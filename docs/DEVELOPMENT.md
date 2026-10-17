@@ -67,7 +67,7 @@ It writes to `/tmp/audiosync-debug.log`.
 
 ## Where things are
 
-Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) describes the engine's behavior clause by clause, and [`EDGE_CASES.md`](EDGE_CASES.md) what happens when devices, sleep or the engine change under a session. The audio path, roughly in order:
+Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) describes the engine's behavior clause by clause, and [`EDGE_CASES.md`](EDGE_CASES.md) what happens when devices, sleep or the engine change under a session. [`WINDOWS_AUDIO_ROUTING.md`](WINDOWS_AUDIO_ROUTING.md) weighs how a future Windows version could avoid double audio when capturing an app. The audio path, roughly in order:
 
 - `AudioSource.swift`, `ProcessTapCapture.swift`: what to capture (system, one app, an input device) and the capture itself
 - `Equalizer.swift`: the 10-band EQ (`EqualizerWindow.swift` is its window)
