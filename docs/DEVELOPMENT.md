@@ -47,7 +47,7 @@ Tests/run-tests.sh --hardware    # adds a silent engine test on every real outpu
 
 The tests are standalone Swift files in `Tests/`, no XCTest. Run the `--hardware` variant too when you touch the audio path.
 
-The test run starts with `scripts/shellcheck.sh`, which checks every script in `scripts/shellcheck-files.txt` and fails if shellcheck is missing. CI runs the same script with the same pinned shellcheck version (different versions flag different things), so install that version: `brew install shellcheck` gives it today, and `scripts/shellcheck.sh --install <dir>` downloads exactly the pinned release. A new shell script goes into that list, or the check fails.
+The test run starts with `scripts/shellcheck.sh`, which checks every script in `scripts/shellcheck-files.txt` and fails if shellcheck is missing. CI runs the same script with the same pinned shellcheck version (different versions flag different things), so install that version: `brew install shellcheck` gives it today, and `scripts/shellcheck.sh --install <dir>` downloads exactly the pinned release (then put `<dir>` on your `PATH`). A new shell script goes into that list, or the check fails.
 
 For a debug log, quit AudioSync and start it from Terminal:
 

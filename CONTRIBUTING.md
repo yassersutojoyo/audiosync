@@ -6,7 +6,7 @@ Issues, reports of device combinations that work (or don't), and pull requests a
 
 ## Before you open a PR
 
-CI builds the app (`swift build -c release`), runs `Tests/run-tests.sh`, runs `git diff --check` over the whole tree, compiles the Python scripts, checks that the generated brand SVGs and `BrandMark.swift` are up to date, runs `shellcheck` on every shell script (the list is `scripts/shellcheck-files.txt`; `Tests/run-tests.sh` runs the same check locally, so install shellcheck first), and runs `./setup.sh --patches-only <dir>`, which downloads the pinned OwnTone source and fails if any of AudioSync's engine patches no longer applies. Please make sure those pass. If you touch the audio path, also run `Tests/run-tests.sh --hardware` locally.
+CI builds the app (`swift build -c release`), runs `Tests/run-tests.sh`, runs `git diff --check` over the whole tree, compiles the Python scripts, checks that the generated brand SVGs and `BrandMark.swift` are up to date, runs `shellcheck` on every shell script in `scripts/shellcheck-files.txt`, and runs `./setup.sh --patches-only <dir>`, which downloads the pinned OwnTone source and fails if any of AudioSync's engine patches no longer applies. Please make sure those pass. `Tests/run-tests.sh` runs the same shellcheck check, so install shellcheck 0.11.0 first (`brew install shellcheck`, or see `docs/DEVELOPMENT.md`). If you touch the audio path, also run `Tests/run-tests.sh --hardware` locally.
 
 ## Style
 
