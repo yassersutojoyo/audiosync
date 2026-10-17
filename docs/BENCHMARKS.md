@@ -64,9 +64,9 @@ Both take `--minutes N` and `--out DIR` (by default the logs go to a new folder 
 
 ## Results
 
-The release baseline is a full `Tests/bench.sh` run (60 minutes per configuration). It hasn't been recorded yet; until it is, the Swift numbers below come from a short smoke run that only shows the scripts work, and `soak.sh` without a baseline exits 3.
+The release baseline is a full `Tests/bench.sh` run (60 minutes per configuration).
 
-The Rust column is reserved for the Rust core comparison; it stays empty until that engine exists.
+The Rust column is reserved for the Rust core (`core/`), measured the same way once it runs inside the app; it stays empty until then.
 
 <!-- bench:swift:begin -->
 Run: 1 min per configuration, 2026-10-17, on d95ffb3.
