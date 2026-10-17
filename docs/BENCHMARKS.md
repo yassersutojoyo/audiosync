@@ -69,26 +69,28 @@ The release baseline is a full `Tests/bench.sh` run (60 minutes per configuratio
 The Rust column is reserved for the Rust core comparison; it stays empty until that engine exists.
 
 <!-- bench:swift:begin -->
-Run: 1 min per configuration, 2026-10-17, on the working tree of 41fba31 (with uncommitted changes).
+Run: 1 min per configuration, 2026-10-17, on d95ffb3.
+
 Machine: MacBook Air (Mac16,12), Apple M4, 16 GB, macOS 26.6.2 (25G83). Outputs: Microsoft Teams Audio, MacBook Air Speakers; local + FIFO used Microsoft Teams Audio.
+
 This is a short smoke run, not the release baseline; record that with a plain `Tests/bench.sh`.
 
 | Metric | Swift | Rust |
 |---|---|---|
-| Delay error at 150 / 500 / 2000 / 3000 ms (ms, per output) | (-8.5, -3.2) / (-8.0, -2.1) / (-7.5, -3.7) / (-5.9, -4.3) | |
+| Delay error at 150 / 500 / 2000 / 3000 ms (ms, per output) | (+0.0, -2.1) / (-2.1, -3.2) / (-11.7, -3.7) / (-1.1, -3.7) | |
 | Two local: dropouts per hour (worst output) | 0 | |
 | Two local: starved renders per hour (worst output) | 0 | |
 | Two local: drift corrections per hour (worst output) | 0 | |
-| Two local: worst lag error, 10 s mean (ms) | 8 | |
-| Two local: inter-output drift, mean / worst (ms) | -5.601 / 6.111 | |
-| Two local: inter-output drift change, first to last window (ms) | 0.276 | |
-| Two local: CPU % mean (harness / ps) | 0.761 / 0.39 | |
-| Two local: memory footprint max / RSS max (MB) | 40.501 / 52.4 | |
+| Two local: worst lag error, 10 s mean (ms) | 4.312 | |
+| Two local: inter-output drift, mean / worst (ms) | 2.686 / 3.177 | |
+| Two local: inter-output drift change, first to last window (ms) | -0.454 | |
+| Two local: CPU % mean (harness / ps) | 0.651 / 0.23 | |
+| Two local: memory footprint max / RSS max (MB) | 40.469 / 52.4 | |
 | Local + FIFO: FIFO underruns per hour | 0 | |
 | Local + FIFO: FIFO gaps per hour | 0 | |
-| Local + FIFO: FIFO latency mean / max (ms) | 12.916 / 21.271 | |
+| Local + FIFO: FIFO latency mean / max (ms) | 10.484 / 21.333 | |
 | Local + FIFO: pipe-full waits, short writes, backlog skips | 0, 0, 0 | |
 | Local + FIFO: local dropouts per hour | 0 | |
-| Local + FIFO: CPU % mean (harness / ps) | 1.513 / 0.98 | |
+| Local + FIFO: CPU % mean (harness / ps) | 1.166 / 0.62 | |
 | Real AirPlay | not available | |
 <!-- bench:swift:end -->
