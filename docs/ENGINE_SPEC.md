@@ -1,0 +1,582 @@
+# AudioSync engine specification
+
+A behavioral specification of AudioSync's audio engine: capture, equalizer, the shared delay buffer, per-output delay and drift correction, local output rendering, volume, the PCM feed into the AirPlay engine, and the control policies around them. It is written so the engine can be reimplemented (for example in Rust) by someone who reads only this document.
+
+It describes AudioSync 0.4.1. It was written from observable behavior only: the public docs (`README.md`, `docs/DEVELOPMENT.md`, `CHANGELOG.md`, `SECURITY.md`, `THIRD_PARTY_NOTICES.md`), the names, values and assertions of the test suites (`Tests/logictest.swift`, `Tests/fifotest.swift`, `Tests/enginetest.swift`, and the printed checks of the ring buffer suite), AudioSync's own policy sources outside the core audio modules (`Volume.swift`, `Equalizer.swift`, `AudioSource.swift`, `CaptureCheck.swift`, `SpeakerState.swift`, `AirPlayReconcile.swift`, `AirPlayPairing.swift`, `EngineLifecycle.swift`, `AirPlayEngine.swift`, `AirPlayEngineConfig.swift`, `OwnToneClient.swift`, `Notices.swift`, `main.swift`, the `AppDelegate*.swift` files, `EqualizerWindow.swift`), and Apple's public Core Audio documentation. The implementation of the capture, ring buffer, renderer, sync engine, FIFO feed, device and diagnostics modules was not consulted.
+
+## Conventions
+
+- **S1** The words MUST, MUST NOT, SHOULD and MAY are normative. Every clause carries one tag. **Observed** clauses state behavior shown by a test, a doc or an allowed source (cited as `file:line`, a test check name in quotes, or a doc section). **Required** clauses are design requirements where the allowed sources do not show the behavior; an implementation MUST meet them, and where a Required clause gives a concrete algorithm or number, it is the reference choice that satisfies every Observed clause.
+- **S2** *Required.* A *frame* is one sample per channel at a given rate. The internal pipeline format is interleaved stereo, 32-bit IEEE float, channel order L, R, nominal range [−1.0, +1.0]. Frame indices are signed 64-bit integers counted from 0 at the start of a session. *Observed:* stereo interleaved float buffers of `frames × 2` (`logictest.swift:164-166`, `fifotest.swift:21-22`, `enginetest.swift:22-23`).
+- **S3** *Observed* (`logictest.swift:234`). A delay of `ms` milliseconds at rate `R` is `floor(ms × R / 1000)` frames (2000 ms at 48 kHz = 96 000 frames; 1820 ms = 87 360 frames).
+- **S4** *Required.* Rates: the *capture rate* Rc is the rate of the captured stream for the whole session; the *device rate* is an output device's nominal rate; the *pipe rate* is fixed at 48 000 Hz (S83). Delays, ring indices and lag are always in Rc frames.
+- **S5** *Required.* A *session* is the span from a successful engine `start` to the matching `stop`. Every session has its own ring history, reader positions and frame counter.
+
+## 1. Data flow
+
+- **S6** *Observed* (`README.md` "How it works, briefly"; `docs/DEVELOPMENT.md` "Where things are"). Components: one capture stage, one 10-band equalizer, one shared delay ring buffer, one delay reader plus one output renderer per enabled local output, and one FIFO feed that writes 48 kHz PCM16 into a named pipe read by the bundled AirPlay engine (OwnTone), which speaks AirPlay and AirPlay 2 to the speakers.
+- **S7** *Observed* (`Equalizer.swift:4-5`, `README.md`). Each captured block is equalized once, in place; the same equalized samples are (a) written to the ring buffer and (b) fed to the FIFO feed. Every output, local and AirPlay, therefore hears identical audio. *Required:* (a) and (b) see bit-identical input; their order within one capture callback is free.
+- **S8** *Observed* (`README.md` intro and "Using it"; `SpeakerState.swift:45-48`). The AirPlay path gets no delay from AudioSync. AirPlay speakers play about two seconds late because of the AirPlay engine's buffer; local outputs are delayed to line up with them.
+- **S9** *Observed* (`README.md`; ring suite "F readers independent (different positions)"). Each local output reads the shared buffer through its own reader, at its own delay, with its own drift correction.
+- **S10** *Observed* (`AudioSource.swift:7-8`). The engine never captures its own output: the system source excludes AudioSync's own process, otherwise the delayed local copies would be captured again and echo.
+
+## 2. Capture
+
+- **S11** *Observed* (`AudioSource.swift:6-14`, `:67-74`). Three source kinds. `system`: every process's audio except AudioSync's own. `app(bundleID)`: every Core Audio process object whose PID is the app's PID or whose responsible PID (the process macOS holds responsible, e.g. a WebKit GPU helper's app) is the app's PID. `input(uid)`: an input device, by Core Audio device UID. *Required:* the app's process list is resolved at session start and SHOULD be refreshed when the app starts new audio processes.
+- **S12** *Observed* (`AudioSource.swift:18-40`; tests "source: …"). Persisted form: `""` = system, `"input:<uid>"` = input device, anything else = an app bundle ID; a missing value means system. Only `app` has a bundle ID.
+- **S13** *Observed* (`README.md` "How it works, briefly"). System and app sources are captured with a Core Audio process tap that also mutes the tapped processes' original output, so only AudioSync's synced copies are heard. Input devices are read directly.
+- **S14** *Observed* (`README.md` "Multi-room audio on macOS"). An input device contributes its first two channels as L and R. *Required:* a one-channel input is copied to both L and R; channels beyond the second are ignored.
+- **S15** *Observed* (`AppDelegate+Engine.swift:21-40`). An input source needs the microphone permission: authorized → start; not determined → request, then start or fail; denied or restricted → the start fails with a notice.
+- **S16** *Required.* The capture stage delivers interleaved stereo float32 at Rc in blocks of any size ≥ 1 frame. Rc is the tap's or input device's nominal rate at session start. Rates from 8 000 to 384 000 Hz MUST be accepted (the suites exercise 32 000, 44 100, 48 000, 96 000 and size a ring for 192 000).
+- **S17** *Observed* (`CaptureCheck.swift:5-9`; `AppDelegate+Engine.swift:110-111`). A process tap delivers no frames until its source actually plays; "no frames yet" is normal. `framesCaptured` is the number of frames written to the ring in the current session and restarts at 0 with each session.
+- **S18** *Observed* (`CaptureCheck.swift:18-30`; `AppDelegate+Engine.swift:115-140`; tests "capture: …"). Capture verdict: `framesCaptured > 0` → *flowing*; otherwise, if the source is known to have been playing for at least 6 s (`playingGrace`) → *notWorking*; otherwise → *waiting*. The host checks 3 s after a start, then every 2 s until audio flows or the session ends, posting a notice only when the verdict changes; a paused or unknown source never yields *notWorking*.
+- **S19** *Observed* (`AppDelegate+Engine.swift:145-154`). "Known playing" comes only from a live Now Playing reading (Spotify, Music): for the system source any playing player counts; for an app source only that app; for an input source never.
+- **S20** *Observed* (`AppDelegate.swift:208-214`). When the capture format changes under a running session, the engine reports an interruption `formatChanged` on the main thread, and the host restarts the session (stop, then start, automatic origin) at the new rate.
+- **S21** *Observed* (`AppDelegate.swift:215-219`). When capture fails for good, the engine reports `sourceLost(error)` on the main thread; the host stops the session, deselects every AirPlay speaker and posts a "source" notice.
+
+## 3. Equalizer
+
+- **S22** *Observed* (`Equalizer.swift:12`). Ten bands, centered at 32, 64, 125, 250, 500, 1000, 2000, 4000, 8000 and 16 000 Hz (band indices 0–9).
+- **S23** *Observed* (`Equalizer.swift:13`; `EqualizerWindow.swift:96`, `:107-118`, `:169`). Band gains and the preamp range from −12 to +12 dB in 0.5 dB steps (the host quantizes and clamps). *Required:* the DSP applies any finite value it is given.
+- **S24** *Observed* (`Equalizer.swift:15-19`; `AppDelegate.swift:152`). Settings: `enabled` (default false), `preamp` in dB (default 0), `gains[10]` in dB (default all 0). The host persists them as JSON.
+- **S25** *Observed* (`Equalizer.swift:106-122`). Each band is an RBJ-cookbook peaking biquad with Q = 1.41 (about one octave). With fs = Rc, G = band gain in dB and f = min(center, 0.45 × fs):
+  `A = 10^(G/40)`, `w0 = 2π f / fs`, `alpha = sin(w0) / (2 × 1.41)`, `a0 = 1 + alpha/A`;
+  `b0 = (1 + alpha·A)/a0`, `b1 = −2·cos(w0)/a0`, `b2 = (1 − alpha·A)/a0`, `a1 = −2·cos(w0)/a0`, `a2 = (1 − alpha/A)/a0`.
+- **S26** *Observed* (`Equalizer.swift:149-169`). Processing, per channel (L and R keep separate filter state) and per sample, in float64: `x = in × 10^(preamp/20)`; then the 10 bands in series in ascending frequency, each in transposed direct form II (`y = b0·x + z1; z1 = b1·x − a1·y + z2; z2 = b2·x − a2·y`); the output sample is `clamp(y, −1, +1)` stored as float32.
+- **S27** *Observed* (`Equalizer.swift:140-143`; "eq: disabled is bypassed"). Disabled, the buffer is left untouched: no preamp, no filtering, no clamping.
+- **S28** *Observed* (`Equalizer.swift:144-148`). On the first enabled block after being disabled, all filter state is zeroed first (stale state would click).
+- **S29** *Observed* (`Equalizer.swift:161-168`; "eq: recovers from a NaN sample (silence stays silent)"). If a channel's cascade output is NaN or ±infinity, that channel's state in all ten bands is zeroed and the output sample is 0. Silence that follows a NaN stays exactly 0.
+- **S30** *Observed* (`Equalizer.swift:65`, `:88-95`). The design rate defaults to 48 000 Hz. On a rate change (only while capture is stopped) the coefficients are recomputed for the new rate and all state is zeroed; setting the same rate again is a no-op.
+- **S31** *Observed* (`Equalizer.swift:7-9`, `:49-58`, `:97-104`, `:128-137`). A settings change takes effect at a block boundary, atomically for all ten bands, the preamp and the enabled flag together (two coefficient sets, the control thread fills the idle one and flips an atomic index; the audio thread publishes which set it is reading so the control side never rewrites a set in use). Filter state is kept across coefficient changes. The audio thread never waits; the control thread MAY yield briefly until the audio thread leaves the set it needs.
+- **S32** *Observed* (tests "eq: …", sine at amplitude 0.25, RMS over the settled second half of 1 s, 512-frame blocks). Enabled and flat: 0 ± 0.05 dB at 1 kHz. Band 5 (1 kHz) at +6 dB: +6 ± 0.2 dB at 1 kHz at 48 kHz (measured 6.00) and at 44.1 kHz; 0 ± 0.5 dB at 8 kHz (measured 0.04). Bass Boost: more than +5 dB at 40 Hz (measured 6.26). Preamp −6 dB with flat bands: −6 ± 0.1 dB. Disabled: 0 ± 0.01 dB.
+- **S33** *Observed* (`Equalizer.swift:22-45`, `:187-189`; "eq: every preset has 10 bands", "eq: one preset per id, in menu order"). Presets, in menu order, as band gains in dB from 32 Hz to 16 kHz. A preset sets the gains only; the settings "match" a preset when all ten gains are exactly equal.
+
+  | Preset | 32 | 64 | 125 | 250 | 500 | 1k | 2k | 4k | 8k | 16k |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | flat | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+  | bassBoost | 6 | 5 | 4 | 2 | 0 | 0 | 0 | 0 | 0 | 0 |
+  | bassCut | −6 | −5 | −4 | −2 | 0 | 0 | 0 | 0 | 0 | 0 |
+  | trebleBoost | 0 | 0 | 0 | 0 | 0 | 1 | 2 | 4 | 5 | 6 |
+  | vocal | −2 | −2 | −1 | 1 | 3 | 4 | 3 | 1 | 0 | −1 |
+  | rock | 4 | 3 | 2 | 0 | −1 | −1 | 1 | 3 | 4 | 4 |
+  | pop | −1 | 0 | 2 | 3 | 4 | 3 | 1 | 0 | −1 | −1 |
+  | jazz | 3 | 2 | 1 | 2 | −1 | −1 | 0 | 1 | 2 | 3 |
+  | classical | 4 | 3 | 2 | 1 | −1 | −1 | 0 | 2 | 3 | 4 |
+  | electronic | 5 | 4 | 1 | 0 | −2 | 1 | 0 | 1 | 4 | 5 |
+  | loudness | 6 | 4 | 0 | 0 | −2 | 0 | −1 | −2 | 4 | 2 |
+  | smallSpeakers | −4 | −2 | 2 | 3 | 2 | 1 | 1 | 2 | 2 | 1 |
+
+- **S34** *Observed* (`Equalizer.swift:4-5`; `docs/DEVELOPMENT.md`). The equalizer runs once, on the capture thread, before the ring buffer and the FIFO feed (S7).
+
+## 4. Delay ring buffer
+
+- **S35** *Observed* (`docs/DEVELOPMENT.md`; `enginetest.swift:16`; ring suite "F …"). One ring per engine, holding interleaved stereo float32 frames, with a capacity C fixed at creation. Exactly one writer (the capture thread) and any number of readers. *Required:* the writer never waits for or checks on readers; once full, each write overwrites the oldest frames.
+- **S36** *Observed* (`logictest.swift:219`, `enginetest.swift:16`). The suites create rings of 24 s of audio (48 000 × 24 = 1 152 000 frames; 192 000 × 24 = 4 608 000 frames). *Required:* C ≥ 24 s × Rc, which covers the 20 s maximum delay (S77) plus headroom for blocks and drift correction.
+- **S37** *Observed* (`logictest.swift:243`). `framesWritten` is the total number of frames written since the last reset, a monotonically increasing 64-bit count (W below). *Required:* it is published only after the frames it counts are in the buffer (release store), and readers load it with acquire ordering.
+- **S38** *Required.* `write(interleaved, frames)` accepts any count; when `frames > C` only the last C frames are kept, and W still grows by `frames`.
+- **S39** *Observed* (`logictest.swift:241-243`, "ring: reset clears history"; `AppDelegate+Engine.swift:110-111`). `reset()` sets W to 0 and makes all history unreadable. Every session starts with a reset, so a new session never plays the previous session's audio. *Required:* reset is called only while no writer is running and no reader exists.
+- **S40** *Required.* Frame k is readable iff `max(0, W − C + M) ≤ k < W`, where M is a safety margin at least the largest block the writer can write in one call (M ≥ 8192 frames). After copying, a reader re-loads W; if any copied frame fell below `W − C` in the meantime, the copy MUST be discarded (output silence) and handled as an overrun (S55).
+
+## 5. Delay reader
+
+- **S41** *Observed* (`logictest.swift:220-237`). Reader interface: `read(into: dst, frames: N, delayFrames: D, toleranceFrames: T)` fills `dst` with exactly N stereo frames; `requestResync()` asks the next `read` to re-anchor to the requested delay. A reader is bound to one ring.
+- **S42** *Observed* (`logictest.swift:238`, lag of the block's last frame is `max(D, 512) − 512`; ring suite "B delay=0 not silent (floored to one block)", "B delay=0 near-live, not silent — measured=0"). The effective delay is `De = max(D, N)`: in steady state the first frame of each block is exactly De frames behind W as loaded at the start of the read. A delay shorter than one block is floored to one block. *Required:* De is also capped at `C − M − N`.
+- **S43** *Required.* Reader state: `P`, the index of the next frame to read; `F`, one past the highest frame index ever emitted (initially 0); `lastW`, W at the previous read; `anchored` (initially false); an atomic resync flag; atomic `D` written by the control thread.
+- **S44** *Required* (normative algorithm; it satisfies every Observed clause in this section). One `read(N, D, T)`:
+  1. `W = framesWritten` (acquire); `De = min(max(D, N), C − M − N)`; `oldest = max(0, W − C + M)`; `advanced = (W != lastW)`; `lastW = W`.
+  2. Anchor: if `!anchored` or the resync flag was set (cleared atomically by this read): `P = W − De`, `anchored = true`.
+     Else, with `e = (W − P) − De`: if `P < oldest` or `e > T`: `P = W − De` (skip forward). Else if `advanced` and `e < −T`: `P = W − De` (step back).
+  3. Emit, for i in 0..<N with k = P + i: if `k ≥ W`, output silence for this and every remaining frame of the block and stop advancing; else if `k < F` or `k < oldest` (this includes k < 0), output silence (masked); else copy frame k.
+  4. `P = min(P + N, max(P, W))`; `F = max(F, highest copied index + 1)`; validate the copy (S40); publish `lagFrames = W − P` (S56).
+  In steady state (no resync, |e| ≤ T, no underrun) this emits frames P … P+N−1 contiguously, with no gap or repeat.
+- **S45** *Required; Observed* consistent (ring suite "A delay=4096 not silent", "B delay=0 not silent"). A new reader anchors on its first read at `W − De`. Added to a running session with enough history, it plays immediately at its exact delay; with less history (e.g. a fresh session), it plays `De − W` frames of silence first.
+- **S46** *Observed* ("delay: change to 500 / 3000 / 1820 / 0 ms is exact"; ring suite "L change while frozen: applied after resume"; "J up-then-down: lands on the new delay"). A delay change (new D plus `requestResync`) is exact: once applied, the steady-state lag equals the new De with zero error, not merely within tolerance. It is applied by the next `read`, however long until that read happens. A newer change supersedes an unfinished older one.
+- **S47** *Observed* (ring suite "E increase: never replays audio", "E increase: delay 24000 reached"; comment at `logictest.swift:237`, "let an increase finish its silence"). A delay increase by Δ frames inserts exactly Δ frames of silence (the masked range of S44 step 3), then playback continues contiguously from the frame after the last one emitted.
+- **S48** *Observed* (ring suite "E decrease: applied on the next block"). A delay decrease by Δ frames is applied on the next block by skipping Δ frames forward.
+- **S49** *Observed* (ring suite "E increase: never replays audio", "C no replay loop (stays silent once drained)", "D plays FRESH frames (not replayed old)", "G gap: no replayed audio", "H stall: never replays audio", "I faster output: never replays audio", "I slower output: never replays audio", "J up-then-down: never replays audio"). Invariant: over a reader's life, the indices of the frames it emits are strictly increasing. No delay change, drift correction, underrun, stall or overrun ever repeats audio that was already played.
+- **S50** *Observed* (`logictest.swift:227`, T = 1680 at 48 kHz; ring suite "K after a stall, drift is still held within ~35 ms"). Drift tolerance (dead band): T = 35 ms, i.e. 1680 frames at 48 kHz. *Required:* at other rates `T = round(0.035 × Rc)`. While |e| ≤ T nothing is corrected.
+- **S51** *Observed* (ring suite "H stall: resumes after the last frame it had", "H stall: delay restored — measured=23488", "I slower output: lag stays within tolerance"). When the reader is behind by more than T (output clock slower than the capture clock, a stalled output callback, or a long freeze), it skips forward to exactly `W − De`. The first frame after the skip is later than the last frame emitted before it.
+- **S52** *Observed* (ring suite "I faster output: lag stays within tolerance"); *Required* mechanism (S44 step 2). When the reader is ahead by more than T while the writer is advancing (output clock faster than the capture clock), it steps back to exactly `W − De`; the frames it already played are masked, so the correction is |e| frames of silence, never a repeat.
+- **S53** *Observed* (ring suite "C underrun eventually emits silence", "C no replay loop (stays silent once drained)"). Underrun: when the writer stops, the reader keeps playing until it has emitted every frame up to W, then outputs silence; P never passes W and it stays silent while W does not move. While W is not advancing, no step-back correction is made (S44), so an underrun always drains.
+- **S54** *Observed* (ring suite "D resumes with audio", "D plays FRESH frames (not replayed old) — first=29696 maxOld=13311", "D delay re-established ≈ 4096 — measured=3584"). When the writer resumes after an underrun, the reader (P = old W) is ahead by more than T, steps back, plays masked silence up to the old W, and then continues with frames written after the resume, at exactly De.
+- **S55** *Required.* Overrun: if `P < oldest` (the reader fell more than the ring's history behind, e.g. after a very long stall), the frames it needed are gone; it skips forward as in S51.
+- **S56** *Observed* (`enginetest.swift:55-59`, "Lag ≈ delay − one device buffer"; `logictest.swift:223-229`). After each read the reader publishes `lagFrames = W − P` (W from the start of the read, P after it). In steady state `lagFrames = De − N`. It is an atomic 64-bit value readable from any thread.
+- **S57** *Observed* (ring suite, "G gap: delay restored to 1 s (within the dead band) — measured=45952" for a 48 000-frame delay; "I faster output … worst error=2192 frames", "I slower output … worst error=1168 frames", "K … worst error=2192 frames", all with 512-frame blocks at 48 kHz). Acceptance: the worst deviation of the measured lag from `De − N` is at most T + N (2192 = 1680 + 512) under clock drift in either direction and after a stall; a writer gap shorter than T leaves a residual error inside the dead band (45 952 vs 47 488 exact).
+- **S58** *Observed* (ring suite "F reader1 contiguous", "F reader2 contiguous", "F reader1 delay ≈ 4096", "F reader2 delay ≈ 12000", "F readers independent (different positions)"). Readers share no state except the ring: each has its own P, F, delay and corrections, and any number of them can read the same ring at different delays.
+- **S59** *Required.* N may differ from call to call (device buffer sizes change); every rule above uses the N of the current call.
+
+## 6. Local output renderer
+
+- **S60** *Observed* (`AppDelegate+Outputs.swift:168-188`; `logictest.swift:89-91`; `enginetest.swift:38-39`). Output devices are enumerated with Core Audio object ID, name, UID and transport type. One renderer runs per local output that is enabled and present, keyed by device UID and bound to that device's object ID, never to "the default output". The capture stage's own private aggregate device (if any) has a fixed name and is excluded from the output list (`AppDelegate+Outputs.swift:138-140`).
+- **S61** *Observed* (`enginetest.swift:42-62`). Renderer interface: `start(deviceID, inputSampleRate, delayMs)` (throws when the device can't be started), `stop()`, `setGain(linear)`, `setDelayMs(ms)`, and atomic counters `framesRendered` (device frames delivered so far) and `lagFrames` (S56).
+- **S62** *Required.* The renderer reads from its reader in Rc frames. If the device's nominal rate differs from Rc, it converts Rc → device rate with a continuous-phase resampler, sizing each reader request from the converter's needs; delay and lag stay defined in Rc frames.
+- **S63** *Required.* Channel mapping: L to the device's first output channel, R to the second, any further channels zero; on a one-channel device, (L + R) / 2.
+- **S64** *Observed* (`enginetest.swift:2-3`, `:43-46`, every output at gain 0 is silent). Every output frame is multiplied by the renderer's linear gain. *Required:* gain 0 yields exact zeros; a gain set before `start` applies from the first callback; a gain change applies from the next callback (a ramp of at most one callback is allowed).
+- **S65** *Required.* Any NaN or ±infinity reaching the renderer's output stage is replaced by 0 before it is handed to the device.
+- **S66** *Observed* (`enginetest.swift:56-60`, "<device>: delay 2000 / 500 / 3000 / 150 ms"). `setDelayMs` stores the new delay (converted per S3 at Rc) and requests a resync (S46); it applies on the next device callback. On real hardware, 0.4 s after each live change the measured lag (`lagFrames / 48000` s) is within 60 ms of the target (the lag is the delay minus one device buffer, ± one 10 ms producer chunk).
+- **S67** *Observed* (`enginetest.swift:51-53`, "<device>: renders audio"). A started renderer renders more than 24 000 frames in its first second (the device's IO cycle runs continuously, even at gain 0 and even while the reader outputs silence).
+- **S68** *Observed* (`AppDelegate.swift:202-207`, `:306-310`; `AppDelegate+Outputs.swift:168-188`). When a device disappears or its IO stops for good, its renderer stops and the engine reports `outputLost(uid)` on the main thread. The UID stays enabled; the host's 3 s reconcile adds the output again, with its current delay and gain, once the device is listed again.
+- **S69** *Observed* (`AppDelegate+Outputs.swift:181-201`). If adding an output fails, the host removes the UID from the enabled set (so it is not retried every poll), posts one notice per failed speaker (plus an alert when the user caused it), and stops the session if nothing else is enabled.
+
+## 7. Volume
+
+- **S70** *Observed* (`Volume.swift:8-16`; tests "volume: …"). Slider position p (0…100) maps to linear gain `g(p) = (clamp(p, 0, 100) / 100)³`; the inverse is `p(g) = 100 × cbrt(clamp(g, 0, 1))`. The curve is strictly increasing over integer positions. Reference values:
+
+  | p | 0 | 1 | 10 | 25 | 50 | 60 | 75 | 90 | 100 |
+  |---|---|---|---|---|---|---|---|---|---|
+  | g | 0 | 1e−6 | 0.001 | 0.015625 | 0.125 | 0.216 | 0.421875 | 0.729 | 1 |
+  | dB | −∞ | −120.00 | −60.00 | −36.12 | −18.06 | −13.31 | −7.50 | −2.75 | 0.00 |
+
+- **S71** *Observed* (`AppDelegate+Outputs.swift:9-11`; `AppDelegate.swift:130`, `:179`). A local output's renderer gain is `g(local p) × g(master p)`. New devices start at local p = 60 (≈ −13.3 dB); master defaults to 100.
+- **S72** *Observed* (`AppDelegate+Outputs.swift:63-68`). A master change re-applies the gain of every active local output and sends the master to the AirPlay engine as the integer `round(master)` on the engine's own 0–100 scale (linear, not the cubic curve; the engine scales its selected outputs relative to it, `OwnToneClient.swift:157-161`).
+- **S73** *Observed* (`AppDelegate+Outputs.swift:55-61`; `AppDelegate+AirPlay.swift:36-41`; `OwnToneClient.swift:151-155`). An AirPlay speaker's volume is an integer 0–100 sent to the engine per output. The host adopts the volume the engine reports on each poll, except within 2 s of the user's own change.
+- **S74** *Observed* (`Volume.swift:19-36`; `OwnToneClient.swift:163-171`; tests "volume writes: …"). Volume requests are coalesced per target (the master, each output): storing a value when none is waiting queues one flush; later values replace the waiting one; the flush sends the latest value once; targets never overwrite each other.
+- **S75** *Observed* (`AppDelegate.swift:166-178`; "volume: legacy 3.49% migrates to ≈33"). Legacy linear percentages (0…150) migrate as `p(pct / 100)`, clamped (3.49 % → 32.68; anything ≥ 100 % → 100).
+- **S76** *Observed* (`AppDelegate+Outputs.swift:48-61`). Host-side volume inputs are clamped to [0, 100] before use.
+
+## 8. AirPlay sync rule (local delay policy)
+
+- **S77** *Observed* (`AppDelegate.swift:106-107`, `:183-186`; `AppDelegate+Outputs.swift:70-76`; `README.md` "Using it"). Each local output has a configured delay in ms, range 0…20 000, default 2000 (seeded from a legacy single delay when present, clamped to the range). Non-finite input is ignored; other input is clamped.
+- **S78** *Observed* (`SpeakerState.swift:49-52`; tests "delay: AirPlay chosen → configured delay", "delay: no AirPlay → plays at once", "delay: zero stays zero"). Effective delay = the configured delay while an AirPlay speaker is chosen, otherwise 0. The configured value is kept either way.
+- **S79** *Observed* (`SpeakerState.swift:54-58`; tests "delay: a chosen speaker not listed today doesn't count", "delay: chosen and listed counts", "delay: listed but not chosen doesn't count"). "An AirPlay speaker is chosen" means at least one AirPlay output ID is both enabled by the user and present in the AirPlay engine's latest output list (this Mac's own receiver is never in that list, S100).
+- **S80** *Observed* (`AppDelegate+Outputs.swift:90-105`; `AppDelegate.swift:97-99`, `:111-115`). Whenever that condition flips (the enabled set or the listed set changed), every running local output gets its new effective delay live through S66: a flip to 0 skips forward (S48), a flip back inserts silence (S47).
+- **S81** *Observed* (`AppDelegate+AirPlay.swift:19-24`). A poll that finds the AirPlay engine unreachable leaves the listed set unchanged, so an engine restart doesn't flap local delays.
+
+## 9. FIFO feed (PCM into the AirPlay engine)
+
+- **S82** *Observed* (`AirPlayEngine.swift:36-37`, `:150-158`, `:226-235`). The pipe is a POSIX FIFO named `audiosync.pipe` in the `media` folder of the engine's working directory (`~/Library/Application Support/AudioSync/AirPlay`), mode 0600, created before the engine is launched; a regular file in its place is replaced by a FIFO.
+- **S83** *Observed* (`AirPlayEngineConfig.swift:41-42`; tests "config: pipe at 48000 Hz", "config: pipe at 16-bit"; `fifotest.swift:64`, two bytes per sample). Wire format: raw PCM, no header, 48 000 Hz, signed 16-bit, 2 channels interleaved L, R. *Required:* little-endian (native on every supported Mac). One frame is 4 bytes; one second is 192 000 bytes.
+- **S84** *Observed* (`fifotest.swift:18-19`, `:60-61`, `:87`; `logictest.swift:203-210`). Interface: create with the pipe path and a queue length in seconds; `setInputRate(Rc)`; `feed(interleaved, frames)` from the capture thread; `start()`; `stop()`; `samplesQueued`, a monotonic 64-bit count of 16-bit samples accepted into the queue (frames × 2).
+- **S85** *Observed* (tests "fifo: 48000 / 44100 / 96000 / 32000 Hz → 48 kHz frame count": 95 697 vs 95 697, 95 999 vs 96 000, 95 917 vs 95 917, 95 916 vs 95 917, from 2 s fed in 441-frame blocks). Input at Rc is resampled to 48 000 Hz with phase carried across blocks: over any run, output frames are within ±2 of `fed × 48000 / Rc`. At Rc = 48 000 the samples pass through unchanged. *Required:* at least linear interpolation; a band-limited resampler is RECOMMENDED; no allocation (S126).
+- **S86** *Observed* ("fifo: NaN/±inf samples do not crash"). Float → int16 conversion never traps. *Required* mapping: NaN → 0; otherwise `round(clamp(x, −1, +1) × 32767)` (ties away from zero), so +∞ → 32767 and −∞ → −32767.
+- **S87** *Required; Observed* sizing (`logictest.swift:203`, 4 s). Between `feed` and the writer thread is a lock-free single-producer, single-consumer queue of `seconds × 48 000` frames (default 4 s). When it is full, `feed` drops the frames that don't fit; dropped frames are not counted in `samplesQueued`. `feed` works whether or not the writer runs.
+- **S88** *Observed* ("fifo: stop/start leaves one writer thread — 1 writers", "fifo: stop closes the writer — 0 writers"). `start()` runs exactly one writer thread holding at most one write descriptor; five back-to-back `stop()`/`start()` pairs still leave exactly one. Within 300 ms of `stop()`, the writer thread has exited and closed its descriptor. *Required:* `start()` while started is a no-op; `start()` begins with an empty queue; `stop()` never blocks the caller for more than 250 ms.
+- **S89** *Required.* The writer opens the pipe with `O_WRONLY | O_NONBLOCK` (a blocking open would hang until a reader appears). `ENXIO` (no reader yet) is retried at least every 100 ms; meanwhile the backlog rule (S90) keeps the queue short.
+- **S90** *Observed* (`fifotest.swift:65-68`). Backlog cap: the writer never lets more than 250 ms (12 000 frames, 48 000 bytes) of unwritten audio pile up; when it falls behind it discards the oldest audio beyond that cap. Everything else is delivered in order, never duplicated.
+- **S91** *Observed* ("fifo: audio reaches the reader — 159744 of 161280 bytes"). With a reader draining the pipe, real-time-paced audio fed for 1 s arrives within 300 ms after feeding stops, short by at most the 250 ms cap (48 000 bytes).
+- **S92** *Observed* ("fifo: reader closing mid-stream does not kill the process"; `main.swift:42`, `SIGPIPE` ignored process-wide). When the reader goes away (engine crash or restart), writing MUST NOT kill the process. *Required:* the descriptor also sets `F_SETNOSIGPIPE`; on `EPIPE` the writer closes it and returns to the open loop (S89), so a restarted engine receives audio again without any action from the host.
+- **S93** *Required.* On `EAGAIN` (pipe full) the writer sleeps at most 5 ms and retries; the backlog cap (S90) still applies. The kernel pipe buffer (64 KiB on macOS) is outside AudioSync's control.
+- **S94** *Required.* `setInputRate` is called by the engine at each session start, before the first `feed`; it resets the resampler phase and history.
+- **S95** *Required.* No write to the pipe ever happens on the capture thread; `feed` only converts and enqueues (S126).
+
+## 10. AirPlay engine coupling
+
+- **S96** *Observed* (`AirPlayEngineConfig.swift:13-52`; tests "config: …"). OwnTone runs only as a separate process, configured through a file regenerated on every start: API bound to 127.0.0.1, no trusted networks, `admin_password` = this run's random password, no allowed browser origin, websocket port = API port − 1, `start_buffer_ms = 500`, library password = the same password, library port = API port (3689 in the tests), library directory = `<dir>/media` (holds the pipe), `pipe_autostart = true`, `pipe_sample_rate = 48000`, `pipe_bits_per_sample = 16`, local audio output disabled, MPD port 0, log level `log` (or `debug` when diagnostics are on).
+- **S97** *Observed* (`AirPlayEngine.swift:177-211`; `AirPlayEngineConfig.swift:7-8`, `:56-58`; tests "config: no password left after start", "config: both passwords marked removed", "config: nothing else changes when the password is removed"). The config file is mode 0600. The host polls `GET /api/config` with the password every 0.5 s, up to 120 times; once it gets HTTP 200, it rewrites the file with every occurrence of the password replaced by `removed-after-start` and nothing else changed.
+- **S98** *Observed* (`EngineLifecycle.swift:4-109`; `AirPlayEngine.swift:296-307`; tests "engine: …"). Engine process states: `stopped`, `starting`, `running` (API accepted this run's password), `restarting`, `failed(setup | launch | unsupportedOS(minimum))`, `gaveUp`. Rules: at most 5 starts within any 60 s window; the 6th is refused and the state becomes `gaveUp`. An unexpected exit restarts the engine after 2 s, unless it happened less than 3 s after the start, before the API answered, on a macOS major version below the bundled engine's minimum: then `failed(unsupportedOS)` and no restart. An unknown minimum never counts as unsupported. An API answer only moves `starting` to `running` (a stale answer during `restarting` is ignored); no answer in time → `failed(launch)`; setup failure → `failed(setup)`. `failed` and `gaveUp` offer Retry, which clears the start history and returns to `stopped`; a stop returns to `stopped`. Spaced exits (one per 20 s) never give up.
+- **S99** *Observed* (`AppDelegate+Engine.swift:89-96`; `OwnToneClient.swift:175-208`; `AppDelegate+AirPlay.swift:72-82`). Pipe playback: 0.5 s after a session starts or the AirPlay selection changes, the host asks the engine to play the pipe if any AirPlay speaker is enabled, otherwise to stop (`PUT /api/player/stop`). Playing: `GET /api/player`; if `state` is `play`, nothing; otherwise search the library for the track whose path includes `audiosync.pipe` and `POST /api/queue/items/add?uris=library:track:<id>&clear=true&playback=start`. While streaming with an enabled, listed speaker, this is re-requested right after an engine restart or a newly listed speaker, otherwise at most every 15 s.
+- **S100** *Observed* (tests "outputs: …"; `OwnToneClient.swift:93-97`). The engine's `/api/outputs` list is parsed into speakers: only types "AirPlay 1" and "AirPlay 2" with both an `id` and a `name`; fields `name`, `type`, `selected`, `volume`, `needs_auth_key` (needs a PIN), `has_password`; missing fields default to not selected, volume 50, no PIN, no password; `requires_auth` alone does not mean a PIN is needed. Invalid JSON, a wrong shape or a top-level array give an empty list. The Mac's own AirPlay receiver (name equal to the computer name, ignoring case; an unknown computer name hides nothing) is left out.
+- **S101** *Observed* (`AppDelegate.swift:306-310`; `OwnToneClient.swift:9-23`, `:101-102`). The host polls every 3.0 s: the engine's output list (2 s timeout, at most one poll in flight), then the local device list. Engine API writes go through one serial queue with a 3 s request timeout; output IDs are percent-encoded in request paths (unreserved characters only, `OwnToneClient.swift:84-88`).
+- **S102** *Observed* (`AirPlayReconcile.swift:100-102`; tests "reconcile: poll timeout during an in-flight switch-on is not an outage", "… a failed poll with nothing in flight is an outage", "… a busy write doesn't make a down engine reachable"). Reachability after a poll = `polled || (writesBusy && previously)`. A newly reachable engine after an unreachable period counts as "came back" (a restart).
+- **S103** *Observed* (`AirPlayReconcile.swift:26-66`; tests "reconcile: …"). Switch-on tracking: each `selected: true` request increments an in-flight count per speaker; only the answer to the last request in flight decides. A success opens a 3 s settle window: an "off" report is ignored while a request is in flight, if it was requested before the success, or within 3 s after it. A failure leaves no grace.
+- **S104** *Observed* (`AirPlayReconcile.swift:140-168`; tests "reconcile: …"). Per reported speaker, while streaming: engine state matches the wish → keep (and confirm a pending pairing, S107); not wanted but selected → deselect; wanted but off → wait if its switch-on is in flight (even after a restart); else select again if the engine came back or the speaker just appeared; else wait while settling; else the pairing rules (S106–S107) decide wait, ask or drop. When not streaming, nothing is selected or dropped. Selections are applied before drops.
+- **S105** *Observed* (`AppDelegate+AirPlay.swift:72-81`). When the engine came back while streaming with an enabled, listed speaker: wanted speakers are re-selected (S104), the master volume is re-sent and pipe playback is ensured at once.
+- **S106** *Observed* (`AirPlayPairing.swift:19-45`, `:70-95`; `AppDelegate+AirPlay.swift:90-93`; tests "pairing: …", "availability: …"). Access kinds: `open`; `code(password)` when a PIN is needed (`password` when the speaker also has a password); `legacyPassword` for an AirPlay 1 speaker with a password and no PIN flag. Availability shown: open → open; code → "needs code"; legacyPassword → "password unsupported". A wanted speaker the engine reports off, with no pairing under way: `open` → drop as unreachable; `legacyPassword` → drop with its own reason; `code` → ask (PIN or password prompt) only if the user turned it on themselves within 45 s (`promptWindow`) before the report was requested, otherwise drop as "needs code". A report requested before the user's click → wait. One click answers one refusal only.
+- **S107** *Observed* (`AirPlayPairing.swift:48-128`; tests "pairing: …"). Pairing stages per speaker: asking → (code entered; a second code is ignored) pairing → (speaker re-selected at time t) confirming(since t). While asking or pairing, reports → wait. Confirming: a report requested before t → wait; an "on" report requested at or after t → done; an "off" report at or after t → drop as "still needs code" (code access) or unreachable. A cancel, a turn-off or an automatic turn-on forgets the speaker (a later code or re-select is ignored).
+- **S108** *Observed* (`AirPlayPairing.swift:130-152`; tests "pairing queue: …"). Prompts wait in a FIFO queue, at most one per speaker, and only for a speaker currently asking; prompts are shown one at a time. When the engine stops listing a speaker, its pairing stage and queued prompt are dropped, but the time of the user's click is kept, so a speaker that returns within the prompt window still gets its prompt; a speaker that vanished mid-pairing and returns gets a notice, not a second prompt.
+- **S109** *Observed* (`AppDelegate+AirPlay.swift:96-105`). A dropped speaker is removed from the enabled set, gets a notice with its reason (an alert only for a rejected code) and, if nothing else is enabled, streaming stops.
+- **S110** *Observed* (`EngineLifecycle.swift:111-126`; `AppDelegate.swift:286-296`; `AirPlayEngine.swift:142-145`; tests "shutdown: …"). Quit: stop the session and deselect every AirPlay speaker; wait for already queued API writes for at most 1.5 s (a stuck write costs only the timeout; an idle queue returns at once); then `SIGTERM` the engine, wait up to 3 s, then `SIGKILL`. Quitting waits at most 5 s on the engine in total (`drainTimeout + gracefulStop ≤ 5`).
+- **S111** *Observed* (`main.swift:36-48`). On `SIGTERM` the app stops the engine process and exits, without the graceful deselect.
+
+## 11. Engine control interface and session lifecycle
+
+- **S112** *Observed* (calls in `AppDelegate+Engine.swift`, `AppDelegate+Outputs.swift`, `AppDelegate.swift`). Engine interface: `start(source)` (throws), `stop()`, `running`, `framesCaptured`, `addOutput(uid, deviceID, delayMs, gain)` (throws), `removeOutput(uid)`, `hasOutput(uid)`, `activeOutputUIDs`, `setGain(uid, g)`, `setDelay(uid, ms)`, equalizer settings update, and two callbacks: `outputLost(uid)` and `interrupted(formatChanged | sourceLost(error))`.
+- **S113** *Required; Observed* usage. Every control call is made on the main thread, and both callbacks are delivered on the main thread.
+- **S114** *Required.* `start(source)`, called only while stopped (the host stops a running engine first, `AppDelegate+Engine.swift:41`): reset the ring (S39), determine Rc, set the equalizer rate (S30), set the FIFO input rate and start it (S94, S88), then start capture. On any failure it throws and leaves everything stopped and released.
+- **S115** *Required; Observed* in part (`AppDelegate+Engine.swift:54`, outputs are added again after every start). `stop()` stops capture (no capture callback runs after it returns), stops and removes every renderer, stops the FIFO feed, and sets `running` false. It is idempotent.
+- **S116** *Observed* (`AppDelegate+Engine.swift:16-20`, `:42-56`). The host starts a session only with at least one speaker enabled; after a successful start it applies the AirPlay selection, sends the master volume, adds the local outputs, ensures pipe playback (S99) and starts the capture check (S18).
+- **S117** *Observed* (`AppDelegate+Outputs.swift:165-202`). Outputs are added only while running. Output sync is idempotent: add every enabled, present UID that has no renderer (with its effective delay and gain); remove every renderer whose UID is no longer enabled; an enabled UID that isn't present waits for a later sync.
+- **S118** *Observed* (`AppDelegate+Outputs.swift:43-46`). When the last speaker (local or AirPlay) is switched off while running, the session stops and every AirPlay speaker is deselected.
+- **S119** *Observed* (`AppDelegate+Outputs.swift:13-41`). Turning a speaker on while not running starts a session (user origin); while running, a local speaker is synced in and an AirPlay speaker is selected.
+- **S120** *Observed* (`AppDelegate.swift:81-89`; `AppDelegate+Groups.swift:112-133`; `AppDelegate+Windows.swift:43-46`). Start origins: *user* and *automatic* (auto-connect, format-change restart). A failed automatic start suppresses further automatic starts until the user acts; switching streaming off by hand suppresses automatic starts by auto-connect (speakers may still be enabled).
+- **S121** *Observed* (`AppDelegate+Engine.swift:59-65`). A failed start stops everything, deselects every AirPlay speaker and posts a "start" notice (plus an alert for a user start).
+- **S122** *Observed* (tests "speaker: …"). A speaker that is enabled shows *playing* while streaming and *will play* while not; a disabled one shows *off*. A click on a playing speaker turns it off; a click on a waiting or off speaker turns it on (and starts streaming).
+
+## 12. Non-finite values
+
+- **S123** *Observed* ("eq: recovers from a NaN sample (silence stays silent)", "fifo: NaN/±inf samples do not crash"). NaN and ±infinity can arrive from capture. No stage may trap, crash or abort on them: the enabled equalizer zeroes them (S29); a disabled equalizer passes them into the ring unchanged; the renderer zeroes them at its output (S65); the FIFO conversion maps them (S86).
+- **S124** *Observed* (`AppDelegate+Outputs.swift:48-76`). Host-side numeric inputs are sanitized before reaching the engine: non-finite delays are ignored, delays are clamped to 0…20 000 ms, volumes to 0…100.
+- **S125** *Required.* A non-finite value never persists in any stateful stage: once finite input resumes, every output is finite within one block (the resampler of S85 resets its history if it sees a non-finite sample).
+
+## 13. Real-time constraints
+
+- **S126** *Required* (project rule; the equalizer's design follows it, `Equalizer.swift:7-9`). The audio path is the capture callback (equalizer, ring write, FIFO `feed`) and every renderer callback (reader, conversion, gain). On it, nothing may allocate or free memory, take a lock (mutex, read-write lock, semaphore, dispatch sync, runtime calls that may lock), block or sleep, make a system call, log or build strings, or touch the file system.
+- **S127** *Required.* Work per callback is bounded and linear in the block size: O(N) per reader, O(20·N) biquad steps for the equalizer, O(N) for conversion.
+- **S128** *Required.* Values shared with audio threads are lock-free atomics only (a Rust port checks this at build time); all buffers (ring, FIFO queue, equalizer state, converter buffers sized for the largest device buffer, at least 8192 frames) are allocated before the audio threads start and freed only after they stopped.
+- **S129** *Required.* The FIFO writer thread does not allocate after `start`, shares no lock with the audio path, does no logging inside its loop, and performs only `open`, `write`, `close` and short sleeps.
+- **S130** *Observed* (`Equalizer.swift:97-104`, `:128-137`). Control-to-audio updates never make the audio thread wait: scalars are atomic stores; multi-value updates are double-buffered and flipped atomically; the control side MAY spin or yield briefly.
+- **S131** *Required.* Logging about audio-path events (underruns, corrections, drops) happens only from non-real-time threads, from counters the audio path increments atomically. The debug log (`AUDIOSYNC_DEBUG=1`, `docs/DEVELOPMENT.md`) is never written from the audio path.
+
+## 14. Threading
+
+- **S132** *Required; Observed* in part (`Equalizer.swift`, `AppDelegate*.swift`). Threads and ownership:
+
+  | Thread | Runs | Writes | Reads |
+  |---|---|---|---|
+  | main | control interface, callbacks, polls, equalizer settings | reader targets and resync flags, gains, equalizer idle set and active index, FIFO start/stop | counters, `lagFrames`, `framesCaptured` |
+  | capture (one Core Audio IO thread) | equalizer, ring write, FIFO `feed` | ring frames and W, equalizer state, FIFO queue tail, `samplesQueued` | equalizer active set, FIFO queue head |
+  | one renderer IO thread per output | reader, conversion, gain | its reader's P, F, lastW, `lagFrames`, `framesRendered` | ring frames and W, its target, resync flag, gain |
+  | FIFO writer (one) | dequeue, backlog cap, pipe writes | FIFO queue head | FIFO queue tail |
+
+- **S133** *Required.* Atomics and orderings: W release/acquire; reader target delay, gain and FIFO run flag relaxed (a target is stored before its resync flag, and the flag is set with release and taken with an acquire exchange); `framesRendered`, `lagFrames` and `samplesQueued` relaxed; FIFO queue indices release/acquire; equalizer `active` and `reading` indices sequentially consistent (S31). `framesCaptured` is W.
+- **S134** *Required.* Teardown order: stop a device's IO (Core Audio returns after the callback in progress finished) before freeing what that callback uses; stop capture before resetting the ring; stop the FIFO writer before freeing its queue.
+- **S135** *Required.* Ring frames are plain memory, not atomics; the W release/acquire pair and the post-copy check of S40 make reads safe without locks.
+
+## 15. Error states
+
+- **S136** *Observed* (sources cited per row); host reactions are listed for completeness.
+
+  | Condition | Engine signal | Host reaction |
+  |---|---|---|
+  | no speaker enabled at start | none (host checks) | informational "start" notice (`AppDelegate+Engine.swift:17-20`) |
+  | microphone denied for an input source | none (host checks) | start fails, notice (`AppDelegate+Engine.swift:21-40`) |
+  | capture can't start | `start` throws | stop, deselect AirPlay, "start" notice, alert if user (S121) |
+  | audio never arrives | `framesCaptured` stays 0 | waiting / not-working notice (S18) |
+  | capture format change | `interrupted(formatChanged)` | automatic restart (S20) |
+  | capture lost | `interrupted(sourceLost)` | stop, deselect AirPlay, "source" notice (S21) |
+  | source app quits | none (host watches apps) | stop, deselect AirPlay, notice (`AppDelegate.swift:222-232`) |
+  | output can't start | `addOutput` throws | disable, notice per speaker (S69) |
+  | output device lost | `outputLost(uid)` | keep enabled, re-add when back (S68) |
+  | pipe has no reader / reader gone | none (writer retries) | none (S89, S92) |
+  | AirPlay engine down, crashing or unsupported | lifecycle state | restart, give up, Retry (S98) |
+  | AirPlay speaker dropped | engine output report | pairing rules, drop with notice (S104–S109) |
+
+  Notices are capped at 4, newest first (S153).
+
+## 16. Edge cases
+
+- **S137** *Device unplug and replug.* *Observed* (S68). The renderer stops, `outputLost` fires, the UID stays enabled; on replug the next 3 s poll re-adds it with its configured delay and gain. *Required:* the new reader anchors at `W − De` (S45), so it is in sync on its first callback, and nothing from before the unplug is replayed.
+- **S138** *Bluetooth drop.* *Observed* (S68; `README.md`: Bluetooth adds its own lag, so users set a little less delay). Handled like an unplug. *Required:* a device that returns at a different nominal rate (e.g. a headset profile) is rendered through S62; its extra latency is not compensated automatically.
+- **S139** *Sleep and wake.* *Required.* No dedicated handling is needed beyond the general rules and none may crash: a callback gap of any length is a stall (S51, S55: resume at the exact delay, no replay); a capture format change after wake goes through S20; a device that vanished goes through S68; capture that never resumes surfaces through S18; AirPlay speakers dropped by the network follow S104–S109 (dropped as unreachable with a notice after the settle rules); the FIFO backlog cap (S90) keeps stale audio from reaching AirPlay.
+- **S140** *Sample-rate change.* *Observed* (S20, S30). A capture rate change restarts the session: new ring history at the new Rc, equalizer coefficients recomputed and state zeroed, FIFO resampler re-rated, renderers re-added. *Required:* an output device's rate change is absorbed by its renderer's converter (S62) with the reader position untouched; if the renderer can't reconfigure, it reports `outputLost` (S68).
+- **S141** *Source switch.* *Observed* (`AppDelegate+Outputs.swift:118-131`). Stop without deselecting AirPlay (deselecting would race the reselect), then start a user-origin session with the new source: the ring is reset, renderers are re-added, AirPlay keeps playing the pipe.
+- **S142** *Source app quits.* *Observed* (`AppDelegate.swift:222-232`). When the app whose bundle ID is the source terminates during a session: stop, deselect every AirPlay speaker, post a "source" notice (no modal alert).
+- **S143** *AirPlay engine restart.* *Observed* (S98, S102, S105, S81, "fifo: reader closing mid-stream does not kill the process"). The pipe reader disappears; the FIFO writer survives and reopens (S92); the host restarts the engine after 2 s within the crash-loop limits; while it is unreachable the AirPlay list and local delays stay as they were; when it answers again, wanted speakers are re-selected, master volume restored and pipe playback started at once. Local outputs keep playing throughout.
+- **S144** *All speakers off, then on.* *Observed* (S118, S119). Switching the last speaker off stops the session and deselects AirPlay; switching any on starts a new session (ring reset, S39) with the saved per-speaker delays and volumes.
+- **S145** *Default output change.* *Required; Observed* basis (S60; `README.md` "Using it": keep the macOS output on a local device). Renderers are bound to device UIDs, so changing the macOS default output never moves, stops or re-times them. System capture taps processes, not a device, and continues; if the change alters the capture format, S20 applies. macOS's own AirPlay output is hidden from the list by default (S151).
+- **S146** *Six or more speakers.* *Required.* There is no fixed limit on outputs: each local output costs one reader and one renderer, all reading one ring without coordination (S58); the engine MUST sustain at least 16 local outputs at 192 kHz within S127. Every AirPlay speaker is fed by the single pipe stream (OwnTone fans it out). *Observed:* reconcile, pairing and coalesced volume writes are per speaker with no cap (S74, S104, S108); notices are capped at 4 (S153).
+- **S147** *Long names.* *Required; Observed* basis (S101, S149). The engine keys everything by device UID or engine output ID, never by display name; names are display-only, may be arbitrarily long Unicode, and never pass through fixed-size buffers or the audio path. IDs are percent-encoded in API paths.
+- **S148** *AirPlay network loss.* *Observed* (S102–S109, S78–S80). Speakers that lose the network are reported off; after the settle rules they are dropped as unreachable, removed from the enabled set, and noticed; if no enabled, listed AirPlay speaker remains, local delays switch to 0 live (S80); if nothing at all remains enabled, streaming stops (S118). Speakers that stop advertising leave the engine's list (`CHANGELOG.md` 0.4.0). An engine that doesn't answer polls is not a network loss (S81, S102). A pipe nobody reads is bounded by S90.
+
+## 17. Host-side policies checked by the same suites
+
+These run in the host application, not the audio engine core, but the logic suite checks them, so a port that replaces the host must keep them.
+
+- **S149** *Observed* (tests "speaker key: …", "groups: JSON round-trip"). Speaker keys: `ap:<engine output id>` for AirPlay, `lc:<device UID>` for local; parsing splits at the first colon only (UIDs may contain colons); any other prefix is rejected. A group (id, name, member keys) round-trips through JSON unchanged.
+- **S150** *Observed* (tests "group name: …", "group rename: …"). Group names are trimmed; blank or whitespace-only is no name. A new group without a name gets "Group n", n being one more than the number of existing groups, skipping names in use. A blank rename keeps the old name.
+- **S151** *Observed* (tests "devices: …"). The local output list hides virtual, aggregate and auto-aggregate devices and macOS's own AirPlay output by default; a hidden device that is chosen (enabled, auto-connect, in a group, or already listed) stays listed in Core Audio order; "Show Virtual Devices" lists everything; hardware transports (built-in, USB, Bluetooth, HDMI, …) and unknown transports are never hidden.
+- **S152** *Observed* (tests "layout: …"). Transport types map to tags (built-in, Bluetooth and Bluetooth LE → Bluetooth, USB, HDMI, DisplayPort, Thunderbolt, macOS AirPlay, FireWire, virtual, aggregate and auto-aggregate → aggregate, PCI, AVB; unknown → other); only built-in outputs are "This Mac", in Core Audio order; every other local and every AirPlay speaker form one "connected" list sorted by name ignoring case, numbers in numeric order, ties stable. Each tag's icon is an existing SF Symbol, never a bolt (reserved for auto-connect), grey unless the speaker plays, then in its own color.
+- **S153** *Observed* (tests "notices: …"; `Notices.swift:17-20`, `:37-51`). Notices: newest first, one per subject (a repost replaces and moves to the top), at most 4 (the oldest drop off); clearing removes only the given subjects and reports whether anything changed; Automation notices are per player and carry their settings pane; privacy panes open System Settings at Local Network or Automation.
+- **S154** *Observed* (`AirPlayReconcile.swift:104-130`; tests "local network: …", "local network probe: …"). Local Network hint: none while the engine isn't up; denied access → hint at once; allowed → never; unknown → a soft hint only once the running engine has listed no AirPlay speaker for 20 s. A Bonjour browser waiting or failing on PolicyDenied means denied; ready means allowed; other waits mean unknown; setup and cancel keep the last answer.
+- **S155** *Observed* (tests "appearance: …"). Appearance choice: system, light or dark, round-tripped through its stored value; missing or unknown → system, which leaves the app appearance unset; light → aqua, dark → darkAqua.
+- **S156** *Observed* (`docs/DEVELOPMENT.md` "Running and testing"; run-tests output "shellcheck 0.11.0 passed (13 scripts)"). Every listed shell script passes the pinned shellcheck version; a missing shellcheck fails the run.
+
+## 18. Test map
+
+Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints only its summary line through `run-tests.sh`; its individual checks are listed as its own binary prints them. Checks printed more than once are listed once.
+
+### shellcheck
+
+| Check | Clauses |
+|---|---|
+| shellcheck 0.11.0 passed (13 scripts) | S156 |
+
+### ring buffer
+
+| Check | Clauses |
+|---|---|
+| A delay=4096 not silent | S44, S45 |
+| A delay=4096 contiguous (no clicks) | S44 |
+| A measured delay ≈ 4096 | S42, S56 |
+| B delay=0 not silent (floored to one block) | S42, S45 |
+| B delay=0 contiguous | S44 |
+| B delay=0 near-live, not silent | S42, S56 |
+| C underrun eventually emits silence | S53 |
+| C no replay loop (stays silent once drained) | S49, S53 |
+| D resumes with audio | S54 |
+| D plays FRESH frames (not replayed old) | S49, S54 |
+| D delay re-established ≈ 4096 | S54, S56 |
+| E increase: never replays audio | S47, S49 |
+| E increase: delay 24000 reached | S46, S47 |
+| E decrease: applied on the next block | S46, S48 |
+| F reader1 contiguous | S44, S58 |
+| F reader2 contiguous | S44, S58 |
+| F reader1 delay ≈ 4096 | S42, S58 |
+| F reader2 delay ≈ 12000 | S42, S58 |
+| F readers independent (different positions) | S9, S58 |
+| G gap: no replayed audio | S49 |
+| G gap: delay restored to 1 s (within the dead band) | S50, S57 |
+| H stall: never replays audio | S49, S51 |
+| H stall: resumes after the last frame it had | S51 |
+| H stall: delay restored | S51, S55 |
+| I faster output: never replays audio | S49, S52 |
+| I faster output: lag stays within tolerance | S50, S52, S57 |
+| I slower output: never replays audio | S49, S51 |
+| I slower output: lag stays within tolerance | S50, S51, S57 |
+| J up-then-down: never replays audio | S47, S49 |
+| J up-then-down: lands on the new delay | S46, S48 |
+| K after a stall, drift is still held within ~35 ms | S50, S51, S52, S57 |
+| L change while frozen: applied after resume | S46 |
+
+### logic
+
+| Check | Clauses |
+|---|---|
+| volume: 0 is silent | S70 |
+| volume: 100 is unity | S70 |
+| volume: 50 ≈ −18 dB | S70 |
+| volume: 10 ≈ −60 dB | S70 |
+| volume: position↔gain round-trip | S70 |
+| volume: legacy 3.49% migrates to ≈33 | S75 |
+| volume: strictly increasing | S70 |
+| volume writes: first value queues a flush | S74 |
+| volume writes: later values ride the queued flush | S74 |
+| volume writes: another speaker gets its own flush | S74 |
+| volume writes: the flush sends the latest value | S74 |
+| volume writes: one request per flush | S74 |
+| volume writes: a value after the flush queues a new one | S74 |
+| volume writes: speakers don't overwrite each other | S74 |
+| source: round-trip system | S12 |
+| source: round-trip app(bundleID: "com.spotify.client") | S12 |
+| source: round-trip input(uid: "BuiltInMicrophoneDevice") | S12 |
+| source: missing value → system | S12 |
+| source: legacy bundle-ID value → app | S12 |
+| source: input has no bundle ID | S12 |
+| appearance: round-trip system | S155 |
+| appearance: round-trip light | S155 |
+| appearance: round-trip dark | S155 |
+| appearance: missing value → match system | S155 |
+| appearance: unknown value → match system | S155 |
+| appearance: system leaves NSApp.appearance unset | S155 |
+| appearance: light → aqua, dark → darkAqua | S155 |
+| speaker key: AirPlay prefix | S149 |
+| speaker key: local parse keeps colons | S149 |
+| speaker key: unknown prefix rejected | S149 |
+| groups: JSON round-trip | S149 |
+| group name: trimmed | S150 |
+| group name: blank or whitespace-only is no name | S150 |
+| group name: a typed name is kept | S150 |
+| group name: blank first group is Group 1 | S150 |
+| group name: blank second group is Group 2 | S150 |
+| group name: the default skips names in use | S150 |
+| group rename: trimmed | S150 |
+| group rename: blank keeps the name | S150 |
+| devices: virtual and aggregate hidden by default | S151 |
+| devices: a chosen virtual device stays listed, in order | S151 |
+| devices: Show Virtual Devices lists everything | S151 |
+| devices: hardware and unknown transports are never hidden | S151 |
+| layout: transport types map to their tag | S152 |
+| layout: an unknown transport is Other | S152 |
+| layout: only built-in outputs are This Mac | S152 |
+| layout: every type icon is an existing SF Symbol | S152 |
+| layout: no type icon is a bolt (that marks auto-connect) | S152 |
+| layout: type icons are grey unless the speaker plays | S152 |
+| layout: a playing speaker's type icon takes its own color | S152 |
+| layout: This Mac keeps Core Audio's order | S152 |
+| layout: connected speakers sort by name, ignoring case, numbers in order, ties stable | S152, S147 |
+| layout: AirPlay and local speakers share one list | S152 |
+| layout: no speakers, empty lists | S152 |
+| eq: flat is transparent | S25, S26, S32 |
+| eq: +6 dB band at 1 kHz | S22, S25, S32 |
+| eq: 1 kHz band leaves 8 kHz alone | S25, S32 |
+| eq: same response at 44.1 kHz | S30, S32 |
+| eq: Bass Boost lifts 40 Hz | S32, S33 |
+| eq: preamp −6 dB | S26, S32 |
+| eq: disabled is bypassed | S27 |
+| eq: recovers from a NaN sample (silence stays silent) | S29, S123 |
+| eq: every preset has 10 bands | S33 |
+| eq: one preset per id, in menu order | S33 |
+| fifo: 48000 Hz → 48 kHz frame count | S85 |
+| fifo: 44100 Hz → 48 kHz frame count | S85 |
+| fifo: 96000 Hz → 48 kHz frame count | S85 |
+| fifo: 32000 Hz → 48 kHz frame count | S85 |
+| delay: 2.0 s holds (last frame of the block) | S3, S42, S44, S56 |
+| delay: change to 500 ms is exact | S46, S48 |
+| delay: change to 3000 ms is exact | S46, S47 |
+| delay: change to 1820 ms is exact | S3, S46, S48 |
+| delay: change to 0 ms is exact | S42, S46, S48 |
+| ring: reset clears history | S39 |
+| pairing: unreachable speaker is turned off | S106 |
+| pairing: unreachable speaker isn't tracked | S106 |
+| pairing: AirPlay 1 password is turned off with its own reason | S106 |
+| pairing: PIN speaker gets a prompt | S106 |
+| pairing: no second prompt while one is open | S107 |
+| pairing: code accepted while asking | S107 |
+| pairing: a second code for the same prompt is ignored | S107 |
+| pairing: wait while the code is being sent | S107 |
+| pairing: a poll sent before the re-select finished is ignored | S107 |
+| pairing: an early 'on' report doesn't confirm | S107 |
+| pairing: paired speaker that stays on is done | S107 |
+| pairing: a later refusal on its own gets a notice, not a prompt | S106 |
+| pairing: the user's next click starts a new attempt with a prompt | S106 |
+| pairing: still asking after pairing is turned off, not prompted again | S107 |
+| pairing: done after the second refusal | S107 |
+| pairing: paired but then unreachable says so | S107 |
+| pairing: password speaker gets a password prompt | S106 |
+| pairing: a code after cancel is ignored | S107 |
+| pairing: a late re-select after cancel doesn't track it | S107 |
+| pairing: a speaker turned on automatically gets a notice, not a prompt | S106 |
+| pairing: an automatic refusal isn't tracked | S106 |
+| pairing: a refusal long after the click gets a notice | S106 |
+| pairing: a poll sent before the click is ignored | S106 |
+| pairing: the poll after the click prompts | S106 |
+| pairing: forgetting a click drops its prompt | S107 |
+| pairing: unreachable after a click | S106 |
+| pairing: one click answers one refusal only | S106 |
+| pairing queue: only a speaker being asked is queued | S108 |
+| pairing queue: an unlisted speaker loses its pairing and prompt | S108 |
+| pairing queue: a listed speaker keeps its prompt | S108 |
+| pairing queue: the next prompt is the listed speaker's | S108 |
+| pairing queue: one prompt per speaker | S108 |
+| pairing queue: the shown prompt still takes its code | S108 |
+| pairing queue: a speaker that vanishes mid-pairing is dropped | S108 |
+| pairing queue: a vanished speaker that comes back gets a notice, not a second prompt | S108 |
+| pairing queue: a click not answered yet survives the speaker vanishing for a moment | S108 |
+| pairing queue: forgetting a speaker drops its queued prompt | S107, S108 |
+| notices: start empty | S153 |
+| notices: newest first, both kept | S153 |
+| notices: same subject replaces the old one and moves to the top | S153 |
+| notices: capped | S153 |
+| notices: the oldest drop off | S153 |
+| notices: clear removes only the given subjects | S153 |
+| notices: clearing an absent subject changes nothing | S153 |
+| notices: clear all | S153 |
+| notices: one Automation notice per player, each with its settings pane | S153 |
+| notices: no settings button unless given | S153 |
+| notices: allowing one player clears only its notice | S153 |
+| notices: privacy panes open System Settings at the right setting | S153 |
+| local network: denied access shows at once, whatever the list | S154 |
+| local network: allowed access never hints, even on a network without speakers | S154 |
+| local network: unknown access, speakers found or engine silent: no hint | S154 |
+| local network: unknown access, no hint during normal discovery | S154 |
+| local network: unknown access, a soft hint once nothing was found for a while | S154 |
+| local network: no hint while the engine isn't up | S154 |
+| local network probe: a browser waiting on PolicyDenied means denied | S154 |
+| local network probe: a browser failing on PolicyDenied means denied | S154 |
+| local network probe: a browser that is ready means allowed | S154 |
+| local network probe: other waits say nothing about access | S154 |
+| local network probe: setup and cancel keep the last answer | S154 |
+| engine: begins stopped | S98 |
+| engine: start → starting | S98 |
+| engine: API answer → running | S98 |
+| engine: exit → restarting | S98 |
+| engine: a stale answer doesn't mark a restart running | S98 |
+| engine: six exits in a minute → gaveUp | S98 |
+| engine: gaveUp offers Retry | S98 |
+| engine: retry from gaveUp → starting | S98 |
+| engine: occasional exits never give up | S98 |
+| engine: macOS 15 with a macOS 26 engine → unsupportedOS | S98 |
+| engine: unsupported OS still offers Retry | S98 |
+| engine: retry from unsupported OS → starting | S98 |
+| engine: macOS 15 with a macOS 15 engine restarts after a quick exit | S98 |
+| engine: unknown engine floor never reports unsupported OS | S98 |
+| engine: a late exit on macOS 15 restarts | S98 |
+| engine: a quick exit after the API answered restarts | S98 |
+| engine: a quick exit on macOS 26 restarts | S98 |
+| engine: no API answer → failed, retryable | S98 |
+| engine: setup failure → failed, retryable | S98 |
+| engine: stop → stopped | S98 |
+| reconcile: an 'off' report while the switch-on is in flight waits | S103, S104 |
+| reconcile: a report requested before the switch-on succeeded waits | S103, S104 |
+| reconcile: an 'off' report within a poll of the switch-on waits | S103, S104 |
+| reconcile: still off a poll after the switch-on → dropped | S103, S104, S106 |
+| reconcile: an older answer doesn't decide while a newer request is on its way | S103 |
+| reconcile: still settling with a request in flight | S103 |
+| reconcile: a failed switch-on leaves no grace | S103 |
+| reconcile: wanted, nothing pending, engine says off → dropped as unreachable | S104, S106 |
+| reconcile: a PIN request without the user's click → dropped with a notice | S104, S106 |
+| reconcile: a PIN request right after the user's click → prompt | S104, S106 |
+| reconcile: after an engine restart the speaker is selected again | S104, S105 |
+| reconcile: a wanted speaker that just appeared is selected | S104 |
+| reconcile: a speaker selected in the engine but off in AudioSync is deselected | S104 |
+| reconcile: matching selection is kept | S104 |
+| reconcile: nothing changes while not streaming | S104 |
+| reconcile: no switch-on in flight at first | S103 |
+| reconcile: a switch-on is in flight once sent | S103 |
+| reconcile: poll timeout during an in-flight switch-on is not an outage | S102 |
+| reconcile: a failed poll with nothing in flight is an outage | S102 |
+| reconcile: a busy write doesn't make a down engine reachable | S102 |
+| reconcile: a speaker with a switch-on in flight isn't re-selected after an engine restart | S104 |
+| reconcile: PIN speaker: failed PUT after a user click → .ask, not .select | S102, S103, S104, S106 |
+| shutdown: drain waits for writes already queued | S110 |
+| shutdown: drain of an idle queue returns at once | S110 |
+| shutdown: a stuck write only costs the timeout | S110 |
+| shutdown: quit waits at most 5 s on the engine | S110 |
+| speaker: on while streaming plays | S122 |
+| speaker: on while off waits | S122 |
+| speaker: off while streaming is off | S122 |
+| speaker: off while off is off | S122 |
+| speaker: click on a playing speaker turns it off | S122 |
+| speaker: click on a waiting speaker turns it on (and starts streaming) | S119, S122 |
+| speaker: click on an off speaker turns it on | S122 |
+| availability: open | S106 |
+| availability: PIN asks for a code | S106 |
+| availability: password asks for a code | S106 |
+| availability: AirPlay 1 password unsupported | S106 |
+| outputs: only AirPlay 1/2 with an id and a name | S100 |
+| outputs: name, type, selected and volume are read | S100 |
+| outputs: a paired speaker (requires_auth, no needs_auth_key) needs no PIN | S100 |
+| outputs: needs_auth_key asks for a PIN | S100 |
+| outputs: has_password marks a password speaker | S100 |
+| outputs: missing fields default to off, 50, no PIN, no password | S100 |
+| outputs: invalid JSON gives no speakers | S100 |
+| outputs: wrong shape gives no speakers | S100 |
+| outputs: top-level array gives no speakers | S100 |
+| outputs: the Mac's own receiver is recognized | S100 |
+| outputs: own receiver match ignores case | S100 |
+| outputs: only an exact name is the Mac | S100 |
+| outputs: unknown computer name hides nothing | S100 |
+| outputs: own receiver is left out of the list | S100, S79 |
+| config: API binds to 127.0.0.1 only | S96 |
+| config: no trusted networks | S96 |
+| config: admin_password is this run's password | S96 |
+| config: no browser origin allowed | S96 |
+| config: websocket kept off the API port | S96 |
+| config: runs as the given user | S96 |
+| config: normal log level | S96 |
+| config: HTTP stream, DAAP and RSP need the password | S96 |
+| config: API port | S96 |
+| config: media folder holds the pipe | S82, S96 |
+| config: pipe autostarts | S96 |
+| config: pipe at 48000 Hz | S83, S96 |
+| config: pipe at 16-bit | S83, S96 |
+| config: local audio output disabled | S96 |
+| config: MPD disabled | S96 |
+| config: debug log level when diagnostics are on | S96 |
+| config: no password left after start | S97 |
+| config: both passwords marked removed | S97 |
+| config: nothing else changes when the password is removed | S97 |
+| capture: frames → flowing | S18 |
+| capture: no frames, unknown source → waiting | S17, S18 |
+| capture: playing only briefly → still waiting | S18 |
+| capture: playing for the grace period with no frames → not working | S18 |
+| capture: a paused or unknown source never blames the permission | S18, S19 |
+| delay: AirPlay chosen → configured delay | S78 |
+| delay: no AirPlay → plays at once | S78 |
+| delay: zero stays zero | S78 |
+| delay: a chosen speaker not listed today doesn't count | S79 |
+| delay: chosen and listed counts | S79 |
+| delay: listed but not chosen doesn't count | S79 |
+| devices: macOS's own AirPlay output is hidden by default | S145, S151 |
+
+### fifo
+
+| Check | Clauses |
+|---|---|
+| fifo: audio reaches the reader | S83, S84, S88, S90, S91 |
+| fifo: stop/start leaves one writer thread | S88 |
+| fifo: reader closing mid-stream does not kill the process | S92, S143 |
+| fifo: NaN/±inf samples do not crash | S86, S123 |
+| fifo: stop closes the writer | S88 |
+
+### engine (`--hardware`)
+
+| Check | Clauses |
+|---|---|
+| found output devices | S60 |
+| \<device\>: output starts | S61 |
+| \<device\>: renders audio | S64, S67 |
+| \<device\>: delay 2000 ms | S46, S56, S62, S66 |
+| \<device\>: delay 500 ms | S46, S48, S56, S62, S66 |
+| \<device\>: delay 3000 ms | S46, S47, S56, S62, S66 |
+| \<device\>: delay 150 ms | S46, S48, S56, S62, S66 |
