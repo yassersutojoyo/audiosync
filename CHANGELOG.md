@@ -4,6 +4,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-10-17
+
 ### Changed
 
 - The prebuilt app's AirPlay engine now works on macOS 15 (Sequoia) and later, whichever macOS the release was built on. You no longer need to build from source on macOS 15.
@@ -80,5 +82,6 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
-[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.4...HEAD
+[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/yassersutojoyo/audiosync/compare/v0.4...v0.4.1
 [0.4.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.4
