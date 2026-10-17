@@ -1,4 +1,3 @@
-<!-- Logo lockup: the wordmark is about as wide as the icon tile and sits just below it. align="top" drops the line gap under the icon. -->
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="brand/audiosync-icon-dark.svg">
