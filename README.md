@@ -40,7 +40,7 @@ Each local speaker gets its own delay (0 to 20 s), and the AirPlay engine keeps 
 
 ## Coming from Airfoil?
 
-If you've used Airfoil, the idea will feel familiar: send the whole system's audio, or just one app, to AirPlay speakers and the Mac's own outputs at the same time, with each local speaker lined up so nothing echoes. AudioSync is free and open source, but it does less. It only streams to AirPlay receivers and outputs macOS already knows about, so there's no Chromecast or other kinds of network speakers. The prebuilt app needs macOS 26 (on macOS 15 you build it yourself), everything runs about two seconds behind, and it's still an alpha.
+If you've used Airfoil, the idea will feel familiar: send the whole system's audio, or just one app, to AirPlay speakers and the Mac's own outputs at the same time, with each local speaker lined up so nothing echoes. AudioSync is free and open source, but it does less. It only streams to AirPlay receivers and outputs macOS already knows about, so there's no Chromecast or other kinds of network speakers. It needs macOS 15 or later, everything runs about two seconds behind, and it's still an alpha.
 
 To be clear: Airfoil is a product of Rogue Amoeba. AudioSync isn't affiliated with them or endorsed by them, and it shares no code with Airfoil.
 
