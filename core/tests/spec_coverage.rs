@@ -237,7 +237,6 @@ fn the_exempt_list_is_well_formed_and_names_spec_clauses() {
 }
 
 #[test]
-#[ignore = "enabled after both halves are merged"]
 fn every_clause_is_covered_or_exempt() {
     let known = spec_numbers();
     let (covered, _) = covers();

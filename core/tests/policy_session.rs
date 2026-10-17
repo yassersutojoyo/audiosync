@@ -1,12 +1,15 @@
-//! Sessions, output sync and the host's reactions (S20, S21, S68, S69, S116 to
-//! S122, S136 to S138, S141, S142, S144 to S146).
+//! Sessions, output sync, streaming, source switches and the host's reactions
+//! (S20, S21, S68, S69, S116 to S122, S136 to S138, S141, S142, S144 to S146,
+//! S161 to S163, S165).
 
 use audiosync_core::policy::pairing::DropReason;
 use audiosync_core::policy::session::{
-    AFTER_START, AfterStart, AutoStartGate, Click, Incident, OutputSync, Reaction, SpeakerKind,
-    SpeakerState, StartOrigin, TurnOff, TurnOn, click, may_start, reaction, source_switch,
-    speaker_state, sync_outputs, turn_off, turn_on,
+    AFTER_START, AfterStart, AutoStartGate, Click, Incident, OutputSync, Reaction, SourceChoice,
+    SpeakerEvent, SpeakerKind, SpeakerState, StartOrigin, StreamingAction, TurnOff, TurnOn,
+    choose_source, click, may_start, reaction, source_switch, speaker_state, streaming_after,
+    sync_outputs, turn_off, turn_on,
 };
+use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::speakers::{NoticeSubject, SpeakerKey};
 use proptest::prelude::*;
 
@@ -330,6 +333,166 @@ fn renderers_follow_device_uids_not_the_default_output() {
     assert!(before.is_empty());
 }
 
+// covers: S161, S117
+#[test]
+fn output_sync_attaches_and_detaches_in_uid_order() {
+    let sync = sync_outputs(
+        true,
+        &["usb-b", "hdmi", "usb-a", "bt"],
+        &["bt", "usb-a", "hdmi", "usb-b", "spare"],
+        &["zz", "hdmi", "aa"],
+    );
+    assert_eq!(
+        sync.add,
+        ["bt", "usb-a", "usb-b"],
+        "enabled ∩ available − active"
+    );
+    assert_eq!(sync.remove, ["aa", "zz"], "active − enabled");
+    // A UID the host lists twice counts once.
+    let sync = sync_outputs(true, &["b", "a", "b"], &["a", "b", "a"], &NONE);
+    assert_eq!(sync.add, ["a", "b"]);
+}
+
+// covers: S161, S68, S117, S137
+#[test]
+fn an_unplugged_speaker_stays_on_and_is_attached_again_once_listed() {
+    let enabled = ["usb", "builtin"];
+    // A playing speaker that is still present is left alone.
+    assert!(sync_outputs(true, &enabled, &["builtin", "usb"], &["builtin", "usb"]).is_empty());
+    // Unplugged: its renderer is gone (S68), its UID stays enabled and waits.
+    assert!(sync_outputs(true, &enabled, &["builtin"], &["builtin"]).is_empty());
+    // A renderer whose UID is still enabled is never detached, listed or not.
+    assert!(
+        sync_outputs(true, &enabled, &["builtin"], &["builtin", "usb"])
+            .remove
+            .is_empty()
+    );
+    // Plugged back in: the first sync that finds it listed attaches it.
+    let replug = sync_outputs(true, &enabled, &["builtin", "usb"], &["builtin"]);
+    assert_eq!(replug.add, ["usb"]);
+    assert!(replug.remove.is_empty());
+    // Switched off by the user: detached.
+    let off = sync_outputs(true, &["builtin"], &["builtin", "usb"], &["builtin", "usb"]);
+    assert_eq!(off.remove, ["usb"]);
+    assert!(off.add.is_empty());
+}
+
+// covers: S161, S138
+#[test]
+fn a_headset_out_of_range_waits_while_the_other_speaker_plays() {
+    let enabled = ["headset", "desk"];
+    // Disconnected: nothing to attach or detach; the desk keeps playing.
+    assert!(sync_outputs(true, &enabled, &["desk"], &["desk"]).is_empty());
+    // Reconnected: attached again.
+    let back = sync_outputs(true, &enabled, &["desk", "headset"], &["desk"]);
+    assert_eq!(back.add, ["headset"]);
+    assert!(back.remove.is_empty());
+}
+
+// covers: S165, S161, S146
+#[test]
+fn eight_local_speakers_are_attached_by_one_sync() {
+    let enabled: Vec<String> = (1..=8).rev().map(|i| format!("usb-{i}")).collect();
+    let mut present = enabled.clone();
+    present.push("BuiltInSpeakerDevice".to_owned());
+    let sync = sync_outputs(true, &enabled, &present, &["BuiltInSpeakerDevice"]);
+    let all: Vec<String> = (1..=8).map(|i| format!("usb-{i}")).collect();
+    assert_eq!(sync.add, all, "all eight, in UID order");
+    assert_eq!(sync.remove, ["BuiltInSpeakerDevice"]);
+}
+
+// covers: S162, S118, S119, S144
+#[test]
+fn streaming_follows_the_enabled_sets_alone() {
+    use SpeakerEvent::{StartRequested, SwitchedOff, SwitchedOn};
+    use StreamingAction::{AskForSpeaker, Nothing, Start, Stop};
+    // Switching the last speaker off stops streaming.
+    assert_eq!(streaming_after(SwitchedOff, true, 0, 0), Stop);
+    // One speaker still on, an AirPlay one included, keeps it running.
+    assert_eq!(streaming_after(SwitchedOff, true, 0, 1), Nothing);
+    assert_eq!(streaming_after(SwitchedOff, true, 1, 0), Nothing);
+    // While stopped there is nothing to stop, and a switch-off starts nothing.
+    assert_eq!(streaming_after(SwitchedOff, false, 0, 0), Nothing);
+    assert_eq!(streaming_after(SwitchedOff, false, 2, 1), Nothing);
+    // Turning a speaker on again starts streaming ...
+    assert_eq!(streaming_after(SwitchedOn, false, 1, 0), Start);
+    assert_eq!(streaming_after(SwitchedOn, false, 0, 1), Start);
+    // ... but only while nothing streams.
+    assert_eq!(streaming_after(SwitchedOn, true, 2, 0), Nothing);
+    // Start with no speaker on asks for one first, with an informational notice.
+    assert_eq!(streaming_after(StartRequested, false, 0, 0), AskForSpeaker);
+    let notice = reaction(&Incident::NoSpeakerEnabled);
+    assert!(notice.informational && !notice.stop_session);
+    assert_eq!(streaming_after(StartRequested, false, 0, 1), Start);
+    assert_eq!(streaming_after(StartRequested, true, 1, 0), Nothing);
+}
+
+// covers: S162, S137
+#[test]
+fn streaming_keeps_running_while_the_only_speaker_is_unplugged() {
+    // The only speaker is still enabled; its device just isn't listed now.
+    assert_eq!(
+        streaming_after(SpeakerEvent::ListingChanged, true, 1, 0),
+        StreamingAction::Nothing
+    );
+    assert_eq!(
+        streaming_after(SpeakerEvent::ListingChanged, false, 1, 0),
+        StreamingAction::Nothing,
+        "a listing change is not a switch"
+    );
+}
+
+// covers: S163, S141
+#[test]
+fn picking_a_source_rebuilds_remembers_or_changes_nothing() {
+    let system = AudioSource::System;
+    let spotify = AudioSource::App {
+        bundle_id: "com.spotify.client".to_owned(),
+    };
+    let mic = AudioSource::Input {
+        uid: "BuiltInMicrophoneDevice".to_owned(),
+    };
+    // Switching while streaming rebuilds the capture; the speakers stay on
+    // and the AirPlay speakers stay selected.
+    let switch = choose_source(&system, &spotify, true);
+    let SourceChoice::Rebuild(how) = switch else {
+        panic!("expected a rebuild, got {switch:?}");
+    };
+    assert_eq!(how, source_switch(true));
+    assert!(how.stop_keeping_airplay);
+    assert_eq!(how.start, Some(StartOrigin::User));
+    // So does switching to an input device.
+    assert_eq!(
+        choose_source(&spotify, &mic, true),
+        SourceChoice::Rebuild(source_switch(true))
+    );
+    // Switching while stopped only remembers the choice.
+    assert_eq!(choose_source(&system, &mic, false), SourceChoice::Remember);
+    let music = AudioSource::App {
+        bundle_id: "com.apple.Music".to_owned(),
+    };
+    assert_eq!(
+        choose_source(&spotify, &music, false),
+        SourceChoice::Remember
+    );
+    // Choosing the source already in use changes nothing.
+    for streaming in [true, false] {
+        assert_eq!(
+            choose_source(&spotify, &spotify.clone(), streaming),
+            SourceChoice::Unchanged
+        );
+        assert_eq!(
+            choose_source(&system, &AudioSource::System, streaming),
+            SourceChoice::Unchanged
+        );
+    }
+    // Any real change clears the old source's notices; no change clears none.
+    let cleared = [NoticeSubject::Source, NoticeSubject::Capture];
+    assert_eq!(switch.clears(), cleared);
+    assert_eq!(SourceChoice::Remember.clears(), cleared);
+    assert!(SourceChoice::Unchanged.clears().is_empty());
+}
+
 // covers: S146
 #[test]
 fn sixteen_and_more_local_outputs_sync_without_a_limit() {
@@ -340,7 +503,7 @@ fn sixteen_and_more_local_outputs_sync_without_a_limit() {
 }
 
 proptest! {
-    // covers: S117
+    // covers: S117, S161
     #[test]
     fn output_sync_is_idempotent(
         enabled in proptest::collection::vec(0u8..12, 0..12),
@@ -350,6 +513,9 @@ proptest! {
         let names = |ids: &[u8]| ids.iter().map(|id| format!("uid-{id}")).collect::<Vec<_>>();
         let (enabled, present, active) = (names(&enabled), names(&present), names(&active));
         let sync = sync_outputs(true, &enabled, &present, &active);
+        // Sorted by UID, each once.
+        prop_assert!(sync.add.windows(2).all(|pair| pair[0] < pair[1]));
+        prop_assert!(sync.remove.windows(2).all(|pair| pair[0] < pair[1]));
         let mut after: Vec<String> = active.iter().filter(|uid| !sync.remove.contains(uid)).cloned().collect();
         after.extend(sync.add.iter().cloned());
         prop_assert!(sync_outputs(true, &enabled, &present, &after).is_empty());

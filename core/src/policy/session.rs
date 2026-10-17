@@ -1,8 +1,11 @@
-//! Starting and stopping sessions, keeping their local outputs in sync, and the
-//! host's reaction to everything that can go wrong (S20, S21, S68, S69, S116 to
-//! S122, S136, S141, S142).
+//! Starting and stopping sessions, keeping their local outputs in sync, source
+//! switches, and the host's reaction to everything that can go wrong (S20,
+//! S21, S68, S69, S116 to S122, S136, S141, S142, S161 to S163).
+
+use std::collections::BTreeSet;
 
 use super::pairing::DropReason;
+use super::source::AudioSource;
 use super::speakers::{NoticeSubject, SpeakerKey};
 
 /// Who started a session (S120).
@@ -55,13 +58,14 @@ pub const AFTER_START: [AfterStart; 5] = [
 ];
 
 /// The local outputs to add and remove so that the running renderers match the
-/// enabled set (S117).
+/// enabled set (S117, S161).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OutputSync {
-    /// Enabled and present UIDs without a renderer, in enabled order. Each is
-    /// added with its effective delay and gain.
+    /// Enabled and present UIDs without a renderer, sorted by UID, each once.
+    /// Each is added with its effective delay and gain.
     pub add: Vec<String>,
-    /// UIDs with a renderer that are no longer enabled.
+    /// UIDs with a renderer that are no longer enabled, sorted by UID, each
+    /// once.
     pub remove: Vec<String>,
 }
 
@@ -72,39 +76,40 @@ impl OutputSync {
     }
 }
 
-/// Output sync (S117), idempotent: while running, add every enabled, present UID
-/// that has no renderer and remove every renderer whose UID is no longer
-/// enabled; an enabled UID that isn't present waits for a later sync. Outputs
-/// are added only while running.
+/// Output sync (S117, S161), idempotent, from three sets of device UIDs:
+/// `enabled` by the user, `present` (listed now) and `active` (has a
+/// renderer). While running it adds `enabled ∩ present − active`; it always
+/// removes `active − enabled`. Both lists are sorted by UID, with no limit on
+/// their length. An enabled UID that isn't present waits for a later sync,
+/// and a renderer whose UID is still enabled is never removed, listed or not.
 ///
 /// Renderers are keyed by device UID, so a device that disappeared (its
-/// renderer stopped, its UID still enabled) is added again once it is listed
-/// again (S68), and a change of the system's default output changes nothing
-/// (S145).
+/// renderer stopped, its UID still enabled) is added again by the first sync
+/// that finds it listed (S68), while the other outputs keep playing, and a
+/// change of the system's default output changes nothing (S145).
 pub fn sync_outputs<E: AsRef<str>, P: AsRef<str>, A: AsRef<str>>(
     running: bool,
     enabled: &[E],
     present: &[P],
     active: &[A],
 ) -> OutputSync {
-    let contains = |list: &[A], uid: &str| list.iter().any(|item| item.as_ref() == uid);
-    let mut sync = OutputSync::default();
-    if running {
-        for uid in enabled.iter().map(AsRef::as_ref) {
-            let is_present = present.iter().any(|item| item.as_ref() == uid);
-            let added = sync.add.iter().any(|item| item == uid);
-            if is_present && !contains(active, uid) && !added {
-                sync.add.push(uid.to_owned());
-            }
-        }
-    }
-    for uid in active.iter().map(AsRef::as_ref) {
-        let is_enabled = enabled.iter().any(|item| item.as_ref() == uid);
-        if !is_enabled && !sync.remove.iter().any(|item| item == uid) {
-            sync.remove.push(uid.to_owned());
-        }
-    }
-    sync
+    let enabled: BTreeSet<&str> = enabled.iter().map(AsRef::as_ref).collect();
+    let present: BTreeSet<&str> = present.iter().map(AsRef::as_ref).collect();
+    let active: BTreeSet<&str> = active.iter().map(AsRef::as_ref).collect();
+    let add = if running {
+        enabled
+            .iter()
+            .filter(|uid| present.contains(*uid) && !active.contains(*uid))
+            .map(|uid| (*uid).to_owned())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let remove = active
+        .difference(&enabled)
+        .map(|uid| (*uid).to_owned())
+        .collect();
+    OutputSync { add, remove }
 }
 
 /// The kind of speaker the user switched.
@@ -158,6 +163,60 @@ pub fn turn_off(kind: SpeakerKind, running: bool, enabled_left: usize) -> TurnOf
         (true, 0, _) => TurnOff::StopSession,
         (true, _, SpeakerKind::Local) => TurnOff::SyncLocalOutputs,
         (true, _, SpeakerKind::AirPlay) => TurnOff::DeselectAirPlay,
+    }
+}
+
+/// Something that may start or stop streaming (S162).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpeakerEvent {
+    /// The user switched a speaker on.
+    SwitchedOn,
+    /// The user switched a speaker off.
+    SwitchedOff,
+    /// The user asked to start streaming.
+    StartRequested,
+    /// A speaker's device or AirPlay entry went away or came back (unplugged,
+    /// out of range, listed again); nobody switched a speaker.
+    ListingChanged,
+}
+
+/// What streaming does after a [`SpeakerEvent`] (S162).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamingAction {
+    /// Start a session, user origin (S119).
+    Start,
+    /// Stop the session and deselect every AirPlay speaker (S118).
+    Stop,
+    /// Start nothing; ask the user to choose a speaker first with an
+    /// informational "start" notice (S116, S136).
+    AskForSpeaker,
+    /// Nothing changes.
+    Nothing,
+}
+
+/// The streaming policy (S162), decided from the enabled sets alone:
+/// `enabled_local` and `enabled_airplay` count the speakers enabled after
+/// the event, whether their devices are listed or not.
+///
+/// A session runs while anything at all is enabled, so a speaker that is on
+/// but unplugged or out of reach keeps it running, and one AirPlay speaker is
+/// enough; it stops once nothing is enabled. Only switching a speaker on, or
+/// asking to start, while nothing streams starts a session; a start with
+/// nothing enabled asks for a speaker instead.
+pub fn streaming_after(
+    event: SpeakerEvent,
+    streaming: bool,
+    enabled_local: usize,
+    enabled_airplay: usize,
+) -> StreamingAction {
+    let any_enabled = enabled_local > 0 || enabled_airplay > 0;
+    match (event, streaming, any_enabled) {
+        (_, true, false) => StreamingAction::Stop,
+        (SpeakerEvent::StartRequested, false, false) => StreamingAction::AskForSpeaker,
+        (SpeakerEvent::SwitchedOn | SpeakerEvent::StartRequested, false, true) => {
+            StreamingAction::Start
+        }
+        _ => StreamingAction::Nothing,
     }
 }
 
@@ -255,6 +314,46 @@ pub fn source_switch(running: bool) -> SourceSwitch {
     SourceSwitch {
         stop_keeping_airplay: running,
         start: running.then_some(StartOrigin::User),
+    }
+}
+
+/// The notices a change of source clears: the old source's (S163).
+static SOURCE_CHANGE_CLEARS: [NoticeSubject; 2] = [NoticeSubject::Source, NoticeSubject::Capture];
+
+/// What picking a capture source does (S163).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceChoice {
+    /// The source already in use was picked: nothing changes.
+    Unchanged,
+    /// Not streaming: remember the new source for the next start.
+    Remember,
+    /// Streaming: remember the new source and rebuild the capture as this
+    /// switch says (S141). Speakers stay on and AirPlay speakers stay
+    /// selected.
+    Rebuild(SourceSwitch),
+}
+
+impl SourceChoice {
+    /// The notices to clear: the old source's "source" and "capture"
+    /// notices on any real change, none otherwise.
+    pub fn clears(&self) -> &'static [NoticeSubject] {
+        match self {
+            SourceChoice::Unchanged => &[],
+            SourceChoice::Remember | SourceChoice::Rebuild(_) => &SOURCE_CHANGE_CLEARS,
+        }
+    }
+}
+
+/// Picking `picked` as the capture source while `current` is in use (S163).
+/// Any other source, an input device included, is a real change: remembered
+/// while not streaming, rebuilt at once while streaming.
+pub fn choose_source(current: &AudioSource, picked: &AudioSource, streaming: bool) -> SourceChoice {
+    if picked == current {
+        SourceChoice::Unchanged
+    } else if streaming {
+        SourceChoice::Rebuild(source_switch(true))
+    } else {
+        SourceChoice::Remember
     }
 }
 

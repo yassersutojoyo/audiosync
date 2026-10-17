@@ -1,4 +1,5 @@
-//! Whether captured audio flows (S17 to S19).
+//! Whether captured audio flows (S17 to S19), and whether a new capture rate
+//! rebuilds the session (S157).
 //!
 //! A process tap delivers nothing until its source plays, so "no frames yet"
 //! is normal (S17). Only a source known to have been playing for a while
@@ -38,6 +39,30 @@ pub fn capture_verdict(frames_captured: u64, playing_for: Option<Seconds>) -> Ca
         CaptureVerdict::NotWorking
     } else {
         CaptureVerdict::Waiting
+    }
+}
+
+/// What a capture rate read from the running capture means for its session
+/// (S157).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RateDecision {
+    /// Keep the session playing.
+    KeepPlaying,
+    /// Rebuild the session at the new rate: the engine reports
+    /// `interrupted(formatChanged)` and the host stops and starts it (S20).
+    Rebuild,
+}
+
+/// The decision for `reported_rate`, a rate in Hz read from the capture of a
+/// session running at `session_rate` (Rc) (S157). Only a real rate, finite
+/// and above 0, that differs from Rc in either direction rebuilds; the same
+/// rate, or one that couldn't be read (the host reports 0), keeps playing.
+pub fn capture_rate_decision(session_rate: f64, reported_rate: f64) -> RateDecision {
+    let readable = reported_rate.is_finite() && reported_rate > 0.0;
+    if readable && reported_rate != session_rate {
+        RateDecision::Rebuild
+    } else {
+        RateDecision::KeepPlaying
     }
 }
 

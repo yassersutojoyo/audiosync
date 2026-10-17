@@ -1,10 +1,11 @@
-//! Capture sources, the microphone permission and the capture check (S12, S15,
-//! S17 to S19).
+//! Capture sources, the microphone permission, the capture check, capture
+//! rate changes and app quits (S12, S15, S17 to S19, S157, S164).
 
 use audiosync_core::policy::capture::{
     CHECK_EVERY, CaptureCheck, CaptureVerdict, FIRST_CHECK_AFTER, PLAYING_GRACE, PlayerReading,
-    capture_verdict, playing_for,
+    RateDecision, capture_rate_decision, capture_verdict, playing_for,
 };
+use audiosync_core::policy::session::{Incident, StartOrigin, reaction};
 use audiosync_core::policy::source::{
     AudioSource, MicrophonePermission, MicrophoneStep, after_microphone_request, microphone_step,
 };
@@ -206,4 +207,66 @@ fn the_check_runs_3_s_after_a_start_then_every_2_s_and_reports_only_changes() {
     let mut ended = CaptureCheck::started(0.0);
     ended.session_ended();
     assert_eq!(ended.check(3.0, 0, None), None);
+}
+
+// covers: S157, S20, S140
+#[test]
+fn a_new_capture_rate_rebuilds_the_session_in_either_direction() {
+    // A lower rate rebuilds the session; so does a higher one.
+    assert_eq!(
+        capture_rate_decision(48_000.0, 44_100.0),
+        RateDecision::Rebuild
+    );
+    assert_eq!(
+        capture_rate_decision(44_100.0, 96_000.0),
+        RateDecision::Rebuild
+    );
+    // The rebuild is the format-change restart: stop, then an automatic start.
+    let restart = reaction(&Incident::FormatChanged);
+    assert!(restart.stop_session);
+    assert_eq!(restart.restart, Some(StartOrigin::FormatChange));
+}
+
+// covers: S157
+#[test]
+fn the_same_rate_or_an_unreadable_one_keeps_playing() {
+    assert_eq!(
+        capture_rate_decision(48_000.0, 48_000.0),
+        RateDecision::KeepPlaying
+    );
+    // A rate that couldn't be read is reported as 0.
+    assert_eq!(
+        capture_rate_decision(48_000.0, 0.0),
+        RateDecision::KeepPlaying
+    );
+    for odd in [-44_100.0, f64::NAN, f64::INFINITY] {
+        assert_eq!(
+            capture_rate_decision(48_000.0, odd),
+            RateDecision::KeepPlaying,
+            "{odd}"
+        );
+    }
+}
+
+// covers: S164, S142
+#[test]
+fn only_the_source_apps_own_quit_ends_the_session() {
+    let spotify = app("com.spotify.client");
+    assert!(spotify.ends_when_app_quits(Some("com.spotify.client")));
+    let ended = reaction(&Incident::SourceAppQuit);
+    assert!(ended.stop_session && ended.deselect_airplay && !ended.alert);
+    // Another app quitting changes nothing.
+    assert!(!spotify.ends_when_app_quits(Some("com.apple.Music")));
+    assert!(!spotify.ends_when_app_quits(Some("com.spotify.client.helper")));
+    // An app without a bundle ID changes nothing.
+    assert!(!spotify.ends_when_app_quits(None));
+    assert!(!app("").ends_when_app_quits(Some("")));
+    // The whole-system source and an input source never end on a quit.
+    let input = AudioSource::Input {
+        uid: "BuiltInMicrophoneDevice".to_owned(),
+    };
+    for quitting in [Some("com.spotify.client"), Some(""), None] {
+        assert!(!AudioSource::System.ends_when_app_quits(quitting));
+        assert!(!input.ends_when_app_quits(quitting));
+    }
 }

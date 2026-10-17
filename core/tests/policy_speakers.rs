@@ -1,5 +1,5 @@
 //! Speaker keys, group names, the device list, the layout and notices (S145,
-//! S147, S149 to S153).
+//! S147, S149 to S153, S165, S166).
 
 use std::cmp::Ordering;
 
@@ -246,6 +246,76 @@ fn long_unicode_names_are_display_only() {
         .collect();
     // Keys, not names, identify speakers: equal names stay distinct.
     assert_eq!(order, ["ap:b", "ap:a", "lc:c"]);
+}
+
+// covers: S165, S146, S152
+#[test]
+fn a_built_in_output_and_sixteen_connected_speakers_are_all_listed() {
+    let mut speakers = vec![local(
+        "BuiltInSpeakerDevice",
+        "MacBook Speakers",
+        Transport::BuiltIn,
+    )];
+    // Eight AirPlay speakers and eight USB ones, numbered across both kinds
+    // and given in no particular order.
+    for i in (1..=8).rev() {
+        speakers.push(airplay(&format!("ap{i}"), &format!("Room {i}")));
+    }
+    for i in [12, 9, 16, 10, 15, 11, 14, 13] {
+        speakers.push(local(
+            &format!("usb{i}"),
+            &format!("room {i}"),
+            Transport::Usb,
+        ));
+    }
+    let Layout {
+        this_computer,
+        connected,
+    } = layout(&speakers);
+    assert_eq!(
+        this_computer,
+        [SpeakerKey::Local("BuiltInSpeakerDevice".to_owned())]
+    );
+    let ids: Vec<&str> = connected.iter().map(SpeakerKey::id).collect();
+    let expected: Vec<String> = (1..=16)
+        .map(|i| {
+            if i <= 8 {
+                format!("ap{i}")
+            } else {
+                format!("usb{i}")
+            }
+        })
+        .collect();
+    assert_eq!(ids, expected, "one list in name order, numbers by value");
+}
+
+// covers: S166, S152, S147
+#[test]
+fn long_names_that_differ_only_at_the_end_sort_whole_and_stay_unchanged() {
+    let stem: String = "Wohnzimmer Süd – Regal "
+        .chars()
+        .cycle()
+        .take(256)
+        .collect();
+    let (long_a, long_b) = (format!("{stem}a"), format!("{stem}b"));
+    assert_eq!(long_a.chars().count(), 257);
+    assert_eq!(compare_names(&long_a, &long_b), Ordering::Less);
+    let speakers = [
+        airplay("b", &long_b),
+        airplay("short", "Bad"),
+        airplay("a", &long_a),
+    ];
+    let connected = layout(&speakers).connected;
+    let order: Vec<&str> = connected.iter().map(SpeakerKey::id).collect();
+    assert_eq!(order, ["short", "a", "b"]);
+    let name_of = |id: &str| {
+        speakers
+            .iter()
+            .find(|speaker| speaker.key.id() == id)
+            .map(|speaker| speaker.name.as_str())
+    };
+    assert_eq!(name_of("a"), Some(long_a.as_str()), "names come out whole");
+    assert_eq!(name_of("b"), Some(long_b.as_str()));
 }
 
 // covers: S153
