@@ -5,8 +5,11 @@ use audiosync_core::eq::{BAND_CENTERS_HZ, PRESETS};
 use audiosync_core::volume::{gain_for_position, gain_to_db};
 
 fn spec() -> String {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/ENGINE_SPEC.md");
-    std::fs::read_to_string(path).expect("docs/ENGINE_SPEC.md is readable")
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("docs")
+        .join("ENGINE_SPEC.md");
+    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
 /// The cells of every row of the Markdown table whose header row starts with
