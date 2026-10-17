@@ -1,7 +1,7 @@
-//! Spec coverage: every clause of `docs/ENGINE_SPEC.md` (S1 to Sn) is named by
-//! at least one `// covers: S44, S49` line in `core/src` or `core/tests`, or is
-//! listed in `core/tests/spec_exempt.txt` with a one-line reason because only the
-//! host application can implement it.
+//! Spec coverage: every clause of `docs/ENGINE_SPEC.md` (S1 to Sn, in any
+//! document order) is named by at least one `// covers: S44, S49` line in
+//! `core/src` or `core/tests`, or is listed in `core/tests/spec_exempt.txt` with
+//! a one-line reason because only the host application can implement it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -14,8 +14,8 @@ fn core_dir() -> PathBuf {
 }
 
 fn spec_text() -> String {
-    fs::read_to_string(core_dir().join("../docs/ENGINE_SPEC.md"))
-        .expect("docs/ENGINE_SPEC.md is readable")
+    let path = core_dir().join("..").join("docs").join("ENGINE_SPEC.md");
+    fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
 /// A clause ID such as `S44`, as its number.
@@ -92,7 +92,7 @@ fn covers() -> (BTreeMap<u32, Vec<String>>, Vec<String>) {
 
 /// The exempt list: clause number to reason; and every malformed line.
 fn exemptions() -> (BTreeMap<u32, String>, Vec<String>) {
-    let text = fs::read_to_string(core_dir().join("tests/spec_exempt.txt"))
+    let text = fs::read_to_string(core_dir().join("tests").join("spec_exempt.txt"))
         .expect("tests/spec_exempt.txt is readable");
     let mut exempt = BTreeMap::new();
     let mut malformed = Vec::new();
@@ -132,17 +132,56 @@ fn list(numbers: impl IntoIterator<Item = u32>) -> String {
         .join(", ")
 }
 
+/// Checks that clause IDs, taken in document order, are S1 to Sn with each
+/// number exactly once. IDs are assigned in order of addition and a later
+/// clause sits in the section it belongs to, so document order is free.
+fn check_ids(numbers: &[u32]) -> Result<(), String> {
+    let mut sorted = numbers.to_vec();
+    sorted.sort_unstable();
+    let mut duplicates: Vec<u32> = sorted
+        .windows(2)
+        .filter(|pair| pair[0] == pair[1])
+        .map(|pair| pair[0])
+        .collect();
+    duplicates.dedup();
+    if !duplicates.is_empty() {
+        return Err(format!("defined more than once: {}", list(duplicates)));
+    }
+    let missing: Vec<u32> = (1..=sorted.last().copied().unwrap_or(0))
+        .filter(|number| sorted.binary_search(number).is_err())
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!("missing: {}", list(missing)));
+    }
+    Ok(())
+}
+
+#[test]
+fn the_id_check_allows_any_order_but_no_gaps_or_repeats() {
+    assert_eq!(check_ids(&[1, 2, 3]), Ok(()));
+    assert_eq!(
+        check_ids(&[1, 2, 5, 3, 4]),
+        Ok(()),
+        "a later clause in its section"
+    );
+    assert_eq!(check_ids(&[]), Ok(()));
+    assert_eq!(
+        check_ids(&[1, 3, 2, 3]),
+        Err("defined more than once: S3".to_owned())
+    );
+    assert_eq!(check_ids(&[1, 4, 2]), Err("missing: S3".to_owned()));
+    assert_eq!(check_ids(&[2, 3]), Err("missing: S1".to_owned()));
+}
+
 // covers: S1
 #[test]
-fn every_clause_carries_a_tag_and_the_ids_run_from_s1_without_gaps() {
+fn every_clause_carries_a_tag_and_the_ids_are_s1_to_sn_once_each() {
     let clauses = clauses(&spec_text());
     assert!(clauses.len() >= 100, "found only {} clauses", clauses.len());
     let numbers: Vec<u32> = clauses.iter().map(|(number, _)| *number).collect();
-    let expected: Vec<u32> = (1..=clauses.len() as u32).collect();
-    assert_eq!(
-        numbers, expected,
-        "clause IDs are S1 to Sn, once each, in order"
-    );
+    if let Err(problem) = check_ids(&numbers) {
+        panic!("clause IDs must be S1 to Sn, each once, in any order; {problem}");
+    }
     let untagged: Vec<u32> = clauses
         .iter()
         .filter(|(_, line)| !line.contains("*Observed") && !line.contains("*Required"))
