@@ -24,21 +24,20 @@ pub const DEFAULT_MASTER_POSITION: f64 = 100.0;
 /// the engine reports is not adopted (S73), in seconds.
 pub const USER_CHANGE_HOLD: f64 = 2.0;
 
-/// Clamps a position to 0…100 (S76). NaN counts as 0.
+/// Clamps a position to 0…100 (S76). NaN and −0 count as 0, so the result is
+/// never negative zero.
 pub fn clamp_position(position: f64) -> f64 {
-    if position.is_nan() {
+    if position.is_nan() || position <= MIN_POSITION {
         MIN_POSITION
     } else {
-        position.clamp(MIN_POSITION, MAX_POSITION)
+        position.min(MAX_POSITION)
     }
 }
 
 /// A volume input from the host, ready to use: non-finite values are ignored
 /// (`None`, keep the previous value), others clamped to 0…100 (S76, S124).
 pub fn sanitize_position(position: f64) -> Option<f64> {
-    position
-        .is_finite()
-        .then(|| position.clamp(MIN_POSITION, MAX_POSITION))
+    position.is_finite().then(|| clamp_position(position))
 }
 
 /// Linear gain of a slider position: `(clamp(p, 0, 100) / 100)³` (S70).
@@ -47,12 +46,13 @@ pub fn gain_for_position(position: f64) -> f64 {
     x * x * x
 }
 
-/// Slider position of a linear gain: `100 × cbrt(clamp(g, 0, 1))` (S70). NaN counts as 0.
+/// Slider position of a linear gain: `100 × cbrt(clamp(g, 0, 1))` (S70). NaN
+/// and −0 count as 0, so the result is never negative zero.
 pub fn position_for_gain(gain: f64) -> f64 {
-    let gain = if gain.is_nan() {
+    let gain = if gain.is_nan() || gain <= 0.0 {
         0.0
     } else {
-        gain.clamp(0.0, 1.0)
+        gain.min(1.0)
     };
     MAX_POSITION * gain.cbrt()
 }
@@ -87,7 +87,8 @@ pub fn migrate_legacy_percent(percent: f64) -> f64 {
     position_for_gain(percent / 100.0)
 }
 
-/// What one coalesced volume write is for (S74).
+/// Where a volume value goes: the engine's master or one AirPlay speaker
+/// (S72 to S74).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum VolumeTarget {
     /// The AirPlay engine's master volume.
@@ -96,60 +97,66 @@ pub enum VolumeTarget {
     Output(String),
 }
 
-/// Coalesces volume writes per target (S74): storing a value when none is
-/// waiting queues one flush; later values replace the waiting one; the flush
-/// sends the latest value once; targets never overwrite each other.
+/// One slot per key holding the newest value not yet sent, so a burst of
+/// slider moves reaches the engine as one request carrying the last value
+/// (S74).
+///
+/// Putting a value into an empty slot means a send has to be scheduled for
+/// that key. Values put before the send runs overwrite the slot. The send
+/// empties the slot and gets the newest value. Each key has its own slot.
 #[derive(Clone, Debug, PartialEq)]
-pub struct CoalescedWrites<K, V> {
-    waiting: Vec<(K, V)>,
+pub struct LatestValues<K, V> {
+    slots: Vec<(K, V)>,
 }
 
-impl<K, V> Default for CoalescedWrites<K, V> {
+impl<K, V> Default for LatestValues<K, V> {
     fn default() -> Self {
-        CoalescedWrites {
-            waiting: Vec::new(),
-        }
+        LatestValues { slots: Vec::new() }
     }
 }
 
-impl<K: PartialEq, V: Copy> CoalescedWrites<K, V> {
-    /// An empty queue.
+impl<K: PartialEq, V: Copy> LatestValues<K, V> {
+    /// No values held.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Stores the latest value for `target`. Returns true when this queued a
-    /// new flush (the caller schedules exactly one), false when the value rides
-    /// a flush that is already queued.
-    pub fn store(&mut self, target: K, value: V) -> bool {
-        if let Some(slot) = self.waiting.iter_mut().find(|(key, _)| *key == target) {
-            slot.1 = value;
-            false
-        } else {
-            self.waiting.push((target, value));
-            true
+    /// Holds `value` as the newest for `key`. Returns true when the slot was
+    /// empty, so the caller schedules one send for `key`; false when a send
+    /// is already scheduled and will carry this value instead.
+    pub fn put(&mut self, key: K, value: V) -> bool {
+        match self.slots.iter_mut().find(|(held, _)| *held == key) {
+            Some(slot) => {
+                slot.1 = value;
+                false
+            }
+            None => {
+                self.slots.push((key, value));
+                true
+            }
         }
     }
 
-    /// The flush for `target`: takes its latest value to send once.
-    pub fn take(&mut self, target: &K) -> Option<V> {
-        let index = self.waiting.iter().position(|(key, _)| key == target)?;
-        Some(self.waiting.remove(index).1)
+    /// For the scheduled send: empties the slot of `key` and returns its
+    /// newest value, or `None` when the slot was empty.
+    pub fn pop(&mut self, key: &K) -> Option<V> {
+        let index = self.slots.iter().position(|(held, _)| held == key)?;
+        Some(self.slots.remove(index).1)
     }
 
-    /// Whether a value is waiting for `target`.
-    pub fn is_waiting(&self, target: &K) -> bool {
-        self.waiting.iter().any(|(key, _)| key == target)
+    /// Whether `key` holds a value.
+    pub fn holds(&self, key: &K) -> bool {
+        self.slots.iter().any(|(held, _)| held == key)
     }
 
-    /// Number of targets with a waiting value.
+    /// Keys holding a value.
     pub fn len(&self) -> usize {
-        self.waiting.len()
+        self.slots.len()
     }
 
-    /// Whether nothing is waiting.
+    /// Whether no key holds a value.
     pub fn is_empty(&self) -> bool {
-        self.waiting.is_empty()
+        self.slots.is_empty()
     }
 }
 

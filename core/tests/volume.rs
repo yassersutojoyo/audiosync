@@ -3,7 +3,7 @@
 
 use audiosync_core::channels::input_to_stereo;
 use audiosync_core::volume::{
-    CoalescedWrites, DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, GainStage, SharedGain,
+    DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, GainStage, LatestValues, SharedGain,
     VolumeTarget, adopt_reported_volume, apply_gain, clamp_position, engine_volume,
     gain_for_position, gain_to_db, migrate_legacy_percent, output_gain, position_for_gain,
     sanitize_position,
@@ -90,43 +90,58 @@ fn a_reported_volume_is_adopted_except_within_two_seconds_of_the_users_change() 
 
 // covers: S74
 #[test]
-fn volume_writes_are_coalesced_per_target() {
-    let mut writes: CoalescedWrites<VolumeTarget, u8> = CoalescedWrites::new();
+fn each_target_sends_only_its_newest_volume() {
+    let mut pending: LatestValues<VolumeTarget, u8> = LatestValues::new();
     let kitchen = VolumeTarget::Output("kitchen".to_owned());
     let den = VolumeTarget::Output("den".to_owned());
     assert!(
-        writes.store(kitchen.clone(), 10),
-        "the first value queues a flush"
+        pending.put(kitchen.clone(), 10),
+        "the first value schedules a send"
     );
     assert!(
-        !writes.store(kitchen.clone(), 20),
-        "later values ride the queued flush"
+        !pending.put(kitchen.clone(), 20),
+        "later values go with the scheduled send"
     );
-    assert!(!writes.store(kitchen.clone(), 30));
+    assert!(!pending.put(kitchen.clone(), 30));
+    assert!(pending.holds(&kitchen));
     assert!(
-        writes.store(den.clone(), 70),
-        "another speaker gets its own flush"
+        pending.put(den.clone(), 70),
+        "another speaker has its own send"
     );
-    assert!(writes.store(VolumeTarget::Master, 55), "so does the master");
-    assert_eq!(writes.len(), 3);
+    assert!(pending.put(VolumeTarget::Master, 55), "so does the master");
+    assert_eq!(pending.len(), 3);
     assert_eq!(
-        writes.take(&kitchen),
+        pending.pop(&kitchen),
         Some(30),
-        "the flush sends the latest value"
+        "the send carries the newest"
     );
-    assert_eq!(writes.take(&kitchen), None, "one request per flush");
+    assert_eq!(pending.pop(&kitchen), None, "one request per send");
+    assert!(!pending.holds(&kitchen));
     assert!(
-        writes.store(kitchen.clone(), 40),
-        "a value after the flush queues a new one"
+        pending.put(kitchen.clone(), 40),
+        "a value after the send schedules a new one"
     );
-    assert_eq!(
-        writes.take(&den),
-        Some(70),
-        "speakers don't overwrite each other"
-    );
-    assert_eq!(writes.take(&VolumeTarget::Master), Some(55));
-    assert_eq!(writes.take(&kitchen), Some(40));
-    assert!(writes.is_empty());
+    assert_eq!(pending.pop(&den), Some(70), "targets keep their own values");
+    assert_eq!(pending.pop(&VolumeTarget::Master), Some(55));
+    assert_eq!(pending.pop(&kitchen), Some(40));
+    assert!(pending.is_empty());
+}
+
+// covers: S70, S76
+#[test]
+fn negative_zero_counts_as_zero() {
+    let positive_zero = 0.0f64.to_bits();
+    for value in [
+        gain_for_position(-0.0),
+        position_for_gain(-0.0),
+        clamp_position(-0.0),
+        sanitize_position(-0.0).unwrap(),
+        migrate_legacy_percent(-0.0),
+        output_gain(-0.0, 100.0),
+    ] {
+        assert_eq!(value.to_bits(), positive_zero);
+    }
+    assert_eq!(engine_volume(-0.0), 0);
 }
 
 // covers: S75

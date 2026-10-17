@@ -442,6 +442,14 @@ mod tests {
         assert!((asc_volume_position(0.125) - 50.0).abs() < 1e-9);
     }
 
+    // covers: S70
+    #[test]
+    fn negative_zero_crosses_the_boundary_as_zero() {
+        let positive_zero = 0.0f64.to_bits();
+        assert_eq!(asc_volume_gain(-0.0).to_bits(), positive_zero);
+        assert_eq!(asc_volume_position(-0.0).to_bits(), positive_zero);
+    }
+
     // covers: S33
     #[test]
     fn presets_cross_the_boundary_in_menu_order() {
