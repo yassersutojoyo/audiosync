@@ -2,7 +2,7 @@
 
 What AudioSync does when the world changes under a running session, where the code that handles it lives, and how each case is checked. Cite a case by its ID (EC1 to EC12); the IDs don't change when cases are added.
 
-"Automated" names the checks in `Tests/` that cover the decision logic; every logic check for a case starts with its ID, so `Tests/run-tests.sh | grep EC7` lists them. Anything that needs a person (unplugging a device, Bluetooth, sleep, changing a device's format, the network) is under "Manual". The manual steps play audio, so do them at a sensible volume.
+"Automated" names the checks in `Tests/` that cover the decision logic; every logic check for a case starts with its ID, so `Tests/run-tests.sh | grep EC7` lists them. Ring-buffer checks are cited by name too, but the test run only prints the ring suite's summary, so their names show up only when one fails. Anything that needs a person (unplugging a device, Bluetooth, sleep, changing a device's format, the network) is under "Manual". The manual steps play audio, so do them at a sensible volume.
 
 | ID | Case | Checked by |
 |---|---|---|
@@ -72,13 +72,13 @@ Manual: stream to a USB output and an AirPlay speaker. In Audio MIDI Setup, chan
 
 ## EC5: Switching the source during playback
 
-Expected: choosing another source while streaming gives a short gap, then only the new source plays on every speaker that was on. AirPlay speakers stay selected; nothing from the old source is replayed. If the new source can't start (the app isn't running, the microphone isn't allowed), streaming stops with an alert and a notice. While streaming is off, a new source is only remembered for the next start.
+Expected: choosing another source while streaming gives a short gap, then only the new source plays on every speaker that was on. AirPlay speakers stay selected; nothing from the old source is replayed. If the new source can't start (an input device while microphone access is off, or an app that quit between the click and the start), streaming stops with an alert and a notice. While streaming is off, a new source is only remembered for the next start.
 
 Code path: `AppDelegate.setSource` (`AppDelegate+Outputs.swift`) asks `SourceSwitch.decide` (`AudioSource.swift`); `.restart` calls `stopEngine(deselectAirPlay: false)` and `startEngine(origin: .user)` (`AppDelegate+Engine.swift`). `SyncEngine.stop` resets the ring; `ProcessTapCapture.start` builds a tap for the new source.
 
 Automated: "EC5 source: switching while streaming rebuilds the capture", "EC5 source: switching to an input device while streaming rebuilds the capture", "EC5 source: switching while stopped only remembers the choice", "EC5 source: choosing the same source changes nothing"; logic "ring: reset clears history"; FIFO "fifo: stop/start leaves one writer thread".
 
-Manual: stream the whole system with music in one app and a video in a browser. Switch the source to the music app: after a short gap only the music plays, AirPlay speakers stay on. Switch to an app that's not running: an alert says so and streaming stops.
+Manual: stream the whole system with music in one app and a video in a browser. Switch the source to the music app: after a short gap only the music plays, AirPlay speakers stay on. To see the failure path, turn off AudioSync under System Settings → Privacy & Security → Microphone, then switch the source to an input device: an alert says so, a notice stays, and streaming stops. (The source list only offers running apps, so a not-running app can't be picked by hand.)
 
 ## EC6: The source app quits
 
@@ -101,7 +101,7 @@ Code path:
 
 Automated: "EC7 engine restart: every wanted speaker is selected again, the rest stay off", "EC7 engine restart: a killed engine counts as unreachable", "EC7 engine restart: a killed engine is started again"; logic "engine: exit → restarting", "engine: six exits in a minute → gaveUp", "engine: gaveUp offers Retry", "engine: occasional exits never give up", "reconcile: after an engine restart the speaker is selected again", "reconcile: a speaker with a switch-on in flight isn't re-selected after an engine restart"; FIFO "fifo: reader closing mid-stream does not kill the process".
 
-Manual: stream to an AirPlay speaker and a local speaker. In Terminal, run `pkill -f 'AudioSync.app/Contents/Helpers/owntone'`. Expected: the local speaker keeps playing; the AirPlay speaker goes quiet and plays again within about 10 s, still switched on, no notice. Run the command six times within a minute (wait for each restart): the give-up message and Retry appear; Retry brings AirPlay back.
+Manual: stream to an AirPlay speaker and a local speaker. In Terminal, run `pkill -KILL -f 'AudioSync.app/Contents/Helpers/owntone'` (a plain `pkill` sends SIGTERM, which the engine treats as a clean stop: it saves and restores its speakers itself, so the crash path isn't exercised). Expected: the local speaker keeps playing; the AirPlay speaker goes quiet and plays again within about 10 s, still switched on, no notice. Run the command six times within a minute (wait for each restart): the give-up message and Retry appear; Retry brings AirPlay back.
 
 ## EC8: Every speaker off, then on
 
