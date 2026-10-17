@@ -1,0 +1,42 @@
+// The About dialog, opened from Help > About AudioSync.
+//
+// Slint is used under its royalty-free license, which asks for the AboutSlint
+// widget in an About dialog reachable from the top-level menu. Keep it here.
+
+import { AboutSlint, StandardButton, VerticalBox } from "std-widgets.slint";
+
+export component AboutDialog inherits Dialog {
+    in property <string> version;
+    in property <string> core-version;
+
+    title: @tr("About AudioSync");
+    preferred-width: 360px;
+
+    VerticalBox {
+        alignment: start;
+
+        Text {
+            text: "AudioSync";
+            font-size: 20px;
+            font-weight: 600;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: @tr("Version {}", root.version);
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: @tr("Audio core {}", root.core-version);
+            font-size: 11px;
+            horizontal-alignment: center;
+        }
+
+        AboutSlint { }
+    }
+
+    StandardButton {
+        kind: ok;
+    }
+}

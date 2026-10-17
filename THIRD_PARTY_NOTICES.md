@@ -137,6 +137,26 @@ above are attached to each release, as described above.
 
 The wordmark SVGs in `brand/` are outlined from Poppins Medium.
 
+## Windows app (in development, not released)
+
+`windows/` is the start of a Windows 11 version of AudioSync. None of it is in
+the macOS app, and no Windows build has been released.
+
+| Component | License |
+|---|---|
+| [Slint](https://slint.dev) 1.18, © SixtyFPS GmbH (the user interface toolkit) | GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0; used under the Slint Royalty-free Desktop, Mobile, and Web Applications License 2.0 |
+
+That license asks for an attribution. The one AudioSync uses is the
+`AboutSlint` widget in the app's About dialog, which the top-level menu opens
+(Help > About AudioSync). The widget shows the Made with Slint logo
+(CC-BY-ND-4.0, © SixtyFPS GmbH) unchanged, and the compiled interface also
+carries a permissively licensed icon from Slint's Fluent style.
+
+The Windows app's other Rust dependencies are under permissive licenses. CI
+checks them with `cargo deny check licenses` against the list in
+`windows/deny.toml`. Full notices for the Windows app, the Rust standard
+library included, will be written before any Windows release.
+
 ## Trademarks
 
 AirPlay is a trademark of Apple Inc.; the AirPlay icon in the app is Apple's

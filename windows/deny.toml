@@ -1,0 +1,37 @@
+# cargo-deny configuration for the Windows app.
+#
+# `cargo deny check licenses` (run from windows/, and in CI) fails when any
+# crate that goes into the x64 or ARM64 Windows build, build and development
+# dependencies included, is under a license that is not on this list.
+
+[graph]
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "BSL-1.0",
+    "CC0-1.0",
+    # Slint's crates are "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR
+    # LicenseRef-Slint-Software-3.0"; AudioSync takes the royalty-free option,
+    # whose attribution is the AboutSlint widget in the About dialog.
+    "LicenseRef-Slint-Royalty-free-2.0",
+]
+confidence-threshold = 0.93
+# Anything else needs a per-crate exception with a one-line reason, e.g.
+# { crate = "name", allow = ["MPL-2.0"] }, # why it is acceptable
+exceptions = []
+include-dev = true
+include-build = true
+# The list is a policy, not an inventory: a license nobody uses yet is fine.
+unused-allowed-license = "allow"
+
+[licenses.private]
+ignore = false

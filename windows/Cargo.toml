@@ -1,0 +1,30 @@
+[package]
+name = "audiosync-windows"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT"
+description = "AudioSync for Windows 11 (in development)."
+repository = "https://github.com/yassersutojoyo/audiosync"
+publish = false
+
+[[bin]]
+name = "audiosync"
+path = "src/main.rs"
+
+[dependencies]
+audiosync-core = { path = "../core" }
+# Used under the Slint Royalty-free Desktop, Mobile, and Web Applications
+# License 2.0, checked for the 1.18 line; see THIRD_PARTY_NOTICES.md.
+slint = "~1.18.1"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Wdk_System_SystemServices",
+    "Win32_System_SystemInformation",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+embed-resource = "3.0.12"
+slint-build = "~1.18.1"
