@@ -4,6 +4,8 @@
 # the menu bar panel and the equalizer, each in light and dark appearance. It draws
 # the app's own SwiftUI views offscreen, so it needs no installed app, no engine, no
 # permissions and no audio devices. Needs only Xcode's command line tools.
+# Then composes social-preview.png (the link preview image) from the light main
+# window and the brand files, with social-preview.swift.
 #
 # Control styling comes from the macOS that runs the script: re-render after a UI
 # change, and on the macOS version the README describes.
@@ -14,7 +16,7 @@
 #   --review    also renders states worth checking before a UI change lands
 #               (streaming off with a notice, no speakers) as review-*.png. They
 #               go to a new temporary directory unless output-dir is given, which
-#               must be outside the repository.
+#               must be outside the repository. It skips the social preview.
 #
 set -euo pipefail
 
@@ -65,4 +67,10 @@ echo "▶ building the renderer"
 swiftc -swift-version 5 "$BUILD/main.swift" "${srcs[@]}" -o "$BUILD/render"
 
 "$BUILD/render" "$dest" brand/fonts/Poppins-Medium.ttf $review
+
+if [ -z "$review" ]; then
+  echo "▶ composing the social preview"
+  swiftc -swift-version 5 scripts/screenshots/social-preview.swift -o "$BUILD/social-preview"
+  "$BUILD/social-preview" "$dest/main-window-light.png" "$dest/social-preview.png"
+fi
 echo "✅ Screenshots rendered."
