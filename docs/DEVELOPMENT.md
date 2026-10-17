@@ -6,6 +6,8 @@ Notes for building AudioSync yourself and finding your way around the code. For 
 
 You need macOS 15 (Sequoia) or later, [Homebrew](https://brew.sh) (only for the build tools `pkg-config` and `cmake`, plus `nasm` on Intel Macs), the Command Line Tools for Xcode 16 or later (`xcode-select --install`), which bring Swift 6 and the `python3` the build uses, and a Rust toolchain for the audio core in `core/`: install it with [rustup](https://rustup.rs).
 
+The first build needs network access: it adds the two Apple targets to your Rust toolchain and fetches the crates.io index for the core's test-only dependencies. Later builds work offline.
+
 ```bash
 git clone https://github.com/yassersutojoyo/audiosync
 cd audiosync
@@ -25,7 +27,7 @@ A few environment variables change what the scripts do:
 - `AUDIOSYNC_INSTALL_DIR`: install somewhere other than `/Applications`
 - `AUDIOSYNC_ENGINE`: bundle a different engine binary
 - `AUDIOSYNC_ADHOC=1`: sign ad-hoc instead of with the local identity
-- `AUDIOSYNC_SKIP_BREW=1`: `setup.sh` skips Homebrew (handy offline)
+- `AUDIOSYNC_SKIP_BREW=1`: `setup.sh` skips Homebrew (handy offline, once the Rust core has been built at least once)
 - `AUDIOSYNC_ENGINE_ONLY=1`: `setup.sh` stops after building the engine
 - `AUDIOSYNC_BUILD_DIR`: build the libraries and the engine somewhere other than `~/.audiosync-build` (for a test build that leaves your usual engine alone; `build.sh` and `archive_sources.sh` follow it too)
 - `AUDIOSYNC_ALLOW_NEWER_ENGINE=1`: `bundle_engine.py` only warns when the engine needs a newer macOS or has libraries it can't trace to `setup.sh`, for a local build deliberately linked against Homebrew. AirPlay then won't start on older systems, so never use it for a release
