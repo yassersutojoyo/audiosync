@@ -8,7 +8,11 @@ inside `AudioSync.app`:
 - `Contents/Frameworks/*.dylib`, `Contents/Frameworks/owntone-sqlext.so`: its libraries
 
 Every build also ships the Poppins font (`Contents/Resources/Fonts/`), see
-[Fonts](#fonts).
+[Fonts](#fonts). The app binary also contains AudioSync's audio core (`core/`,
+written in Rust and MIT-licensed like the rest of AudioSync; its only
+third-party crates are test and benchmark tools that never reach the app) and,
+compiled in with it, parts of the Rust standard library, see
+[App frameworks and libraries](#app-frameworks-and-libraries).
 
 The engine runs as a separate process that AudioSync talks to over a named
 pipe and a local HTTP API. Each component stays under its own license. The
@@ -19,6 +23,7 @@ app also carries, in `Contents/Resources/ThirdParty/`:
 - the exact library versions it was built with (`versions.txt`)
 - each library's own license files (`licenses/<library>/`)
 - the Poppins font license (`licenses/poppins/OFL.txt`)
+- the Rust standard library's copyright notices and license texts (`licenses/rust/`)
 
 The engine as distributed is covered by OwnTone's license, the GNU GPL
 version 2 or later. The libraries it links keep their own licenses, all of them
@@ -117,11 +122,12 @@ The engine also uses macOS's own zlib, libcurl and libxml2, which are part of
 the system and not bundled. The sources of the GPL- and LGPL-licensed libraries
 above are attached to each release, as described above.
 
-## App frameworks
+## App frameworks and libraries
 
 | Component | License |
 |---|---|
 | [Sparkle](https://sparkle-project.org) 2.9.5 (update framework, currently disabled; license in `licenses/sparkle/`) | MIT |
+| [Rust standard library](https://github.com/rust-lang/rust), © The Rust Project Developers (the parts the audio core uses, compiled into the app binary; its copyright notices, which also cover the crates it is built from, its license texts and the Rust version in `licenses/rust/`) | MIT OR Apache-2.0 |
 
 ## Fonts
 

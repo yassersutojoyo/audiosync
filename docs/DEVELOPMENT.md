@@ -4,7 +4,7 @@ Notes for building AudioSync yourself and finding your way around the code. For 
 
 ## Building
 
-You need macOS 15 (Sequoia) or later, [Homebrew](https://brew.sh) (only for the build tools `pkg-config` and `cmake`, plus `nasm` on Intel Macs), and the Command Line Tools for Xcode 16 or later (`xcode-select --install`), which bring Swift 6 and the `python3` the build uses.
+You need macOS 15 (Sequoia) or later, [Homebrew](https://brew.sh) (only for the build tools `pkg-config` and `cmake`, plus `nasm` on Intel Macs), the Command Line Tools for Xcode 16 or later (`xcode-select --install`), which bring Swift 6 and the `python3` the build uses, and a Rust toolchain for the audio core in `core/`: install it with [rustup](https://rustup.rs).
 
 ```bash
 git clone https://github.com/yassersutojoyo/audiosync
@@ -15,6 +15,8 @@ cd audiosync
 `setup.sh` installs those build tools with Homebrew, then builds every library the engine links (FFmpeg, libgcrypt, SQLite, libinotify-kqueue and the rest, listed with their versions and checksums in `scripts/engine_deps.sh`) from pinned upstream release tarballs into `~/.audiosync-build/deps`. FFmpeg is an LGPL build without external libraries. Then it downloads OwnTone 29.2 (checksum-pinned), applies AudioSync's patches, builds it against those libraries into `~/.audiosync-build/engine`, and runs `build.sh`. The libraries take about nine minutes the first time; after that they're reused until `scripts/engine_deps.sh` or the target macOS changes. No Homebrew library ends up in the app.
 
 After that, `./build.sh` is all you need day to day. It builds the app, bundles the engine and every library it needs (so the app runs on Macs without Homebrew), signs it, and installs it to `/Applications`, or `~/Applications` if `/Applications` isn't writable. Without an engine the app still builds and runs, just without AirPlay speakers.
+
+The app links the audio core, the Rust crate in `core/` (see `core/NOTES.md`). `build.sh` first runs `scripts/build_core.sh`, which builds it for Apple silicon and Intel (with rustup, it adds a missing target itself) and joins both into one static library, `core/target/universal-apple-darwin/release/libaudiosync_core.a`. That library exports only the functions in `core/include/audiosync_core.h`, so none of the Rust standard library's own symbols can stand in for the system's. A plain `swift build`, a scratch build included, links that file: run the script first, or the link stops with "library 'audiosync_core' not found".
 
 Everything is built with `MACOSX_DEPLOYMENT_TARGET=15.0`, the app's `LSMinimumSystemVersion`, so the engine runs on macOS 15 and later, whatever macOS the release is built on. C library functions the SDK marks as newer than 15.0 (`pipe2`, `dup3` and a few others) are reported as missing to `configure`, because a weak import of one is NULL on an older macOS and crashes the engine. `setup.sh` checks the libraries and the engine after building them, and `bundle_engine.py` checks everything it bundles again: the build fails if anything needs a newer macOS than `LSMinimumSystemVersion`, weak-imports from libSystem, or links something outside the app and the system.
 
@@ -77,9 +79,11 @@ Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) desc
 
 The app side: `AppDelegate.swift` holds app state, persistence, launch and quit, and its extensions split out windows (`+Windows`), groups and auto-connect (`+Groups`), local outputs (`+Outputs`), AirPlay speakers (`+AirPlay`) and streaming and notices (`+Engine`). The UI is SwiftUI in `MainWindow.swift` and `MenuBar.swift`, with the app menus in `MainMenu.swift`. Smaller pieces: `AudioDevices.swift` (Core Audio device helpers), `Volume.swift` (the loudness curve), `SpeakerGroups.swift`, `NowPlaying.swift` (Spotify and Music), `Diagnostics.swift` (the debug log) and `main.swift` (keeps one copy running).
 
+`AudioSyncCore.swift` is the app's side of the Rust core (`core/`, imported through the `CAudioSyncCore` module in `Sources/CAudioSyncCore`); for now it only logs the core's version at launch.
+
 All user-facing text goes through `AppText` in `Localization.swift`. `Brand.swift` has the brand colors and typeface; `BrandMark.swift` is generated, so don't edit it.
 
-Outside the app: `setup.sh`, `build.sh` and `scripts/bundle_engine.py` build and bundle the engine, `make-dmg.sh` packages a release, and `scripts/archive_sources.sh` gathers library sources for one (see `RELEASE.md`).
+Outside the app: `setup.sh`, `build.sh` and `scripts/bundle_engine.py` build and bundle the engine, `scripts/build_core.sh` builds the Rust core, `make-dmg.sh` packages a release, and `scripts/archive_sources.sh` gathers library sources for one (see `RELEASE.md`).
 
 ## Logo, icons and screenshots
 
