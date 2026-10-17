@@ -98,4 +98,4 @@ security delete-keychain ~/Library/Keychains/audiosync-signing.keychain-db   # i
 rm -rf ~/.audiosync-build
 ```
 
-The Homebrew build tools `setup.sh` installed (`pkg-config`, `cmake`) stay; `brew uninstall` them if nothing else needs them.
+The Homebrew build tools `setup.sh` installed (`pkg-config`, `cmake`, plus `nasm` on Intel Macs) stay; `brew uninstall` them if nothing else needs them.
