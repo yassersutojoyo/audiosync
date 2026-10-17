@@ -1,0 +1,19 @@
+[package]
+name = "audiosync-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Platform-independent audio core of AudioSync: delay ring buffer, drift correction, resampling, equalizer, volume, sync policy and PCM16 conversion."
+repository = "https://github.com/yassersutojoyo/audiosync"
+publish = false
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+
+[dev-dependencies]
+
+[profile.release]
+panic = "abort"
