@@ -1,0 +1,29 @@
+# cargo-deny configuration for audiosync-core.
+#
+# `cargo deny check licenses` (run from core/, and in CI) fails when any crate in
+# the build graph, development dependencies included, is under a license that
+# is not on this list. The core is MIT; only permissive licenses may enter it.
+
+[graph]
+all-features = true
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "ISC",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.93
+exceptions = []
+# Test, benchmark and build tools are held to the same list as the library.
+include-dev = true
+include-build = true
+# The list is a policy, not an inventory: a license nobody uses yet is fine.
+unused-allowed-license = "allow"
+
+[licenses.private]
+ignore = false

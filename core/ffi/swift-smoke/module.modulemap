@@ -1,0 +1,5 @@
+module AudioSyncCore {
+    header "../../include/audiosync_core.h"
+    link "audiosync_core"
+    export *
+}
