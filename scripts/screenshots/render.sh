@@ -3,7 +3,8 @@
 # Regenerates the app screenshots in docs/images from mock data: the main window,
 # the menu bar panel and the equalizer, each in light and dark appearance. It draws
 # the app's own SwiftUI views offscreen, so it needs no installed app, no engine, no
-# permissions and no audio devices. Needs only Xcode's command line tools.
+# permissions and no audio devices. Needs Xcode's command line tools and the Rust
+# toolchain the app build uses (for the audio core).
 # Then composes social-preview.png (the link preview image) from the light main
 # window and the brand files, with social-preview.swift.
 #
@@ -63,8 +64,12 @@ for f in Sources/AudioSync/*.swift; do
   [ "$(basename "$f")" = main.swift ] || srcs+=("$f")
 done
 cp scripts/screenshots/render.swift "$BUILD/main.swift"
+# The app sources import the Rust audio core (core/), so the renderer links it too.
+scripts/build_core.sh
 echo "▶ building the renderer"
-swiftc -swift-version 5 "$BUILD/main.swift" "${srcs[@]}" -o "$BUILD/render"
+swiftc -swift-version 5 "$BUILD/main.swift" "${srcs[@]}" \
+  -I Sources/CAudioSyncCore -L core/target/universal-apple-darwin/release -laudiosync_core \
+  -o "$BUILD/render"
 
 "$BUILD/render" "$dest" brand/fonts/Poppins-Medium.ttf $review
 

@@ -16,6 +16,11 @@
 # that keeps only the header's functions global and holds just the code they
 # need.
 #
+# The prebuilt standard library in cargo's archive also carries LLVM bitcode
+# (__LLVM sections). Some Apple linkers keep it in ld -r output, and an older
+# Xcode's nm and ld can't read bitcode from a newer LLVM, so it's removed before
+# the prelink with the toolchain's own objcopy, which shares rustc's LLVM.
+#
 # That code includes parts of the Rust standard library, so licenses/rust/ next
 # to the library receives its copyright notices and license texts from the
 # toolchain that built it; build.sh ships them in the app.
@@ -72,6 +77,17 @@ for target in "$arm" "$intel"; do
     exit 1
   fi
 done
+# The toolchain's objcopy: rust-objcopy, which ships with rustc, or llvm-objcopy
+# from rustup's llvm-tools. It loads rustc's LLVM library from the toolchain's
+# lib/, which prelink puts on its library path the way rustc does.
+tools="$sysroot/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin"
+objcopy="$tools/rust-objcopy"
+[ -x "$objcopy" ] || objcopy="$tools/llvm-objcopy"
+if [ ! -x "$objcopy" ]; then
+  echo "❌ This Rust toolchain has no rust-objcopy ($tools)." >&2
+  echo "   Update it (rustup update stable) or add one: rustup component add llvm-tools" >&2
+  exit 1
+fi
 
 echo "▶ Rust core (release, $arm and $intel)…"
 cargo build --release --lib --locked --target "$arm" --target "$intel" --target-dir "$target_dir"
@@ -88,9 +104,24 @@ if [ ! -s "$work/exports" ]; then
 fi
 
 sdk=$(xcrun --sdk macosx --show-sdk-version)
+# -u makes ld load every archive member the header's functions need, whatever a
+# linker makes of the export list, which then hides everything else.
+roots=()
+while IFS= read -r symbol; do
+  roots+=(-u "$symbol")
+done < "$work/exports"
 prelink() {   # prelink ARCH RUST_TARGET
-  xcrun ld -r -arch "$1" -platform_version macos "$MACOSX_DEPLOYMENT_TARGET" "$sdk" \
-    -exported_symbols_list "$work/exports" -o "$work/$1.o" "$target_dir/$2/release/$lib"
+  DYLD_FALLBACK_LIBRARY_PATH="$sysroot/lib" "$objcopy" \
+    --remove-section=__LLVM,__bitcode --remove-section=__LLVM,__cmdline \
+    "$target_dir/$2/release/$lib" "$work/$1.a"
+  # -S leaves out the debug map, which would record this run's temporary paths.
+  xcrun ld -r -S -arch "$1" -platform_version macos "$MACOSX_DEPLOYMENT_TARGET" "$sdk" \
+    "${roots[@]}" -exported_symbols_list "$work/exports" -o "$work/$1.o" "$work/$1.a"
+  xcrun otool -l "$work/$1.o" > "$work/$1.load"
+  if grep -q 'segname __LLVM' "$work/$1.load"; then
+    echo "❌ The $1 object still carries LLVM bitcode (an __LLVM section)." >&2
+    exit 1
+  fi
 }
 prelink arm64 "$arm"
 prelink x86_64 "$intel"
@@ -98,7 +129,7 @@ prelink x86_64 "$intel"
 ZERO_AR_DATE=1 xcrun libtool -static -o "$work/$lib" "$work/arm64.o" "$work/x86_64.o"
 
 for arch in arm64 x86_64; do
-  xcrun nm -gU -arch "$arch" "$work/$lib" | awk 'NF == 3 { print $3 }' | sort -u > "$work/globals"
+  xcrun nm -gU --no-llvm-bc -arch "$arch" "$work/$lib" | awk 'NF == 3 { print $3 }' | sort -u > "$work/globals"
   if ! cmp -s "$work/globals" "$work/exports"; then
     echo "❌ The $arch slice exports more or less than the header declares:" >&2
     diff "$work/exports" "$work/globals" >&2 || true
