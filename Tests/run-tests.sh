@@ -3,6 +3,8 @@
 # just the Command Line Tools). Usage: Tests/run-tests.sh [--hardware]
 #   --hardware  also runs the engine test, which opens real output devices at
 #               zero volume (silent) to check render flow and delay end to end.
+# Also runs shellcheck on the scripts in scripts/shellcheck-files.txt, and fails
+# if shellcheck isn't installed (brew install shellcheck).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SRC=Sources/AudioSync
@@ -19,6 +21,9 @@ build() {   # build <name> <test file> <source files…>
 }
 
 status=0
+echo "▶ shellcheck"
+scripts/shellcheck.sh || status=1
+
 echo "▶ ring buffer"
 build ring Tests/ringtest.swift RingBuffer.swift
 "$OUT/ring/run" > "$OUT/ring.log" || status=1

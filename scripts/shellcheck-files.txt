@@ -1,0 +1,13 @@
+# Shell scripts that shellcheck must pass. scripts/shellcheck.sh reads this list,
+# and both CI and Tests/run-tests.sh run that script, so they check the same files.
+# One path or glob per line, relative to the repository root.
+setup.sh
+build.sh
+makeicon.sh
+make-dmg.sh
+make-web-icons.sh
+make-local-cert.sh
+Tests/*.sh
+scripts/*.sh
+scripts/brand/*.sh
+scripts/screenshots/*.sh
