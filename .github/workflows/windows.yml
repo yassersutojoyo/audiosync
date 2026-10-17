@@ -1,0 +1,104 @@
+name: Windows
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # A warning in a .slint file fails the build, like a Rust warning in clippy.
+  SLINT_COMPILER_DENY_WARNINGS: '1'
+
+jobs:
+  test:
+    name: Format, clippy and tests
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain (stable, with rustfmt and clippy)
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --locked
+
+  build:
+    name: Release build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain (stable, with the ${{ matrix.target }} target)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+          rustc --version
+
+      - name: Build
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: The executable carries the manifest and the version information
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path "target/${{ matrix.target }}/release/audiosync.exe").Path
+          # The manifest is stored as plain text in the executable.
+          $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($exe))
+          foreach ($entry in '{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}', 'PerMonitorV2') {
+            if (-not $text.Contains($entry)) { throw "the embedded manifest lacks $entry" }
+          }
+          $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
+          if ($info.ProductName -ne 'AudioSync') { throw "unexpected product name '$($info.ProductName)'" }
+          "audiosync.exe $($info.ProductVersion) for ${{ matrix.arch }}: manifest and version information present"
+
+      - name: Upload audiosync.exe (workflow artifact, not a release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: audiosync-windows-${{ matrix.arch }}
+          path: windows/target/${{ matrix.target }}/release/audiosync.exe
+          if-no-files-found: error
+
+  licenses:
+    name: Licenses
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the pinned cargo-deny
+        run: cargo install --locked cargo-deny --version 0.20.2
+
+      - name: Permissive licenses and Slint's royalty-free option only (windows/deny.toml)
+        run: cargo deny --locked check licenses

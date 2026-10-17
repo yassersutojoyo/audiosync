@@ -1,0 +1,24 @@
+// The main window. Empty for now; the menu bar leads to the About dialog.
+
+export { AboutDialog } from "about.slint";
+
+export component MainWindow inherits Window {
+    callback about-requested();
+
+    title: "AudioSync";
+    preferred-width: 640px;
+    preferred-height: 400px;
+
+    MenuBar {
+        Menu {
+            title: @tr("Help");
+
+            MenuItem {
+                title: @tr("About AudioSync");
+                activated => {
+                    root.about-requested();
+                }
+            }
+        }
+    }
+}
