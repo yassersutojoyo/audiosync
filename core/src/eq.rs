@@ -472,7 +472,8 @@ impl EqProcessor {
             return;
         }
         if !self.was_enabled {
-            // Stale state from before the equalizer was switched off would click (S28).
+            // S28: the first enabled block after a disabled stretch starts
+            // from zeroed filters; their memory is from audio that is long gone.
             self.zero_state();
             self.was_enabled = true;
         }

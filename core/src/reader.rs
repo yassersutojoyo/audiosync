@@ -229,6 +229,9 @@ pub struct Reader {
     /// F: one past the highest frame index emitted since the latest prime.
     emitted_end: i64,
     anchored: bool,
+    /// The target delay `read_target` applies. Taken from the control only
+    /// with a resync or a prime, never on its own.
+    applied_delay: i64,
     /// Set when a copy failed the post-copy check (S40): the next read skips
     /// forward as for an overrun (S55).
     reanchor: bool,
@@ -263,6 +266,7 @@ impl Reader {
             next: 0,
             emitted_end: 0,
             anchored: false,
+            applied_delay: 0,
             reanchor: false,
             #[cfg(test)]
             before_check: None,
@@ -303,14 +307,23 @@ impl Reader {
         self.read_at(dst, frames, delay_frames, tolerance_frames, resync)
     }
 
-    /// Reads at the delay and tolerance set through [`ReaderControl`]. The
-    /// resync flag is taken (acquire) before the delay is loaded, so a delay
-    /// change is never applied with a stale target (S133, S46).
+    /// Reads at the delay and tolerance set through [`ReaderControl`].
+    ///
+    /// The reader keeps the delay it applies and takes the control's target
+    /// only when it takes a resync request or a prime reset (or anchors for
+    /// the first time). The control stores a target before raising its
+    /// resync flag, so a read between the two keeps the old delay instead of
+    /// applying the new one as a drift correction; the next read applies it
+    /// as a resync (S46, S158). The flag is taken with acquire ordering
+    /// before the target is loaded, so a flagged target is never stale
+    /// (S133).
     pub fn read_target(&mut self, dst: &mut [f32], frames: usize) -> ReadReport {
         let resync = self.take_requests();
-        let delay = self.shared.delay.load(Ordering::Relaxed);
+        if resync || !self.anchored {
+            self.applied_delay = self.shared.delay.load(Ordering::Relaxed);
+        }
         let tolerance = self.shared.tolerance.load(Ordering::Relaxed);
-        self.read_at(dst, frames, delay, tolerance, resync)
+        self.read_at(dst, frames, self.applied_delay, tolerance, resync)
     }
 
     /// Applies a pending prime reset (S159) and takes the resync flag.
@@ -1545,6 +1558,34 @@ mod tests {
         assert_eq!((counters.primes, counters.resyncs), (1, 1));
         assert_eq!(counters.drift_skips + counters.drift_silences, 0);
         assert_eq!(counters.starved_renders, 0);
+    }
+
+    // covers: S158, S46, S133
+    #[test]
+    fn a_delay_stored_before_its_resync_flag_waits_for_the_flag() {
+        let ring = ring(1 << 18);
+        let mut cap = Capture::new(&ring);
+        cap.write(60_000);
+        let mut out = Output::new(&ring);
+        settle_target(&mut cap, &mut out, 4096, 10);
+        // The control thread has stored a new target and not yet raised the
+        // resync flag when the output's callback runs.
+        out.reader.shared.delay.store(24_000, Ordering::Relaxed);
+        let block = lockstep_target(&mut cap, &mut out, 1).pop().unwrap();
+        assert_eq!(block.report.correction, Correction::None);
+        assert_eq!(block.report.lag, 4096 - N as i64, "still the old delay");
+        // The flag follows: the next read applies the new delay as a resync.
+        out.reader.control().request_resync();
+        let block = lockstep_target(&mut cap, &mut out, 1).pop().unwrap();
+        assert_eq!(block.report.correction, Correction::Resync);
+        assert_eq!(block.report.lag, 24_000 - N as i64);
+        let counters = out.reader.control().counters();
+        assert_eq!((counters.primes, counters.resyncs), (1, 1));
+        assert_eq!(
+            counters.drift_skips + counters.drift_silences,
+            0,
+            "no drift correction"
+        );
     }
 
     // covers: S158, S51

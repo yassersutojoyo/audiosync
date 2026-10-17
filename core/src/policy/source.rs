@@ -1,5 +1,5 @@
-//! Capture sources as the host stores them (S12) and the microphone permission
-//! an input source needs (S15).
+//! Capture sources as the host stores them (S12), the microphone permission an
+//! input source needs (S15), and which app quitting ends a session (S164).
 
 /// What the engine captures (S11).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -61,6 +61,19 @@ impl AudioSource {
     /// permission (S15).
     pub fn needs_microphone(&self) -> bool {
         matches!(self, AudioSource::Input { .. })
+    }
+
+    /// Whether the session capturing this source ends because an app quit
+    /// (S142, S164). `quitting_bundle_id` is the quitting app's bundle ID, if
+    /// it has one. Only an app source can end this way, and only through
+    /// its own app; the whole-system and input-device sources never do.
+    pub fn ends_when_app_quits(&self, quitting_bundle_id: Option<&str>) -> bool {
+        match (self, quitting_bundle_id) {
+            (AudioSource::App { bundle_id }, Some(quitting)) => {
+                !quitting.is_empty() && quitting == bundle_id
+            }
+            _ => false,
+        }
     }
 }
 

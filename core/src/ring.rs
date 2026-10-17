@@ -520,11 +520,14 @@ mod tests {
     #[test]
     fn concurrent_reads_never_see_torn_or_stale_frames() {
         use std::sync::atomic::AtomicBool;
+        use std::time::{Duration, Instant};
         let ring = Ring::new(16_384, 8192).unwrap();
         let mut writer = ring.writer().unwrap();
         let stop = Arc::new(AtomicBool::new(false));
+        let validated = Arc::new(AtomicU64::new(0));
         let reader_ring = Arc::clone(&ring);
         let reader_stop = Arc::clone(&stop);
+        let reader_validated = Arc::clone(&validated);
         let reader = std::thread::spawn(move || {
             let mut buf = vec![0.0f32; 4096 * 2];
             let (mut good, mut rejected) = (0u64, 0u64);
@@ -548,13 +551,19 @@ mod tests {
                     );
                 }
                 good += 1;
+                reader_validated.store(good, Ordering::Relaxed);
             }
             (good, rejected)
         });
         let mut next = 0u64;
         let sizes = [1usize, 64, 511, 512, 4096, 8192, 777];
-        let started = std::time::Instant::now();
-        while started.elapsed() < std::time::Duration::from_millis(300) {
+        // Race for 300 ms, and on a loaded machine until the reader got to
+        // validate a copy at all (bounded).
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_millis(300)
+            || (validated.load(Ordering::Relaxed) == 0
+                && started.elapsed() < Duration::from_secs(20))
+        {
             for &n in &sizes {
                 writer.write(&block(next, n), n);
                 next += n as u64;

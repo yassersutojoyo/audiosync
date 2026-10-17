@@ -7,11 +7,15 @@
 //! stays at zero. Other test threads never track, so they cannot interfere.
 //!
 //! The audio-path modules also forbid unsafe code and contain no lock types,
-//! checked here against their sources.
+//! checked here against their sources (read at run time, so the check works on
+//! any checkout's line endings and path separators).
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use audiosync_core::convert;
 use audiosync_core::fifo::{FifoFeed, OpenError, PipeSink, Step, WriteError};
@@ -290,63 +294,116 @@ fn fifo_writer_step_does_not_allocate() {
             let step = writer.step(&mut pipe);
             std::hint::black_box(step == Step::Continue);
         }
-        writer.disconnect(&mut pipe);
+        // Closing as a stop does, giving a partly written frame a few tries.
+        let mut tries = 0;
+        writer.close_aligned(&mut pipe, |pause: Duration| {
+            std::hint::black_box(pause);
+            tries += 1;
+            tries < 8
+        });
     });
     assert_eq!(count, 0, "the writer's step allocated or freed");
     assert!(pipe.bytes > 0 && feed.counters().backlog_skips > 0);
     assert!(!pipe.open);
 }
 
-/// The source of a module without its unit tests.
-fn production_part(source: &str) -> &str {
-    source.split("#[cfg(test)]\nmod tests").next().unwrap()
+/// The source of a module without its unit tests, with `\n` line ends
+/// whatever the checkout uses (a Windows checkout may have `\r\n`). Panics
+/// if the module has a test module this split doesn't find, so the scan never
+/// silently covers test code or misses a renamed marker.
+fn production_part(source: &str) -> String {
+    let source = source.replace("\r\n", "\n");
+    let marker = "\n#[cfg(test)]\nmod tests";
+    match source.split_once(marker) {
+        Some((code, _)) => code.to_owned(),
+        None => {
+            assert!(
+                !source.contains("mod tests"),
+                "a test module not preceded by its #[cfg(test)] line"
+            );
+            source
+        }
+    }
+}
+
+/// Words that mean a lock, a blocking wait, logging or file access.
+const NOT_REAL_TIME: [&str; 16] = [
+    "Mutex",
+    "RwLock",
+    "Condvar",
+    "Barrier",
+    "mpsc",
+    "Semaphore",
+    ".lock(",
+    "OnceLock",
+    "LazyLock",
+    "RefCell",
+    "UnsafeCell",
+    "println!",
+    "eprintln!",
+    "std::fs",
+    "File::",
+    "thread::sleep",
+];
+
+/// The words of [`NOT_REAL_TIME`] in a module's production code.
+fn forbidden_words(code: &str) -> Vec<&'static str> {
+    NOT_REAL_TIME
+        .into_iter()
+        .filter(|word| code.contains(word))
+        .collect()
+}
+
+#[test]
+fn the_source_scan_reads_crlf_checkouts_and_finds_what_it_looks_for() {
+    let source = "#![forbid(unsafe_code)]\r\nuse std::sync::atomic::AtomicU32;\r\n\r\n\
+                  #[cfg(test)]\r\nmod tests {\r\n    use std::sync::Mutex;\r\n}\r\n";
+    let code = production_part(source);
+    assert!(code.ends_with("AtomicU32;\n"), "{code:?}");
+    assert!(forbidden_words(&code).is_empty(), "test code is left out");
+    let locked = production_part("use std::sync::Mutex;\r\nfn f() { thread::sleep(d) }\r\n");
+    assert_eq!(forbidden_words(&locked), ["Mutex", "thread::sleep"]);
 }
 
 // covers: S128, S126, S133
 #[test]
 fn audio_path_modules_use_only_atomics() {
+    // Where each module may wait: never on an audio thread; the equalizer's
+    // control side may yield while the capture thread copies a set (S31,
+    // S130); the FIFO writer thread parks between steps (S129).
     let modules = [
-        ("ring.rs", include_str!("../src/ring.rs")),
-        ("reader.rs", include_str!("../src/reader.rs")),
-        ("resample.rs", include_str!("../src/resample.rs")),
-        ("convert.rs", include_str!("../src/convert.rs")),
-        ("fifo.rs", include_str!("../src/fifo.rs")),
+        ("ring.rs", "none"),
+        ("reader.rs", "none"),
+        ("resample.rs", "none"),
+        ("convert.rs", "none"),
+        ("channels.rs", "none"),
+        ("volume.rs", "none"),
+        ("eq.rs", "yield"),
+        ("fifo.rs", "park"),
     ];
-    let forbidden = [
-        "Mutex",
-        "RwLock",
-        "Condvar",
-        "Barrier",
-        "mpsc",
-        "Semaphore",
-        ".lock(",
-        "OnceLock",
-        "LazyLock",
-        "RefCell",
-        "UnsafeCell",
-        "println!",
-        "eprintln!",
-        "std::fs",
-        "File::",
-        "thread::sleep",
-    ];
-    for (name, source) in modules {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    for (name, waits) in modules {
+        let path = src.join(name);
+        let source =
+            fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         assert!(
             source.contains("#![forbid(unsafe_code)]"),
             "{name} must forbid unsafe code"
         );
-        let code = production_part(source);
-        for word in forbidden {
-            assert!(!code.contains(word), "{name} uses {word}");
+        let code = production_part(&source);
+        assert_eq!(forbidden_words(&code), [] as [&str; 0], "{name}");
+        let mut thread_calls = code.match_indices("thread::").map(|(at, _)| &code[at..]);
+        let allowed = |call: &str| match waits {
+            "yield" => call.starts_with("thread::yield_now"),
+            "park" => ["thread::park_timeout", "thread::Builder", "thread::{"]
+                .iter()
+                .any(|prefix| call.starts_with(prefix)),
+            _ => false,
+        };
+        assert!(thread_calls.all(allowed), "{name} blocks");
+        if waits != "park" {
+            assert!(!code.contains("park"), "{name} parks");
         }
-    }
-    // Only the FIFO writer thread may sleep, and only between steps.
-    for (name, source) in &modules[..4] {
-        let code = production_part(source);
-        assert!(
-            !code.contains("park") && !code.contains("thread::"),
-            "{name} blocks"
-        );
     }
 }
 
