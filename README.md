@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  Play your Mac's audio on HomePods, AirPlay speakers and every local output at once, in sync.
+  A free, open-source Airfoil alternative for macOS: play your Mac's audio on HomePods, AirPlay speakers and every local output at once, in sync.
 </p>
 
 <p align="center">
@@ -30,13 +30,19 @@
 
 I built this because I wanted my Mac's audio on every speaker in the house at once. The catch is that a HomePod always plays a little late (AirPlay buffers about two seconds), so a HomePod and a desk speaker playing the same song sound like an echo. AudioSync captures the audio once, streams it to your AirPlay speakers, and plays a delayed copy on each local output, every one with its own offset, until the whole room sounds like one speaker.
 
-It's a small Mac app written in Swift, with a main window and a menu bar panel, free and MIT-licensed. Think of it as an open-source alternative to Airfoil. It's an early alpha, so expect rough edges.
+It's a small Mac app written in Swift, with a main window and a menu bar panel, free and MIT-licensed. It's an early alpha, so expect rough edges.
 
-## What it does
+## Multi-room audio on macOS
 
-The source can be all system audio, a single app (with its helper processes, like a browser's audio service), or an input device such as a microphone, line-in or audio interface (first two channels). It plays to HomePods, Apple TVs and other AirPlay receivers, plus anything macOS can play to: built-in speakers, the headphone jack, HDMI/DisplayPort, USB DACs and Bluetooth.
+The source can be all system audio, a single app (with its helper processes, like a browser's audio service), or an input device such as a microphone, line-in or audio interface (first two channels). It plays to one or more HomePods, Apple TVs and other AirPlay receivers, plus anything macOS can play to: built-in speakers, the headphone jack, HDMI/DisplayPort, USB DACs and Bluetooth.
 
 Each local speaker gets its own delay (0 to 20 s), and the AirPlay engine keeps the AirPlay speakers in step with each other. On top of that there's per-speaker and master volume, a 10-band equalizer with a preamp and presets, Now Playing for Spotify and Music, speaker groups, auto-connect, and launch at login. The AirPlay engine (OwnTone) ships inside the app and AudioSync starts and stops it itself, so there's nothing else to install or configure.
+
+## Coming from Airfoil?
+
+If you've used Airfoil, the idea will feel familiar: send the whole system's audio, or just one app, to AirPlay speakers and the Mac's own outputs at the same time, with each local speaker lined up so nothing echoes. AudioSync is free and open source, but it does less. It only streams to AirPlay receivers and outputs macOS already knows about, so there's no Chromecast or other kinds of network speakers. The prebuilt app needs macOS 26 (on macOS 15 you build it yourself), everything runs about two seconds behind, and it's still an alpha.
+
+To be clear: Airfoil is a product of Rogue Amoeba. AudioSync isn't affiliated with them or endorsed by them, and it shares no code with Airfoil.
 
 ## Install
 
