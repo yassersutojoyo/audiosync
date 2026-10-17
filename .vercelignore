@@ -1,0 +1,4 @@
+# Deploy only the landing page.
+/*
+!/site
+!/vercel.json

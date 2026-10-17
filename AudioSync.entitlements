@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Entitlements for Developer ID (Hardened Runtime) builds. Local self-signed and
+     ad-hoc builds don't use the Hardened Runtime and need none of these. -->
+<plist version="1.0">
+<dict>
+    <!-- Input devices as a source (microphone, line-in, audio interface). -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <!-- Now Playing: Apple Events to Spotify and Music. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+</dict>
+</plist>

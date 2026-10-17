@@ -1,0 +1,9 @@
+<?xml version="1.0" standalone="yes"?>
+<!-- AudioSync's Sparkle feed. Intentionally empty: auto-update is disabled
+     (Info.plist has no SUFeedURL) until this fork ships its own signed
+     release with its own EdDSA key. See RELEASE.md. -->
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>AudioSync</title>
+    </channel>
+</rss>

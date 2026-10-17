@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>ATSApplicationFontsPath</key>
+	<string>Fonts</string>
+	<key>CFBundleDisplayName</key>
+	<string>AudioSync</string>
+	<key>CFBundleExecutable</key>
+	<string>AudioSync</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.yassersutojoyo.audiosync</string>
+	<key>CFBundleName</key>
+	<string>AudioSync</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.4.0</string>
+	<key>CFBundleVersion</key>
+	<string>4</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>AudioSync shows the current track and its play/pause/skip controls for Spotify and Music.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>AudioSync captures the audio you choose (all system audio or one app) to play it in sync on your local and AirPlay speakers.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_airplay._tcp</string>
+		<string>_raop._tcp</string>
+		<string>_dacp._tcp</string>
+		<string>_touch-able._tcp</string>
+		<string>_touch-remote._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>AudioSync finds and streams to the AirPlay speakers (HomePod, Apple TV, AirPlay receivers) on your network.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>AudioSync reads the input device you choose (microphone, line-in or audio interface) to play it on your speakers.</string>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
+</dict>
+</plist>
