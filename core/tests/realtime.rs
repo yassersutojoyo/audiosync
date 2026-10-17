@@ -347,7 +347,7 @@ const NOT_REAL_TIME: [&str; 16] = [
 ];
 
 /// The words of [`NOT_REAL_TIME`] in a module's production code.
-fn lock_words(code: &str) -> Vec<&'static str> {
+fn forbidden_words(code: &str) -> Vec<&'static str> {
     NOT_REAL_TIME
         .into_iter()
         .filter(|word| code.contains(word))
@@ -360,9 +360,9 @@ fn the_source_scan_reads_crlf_checkouts_and_finds_what_it_looks_for() {
                   #[cfg(test)]\r\nmod tests {\r\n    use std::sync::Mutex;\r\n}\r\n";
     let code = production_part(source);
     assert!(code.ends_with("AtomicU32;\n"), "{code:?}");
-    assert!(lock_words(&code).is_empty(), "test code is left out");
+    assert!(forbidden_words(&code).is_empty(), "test code is left out");
     let locked = production_part("use std::sync::Mutex;\r\nfn f() { thread::sleep(d) }\r\n");
-    assert_eq!(lock_words(&locked), ["Mutex", "thread::sleep"]);
+    assert_eq!(forbidden_words(&locked), ["Mutex", "thread::sleep"]);
 }
 
 // covers: S128, S126, S133
@@ -391,7 +391,7 @@ fn audio_path_modules_use_only_atomics() {
             "{name} must forbid unsafe code"
         );
         let code = production_part(&source);
-        assert_eq!(lock_words(&code), [] as [&str; 0], "{name}");
+        assert_eq!(forbidden_words(&code), [] as [&str; 0], "{name}");
         let mut thread_calls = code.match_indices("thread::").map(|(at, _)| &code[at..]);
         let allowed = |call: &str| match waits {
             "yield" => call.starts_with("thread::yield_now"),
