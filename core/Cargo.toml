@@ -21,6 +21,10 @@ proptest = "1.11.0"
 name = "pipeline"
 harness = false
 
+[[bench]]
+name = "eq"
+harness = false
+
 [profile.release]
 panic = "abort"
 

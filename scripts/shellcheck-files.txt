@@ -11,3 +11,4 @@ Tests/*.sh
 scripts/*.sh
 scripts/brand/*.sh
 scripts/screenshots/*.sh
+core/ffi/*.sh
