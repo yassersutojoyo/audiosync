@@ -1,0 +1,53 @@
+#!/bin/bash
+# Soak test of the Swift engine, completely silent and unattended: plays a known
+# signal through two local outputs at gain 0 (a virtual output first, then the
+# built-in one; never AirPlay, never an input device) and through the FIFO path
+# to a local reader standing in for the AirPlay engine. Logs a record every 10 s
+# and ends with a summary judged against Tests/baseline/swift.json when it
+# exists (see docs/BENCHMARKS.md). Keeps the Mac awake while it runs.
+#
+# Usage: Tests/soak.sh [--minutes N] [--out DIR] [--baseline FILE] [--device NAME]...
+#   --minutes N      measured duration (default 60)
+#   --out DIR        where windows.jsonl, windows.csv, result.json and summary.txt
+#                    go (default: a new audiosync-soak-* folder under $TMPDIR)
+#   --baseline FILE  baseline to judge against (default Tests/baseline/swift.json)
+#   --device NAME    use this output instead of the default pick (repeat for two)
+# Exit status: 0 PASS (or no baseline yet), 1 FAIL, 2 setup error.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+minutes=60
+out=""
+baseline=Tests/baseline/swift.json
+devices=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --minutes)  minutes=${2:?--minutes needs a value}; shift 2 ;;
+    --out)      out=${2:?--out needs a value}; shift 2 ;;
+    --baseline) baseline=${2:?--baseline needs a value}; shift 2 ;;
+    --device)   devices+=(--device "${2:?--device needs a value}"); shift 2 ;;
+    -h|--help)  sed -n '2,16p' "$0"; exit 0 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+case $minutes in ''|*[!0-9]*|0) echo "--minutes must be a positive whole number" >&2; exit 2 ;; esac
+
+if [ -z "$out" ]; then out=$(mktemp -d "${TMPDIR:-/tmp}/audiosync-soak-XXXXXX"); fi
+mkdir -p "$out"
+bin="$out/soaktest"
+echo "▶ building the harness"
+Tests/build-harness.sh "$bin"
+
+args=(--label soak --seconds $((minutes * 60)) --interval 10 --outputs 2 --fifo --out "$out")
+if [ -f "$baseline" ]; then
+  args+=(--baseline "$baseline")
+else
+  echo "no baseline at $baseline: numbers only (run Tests/bench.sh to create one)"
+fi
+
+caffeinate -i -w $$ &   # no idle sleep while this script runs
+echo "▶ soak, $minutes min, output in $out"
+status=0
+"$bin" "${args[@]}" ${devices[@]+"${devices[@]}"} || status=$?
+echo "results: $out/summary.txt, $out/result.json, $out/windows.jsonl"
+exit $status

@@ -49,6 +49,8 @@ The tests are standalone Swift files in `Tests/`, no XCTest. Run the `--hardware
 
 The test run starts with `scripts/shellcheck.sh`, which checks every script in `scripts/shellcheck-files.txt` and fails if shellcheck is missing. CI runs the same script with the same pinned shellcheck version (different versions flag different things), so install that version: `brew install shellcheck` gives it today, and `scripts/shellcheck.sh --install <dir>` downloads exactly the pinned release (then put `<dir>` on your `PATH`). A new shell script goes into that list, or the check fails.
 
+`Tests/soak.sh` (an hour of silent playback, judged against a baseline) and `Tests/bench.sh` (writes that baseline) take long, so `run-tests.sh` only compiles their harness. [BENCHMARKS.md](BENCHMARKS.md) explains both.
+
 For a debug log, quit AudioSync and start it from Terminal:
 
 ```bash
