@@ -29,3 +29,15 @@ enum CaptureCheck: Equatable {
         return .waiting
     }
 }
+
+/// The capture's sample rate changed under a running session: the tap's format
+/// can follow an output device's rate, and an input device can be switched to
+/// another rate.
+enum CaptureRate {
+    /// True when `reported` is a real rate other than the session's `current`
+    /// one: local speakers render at the capture rate, so the session is
+    /// rebuilt at the new rate. A rate that couldn't be read (0) changes nothing.
+    static func needsRestart(current: Double, reported: Double) -> Bool {
+        reported > 0 && reported != current
+    }
+}
