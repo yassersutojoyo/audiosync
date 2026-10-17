@@ -40,19 +40,19 @@ Each local speaker gets its own delay (0 to 20 s), and the AirPlay engine keeps 
 
 ## Coming from Airfoil?
 
-If you've used Airfoil, the idea will feel familiar: send the whole system's audio, or just one app, to AirPlay speakers and the Mac's own outputs at the same time, with each local speaker lined up so nothing echoes. AudioSync is free and open source, but it does less. It only streams to AirPlay receivers and outputs macOS already knows about, so there's no Chromecast or other kinds of network speakers. The prebuilt app needs macOS 26 (on macOS 15 you build it yourself), everything runs about two seconds behind, and it's still an alpha.
+If you've used Airfoil, the idea will feel familiar: send the whole system's audio, or just one app, to AirPlay speakers and the Mac's own outputs at the same time, with each local speaker lined up so nothing echoes. AudioSync is free and open source, but it does less. It only streams to AirPlay receivers and outputs macOS already knows about, so there's no Chromecast or other kinds of network speakers. It needs macOS 15 or later, everything runs about two seconds behind, and it's still an alpha.
 
 To be clear: Airfoil is a product of Rogue Amoeba. AudioSync isn't affiliated with them or endorsed by them, and it shares no code with Airfoil.
 
 ## Install
 
-Download `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest) and drag the app to Applications. The prebuilt app needs macOS 26 (Tahoe) or later, because the bundled engine's libraries were built there.
+Download `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest) and drag the app to Applications. It runs on macOS 15 (Sequoia) or later, AirPlay included.
 
 I don't have a paid Apple developer account, so releases aren't notarized and macOS blocks the first launch. Open AudioSync once, dismiss the warning, then go to System Settings → Privacy & Security and click Open Anyway next to the message about AudioSync. (Or run `xattr -dr com.apple.quarantine /Applications/AudioSync.app`.) Each release lists SHA-256 checksums for its files.
 
 Auto-update is off for now. To update, quit AudioSync and replace the app with the one from [Releases](https://github.com/yassersutojoyo/audiosync/releases). [`CHANGELOG.md`](CHANGELOG.md) has what changed.
 
-On macOS 15 (Sequoia), build from source instead. You need Homebrew and the Xcode 16 command line tools, then:
+You can also build it yourself. You need Homebrew and the Xcode 16 command line tools, then:
 
 ```bash
 git clone https://github.com/yassersutojoyo/audiosync
@@ -60,7 +60,7 @@ cd audiosync
 ./setup.sh
 ```
 
-The first run takes a while: it builds the AirPlay engine and installs the app. [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) has the details, plus how to uninstall.
+The first run takes a while (around ten minutes): it builds the AirPlay engine and its libraries, then installs the app. [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) has the details, plus how to uninstall.
 
 On first use macOS asks for Screen & System Audio Recording (choose System Audio Recording Only) to capture audio, and Local Network to find AirPlay speakers. Microphone access is only needed for an input source, and Automation (Spotify, Music) only for Now Playing.
 
@@ -115,11 +115,10 @@ HomePods can't show a PIN, so AudioSync builds OwnTone with a small patch that t
 - Everything is about two seconds late because of the AirPlay buffer. Fine for music, not for video or games.
 - AirPlay 2 support in OwnTone is reverse-engineered, so a HomePod or macOS update can break it until OwnTone catches up.
 - Now Playing only works with Spotify and Music; macOS doesn't let other apps read the system-wide Now Playing info.
-- The bundled engine needs the macOS version it was built on or later, which is why the prebuilt app needs macOS 26.
 
 ## License and credits
 
-AudioSync's own code is under the [MIT License](LICENSE). The bundled AirPlay engine and its libraries keep their own licenses; as distributed, the engine is GPL-3.0 because FFmpeg is built with GPL-3.0 components. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists everything, including the engine patches and where to get the source.
+AudioSync's own code is under the [MIT License](LICENSE). The bundled AirPlay engine and its libraries keep their own licenses; as distributed, the engine is under OwnTone's GPL-2.0-or-later. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists everything, including the engine patches and where to get the source.
 
 - AudioSync started as a fork of [HomeSounds Sync](https://github.com/techjuicelab/homesounds-sync) by TechJuicelab. The original copyright notice is kept in `LICENSE`.
 - [OwnTone](https://github.com/owntone/owntone-server) (GPL-2.0-or-later) is the AirPlay engine, bundled and run as a separate process.

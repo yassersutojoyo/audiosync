@@ -17,19 +17,22 @@ app also carries, in `Contents/Resources/ThirdParty/`:
 - this file
 - OwnTone's license (`OwnTone-COPYING.txt`)
 - the exact library versions it was built with (`versions.txt`)
-- each library's own license files (`licenses/<formula>/`)
+- each library's own license files (`licenses/<library>/`)
 - the Poppins font license (`licenses/poppins/OFL.txt`)
 
-Because the bundled FFmpeg is built with GPL-3.0 components, **the engine as
-distributed is covered by the GNU GPL version 3**. AudioSync itself remains MIT:
-it is a separate program and does not link against the engine.
+The engine as distributed is covered by OwnTone's license, the GNU GPL
+version 2 or later. The libraries it links keep their own licenses, all of them
+LGPL or permissive and compatible with that: FFmpeg is an LGPL build with no GPL
+components, and libunistring, offered under LGPL-3.0-or-later or
+GPL-2.0-or-later, is used here under its GPL-2.0-or-later option. AudioSync
+itself remains MIT: it is a separate program and does not link against the
+engine.
 
 ## AirPlay engine
 
 | Component | License | Source |
 |---|---|---|
 | [OwnTone](https://github.com/owntone/owntone-server) 29.2 | GPL-2.0-or-later | [owntone-29.2.tar.xz](https://github.com/owntone/owntone-server/releases/tag/29.2) |
-| [libinotify-kqueue](https://github.com/libinotify-kqueue/libinotify-kqueue) 20240724 (license in `licenses/libinotify-kqueue/`) | MIT | [release](https://github.com/libinotify-kqueue/libinotify-kqueue/releases/tag/20240724) |
 
 AudioSync builds OwnTone from that release with eight small source patches.
 They are the `perl` edits in [`setup.sh`](setup.sh) (step 3), each documented
@@ -59,20 +62,26 @@ inline:
    its password again; any other speaker retries transient pairing, and one
    that only pairs with a PIN falls into the stock PIN entry.
 
-`configure` also gets `ac_cv_func_pipe2=no ac_cv_func_dup3=no`, so a binary
-built with the macOS 27 SDK still runs on macOS 26 and earlier. It also gets
-`--without-pulseaudio --without-alsa --without-libwebsockets --disable-spotify
---disable-lastfm --disable-mpd --disable-webinterface`. The corresponding
-source is therefore the OwnTone release above plus those edits, and
-`./setup.sh` reproduces the exact build.
+OwnTone is built with `MACOSX_DEPLOYMENT_TARGET=15.0` against the libraries
+below. Its `configure` sees C library functions the macOS SDK marks as newer
+than 15.0 (`pipe2`, `dup3` and a few others, listed in
+`scripts/engine_deps.sh`) as absent, so the engine still runs on macOS 15. It
+also gets `--without-pulseaudio --without-alsa --without-libwebsockets
+--disable-spotify --disable-lastfm --disable-mpd --disable-webinterface`, the
+libgcrypt and libgpg-error prefix, and empty protobuf-c flags (the disabled
+Spotify client's sub-configure asks for them; nothing is built with them). The
+corresponding source is therefore the OwnTone release above plus those edits,
+and `./setup.sh` reproduces the exact build.
 
 **Source with each release.** From version 0.4.0 on, every AudioSync release
 on [GitHub](https://github.com/yassersutojoyo/audiosync/releases) attaches the
 corresponding source of the engine and of every bundled GPL- or LGPL-licensed
 library: the OwnTone source tarball (the patches are in `setup.sh` at the
 release tag) and, for each library listed below under a GPL or LGPL license,
-the exact upstream source (the release tarball, or an archive of the pinned git revision), the Homebrew formula it was built from (build
-options and patches), each external patch that formula applies, and
+the exact upstream release tarball it was built from (checked against the
+SHA-256 pinned in `scripts/engine_deps.sh`). These libraries are built without
+source changes. Next to them are `audiosync-engine-deps.sh`, a copy of
+`scripts/engine_deps.sh` with the build steps and configure options, and
 `SHA256SUMS-sources.txt`.
 
 **Written offer.** If you received AudioSync as a binary, you can get the
@@ -85,32 +94,28 @@ physically providing the source.
 
 ## Libraries used by the engine
 
-They are installed from Homebrew when the engine is built, and copied into the
-app with only their install names, rpaths and code signatures changed. The
-exact formula versions are in `Contents/Resources/ThirdParty/versions.txt`.
+`setup.sh` builds them for macOS 15.0 from checksum-pinned upstream release
+tarballs (versions, URLs and SHA-256 sums are in `scripts/engine_deps.sh`), and
+they are copied into the app with only their install names, rpaths and code
+signatures changed. The exact versions and licenses are in
+`Contents/Resources/ThirdParty/versions.txt`.
 
 | Library (bundled files) | License |
 |---|---|
-| FFmpeg 9 (libavcodec, libavformat, libavfilter, libavutil, libswresample, libswscale) | GPL-3.0-or-later (Homebrew builds it with `--enable-gpl --enable-version3`) |
-| x264 (libx264), x265 (libx265) | GPL-2.0-or-later |
-| libgcrypt, libgpg-error, libplist | LGPL-2.1-or-later |
-| gettext (libintl) | LGPL-2.1-or-later |
-| mpg123 (libmpg123) | LGPL-2.1-only |
-| LAME (libmp3lame) | LGPL-2.0-or-later |
-| libunistring | LGPL-3.0-or-later OR GPL-2.0-or-later |
-| libevent, libvpx, Opus | BSD-3-Clause |
-| dav1d | BSD-2-Clause |
-| SVT-AV1 (libSvtAv1Enc) | BSD-3-Clause-Clear, plus the Alliance for Open Media patent license |
-| libvmaf | BSD-2-Clause-Patent |
-| json-c | MIT |
-| libconfuse, libsodium | ISC |
-| OpenSSL (libssl, libcrypto) | Apache-2.0 |
-| SQLite | Public domain |
-| XZ Utils (liblzma) | 0BSD |
+| [FFmpeg](https://ffmpeg.org) 9.0.2 (libavcodec, libavformat, libavfilter, libavutil, libswresample, libswscale) | LGPL-2.1-or-later (built without `--enable-gpl` and without external libraries) |
+| [libgcrypt](https://gnupg.org/software/libgcrypt/) 1.12.4, [libgpg-error](https://gnupg.org/software/libgpg-error/) 1.61 | LGPL-2.1-or-later |
+| [libplist](https://github.com/libimobiledevice/libplist) 2.8.0 | LGPL-2.1-or-later |
+| [libunistring](https://www.gnu.org/software/libunistring/) 1.4.2 | LGPL-3.0-or-later OR GPL-2.0-or-later |
+| [json-c](https://github.com/json-c/json-c) 0.19 | MIT |
+| [libinotify-kqueue](https://github.com/libinotify-kqueue/libinotify-kqueue) 20240724 (libinotify) | MIT |
+| [libevent](https://libevent.org) 2.1.13 (libevent, libevent_pthreads) | BSD-3-Clause |
+| [libsodium](https://libsodium.org) 1.0.22 | ISC |
+| [libConfuse](https://github.com/libconfuse/libconfuse) 3.4 | ISC |
+| [SQLite](https://sqlite.org) 3.54.0 (libsqlite3) | Public domain (the dedication at the top of `sqlite3.h`, shipped as its license file) |
 
-Their sources are published by each project and mirrored by
-[Homebrew](https://formulae.brew.sh). The sources of the GPL- and LGPL-licensed
-ones are also attached to each release, as described above.
+The engine also uses macOS's own zlib, libcurl and libxml2, which are part of
+the system and not bundled. The sources of the GPL- and LGPL-licensed libraries
+above are attached to each release, as described above.
 
 ## App frameworks
 

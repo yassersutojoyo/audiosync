@@ -34,7 +34,7 @@ Capture uses a Core Audio process tap (behind the Screen & System Audio Recordin
 
 ### Supply chain
 
-`setup.sh` pins the OwnTone and libinotify versions, checks their SHA-256 before building, and stops if any of AudioSync's patches fails to apply. `build.sh` pins Sparkle 2.9.5 by SHA-256, unless you pass an already verified copy with `SPARKLE_DIR`, which skips the check. Homebrew libraries are not pinned: the engine uses whatever Homebrew has at build time, and the exact versions are recorded in the app (`Contents/Resources/ThirdParty/versions.txt`).
+`setup.sh` pins OwnTone and every library the engine links (versions and SHA-256 in `scripts/engine_deps.sh`), checks each download before building it from source, and stops if any of AudioSync's patches fails to apply. Homebrew only supplies build tools (`pkg-config`, `cmake`); none of its libraries end up in the app. `build.sh` pins Sparkle 2.9.5 by SHA-256, unless you pass an already verified copy with `SPARKLE_DIR`, which skips the check. The exact library versions are recorded in the app (`Contents/Resources/ThirdParty/versions.txt`).
 
 ## Signing and distribution
 

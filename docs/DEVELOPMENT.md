@@ -4,7 +4,7 @@ Notes for building AudioSync yourself and finding your way around the code. For 
 
 ## Building
 
-You need macOS 15 (Sequoia) or later, [Homebrew](https://brew.sh), and the Command Line Tools for Xcode 16 or later (`xcode-select --install`), which bring Swift 6 and the `python3` the build uses.
+You need macOS 15 (Sequoia) or later, [Homebrew](https://brew.sh) (only for the build tools `pkg-config` and `cmake`, plus `nasm` on Intel Macs), and the Command Line Tools for Xcode 16 or later (`xcode-select --install`), which bring Swift 6 and the `python3` the build uses.
 
 ```bash
 git clone https://github.com/yassersutojoyo/audiosync
@@ -12,11 +12,11 @@ cd audiosync
 ./setup.sh
 ```
 
-`setup.sh` installs the build dependencies with Homebrew (FFmpeg and friends), builds libinotify-kqueue, downloads OwnTone 29.2 (checksum-pinned), applies AudioSync's patches and builds it into `~/.audiosync-build/engine`, and then runs `build.sh`. The first run takes a while.
+`setup.sh` installs those build tools with Homebrew, then builds every library the engine links (FFmpeg, libgcrypt, SQLite, libinotify-kqueue and the rest, listed with their versions and checksums in `scripts/engine_deps.sh`) from pinned upstream release tarballs into `~/.audiosync-build/deps`. FFmpeg is an LGPL build without external libraries. Then it downloads OwnTone 29.2 (checksum-pinned), applies AudioSync's patches, builds it against those libraries into `~/.audiosync-build/engine`, and runs `build.sh`. The libraries take about nine minutes the first time; after that they're reused until `scripts/engine_deps.sh` or the target macOS changes. No Homebrew library ends up in the app.
 
-After that, `./build.sh` is all you need day to day. It builds the app, bundles the engine and every library it needs (so the app runs on Macs without Homebrew), signs it, and installs it to `/Applications`, or `~/Applications` if `/Applications` isn't writable. Without an engine the app still builds and runs, just without AirPlay speakers. If a `brew upgrade` changes the major version of a library the engine was linked against (FFmpeg, say), bundling stops and asks you to run `./setup.sh` again.
+After that, `./build.sh` is all you need day to day. It builds the app, bundles the engine and every library it needs (so the app runs on Macs without Homebrew), signs it, and installs it to `/Applications`, or `~/Applications` if `/Applications` isn't writable. Without an engine the app still builds and runs, just without AirPlay speakers.
 
-The bundled Homebrew libraries need the macOS they were built on or later. `bundle_engine.py` warns when that's newer than the app's own minimum (macOS 15).
+Everything is built with `MACOSX_DEPLOYMENT_TARGET=15.0`, the app's `LSMinimumSystemVersion`, so the engine runs on macOS 15 and later, whatever macOS the release is built on. C library functions the SDK marks as newer than 15.0 (`pipe2`, `dup3` and a few others) are reported as missing to `configure`, because a weak import of one is NULL on an older macOS and crashes the engine. `setup.sh` checks the libraries and the engine after building them, and `bundle_engine.py` checks everything it bundles again: the build fails if anything needs a newer macOS than `LSMinimumSystemVersion`, weak-imports from libSystem, or links something outside the app and the system.
 
 A few environment variables change what the scripts do:
 
@@ -25,6 +25,8 @@ A few environment variables change what the scripts do:
 - `AUDIOSYNC_ADHOC=1`: sign ad-hoc instead of with the local identity
 - `AUDIOSYNC_SKIP_BREW=1`: `setup.sh` skips Homebrew (handy offline)
 - `AUDIOSYNC_ENGINE_ONLY=1`: `setup.sh` stops after building the engine
+- `AUDIOSYNC_BUILD_DIR`: build the libraries and the engine somewhere other than `~/.audiosync-build` (for a test build that leaves your usual engine alone; `build.sh` and `archive_sources.sh` follow it too)
+- `AUDIOSYNC_ALLOW_NEWER_ENGINE=1`: `bundle_engine.py` only warns when the engine needs a newer macOS or has libraries it can't trace to `setup.sh`, for a local build deliberately linked against Homebrew. AirPlay then won't start on older systems, so never use it for a release
 - `CODESIGN_IDENTITY`: sign with a Developer ID, given by its full name (see `RELEASE.md`)
 - `ENTITLEMENTS`: entitlements for the app signature (Developer ID builds default to `AudioSync.entitlements`)
 - `SPARKLE_DIR`: use an already verified Sparkle folder instead of the cached archive
@@ -96,4 +98,4 @@ security delete-keychain ~/Library/Keychains/audiosync-signing.keychain-db   # i
 rm -rf ~/.audiosync-build
 ```
 
-The Homebrew packages `setup.sh` installed stay; `brew uninstall` them if nothing else needs them.
+The Homebrew build tools `setup.sh` installed (`pkg-config`, `cmake`, plus `nasm` on Intel Macs) stay; `brew uninstall` them if nothing else needs them.

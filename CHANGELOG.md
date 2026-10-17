@@ -4,6 +4,15 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Changed
+
+- The prebuilt app's AirPlay engine now works on macOS 15 (Sequoia) and later, whichever macOS the release was built on. You no longer need to build from source on macOS 15.
+- The bundled engine is smaller (about 30 MB instead of 46 MB): its libraries are built from pinned sources, and FFmpeg no longer includes video encoders AudioSync never used. The engine as distributed is now GPL-2.0-or-later; see `THIRD_PARTY_NOTICES.md`.
+
+### Fixed
+
+- The AirPlay engine in the 0.4.0 download could crash on macOS 26.0 through 26.3, because one of its bundled libraries needed macOS 26.4.
+
 ## [0.4.0] — 2026-10-17
 
 The big one: AudioSync is now a regular Dock app with a main window, and it can pair with speakers that ask for a code.
