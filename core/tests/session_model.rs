@@ -27,7 +27,7 @@ fn block(session: u32, first: u64, frames: usize) -> Vec<f32> {
         .collect()
 }
 
-// covers: S4, S62
+// covers: S4, S62, S45
 #[test]
 fn delays_ring_indices_and_lag_count_capture_rate_frames() {
     // Captured at 44.1 kHz, played on a 48 kHz device, fed to the 48 kHz pipe.
@@ -54,13 +54,23 @@ fn delays_ring_indices_and_lag_count_capture_rate_frames() {
             (need, 480)
         );
         device_frames += 480;
-        if round > 0 {
-            // The reader keeps its delay in Rc frames while the device
-            // consumes them at its own rate: no correction is ever needed.
-            assert_eq!(report.correction, Correction::None, "round {round}");
-            assert_eq!(report.delay, delay);
-            let error = report.lag - (delay - need as i64);
-            assert!(error.abs() <= t, "round {round}: lag {}", report.lag);
+        assert_eq!(report.delay, delay);
+        match round {
+            // A second of Rc frames is 100 rounds: the reader waits in
+            // silence until more than that is written, then primes (S45).
+            0..100 => {
+                assert_eq!(report.correction, Correction::None, "round {round}");
+                assert_eq!((report.copied, report.lag), (0, report.written));
+            }
+            100 => assert_eq!(report.correction, Correction::Prime),
+            _ => {
+                // The reader keeps its delay in Rc frames while the device
+                // consumes them at its own rate: no correction is ever
+                // needed.
+                assert_eq!(report.correction, Correction::None, "round {round}");
+                let error = report.lag - (delay - need as i64);
+                assert!(error.abs() <= t, "round {round}: lag {}", report.lag);
+            }
         }
     }
     assert_eq!(ring.frames_written(), 600 * 441, "W counts Rc frames");
@@ -109,22 +119,30 @@ fn every_session_has_its_own_history_reader_positions_and_frame_count() {
     capture.reset();
     assert_eq!(ring.frames_written(), 0, "framesCaptured restarts at 0");
     let mut output = Reader::new(Arc::clone(&ring), rate);
+    let report = output.read(&mut buf, n, delay, t);
     assert_eq!(
-        output.read(&mut buf, n, delay, t).correction,
-        Correction::Prime,
-        "reader positions start fresh"
+        (report.correction, report.start, report.lag),
+        (Correction::None, 0, 0),
+        "reader positions start fresh, with nothing written yet"
     );
     assert!(buf.iter().all(|sample| *sample == 0.0));
     let mut heard = Vec::new();
+    let mut primed_at = None;
     for i in 0..30 {
         capture.write(&block(2, i * n as u64, n), n);
-        output.read(&mut buf, n, delay, t);
+        let report = output.read(&mut buf, n, delay, t);
+        if report.correction == Correction::Prime {
+            primed_at = Some(report.written);
+        }
         heard.extend(buf.chunks_exact(2).filter_map(|f| decode(f[0], f[1])));
     }
+    // The reader primes once more than its delay is written (S45), at
+    // W = 5280, so it starts with frame 480 of this session.
+    assert_eq!(primed_at, Some(11 * n as i64));
     assert!(!heard.is_empty());
     for (k, (session, index)) in heard.iter().enumerate() {
         assert_eq!(*session, 2, "only this session's audio");
-        assert_eq!(*index, k as u64, "counted from the session's start");
+        assert_eq!(*index, 480 + k as u64, "counted from the session's start");
     }
 }
 

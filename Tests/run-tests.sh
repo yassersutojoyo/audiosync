@@ -73,6 +73,23 @@ else
   status=1
 fi
 
+echo "▶ AirPlay volume requests"
+# The AirPlay engine's master volume is its loudest selected speaker's
+# volume, so a master write (the player volume, or a 'pvol' metadata item)
+# sets a lone speaker to it. AudioSync sends per-speaker volumes only, and
+# only AirPlayVolume (AirPlayReconcile.swift) builds a speaker's volume or
+# switch-on body, so every switch-on carries the speaker's own volume.
+requests_ok=1
+if grep -nE 'api/player/volume|code: *"pvol"|70766f6c' "$SRC"/*.swift; then
+  echo "FAIL: AudioSync writes the AirPlay engine's master volume"
+  requests_ok=0
+fi
+if grep -nE '\\"(selected|volume)\\"' "$SRC"/*.swift | grep -v "^$SRC/AirPlayReconcile.swift:"; then
+  echo "FAIL: a speaker's volume or switch-on body is built outside AirPlayVolume"
+  requests_ok=0
+fi
+if [ "$requests_ok" = 1 ]; then echo "PASSED"; else status=1; fi
+
 echo "▶ ring buffer"
 build ring Tests/ringtest.swift RingBuffer.swift
 "$OUT/ring/run" > "$OUT/ring.log" || status=1

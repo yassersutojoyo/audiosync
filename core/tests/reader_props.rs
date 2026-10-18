@@ -79,13 +79,22 @@ struct Output {
     buf: Vec<f32>,
     /// Highest index ever emitted.
     last: Option<i64>,
+    /// Whether a read has primed the reader (S45).
+    primed: bool,
+    /// The previous read's report.
+    previous: Option<ReadReport>,
+    /// A delay change was requested and no read has applied it yet.
+    change_pending: bool,
 }
 
 impl Output {
     /// Reads one block and checks it: every frame is silence or exactly the
     /// frame its position names; indices only ever increase (S49); nothing
     /// unwritten or outside the readable window is emitted (S40); every
-    /// re-positioning lands on the exact delay (S42, S46).
+    /// re-positioning lands on the exact delay (S42, S46); a reader waits in
+    /// silence until more than its delay is written (S45); a dry reader, at
+    /// a W the writer has not moved since, makes no correction and keeps a
+    /// requested change for the first read that finds unread frames (S44).
     fn read(&mut self, frames: usize) -> Result<ReadReport, TestCaseError> {
         let report = self.reader.read_target(&mut self.buf, frames);
         prop_assert_eq!(report.frames, frames);
@@ -108,7 +117,39 @@ impl Output {
             prop_assert_eq!(report.start, report.written - report.delay);
             prop_assert_eq!(report.lag, report.delay - frames as i64);
         }
+        if !self.primed {
+            if report.correction == Correction::Prime {
+                prop_assert!(report.written > report.delay, "S45: primed too early");
+                self.primed = true;
+            } else {
+                prop_assert_eq!(report.correction, Correction::None);
+                prop_assert!(report.written <= report.delay, "S45: not primed");
+                prop_assert_eq!(report.copied, 0);
+                prop_assert_eq!(report.lag, report.written, "W - P with P = 0");
+            }
+        } else if self
+            .previous
+            .is_some_and(|p| p.lag == 0 && p.written == report.written)
+        {
+            prop_assert_eq!(report.correction, Correction::None, "dry: no anchor");
+            prop_assert_eq!(
+                (report.masked, report.copied, report.starved, report.lag),
+                (0, 0, frames, 0)
+            );
+        } else if self.change_pending {
+            prop_assert_eq!(report.correction, Correction::Resync);
+        }
+        if matches!(report.correction, Correction::Prime | Correction::Resync) {
+            self.change_pending = false;
+        }
+        self.previous = Some(report);
         Ok(report)
+    }
+
+    /// Sets a new target delay with its resync request.
+    fn set_delay(&mut self, delay: i64) {
+        self.reader.control().set_delay_frames(delay);
+        self.change_pending = true;
     }
 }
 
@@ -124,6 +165,9 @@ fn session() -> (Arc<Ring>, Capture, Vec<Output>) {
             reader: Reader::new(Arc::clone(&ring), 48_000),
             buf: vec![0.0; MAX_READ * 2],
             last: None,
+            primed: false,
+            previous: None,
+            change_pending: false,
         })
         .collect();
     (ring, capture, outputs)
@@ -135,7 +179,7 @@ fn apply(op: &Op, capture: &mut Capture, outputs: &mut [Output]) -> Result<(), T
         Op::Read { reader, frames } => {
             outputs[reader].read(frames)?;
         }
-        Op::SetDelay { reader, delay } => outputs[reader].reader.control().set_delay_frames(delay),
+        Op::SetDelay { reader, delay } => outputs[reader].set_delay(delay),
         Op::Pause {
             reader,
             reads,
@@ -156,7 +200,7 @@ fn apply(op: &Op, capture: &mut Capture, outputs: &mut [Output]) -> Result<(), T
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    // covers: S49, S46, S42, S44, S47, S48, S53, S54, S58, S59, S40
+    // covers: S49, S46, S42, S44, S45, S47, S48, S53, S54, S58, S59, S40
     #[test]
     fn delay_changes_never_repeat_and_settle_exactly(
         ops in prop::collection::vec(op(), 1..60),
@@ -170,7 +214,7 @@ proptest! {
         // Settle: each reader gets its final delay, then capture and output
         // run in lockstep long enough for any inserted silence to end.
         for (out, &delay) in outputs.iter_mut().zip(&finals) {
-            out.reader.control().set_delay_frames(delay);
+            out.set_delay(delay);
         }
         let rounds = CAPACITY / block + 8;
         let mut last_reports = vec![ReadReport::default(); READERS];
@@ -192,7 +236,7 @@ proptest! {
         }
     }
 
-    // covers: S49, S51, S52, S53, S55
+    // covers: S49, S51, S52, S53, S55, S44, S45
     #[test]
     fn a_fixed_delay_never_repeats_under_any_schedule(
         schedule in prop::collection::vec((1usize..=3000, 0usize..=3, 1usize..=1024), 1..60),
@@ -201,7 +245,7 @@ proptest! {
     ) {
         let (_ring, mut capture, mut outputs) = session();
         let out = &mut outputs[0];
-        out.reader.control().set_delay_frames(delay);
+        out.set_delay(delay);
         out.reader.control().set_tolerance_frames(tolerance);
         for &(write, reads, frames) in &schedule {
             capture.write(write);
@@ -227,7 +271,7 @@ proptest! {
         capture.write(CAPACITY);
         let (plain, others) = outputs.split_at_mut(1);
         let plain = &mut plain[0];
-        plain.reader.control().set_delay_frames(delay);
+        plain.set_delay(delay);
         let first = plain.read(512)?;
         let mut expected_next = first.start + 512;
         for op in &ops {

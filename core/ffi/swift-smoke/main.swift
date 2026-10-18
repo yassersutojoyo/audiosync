@@ -82,8 +82,8 @@ func versionVolumeAndEqualizer() {
 
 /// A ring at 48 kHz, its writer and one reader. Frame i carries i + 1 on L
 /// and -(i + 1) on R, so silence is never a frame and every frame names its
-/// index. The reader plays 512-frame blocks at 4096, then 8192, then 2048
-/// frames of delay.
+/// index. The reader waits until the ring holds more than its delay, then
+/// plays 512-frame blocks at 4096, then 8192, then 2048 frames of delay.
 func ringAndReader() {
     let rate: UInt32 = 48_000
     let capacity = asc_ring_capacity_for_rate(rate)
@@ -140,9 +140,14 @@ func ringAndReader() {
     }
 
     asc_reader_set_delay_frames(reader, 4096)
-    let first = play(100, delay: 4096)
-    check(first.exact, "each block starts exactly 4096 frames behind the writer")
-    check(first.silent == 4096 - frames, "silence only before the stream starts (\(first.silent) frames)")
+    let waiting = play(8, delay: 4096)
+    check(
+        waiting.silent == 8 * frames && asc_reader_counters(reader).primes == 0
+            && asc_reader_lag_frames(reader) == Int64(next),
+        "silent, and not yet anchored, until more than 4096 frames are written (\(waiting.silent) frames)")
+    let first = play(92, delay: 4096)
+    check(first.exact, "then each block starts exactly 4096 frames behind the writer")
+    check(first.silent == 0, "no silence once anchored (\(first.silent) frames)")
     check(asc_ring_frames_written(ring) == UInt64(next), "the ring counts \(next) frames written")
     check(asc_reader_lag_frames(reader) == Int64(4096 - frames), "lag is the delay minus one block: \(asc_reader_lag_frames(reader))")
 

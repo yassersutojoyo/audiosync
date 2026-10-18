@@ -4,9 +4,9 @@
 //! fast or 200 ppm slow and reads 512-frame blocks at a 2 s delay, for two
 //! hours of audio in each direction. A third of the way in, the output
 //! stalls for 2 s. Every frame is self-identifying, and every read checks
-//! that nothing repeats (S49) and that the lag stays within T + N of
-//! `De - N` (S57). Time is counted in integer ticks so the clocks never
-//! drift from rounding.
+//! that nothing repeats (S49) and, once the reader has primed (S45), that
+//! the lag stays within T + N of `De - N` (S57). Time is counted in integer
+//! ticks so the clocks never drift from rounding.
 
 use std::sync::Arc;
 
@@ -46,6 +46,7 @@ fn simulate(writer_period: u64, reader_period: u64) -> Summary {
     let mut next_frame = 0u64;
     let mut written = 0u64;
     let mut last: i64 = -1;
+    let mut primed = false;
     let (mut writer_at, mut reader_at) = (0u64, reader_period / 2);
     let mut summary = Summary::default();
 
@@ -76,13 +77,21 @@ fn simulate(writer_period: u64, reader_period: u64) -> Summary {
                 summary.silent += 1;
             }
         }
-        let error = (report.lag - (DELAY - BLOCK as i64)).abs();
-        assert!(
-            error <= bound,
-            "S57: lag error {error} > {bound} at read {}",
-            summary.reads
-        );
-        summary.worst = summary.worst.max(error);
+        // Until more than the delay is written, the reader waits in silence
+        // and its lag is W - P with P = 0 (S45); the delay holds from the
+        // read that primes on.
+        primed |= report.correction == Correction::Prime;
+        if primed {
+            let error = (report.lag - (DELAY - BLOCK as i64)).abs();
+            assert!(
+                error <= bound,
+                "S57: lag error {error} > {bound} at read {}",
+                summary.reads
+            );
+            summary.worst = summary.worst.max(error);
+        } else {
+            assert!(report.written <= DELAY && report.lag == report.written);
+        }
         match report.correction {
             Correction::SkipForward => summary.skips += 1,
             Correction::StepBack => summary.step_backs += 1,
