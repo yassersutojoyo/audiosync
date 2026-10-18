@@ -1,49 +1,167 @@
 #!/bin/bash
-# Benchmark baseline of the Swift engine, completely silent and unattended.
-# Runs the soak harness in two configurations, one after the other:
+# Benchmark baseline of the engine, the Swift one or the Rust core (--engine),
+# completely silent and unattended. Runs the soak harness in two configurations,
+# one after the other:
 #   two_local        two local outputs at gain 0, plus the delay-accuracy test
 #                    (150/500/2000/3000 ms on each output)
 #   local_plus_fifo  one local output at gain 0 plus the FIFO path to a local
 #                    reader standing in for the AirPlay engine
 # Real AirPlay is recorded as "not available" (it needs a speaker on the network
 # and makes sound). While each configuration runs, `ps` samples the harness's
-# CPU % and RSS every second. Writes Tests/baseline/swift.json (machine, macOS,
-# commit and every number), which Tests/soak.sh judges against, and the Swift
-# results table in docs/BENCHMARKS.md. Keeps the Mac awake while it runs.
+# CPU % and RSS every second. Writes Tests/baseline/<engine>.json (machine,
+# macOS, commit and every number), which Tests/soak.sh judges against, and the
+# results table in docs/BENCHMARKS.md (both engines' columns, from their
+# baselines). Keeps the Mac awake while it runs.
 #
-# Usage: Tests/bench.sh [--minutes N] [--out DIR] [--baseline-out FILE] [--no-doc]
+# Usage: Tests/bench.sh [--engine swift|rust] [--minutes N] [--out DIR] [--baseline-out FILE] [--no-doc] [--doc-only]
+#   --engine NAME        swift (default) or rust: which implementation plays
 #   --minutes N          minutes per configuration (default 60, so two hours in all)
 #   --out DIR            working folder for logs (default: new audiosync-bench-* under $TMPDIR)
-#   --baseline-out FILE  where the baseline goes (default Tests/baseline/swift.json)
+#   --baseline-out FILE  where the baseline goes (default Tests/baseline/<engine>.json)
 #   --no-doc             leave docs/BENCHMARKS.md alone
+#   --doc-only           only rewrite the table from the baselines in Tests/baseline/
 set -euo pipefail
 export LC_ALL=C
 cd "$(dirname "$0")/.."
 
+engine=swift
 minutes=60
 out=""
-baseline_out=Tests/baseline/swift.json
+baseline_out=""
 doc=docs/BENCHMARKS.md
+doc_only=false
 while [ $# -gt 0 ]; do
   case $1 in
+    --engine)       engine=${2:?--engine needs a value}; shift 2 ;;
     --minutes)      minutes=${2:?--minutes needs a value}; shift 2 ;;
     --out)          out=${2:?--out needs a value}; shift 2 ;;
     --baseline-out) baseline_out=${2:?--baseline-out needs a value}; shift 2 ;;
     --no-doc)       doc=""; shift ;;
-    -h|--help)      sed -n '2,19p' "$0"; exit 0 ;;
+    --doc-only)     doc_only=true; shift ;;
+    -h|--help)      sed -n '2,22p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+case $engine in swift|rust) ;; *) echo "--engine must be swift or rust" >&2; exit 2 ;; esac
 case $minutes in ''|*[!0-9]*|0) echo "--minutes must be a positive whole number" >&2; exit 2 ;; esac
+if [ -z "$baseline_out" ]; then baseline_out=Tests/baseline/$engine.json; fi
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is needed to check and format the baseline (it comes with the Command Line Tools)" >&2
   exit 2
 fi
 
+# write_doc SWIFT_BASELINE RUST_BASELINE: the results table between the markers
+# in the doc, one column per engine whose baseline file exists.
+write_doc() {
+  python3 -I - "$doc" "$1" "$2" <<'PY'
+import json, os, sys
+doc_path, paths = sys.argv[1], {"swift": sys.argv[2], "rust": sys.argv[3]}
+names = {"swift": "Swift", "rust": "Rust"}
+baselines = {e: json.load(open(p, encoding="utf-8")) for e, p in paths.items() if os.path.exists(p)}
+if not baselines:
+    sys.exit("no baseline to write the table from")
+def g(x):
+    return "%g" % x
+def describe(e, b):
+    a, f = b["configs"]["two_local"], b["configs"]["local_plus_fifo"]
+    m = b["machine"]
+    names_out = ", ".join(o["name"] for o in a["harness"]["config"]["outputs"])
+    where = ("the working tree of %s (with uncommitted changes)" % b["commit"]) if b["uncommitted_changes"] else b["commit"]
+    mins = b["minutes_per_config"]
+    lines = [
+        "%s: %d min per configuration, %s, on %s." % (names[e], mins, b["generated"][:10], where),
+        "Machine: %s (%s), %s, %d GB, macOS %s (%s). Outputs: %s; local + FIFO used %s."
+        % (m["model_name"], m["model_identifier"], m["chip"], m["memory_gb"], m["macos"], m["macos_build"],
+           names_out, f["harness"]["config"]["outputs"][0]["name"]),
+    ]
+    if mins < 60:
+        lines.append("This is a short smoke run, not the release baseline; record that with a plain "
+                     "`Tests/bench.sh --engine %s`." % e)
+    return lines
+def column(b):
+    a, f = b["configs"]["two_local"], b["configs"]["local_plus_fifo"]
+    am, fm = a["harness"]["metrics"], f["harness"]["metrics"]
+    acc = a["harness"]["delay_accuracy"]
+    def errs(t):
+        return ", ".join("%+.1f" % r["error_ms"] for r in acc if r["target_ms"] == t)
+    return [
+        " / ".join("(%s)" % errs(t) for t in (150, 500, 2000, 3000)),
+        g(am["local_dropouts_per_h"]),
+        g(am["local_starved_renders_per_h"]),
+        g(am["local_drift_corrections_per_h"]),
+        g(am["local_lag_err_ms_max_abs"]),
+        "%s / %s" % (g(am["inter_output_drift_ms_mean"]), g(am["inter_output_drift_ms_max_abs"])),
+        g(am["inter_output_drift_ms_change"]),
+        "%s / %s" % (g(am["cpu_pct_mean"]), g(a["process"]["cpu_pct_mean"])),
+        "%s / %s" % (g(am["footprint_mb_max"]), g(a["process"]["rss_mb_max"])),
+        g(fm["fifo_underruns_per_h"]),
+        g(fm["fifo_gaps_per_h"]),
+        "%s / %s" % (g(fm["fifo_latency_ms_mean"]), g(fm["fifo_latency_ms_max"])),
+        "%d, %d, %d" % (fm["fifo_pipe_full_waits"], fm["fifo_short_writes"], fm["fifo_backlog_skips"]),
+        g(fm["local_dropouts_per_h"]),
+        "%s / %s" % (g(fm["cpu_pct_mean"]), g(f["process"]["cpu_pct_mean"])),
+        "not available",
+    ]
+labels = [
+    "Delay error at 150 / 500 / 2000 / 3000 ms (ms, per output)",
+    "Two local: dropouts per hour (worst output)",
+    "Two local: starved renders per hour (worst output)",
+    "Two local: drift corrections per hour (worst output)",
+    "Two local: worst lag error, 10 s mean (ms)",
+    "Two local: inter-output drift, mean / worst (ms)",
+    "Two local: inter-output drift change, first to last window (ms)",
+    "Two local: CPU % mean (harness / ps)",
+    "Two local: memory footprint max / RSS max (MB)",
+    "Local + FIFO: FIFO underruns per hour",
+    "Local + FIFO: FIFO gaps per hour",
+    "Local + FIFO: FIFO latency mean / max (ms)",
+    "Local + FIFO: pipe-full waits, short writes, backlog skips",
+    "Local + FIFO: local dropouts per hour",
+    "Local + FIFO: CPU % mean (harness / ps)",
+    "Real AirPlay",
+]
+cols = {e: column(b) if b else None for e, b in baselines.items()}
+blank = [""] * len(labels)
+rows = zip(labels, cols.get("swift") or blank, cols.get("rust") or blank)
+def row(cells):
+    return "|" + "|".join(" %s " % c if c else " " for c in cells) + "|"
+table = ["| Metric | Swift | Rust |", "|---|---|---|"] + [row(r) for r in rows]
+text = []
+for e in ("swift", "rust"):
+    if e in baselines:
+        text += describe(e, baselines[e])
+block = "\n\n".join(text) + "\n\n" + "\n".join(table) + "\n"
+begin, end = "<!-- bench:results:begin -->", "<!-- bench:results:end -->"
+doc = open(doc_path, encoding="utf-8").read()
+if begin not in doc or end not in doc:
+    sys.exit("%s has no %s ... %s markers" % (doc_path, begin, end))
+head, rest = doc.split(begin, 1)
+_, tail = rest.split(end, 1)
+open(doc_path, "w", encoding="utf-8").write(head + begin + "\n" + block + end + tail)
+print("▶ results table written to " + doc_path)
+PY
+}
+
+# The other engine's column comes from its baseline in Tests/baseline/.
+other_baseline() {
+  if [ "$engine" = swift ]; then echo Tests/baseline/rust.json; else echo Tests/baseline/swift.json; fi
+}
+
+if [ "$doc_only" = true ]; then
+  [ -n "$doc" ] || { echo "--doc-only and --no-doc together leave nothing to do" >&2; exit 2; }
+  write_doc Tests/baseline/swift.json Tests/baseline/rust.json
+  exit 0
+fi
+
 if [ -z "$out" ]; then out=$(mktemp -d "${TMPDIR:-/tmp}/audiosync-bench-XXXXXX"); fi
 mkdir -p "$out"
 bin="$out/soaktest"
-echo "▶ building the harness"
+echo "▶ building the Rust core and the harness"
+if ! scripts/build_core.sh > "$out/core-build.log" 2>&1; then
+  tail -n 20 "$out/core-build.log" >&2
+  echo "the Rust core did not build" >&2
+  exit 2
+fi
 if ! Tests/build-harness.sh "$bin"; then echo "the harness did not compile" >&2; exit 2; fi
 caffeinate -i -w $$ &   # no idle sleep while this script runs
 per_config=$((minutes * 60))   # seconds per configuration
@@ -58,8 +176,9 @@ run_config() {
   local name=$1; shift
   local dir="$out/$name"
   mkdir -p "$dir"
-  echo "▶ $name, $minutes min ($dir)"
-  "$bin" --label "$name" --seconds "$per_config" --interval 10 --out "$dir" "$@" > "$dir/harness.log" 2>&1 &
+  echo "▶ $name, $engine engine, $minutes min ($dir)"
+  "$bin" --label "$name" --engine "$engine" --seconds "$per_config" --interval 10 --out "$dir" "$@" \
+    > "$dir/harness.log" 2>&1 &
   harness_pid=$!
   local t=0 sample
   echo "t_s,cpu_pct,rss_kb" > "$dir/ps.csv"
@@ -109,7 +228,7 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then dirty=true; fi
 mkdir -p "$(dirname "$baseline_out")"
 tmp="$out/baseline.json"
 {
-  printf '{\n"engine": "swift",\n'
+  printf '{\n"engine": %s,\n' "$(json_str "$engine")"
   printf '"generated": %s,\n' "$(json_str "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
   printf '"minutes_per_config": %d,\n' "$minutes"
   printf '"commit": %s,\n"uncommitted_changes": %s,\n' "$(json_str "$commit")" "$dirty"
@@ -131,65 +250,11 @@ if ! python3 -I -m json.tool --indent 1 "$tmp" > "$tmp.pretty"; then
   exit 1
 fi
 mv "$tmp.pretty" "$baseline_out"
-echo "▶ baseline written to $baseline_out ($minutes min per configuration, commit $commit)"
+echo "▶ baseline written to $baseline_out ($engine engine, $minutes min per configuration, commit $commit)"
 
 [ -n "$doc" ] || exit 0
-# Replace the Swift results between the markers in the doc with this run's numbers.
-python3 -I - "$baseline_out" "$doc" <<'PY'
-import json, sys
-base_path, doc_path = sys.argv[1], sys.argv[2]
-b = json.load(open(base_path, encoding="utf-8"))
-a, f = b["configs"]["two_local"], b["configs"]["local_plus_fifo"]
-am, fm = a["harness"]["metrics"], f["harness"]["metrics"]
-acc = a["harness"]["delay_accuracy"]
-m = b["machine"]
-def errs(t):
-    return ", ".join("%+.1f" % r["error_ms"] for r in acc if r["target_ms"] == t)
-def g(x):
-    return "%g" % x
-names = ", ".join(o["name"] for o in a["harness"]["config"]["outputs"])
-commit = b["commit"]
-where = ("the working tree of %s (with uncommitted changes)" % commit) if b["uncommitted_changes"] else commit
-mins = b["minutes_per_config"]
-lines = [
-    "Run: %d min per configuration, %s, on %s." % (mins, b["generated"][:10], where),
-    "Machine: %s (%s), %s, %d GB, macOS %s (%s). Outputs: %s; local + FIFO used %s."
-    % (m["model_name"], m["model_identifier"], m["chip"], m["memory_gb"], m["macos"], m["macos_build"],
-       names, f["harness"]["config"]["outputs"][0]["name"]),
-]
-if mins < 60:
-    lines.append("This is a short smoke run, not the release baseline; record that with a plain `Tests/bench.sh`.")
-rows = [
-    ("Delay error at 150 / 500 / 2000 / 3000 ms (ms, per output)",
-     " / ".join("(%s)" % errs(t) for t in (150, 500, 2000, 3000))),
-    ("Two local: dropouts per hour (worst output)", g(am["local_dropouts_per_h"])),
-    ("Two local: starved renders per hour (worst output)", g(am["local_starved_renders_per_h"])),
-    ("Two local: drift corrections per hour (worst output)", g(am["local_drift_corrections_per_h"])),
-    ("Two local: worst lag error, 10 s mean (ms)", g(am["local_lag_err_ms_max_abs"])),
-    ("Two local: inter-output drift, mean / worst (ms)",
-     "%s / %s" % (g(am["inter_output_drift_ms_mean"]), g(am["inter_output_drift_ms_max_abs"]))),
-    ("Two local: inter-output drift change, first to last window (ms)", g(am["inter_output_drift_ms_change"])),
-    ("Two local: CPU % mean (harness / ps)", "%s / %s" % (g(am["cpu_pct_mean"]), g(a["process"]["cpu_pct_mean"]))),
-    ("Two local: memory footprint max / RSS max (MB)",
-     "%s / %s" % (g(am["footprint_mb_max"]), g(a["process"]["rss_mb_max"]))),
-    ("Local + FIFO: FIFO underruns per hour", g(fm["fifo_underruns_per_h"])),
-    ("Local + FIFO: FIFO gaps per hour", g(fm["fifo_gaps_per_h"])),
-    ("Local + FIFO: FIFO latency mean / max (ms)",
-     "%s / %s" % (g(fm["fifo_latency_ms_mean"]), g(fm["fifo_latency_ms_max"]))),
-    ("Local + FIFO: pipe-full waits, short writes, backlog skips",
-     "%d, %d, %d" % (fm["fifo_pipe_full_waits"], fm["fifo_short_writes"], fm["fifo_backlog_skips"])),
-    ("Local + FIFO: local dropouts per hour", g(fm["local_dropouts_per_h"])),
-    ("Local + FIFO: CPU % mean (harness / ps)", "%s / %s" % (g(fm["cpu_pct_mean"]), g(f["process"]["cpu_pct_mean"]))),
-    ("Real AirPlay", "not available"),
-]
-table = ["| Metric | Swift | Rust |", "|---|---|---|"] + ["| %s | %s | |" % r for r in rows]
-block = "\n\n".join(lines) + "\n\n" + "\n".join(table) + "\n"
-begin, end = "<!-- bench:swift:begin -->", "<!-- bench:swift:end -->"
-doc = open(doc_path, encoding="utf-8").read()
-if begin not in doc or end not in doc:
-    sys.exit("%s has no %s ... %s markers" % (doc_path, begin, end))
-head, rest = doc.split(begin, 1)
-_, tail = rest.split(end, 1)
-open(doc_path, "w", encoding="utf-8").write(head + begin + "\n" + block + end + tail)
-print("▶ results table written to " + doc_path)
-PY
+if [ "$engine" = swift ]; then
+  write_doc "$baseline_out" "$(other_baseline)"
+else
+  write_doc "$(other_baseline)" "$baseline_out"
+fi
