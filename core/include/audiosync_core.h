@@ -447,7 +447,7 @@ typedef struct AscPipeSink {
 typedef struct AscFifoCounters {
     uint64_t opens;                 /* successful opens of the pipe */
     uint64_t write_errors;          /* failed writes other than a full pipe */
-    uint64_t backlog_skips;         /* times the 250 ms backlog cap dropped audio */
+    uint64_t backlog_skips;         /* times the 250 ms backlog cap or an open dropped audio */
     uint64_t backlog_skip_samples;  /* 16-bit samples those drops removed */
     uint64_t pipe_full_waits;       /* waits on a full pipe */
     uint64_t short_writes;          /* writes that took only part of the bytes */
@@ -514,12 +514,13 @@ void asc_fifo_writer_destroy(AscFifoWriter *writer);
 /*
  * Writer thread: one bounded piece of work. It keeps the unwritten audio at
  * or under 250 ms (dropping the oldest whole frames), opens the pipe while it
- * is closed, otherwise makes one write of at most ASC_PIPE_WRITE_MAX_BYTES
- * that ends on a frame boundary, resumes a short write at the next byte and
- * reopens after a broken pipe on a frame boundary. Returns the microseconds
- * to sleep before the next step (or until the host wakes the thread to
- * stop); 0 means step again at once. A NULL writer or sink does nothing and
- * returns the open retry pause.
+ * is closed (each open, the first or a reopen, drops whatever queued before
+ * it, so writing starts at the live edge), otherwise makes one write of at
+ * most ASC_PIPE_WRITE_MAX_BYTES that ends on a frame boundary, resumes a
+ * short write at the next byte and reopens after a broken pipe on a frame
+ * boundary. Returns the microseconds to sleep before the next step (or until
+ * the host wakes the thread to stop); 0 means step again at once. A NULL
+ * writer or sink does nothing and returns the open retry pause.
  */
 uint32_t asc_fifo_writer_step(AscFifoWriter *writer, const AscPipeSink *sink);
 
