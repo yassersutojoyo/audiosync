@@ -105,13 +105,6 @@ What it means:
 - The session's mute and volume apply before the process loopback tap, for one app and for the whole system alike: 50% is exactly 6 dB down (a linear gain) and mute is digital silence. Auto-muting the source (3b) would silence AudioSync's copies too, so it's out. Guiding the user to send the app, or the Windows default output, to an output they don't listen to stays the recommendation.
 - Endpoint mute sits after the tap: every output endpoint was muted for the whole test and the unmuted session still came through at full level. So muting the endpoint the app plays on, when AudioSync doesn't play there itself, might be a documented alternative to rerouting the app. It silences everything else on that endpoint too, and nothing beyond this run has tested it.
 
-## AirPlay on Windows (out of scope)
+## AirPlay on Windows
 
-Not planned now; recorded so the options aren't researched twice.
-[`WINDOWS_AIRPLAY.md`](WINDOWS_AIRPLAY.md) now covers these options in depth, with a recommendation.
-
-- **OwnTone.** Supports Linux and BSD, not Windows ([installation](https://owntone.github.io/owntone-server/installation/)). It could run under WSL2 or a container as the same separate GPL process. WSL's mirrored networking (Windows 11 22H2 and later) is documented to add multicast support ([WSL networking](https://learn.microsoft.com/en-us/windows/wsl/networking)), which mDNS discovery needs; untested for AirPlay.
-- **libraop.** [RAOP (AirPlay 1) player and library](https://github.com/philippe44/libraop) with timing sync and a Windows build, MIT-licensed (it bundles third-party parts under their own terms). Linking it would make AudioSync speak AirPlay 1 itself, with no AirPlay 2.
-- **pyatv.** [Python client library](https://github.com/postlund/pyatv), MIT. RAOP streaming of files and URLs, one stream at a time, and only legacy pairing because HAP-based encryption isn't implemented ([supported features](https://pyatv.dev/documentation/supported_features/)). Not a multi-room sender.
-- **AirPlay 2 senders.** AirPlay 2 needs HomeKit-style pairing (SRP and Curve25519), encrypted RTSP and PTP timing for buffered multi-room audio. Apple's spec isn't public, so every open-source sender builds on reverse-engineered behavior; OwnTone is the mature one. A native Windows AirPlay 2 sender would be a large separate project.
-- **Discovery.** Windows 10 and 11 have a native DNS-SD browse API ([`DnsServiceBrowse`](https://learn.microsoft.com/en-us/windows/win32/api/windns/nf-windns-dnsservicebrowse)), so finding speakers wouldn't need a bundled mDNS stack.
+AirPlay isn't part of this routing question. AudioSync is getting its own AirPlay sender, written in Rust: [WINDOWS_AIRPLAY.md](WINDOWS_AIRPLAY.md) covers the Windows side, and [AIRPLAY_SURVEY.md](AIRPLAY_SURVEY.md) the existing projects, the public specs and the planned design.
