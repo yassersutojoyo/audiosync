@@ -24,7 +24,7 @@ use super::SESSION_RATE;
 use super::backend::{
     AudioBackend, BackendError, BackendEvent, OutputInfo, SourceId, SourceInfo, StopReason,
 };
-use super::capture::{Activation, decide_activation, source_list};
+use super::capture::{Activation, decide_activation, running_app, source_list};
 #[cfg(test)]
 use super::outputs::OutputParams;
 use super::outputs::{AirPlay, Endpoint, OutputPolicy};
@@ -375,6 +375,15 @@ impl<D: Driver> AudioBackend for Controller<D> {
             &session_pids,
             self.driver.own_pid(),
         ))
+    }
+
+    fn find_app(
+        &mut self,
+        root_pid: u32,
+        executable: &str,
+    ) -> Result<Option<SourceInfo>, BackendError> {
+        let processes = self.driver.processes()?;
+        Ok(running_app(&processes, root_pid, executable))
     }
 
     fn list_outputs(&mut self) -> Result<Vec<OutputInfo>, BackendError> {

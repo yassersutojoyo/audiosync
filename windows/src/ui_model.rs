@@ -241,8 +241,13 @@ pub enum GroupError {
 }
 
 /// The audio side, as the UI sees it. Every method is called on the UI
-/// thread and returns quickly; the real backend does its work elsewhere and
-/// reports through the next snapshot.
+/// thread, and the next snapshot shows what it did. Most calls return at
+/// once, but on Windows a call that starts or stops streams waits for them:
+/// starting or stopping streaming, picking another source while streaming,
+/// turning a speaker or group on or off while streaming, and a poll that
+/// brings a speaker back. Each stream takes a moment to open (longer for a
+/// Bluetooth device, and starting capture waits up to 5 s for Windows), and
+/// the windows don't respond meanwhile.
 pub trait Backend {
     fn snapshot(&self) -> AppState;
     fn set_running(&mut self, on: bool);

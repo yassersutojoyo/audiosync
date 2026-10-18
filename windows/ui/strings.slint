@@ -99,6 +99,12 @@ export global Strings {
         return @tr("AudioSync couldn't open a window: {}", detail);
     }
 
+    // Windows audio couldn't be reached at startup, so AudioSync exits;
+    // `detail` is the system's reason.
+    public pure function audio-failed(detail: string) -> string {
+        return @tr("AudioSync couldn't reach Windows audio, so it can't start. Restart your PC, then open AudioSync again.\n\nDetails: {}", detail);
+    }
+
     // The status under the wordmark (and the tray icon's tooltip).
     public pure function status(running: bool, speakers: int) -> string {
         if !running {

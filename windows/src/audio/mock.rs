@@ -269,6 +269,20 @@ impl Controller<MockDriver> {
         self.add_process(pid, parent_pid, executable, true);
     }
 
+    /// Starts an app, started by Explorer, that hasn't opened an audio
+    /// stream yet.
+    pub fn add_silent_app(&mut self, pid: u32, executable: &str) {
+        self.add_process(pid, EXPLORER_PID, executable, false);
+    }
+
+    /// Ends the audio session of process `pid`, which keeps running (as an
+    /// app may do while it is paused).
+    pub fn close_audio_session(&mut self, pid: u32) {
+        self.driver_mut()
+            .session_pids
+            .retain(|&session_pid| session_pid != pid);
+    }
+
     fn add_process(&mut self, pid: u32, parent_pid: u32, executable: &str, audio: bool) {
         let driver = self.driver_mut();
         let created = driver

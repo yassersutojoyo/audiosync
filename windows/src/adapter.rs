@@ -301,16 +301,28 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// The source to start: the whole system, or the chosen app where it runs
-    /// now.
+    /// now. The app needn't play yet: capture hears it once it does.
     fn chosen_source(&mut self) -> Result<SourceId, BackendError> {
-        if self.chosen != Chosen::WholeSystem {
-            self.refresh_sources();
-            // Not listed: it quit, and its process ID may belong to another
-            // process by now.
-            let key = self.chosen.key();
-            if !self.sources.iter().any(|source| source_key(source) == key) {
-                return Err(BackendError::SourceGone);
-            }
+        if self.chosen == Chosen::WholeSystem {
+            return Ok(SourceId::WholeSystem);
+        }
+        self.refresh_sources();
+        let key = self.chosen.key();
+        if let Chosen::App {
+            root_pid,
+            executable,
+            ..
+        } = &self.chosen
+            && !self.sources.iter().any(|source| source_key(source) == key)
+        {
+            // Not listed: it has no audio session right now, or it quit and
+            // its process ID may belong to another program by now. The
+            // process list tells which.
+            let app = self
+                .audio
+                .find_app(*root_pid, executable)?
+                .ok_or(BackendError::SourceGone)?;
+            self.chosen = Chosen::from_source(&app);
         }
         Ok(self.chosen.id())
     }
@@ -427,10 +439,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn handle(&mut self, event: BackendEvent) {
         match event {
             BackendEvent::OutputsChanged => self.outputs_listed(),
-            // It stays on, and plays again once its device is back.
+            // It stays on, and plays again once its device is back. A device
+            // still listed only lost its stream (after a format change, say):
+            // the next poll opens it again, so that needs no notice.
             BackendEvent::OutputLost { id } => {
-                let speaker = self.output_name(&id);
-                self.post(speaker_subject(&id), NoticeMessage::SpeakerLost { speaker });
+                if !self.audio.outputs().iter().any(|output| output.id == id) {
+                    let speaker = self.output_name(&id);
+                    self.post(speaker_subject(&id), NoticeMessage::SpeakerLost { speaker });
+                }
             }
             BackendEvent::OutputFailed { id, .. } => self.output_failed(&id, false),
             BackendEvent::Stopped { reason } => {
@@ -1085,6 +1101,46 @@ mod tests {
     }
 
     #[test]
+    fn an_app_without_an_audio_session_is_still_captured() {
+        let mut adapter = adapter();
+        adapter.select_source(&player());
+        // Paused, it closed its stream, so the source list leaves it out.
+        adapter.audio_mut().close_audio_session(PLAYER_PID);
+        adapter.refresh_devices();
+        assert_eq!(adapter.snapshot().source_id, player(), "the choice stays");
+
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+        assert_eq!(
+            captures(&adapter),
+            [(LoopbackMode::IncludeTree, PLAYER_PID)]
+        );
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    #[test]
+    fn an_app_opened_again_is_captured_before_it_plays() {
+        let mut adapter = adapter();
+        adapter.select_source(&player());
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.audio_mut().add_silent_app(2100, "player.exe");
+        turn_on(&mut adapter, SPEAKERS);
+        let state = adapter.snapshot();
+        assert!(state.running);
+        assert_eq!(captures(&adapter), [(LoopbackMode::IncludeTree, 2100)]);
+        assert_eq!(state.source_id, "app:2100:player.exe");
+        assert!(
+            state
+                .sources
+                .iter()
+                .any(|s| s.id == state.source_id && s.name == "Player"),
+            "it shows: {:?}",
+            state.sources
+        );
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    #[test]
     fn a_new_source_while_streaming_starts_capture_again() {
         let mut adapter = adapter();
         turn_on(&mut adapter, SPEAKERS);
@@ -1209,6 +1265,44 @@ mod tests {
         assert!(adapter.poll());
         assert!(messages(&adapter).is_empty(), "its cause is gone");
         assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
+    }
+
+    #[test]
+    fn an_output_a_refresh_no_longer_lists_is_reported() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
+        // Its stream doesn't notice; the listing that the refresh asks for
+        // does.
+        adapter.audio_mut().disconnect_output_unnoticed(HEADPHONES);
+        adapter.refresh_devices();
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "Headphones".into(),
+        };
+        assert_eq!(messages(&adapter), [lost]);
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+    }
+
+    #[test]
+    fn a_stream_that_resets_while_its_device_stays_gets_no_notice() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        // A format change: the stream ends, and opening it again fails for a
+        // moment as if the device were gone.
+        adapter.audio_mut().end_renderer(SPEAKERS);
+        adapter
+            .audio_mut()
+            .fail_output(SPEAKERS, Some(BackendError::DeviceGone));
+        adapter.poll();
+        assert!(playing(&adapter).is_empty());
+        assert!(enabled(&adapter, SPEAKERS), "it stays on");
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+
+        adapter.audio_mut().fail_output(SPEAKERS, None);
+        adapter.poll();
+        adapter.poll();
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
     }
 
     #[test]

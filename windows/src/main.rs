@@ -30,8 +30,10 @@ mod tray;
 mod ui_model;
 mod view;
 
-use std::fmt;
 use std::process::ExitCode;
+
+#[cfg(windows)]
+use slint::ComponentHandle;
 
 slint::include_modules!();
 
@@ -46,7 +48,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            platform::show_error(&format!("AudioSync could not start: {error}"));
+            platform::show_error(&error.message());
             ExitCode::FAILURE
         }
     }
@@ -60,12 +62,20 @@ enum StartError {
     Audio(audio::backend::BackendError),
 }
 
-impl fmt::Display for StartError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl StartError {
+    /// What the error box says.
+    fn message(&self) -> String {
         match self {
-            StartError::Window(error) => error.fmt(f),
+            // A window system that failed can't give the UI's strings.
+            StartError::Window(error) => format!("AudioSync could not start: {error}"),
+            // The UI's words, with the system's reason as the detail.
             #[cfg(windows)]
-            StartError::Audio(error) => error.fmt(f),
+            StartError::Audio(error) => AboutDialog::new()
+                .map(|dialog| {
+                    let strings = dialog.global::<Strings>();
+                    strings.invoke_audio_failed(error.to_string().into()).into()
+                })
+                .unwrap_or_else(|_| format!("AudioSync could not start: {error}")),
         }
     }
 }

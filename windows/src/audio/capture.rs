@@ -165,6 +165,31 @@ pub fn source_list(
     sources
 }
 
+/// The app that runs `executable` now, found among all running processes,
+/// so it is found whether or not it has an audio session: the app of process
+/// `root_pid` while that process still runs `executable`, else the app of
+/// the first other process that does. `None` when no process runs it, so a
+/// process ID that another program got after the app quit never counts.
+///
+/// Whether the app may be captured is left to [`decide_activation`].
+pub fn running_app(
+    processes: &ProcessTable,
+    root_pid: u32,
+    executable: &str,
+) -> Option<SourceInfo> {
+    let pid = processes
+        .running(executable)
+        .find(|&pid| pid == root_pid)
+        .or_else(|| processes.running(executable).next())?;
+    let root_pid = processes.app_root(pid);
+    let executable = processes.get(root_pid)?.executable.clone();
+    Some(SourceInfo {
+        id: SourceId::App { root_pid },
+        name: display_name(&executable),
+        executable,
+    })
+}
+
 /// A sample type a capture can deliver.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SampleType {
@@ -600,6 +625,37 @@ mod tests {
             .map(|source| source.name)
             .collect();
         assert_eq!(names, ["All System Audio", "Alpha", "Mid", "Zebra"]);
+    }
+
+    #[test]
+    fn a_running_app_is_found_without_an_audio_session() {
+        let browser = SourceInfo {
+            id: app(200),
+            name: "Browser".to_owned(),
+            executable: "browser.exe".to_owned(),
+        };
+        let table = desktop();
+        assert_eq!(
+            running_app(&table, 200, "browser.exe"),
+            Some(browser.clone())
+        );
+        assert_eq!(
+            running_app(&table, 202, "browser.exe"),
+            Some(browser.clone()),
+            "a helper leads to the app's top process"
+        );
+        assert_eq!(
+            running_app(&table, 4242, "browser.exe"),
+            Some(browser),
+            "an app that started again has a new process ID"
+        );
+    }
+
+    #[test]
+    fn a_process_id_that_another_program_got_is_not_the_app() {
+        let table = desktop();
+        assert_eq!(running_app(&table, 300, "player.exe"), None);
+        assert_eq!(running_app(&table, 4242, "player.exe"), None);
     }
 
     #[test]

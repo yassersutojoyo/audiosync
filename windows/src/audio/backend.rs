@@ -143,8 +143,9 @@ pub enum BackendError {
     },
 }
 
-/// A sentence in English for logs and diagnostics. It isn't shown to the
-/// user as it is: the UI's text is translated.
+/// A sentence in English for logs and diagnostics. The UI words errors in
+/// its own, translated text; this sentence reaches the user only as the
+/// detail under that text when Windows audio can't be opened at startup.
 impl fmt::Display for BackendError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -178,6 +179,17 @@ pub trait AudioBackend {
     /// opened an audio stream, by name. AudioSync's own processes, and any
     /// app whose capture would include them, are left out.
     fn list_sources(&mut self) -> Result<Vec<SourceInfo>, BackendError>;
+
+    /// The app that runs `executable` now, whether or not it has opened an
+    /// audio stream: the app of process `root_pid` while that process still
+    /// runs `executable`, else another app that runs it, or `None` when none
+    /// does. The source list offers only apps with an audio stream, but a
+    /// capture can start before its app plays (just opened, or paused).
+    fn find_app(
+        &mut self,
+        root_pid: u32,
+        executable: &str,
+    ) -> Result<Option<SourceInfo>, BackendError>;
 
     /// Lists the connected outputs again, and returns them by name, with
     /// their settings. A failed listing keeps the last list.
