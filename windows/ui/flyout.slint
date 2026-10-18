@@ -4,11 +4,11 @@
 // and group, then Open AudioSync and Exit. Escape or a click elsewhere
 // closes it.
 
-import { Button, ComboBox, ScrollView, Switch } from "std-widgets.slint";
+import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { GroupItem, NoticeItem, RowState, SpeakerItem } from "types.slint";
-import { BrandMark, Divider, Glyphs, NoticeStack, SecondaryText, SectionTitle, SpeakerBadge, VolumeSlider, Wordmark } from "widgets.slint";
+import { BrandMark, Divider, Glyphs, NoticeStack, SecondaryText, SectionTitle, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 // A compact row: the toggle and the name.
 component FlyoutRow inherits HorizontalLayout {
@@ -156,7 +156,7 @@ export component TrayFlyout inherits Window {
                     horizontal-stretch: 1;
                 }
 
-                power := Switch {
+                power := ToggleSwitch {
                     checked: root.running;
                     accessible-label: Strings.streaming-switch;
                     toggled => {

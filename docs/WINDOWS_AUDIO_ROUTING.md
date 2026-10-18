@@ -1,6 +1,6 @@
 # Windows audio routing
 
-Research notes for the Windows 11 version of AudioSync (`windows/`). Process loopback capture is built; the detect-and-warn, the guided setup and the hardware tests below aren't done yet. The question: how to hear a captured app only through AudioSync's delayed, synced outputs, and not also directly from the PC.
+Research notes for the Windows 11 version of AudioSync (`windows/`). Process loopback capture is built and hardware test 1 has been run (results below); the detect-and-warn, the guided setup and the other hardware tests aren't done yet. The question: how to hear a captured app only through AudioSync's delayed, synced outputs, and not also directly from the PC.
 
 ## The problem
 
@@ -15,7 +15,7 @@ On Windows, the matching tool is the Application Loopback API: [`ActivateAudioIn
 Two documented facts matter for every option below:
 
 - An app's output follows the default device only if the app opens its streams on the default device; apps that open a specific endpoint by ID handle routing themselves ([Stream routing](https://learn.microsoft.com/en-us/windows/win32/coreaudio/stream-routing)).
-- For endpoint loopback, the tap sits before volume and mute by default, and post-volume capture is opt-in ([`AUDCLNT_STREAMOPTIONS_POST_VOLUME_LOOPBACK`](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/ne-audioclient-audclnt_streamoptions)). Microsoft doesn't say whether a per-app session's volume or mute applies before or after the process loopback tap. Users on the OBS forums report that muting or lowering an app in the Windows volume mixer also mutes or lowers what an application capture records ([thread 1](https://obsproject.com/forum/threads/how-do-i-mute-audio-from-a-certain-window-while-still-making-it-so-you-can-hear-in-the-recording.163301/), [thread 2](https://obsproject.com/forum/threads/bypass-windows-volume-level-in-capture.176825/post-709693)). That's community evidence, not documentation, so it's hardware test 1 below.
+- For endpoint loopback, the tap sits before volume and mute by default, and post-volume capture is opt-in ([`AUDCLNT_STREAMOPTIONS_POST_VOLUME_LOOPBACK`](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/ne-audioclient-audclnt_streamoptions)). Microsoft doesn't say whether a per-app session's volume or mute applies before or after the process loopback tap. Users on the OBS forums report that muting or lowering an app in the Windows volume mixer also mutes or lowers what an application capture records ([thread 1](https://obsproject.com/forum/threads/how-do-i-mute-audio-from-a-certain-window-while-still-making-it-so-you-can-hear-in-the-recording.163301/), [thread 2](https://obsproject.com/forum/threads/bypass-windows-volume-level-in-capture.176825/post-709693)). That's community evidence, not documentation, so it became hardware test 1, and the measurement agrees with the forums: session mute and volume apply before the process loopback tap ([results](#test-1-results-session-mute)).
 
 ## Options
 
@@ -48,7 +48,7 @@ A virtual endpoint gives AudioSync a silent place to send audio (the app is rout
 ### 3. Manual setup by the user
 
 - **Per-app output to an unused endpoint.** In Windows 11 Settings > System > Sound > Volume mixer, the user picks, for the source app, an output they don't listen to: a monitor's HDMI or DisplayPort audio with the monitor muted or without speakers, an unused jack, or a virtual cable. Process loopback isn't tied to an endpoint, so capture should continue (hardware test 2). The choice persists until the user resets it. All documented, no code; the cost is a setup step and a spare endpoint.
-- **Mute the app in the volume mixer.** Only useful if process loopback still captures a muted session. Community reports say it doesn't (see above). If test 1 proves otherwise, AudioSync can do this itself with documented APIs: find the app's session with [`IAudioSessionManager2`](https://learn.microsoft.com/en-us/windows/win32/api/audiopolicy/nn-audiopolicy-iaudiosessionmanager2) and [`GetProcessId`](https://learn.microsoft.com/en-us/windows/win32/api/audiopolicy/nf-audiopolicy-iaudiosessioncontrol2-getprocessid), then mute it through [`ISimpleAudioVolume`](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nn-audioclient-isimpleaudiovolume). Session volume and mute persist across restarts, so the same restore-on-launch care as option 1 applies.
+- **Mute the app in the volume mixer.** Doesn't work: test 1 measured that a muted session gives process loopback pure silence, and a turned-down one gives it the same lower level ([results](#test-1-results-session-mute)). AudioSync could have done this itself with documented APIs: find the app's session with [`IAudioSessionManager2`](https://learn.microsoft.com/en-us/windows/win32/api/audiopolicy/nn-audiopolicy-iaudiosessionmanager2) and [`GetProcessId`](https://learn.microsoft.com/en-us/windows/win32/api/audiopolicy/nf-audiopolicy-iaudiosessioncontrol2-getprocessid), then mute it through [`ISimpleAudioVolume`](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nn-audioclient-isimpleaudiovolume). Session volume and mute persist across restarts, so the same restore-on-launch care as option 1 applies.
 - **The app's own output picker.** Many players, browsers, chat apps and games let the user choose their output device. Pointing that at an unused endpoint works the same way, documented and per app.
 
 ### 4. Other approaches
@@ -66,18 +66,18 @@ A virtual endpoint gives AudioSync a silent place to send audio (the app is rout
 | 2a. Bundle VB-CABLE | Driver: n/a | Third-party closed kernel driver | Donationware terms allow bundling with conditions | Small | Elevated installer; Store 10.2.4 |
 | 2b. Our own driver | Yes (WDK) | Kernel bugs, signing pipeline | MS-PL sample base | Large: EV cert, HLK or attestation, upkeep | Elevated installer; Store 10.2.4 |
 | 3. Manual per-app routing | Yes | Setup friction; needs a spare endpoint | None | Docs and a guide screen | No impact |
-| 3b. Auto-mute session | Yes | May silence the capture too (test 1) | None | Small | No impact |
+| 3b. Auto-mute session | Yes | Silences the capture too (measured in test 1): not viable | None | Small | No impact |
 | 4. Whole-system exclude mode | Yes, except one manual default change | Other apps silent while active | None | Small | No impact |
 
 ## Recommendation
 
-Build first: process loopback capture with only documented APIs, plus detect-and-warn, a guided manual setup (per-app output to an unused endpoint, or whole-system mode with exclude), and restore-on-launch for anything AudioSync changes. Run hardware test 1 before anything else: if a muted session still feeds process loopback, documented auto-mute (3b) becomes the default and most of the setup goes away.
+Build first: process loopback capture with only documented APIs, plus detect-and-warn, a guided manual setup (per-app output to an unused endpoint, or whole-system mode with exclude), and restore-on-launch for anything AudioSync changes. Hardware test 1 ruled out the shortcut: a muted session doesn't feed process loopback, so documented auto-mute (3b) is off the table and the guided setup stays the main path.
 
 Defer: the undocumented policy interface (an opt-in experiment at most, only after the maintainer approves the clean-room source and with crash-safe restore), our own driver (EV certificate, signing pipeline, kernel risk), and bundling VB-CABLE (linking to it as an optional download in the setup guide is enough for now).
 
 ## Hardware tests on a Windows 11 PC
 
-1. **Session mute.** Play a test tone in an app, capture it with process loopback (include tree), then mute the app in the volume mixer, set it to 50%, and do both again with `ISimpleAudioVolume`. Measure the captured level each time.
+1. **Session mute.** Play a test tone in an app, capture it with process loopback (include tree), then mute the app in the volume mixer, set it to 50%, and do both again with `ISimpleAudioVolume`. Measure the captured level each time. Done with `ISimpleAudioVolume`; see the results after this list.
 2. **Routed endpoint.** Route the app to a second endpoint (HDMI audio, an unused jack, a virtual cable). Capture continues; nothing is audible on the default device.
 3. **Endpoint loss.** Disable or unplug that endpoint mid-capture. Where does the app's audio go, does capture survive, and how quickly does the notification arrive?
 4. **Whole-system exclude.** Default output on an unused endpoint; AudioSync renders to the real speakers by ID with its own process excluded. No feedback, no double audio.
@@ -86,6 +86,24 @@ Defer: the undocumented policy interface (an opt-in experiment at most, only aft
 7. **Drift.** Capture an app paced by endpoint A while rendering to B and to AirPlay for 30 minutes; check lag stays within the drift-correction bounds.
 8. **Builds.** Repeat 1 to 4 on each supported Windows 11 feature update (23H2, 24H2, 25H2), and on every new one before release.
 9. **Reused ancestor ID.** Start AudioSync from a helper process that then exits, start processes until one gets the helper's old process ID, and capture that process with include tree. AudioSync's own output must not come through. AudioSync now accepts such an app because it checks process creation times; if Windows' include-tree walk follows recorded parent IDs without that check, go back to refusing any app whose recorded ancestors include AudioSync's.
+
+### Test 1 results: session mute
+
+Measured on Windows 11 25H2 (OS build 26200.9711) with [`windows/examples/mute_probe.rs`](../windows/examples/mute_probe.rs). To rerun it, close AudioSync and run `cargo run --release --example mute_probe` in `windows/`. The probe starts a second copy of itself that plays a 1 kHz sine (peak -26 dBFS, so RMS -29 dBFS) on the default output in shared mode, finds that process's session through `IAudioSessionManager2` and `GetProcessId`, and sets its mute and volume through `ISimpleAudioVolume`: the same session values the volume mixer shows, though the mixer's own controls weren't clicked. Each setting is captured for 3 seconds with process loopback on the player's tree, and the first two also with a whole-system capture that excludes only a separate capture process. The run is silent: the probe mutes every active output endpoint before the tone starts, checks each one reads back as muted, and puts every endpoint's mute and volume back at the end (`mute_probe restore` does that by hand if a run dies halfway).
+
+| Player's session | Process loopback, include tree (peak / RMS dBFS) | Whole system, exclude (peak / RMS dBFS) |
+|---|---|---|
+| Unmuted, 100% | -26.0 / -29.1 | -26.0 / -29.1 |
+| Muted | silence | silence |
+| Unmuted, 50% | -32.0 / -35.1 | not measured |
+| Unmuted, 0% | silence | not measured |
+
+Two runs per row, identical to 0.1 dB. "Silence" means every captured sample was zero: packets kept arriving at the normal rate, unflagged, just empty.
+
+What it means:
+
+- The session's mute and volume apply before the process loopback tap, for one app and for the whole system alike: 50% is exactly 6 dB down (a linear gain) and mute is digital silence. Auto-muting the source (3b) would silence AudioSync's copies too, so it's out. Guiding the user to send the app, or the Windows default output, to an output they don't listen to stays the recommendation.
+- Endpoint mute sits after the tap: every output endpoint was muted for the whole test and the unmuted session still came through at full level. So muting the endpoint the app plays on, when AudioSync doesn't play there itself, might be a documented alternative to rerouting the app. It silences everything else on that endpoint too, and nothing beyond this run has tested it.
 
 ## AirPlay on Windows (out of scope)
 

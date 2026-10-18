@@ -226,7 +226,14 @@ fn blocks<'a>(source: &'a str, element: &str) -> Vec<&'a str> {
 #[test]
 fn every_control_has_an_accessible_label() {
     let standard = [
-        "Button", "Switch", "Slider", "ComboBox", "LineEdit", "CheckBox", "SpinBox",
+        "Button",
+        "Switch",
+        "ToggleSwitch",
+        "Slider",
+        "ComboBox",
+        "LineEdit",
+        "CheckBox",
+        "SpinBox",
     ];
     let own = ["IconButton", "SpeakerBadge", "VolumeSlider"];
     let mut checked = 0;
@@ -300,6 +307,121 @@ fn custom_controls_are_accessible_and_show_focus() {
     }
 }
 
+/// The text of `component`'s definition in `source`, up to the next one.
+fn component_body<'a>(source: &'a str, component: &str) -> &'a str {
+    let start = source
+        .find(&format!("component {component} "))
+        .unwrap_or_else(|| panic!("{component} exists"));
+    let rest = &source[start..];
+    let end = ["\ncomponent ", "\nexport component ", "\n// "]
+        .iter()
+        .filter_map(|next| rest.find(next))
+        .min()
+        .unwrap_or(rest.len());
+    &rest[..end]
+}
+
+/// The on/off toggles (streaming, the equalizer, each speaker and group) are
+/// keyboard focusable for Narrator too. Slint 1.18 tells Windows that only
+/// some roles take keyboard focus, and `switch` is not one of them, so a
+/// toggle is a button that is checkable: Windows reads it as a toggle
+/// button that Tab reaches, and Space or Enter flips it.
+#[test]
+fn toggles_report_keyboard_focus_to_narrator() {
+    for (file, source) in UI_FILES {
+        assert!(
+            !source.contains("accessible-role: switch"),
+            "{file}: a switch role reads as not focusable"
+        );
+        assert!(
+            blocks(source, "Switch").is_empty(),
+            "{file}: use ToggleSwitch, not the standard Switch"
+        );
+    }
+    let widgets = include_str!("../ui/widgets.slint");
+    let toggle = component_body(widgets, "ToggleSwitch");
+    assert!(toggle.contains("inherits Switch"));
+    assert!(toggle.contains("accessible-role: button;"));
+    let badge = component_body(widgets, "SpeakerBadge");
+    for needle in [
+        "accessible-role: button;",
+        "accessible-checkable: true;",
+        "accessible-checked:",
+        "FocusScope",
+        "event.text == \" \" || event.text == Key.Return",
+        "FocusRing",
+        "visible-focus: focus.has-focus;",
+    ] {
+        assert!(badge.contains(needle), "SpeakerBadge has {needle}");
+    }
+    let mut toggles = 0;
+    for (_, source) in UI_FILES {
+        toggles += blocks(source, "power := ToggleSwitch").len();
+    }
+    assert_eq!(toggles, 3, "main window, flyout and equalizer");
+}
+
+/// Icons and other decorative pieces stay out of Narrator's way. Slint 1.18
+/// exposes every instance of a component whose root is a Text or Image,
+/// whatever `accessible-role` says, so a decorative component wraps its Text
+/// or Image (set to `none`) in a layout or Rectangle, and the icon font is
+/// drawn only by Glyph.
+#[test]
+fn decorative_pieces_are_hidden_from_narrator() {
+    let widgets = include_str!("../ui/widgets.slint");
+    for (file, source) in UI_FILES {
+        let mut from = 0;
+        while let Some(offset) = source[from..].find("component ") {
+            let start = from + offset;
+            from = start + "component ".len();
+            let header = source[start..].lines().next().unwrap_or_default();
+            let Some(name) = header.split_whitespace().nth(1) else {
+                continue;
+            };
+            if !(header.contains("inherits Text ") || header.contains("inherits Image ")) {
+                continue;
+            }
+            let body = component_body(source, name);
+            assert!(
+                !body.contains("accessible-role: none"),
+                "{file}: {name} inherits a Text or Image, so `none` is ignored; wrap it"
+            );
+            for (other_file, other) in UI_FILES {
+                for block in blocks(other, name) {
+                    assert!(
+                        !block.contains("accessible-role: none"),
+                        "{other_file}: a {name} set to `none`, which Slint ignores:\n{block}"
+                    );
+                }
+            }
+        }
+        if *file != "widgets.slint" {
+            assert!(
+                !source.contains("Segoe Fluent Icons"),
+                "{file}: icons are drawn by Glyph"
+            );
+        }
+    }
+    for component in ["Glyph", "SectionTitle", "QuietText", "BrandMark"] {
+        let body = component_body(widgets, component);
+        assert!(
+            body.contains("inherits HorizontalLayout") || body.contains("inherits Rectangle"),
+            "{component} wraps its content"
+        );
+        assert!(
+            body.contains("accessible-role: none;"),
+            "{component} hides its content"
+        );
+    }
+    assert_eq!(
+        widgets
+            .matches("font-family: \"Segoe Fluent Icons\"")
+            .count(),
+        1,
+        "only Glyph draws the icon font"
+    );
+}
+
 /// Every window answers Escape or has a close button of its own, and the
 /// main window's commands have Ctrl shortcuts.
 #[test]
@@ -321,4 +443,25 @@ fn keyboard_shortcuts_are_declared() {
             );
         }
     }
+}
+
+/// Windows has no AirPlay yet, so no text the user reads promises it: the
+/// only translatable string naming AirPlay is the speaker kind itself, and
+/// an empty Connected Speakers list says just that it's empty.
+#[test]
+fn no_text_promises_airplay() {
+    let strings = include_str!("../ui/strings.slint");
+    for line in strings.lines().filter(|line| line.contains("@tr(")) {
+        assert!(
+            !line.contains("AirPlay") || line.contains("@tr(\"AirPlay\")"),
+            "strings.slint: {}",
+            line.trim()
+        );
+    }
+    assert!(strings.contains("connected-none: @tr(\"No connected speakers\")"));
+    assert!(
+        include_str!("../ui/main.slint")
+            .contains("root.connected.length == 0 ? Strings.connected-none"),
+        "the empty Connected Speakers list uses the plain note"
+    );
 }

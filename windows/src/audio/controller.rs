@@ -11,9 +11,15 @@
 //! device goes away stops, whether its stream notices or the device list no
 //! longer shows the device, and stays on; it plays again once the device is
 //! listed (S68). An output that can't start is turned off and reported (S69).
+//!
+//! Everything the controller does and reports goes to the debug log
+//! ([`DebugLog`]), from the thread that calls it, never from an audio
+//! thread; while a session runs, [`AudioBackend::poll`] adds a status line
+//! every few seconds from the counters the audio threads keep.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
 use audiosync_core::reader::{Reader, ReaderControl};
@@ -24,11 +30,18 @@ use super::SESSION_RATE;
 use super::backend::{
     AudioBackend, BackendError, BackendEvent, OutputInfo, SourceId, SourceInfo, StopReason,
 };
-use super::capture::{Activation, decide_activation, running_app, source_list};
+use super::capture::{
+    Activation, CaptureAttempt, LoopbackMode, SampleType, decide_activation, running_app,
+    source_list,
+};
 #[cfg(test)]
 use super::outputs::OutputParams;
-use super::outputs::{AirPlay, Endpoint, OutputPolicy};
+use super::outputs::{AirPlay, Endpoint, OutputPolicy, StreamSetup};
 use super::process::ProcessTable;
+use crate::debug_log::DebugLog;
+
+/// How often the debug log gets a status line while a session runs.
+const STATUS_INTERVAL: Duration = Duration::from_secs(5);
 
 /// How a running capture is doing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +58,10 @@ pub enum CaptureState {
 pub trait CaptureHandle {
     /// How the capture is doing.
     fn state(&self) -> CaptureState;
+
+    /// The format Windows delivers the capture in, for the debug log, when
+    /// known.
+    fn setup(&self) -> Option<CaptureAttempt>;
 }
 
 /// A running output. Dropping it stops the output and waits for its thread.
@@ -55,6 +72,9 @@ pub trait RendererHandle {
 
     /// Whether it stopped by itself, because its device went away or failed.
     fn has_ended(&self) -> bool;
+
+    /// How its stream is set up, for the debug log, when known.
+    fn setup(&self) -> Option<StreamSetup>;
 }
 
 /// The platform calls the backend makes.
@@ -133,11 +153,24 @@ pub struct Controller<D: Driver> {
     equalizer: EqSettings,
     /// Events for the next poll.
     pending: Vec<BackendEvent>,
+    /// The debug log; it writes nothing unless `AUDIOSYNC_DEBUG=1`.
+    log: DebugLog,
+    /// The last name of every output listed, so the log names outputs
+    /// that are gone.
+    names: BTreeMap<String, String>,
+    /// How each output's stream was set up the last time it played.
+    setups: BTreeMap<String, StreamSetup>,
+    /// The last error listing the outputs, and listing the sources: an
+    /// error that repeats at every poll is logged once.
+    listing_error: Option<BackendError>,
+    sources_error: Option<BackendError>,
+    /// When the log last got a status line, and the frames captured then.
+    last_status: Option<(Instant, u64)>,
 }
 
 impl<D: Driver> Controller<D> {
-    /// A stopped backend over `driver`, with no output set and the equalizer
-    /// off.
+    /// A stopped backend over `driver`, with no output set, the equalizer
+    /// off and the debug log off.
     pub fn with_driver(driver: D) -> Controller<D> {
         Controller {
             driver,
@@ -147,7 +180,18 @@ impl<D: Driver> Controller<D> {
             session: None,
             equalizer: EqSettings::default(),
             pending: Vec::new(),
+            log: DebugLog::default(),
+            names: BTreeMap::new(),
+            setups: BTreeMap::new(),
+            listing_error: None,
+            sources_error: None,
+            last_status: None,
         }
+    }
+
+    /// Sends what the backend does to `log`.
+    pub fn set_debug_log(&mut self, log: DebugLog) {
+        self.log = log;
     }
 
     /// The driver.
@@ -208,12 +252,29 @@ impl<D: Driver> Controller<D> {
             Ok(listed) => listed,
             Err(error) => {
                 self.listing_ok = false;
+                if self.listing_error.as_ref() != Some(&error) {
+                    self.log
+                        .log(|| format!("listing the outputs failed: {error}"));
+                    self.listing_error = Some(error.clone());
+                }
                 return (false, Err(error));
             }
         };
         listed.sort_by(|a, b| a.id.cmp(&b.id));
         listed.dedup_by(|a, b| a.id == b.id);
         let changed = listed != self.present;
+        // The first listing, or the first since one failed, shows every
+        // output as it is; later ones mark what changed.
+        let previous = self.listing_ok.then_some(self.present.as_slice());
+        self.log.log(|| match previous {
+            Some(_) if !changed => format!("outputs listed again, no change ({})", listed.len()),
+            _ => describe_listing(previous, &listed, &self.setups),
+        });
+        for endpoint in &listed {
+            self.names
+                .insert(endpoint.id.clone(), endpoint.name.clone());
+        }
+        self.listing_error = None;
         self.present = listed;
         self.listing_ok = true;
         (changed, Ok(()))
@@ -224,6 +285,10 @@ impl<D: Driver> Controller<D> {
     /// queues [`BackendEvent::OutputsChanged`] when the list differs.
     fn refresh_if_needed(&mut self, force: bool) {
         let notified = self.driver.outputs_changed();
+        if notified {
+            self.log
+                .log(|| "Windows reported a change of the outputs".to_owned());
+        }
         if force || notified || !self.listing_ok {
             let (changed, _) = self.refresh_outputs();
             if changed && !self.pending.contains(&BackendEvent::OutputsChanged) {
@@ -251,6 +316,15 @@ impl<D: Driver> Controller<D> {
             playing.handle.request_stop();
         }
         drop(removed);
+        for id in &plan.detach {
+            let why = if self.policy.settings(id).enabled {
+                "its device isn't listed"
+            } else {
+                "switched off"
+            };
+            self.log
+                .log(|| format!("output {} stopped: {why}", label(&self.names, id)));
+        }
 
         let mut failures = Vec::new();
         for endpoint in plan.attach {
@@ -264,6 +338,21 @@ impl<D: Driver> Controller<D> {
                 .start_renderer(&endpoint, reader, Arc::clone(&gain))
             {
                 Ok(handle) => {
+                    let setup = handle.setup();
+                    if let Some(setup) = setup {
+                        self.setups.insert(endpoint.id.clone(), setup);
+                    }
+                    self.log.log(|| {
+                        let settings = self.policy.settings(&endpoint.id);
+                        format!(
+                            "output {} started: {}; delay {} ms, volume {} (gain {:.3})",
+                            label(&self.names, &endpoint.id),
+                            describe_stream(setup),
+                            settings.delay_ms,
+                            settings.volume,
+                            params.gain,
+                        )
+                    });
                     session.outputs.insert(
                         endpoint.id,
                         Playing {
@@ -275,8 +364,21 @@ impl<D: Driver> Controller<D> {
                 }
                 // Listed a moment ago and gone now: it stays on and plays
                 // once it is listed again (S68).
-                Err(BackendError::DeviceGone) => {}
+                Err(BackendError::DeviceGone) => {
+                    self.log.log(|| {
+                        format!(
+                            "output {} went away while starting; it stays on",
+                            label(&self.names, &endpoint.id)
+                        )
+                    });
+                }
                 Err(error) => {
+                    self.log.log(|| {
+                        format!(
+                            "output {} could not start: {error} It is turned off.",
+                            label(&self.names, &endpoint.id)
+                        )
+                    });
                     self.policy.set_enabled(&endpoint.id, false);
                     failures.push((endpoint.id, error));
                 }
@@ -308,6 +410,14 @@ impl<D: Driver> Controller<D> {
             playing.handle.request_stop();
         }
         drop(stopped);
+        for id in &unlisted {
+            self.log.log(|| {
+                format!(
+                    "output {} stopped: its device is no longer listed",
+                    label(&self.names, id)
+                )
+            });
+        }
         unlisted
     }
 
@@ -324,12 +434,14 @@ impl<D: Driver> Controller<D> {
         let Some(session) = self.session.take() else {
             return;
         };
+        let started = Instant::now();
         let Session {
             mut outputs,
             capture,
             ring,
             ..
         } = session;
+        let stopped = outputs.len();
         for playing in outputs.values_mut() {
             playing.handle.request_stop();
         }
@@ -337,7 +449,74 @@ impl<D: Driver> Controller<D> {
         // before the ring they use is freed (S134).
         drop(outputs);
         drop(capture);
+        let captured = ring.frames_written();
         drop(ring);
+        self.last_status = None;
+        self.log.log(|| {
+            format!(
+                "session ended: the capture and {stopped} output(s) stopped in {} ms; \
+                 {captured} frames captured",
+                started.elapsed().as_millis()
+            )
+        });
+    }
+
+    /// Logs how the session is doing, at most every [`STATUS_INTERVAL`]:
+    /// the frames captured, and each playing output's delay, volume and
+    /// reader counters, all read from the atomics the audio threads keep.
+    fn log_status_if_due(&mut self, now: Instant) {
+        if !self.log.enabled() {
+            return;
+        }
+        let Some(session) = &self.session else {
+            return;
+        };
+        let frames = session.ring.frames_written();
+        let Some((since, frames_then)) = self.last_status else {
+            self.last_status = Some((now, frames));
+            return;
+        };
+        let elapsed = now.saturating_duration_since(since);
+        if elapsed < STATUS_INTERVAL {
+            return;
+        }
+        self.last_status = Some((now, frames));
+        self.log.log(|| {
+            let seconds = elapsed.as_secs_f64();
+            let mut text = format!(
+                "status: capturing {}; {frames} frames captured, {:.0} frames/s over {seconds:.1} s",
+                describe_source(&session.source),
+                frames.saturating_sub(frames_then) as f64 / seconds,
+            );
+            for (id, playing) in &session.outputs {
+                let settings = self.policy.settings(id);
+                let counters = playing.control.counters();
+                text.push_str(&format!(
+                    "\n  output {}: delay {} ms ({} frames), volume {} (gain {:.3}), lag {} frames; \
+                     primes {}, resyncs {}, starved reads {} ({} frames), drift skips {} ({} frames), \
+                     drift silences {} ({} frames), rejected copies {}",
+                    label(&self.names, id),
+                    settings.delay_ms,
+                    playing.control.delay_frames(),
+                    settings.volume,
+                    playing.gain.get(),
+                    playing.control.lag_frames(),
+                    counters.primes,
+                    counters.resyncs,
+                    counters.starved_renders,
+                    counters.starved_frames,
+                    counters.drift_skips,
+                    counters.drift_skip_frames,
+                    counters.drift_silences,
+                    counters.drift_silence_frames,
+                    counters.rejected_copies,
+                ));
+            }
+            if session.outputs.is_empty() {
+                text.push_str("\n  no output plays");
+            }
+            text
+        });
     }
 
     /// Gives a playing output its current delay; a delay that didn't change
@@ -358,6 +537,51 @@ impl<D: Driver> Controller<D> {
             playing.gain.set(self.policy.params(id).gain);
         }
     }
+
+    /// Starts a session capturing `source`, after the running one ended.
+    fn start_session(&mut self, source: &SourceId) -> Result<(), BackendError> {
+        let processes = match source {
+            SourceId::WholeSystem => ProcessTable::default(),
+            SourceId::App { .. } => self.driver.processes()?,
+        };
+        let activation = decide_activation(source, self.driver.own_pid(), &processes)?;
+        let ring = Ring::for_rate(SESSION_RATE).map_err(|_| BackendError::UnsupportedFormat)?;
+        let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
+        // The capture equalizes at the session rate, after any resampling
+        // (a positive rate is always accepted).
+        let (mut equalizer, processor) = eq::equalizer();
+        equalizer.set_sample_rate(f64::from(SESSION_RATE));
+        equalizer.set_settings(self.equalizer);
+        let capture = self.driver.start_capture(activation, writer, processor)?;
+        self.log.log(|| {
+            format!(
+                "capture started: {}",
+                describe_capture(activation, capture.setup())
+            )
+        });
+        self.session = Some(Session {
+            source: source.clone(),
+            ring,
+            capture,
+            equalizer,
+            outputs: BTreeMap::new(),
+        });
+        self.refresh_if_needed(false);
+        let failures = self.sync_outputs();
+        self.report_failures(failures);
+        Ok(())
+    }
+
+    /// The sources to offer, from the processes and audio sessions now.
+    fn read_sources(&mut self) -> Result<Vec<SourceInfo>, BackendError> {
+        let processes = self.driver.processes()?;
+        let session_pids = self.driver.session_pids()?;
+        Ok(source_list(
+            &processes,
+            &session_pids,
+            self.driver.own_pid(),
+        ))
+    }
 }
 
 impl<D: Driver> Drop for Controller<D> {
@@ -368,13 +592,21 @@ impl<D: Driver> Drop for Controller<D> {
 
 impl<D: Driver> AudioBackend for Controller<D> {
     fn list_sources(&mut self) -> Result<Vec<SourceInfo>, BackendError> {
-        let processes = self.driver.processes()?;
-        let session_pids = self.driver.session_pids()?;
-        Ok(source_list(
-            &processes,
-            &session_pids,
-            self.driver.own_pid(),
-        ))
+        let sources = self.read_sources();
+        match &sources {
+            Err(error) if self.sources_error.as_ref() != Some(error) => {
+                self.log
+                    .log(|| format!("listing the sources failed: {error}"));
+                self.sources_error = Some(error.clone());
+            }
+            Ok(_) if self.sources_error.is_some() => {
+                self.log
+                    .log(|| "listing the sources works again".to_owned());
+                self.sources_error = None;
+            }
+            _ => {}
+        }
+        sources
     }
 
     fn find_app(
@@ -382,7 +614,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
         root_pid: u32,
         executable: &str,
     ) -> Result<Option<SourceInfo>, BackendError> {
-        let processes = self.driver.processes()?;
+        let processes = self.driver.processes().inspect_err(|error| {
+            self.log
+                .log(|| format!("looking for {executable} failed: {error}"));
+        })?;
         Ok(running_app(&processes, root_pid, executable))
     }
 
@@ -428,33 +663,17 @@ impl<D: Driver> AudioBackend for Controller<D> {
 
     fn start(&mut self, source: &SourceId) -> Result<(), BackendError> {
         self.end_session();
-        let processes = match source {
-            SourceId::WholeSystem => ProcessTable::default(),
-            SourceId::App { .. } => self.driver.processes()?,
-        };
-        let activation = decide_activation(source, self.driver.own_pid(), &processes)?;
-        let ring = Ring::for_rate(SESSION_RATE).map_err(|_| BackendError::UnsupportedFormat)?;
-        let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
-        // The capture equalizes at the session rate, after any resampling
-        // (a positive rate is always accepted).
-        let (mut equalizer, processor) = eq::equalizer();
-        equalizer.set_sample_rate(f64::from(SESSION_RATE));
-        equalizer.set_settings(self.equalizer);
-        let capture = self.driver.start_capture(activation, writer, processor)?;
-        self.session = Some(Session {
-            source: source.clone(),
-            ring,
-            capture,
-            equalizer,
-            outputs: BTreeMap::new(),
-        });
-        self.refresh_if_needed(false);
-        let failures = self.sync_outputs();
-        self.report_failures(failures);
-        Ok(())
+        self.log
+            .log(|| format!("starting: capturing {}", describe_source(source)));
+        self.start_session(source).inspect_err(|error| {
+            self.log.log(|| format!("the start failed: {error}"));
+        })
     }
 
     fn stop(&mut self) {
+        if self.session.is_some() {
+            self.log.log(|| "stopping".to_owned());
+        }
         self.end_session();
     }
 
@@ -463,6 +682,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn set_output_enabled(&mut self, id: &str, enabled: bool) -> Result<(), BackendError> {
+        self.log.log(|| {
+            let state = if enabled { "on" } else { "off" };
+            format!("output {} switched {state}", label(&self.names, id))
+        });
         self.policy.set_enabled(id, enabled);
         if self.session.is_none() {
             return Ok(());
@@ -483,21 +706,48 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn set_output_delay(&mut self, id: &str, delay_ms: f64) {
+        let before = self.policy.settings(id).delay_ms;
         if self.policy.set_delay_ms(id, delay_ms) {
             self.apply_delay(id);
+            let after = self.policy.settings(id).delay_ms;
+            if after != before {
+                self.log.log(|| {
+                    format!(
+                        "output {} delay: {after} ms ({} frames)",
+                        label(&self.names, id),
+                        self.policy.params(id).delay_frames,
+                    )
+                });
+            }
         }
     }
 
     fn set_output_volume(&mut self, id: &str, position: f64) {
+        let before = self.policy.settings(id).volume;
         if self.policy.set_volume(id, position) {
             self.apply_gain(id);
+            let after = self.policy.settings(id).volume;
+            if after != before {
+                self.log.log(|| {
+                    format!(
+                        "output {} volume: {after} (gain {:.3})",
+                        label(&self.names, id),
+                        self.policy.params(id).gain,
+                    )
+                });
+            }
         }
     }
 
     fn set_master_volume(&mut self, position: f64) {
+        let before = self.policy.master();
         if self.policy.set_master(position) {
             for id in self.playing_ids() {
                 self.apply_gain(&id);
+            }
+            let after = self.policy.master();
+            if after != before {
+                self.log.log(|| format!("master volume: {after}"));
             }
         }
     }
@@ -507,6 +757,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn set_equalizer(&mut self, settings: EqSettings) {
+        if settings != self.equalizer {
+            self.log
+                .log(|| format!("equalizer: {}", describe_equalizer(&settings)));
+        }
         self.equalizer = settings;
         if let Some(session) = self.session.as_mut() {
             session.equalizer.set_settings(settings);
@@ -524,6 +778,8 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 CaptureState::Failed(error) => Some(StopReason::CaptureFailed(error)),
             });
         if let Some(reason) = stop_reason {
+            self.log
+                .log(|| format!("the capture ended: {}", describe_stop(&reason)));
             self.end_session();
             self.pending.push(BackendEvent::Stopped { reason });
         }
@@ -539,6 +795,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 .collect();
             for id in stopped {
                 session.outputs.remove(&id);
+                self.log.log(|| {
+                    format!(
+                        "output {} stopped by itself: its stream failed or its device went away",
+                        label(&self.names, &id)
+                    )
+                });
                 ended.push(id);
             }
         }
@@ -558,15 +820,164 @@ impl<D: Driver> AudioBackend for Controller<D> {
             }
         }
         self.report_failures(failures);
-        std::mem::take(&mut self.pending)
+        self.log_status_if_due(Instant::now());
+        let events = std::mem::take(&mut self.pending);
+        for event in &events {
+            self.log
+                .log(|| format!("event: {}", describe_event(event, &self.names)));
+        }
+        events
+    }
+}
+
+/// How the log names an output: its last listed name and its endpoint ID.
+fn label(names: &BTreeMap<String, String>, id: &str) -> String {
+    match names.get(id) {
+        Some(name) => format!("\"{name}\" ({id})"),
+        None => format!("({id})"),
+    }
+}
+
+/// The log lines for a listing of `listed` after `previous`: a heading, then
+/// each output, and each output gone. Against an earlier listing, a new
+/// output is marked `+`, a changed one (a new name, kind or default output)
+/// `*`, and one gone `-`.
+fn describe_listing(
+    previous: Option<&[Endpoint]>,
+    listed: &[Endpoint],
+    setups: &BTreeMap<String, StreamSetup>,
+) -> String {
+    let mut text = format!("outputs listed: {}", listed.len());
+    for endpoint in listed {
+        let mark = match previous.map(|previous| previous.iter().find(|e| e.id == endpoint.id)) {
+            None => ' ',
+            Some(None) => '+',
+            Some(Some(before)) if before != endpoint => '*',
+            Some(Some(_)) => ' ',
+        };
+        let default = if endpoint.is_default {
+            ", Windows default"
+        } else {
+            ""
+        };
+        let played = setups.get(&endpoint.id).map_or_else(String::new, |setup| {
+            format!(
+                ", last played at {} Hz, {} ch",
+                setup.format.rate, setup.format.channels
+            )
+        });
+        text.push_str(&format!(
+            "\n  {mark} \"{}\" ({}): {:?}{default}{played}",
+            endpoint.name, endpoint.id, endpoint.kind
+        ));
+    }
+    for gone in previous
+        .unwrap_or_default()
+        .iter()
+        .filter(|before| !listed.iter().any(|endpoint| endpoint.id == before.id))
+    {
+        text.push_str(&format!("\n  - \"{}\" ({}): gone", gone.name, gone.id));
+    }
+    text
+}
+
+/// A source as the log names it.
+fn describe_source(source: &SourceId) -> String {
+    match source {
+        SourceId::WholeSystem => "the whole system".to_owned(),
+        SourceId::App { root_pid } => format!("the app of process {root_pid}"),
+    }
+}
+
+/// What a capture captures, and the format Windows delivers it in.
+fn describe_capture(activation: Activation, setup: Option<CaptureAttempt>) -> String {
+    let pid = activation.target_pid;
+    let what = match activation.mode {
+        LoopbackMode::ExcludeTree => format!("everything except process {pid} and its children"),
+        LoopbackMode::IncludeTree => format!("process {pid} and its children"),
+    };
+    let format = match setup {
+        Some(attempt) => {
+            let sample = match attempt.format.sample {
+                SampleType::F32 => "32-bit float",
+                SampleType::I16 => "16-bit integer",
+            };
+            let converted = if attempt.autoconvert {
+                ", converted by Windows"
+            } else {
+                ""
+            };
+            format!(
+                "{} Hz, {} ch, {sample}{converted}",
+                attempt.format.rate, attempt.format.channels
+            )
+        }
+        None => "format not known".to_owned(),
+    };
+    format!("{what}; {format}")
+}
+
+/// How an output's stream is set up, as the log shows it.
+fn describe_stream(setup: Option<StreamSetup>) -> String {
+    let Some(setup) = setup else {
+        return "stream format not known".to_owned();
+    };
+    let format = setup.format;
+    let samples = if format.convert {
+        "float, converted by Windows to the device's format"
+    } else {
+        "float, the device's own format"
+    };
+    let buffer_ms = f64::from(setup.buffer_frames) * 1_000.0 / f64::from(format.rate.max(1));
+    format!(
+        "{} Hz, {} ch (mask 0x{:x}), {samples}; buffer {} frames ({buffer_ms:.1} ms)",
+        format.rate, format.channels, format.channel_mask, setup.buffer_frames
+    )
+}
+
+/// The equalizer settings as the log shows them.
+fn describe_equalizer(settings: &EqSettings) -> String {
+    let bands: Vec<String> = settings
+        .gains_db
+        .iter()
+        .map(|gain| format!("{gain:+.1}"))
+        .collect();
+    format!(
+        "{}, preamp {:+.1} dB, bands {} dB",
+        if settings.enabled { "on" } else { "off" },
+        settings.preamp_db,
+        bands.join(" ")
+    )
+}
+
+/// Why playback stopped on its own, as the log says it.
+fn describe_stop(reason: &StopReason) -> String {
+    match reason {
+        StopReason::SourceQuit => "the captured app quit".to_owned(),
+        StopReason::CaptureFailed(error) => format!("the capture failed: {error}"),
+    }
+}
+
+/// An event the backend reports, as the log says it.
+fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> String {
+    match event {
+        BackendEvent::OutputsChanged => "the outputs changed".to_owned(),
+        BackendEvent::OutputLost { id } => format!("output {} lost", label(names, id)),
+        BackendEvent::OutputFailed { id, error } => {
+            format!("output {} failed: {error}", label(names, id))
+        }
+        BackendEvent::Stopped { reason } => format!("stopped: {}", describe_stop(reason)),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use super::*;
-    use crate::audio::capture::LoopbackMode;
+    use crate::audio::backend::OutputKind;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
+    use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
 
     const SPEAKERS: &str = "speakers";
     const HEADPHONES: &str = "headphones";
@@ -1050,5 +1461,197 @@ mod tests {
             [HEADPHONES, SPEAKERS],
             "only connected ones are listed"
         );
+    }
+
+    /// The backend of [`backend`], logging to a debug log of its own in a
+    /// folder for the test `name`; returns the log and the folder too.
+    fn logged_backend(name: &str) -> (MockBackend, DebugLog, PathBuf) {
+        let dir = test_dir(name);
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let mut backend = backend();
+        backend.set_debug_log(log.clone());
+        (backend, log, dir)
+    }
+
+    /// What `log`, kept in `dir`, holds so far, without the time stamps.
+    fn logged(log: &DebugLog, dir: &Path) -> Vec<String> {
+        assert!(log.flush(TEST_FLUSH), "the log is written");
+        read_messages(&dir.join(FILE_NAME))
+    }
+
+    #[test]
+    fn a_start_and_an_output_switch_are_logged() {
+        let (mut backend, log, dir) = logged_backend("controller-start");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, true).unwrap();
+        backend.stop();
+        let messages = logged(&log, &dir);
+        assert_in_order(
+            &messages,
+            &[
+                "starting: capturing the whole system",
+                "capture started: everything except process 1000 and its children; \
+                 48000 Hz, 2 ch, 32-bit float, converted by Windows",
+                "output \"Headphones\" (headphones) started: 48000 Hz, 2 ch (mask 0x3), \
+                 float, the device's own format; buffer 960 frames (20.0 ms); delay 0 ms, volume ",
+                "output \"Speakers\" (speakers) started: 48000 Hz",
+                "output \"Headphones\" (headphones) switched off",
+                "output \"Headphones\" (headphones) stopped: switched off",
+                "output \"Headphones\" (headphones) switched on",
+                "output \"Headphones\" (headphones) started: 48000 Hz",
+                "stopping",
+                "session ended: the capture and 2 output(s) stopped in ",
+            ],
+        );
+        assert!(
+            !messages.iter().any(|m| m.starts_with("event:")),
+            "nothing to report: {messages:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_start_that_fails_and_an_output_that_cant_start_are_logged() {
+        let (mut backend, log, dir) = logged_backend("controller-failures");
+        backend.refuse_captures(Some(BackendError::SourceGone));
+        assert!(backend.start(&SourceId::WholeSystem).is_err());
+        backend.refuse_captures(None);
+        backend.fail_output(SPEAKERS, Some(BackendError::UnsupportedFormat));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        let messages = logged(&log, &dir);
+        assert_in_order(
+            &messages,
+            &[
+                "starting: capturing the whole system",
+                "the start failed: The app isn't running anymore.",
+                "starting: capturing the whole system",
+                "capture started:",
+                "output \"Headphones\" (headphones) started:",
+                "output \"Speakers\" (speakers) could not start: \
+                 The device's audio format isn't supported. It is turned off.",
+                "event: output \"Speakers\" (speakers) failed: \
+                 The device's audio format isn't supported.",
+            ],
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn device_changes_and_the_events_they_bring_are_logged() {
+        let (mut backend, log, dir) = logged_backend("controller-devices");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.disconnect_output(HEADPHONES);
+        backend.poll();
+        backend.connect_output_as("tv", "TV", OutputKind::Hdmi);
+        backend.set_default_output("tv");
+        backend.poll();
+        // A listing that keeps failing is logged once, until it works again.
+        backend.fail_listing(Some(listing_error()));
+        backend.disconnect_output("tv");
+        backend.poll();
+        backend.poll();
+        backend.fail_listing(None);
+        backend.poll();
+        backend.poll();
+        let messages = logged(&log, &dir);
+        assert_in_order(
+            &messages,
+            &[
+                "output \"Headphones\" (headphones) stopped by itself",
+                "Windows reported a change of the outputs",
+                "outputs listed: 1",
+                "    \"Speakers\" (speakers): Other, last played at 48000 Hz, 2 ch",
+                "  - \"Headphones\" (headphones): gone",
+                "event: the outputs changed",
+                "event: output \"Headphones\" (headphones) lost",
+                "Windows reported a change of the outputs",
+                "outputs listed: 2",
+                "    \"Speakers\" (speakers): Other",
+                "  + \"TV\" (tv): Hdmi, Windows default",
+                "event: the outputs changed",
+                "Windows reported a change of the outputs",
+                "listing the outputs failed: \
+                 IMMDeviceEnumerator::EnumAudioEndpoints failed (0x80004005).",
+                "outputs listed: 1",
+                "    \"Speakers\" (speakers): Other",
+                "event: the outputs changed",
+            ],
+        );
+        let failures = messages
+            .iter()
+            .filter(|m| m.starts_with("listing the outputs failed"))
+            .count();
+        assert_eq!(failures, 1, "{messages:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn setting_changes_are_logged_when_they_change_something() {
+        let (mut backend, log, dir) = logged_backend("controller-settings");
+        backend.set_output_delay(SPEAKERS, 120.0);
+        backend.set_output_delay(SPEAKERS, 120.0);
+        backend.set_output_volume(HEADPHONES, 50.0);
+        let gain = backend.policy().params(HEADPHONES).gain;
+        backend.set_master_volume(80.0);
+        let mut settings = EqSettings {
+            enabled: true,
+            preamp_db: -3.0,
+            ..EqSettings::default()
+        };
+        settings.gains_db[0] = 6.0;
+        backend.set_equalizer(settings);
+        backend.set_equalizer(settings);
+        let messages = logged(&log, &dir);
+        assert_eq!(
+            messages[..3],
+            [
+                "output \"Speakers\" (speakers) delay: 120 ms (5760 frames)".to_owned(),
+                format!("output \"Headphones\" (headphones) volume: 50 (gain {gain:.3})"),
+                "master volume: 80".to_owned(),
+            ]
+        );
+        assert_eq!(
+            messages[3..],
+            ["equalizer: on, preamp -3.0 dB, bands \
+              +6.0 +0.0 +0.0 +0.0 +0.0 +0.0 +0.0 +0.0 +0.0 +0.0 dB"]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_status_line_comes_every_few_seconds_while_streaming() {
+        let (mut backend, log, dir) = logged_backend("controller-status");
+        backend.set_output_delay(SPEAKERS, 120.0);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let start = Instant::now();
+        // The first check only notes where the count starts.
+        backend.log_status_if_due(start);
+        backend.feed_capture(48_000);
+        backend.log_status_if_due(start + Duration::from_secs(1));
+        backend.log_status_if_due(start + STATUS_INTERVAL);
+        backend.log_status_if_due(start + STATUS_INTERVAL + Duration::from_secs(1));
+        backend.stop();
+        backend.log_status_if_due(start + STATUS_INTERVAL * 3);
+        let messages = logged(&log, &dir);
+        let status = messages.iter().filter(|m| m.starts_with("status:")).count();
+        assert_eq!(status, 1, "{messages:?}");
+        assert_in_order(
+            &messages,
+            &[
+                "status: capturing the whole system; 48000 frames captured, \
+                 9600 frames/s over 5.0 s",
+                "  output \"Headphones\" (headphones): delay 0 ms (0 frames), volume ",
+                "  output \"Speakers\" (speakers): delay 120 ms (5760 frames), volume ",
+                "session ended:",
+            ],
+        );
+        // Nothing reads the mock's ring, so every reader counter is 0.
+        let counters = "lag 0 frames; primes 0, resyncs 0, starved reads 0 (0 frames), \
+                        drift skips 0 (0 frames), drift silences 0 (0 frames), rejected copies 0";
+        let outputs = messages.iter().filter(|m| m.starts_with("  output "));
+        assert!(outputs.clone().count() == 2 && outputs.clone().all(|m| m.ends_with(counters)));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

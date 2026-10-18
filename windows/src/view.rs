@@ -32,12 +32,14 @@ enum DialogPurpose {
     Message,
 }
 
-/// UI state the backend doesn't keep: which sync controls are open and what
-/// is being typed in their fields.
+/// UI state the backend doesn't keep: which sync controls are open, what is
+/// being typed in their fields, and whether virtual outputs are listed.
 #[derive(Default)]
 struct UiState {
     sync_open: HashSet<String>,
     delay_drafts: HashMap<String, String>,
+    /// View > Show Virtual Devices; off at launch, like the Mac's default.
+    show_virtual: bool,
 }
 
 struct Models {
@@ -261,8 +263,17 @@ impl App {
             )
         };
         let (this_pc, connected) = state.layout();
-        let this_pc: Vec<SpeakerItem> = this_pc.into_iter().map(|s| item(s, false)).collect();
-        let connected: Vec<SpeakerItem> = connected.into_iter().map(|s| item(s, true)).collect();
+        let listed = |s: &&ui_model::Speaker| s.is_listed(ui.show_virtual);
+        let this_pc: Vec<SpeakerItem> = this_pc
+            .into_iter()
+            .filter(listed)
+            .map(|s| item(s, false))
+            .collect();
+        let connected: Vec<SpeakerItem> = connected
+            .into_iter()
+            .filter(listed)
+            .map(|s| item(s, true))
+            .collect();
         let all: Vec<SpeakerItem> = this_pc.iter().chain(&connected).cloned().collect();
         let groups: Vec<GroupItem> = state.groups.iter().map(|g| group_item(&state, g)).collect();
         let notices: Vec<NoticeItem> = state
@@ -284,10 +295,6 @@ impl App {
             .iter()
             .position(|s| s.id == state.source_id)
             .map_or(-1, |i| i as i32);
-        let has_airplay = state
-            .speakers
-            .iter()
-            .any(|s| s.kind == ui_model::SpeakerKind::AirPlay);
         let status = strings.invoke_status(state.running, count(state.active_speakers()));
         let flyout_notices = newest_notices(&notices, FLYOUT_NOTICE_LIMIT);
 
@@ -318,11 +325,7 @@ impl App {
             window.show_state(&state, &status, source_index);
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
-        self.main.set_connected_note(if has_airplay {
-            SharedString::new()
-        } else {
-            strings.get_air_play_empty()
-        });
+        self.main.set_show_virtual_devices(ui.show_virtual);
 
         self.show_equalizer_state(&state.equalizer);
         drop(ui);
@@ -413,6 +416,10 @@ impl App {
         main.on_new_group_requested(move || with_app(&w, App::ask_new_group));
         let w = weak.clone();
         main.on_refresh_devices(move || with_app(&w, |app| app.update(|b| b.refresh_devices())));
+        let w = weak.clone();
+        main.on_show_virtual_devices_toggled(move |on| {
+            with_app(&w, |app| app.show_virtual_devices(on))
+        });
         let w = weak.clone();
         main.on_notice_dismissed(move |id| {
             with_app(&w, |app| app.update(|b| b.dismiss_notice(id as u64)))
@@ -580,6 +587,11 @@ impl App {
             }
             ui.delay_drafts.remove(id);
         }
+        self.refresh();
+    }
+
+    fn show_virtual_devices(&self, on: bool) {
+        self.ui.borrow_mut().show_virtual = on;
         self.refresh();
     }
 

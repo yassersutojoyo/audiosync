@@ -4,10 +4,11 @@
 #   --hardware  also runs the engine test, which opens real output devices at
 #               zero volume (silent) to check render flow and delay end to end,
 #               once on the Swift engine and once on the Rust core.
-# Also runs shellcheck on the scripts in scripts/shellcheck-files.txt, and fails
-# if shellcheck isn't installed (brew install shellcheck). The core parity suite,
-# the soak harness and the engine test link the Rust core, so this builds it
-# first with scripts/build_core.sh (which needs a Rust toolchain).
+# Also runs shellcheck on the scripts in scripts/shellcheck-files.txt (it fails
+# if shellcheck isn't installed: brew install shellcheck) and the private-reference
+# check, scripts/privacy_check.py. The core parity suite, the soak harness
+# and the engine test link the Rust core, so this builds it first with
+# scripts/build_core.sh (which needs a Rust toolchain).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SRC=Sources/AudioSync
@@ -33,6 +34,9 @@ build() {   # build <name> <test file> <source files…> [-- <more swiftc argume
 status=0
 echo "▶ shellcheck"
 scripts/shellcheck.sh || status=1
+
+echo "▶ private references (scripts/privacy_check.py)"
+{ python3 -I scripts/privacy_check.py --self-test && python3 -I scripts/privacy_check.py; } || status=1
 
 echo "▶ side effects in debug logging"
 # DBG.log takes an autoclosure that only runs with AUDIOSYNC_DEBUG=1, so a

@@ -4,11 +4,11 @@
 // speaker list (This PC, Groups, Connected Speakers). The menu bar carries
 // the Windows shortcuts. Tab order follows the reading order.
 
-import { ComboBox, ScrollView, Switch } from "std-widgets.slint";
+import { ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { GroupItem, NoticeItem, RowState, SpeakerItem } from "types.slint";
-import { BrandMark, Card, Divider, Glyph, Glyphs, GroupRow, NoticeStack, SecondaryText, SectionTitle, SpeakerRow, VolumeSlider, Wordmark } from "widgets.slint";
+import { BrandMark, Card, Divider, Glyph, Glyphs, GroupRow, NoticeStack, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -178,8 +178,8 @@ export component MainWindow inherits Window {
     in property <[SpeakerItem]> connected;
     in property <[GroupItem]> groups;
     in property <[NoticeItem]> notices;
-    // Under Connected Speakers while no AirPlay speaker is listed.
-    in property <string> connected-note;
+    // View > Show Virtual Devices: virtual outputs are listed even while off.
+    in property <bool> show-virtual-devices;
 
     callback power-toggled(bool);
     callback source-selected(int);
@@ -196,6 +196,7 @@ export component MainWindow inherits Window {
     callback group-deleted(string);
     callback new-group-requested();
     callback refresh-devices();
+    callback show-virtual-devices-toggled(bool);
     callback notice-dismissed(int);
     callback notices-dismissed-all();
     callback close-requested();
@@ -282,6 +283,17 @@ export component MainWindow inherits Window {
                     root.equalizer-requested();
                 }
             }
+
+            MenuSeparator { }
+
+            MenuItem {
+                title: Strings.show-virtual-devices;
+                checkable: true;
+                checked: root.show-virtual-devices;
+                activated => {
+                    root.show-virtual-devices-toggled(!root.show-virtual-devices);
+                }
+            }
         }
 
         Menu {
@@ -333,7 +345,7 @@ export component MainWindow inherits Window {
 
             VerticalLayout {
                 alignment: center;
-                power := Switch {
+                power := ToggleSwitch {
                     text: Strings.streaming-switch;
                     checked: root.running;
                     accessible-label: Strings.streaming-switch;
@@ -430,6 +442,8 @@ export component MainWindow inherits Window {
                     spacing: Tokens.spacing-section-gap;
                     padding-bottom: 4px;
                     padding-right: 4px;
+                    // Rows keep their height when the list is shorter than the view.
+                    alignment: start;
 
                     SpeakerSection {
                         title: Strings.this-pc-section;
@@ -492,7 +506,7 @@ export component MainWindow inherits Window {
                     SpeakerSection {
                         title: Strings.connected-section;
                         speakers: root.connected;
-                        note: root.connected-note;
+                        note: root.connected.length == 0 ? Strings.connected-none : "";
                         toggled(id) => {
                             root.speaker-toggled(id);
                         }
