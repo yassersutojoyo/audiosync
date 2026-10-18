@@ -14,8 +14,9 @@ export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
 export { TrayFlyout } from "flyout.slint";
 export { GroupNameDialog } from "dialogs.slint";
+export { GuideWindow } from "guide.slint";
 export { Strings } from "strings.slint";
-export { Availability, GroupItem, NoticeItem, RowState, SpeakerItem, SpeakerKind } from "types.slint";
+export { Availability, GroupItem, GuidePage, GuideStepItem, NoticeItem, RowState, SpeakerItem, SpeakerKind } from "types.slint";
 
 // A titled card of speaker rows, with a note when it has none.
 component SpeakerSection inherits VerticalLayout {
@@ -199,6 +200,8 @@ export component MainWindow inherits Window {
     callback show-virtual-devices-toggled(bool);
     callback notice-dismissed(int);
     callback notices-dismissed-all();
+    // Show How on a notice: open its guide.
+    callback notice-guide-requested(int);
     callback close-requested();
     callback exit-requested();
     callback about-requested();
@@ -365,6 +368,9 @@ export component MainWindow inherits Window {
             }
             dismissed-all => {
                 root.notices-dismissed-all();
+            }
+            guide-requested(id) => {
+                root.notice-guide-requested(id);
             }
         }
 

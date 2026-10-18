@@ -70,6 +70,8 @@ export component TrayFlyout inherits Window {
     callback group-toggled(string);
     callback notice-dismissed(int);
     callback notices-dismissed-all();
+    // Show How on a notice: open its guide.
+    callback notice-guide-requested(int);
     callback open-app();
     callback exit-app();
     callback close-requested();
@@ -84,8 +86,8 @@ export component TrayFlyout inherits Window {
     forward-focus: focus;
 
     // Whether a control that a refresh can remove has keyboard focus: the
-    // notice's dismiss button, the button for more notices, or a group or
-    // speaker row. Slint leaves nothing focused when the focused control is
+    // notice's buttons (dismiss, Show How), the button for more notices, or
+    // a group or speaker row. Slint leaves nothing focused when the focused control is
     // removed, and Escape then does nothing until Tab, so the app calls
     // `take-focus` when a refresh removed the part that held it. A removed
     // control never reports losing focus; `take-focus` clears these. (The
@@ -175,7 +177,10 @@ export component TrayFlyout inherits Window {
                 dismissed-all => {
                     root.notices-dismissed-all();
                 }
-                dismiss-focus-changed(focused) => {
+                guide-requested(id) => {
+                    root.notice-guide-requested(id);
+                }
+                button-focus-changed(focused) => {
                     root.notice-focused = focused;
                 }
             }

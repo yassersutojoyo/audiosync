@@ -17,10 +17,13 @@ use std::time::Duration;
 use audiosync_core::eq::{self, EqSettings};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
+use crate::debug_log::DebugLog;
+use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::ui_model::{self, AppState, Backend, NoticeMessage, SourceKind, SpeakerState};
 use crate::{
-    AboutDialog, Availability, EqualizerWindow, GroupItem, GroupNameDialog, MainWindow, NoticeItem,
-    RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
+    AboutDialog, Availability, EqualizerWindow, GroupItem, GroupNameDialog, GuidePage,
+    GuideStepItem, GuideWindow, MainWindow, NoticeItem, RowState, SpeakerItem, SpeakerKind,
+    Strings, TrayFlyout,
 };
 
 /// What the group name dialog is open for.
@@ -123,6 +126,13 @@ pub struct App {
     pub equalizer: EqualizerWindow,
     group_dialog: GroupNameDialog,
     about: AboutDialog,
+    guide: GuideWindow,
+    /// The paragraphs the guide shows.
+    guide_steps: Rc<VecModel<GuideStepItem>>,
+    /// The guide is open for the double-audio notice and follows it (not
+    /// for a made-up preview notice).
+    guide_follows_notice: Cell<bool>,
+    log: DebugLog,
     ui: RefCell<UiState>,
     dialog_purpose: RefCell<DialogPurpose>,
     models: Models,
@@ -142,7 +152,8 @@ fn with_app(app: &Weak<App>, action: impl FnOnce(&App)) {
 }
 
 impl App {
-    pub fn new(backend: Box<dyn Backend>) -> Result<Rc<App>, slint::PlatformError> {
+    /// The windows over `backend`; what they do themselves goes to `log`.
+    pub fn new(backend: Box<dyn Backend>, log: DebugLog) -> Result<Rc<App>, slint::PlatformError> {
         let models = Models {
             sources: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
@@ -161,6 +172,10 @@ impl App {
             equalizer: EqualizerWindow::new()?,
             group_dialog: GroupNameDialog::new()?,
             about: AboutDialog::new()?,
+            guide: GuideWindow::new()?,
+            guide_steps: Rc::new(VecModel::default()),
+            guide_follows_notice: Cell::new(false),
+            log,
             ui: RefCell::default(),
             dialog_purpose: RefCell::new(DialogPurpose::Message),
             models,
@@ -173,6 +188,7 @@ impl App {
         app.connect_flyout();
         app.connect_equalizer();
         app.connect_dialogs();
+        app.connect_guide();
         app.refresh();
         let weak = Rc::downgrade(&app);
         app.poll_timer
@@ -243,6 +259,8 @@ impl App {
         self.equalizer
             .set_band_hz(ModelRc::new(VecModel::from(band_hz)));
         self.equalizer.set_max_gain(eq::MAX_GAIN_DB as f32);
+        self.guide
+            .set_steps(ModelRc::from(self.guide_steps.clone()));
         self.about.set_version(env!("CARGO_PKG_VERSION").into());
         self.about.set_core_version(audiosync_core::VERSION.into());
     }
@@ -320,6 +338,7 @@ impl App {
         sync_model(&m.flyout_notices, flyout_notices);
         self.flyout.set_notice_count(count(notices.len()));
         self.restore_flyout_focus(flyout_removed);
+        self.refresh_guide(&state);
 
         for window in [&self.main as &dyn WindowState, &self.flyout] {
             window.show_state(&state, &status, source_index);
@@ -429,6 +448,8 @@ impl App {
             with_app(&w, |app| app.update(|b| b.dismiss_all_notices()))
         });
         let w = weak.clone();
+        main.on_notice_guide_requested(move |id| with_app(&w, |app| app.show_guide(id)));
+        let w = weak.clone();
         main.on_close_requested(move || with_app(&w, App::close_main));
         main.on_exit_requested(|| {
             let _ = slint::quit_event_loop();
@@ -479,6 +500,13 @@ impl App {
         let w = weak.clone();
         flyout.on_notices_dismissed_all(move || {
             with_app(&w, |app| app.update(|b| b.dismiss_all_notices()))
+        });
+        let w = weak.clone();
+        flyout.on_notice_guide_requested(move |id| {
+            with_app(&w, |app| {
+                app.hide_flyout();
+                app.show_guide(id);
+            })
         });
         let w = weak.clone();
         flyout.on_open_app(move || {
@@ -559,6 +587,108 @@ impl App {
                 let _ = app.group_dialog.hide();
             })
         });
+    }
+
+    fn connect_guide(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        let w = weak.clone();
+        self.guide
+            .on_page_requested(move |page| with_app(&w, |app| app.open_guide_page(page)));
+        let w = weak.clone();
+        self.guide
+            .on_close_requested(move || with_app(&w, App::close_guide));
+        let w = weak;
+        self.guide.window().on_close_requested(move || {
+            with_app(&w, App::close_guide);
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
+
+    fn close_guide(&self) {
+        self.guide_follows_notice.set(false);
+        let _ = self.guide.hide();
+    }
+
+    /// Opens the Settings page a guide button asks for; only the pages the
+    /// guide names, nothing else. When the shell doesn't take it, the guide
+    /// says where to find the page.
+    fn open_guide_page(&self, page: GuidePage) {
+        let Some(page) = settings_page(page) else {
+            return;
+        };
+        let opened = crate::platform::open_settings(page.uri());
+        if !opened {
+            self.log
+                .log(|| format!("guide: the shell did not open {}", page.uri()));
+        }
+        self.guide.set_settings_failed(!opened);
+    }
+
+    /// Keeps an open guide in step with the double-audio notice it was
+    /// opened from: updated while that notice changes, closed once it is
+    /// gone (the app quit, streaming stopped, the routing was fixed).
+    fn refresh_guide(&self, state: &AppState) {
+        if !self.guide_follows_notice.get() {
+            return;
+        }
+        match guide::current(&state.notices) {
+            Some(guide) => self.fill_guide(&guide),
+            None => {
+                self.log
+                    .log(|| "guide: closed, its notice is gone".to_owned());
+                self.close_guide();
+            }
+        }
+    }
+
+    /// Shows `guide` in the guide window, row by row so a focused button
+    /// keeps its focus.
+    fn fill_guide(&self, guide: &Guide) {
+        let strings = self.strings();
+        self.guide.set_intro(guide_intro(&strings, guide));
+        let items: Vec<GuideStepItem> = guide
+            .steps
+            .iter()
+            .map(|step| GuideStepItem {
+                text: guide_step_text(&strings, step),
+                page: guide_page(step.page()),
+            })
+            .collect();
+        sync_model(&self.guide_steps, items);
+    }
+
+    /// Opens the guide of notice `id`, if it is still there and has one.
+    fn show_guide(&self, id: i32) {
+        let state = self.snapshot();
+        let Some(notice) = state
+            .notices
+            .iter()
+            .find(|notice| i32::try_from(notice.id).ok() == Some(id))
+        else {
+            return;
+        };
+        if self.show_guide_for(&notice.message) {
+            self.guide_follows_notice.set(true);
+        }
+    }
+
+    /// Opens the guide for a notice saying `message`, if it has one, and
+    /// brings it to the front. Returns whether it opened. A guide opened
+    /// this way stays as it is; one opened from a notice follows it.
+    pub fn show_guide_for(&self, message: &NoticeMessage) -> bool {
+        let Some(guide) = guide::guide(message) else {
+            return false;
+        };
+        self.guide_follows_notice.set(false);
+        self.fill_guide(&guide);
+        self.guide.set_settings_failed(false);
+        if let Err(error) = self.guide.show() {
+            self.show_window_error(&error);
+            return false;
+        }
+        self.guide.invoke_take_focus();
+        crate::platform::bring_to_front(self.guide.window());
+        true
     }
 
     fn select_source(&self, index: i32) {
@@ -855,6 +985,77 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
         id: i32::try_from(notice.id).unwrap_or(i32::MAX),
         message: notice_text(strings, &notice.message),
         time: notice.time.as_str().into(),
+        has_guide: guide::guide(&notice.message).is_some(),
+    }
+}
+
+/// Names as one list, "A, B and C": commas between all but the last two,
+/// then `and` (the UI's words for "head and last").
+fn join_names(names: &[String], and: impl FnOnce(&str, &str) -> String) -> String {
+    match names {
+        [] => String::new(),
+        [only] => only.clone(),
+        [head @ .., last] => and(&head.join(", "), last),
+    }
+}
+
+/// Output names as one list in the UI's words: what every notice and the
+/// guide name outputs with.
+fn joined(strings: &Strings<'_>, names: &[String]) -> SharedString {
+    join_names(names, |head, last| {
+        strings
+            .invoke_list_and(head.into(), last.into())
+            .to_string()
+    })
+    .into()
+}
+
+/// The guide's first paragraph, in the UI's words.
+fn guide_intro(strings: &Strings<'_>, guide: &Guide) -> SharedString {
+    let outputs = joined(strings, &guide.outputs);
+    match &guide.source {
+        Some(source) => strings.invoke_guide_intro_app(source.as_str().into(), outputs),
+        None => strings.invoke_guide_intro_system(outputs),
+    }
+}
+
+/// A guide step in the UI's words.
+fn guide_step_text(strings: &Strings<'_>, step: &GuideStep) -> SharedString {
+    match step {
+        GuideStep::RouteApp { app } => strings.invoke_guide_route_app(app.as_str().into()),
+        GuideStep::ChangeDefault { current } => {
+            strings.invoke_guide_change_default(current.as_str().into())
+        }
+        GuideStep::RouteOtherApps { outputs } => {
+            strings.invoke_guide_route_other_apps(joined(strings, outputs))
+        }
+        GuideStep::MuteOutputs { outputs } => {
+            strings.invoke_guide_mute_outputs(joined(strings, outputs), count(outputs.len()))
+        }
+        GuideStep::SharedOutputs { outputs } => {
+            strings.invoke_guide_shared_outputs(joined(strings, outputs))
+        }
+        GuideStep::KeepAppUnmuted { app } => {
+            strings.invoke_guide_keep_app_unmuted(app.as_str().into())
+        }
+    }
+}
+
+/// The UI's name of a step's Settings page.
+fn guide_page(page: Option<SettingsPage>) -> GuidePage {
+    match page {
+        None => GuidePage::None,
+        Some(SettingsPage::VolumeMixer) => GuidePage::VolumeMixer,
+        Some(SettingsPage::Sound) => GuidePage::Sound,
+    }
+}
+
+/// The Settings page a step's button asks for.
+fn settings_page(page: GuidePage) -> Option<SettingsPage> {
+    match page {
+        GuidePage::None => None,
+        GuidePage::VolumeMixer => Some(SettingsPage::VolumeMixer),
+        GuidePage::Sound => Some(SettingsPage::Sound),
     }
 }
 
@@ -883,9 +1084,10 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             source,
             mute,
             shared,
+            ..
         } => {
-            let mute = SharedString::from(mute.join(", "));
-            let shared = SharedString::from(shared.join(", "));
+            let mute = joined(strings, mute);
+            let shared = joined(strings, shared);
             match source {
                 Some(source) => {
                     strings.invoke_notice_heard_twice_app(source.as_str().into(), mute, shared)
@@ -951,6 +1153,49 @@ mod tests {
         // flyout's button opens the main window for the other notice.
         assert_eq!(messages, [NoticeMessage::NoSpeaker]);
         assert_eq!(newest_notices(&notices, MAIN_NOTICE_LIMIT).len(), 2);
+    }
+
+    #[test]
+    fn output_names_read_as_a_list() {
+        let and = |head: &str, last: &str| format!("{head} and {last}");
+        let names =
+            |list: &[&str]| -> Vec<String> { list.iter().map(|name| (*name).to_owned()).collect() };
+        assert_eq!(join_names(&names(&[]), and), "");
+        assert_eq!(join_names(&names(&["TV"]), and), "TV");
+        assert_eq!(
+            join_names(&names(&["TV", "Speakers"]), and),
+            "TV and Speakers"
+        );
+        assert_eq!(
+            join_names(&names(&["TV", "Speakers", "Monitor"]), and),
+            "TV, Speakers and Monitor"
+        );
+        // Every notice and the guide join names through it.
+        let view = include_str!("view.rs");
+        let comma_joins = view.matches(concat!(".join(", "\", \"", ")")).count();
+        assert_eq!(comma_joins, 1, "only join_names joins names by commas");
+    }
+
+    #[test]
+    fn guide_buttons_ask_for_the_page_their_step_names() {
+        for page in [
+            None,
+            Some(SettingsPage::VolumeMixer),
+            Some(SettingsPage::Sound),
+        ] {
+            assert_eq!(settings_page(guide_page(page)), page);
+        }
+        let message = guide::preview("app").unwrap();
+        let pages: Vec<GuidePage> = guide::guide(&message)
+            .unwrap()
+            .steps
+            .iter()
+            .map(|step| guide_page(step.page()))
+            .collect();
+        assert_eq!(
+            pages,
+            [GuidePage::VolumeMixer, GuidePage::Sound, GuidePage::None]
+        );
     }
 
     #[test]

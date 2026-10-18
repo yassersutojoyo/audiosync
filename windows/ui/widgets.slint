@@ -703,22 +703,37 @@ export component Divider inherits Rectangle {
     background: Tokens.separator;
 }
 
-// The notices, newest first, each with its own dismiss button. It lists
-// every notice in `notices`; a window that shows only the newest few passes
-// just those (a hidden row would still take its place in the layout), so the
-// Dismiss All row appears only when more than one notice is on screen.
+// The notices, newest first, each with its own dismiss button, and Show How
+// on one that has a guide. It lists every notice in `notices`; a window that
+// shows only the newest few passes just those (a hidden row would still take
+// its place in the layout), so the Dismiss All row appears only when more
+// than one notice is on screen.
 export component NoticeStack inherits VerticalLayout {
     in property <[NoticeItem]> notices;
     callback dismissed(int);
     callback dismissed-all();
-    // A notice's dismiss button gained (true) or lost (false) keyboard focus.
-    callback dismiss-focus-changed(bool);
+    // Show How on a notice: open its guide.
+    callback guide-requested(int);
+    // Whether one of a notice's buttons has keyboard focus, each time that
+    // changes.
+    callback button-focus-changed(bool);
 
     spacing: 6px;
     accessible-role: groupbox;
     accessible-label: Strings.notices;
 
-    for notice in root.notices: Rectangle {
+    for notice in root.notices: row := Rectangle {
+        // Which of the row's buttons has keyboard focus; the stack reports
+        // either one, whichever changed last.
+        property <bool> dismiss-focused;
+        property <bool> guide-focused;
+        changed dismiss-focused => {
+            root.button-focus-changed(self.dismiss-focused || self.guide-focused);
+        }
+        changed guide-focused => {
+            root.button-focus-changed(self.dismiss-focused || self.guide-focused);
+        }
+
         background: Tokens.notice;
         border-radius: Tokens.radius-card - 2px;
 
@@ -734,20 +749,39 @@ export component NoticeStack inherits VerticalLayout {
             }
 
             VerticalLayout {
-                spacing: 2px;
-                accessible-role: text;
-                accessible-label: notice.message;
+                spacing: 6px;
 
-                Text {
-                    text: notice.message;
-                    color: Tokens.text;
-                    font-size: Tokens.font-size-callout;
-                    wrap: word-wrap;
-                    accessible-role: none;
+                VerticalLayout {
+                    spacing: 2px;
+                    accessible-role: text;
+                    accessible-label: notice.message;
+
+                    Text {
+                        text: notice.message;
+                        color: Tokens.text;
+                        font-size: Tokens.font-size-callout;
+                        wrap: word-wrap;
+                        accessible-role: none;
+                    }
+
+                    QuietText {
+                        text: notice.time;
+                    }
                 }
 
-                QuietText {
-                    text: notice.time;
+                if notice.has-guide: HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        text: Strings.notice-show-how;
+                        accessible-label: Strings.notice-show-how-label;
+                        clicked => {
+                            root.guide-requested(notice.id);
+                        }
+                        // A standard button reports focus only through has-focus.
+                        changed has-focus => {
+                            row.guide-focused = self.has-focus;
+                        }
+                    }
                 }
             }
 
@@ -761,7 +795,7 @@ export component NoticeStack inherits VerticalLayout {
                         root.dismissed(notice.id);
                     }
                     focus-changed(focused) => {
-                        root.dismiss-focus-changed(focused);
+                        row.dismiss-focused = focused;
                     }
                 }
             }
