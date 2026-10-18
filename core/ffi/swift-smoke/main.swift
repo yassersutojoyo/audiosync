@@ -201,8 +201,6 @@ func fifoFeed() {
         return
     }
     check(asc_fifo_writer_create(feed) == nil, "a second FIFO writer is refused")
-    let queued = asc_fifo_feed(feed, samples, samples.count / 2)
-    check(queued == samples.count / 2, "\(queued) frames queued at 48 kHz pass through")
 
     let pipe = PipeRecorder()
     var sink = AscPipeSink(
@@ -219,6 +217,11 @@ func fifoFeed() {
         close: { context in
             recorder(context).closes += 1
         })
+    // The first step opens the pipe, which starts at the live edge: only
+    // audio fed after it is written.
+    check(asc_fifo_writer_step(writer, &sink) == 0 && pipe.opens == 1, "the first step opens the pipe")
+    let queued = asc_fifo_feed(feed, samples, samples.count / 2)
+    check(queued == samples.count / 2, "\(queued) frames queued at 48 kHz pass through")
     var steps = 0
     while asc_fifo_writer_step(writer, &sink) == 0 && steps < 100 {
         steps += 1
