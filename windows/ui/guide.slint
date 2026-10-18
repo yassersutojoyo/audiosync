@@ -12,6 +12,8 @@ import { SecondaryText } from "widgets.slint";
 export component GuideWindow inherits Window {
     in property <string> intro;
     in property <[GuideStepItem]> steps;
+    // The last button press didn't open Settings: say where to find it.
+    in property <bool> settings-failed;
     callback page-requested(GuidePage);
     callback close-requested();
 
@@ -79,6 +81,13 @@ export component GuideWindow inherits Window {
                         }
                     }
                 }
+            }
+
+            if root.settings-failed: Text {
+                text: Strings.guide-settings-failed;
+                color: Tokens.text;
+                wrap: word-wrap;
+                min-height: self.preferred-height;
             }
 
             SecondaryText {

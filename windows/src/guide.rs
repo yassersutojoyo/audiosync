@@ -11,7 +11,7 @@
 //!
 //! The steps carry names only; the UI words them (`ui/strings.slint`).
 
-use crate::ui_model::NoticeMessage;
+use crate::ui_model::{Notice, NoticeMessage};
 
 /// A Settings page a step opens, by its documented `ms-settings:` URI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,6 +130,12 @@ pub fn guide(message: &NoticeMessage) -> Option<Guide> {
     })
 }
 
+/// The guide of the double-audio notice among `notices`, if one is
+/// showing: what an open guide shows now, or `None` once it should close.
+pub fn current(notices: &[Notice]) -> Option<Guide> {
+    notices.iter().find_map(|notice| guide(&notice.message))
+}
+
 /// A made-up double-audio notice to look at the guide without streaming:
 /// `app` for one app, `system` for the whole system. With `AUDIOSYNC_DEBUG=1`,
 /// the app opens the guide for it at launch when `AUDIOSYNC_PREVIEW_GUIDE`
@@ -139,7 +145,7 @@ pub fn preview(kind: &str) -> Option<NoticeMessage> {
     match kind {
         "app" => Some(NoticeMessage::HeardTwice {
             source: Some("Music Player".to_owned()),
-            mute: names(&["TV"]),
+            mute: names(&["TV", "Monitor"]),
             shared: Vec::new(),
             default_output: None,
         }),
@@ -297,6 +303,35 @@ mod tests {
             .page(),
             None
         );
+    }
+
+    #[test]
+    fn an_open_guide_follows_the_notice_and_closes_without_it() {
+        let notice = |id: u64, message: NoticeMessage| Notice {
+            id,
+            subject: "subject".to_owned(),
+            message,
+            time: "09.41".to_owned(),
+        };
+        let mut notices = vec![
+            notice(1, NoticeMessage::NoSpeaker),
+            notice(2, twice(Some("Player"), &["TV"], &[], None)),
+        ];
+        assert_eq!(
+            current(&notices).map(|guide| guide.outputs),
+            Some(names(&["TV"]))
+        );
+        // The same notice changed in place: AudioSync plays to the TV now.
+        notices[1].message = twice(Some("Player"), &[], &["TV"], None);
+        assert_eq!(
+            current(&notices).map(|guide| guide.steps[1].clone()),
+            Some(GuideStep::SharedOutputs {
+                outputs: names(&["TV"])
+            })
+        );
+        // The app quit, or streaming stopped: the notice is gone.
+        notices.remove(1);
+        assert_eq!(current(&notices), None);
     }
 
     #[test]

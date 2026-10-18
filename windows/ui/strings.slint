@@ -159,7 +159,7 @@ export global Strings {
     // some outputs, undelayed, next to AudioSync's delayed copies. `mute`
     // names the ones AudioSync doesn't play to (muting them helps), `shared`
     // the ones AudioSync plays to as well (only moving the app helps); each is
-    // one output's name, several joined by commas, or empty.
+    // one output's name, several as "A, B and C" (list-and), or empty.
     public pure function notice-heard-twice-app(source: string, mute: string, shared: string) -> string {
         if shared == "" {
             return @tr("You may hear {0} twice: it also plays straight from {1}. Send it to an output you don't listen to (Volume mixer), or mute {1}.", source, mute);
@@ -183,13 +183,21 @@ export global Strings {
     }
 
     // The double-audio guide, opened from Show How on that notice. Each list
-    // is output names joined by commas. AudioSync changes none of these
+    // is output names as "A, B and C" (list-and). AudioSync changes none of these
     // settings itself; a step's button opens the Settings page where the
     // user does.
     out property <string> guide-title: @tr("Avoid Double Audio");
     out property <string> guide-steps: @tr("Steps");
     out property <string> guide-footer: @tr("AudioSync doesn't change these settings itself. The notice goes away on its own once the sound plays only through AudioSync.");
     out property <string> guide-close: @tr("Close");
+    // Shown in the guide when the shell didn't open the Settings page.
+    out property <string> guide-settings-failed: @tr("Couldn't open Settings. Open it from the Start menu: Settings > System > Sound.");
+
+    // Joins a list of names: `head` is all but the last, already joined by
+    // commas ("TV, Speakers"), `last` the last one.
+    public pure function list-and(head: string, last: string) -> string {
+        return @tr("{0} and {1}", head, last);
+    }
 
     public pure function guide-intro-app(source: string, outputs: string) -> string {
         return @tr("Windows keeps playing {0} straight from {1}, next to AudioSync's synced copies. To hear it only once:", source, outputs);
@@ -211,8 +219,12 @@ export global Strings {
         return @tr("Some apps play straight to {0}. In the Volume mixer, set them to an output you don't listen to as well.", outputs);
     }
 
-    public pure function guide-mute-outputs(outputs: string) -> string {
-        return @tr("Or, if you don't need {0}, mute it: in Sound settings, open it and turn its volume all the way down. AudioSync doesn't play there, so its copies stay as they are.", outputs);
+    // `count` is how many outputs `outputs` names.
+    public pure function guide-mute-outputs(outputs: string, count: int) -> string {
+        if count == 1 {
+            return @tr("Or, if you don't need {0}, mute it: in Sound settings, open it and turn its volume all the way down. AudioSync doesn't play there, so its copies stay as they are.", outputs);
+        }
+        return @tr("Or, if you don't need {0}, mute them: in Sound settings, open each of them and turn its volume all the way down. AudioSync doesn't play there, so its copies stay as they are.", outputs);
     }
 
     public pure function guide-shared-outputs(outputs: string) -> string {

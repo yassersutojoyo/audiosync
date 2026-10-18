@@ -145,7 +145,7 @@ fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
 
 /// Shows the main window and runs the UI until the user exits.
 fn run(log: &DebugLog) -> Result<(), StartError> {
-    let app = view::App::new(backend(log)?)?;
+    let app = view::App::new(backend(log)?, log.clone())?;
 
     // With a tray icon, closing the main window keeps AudioSync running in
     // the notification area; without one (or off Windows), it quits.
