@@ -1,0 +1,6 @@
+# Clauses of docs/ENGINE_SPEC.md that the core is meant to implement but doesn't
+# yet, so no test in core/ covers them so far. One per line: the clause ID, a
+# space, what is missing. tests/spec_coverage.rs fails once a clause listed here
+# gains a `// covers:` test, so the line goes when the core implements it. A
+# clause only the host can implement belongs in tests/spec_exempt.txt instead.
+S169 The FIFO writer doesn't start at the live edge when it opens the pipe again; the parity check "rust: fifo reopen resumes at the live edge (S169)" prints as KNOWN.
