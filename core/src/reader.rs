@@ -635,32 +635,139 @@ mod tests {
         assert_eq!(report.frames, 5);
     }
 
-    // covers: S45
+    // covers: S45, S158
     #[test]
-    fn fresh_session_plays_de_minus_w_silence_first() {
+    fn a_fresh_session_stays_silent_until_the_ring_holds_more_than_the_delay() {
         let ring = ring(1 << 18);
         let mut cap = Capture::new(&ring);
         cap.write(1000);
         let mut out = Output::new(&ring);
-        let mut silent_before_first = 0usize;
-        let mut first = None;
+        let mut blocks = Vec::new();
         for _ in 0..20 {
-            let block = out.read(N, 4096);
-            for f in &block.frames {
-                match (first, f) {
-                    (None, None) => silent_before_first += 1,
-                    (None, Some(k)) => first = Some(*k),
-                    _ => {}
-                }
-            }
+            blocks.push(out.read(N, 4096));
             cap.write(N);
         }
+        // The reads at W = 1000, 1512, ..., 4072 wait in silence; the one at
+        // W = 4584 primes at 488, and frames 0 to 487 are never played.
+        for b in &blocks[..7] {
+            assert_eq!(b.report.correction, Correction::None);
+            assert!(b.report.written <= 4096);
+            assert_eq!(b.silent(), N);
+            assert_eq!(b.report.lag, b.report.written, "W - P while P is 0");
+        }
+        assert_eq!(blocks[7].report.written, 4584);
+        assert_eq!(blocks[7].report.correction, Correction::Prime);
+        assert_eq!(blocks[7].first(), Some(488));
+        for pair in blocks[7..].windows(2) {
+            assert_eq!(pair[1].silent(), 0);
+            assert_eq!(pair[1].first(), Some(pair[0].last().unwrap() + 1));
+        }
         assert_eq!(
-            first,
-            Some(0),
-            "playback starts at the session's first frame"
+            out.reader.control().counters(),
+            ReaderCounters {
+                primes: 1,
+                ..ReaderCounters::default()
+            },
+            "the silent reads count nothing"
         );
-        assert_eq!(silent_before_first, 4096 - 1000);
+    }
+
+    // covers: S45, S44, S56, S158
+    #[test]
+    fn a_new_reader_primes_on_the_first_read_that_finds_more_than_de_written() {
+        let ring = ring(1 << 18);
+        let mut cap = Capture::new(&ring);
+        let mut out = Output::new(&ring);
+        // N = 512, De = 1200, one block written before each read.
+        for w in [512, 1024] {
+            cap.write(N);
+            let b = out.read(N, 1200);
+            assert_eq!(b.report.written, w);
+            assert_eq!(b.report.correction, Correction::None);
+            assert_eq!(b.silent(), N);
+            assert_eq!(
+                (b.report.masked, b.report.copied, b.report.starved),
+                (N, 0, 0)
+            );
+            assert_eq!(b.report.start, 0);
+            assert_eq!(b.report.lag, w, "W - P while P is still 0");
+            assert_eq!(out.reader.lag_frames(), w);
+        }
+        assert_eq!(
+            out.reader.control().counters(),
+            ReaderCounters::default(),
+            "a reader waiting to prime counts nothing"
+        );
+        cap.write(N);
+        let b = out.read(N, 1200);
+        assert_eq!(b.report.correction, Correction::Prime);
+        assert_eq!(b.report.start, 336);
+        assert_eq!((b.first(), b.last()), (Some(336), Some(847)));
+        assert_eq!(b.silent(), 0);
+        assert_eq!(b.report.lag, 688);
+        for b in lockstep(&mut cap, &mut out, 1200, 20) {
+            assert_eq!(b.report.correction, Correction::None);
+            assert_eq!(b.silent(), 0);
+            assert_eq!(b.report.lag, 688);
+        }
+        assert_eq!(
+            out.reader.control().counters(),
+            ReaderCounters {
+                primes: 1,
+                ..ReaderCounters::default()
+            }
+        );
+    }
+
+    // covers: S45
+    #[test]
+    fn a_read_with_exactly_de_frames_written_still_waits() {
+        let ring = ring(1 << 18);
+        let mut cap = Capture::new(&ring);
+        let mut out = Output::new(&ring);
+        cap.write(1200);
+        let b = out.read(N, 1200);
+        assert_eq!(b.report.correction, Correction::None);
+        assert_eq!(b.silent(), N);
+        assert_eq!(b.report.lag, 1200);
+        cap.write(1);
+        let b = out.read(N, 1200);
+        assert_eq!(b.report.correction, Correction::Prime);
+        assert_eq!(
+            b.report.start, 1,
+            "the read that primes starts at W - De >= 1"
+        );
+        assert_eq!(b.first(), Some(1));
+        assert_eq!(b.silent(), 0);
+        assert_eq!(b.report.lag, 688);
+    }
+
+    // covers: S45, S46, S158
+    #[test]
+    fn a_read_that_primes_uses_the_current_target_and_clears_the_resync_flag() {
+        let ring = ring(1 << 18);
+        let mut cap = Capture::new(&ring);
+        let mut out = Output::new(&ring);
+        let control = out.reader.control();
+        control.set_delay_frames(4096);
+        for _ in 0..4 {
+            cap.write(N);
+            let b = out.read_target(N);
+            assert_eq!(b.report.correction, Correction::None);
+            assert_eq!((b.report.delay, b.silent()), (4096, N));
+        }
+        // A newer target, shorter than what is written by now: the next read
+        // primes with it.
+        control.set_delay_frames(1500);
+        cap.write(N);
+        let b = out.read_target(N);
+        assert_eq!(b.report.correction, Correction::Prime);
+        assert_eq!((b.report.delay, b.report.start), (1500, 2560 - 1500));
+        // That read took the resync flag: the next one is no resync.
+        cap.write(N);
+        assert_eq!(out.read_target(N).report.correction, Correction::None);
+        let counters = control.counters();
+        assert_eq!((counters.primes, counters.resyncs), (1, 0));
     }
 
     // covers: S42, S56, S44
@@ -1016,6 +1123,315 @@ mod tests {
         }
     }
 
+    /// The L run of S46: a 24 s ring holding 48 000 frames, then 50 lockstep
+    /// rounds at D = 0 (De = N), each read ending at W; then the writer
+    /// freezes and five reads at D = 0 run dry. Ends with W = P = F = 73 600.
+    fn frozen_at_the_live_edge() -> (Capture, Output) {
+        let ring = Ring::for_rate(RATE).unwrap();
+        let mut cap = Capture::new(&ring);
+        cap.write(48_000);
+        let mut out = Output::new(&ring);
+        let blocks = lockstep(&mut cap, &mut out, 0, 50);
+        assert_eq!(blocks[0].report.correction, Correction::Prime);
+        assert_eq!(blocks[0].report.start, 48_000);
+        assert!(blocks.iter().all(|b| b.silent() == 0 && b.report.lag == 0));
+        assert_eq!((cap.w(), out.last), (73_600, Some(73_599)));
+        for _ in 0..5 {
+            assert_dry(&out.read(N, 0), 73_600);
+        }
+        (cap, out)
+    }
+
+    /// A dry read (S44 step 2): N frames of silence at `P = W`, no
+    /// correction, a starved render of N frames, `lagFrames = 0`.
+    fn assert_dry(block: &Block, w: i64) {
+        let r = &block.report;
+        assert_eq!(r.correction, Correction::None, "no anchor while dry");
+        assert_eq!((r.written, r.start, r.lag), (w, w, 0));
+        assert_eq!((r.masked, r.copied, r.starved), (0, 0, r.frames));
+    }
+
+    // covers: S44, S46, S41, S49, S56, S158
+    #[test]
+    fn a_change_on_a_dry_reader_waits_for_the_writer_then_lands_exactly() {
+        let (mut cap, mut out) = frozen_at_the_live_edge();
+        out.reader.control().request_resync();
+        for _ in 0..5 {
+            let b = out.read(N, 1200);
+            assert_dry(&b, 73_600);
+            assert_eq!(b.report.delay, 1200);
+        }
+        assert_eq!(
+            out.reader.control().counters(),
+            ReaderCounters {
+                primes: 1,
+                starved_renders: 10,
+                starved_frames: 5120,
+                ..ReaderCounters::default()
+            },
+            "the change waits: no resync, no drift correction"
+        );
+        // The writer resumes. The first read finds P < W and applies the
+        // change against its W; all 512 frames lie below F, so it is silent.
+        cap.write(N);
+        let b = out.read(N, 1200);
+        assert_eq!(b.report.correction, Correction::Resync);
+        assert_eq!((b.report.written, b.report.start), (74_112, 72_912));
+        assert_eq!((b.report.masked, b.silent()), (N, N));
+        assert_eq!(b.report.lag, 688);
+        // 176 masked frames, then the first frame it never played.
+        cap.write(N);
+        let b = out.read(N, 1200);
+        assert_eq!(b.report.correction, Correction::None);
+        assert_eq!(b.report.error, 0);
+        assert_eq!(b.report.masked, 176);
+        assert_eq!((b.first(), b.last()), (Some(73_600), Some(73_935)));
+        assert_eq!(b.report.lag, 688);
+        // From then on every block is contiguous and exactly De - N behind.
+        let mut last = b.last().unwrap();
+        for b in lockstep(&mut cap, &mut out, 1200, 100) {
+            assert_eq!(b.report.correction, Correction::None);
+            assert_eq!(b.first(), Some(last + 1), "nothing repeated or skipped");
+            last = b.last().unwrap();
+            assert_eq!(b.report.written - 1 - last, 688);
+            assert_eq!(b.report.lag, 688);
+        }
+        let counters = out.reader.control().counters();
+        assert_eq!((counters.primes, counters.resyncs), (1, 1));
+        assert_eq!(counters.drift_skips + counters.drift_silences, 0);
+        assert_eq!(
+            (counters.starved_renders, counters.starved_frames),
+            (10, 5120)
+        );
+    }
+
+    // covers: S46, S47, S52, S158
+    #[test]
+    fn a_long_change_on_a_dry_reader_lands_exactly_after_the_resume() {
+        let (mut cap, mut out) = frozen_at_the_live_edge();
+        out.reader.control().request_resync();
+        for _ in 0..5 {
+            // Far more than T from its new target, and still no step back.
+            assert_dry(&out.read(N, 24_000), 73_600);
+        }
+        cap.write(N);
+        let b = out.read(N, 24_000);
+        assert_eq!(b.report.correction, Correction::Resync);
+        assert_eq!(b.report.start, 74_112 - 24_000);
+        let mut blocks = vec![b];
+        while blocks.last().unwrap().first().is_none() {
+            cap.write(N);
+            blocks.push(out.read(N, 24_000));
+        }
+        assert_eq!(blocks.len(), 46, "audio returns in the 46th block");
+        assert_eq!(blocks[45].first(), Some(73_600));
+        assert_eq!(blocks.iter().map(Block::silent).sum::<usize>(), 23_488);
+        for b in &blocks[1..] {
+            assert_eq!(b.report.correction, Correction::None);
+        }
+        for b in &blocks {
+            assert_eq!(b.report.lag, 23_488);
+        }
+        for b in lockstep(&mut cap, &mut out, 24_000, 50) {
+            assert_eq!(b.report.correction, Correction::None);
+            assert_eq!(b.silent(), 0);
+            assert_eq!(b.report.lag, 23_488);
+        }
+        let counters = out.reader.control().counters();
+        assert_eq!((counters.primes, counters.resyncs), (1, 1));
+        assert_eq!(counters.drift_skips + counters.drift_silences, 0);
+        assert_eq!(
+            (counters.starved_renders, counters.starved_frames),
+            (10, 5120)
+        );
+    }
+
+    // covers: S46, S48
+    #[test]
+    fn a_change_on_a_dry_reader_skips_ahead_when_more_than_de_arrives() {
+        let (mut cap, mut out) = frozen_at_the_live_edge();
+        out.reader.control().request_resync();
+        assert_dry(&out.read(N, 1200), 73_600);
+        // The writer comes back with 4096 frames at once: W - De lies past F.
+        cap.write(4096);
+        let b = out.read(N, 1200);
+        assert_eq!(b.report.correction, Correction::Resync);
+        assert_eq!(b.report.start, 77_696 - 1200);
+        assert_eq!((b.silent(), b.first()), (0, Some(76_496)));
+        assert_eq!(b.report.lag, 688);
+        let counters = out.reader.control().counters();
+        assert_eq!(counters.resyncs, 1);
+        assert_eq!(counters.drift_skips, 0, "a resync, not a drift skip");
+    }
+
+    // covers: S46, S41, S133, S158
+    #[test]
+    fn a_target_set_on_a_dry_reader_waits_and_the_newest_one_is_applied() {
+        let (mut cap, mut out) = frozen_at_the_live_edge();
+        let control = out.reader.control();
+        control.set_delay_frames(1200);
+        for _ in 0..3 {
+            let b = out.read_target(N);
+            assert_dry(&b, 73_600);
+            assert_eq!(b.report.delay, N as i64, "still the delay it applies");
+        }
+        // A newer change supersedes the one still waiting.
+        control.set_delay_frames(3000);
+        for _ in 0..3 {
+            assert_dry(&out.read_target(N), 73_600);
+        }
+        cap.write(N);
+        let b = out.read_target(N);
+        assert_eq!(b.report.correction, Correction::Resync);
+        assert_eq!((b.report.delay, b.report.start), (3000, 74_112 - 3000));
+        assert_eq!(b.report.lag, 3000 - N as i64);
+        for b in lockstep_target(&mut cap, &mut out, 20) {
+            assert_eq!(b.report.correction, Correction::None);
+            assert_eq!(b.report.lag, 3000 - N as i64);
+        }
+        let counters = control.counters();
+        assert_eq!(
+            (counters.primes, counters.resyncs),
+            (1, 1),
+            "one resync, for the newer change"
+        );
+        assert_eq!(counters.drift_skips + counters.drift_silences, 0);
+    }
+
+    // covers: S52, S53, S44, S54, S158
+    #[test]
+    fn a_dry_reader_makes_no_correction_until_the_writer_writes_again() {
+        let ring = ring(1 << 18);
+        let mut cap = Capture::new(&ring);
+        cap.write(20_000);
+        let mut out = Output::new(&ring);
+        settle(&mut cap, &mut out, 2048);
+        let w = cap.w();
+        // The writer stops. Inside the dead band the reader plays what is
+        // buffered and reaches W after three blocks ...
+        for k in 1..=3 {
+            let b = out.read(N, 2048);
+            assert_eq!(b.report.correction, Correction::None);
+            assert_eq!(b.report.error, -k * N as i64);
+            assert_eq!(b.silent(), 0);
+        }
+        assert_eq!((out.last, out.reader.lag_frames()), (Some(w - 1), 0));
+        // ... and then outputs starved blocks: 2048 ahead of its target,
+        // more than T, yet no step back while it is dry.
+        for _ in 0..20 {
+            let b = out.read(N, 2048);
+            assert_dry(&b, w);
+            assert_eq!(b.report.error, -2048);
+        }
+        let counters = out.reader.control().counters();
+        assert_eq!(counters.drift_silences, 0);
+        assert_eq!(
+            (counters.starved_renders, counters.starved_frames),
+            (20, 20 * N as u64)
+        );
+        // The writer writes again: the new frames play as they arrive, with
+        // the error inside the dead band.
+        let blocks = lockstep(&mut cap, &mut out, 2048, 10);
+        assert_eq!(blocks[0].first(), Some(w));
+        for b in &blocks {
+            assert_eq!(b.report.correction, Correction::None);
+            assert_eq!((b.silent(), b.report.lag), (0, 0));
+            assert!(b.report.error.abs() <= T);
+        }
+    }
+
+    // covers: S46, S53
+    #[test]
+    fn a_change_on_the_first_read_after_the_writer_stops_is_applied_at_once() {
+        let ring = Ring::for_rate(RATE).unwrap();
+        let mut cap = Capture::new(&ring);
+        cap.write(48_000);
+        let mut out = Output::new(&ring);
+        lockstep(&mut cap, &mut out, 4096, 200);
+        assert_eq!((cap.w(), out.last), (150_400, Some(146_815)));
+        assert_eq!(out.reader.lag_frames(), 3584);
+        // The writer stops, and the next read comes with the change.
+        out.reader.control().request_resync();
+        let b = out.read(N, 5296);
+        assert_eq!(b.report.correction, Correction::Resync, "P < W: at once");
+        assert_eq!(b.report.start, 145_104);
+        assert_eq!(b.report.masked, N);
+        assert_eq!(b.report.lag, 4784);
+        let lags: Vec<i64> = (0..2).map(|_| out.read(N, 5296).report.lag).collect();
+        assert_eq!(lags, [4272, 3760]);
+        // The writer resumes; the error the stall left is inside the dead
+        // band, so nothing corrects it and the change lands 1024 short.
+        cap.write(N);
+        let b = out.read(N, 5296);
+        assert_eq!(
+            (b.report.correction, b.report.error),
+            (Correction::None, -1024)
+        );
+        assert_eq!(b.report.masked, 176);
+        assert_eq!(b.first(), Some(146_816));
+        assert_eq!(b.report.lag, 3760);
+        for b in lockstep(&mut cap, &mut out, 5296, 20) {
+            assert_eq!(b.report.correction, Correction::None);
+            assert_eq!(b.report.lag, 3760);
+        }
+    }
+
+    // covers: S46, S52, S53
+    #[test]
+    fn a_change_applied_during_a_stall_lands_short_by_the_stalled_reads() {
+        // After the change, j more reads with the writer stopped leave it
+        // j blocks short; the step back at the fourth starts the count again.
+        for (j, short) in [(0, 0), (1, 512), (2, 1024), (3, 1536), (4, 0), (5, 512)] {
+            let ring = ring(1 << 18);
+            let mut cap = Capture::new(&ring);
+            cap.write(20_000);
+            let mut out = Output::new(&ring);
+            settle(&mut cap, &mut out, 4096);
+            out.reader.control().request_resync();
+            let b = out.read(N, 5296);
+            assert_eq!(b.report.correction, Correction::Resync);
+            assert_eq!(b.report.lag, 4784);
+            for _ in 0..j {
+                out.read(N, 5296);
+            }
+            for b in lockstep(&mut cap, &mut out, 5296, 20) {
+                assert_eq!(b.report.correction, Correction::None, "j = {j}");
+                assert_eq!(b.report.lag, 4784 - short, "j = {j}");
+            }
+        }
+    }
+
+    // covers: S46, S52, S53, S54
+    #[test]
+    fn a_change_applied_during_a_stall_is_lost_once_the_reader_runs_dry() {
+        let ring = ring(1 << 18);
+        let mut cap = Capture::new(&ring);
+        cap.write(20_000);
+        let mut out = Output::new(&ring);
+        settle(&mut cap, &mut out, 4096);
+        let w = cap.w();
+        // The writer stops; the next read takes a change to 2000 frames.
+        out.reader.control().request_resync();
+        let b = out.read(N, 2000);
+        assert_eq!(b.report.correction, Correction::Resync);
+        assert_eq!((b.first(), b.report.lag), (Some(w - 2000), 1488));
+        // Three more reads play what is buffered and reach W ...
+        let lags: Vec<i64> = (0..3).map(|_| out.read(N, 2000).report.lag).collect();
+        assert_eq!(lags, [976, 464, 0]);
+        assert_eq!(out.last, Some(w - 1));
+        // ... where the reader is dry: more than T ahead, but no step back.
+        for _ in 0..5 {
+            assert_dry(&out.read(N, 2000), w);
+        }
+        // The writer resumes; the error stays inside the dead band, so the
+        // change lands De - N short, at lagFrames = 0.
+        for b in lockstep(&mut cap, &mut out, 2000, 20) {
+            assert_eq!(b.report.correction, Correction::None);
+            assert_eq!((b.silent(), b.report.lag), (0, 0));
+        }
+        assert_eq!(out.reader.control().counters().drift_silences, 0);
+    }
+
     // covers: S50
     #[test]
     fn tolerance_is_35_ms_rounded() {
@@ -1288,6 +1704,36 @@ mod tests {
         assert_eq!(counters.drift_skip_frames, block.report.error as u64);
         // Settled readers sit one block ahead until the writer's next block.
         assert_eq!(block.report.error, (3 << 16) - N as i64);
+    }
+
+    // covers: S44, S55, S158
+    #[test]
+    fn a_negative_p_early_in_a_session_is_never_an_overrun() {
+        // C - M = 57 344; De at its cap, C - M - N.
+        let ring = ring(1 << 16);
+        let de = (1 << 16) - MIN_MARGIN_FRAMES as i64 - N as i64;
+        let mut cap = Capture::new(&ring);
+        cap.write(10_000);
+        let mut out = Output::new(&ring);
+        assert_eq!(out.read(N, 1024).report.correction, Correction::Prime);
+        // A resync to the capped delay this early leaves P negative.
+        out.reader.control().request_resync();
+        cap.write(N);
+        let b = out.read(N, de);
+        assert_eq!(b.report.correction, Correction::Resync);
+        assert_eq!(b.report.start, 10_512 - de);
+        let p = b.report.start + N as i64;
+        // 1500 frames later P lies below W - C + M, but nothing was ever
+        // overwritten (oldest = 0): the error of 988 frames is inside the
+        // dead band, so nothing is corrected and the frames stay masked.
+        cap.write(1500);
+        assert!(p < cap.w() - (1 << 16) + MIN_MARGIN_FRAMES as i64);
+        assert_eq!(ring.oldest_readable(cap.w() as u64), 0);
+        let b = out.read(N, de);
+        assert_eq!(b.report.correction, Correction::None, "not an overrun");
+        assert_eq!((b.report.start, b.report.error), (p, 988));
+        assert_eq!(b.report.masked, N);
+        assert_eq!(out.reader.control().counters().drift_skips, 0);
     }
 
     // covers: S40, S55
@@ -1699,5 +2145,80 @@ mod tests {
             assert_eq!(b.report.correction, Correction::None);
             assert_eq!(b.silent(), 0);
         }
+    }
+
+    // covers: S159, S45, S56, S158
+    #[test]
+    fn after_a_prime_reset_p_only_feeds_the_lag_until_the_next_prime() {
+        let ring = ring(1 << 18);
+        let mut cap = Capture::new(&ring);
+        cap.write(20_000);
+        let mut out = Output::new(&ring);
+        settle(&mut cap, &mut out, 4096);
+        let p = cap.w() - (4096 - N as i64);
+        out.reader.control().reset_prime();
+        // Not anchored, with no more than De written: each read waits in
+        // silence, keeps P, publishes W - P and counts nothing.
+        for _ in 0..3 {
+            cap.write(N);
+            let b = out.read(N, 60_000);
+            assert_eq!(b.report.correction, Correction::None);
+            assert_eq!(b.silent(), N);
+            assert_eq!(b.report.start, p);
+            assert_eq!(b.report.lag, cap.w() - p);
+        }
+        assert_eq!(
+            out.reader.control().counters(),
+            ReaderCounters {
+                primes: 1,
+                ..ReaderCounters::default()
+            }
+        );
+        // The first read with W > De primes like a new reader's first read.
+        cap.write(40_000);
+        out.last = None;
+        let b = out.read(N, 60_000);
+        assert_eq!(b.report.correction, Correction::Prime);
+        assert_eq!(b.report.start, cap.w() - 60_000);
+        assert_eq!(b.silent(), 0);
+        assert_eq!(b.report.lag, 60_000 - N as i64);
+        assert_eq!(out.reader.control().counters().primes, 2);
+    }
+
+    // covers: S159, S46, S53, S158
+    #[test]
+    fn a_prime_reset_on_a_dry_reader_primes_at_once() {
+        let (mut cap, mut out) = frozen_at_the_live_edge();
+        // A change waits on the dry reader ...
+        out.reader.control().request_resync();
+        assert_dry(&out.read(N, 1200), 73_600);
+        // ... but a prime reset does not wait for the writer.
+        out.reader.control().reset_prime();
+        out.last = None;
+        let b = out.read(N, 1200);
+        assert_eq!(b.report.correction, Correction::Prime);
+        assert_eq!(b.report.start, 73_600 - 1200);
+        assert_eq!(b.silent(), 0, "F restarted");
+        assert_eq!(b.report.lag, 688);
+        // Two more reads with the writer stopped reach W; then it is dry.
+        assert_eq!(out.read(N, 1200).report.lag, 176);
+        let b = out.read(N, 1200);
+        assert_eq!(
+            (b.report.copied, b.report.starved, b.report.lag),
+            (176, 336, 0)
+        );
+        assert_dry(&out.read(N, 1200), 73_600);
+        // The writer resumes, and the reader plays at lagFrames = 0.
+        for b in lockstep(&mut cap, &mut out, 1200, 5) {
+            assert_eq!(b.report.correction, Correction::None);
+            assert_eq!((b.silent(), b.report.lag), (0, 0));
+        }
+        let counters = out.reader.control().counters();
+        assert_eq!(
+            (counters.primes, counters.resyncs),
+            (2, 0),
+            "only the prime"
+        );
+        assert_eq!(counters.drift_skips + counters.drift_silences, 0);
     }
 }
