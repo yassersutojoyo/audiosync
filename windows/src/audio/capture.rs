@@ -429,7 +429,7 @@ mod tests {
     use std::sync::Arc;
 
     use audiosync_core::eq::{EqSettings, equalizer};
-    use audiosync_core::reader::Reader;
+    use audiosync_core::reader::{Correction, Reader};
     use audiosync_core::ring::Ring;
 
     use super::*;
@@ -762,6 +762,19 @@ mod tests {
         (ring, writer)
     }
 
+    /// Frames of silence [`session_ring_after_lead_in`] writes before the
+    /// audio under test; see [`newest`].
+    const LEAD_IN: u64 = 1;
+
+    /// A session ring whose writer has already written [`LEAD_IN`] frames of
+    /// silence, straight to the ring, so a converter made with it sees only
+    /// the packets a test pushes.
+    fn session_ring_after_lead_in() -> (Arc<Ring>, RingWriter) {
+        let (ring, mut writer) = session_ring();
+        writer.write(&[0.0; 2 * LEAD_IN as usize], LEAD_IN as usize);
+        (ring, writer)
+    }
+
     /// A converter whose equalizer is off, as it starts.
     fn new_converter(
         format: StreamFormat,
@@ -785,27 +798,39 @@ mod tests {
         samples.iter().flat_map(|s| s.to_le_bytes()).collect()
     }
 
-    /// Reads the newest `frames` frames of the ring.
+    /// Reads the newest `frames` frames of the ring, through a new reader at
+    /// a delay of `frames`. A new reader primes only on a read that finds
+    /// more frames written than its delay, at `W - De` (S45), so it never
+    /// reads frame 0: the ring must hold more than `frames`, and a test that
+    /// reads back everything it wrote starts from
+    /// [`session_ring_after_lead_in`].
     fn newest(ring: &Arc<Ring>, frames: usize) -> Vec<f32> {
         let mut reader = Reader::new(Arc::clone(ring), SESSION_RATE);
         let mut out = vec![0.0; frames * 2];
-        reader.read(&mut out, frames, frames as i64, 0);
+        let report = reader.read(&mut out, frames, frames as i64, 0);
+        assert_eq!(
+            (report.correction, report.copied),
+            (Correction::Prime, frames),
+            "the read primes and copies all {frames} frames, which needs more than \
+             {frames} written ({} are)",
+            ring.frames_written()
+        );
         out
     }
 
     #[test]
     fn float_stereo_at_the_session_rate_is_written_unchanged() {
-        let (ring, writer) = session_ring();
+        let (ring, writer) = session_ring_after_lead_in();
         let mut converter = new_converter(CAPTURE_ATTEMPTS[0].format, writer).unwrap();
         let samples: Vec<f32> = (0..3000).map(|i| (i as f32 / 3000.0) - 0.5).collect();
         converter.push(&f32_bytes(&samples), 1500, false);
-        assert_eq!(ring.frames_written(), 1500);
+        assert_eq!(ring.frames_written(), LEAD_IN + 1500);
         assert_eq!(newest(&ring, 1500), samples);
     }
 
     #[test]
     fn sixteen_bit_samples_are_scaled_to_float() {
-        let (ring, writer) = session_ring();
+        let (ring, writer) = session_ring_after_lead_in();
         let format = StreamFormat {
             sample: SampleType::I16,
             rate: SESSION_RATE,
@@ -820,11 +845,11 @@ mod tests {
 
     #[test]
     fn a_silent_packet_writes_silence_whatever_its_data() {
-        let (ring, writer) = session_ring();
+        let (ring, writer) = session_ring_after_lead_in();
         let mut converter = new_converter(CAPTURE_ATTEMPTS[0].format, writer).unwrap();
         converter.push(&f32_bytes(&[0.25; 8]), 4, false);
         converter.push(&f32_bytes(&[0.75; 8]), 4, true);
-        assert_eq!(ring.frames_written(), 8);
+        assert_eq!(ring.frames_written(), LEAD_IN + 8);
         let out = newest(&ring, 8);
         assert_eq!(&out[..8], &[0.25; 8]);
         assert_eq!(&out[8..], &[0.0; 8]);
@@ -832,7 +857,7 @@ mod tests {
 
     #[test]
     fn a_mono_capture_feeds_both_channels() {
-        let (ring, writer) = session_ring();
+        let (ring, writer) = session_ring_after_lead_in();
         let format = StreamFormat {
             sample: SampleType::F32,
             rate: SESSION_RATE,
@@ -855,14 +880,14 @@ mod tests {
 
     #[test]
     fn a_long_packet_is_converted_in_chunks() {
-        let (ring, writer) = session_ring();
+        let (ring, writer) = session_ring_after_lead_in();
         let mut converter = new_converter(CAPTURE_ATTEMPTS[0].format, writer).unwrap();
         let frames = CONVERT_CHUNK * 3 + 17;
         let samples: Vec<f32> = (0..frames * 2)
             .map(|i| (i % 1000) as f32 / 1000.0)
             .collect();
         converter.push(&f32_bytes(&samples), frames, false);
-        assert_eq!(ring.frames_written(), frames as u64);
+        assert_eq!(ring.frames_written(), LEAD_IN + frames as u64);
         assert_eq!(newest(&ring, frames), samples);
     }
 
@@ -927,7 +952,7 @@ mod tests {
 
     #[test]
     fn the_equalizer_applies_from_the_next_packet() {
-        let (ring, writer) = session_ring();
+        let (ring, writer) = session_ring_after_lead_in();
         let (mut control, processor) = equalizer();
         let mut converter =
             CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor).unwrap();
