@@ -83,6 +83,7 @@ pub struct MockDriver {
     session_pids: Vec<u32>,
     outputs: Vec<Endpoint>,
     changed: bool,
+    listing_error: Option<BackendError>,
     output_errors: BTreeMap<String, BackendError>,
     capture_error: Option<BackendError>,
     capture: Option<Arc<Mutex<CaptureLink>>>,
@@ -121,6 +122,7 @@ impl MockDriver {
             session_pids: Vec::new(),
             outputs: Vec::new(),
             changed: false,
+            listing_error: None,
             output_errors: BTreeMap::new(),
             capture_error: None,
             capture: None,
@@ -172,7 +174,10 @@ impl Driver for MockDriver {
     }
 
     fn outputs(&mut self) -> Result<Vec<Endpoint>, BackendError> {
-        Ok(self.outputs.clone())
+        match &self.listing_error {
+            Some(error) => Err(error.clone()),
+            None => Ok(self.outputs.clone()),
+        }
     }
 
     fn outputs_changed(&mut self) -> bool {
@@ -314,10 +319,23 @@ impl Controller<MockDriver> {
 
     /// Disconnects an output; an output playing on it stops by itself.
     pub fn disconnect_output(&mut self, id: &str) {
+        self.disconnect_output_unnoticed(id);
+        self.driver_mut().end_renderers_of(id);
+    }
+
+    /// Disconnects an output without telling the output playing on it, which
+    /// plays on until the backend stops it, as a Windows stream whose device
+    /// went away may.
+    pub fn disconnect_output_unnoticed(&mut self, id: &str) {
         let driver = self.driver_mut();
         driver.outputs.retain(|output| output.id != id);
-        driver.end_renderers_of(id);
         driver.changed = true;
+    }
+
+    /// Makes every later listing of the outputs fail with `error`, or work
+    /// again with `None`.
+    pub fn fail_listing(&mut self, error: Option<BackendError>) {
+        self.driver_mut().listing_error = error;
     }
 
     /// Makes `id` Windows' default output.
