@@ -39,7 +39,7 @@ A Windows version is in development too, written in Rust. It isn't usable yet.
 
 The source can be all system audio, a single app (with its helper processes, like a browser's audio service), or an input device such as a microphone, line-in or audio interface (first two channels). It plays to one or more HomePods, Apple TVs and other AirPlay receivers, plus anything macOS can play to: built-in speakers, the headphone jack, HDMI/DisplayPort, USB DACs and Bluetooth.
 
-Each local speaker gets its own delay (0 to 20 s), and the AirPlay engine keeps the AirPlay speakers in step with each other. On top of that there's per-speaker and master volume, a 10-band equalizer with a preamp and presets, Now Playing for Spotify and Music, speaker groups, auto-connect, and launch at login. The AirPlay engine (OwnTone) ships inside the app and AudioSync starts and stops it itself, so there's nothing else to install or configure.
+Each local speaker gets its own delay (0 to 20 s), and the AirPlay engine keeps the AirPlay speakers in step with each other. On top of that there's per-speaker and master volume, a 10-band equalizer with a preamp and presets, Now Playing for Spotify and Music (also shown on AirPlay TVs and other speakers with a screen), speaker groups, auto-connect, and launch at login. The AirPlay engine (OwnTone) ships inside the app and AudioSync starts and stops it itself, so there's nothing else to install or configure.
 
 ## Coming from Airfoil?
 
