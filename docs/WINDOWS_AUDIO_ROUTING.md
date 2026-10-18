@@ -90,6 +90,7 @@ Defer: the undocumented policy interface (an opt-in experiment at most, only aft
 ## AirPlay on Windows (out of scope)
 
 Not planned now; recorded so the options aren't researched twice.
+[`WINDOWS_AIRPLAY.md`](WINDOWS_AIRPLAY.md) now covers these options in depth, with a recommendation.
 
 - **OwnTone.** Supports Linux and BSD, not Windows ([installation](https://owntone.github.io/owntone-server/installation/)). It could run under WSL2 or a container as the same separate GPL process. WSL's mirrored networking (Windows 11 22H2 and later) is documented to add multicast support ([WSL networking](https://learn.microsoft.com/en-us/windows/wsl/networking)), which mDNS discovery needs; untested for AirPlay.
 - **libraop.** [RAOP (AirPlay 1) player and library](https://github.com/philippe44/libraop) with timing sync and a Windows build, MIT-licensed (it bundles third-party parts under their own terms). Linking it would make AudioSync speak AirPlay 1 itself, with no AirPlay 2.
