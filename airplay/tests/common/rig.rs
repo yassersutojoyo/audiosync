@@ -68,6 +68,10 @@ pub struct Host {
     /// Blocks that arrive this many seconds late, with every later block
     /// held behind them as a stalled capture thread would.
     pub stalls: Vec<(u64, f64)>,
+    /// From each listed block on, the host delivers this many seconds later
+    /// and never catches up: a capture that paused and resumed in real time
+    /// (a loopback that delivers nothing while the source is silent).
+    pub pauses: Vec<(u64, f64)>,
     /// Write float samples instead of 16-bit ones.
     pub float: bool,
     rng: Rng,
@@ -86,6 +90,7 @@ impl Host {
             written: 0,
             stop_at: None,
             stalls: Vec::new(),
+            pauses: Vec::new(),
             float: false,
             rng: Rng::new(0x5EED),
             next_at: None,
@@ -105,7 +110,14 @@ impl Host {
         }
         if self.next_at.is_none() {
             let k = self.written;
-            let produced = self.start + (k + 1) as f64 * self.block as f64 / self.rate;
+            let paused: f64 = self
+                .pauses
+                .iter()
+                .filter(|&&(block, _)| block <= k)
+                .map(|&(_, seconds)| seconds)
+                .sum();
+            let produced = self.start + (k + 1) as f64 * self.block as f64 / self.rate + paused;
+
             let mut at = produced + self.rng.uniform(-self.jitter, self.jitter);
             for &(block, stall) in &self.stalls {
                 if block == k {
