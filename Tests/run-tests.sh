@@ -48,6 +48,31 @@ else
   echo "PASSED"
 fi
 
+echo "▶ streaming off stops the pipe writer before the engine"
+# stopEngine must call engine.stop(), which returns once the pipe writer has
+# closed the pipe, before it asks the AirPlay engine to stop. The other way
+# round, audio still coming in makes the engine start the pipe again by itself
+# (pipe_autostart), and that stray start plays the next session late (EC13).
+if awk '
+  /func stopEngine\(/ { inside = 1 }
+  inside {
+    line = $0
+    sub(/\/\/.*/, "", line)
+    if (!writer && line ~ /engine\.stop\(\)/) writer = NR
+    if (!player && line ~ /OwnToneClient\.stopPlayback\(\)/) player = NR
+    depth += gsub(/[{]/, "{", line) - gsub(/[}]/, "}", line)
+    if (depth > 0) opened = 1
+    if (opened && depth == 0) inside = 0
+  }
+  END { exit !(writer && player && writer < player) }
+' "$SRC/AppDelegate+Engine.swift"; then
+  echo "PASSED"
+else
+  echo "FAIL: stopEngine in AppDelegate+Engine.swift must call engine.stop() (the pipe writer)" \
+    "before OwnToneClient.stopPlayback() (the engine's stop request)"
+  status=1
+fi
+
 echo "▶ ring buffer"
 build ring Tests/ringtest.swift RingBuffer.swift
 "$OUT/ring/run" > "$OUT/ring.log" || status=1
