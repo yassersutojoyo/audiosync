@@ -24,7 +24,8 @@
 //! likely paused) keeps counting on the endpoints AudioSync doesn't play to
 //! for as long as it stays silent: it will play there again, and muting them
 //! shows at once. An endpoint AudioSync plays to ages as usual, since moving
-//! the app away from it shows only once the app plays again.
+//! the app away from it shows only once the app plays again, and so does an
+//! endpoint that went away.
 //!
 //! [`check`] is the decision, plain Rust over a snapshot the driver takes;
 //! the controller runs it every few seconds while streaming and reports a
@@ -189,8 +190,7 @@ fn played_on(
     rendered: &[String],
     last: &[PlayedOn],
 ) -> Vec<PlayedOn> {
-    let _ = rendered;
-    let mut active: Vec<PlayedOn> = endpoints
+    let active: BTreeSet<&str> = endpoints
         .iter()
         .filter(|endpoint| {
             endpoint
@@ -198,17 +198,39 @@ fn played_on(
                 .iter()
                 .any(|&pid| captured.captures(pid))
         })
-        .map(|endpoint| PlayedOn {
-            endpoint_id: endpoint.id.clone(),
+        .map(|endpoint| endpoint.id.as_str())
+        .collect();
+    // One app silent everywhere is most likely paused.
+    let paused_app = active.is_empty() && matches!(captured, Captured::Only(_));
+    let mut played: Vec<PlayedOn> = active
+        .iter()
+        .map(|id| PlayedOn {
+            endpoint_id: (*id).to_owned(),
             idle_checks: 0,
         })
         .collect();
-    if active.is_empty() {
-        active = last.to_vec();
+    for before in last {
+        if active.contains(before.endpoint_id.as_str()) {
+            continue;
+        }
+        let held = paused_app
+            && !rendered.contains(&before.endpoint_id)
+            && endpoints.iter().any(|e| e.id == before.endpoint_id);
+        let idle_checks = if held {
+            before.idle_checks
+        } else {
+            before.idle_checks.saturating_add(1)
+        };
+        if idle_checks <= HOLD_CHECKS {
+            played.push(PlayedOn {
+                endpoint_id: before.endpoint_id.clone(),
+                idle_checks,
+            });
+        }
     }
-    active.sort_by(|a, b| a.endpoint_id.cmp(&b.endpoint_id));
-    active.dedup_by(|a, b| a.endpoint_id == b.endpoint_id);
-    active
+    played.sort_by(|a, b| a.endpoint_id.cmp(&b.endpoint_id));
+    played.dedup_by(|a, b| a.endpoint_id == b.endpoint_id);
+    played
 }
 
 #[cfg(test)]

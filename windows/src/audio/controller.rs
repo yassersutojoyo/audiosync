@@ -704,7 +704,6 @@ impl<D: Driver> Controller<D> {
             LoopbackMode::ExcludeTree => Captured::AllExcept(tree),
         };
         let answer = routing::check(&captured, &endpoints, &rendered, &self.routing.played_on);
-        self.routing.played_on = answer.played_on;
         if answer.paths != self.routing.reported {
             self.log.log(|| {
                 describe_routing(
@@ -713,6 +712,7 @@ impl<D: Driver> Controller<D> {
                     &endpoints,
                     &captured,
                     &rendered,
+                    &answer.played_on,
                 )
             });
             self.routing.reported.clone_from(&answer.paths);
@@ -720,6 +720,7 @@ impl<D: Driver> Controller<D> {
                 paths: answer.paths,
             });
         }
+        self.routing.played_on = answer.played_on;
     }
 
     /// The sources to offer, from the processes and audio sessions now.
@@ -1042,7 +1043,14 @@ fn describe_routing(
     endpoints: &[EndpointAudio],
     captured: &Captured,
     rendered: &[String],
+    played_on: &[PlayedOn],
 ) -> String {
+    let silent = !endpoints.iter().any(|endpoint| {
+        endpoint
+            .active_pids
+            .iter()
+            .any(|&pid| captured.captures(pid))
+    });
     let mut text = if paths.is_empty() {
         "double audio: none, the source is heard only through AudioSync".to_owned()
     } else {
@@ -1068,8 +1076,13 @@ fn describe_routing(
                             .collect()
                     })
                     .unwrap_or_default();
+                let idle = played_on
+                    .iter()
+                    .find(|played| played.endpoint_id == path.endpoint_id)
+                    .map_or(0, |played| played.idle_checks);
                 match pids.as_slice() {
-                    [] => "the source played there last and is silent now".to_owned(),
+                    [] if silent => "the source played there last and is silent now".to_owned(),
+                    [] => format!("no active session of the source there for {idle} check(s)"),
                     [pid] => format!("an active session of process {pid}"),
                     _ => format!("active sessions of processes {}", pids.join(", ")),
                 }
