@@ -29,6 +29,8 @@ windows = { version = "0.62", features = [
     "Win32_Globalization",
     "Win32_Graphics_Gdi",
     "Win32_Media_Audio",
+    # IAudioEndpointVolume, for examples/mute_probe.rs.
+    "Win32_Media_Audio_Endpoints",
     "Win32_Media_KernelStreaming",
     "Win32_Media_Multimedia",
     "Win32_Security",

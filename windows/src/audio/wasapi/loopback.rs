@@ -9,6 +9,7 @@
 //! multithreaded apartment and registered with MMCSS; its loop passes each
 //! packet to a [`CaptureConverter`], which equalizes it and writes the ring.
 
+use std::mem::ManuallyDrop;
 use std::ptr;
 use std::slice;
 use std::sync::Arc;
@@ -43,7 +44,7 @@ use super::com::{
 use super::processes::ProcessWatch;
 use crate::audio::backend::BackendError;
 use crate::audio::capture::{
-    Activation, CAPTURE_ATTEMPTS, CaptureConverter, LoopbackMode, StreamFormat,
+    Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, LoopbackMode, StreamFormat,
 };
 use crate::audio::controller::{CaptureHandle, CaptureState};
 use crate::audio::outputs::HNS_PER_MS;
@@ -71,6 +72,8 @@ pub struct LoopbackCapture {
     thread: Option<JoinHandle<()>>,
     /// The captured app, to notice when it quits.
     source: Option<ProcessWatch>,
+    /// How Windows accepted to deliver the capture.
+    setup: CaptureAttempt,
 }
 
 impl CaptureHandle for LoopbackCapture {
@@ -84,6 +87,10 @@ impl CaptureHandle for LoopbackCapture {
             return CaptureState::Failed(device_code_error("process loopback capture", code));
         }
         CaptureState::Running
+    }
+
+    fn setup(&self) -> Option<CaptureAttempt> {
+        Some(self.setup)
     }
 }
 
@@ -110,7 +117,7 @@ pub(super) fn start(
     let stop = Arc::new(Event::manual_reset()?);
     let failure = Arc::new(AtomicI32::new(0));
     let ended = Arc::new(AtomicBool::new(false));
-    let thread = {
+    let (thread, setup) = {
         let stop = Arc::clone(&stop);
         let failure = Arc::clone(&failure);
         let ended = Arc::clone(&ended);
@@ -126,6 +133,7 @@ pub(super) fn start(
         ended,
         thread: Some(thread),
         source,
+        setup,
     })
 }
 
@@ -137,7 +145,7 @@ fn run(
     stop: &Event,
     failure: &AtomicI32,
     ended: &AtomicBool,
-    ready: Ready,
+    ready: Ready<CaptureAttempt>,
 ) {
     let _apartment = match Apartment::enter() {
         Ok(apartment) => apartment,
@@ -156,7 +164,10 @@ fn run(
     if let Err(error) = unsafe { stream.client.Start() } {
         return ready.fail(system_error("IAudioClient::Start", &error));
     }
-    ready.ok();
+    ready.ok(CaptureAttempt {
+        format: stream.format,
+        autoconvert: stream.autoconvert,
+    });
     let result = capture_loop(&stream, &mut converter, stop);
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };
@@ -174,6 +185,8 @@ struct CaptureStream {
     /// it is closed after them.
     event: Event,
     format: StreamFormat,
+    /// Whether Windows converts to `format`.
+    autoconvert: bool,
 }
 
 /// Activates and initializes a capture, trying each format of
@@ -199,7 +212,7 @@ fn open_stream(activation: Activation) -> Result<CaptureStream, BackendError> {
             )
         };
         match initialized {
-            Ok(()) => return finish_stream(client, attempt.format),
+            Ok(()) => return finish_stream(client, attempt),
             Err(error) => {
                 first_error.get_or_insert(system_error("IAudioClient::Initialize", &error));
             }
@@ -211,7 +224,7 @@ fn open_stream(activation: Activation) -> Result<CaptureStream, BackendError> {
 /// Connects an initialized client to its event and capture service.
 fn finish_stream(
     client: IAudioClient,
-    format: StreamFormat,
+    attempt: CaptureAttempt,
 ) -> Result<CaptureStream, BackendError> {
     let event = Event::auto_reset()?;
     // SAFETY: calls on an initialized client; the event outlives the stream.
@@ -224,7 +237,8 @@ fn finish_stream(
         client,
         capture,
         event,
-        format,
+        format: attempt.format,
+        autoconvert: attempt.autoconvert,
     })
 }
 
@@ -233,7 +247,10 @@ fn finish_stream(
 #[repr(C)]
 struct ActivationArgs {
     params: AUDIOCLIENT_ACTIVATION_PARAMS,
-    variant: PROPVARIANT,
+    /// Never dropped: the `windows` crate's PROPVARIANT clears itself on
+    /// drop, and clearing a VT_BLOB frees the blob (the parameters above)
+    /// with `CoTaskMemFree`.
+    variant: ManuallyDrop<PROPVARIANT>,
 }
 
 /// An `IAudioClient` for a process loopback capture of `activation`.
@@ -257,13 +274,14 @@ fn activate(activation: Activation) -> Result<IAudioClient, BackendError> {
                 },
             },
         },
-        variant: PROPVARIANT::default(),
+        variant: ManuallyDrop::new(PROPVARIANT::default()),
     }));
     // SAFETY: `args` is a live allocation this function owns. The variant
     // gets the BLOB arm of its union, pointing at the parameters next to it;
-    // it owns nothing, so it is never cleared.
+    // it owns nothing, so it is never dropped.
     unsafe {
-        let value = &mut *(*args).variant.Anonymous.Anonymous;
+        let variant: &mut PROPVARIANT = &mut (*args).variant;
+        let value = &mut *variant.Anonymous.Anonymous;
         value.vt = VT_BLOB;
         value.Anonymous.blob = BLOB {
             cbSize: size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
@@ -277,7 +295,8 @@ fn activate(activation: Activation) -> Result<IAudioClient, BackendError> {
         ActivateAudioInterfaceAsync(
             VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             &IAudioClient::IID,
-            Some(&raw const (*args).variant),
+            // `ManuallyDrop` is `repr(transparent)`.
+            Some((&raw const (*args).variant).cast::<PROPVARIANT>()),
             &handler,
         )
     };
@@ -393,5 +412,19 @@ fn capture_loop(
             // SAFETY: releases the packet read above.
             unsafe { stream.capture.ReleaseBuffer(frames) }.map_err(|e| e.code())?;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn activation_args_never_clear_their_variant() {
+        // The `windows` crate's PROPVARIANT clears itself on drop, and
+        // clearing a VT_BLOB frees the blob with CoTaskMemFree. The blob is
+        // the parameters inside the same allocation, so a drop would free
+        // Rust's allocation behind its back: a heap corruption.
+        assert!(!std::mem::needs_drop::<ActivationArgs>());
     }
 }

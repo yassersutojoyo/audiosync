@@ -23,19 +23,29 @@ struct ReceiverInfo: Equatable {
     /// polling, or no reading since polling started).
     /// A paused track only counts when its player is the chosen source: with
     /// the whole system as the source, what plays may be another app.
-    /// `sourceName`: the source app's name, nil for the whole system or an
-    /// input; a name that is just the app's bundle ID (no name was found)
-    /// isn't shown. `untitled`: the title when no track counts.
+    /// A track's fields go out as its player gave them, blank ones included.
+    /// `sourceName`: the source's name as the source picker shows it (the
+    /// whole system's label, the app's or the input device's name), nil when
+    /// there is none; a blank name, or one that is just the app's bundle ID
+    /// (no name was found), isn't shown.
+    /// `untitled`: what receivers show when no track counts, AudioSync's own
+    /// labels for the title, artist and album, none of them blank: a TV may
+    /// show no text at all when the artist is blank. The source's name, when
+    /// there is one to show, takes the artist's place.
     static func decide(track: NowPlayingMonitor.Track?, source: AudioSource,
-                       sourceName: String?, untitled: String) -> ReceiverInfo {
+                       sourceName: String?, untitled: PipeMetadata.Fields) -> ReceiverInfo {
         if let track, track.isPlaying || source.bundleID == track.bundleID {
             let artwork: Artwork = track.artwork != nil ? .track
                 : track.bundleID == NowPlayingMonitor.spotify ? .wait : .neutral
             return ReceiverInfo(fields: .init(title: track.title, artist: track.artist, album: track.album),
                                 artwork: artwork)
         }
-        let name = sourceName == source.bundleID ? nil : sourceName
-        return ReceiverInfo(fields: .init(title: untitled, artist: name ?? "", album: ""), artwork: .neutral)
+        var fields = untitled
+        if let name = sourceName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !name.isEmpty, name != source.bundleID {
+            fields.artist = name
+        }
+        return ReceiverInfo(fields: fields, artwork: .neutral)
     }
 
     /// How long receivers keep the last cover while a player's own artwork is

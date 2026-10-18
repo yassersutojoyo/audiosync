@@ -2,10 +2,10 @@
 // 16 kHz, ±12 dB in 0.5 dB steps), and Reset. Opened with Ctrl+E or from
 // the Equalizer card.
 
-import { Button, ComboBox, Slider, Switch } from "std-widgets.slint";
+import { Button, ComboBox, Slider } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { SecondaryText } from "widgets.slint";
+import { QuietText, SecondaryText, ToggleSwitch } from "widgets.slint";
 
 // One vertical gain slider with its value above and its label below.
 component Band inherits VerticalLayout {
@@ -22,11 +22,10 @@ component Band inherits VerticalLayout {
         slider.value = root.gain;
     }
 
-    SecondaryText {
+    QuietText {
         text: Strings.equalizer-gain(slider.value);
         horizontal-alignment: center;
         wrap: no-wrap;
-        accessible-role: none;
     }
 
     HorizontalLayout {
@@ -47,11 +46,10 @@ component Band inherits VerticalLayout {
         }
     }
 
-    SecondaryText {
+    QuietText {
         text: root.short-label;
         horizontal-alignment: center;
         wrap: no-wrap;
-        accessible-role: none;
     }
 }
 
@@ -109,7 +107,7 @@ export component EqualizerWindow inherits Window {
             HorizontalLayout {
                 spacing: 12px;
 
-                power := Switch {
+                power := ToggleSwitch {
                     text: Strings.equalizer-title;
                     checked: root.enabled;
                     accessible-label: Strings.equalizer-title;
