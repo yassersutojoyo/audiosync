@@ -41,9 +41,15 @@ struct Models {
     all_speakers: Rc<VecModel<SpeakerItem>>,
     groups: Rc<VecModel<GroupItem>>,
     notices: Rc<VecModel<NoticeItem>>,
+    flyout_notices: Rc<VecModel<NoticeItem>>,
     gains: Rc<VecModel<f32>>,
     presets: Rc<VecModel<SharedString>>,
 }
+
+/// How many notices the main window lists, newest first.
+const MAIN_NOTICE_LIMIT: usize = 4;
+/// The flyout lists only the newest notice and a button for the rest.
+const FLYOUT_NOTICE_LIMIT: usize = 1;
 
 /// Runs after every refresh with the new state.
 type RefreshHook = Box<dyn Fn(&AppState)>;
@@ -81,6 +87,7 @@ impl App {
             all_speakers: Rc::new(VecModel::default()),
             groups: Rc::new(VecModel::default()),
             notices: Rc::new(VecModel::default()),
+            flyout_notices: Rc::new(VecModel::default()),
             gains: Rc::new(VecModel::default()),
             presets: Rc::new(VecModel::default()),
         };
@@ -150,7 +157,8 @@ impl App {
         self.flyout
             .set_speakers(ModelRc::from(m.all_speakers.clone()));
         self.flyout.set_groups(ModelRc::from(m.groups.clone()));
-        self.flyout.set_notices(ModelRc::from(m.notices.clone()));
+        self.flyout
+            .set_notices(ModelRc::from(m.flyout_notices.clone()));
         self.equalizer.set_gains(ModelRc::from(m.gains.clone()));
         self.equalizer
             .set_preset_names(ModelRc::from(m.presets.clone()));
@@ -205,7 +213,12 @@ impl App {
         sync_model(&m.connected, connected);
         sync_model(&m.all_speakers, all);
         sync_model(&m.groups, groups);
-        sync_model(&m.notices, notices);
+        sync_model(&m.notices, newest_notices(&notices, MAIN_NOTICE_LIMIT));
+        sync_model(
+            &m.flyout_notices,
+            newest_notices(&notices, FLYOUT_NOTICE_LIMIT),
+        );
+        self.flyout.set_notice_count(count(notices.len()));
 
         for window in [&self.main as &dyn WindowState, &self.flyout] {
             window.show_state(&state, &status, source_index);
@@ -344,6 +357,10 @@ impl App {
         let w = weak.clone();
         flyout.on_notice_dismissed(move |id| {
             with_app(&w, |app| app.update(|b| b.dismiss_notice(id as u64)))
+        });
+        let w = weak.clone();
+        flyout.on_notices_dismissed_all(move || {
+            with_app(&w, |app| app.update(|b| b.dismiss_all_notices()))
         });
         let w = weak.clone();
         flyout.on_open_app(move || {
@@ -497,6 +514,7 @@ impl App {
             self.show_window_error(&error);
             return;
         }
+        self.equalizer.invoke_take_focus();
         crate::platform::bring_to_front(self.equalizer.window());
     }
 
@@ -612,6 +630,12 @@ impl WindowState for TrayFlyout {
         self.set_source_index(source_index);
         self.set_master_volume(state.master_volume as f32);
     }
+}
+
+/// The newest `limit` notices: what a window lists. A window that shows
+/// fewer than all of them says how many more there are instead.
+fn newest_notices(notices: &[NoticeItem], limit: usize) -> Vec<NoticeItem> {
+    notices.iter().take(limit).cloned().collect()
 }
 
 /// Replaces the rows that changed; the whole list only when its length did.
@@ -752,6 +776,20 @@ mod tests {
         let row = group_item(&state, &state.groups[0]);
         assert_eq!((row.available, row.total), (2, 2));
         assert_eq!(row.state, RowState::Off);
+    }
+
+    #[test]
+    fn the_flyout_lists_only_the_newest_notice() {
+        let mut backend = MockBackend::new();
+        backend.post("source", "older", "09.40");
+        backend.post("start", "newer", "09.41");
+        let notices: Vec<NoticeItem> = backend.snapshot().notices.iter().map(notice_item).collect();
+        let flyout = newest_notices(&notices, FLYOUT_NOTICE_LIMIT);
+        let messages: Vec<_> = flyout.iter().map(|n| n.message.as_str()).collect();
+        // One row: the stack draws no Dismiss All row under it, and the
+        // flyout's button opens the main window for the other notice.
+        assert_eq!(messages, ["newer"]);
+        assert_eq!(newest_notices(&notices, MAIN_NOTICE_LIMIT).len(), 2);
     }
 
     #[test]

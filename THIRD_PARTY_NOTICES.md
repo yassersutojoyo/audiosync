@@ -148,16 +148,16 @@ the macOS app, and no Windows build has been released.
 | [tray-icon](https://github.com/tauri-apps/tray-icon) 0.26 and [muda](https://github.com/tauri-apps/muda) 0.21, © the Tauri Programme within The Commons Conservancy (the notification-area icon and its menu) | MIT OR Apache-2.0 |
 | [Poppins](https://github.com/itfoundry/Poppins) Medium, © 2020 The Poppins Project Authors (the wordmark typeface, compiled into the executable from `brand/fonts/`) | SIL Open Font License 1.1 |
 
+The Slint Royalty-free License asks for an attribution. The one AudioSync uses
+is the `AboutSlint` widget in the app's About dialog, which the top-level menu opens
+(Help > About AudioSync). The widget shows the Made with Slint logo
+(CC-BY-ND-4.0, © SixtyFPS GmbH) unchanged, and the compiled interface also
+carries an icon from Microsoft's Fluent UI System Icons (MIT, © Microsoft Corporation), via Slint's Fluent style.
+
 The icons inside the Windows app's controls come from Segoe Fluent Icons, the
 icon font Windows 11 ships; the app uses the installed font and doesn't bundle
 it. The app and tray icons in `windows/res/` are generated from AudioSync's own
 brand mark (`scripts/brand/windows-icons.sh`).
-
-That license asks for an attribution. The one AudioSync uses is the
-`AboutSlint` widget in the app's About dialog, which the top-level menu opens
-(Help > About AudioSync). The widget shows the Made with Slint logo
-(CC-BY-ND-4.0, © SixtyFPS GmbH) unchanged, and the compiled interface also
-carries an icon from Microsoft's Fluent UI System Icons (MIT, © Microsoft Corporation), via Slint's Fluent style.
 
 The Windows app's other Rust dependencies are under permissive licenses. CI
 checks them with `cargo deny check licenses` against the list in

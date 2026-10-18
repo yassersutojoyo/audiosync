@@ -211,7 +211,9 @@ export component MainWindow inherits Window {
     background: Tokens.background;
     default-font-size: Tokens.font-size-body;
 
-    // Rust sets these; a user's click or drag replaces the controls' bindings.
+    // Rust sets these; a user's click or drag replaces the controls' bindings,
+    // so each control's handler also sets it back to the state after its
+    // callback (a change the engine refused doesn't fire these).
     changed running => {
         power.checked = root.running;
     }
@@ -337,6 +339,8 @@ export component MainWindow inherits Window {
                     accessible-label: Strings.streaming-switch;
                     toggled => {
                         root.power-toggled(self.checked);
+                        // Show what the engine did, even if it refused.
+                        self.checked = root.running;
                     }
                 }
             }
@@ -375,6 +379,7 @@ export component MainWindow inherits Window {
                             accessible-label: Strings.source-label;
                             selected => {
                                 root.source-selected(self.current-index);
+                                self.current-index = root.source-index;
                             }
                         }
                     }
