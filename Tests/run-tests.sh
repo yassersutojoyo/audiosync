@@ -55,7 +55,7 @@ if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
   echo "▶ core parity (the Swift suites' checks on both engines' parts)"
   build parity Tests/paritytest.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
   "$OUT/parity/run" > "$OUT/parity.log" || status=1
-  grep -E "FAIL|PASSED|^core " "$OUT/parity.log" || true
+  grep -E "FAIL|KNOWN|PASSED|^core " "$OUT/parity.log" || true
 else
   tail -n 20 "$OUT/core.log"
   echo "❌ the Rust core did not build, so the suites that link it can't run"
