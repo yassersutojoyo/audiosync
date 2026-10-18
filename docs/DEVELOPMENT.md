@@ -105,7 +105,7 @@ The logo, app icon and wordmark are generated from the sources in `brand/` by `s
 
 The design tokens (colors for light and dark, the typeface, spacing, corner radii and opacities) live in `brand/tokens.json`. `python3 -I scripts/brand/tokens.py` writes them into `Sources/AudioSync/BrandTokens.swift` for the Mac app, `windows/ui/tokens.slint` and `windows/src/tokens.rs` for the Windows app and its contrast test, and the CSS variables between the `tokens:begin` and `tokens:end` comments in `site/index.html`; `--check` only reports what's out of date. Change a token in the JSON and rerun the script, never the outputs.
 
-CI regenerates the brand SVGs, `BrandMark.swift` and every token output and fails on any difference, but it doesn't check the PNG and ICNS files, so regenerate those yourself.
+CI regenerates the brand SVGs, `BrandMark.swift` and every token output and fails on any difference, but it doesn't check the PNG, ICNS and ICO files (including `windows/res/`), so regenerate those yourself.
 
 The screenshots in `docs/images` come from `scripts/screenshots/render.sh`. It draws the app's own SwiftUI views offscreen from mock data, in light and dark, so it needs no installed app, engine, permissions or audio devices. Control styling follows the macOS you run it on, so re-render after a UI change.
 
