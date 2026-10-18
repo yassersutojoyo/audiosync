@@ -107,7 +107,7 @@ fn pending() -> (BTreeMap<u32, String>, Vec<String>) {
 fn clause_list(file: &str) -> (BTreeMap<u32, String>, Vec<String>) {
     let text = fs::read_to_string(core_dir().join("tests").join(file))
         .unwrap_or_else(|error| panic!("tests/{file}: {error}"));
-    let mut exempt = BTreeMap::new();
+    let mut listed = BTreeMap::new();
     let mut malformed = Vec::new();
     for (index, line) in text.lines().enumerate() {
         let line = line.trim();
@@ -117,7 +117,7 @@ fn clause_list(file: &str) -> (BTreeMap<u32, String>, Vec<String>) {
         let (id, reason) = line.split_once(' ').unwrap_or((line, ""));
         match clause_number(id) {
             Some(number) if !reason.trim().is_empty() => {
-                if exempt.insert(number, reason.trim().to_owned()).is_some() {
+                if listed.insert(number, reason.trim().to_owned()).is_some() {
                     malformed.push(format!("line {}: {id} is listed twice", index + 1));
                 }
             }
@@ -127,7 +127,7 @@ fn clause_list(file: &str) -> (BTreeMap<u32, String>, Vec<String>) {
             )),
         }
     }
-    (exempt, malformed)
+    (listed, malformed)
 }
 
 fn spec_numbers() -> BTreeSet<u32> {
