@@ -90,6 +90,9 @@ pub struct SessionConfig {
     /// RAOP `sv=true`: the sender scales the samples and sends no volume
     /// requests (P121).
     pub software_volume: bool,
+    /// RAOP `sm=true`: the sender applies mute to the samples, so mute is
+    /// never sent as −144; levels still go as volume requests (P121).
+    pub software_mute: bool,
     /// The metadata types the receiver lists (P123).
     pub metadata: MetadataSupport,
 }
@@ -107,6 +110,7 @@ impl SessionConfig {
             verifier: None,
             initial_volume,
             software_volume: false,
+            software_mute: false,
             metadata: MetadataSupport::default(),
         }
     }
@@ -127,6 +131,7 @@ impl fmt::Debug for SessionConfig {
             .field("verifier", &self.verifier.is_some())
             .field("initial_volume", &self.initial_volume)
             .field("software_volume", &self.software_volume)
+            .field("software_mute", &self.software_mute)
             .field("metadata", &self.metadata)
             .finish()
     }
@@ -631,20 +636,27 @@ impl Session {
 
     /// Sets the speaker volume (P118, P120). Before RECORD it replaces the
     /// initial volume; while playing, a newer value replaces one still
-    /// queued. NaN is ignored. With software volume no request is sent
-    /// (P121).
+    /// queued. NaN is ignored. With software volume no request is sent,
+    /// and with software mute no mute request (P121): the stream applies
+    /// them to the samples.
     pub fn set_volume(&mut self, volume: Volume, now: Instant) {
         if matches!(volume, Volume::Db(db) if db.is_nan()) {
             return;
         }
         match self.state {
             State::Closed | State::TearingDown => {}
-            State::Playing if !self.config.software_volume => {
+            State::Playing if self.sends_volume(volume) => {
                 self.pending_volume = Some(volume);
                 self.drive(now);
             }
+            State::Playing => {}
             _ => self.config.initial_volume = volume,
         }
+    }
+
+    /// Whether a volume goes to the receiver as a request (P121).
+    fn sends_volume(&self, volume: Volume) -> bool {
+        !self.config.software_volume && !(self.config.software_mute && volume == Volume::Muted)
     }
 
     /// Asks the receiver for its volume with GET_PARAMETER (P122). Only while
@@ -1243,7 +1255,7 @@ impl Session {
             destinations,
         });
 
-        if !self.config.software_volume {
+        if self.sends_volume(self.config.initial_volume) {
             self.pending_volume = Some(self.config.initial_volume);
         }
     }

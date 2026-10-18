@@ -21,14 +21,22 @@
 //! real sockets come later; the seams they plug into are named where they
 //! sit (for example [`session::Verifier`] and [`discovery::Browser`]).
 
+pub mod alac;
+pub mod audio;
+pub mod clock;
 pub mod digest;
 pub mod discovery;
 pub mod error;
 pub mod ids;
+pub mod input;
 pub mod metadata;
+pub mod rate;
+pub mod rtp;
 pub mod rtsp;
 pub mod sdp;
 pub mod session;
+pub mod store;
+pub mod stream;
 pub mod volume;
 
 /// The crate version, which the sender names itself with (P5).

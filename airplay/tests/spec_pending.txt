@@ -5,59 +5,13 @@
 
 # Stream and transport: several sessions, threads, sockets.
 P7 Partly done: record parsing and merging (discovery.rs); live mDNS browsing behind the Browser trait comes with the transport stage.
-P31 Partly done: the SETUP Transport header (session.rs); sockets open and answering before SETUP need P82.
+P31 Partly done: the SETUP Transport header with the ports the driver hands in after the connect (session.rs); sockets open and answering before SETUP need P82.
+P82 Opening the control and timing sockets in the connection's family: transport stage (sessions take their ports with handle_connected).
 P141 Partly done: one session's loss handling (session.rs); other speakers keep playing is stream-stage work.
-P3 Several sessions with their own sockets, RTP numbering and SSRC need the stream and transport stage; each Session is already independent.
-P4 The shared timeline of all speakers belongs to the stream stage.
-P6 The real-time input call and its ring belong to the audio stage.
+P3 Partly done: every speaker has its own RTP numbering, SSRC and resend history on the shared timeline (stream.rs); its own UDP sockets need P82, and failure isolation between sessions the stream stage.
+P6 Partly done: the input call is a preallocated single-producer, single-consumer ring that never allocates, locks or blocks (input.rs, tests/realtime.rs); the crate's own network threads come with the transport stage.
 P129 Partly done: one session's TEARDOWN with its 2 s limit (session.rs); stopping every speaker in parallel within 2 s needs the stream stage.
-P142 Reconnect backoff and rejoining the running timeline need the stream stage; ErrorKind::needs_user already marks the stop list.
-P143 Capture restarts flush every session and reset the rate model: stream and timing stage.
-P144 Lock-free per-session packet counters come with RTP and the stream stage.
-
-# Audio and RTP.
-P34 Partly done: FLUSH with RTP-Info and the ignored answer (session.rs); continuing the numbering and flagging the next packet and sync come with RTP.
-P72 Audio format of the packets: audio stage.
-P73 Float and 16-bit input conversion: audio stage.
-P75 352 frames per packet: RTP stage.
-P76 PCM payload layout: audio stage.
-P77 ALAC payloads need an ALAC encoder: audio stage.
-P78 RTP header and marker bit: RTP stage.
-P79 Sequence number and timestamp arithmetic: RTP stage.
-P80 Shared payloads cut at 352-frame boundaries: audio stage.
-P81 Per-speaker RTP timestamp offsets: RTP stage.
-P82 Opening the control and timing sockets: transport stage (sessions already take their ports as config).
-P83 Which port each packet goes to and from: RTP and transport stage.
-P84 Packet pacing and the send margin: timing stage.
-P85 Silence when the host has no audio: audio stage.
-P86 Retransmission requests: RTP stage.
-P87 Retransmission replies: RTP stage.
-P88 Resend history and its limits: RTP stage.
-P121 Partly done: no volume requests with software volume (session.rs); scaling the samples and the separate encoding come with the audio stage.
-
-# Timing and latency.
-P89 The sender clock: timing stage.
-P90 Timing requests from the receiver: timing stage.
-P91 Timing replies: timing stage.
-P92 Ignoring other packets on the timing socket: timing stage.
-P93 Sync packet layout: timing stage.
-P94 Sync packet schedule: timing stage.
-P95 How receivers read sync packets: timing stage.
-P96 Frame numbering and the arrival model c(n): timing stage.
-P97 Sync packet fields from the model: timing stage.
-P98 Base latency default and range: timing stage.
-P99 Per-speaker delay in pacing and sync times: timing stage.
-P100 Delay changes through a FLUSH of one speaker: timing stage.
-P101 Rate model: timing stage.
-P102 The multi-room guarantee: timing stage.
-P103 Joining a playing stream: timing stage.
-P109 Receiver buffering behavior, a background fact for the timing stage.
-P110 Partly done: the RECORD answer's Audio-Latency is reported (session.rs); keeping it out of Lf belongs to the timing stage.
-P111 Input ring and payload store sizes: audio stage.
-P112 Underrun and overrun handling: audio stage.
-P113 Latency reporting to the host: timing stage.
-P114 The host contract for local outputs: timing stage.
-P115 First-sound time per speaker: timing stage.
+P142 Reconnect backoff needs the stream stage; ErrorKind::needs_user marks the stop list, and Stream::add_speaker already joins a playing timeline (P103).
 
 # Pairing and crypto.
 P47 Legacy pairing connection and requests: pairing stage.
