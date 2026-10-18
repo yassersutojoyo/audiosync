@@ -39,10 +39,9 @@ fn assert_continuous(audio: &[Audio], from: usize) {
     }
 }
 
-fn arrival_of_block(rig: &Rig, k: u64, pause: f64) -> f64 {
+fn arrival_of_block(k: u64, pause: f64) -> f64 {
     // The scripted host's block k is produced at (k + 1) × 10 ms plus the
     // pause, with at most 2 ms of jitter.
-    let _ = rig;
     (k + 1) as f64 * 0.010 + pause
 }
 
@@ -64,7 +63,7 @@ fn a_paused_capture_that_resumes_in_real_time_is_heard_again_at_once() {
     rig.run_for(Duration::from_secs(95));
 
     let audio = rig.audio(id);
-    let resumed = arrival_of_block(&rig, 3_000, 5.0);
+    let resumed = arrival_of_block(3_000, 5.0);
     let back = first_with_audio(&audio, 30.5);
     let packet = &audio[back];
     assert!(
@@ -104,7 +103,7 @@ fn a_short_pause_comes_back_within_a_block() {
     let id = rig.add(speaker(1, Codec::Alac));
     rig.run_for(Duration::from_secs(50));
     let audio = rig.audio(id);
-    let resumed = arrival_of_block(&rig, 1_000, 0.3);
+    let resumed = arrival_of_block(1_000, 0.3);
     let back = first_with_audio(&audio, 10.1);
     let packet = &audio[back];
     assert!(
@@ -118,6 +117,52 @@ fn a_short_pause_comes_back_within_a_block() {
         "R̂ off by {} ppm",
         rate_error_ppm(&rig)
     );
+}
+
+// covers: P84
+#[test]
+fn repeated_capture_hiccups_raise_the_margin_after_the_first() {
+    // A capture thread that hiccups now and then and delivers its backlog
+    // at once: the first hiccup leaves a dropout, and M, which takes the
+    // late block's residual, covers the ones after it (P84). A residual
+    // longer than M can be (a pause) doesn't count.
+    for (hiccup, every, seconds) in [(0.035, 300u64, 120u64), (0.030, 1_000, 120)] {
+        let mut rig = Rig::with_host();
+        let mut host = Host::new(0.0).seed(8);
+        host.jitter = 0.002;
+        host.stalls = (1..)
+            .map(|i| (i * every, hiccup))
+            .take_while(|&(block, _)| block < seconds * 100)
+            .collect();
+        rig.host = Some(host);
+        let id = rig.add(speaker(1, Codec::Alac));
+        rig.run_for(Duration::from_secs(seconds));
+        let counters = rig.stream.counters();
+        let silent = counters.silent_frames();
+        let one_hiccup = (hiccup * 44_100.0) as u64;
+        assert!(
+            silent <= 2 * one_hiccup,
+            "{hiccup} s every {every} blocks: {silent} silent frames"
+        );
+        assert_eq!(counters.input_frames_dropped(), silent);
+        let highest = rig.margins.iter().map(|&(_, m)| m).fold(0.0, f64::max);
+        assert!(
+            highest >= 0.010 + hiccup - 0.003,
+            "M only reached {highest}"
+        );
+        assert!(highest <= 0.100);
+        // Stalls leave R̂ alone.
+        assert!(rate_error_ppm(&rig).abs() < 50.0);
+        let audio = rig.audio(id);
+        for packet in &audio {
+            let n = rig.frame_of(id, packet.header.timestamp) as u64;
+            for (offset, frame) in decode(Codec::Alac, &packet.payload).iter().enumerate() {
+                if *frame != [0, 0] {
+                    assert_eq!(*frame, host_frame(n + offset as u64), "no shift");
+                }
+            }
+        }
+    }
 }
 
 // covers: P143
