@@ -44,6 +44,17 @@ else
   echo "PASSED"
 fi
 
+echo "▶ no AirPlay master volume"
+# The AirPlay engine's master volume is its loudest selected speaker's
+# volume, and a master write sets a lone speaker to it: AudioSync sends
+# per-speaker volumes only (AirPlayVolume in AirPlayReconcile.swift).
+if grep -n 'api/player/volume' "$SRC"/*.swift; then
+  echo "FAIL: AudioSync writes the AirPlay engine's master volume"
+  status=1
+else
+  echo "PASSED"
+fi
+
 echo "▶ ring buffer"
 build ring Tests/ringtest.swift RingBuffer.swift
 "$OUT/ring/run" > "$OUT/ring.log" || status=1
