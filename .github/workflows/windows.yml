@@ -22,7 +22,7 @@ jobs:
         shell: bash
         working-directory: windows
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Rust toolchain (stable, with rustfmt and clippy)
         run: |
@@ -56,7 +56,7 @@ jobs:
         shell: bash
         working-directory: windows
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Rust toolchain (stable, with the ${{ matrix.target }} target)
         run: |
@@ -87,7 +87,7 @@ jobs:
         run: python -I ../scripts/windows_notices.py ${{ matrix.target }}
 
       - name: Upload audiosync.exe and its notices (workflow artifact, not a release)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: audiosync-windows-${{ matrix.arch }}
           path: |
@@ -99,12 +99,12 @@ jobs:
 
   licenses:
     name: Licenses
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: windows
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install the pinned cargo-deny
         run: cargo install --locked cargo-deny --version 0.20.2
