@@ -141,7 +141,7 @@ Clauses only the host can implement are listed with a reason in `tests/spec_exem
 
 ### Spec coverage checker
 
-`tests/spec_coverage.rs` reads `../docs/ENGINE_SPEC.md`, collects every clause ID and scans `src/` and `tests/` for lines of the exact form `// covers: S44, S49`. It checks that every clause carries an Observed or Required tag and that the IDs are S1 to Sn, each once, in any document order (S1); that every `// covers:` line is well formed and names existing clauses; that the exempt list is well formed; and that every clause is covered or exempt, with no exempt clause covered after all.
+`tests/spec_coverage.rs` reads `../docs/ENGINE_SPEC.md`, collects every clause ID and scans `src/` and `tests/` for lines of the exact form `// covers: S44, S49`. It checks that every clause carries an Observed or Required tag and that the IDs are S1 to Sn, each once, in any document order (S1); that every `// covers:` line is well formed and names existing clauses; that the exempt list is well formed; and that every clause is covered or exempt, with no exempt clause covered after all. A clause the core is meant to implement but doesn't yet goes in `tests/spec_pending.txt` with what is missing; the check fails once such a clause gains a `// covers:` test, so the line goes when the core implements it, and a clause can't be both exempt and pending.
 
 ## The audio engine through the C interface
 

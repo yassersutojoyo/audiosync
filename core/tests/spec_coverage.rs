@@ -1,7 +1,9 @@
 //! Spec coverage: every clause of `docs/ENGINE_SPEC.md` (S1 to Sn, in any
 //! document order) is named by at least one `// covers: S44, S49` line in
 //! `core/src` or `core/tests`, or is listed in `core/tests/spec_exempt.txt` with
-//! a one-line reason because only the host application can implement it.
+//! a one-line reason because only the host application can implement it, or in
+//! `core/tests/spec_pending.txt` with what is missing because the core is meant
+//! to implement it but doesn't yet.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -92,8 +94,19 @@ fn covers() -> (BTreeMap<u32, Vec<String>>, Vec<String>) {
 
 /// The exempt list: clause number to reason; and every malformed line.
 fn exemptions() -> (BTreeMap<u32, String>, Vec<String>) {
-    let text = fs::read_to_string(core_dir().join("tests").join("spec_exempt.txt"))
-        .expect("tests/spec_exempt.txt is readable");
+    clause_list("spec_exempt.txt")
+}
+
+/// The pending list: clause number to what is missing; and every malformed line.
+fn pending() -> (BTreeMap<u32, String>, Vec<String>) {
+    clause_list("spec_pending.txt")
+}
+
+/// A clause list in `tests/` (`S<n> <reason>` per line, `#` comments): clause
+/// number to reason; and every malformed line.
+fn clause_list(file: &str) -> (BTreeMap<u32, String>, Vec<String>) {
+    let text = fs::read_to_string(core_dir().join("tests").join(file))
+        .unwrap_or_else(|error| panic!("tests/{file}: {error}"));
     let mut exempt = BTreeMap::new();
     let mut malformed = Vec::new();
     for (index, line) in text.lines().enumerate() {
@@ -237,35 +250,81 @@ fn the_exempt_list_is_well_formed_and_names_spec_clauses() {
 }
 
 #[test]
-fn every_clause_is_covered_or_exempt() {
+fn the_pending_list_is_well_formed_and_names_spec_clauses() {
+    let (pending, malformed) = pending();
+    assert!(
+        malformed.is_empty(),
+        "tests/spec_pending.txt:\n{}",
+        malformed.join("\n")
+    );
+    let known = spec_numbers();
+    let unknown: Vec<u32> = pending
+        .keys()
+        .copied()
+        .filter(|number| !known.contains(number))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "pending clauses the spec doesn't have: {}",
+        list(unknown)
+    );
+    let (exempt, _) = exemptions();
+    let both: Vec<u32> = pending
+        .keys()
+        .copied()
+        .filter(|number| exempt.contains_key(number))
+        .collect();
+    assert!(
+        both.is_empty(),
+        "clauses both exempt and pending (a clause is either host-only or still to be built): {}",
+        list(both)
+    );
+}
+
+#[test]
+fn every_clause_is_covered_exempt_or_pending() {
     let known = spec_numbers();
     let (covered, _) = covers();
     let (exempt, _) = exemptions();
+    let (pending, _) = pending();
     let uncovered: Vec<u32> = known
         .iter()
         .copied()
-        .filter(|number| !covered.contains_key(number) && !exempt.contains_key(number))
+        .filter(|number| {
+            !covered.contains_key(number)
+                && !exempt.contains_key(number)
+                && !pending.contains_key(number)
+        })
         .collect();
-    let stale: Vec<u32> = exempt
+    let stale_exempt: Vec<u32> = exempt
+        .keys()
+        .copied()
+        .filter(|number| covered.contains_key(number))
+        .collect();
+    let stale_pending: Vec<u32> = pending
         .keys()
         .copied()
         .filter(|number| covered.contains_key(number))
         .collect();
     println!(
-        "{} clauses: {} covered, {} exempt, {} uncovered",
+        "{} clauses: {} covered, {} exempt, {} pending, {} uncovered",
         known.len(),
         known
             .iter()
             .filter(|number| covered.contains_key(number))
             .count(),
         exempt.len(),
+        pending.len(),
         uncovered.len()
     );
     assert!(
-        uncovered.is_empty() && stale.is_empty(),
-        "uncovered clauses (add a `// covers:` test or, if only the host can implement it, a line in tests/spec_exempt.txt): {}\n\
-         exempt clauses that are covered after all (remove them from tests/spec_exempt.txt): {}",
+        uncovered.is_empty() && stale_exempt.is_empty() && stale_pending.is_empty(),
+        "uncovered clauses (add a `// covers:` test; if only the host can implement it, a line in tests/spec_exempt.txt; \
+         if the core doesn't implement it yet, a line in tests/spec_pending.txt): {}\n\
+         exempt clauses that are covered after all (remove them from tests/spec_exempt.txt): {}\n\
+         pending clauses that are covered now (remove them from tests/spec_pending.txt): {}",
         list(uncovered),
-        list(stale)
+        list(stale_exempt),
+        list(stale_pending)
     );
 }
