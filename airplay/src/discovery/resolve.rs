@@ -182,11 +182,13 @@ impl Resolver {
     fn evaluate(&mut self, ids: &[ServiceId]) -> Vec<BrowseEvent> {
         let mut events = Vec::new();
         for id in ids {
-            let Some(service) = self.services.get(id) else {
+            let current = match self.services.get(id) {
+                Some(service) => self.assemble(id, service),
+                None => continue,
+            };
+            let Some(service) = self.services.get_mut(id) else {
                 continue;
             };
-            let current = self.assemble(id, service);
-            let service = self.services.get_mut(id).expect("present above");
             if current != service.reported {
                 events.push(match &current {
                     Some(record) => BrowseEvent::Resolved(record.clone()),

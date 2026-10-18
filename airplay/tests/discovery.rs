@@ -139,7 +139,7 @@ fn discovery_browse_follows_ptr_to_srv_txt_and_addresses_for_both_types() {
         DnsRecord::Txt {
             kind: ServiceKind::AirPlay,
             instance: "Living Room".to_owned(),
-            strings: strings(&["deviceid=00:50:c2:12:a2:3f", "features=0x5A7FFFF7,0x1E"]),
+            strings: strings(&["deviceid=00:50:c2:12:a2:3f", "features=0x1234ABCD,0x6"]),
             ttl: 4500,
         },
     ];
@@ -347,12 +347,12 @@ fn raop_txt_keys_are_read() {
         "sv=false",
         "sm=false",
         "sf=0x4",
-        "ft=0x5A7FFFF7,0x1E",
-        "am=AppleTV3,2",
-        "vs=366.0",
-        "vn=65537",
-        "fv=p20.78100.3",
-        "ov=8.4.4",
+        "ft=0x1234ABCD,0x6",
+        "am=AppleTV9,1",
+        "vs=1.0",
+        "vn=2",
+        "fv=1.2.3",
+        "ov=4.5.6",
         "pk=0a0b0c",
     ]));
     let raop = audiosync_airplay::discovery::RaopTxt::read(&txt);
@@ -372,12 +372,12 @@ fn raop_txt_keys_are_read() {
         (Some(false), Some(false))
     );
     assert_eq!(raop.status_flags, Some(StatusFlags(4)));
-    assert_eq!(raop.features, Some(Features(0x1E_5A7F_FFF7)));
-    assert_eq!(raop.model.as_deref(), Some("AppleTV3,2"));
-    assert_eq!(raop.server_version.as_deref(), Some("366.0"));
-    assert_eq!(raop.protocol_version.as_deref(), Some("65537"));
-    assert_eq!(raop.firmware_version.as_deref(), Some("p20.78100.3"));
-    assert_eq!(raop.os_version.as_deref(), Some("8.4.4"));
+    assert_eq!(raop.features, Some(Features(0x6_1234_ABCD)));
+    assert_eq!(raop.model.as_deref(), Some("AppleTV9,1"));
+    assert_eq!(raop.server_version.as_deref(), Some("1.0"));
+    assert_eq!(raop.protocol_version.as_deref(), Some("2"));
+    assert_eq!(raop.firmware_version.as_deref(), Some("1.2.3"));
+    assert_eq!(raop.os_version.as_deref(), Some("4.5.6"));
     assert_eq!(raop.public_key, Some(vec![0x0a, 0x0b, 0x0c]));
 }
 
@@ -387,31 +387,31 @@ fn airplay_txt_keys_are_read() {
     let key = "ab".repeat(32);
     let txt = Txt::parse(&strings(&[
         "deviceid=00:50:C2:12:A2:3F",
-        "features=0x5A7FFFF7,0x1E",
+        "features=0x1234ABCD,0x6",
         "flags=0x244",
-        "model=AudioAccessory5,1",
+        "model=Speaker1,1",
         "manufacturer=Example",
-        "srcvers=366.0",
+        "srcvers=1.0",
         "protovers=1.1",
         "pw",
         &format!("pk={key}"),
-        "pi=2e388006-13ba-4041-9a67-25dd4a43d536",
+        "pi=00000000-0000-0000-0000-0000000000a1",
         "psi=00000000-0000-0000-0000-000000000001",
         "gid=6f4a2b1c-0000-0000-0000-000000000002",
         "igl=1",
         "gcgl=0",
         "acl=0",
         "rsf=0x0",
-        "fv=p20.1",
+        "fv=7.8",
         "osvers=14.0",
     ]));
     let airplay = audiosync_airplay::discovery::AirPlayTxt::read(&txt);
     assert_eq!(airplay.device_id, Some(ID));
-    assert_eq!(airplay.features, Some(Features(0x1E_5A7F_FFF7)));
+    assert_eq!(airplay.features, Some(Features(0x6_1234_ABCD)));
     assert_eq!(airplay.flags, Some(StatusFlags(0x244)));
-    assert_eq!(airplay.model.as_deref(), Some("AudioAccessory5,1"));
+    assert_eq!(airplay.model.as_deref(), Some("Speaker1,1"));
     assert_eq!(airplay.manufacturer.as_deref(), Some("Example"));
-    assert_eq!(airplay.source_version.as_deref(), Some("366.0"));
+    assert_eq!(airplay.source_version.as_deref(), Some("1.0"));
     assert_eq!(airplay.protocol_version.as_deref(), Some("1.1"));
     assert_eq!(airplay.password, Some(true));
     assert_eq!(airplay.public_key, Some([0xab; 32]));
@@ -421,7 +421,7 @@ fn airplay_txt_keys_are_read() {
     assert_eq!(airplay.group_contains_group_leader.as_deref(), Some("0"));
     assert_eq!(airplay.access_control.as_deref(), Some("0"));
     assert_eq!(airplay.required_sender_features.as_deref(), Some("0x0"));
-    assert_eq!(airplay.firmware_version.as_deref(), Some("p20.1"));
+    assert_eq!(airplay.firmware_version.as_deref(), Some("7.8"));
     assert_eq!(airplay.os_version.as_deref(), Some("14.0"));
     // A key of the wrong length is dropped.
     let short = Txt::parse(&strings(&["pk=abcd"]));
@@ -434,8 +434,8 @@ fn airplay_txt_keys_are_read() {
 // covers: P14, P15
 #[test]
 fn discovery_features_and_flags() {
-    let features = Features::parse_txt("0x5A7FFFF7,0x1E").expect("two parts");
-    assert_eq!(features, Features(0x0000_001E_5A7F_FFF7));
+    let features = Features::parse_txt("0x1234ABCD,0x6").expect("two parts");
+    assert_eq!(features, Features(0x0000_0006_1234_ABCD));
     assert!(features.has(Features::AUDIO));
     assert!(
         features.has(33) && features.has(34),
@@ -443,10 +443,10 @@ fn discovery_features_and_flags() {
     );
     assert!(!features.has(32));
     assert_eq!(
-        Features::parse_txt("0x445F8A00"),
-        Some(Features(0x445F_8A00))
+        Features::parse_txt("0x00C0FFEE"),
+        Some(Features(0x00C0_FFEE))
     );
-    assert_eq!(Features::parse_txt("445F8A00"), Some(Features(0x445F_8A00)));
+    assert_eq!(Features::parse_txt("00C0FFEE"), Some(Features(0x00C0_FFEE)));
     assert_eq!(Features::parse_txt("0x1,0x2,0x3"), None);
     assert_eq!(
         Features::parse_txt("0x1FFFFFFFF"),
@@ -455,10 +455,7 @@ fn discovery_features_and_flags() {
     );
     assert_eq!(Features::parse_txt("zz"), None);
     // RAOP `ft` is the same mask; /info reports it as one decimal integer.
-    assert_eq!(
-        Features::from_info(130_367_356_919),
-        Features(0x1E_5A7F_FFF7)
-    );
+    assert_eq!(Features::from_info(26_075_245_517), Features(0x6_1234_ABCD));
     assert!(!features.has(64));
 
     let flags = StatusFlags::parse_txt("0x2028C").expect("hex");
@@ -919,7 +916,7 @@ fn scope_and_protocol_choice() {
     );
 
     // The mode table (P45).
-    let apple_tv = &["am=AppleTV5,3", "sf=0x8", "pw=true", "et=0,3,5"][..];
+    let apple_tv = &["am=AppleTV9,2", "sf=0x8", "pw=true", "et=0,3,5"][..];
     let cases: [(&[&str], Vec<SecurityMode>); 5] = [
         (&["et=0"], vec![SecurityMode::Open]),
         (&[], vec![SecurityMode::Open]),
@@ -943,7 +940,7 @@ fn scope_and_protocol_choice() {
 #[test]
 fn an_apple_tv_with_the_pin_flags_needs_legacy_pairing() {
     for flags in ["sf=0x8", "sf=0x200"] {
-        let apple_tv = raop_device(&["am=AppleTV6,2", flags, "et=3,5"]);
+        let apple_tv = raop_device(&["am=AppleTV9,3", flags, "et=3,5"]);
         assert!(apple_tv.is_apple_tv());
         assert!(apple_tv.verdict.legacy_pairing, "{flags}");
         // Legacy pairing makes it AirPlay 1 capable without `et` 0.
@@ -959,14 +956,14 @@ fn an_apple_tv_with_the_pin_flags_needs_legacy_pairing() {
         );
     }
     // The AirPlay `model` counts too.
-    let by_model = device(Some(&["et=0"]), Some(&["model=AppleTV11,1", "flags=0x8"]));
+    let by_model = device(Some(&["et=0"]), Some(&["model=AppleTV9,4", "flags=0x8"]));
     assert!(by_model.verdict.legacy_pairing);
     // Other receivers with the PIN flag aren't Apple TVs.
     let other = raop_device(&["am=Speaker1,1", "sf=0x8"]);
     assert!(!other.verdict.legacy_pairing);
     assert_eq!(other.airplay1_plan(false), Ok(()));
     // An Apple TV without the flags plays without pairing.
-    assert!(!raop_device(&["am=AppleTV3,2"]).verdict.legacy_pairing);
+    assert!(!raop_device(&["am=AppleTV9,1"]).verdict.legacy_pairing);
 }
 
 // covers: P59, P139

@@ -124,10 +124,10 @@ fn requests_encode_and_parse_back() {
 #[test]
 fn header_helpers_read_the_values_the_session_needs() {
     let ports = TransportPorts::parse(
-        "RTP/AVP/UDP;unicast;mode=record;server_port=53561;control_port=63379;timing_port=0",
+        "RTP/AVP/UDP;unicast;mode=record;server_port=50010;control_port=50011;timing_port=0",
     );
-    assert_eq!(ports.server_port, Some(53_561));
-    assert_eq!(ports.control_port, Some(63_379));
+    assert_eq!(ports.server_port, Some(50_010));
+    assert_eq!(ports.control_port, Some(50_011));
     assert_eq!(ports.timing_port, Some(0));
     assert_eq!(
         TransportPorts::parse("RTP/AVP/UDP;server_port=x").server_port,
