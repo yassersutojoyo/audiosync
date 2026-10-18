@@ -443,6 +443,7 @@ dependencies = [
  "slint",
  "slint-build",
  "windows",
+ "windows-core",
 ]
 
 [[package]]

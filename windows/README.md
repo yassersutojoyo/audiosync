@@ -50,6 +50,12 @@ cargo check --target aarch64-pc-windows-msvc
 - `src/main.rs`: startup, the main window and the About dialog
 - `src/os_version.rs`: which Windows versions the app runs on (unit-tested)
 - `src/platform.rs`: the Windows calls (`RtlGetVersion`, the message box)
+- `src/audio/`: the audio backend the UI will drive. `wasapi/` is the
+  Windows part (process loopback capture, one render stream per output,
+  device notifications); the rest is plain Rust over `audiosync-core`
+  (which outputs play, at what delay and volume, what gets captured) and is
+  tested on any host, along with a mock backend for UI work. It isn't wired
+  to the window yet and hasn't run on real hardware.
 - `ui/`: the Slint files, compiled by `build.rs`
 - `res/audiosync.exe.manifest`: supported Windows versions and per-monitor DPI
   awareness; `build.rs` embeds it with the version information

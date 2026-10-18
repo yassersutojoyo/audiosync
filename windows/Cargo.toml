@@ -21,9 +21,23 @@ slint = "~1.18.1"
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Wdk_System_SystemServices",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Media_KernelStreaming",
+    "Win32_Media_Multimedia",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# The code `#[implement]` generates for the COM callbacks names this crate.
+windows-core = "0.62"
 
 [build-dependencies]
 embed-resource = "3.0.12"
