@@ -9,6 +9,7 @@
 //! multithreaded apartment and registered with MMCSS; its loop passes each
 //! packet to a [`CaptureConverter`], which equalizes it and writes the ring.
 
+use std::mem::ManuallyDrop;
 use std::ptr;
 use std::slice;
 use std::sync::Arc;
@@ -233,7 +234,10 @@ fn finish_stream(
 #[repr(C)]
 struct ActivationArgs {
     params: AUDIOCLIENT_ACTIVATION_PARAMS,
-    variant: PROPVARIANT,
+    /// Never dropped: the `windows` crate's PROPVARIANT clears itself on
+    /// drop, and clearing a VT_BLOB frees the blob (the parameters above)
+    /// with `CoTaskMemFree`.
+    variant: ManuallyDrop<PROPVARIANT>,
 }
 
 /// An `IAudioClient` for a process loopback capture of `activation`.
@@ -257,13 +261,14 @@ fn activate(activation: Activation) -> Result<IAudioClient, BackendError> {
                 },
             },
         },
-        variant: PROPVARIANT::default(),
+        variant: ManuallyDrop::new(PROPVARIANT::default()),
     }));
     // SAFETY: `args` is a live allocation this function owns. The variant
     // gets the BLOB arm of its union, pointing at the parameters next to it;
-    // it owns nothing, so it is never cleared.
+    // it owns nothing, so it is never dropped.
     unsafe {
-        let value = &mut *(*args).variant.Anonymous.Anonymous;
+        let variant: &mut PROPVARIANT = &mut (*args).variant;
+        let value = &mut *variant.Anonymous.Anonymous;
         value.vt = VT_BLOB;
         value.Anonymous.blob = BLOB {
             cbSize: size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
@@ -277,7 +282,8 @@ fn activate(activation: Activation) -> Result<IAudioClient, BackendError> {
         ActivateAudioInterfaceAsync(
             VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             &IAudioClient::IID,
-            Some(&raw const (*args).variant),
+            // `ManuallyDrop` is `repr(transparent)`.
+            Some((&raw const (*args).variant).cast::<PROPVARIANT>()),
             &handler,
         )
     };
@@ -393,5 +399,19 @@ fn capture_loop(
             // SAFETY: releases the packet read above.
             unsafe { stream.capture.ReleaseBuffer(frames) }.map_err(|e| e.code())?;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn activation_args_never_clear_their_variant() {
+        // The `windows` crate's PROPVARIANT clears itself on drop, and
+        // clearing a VT_BLOB frees the blob with CoTaskMemFree. The blob is
+        // the parameters inside the same allocation, so a drop would free
+        // Rust's allocation behind its back: a heap corruption.
+        assert!(!std::mem::needs_drop::<ActivationArgs>());
     }
 }
