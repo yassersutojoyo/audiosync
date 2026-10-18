@@ -21,6 +21,7 @@ mod audio;
 #[cfg(test)]
 mod contrast;
 mod debug_log;
+mod guide;
 mod os_version;
 #[cfg(any(windows, test))]
 mod placement;
@@ -46,6 +47,10 @@ slint::include_modules!();
 
 /// How long the app waits, as it stops, for the debug log to reach its file.
 const LOG_FLUSH_AT_EXIT: Duration = Duration::from_secs(1);
+
+/// With the debug log on, `app` or `system` here opens the double-audio
+/// guide at launch for a made-up notice (`guide::preview`).
+const PREVIEW_GUIDE_VAR: &str = "AUDIOSYNC_PREVIEW_GUIDE";
 
 fn main() -> ExitCode {
     let log = DebugLog::from_env();
@@ -159,6 +164,17 @@ fn run(log: &DebugLog) -> Result<(), StartError> {
 
     app.show_main();
     log.log(|| "main window: shown".to_owned());
+    // To look at the double-audio guide without streaming: a made-up notice,
+    // only while the debug log is on.
+    if log.enabled()
+        && let Some(message) = std::env::var(PREVIEW_GUIDE_VAR)
+            .ok()
+            .as_deref()
+            .and_then(guide::preview)
+    {
+        log.log(|| format!("guide: opened for a made-up notice ({PREVIEW_GUIDE_VAR})"));
+        app.show_guide_for(&message);
+    }
     slint::run_event_loop_until_quit()?;
     log.log(|| "the event loop ended".to_owned());
     Ok(())
@@ -221,12 +237,16 @@ mod tests {
     fn escape_works_as_soon_as_the_flyout_or_equalizer_opens() {
         let flyout = include_str!("../ui/flyout.slint");
         let equalizer = include_str!("../ui/equalizer.slint");
+        let guide = include_str!("../ui/guide.slint");
         assert!(flyout.contains("forward-focus: focus;") && flyout.contains("focus := FocusScope"));
-        assert!(
-            equalizer.contains("forward-focus: keys;") && equalizer.contains("keys := FocusScope")
-        );
+        for window in [equalizer, guide] {
+            assert!(
+                window.contains("forward-focus: keys;") && window.contains("keys := FocusScope")
+            );
+        }
         assert!(include_str!("tray.rs").contains("app.flyout.invoke_take_focus();"));
         assert!(include_str!("view.rs").contains("self.equalizer.invoke_take_focus();"));
+        assert!(include_str!("view.rs").contains("self.guide.invoke_take_focus();"));
     }
 
     /// Slint leaves nothing focused when the focused control is removed, and
@@ -246,15 +266,35 @@ mod tests {
                 "{component}: {body}"
             );
         }
+        // A notice row reports when either of its buttons has the focus.
         let body = handler_body(
             widgets,
             "export component NoticeStack",
             "focus-changed(focused)",
         );
+        assert!(body.contains("row.dismiss-focused = focused;"), "{body}");
+        let body = handler_body(
+            widgets,
+            "text: Strings.notice-show-how;",
+            "changed has-focus",
+        );
         assert!(
-            body.contains("root.dismiss-focus-changed(focused);"),
+            body.contains("row.guide-focused = self.has-focus;"),
             "{body}"
         );
+        for flag in ["dismiss-focused", "guide-focused"] {
+            let body = handler_body(
+                widgets,
+                "export component NoticeStack",
+                &format!("changed {flag}"),
+            );
+            assert!(
+                body.contains(
+                    "root.button-focus-changed(self.dismiss-focused || self.guide-focused);"
+                ),
+                "{flag}: {body}"
+            );
+        }
 
         let flyout = include_str!("../ui/flyout.slint");
         let body = handler_body(flyout, "component FlyoutRow", "focus-changed(focused)");
@@ -267,7 +307,7 @@ mod tests {
         for (element, handler, flag) in [
             (
                 "NoticeStack {",
-                "dismiss-focus-changed(focused)",
+                "button-focus-changed(focused)",
                 "notice-focused",
             ),
             (

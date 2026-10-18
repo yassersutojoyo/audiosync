@@ -42,7 +42,7 @@ use crate::audio::backend::{
     StopReason,
 };
 use crate::audio::capture::WHOLE_SYSTEM_NAME;
-use crate::audio::routing::DirectPath;
+use crate::audio::routing::{DirectPath, DirectReason};
 use crate::debug_log::DebugLog;
 use crate::ui_model::{
     AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, Source, SourceKind,
@@ -600,6 +600,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
             },
             mute: names(false),
             shared: names(true),
+            default_output: paths
+                .iter()
+                .find(|path| path.reason == DirectReason::DefaultEndpoint)
+                .map(|path| path.endpoint_name.clone()),
         };
         let showing = self.heard_twice.as_ref() == Some(&subject)
             && self.notices.get(&NoticeSubject::DoubleAudio).is_some();
@@ -1714,6 +1718,7 @@ mod tests {
             source: source.map(str::to_owned),
             mute: names(mute),
             shared: names(shared),
+            default_output: None,
         }
     }
 
@@ -1811,6 +1816,22 @@ mod tests {
         // The whole system takes in the player on the TV too.
         adapter.select_source(SYSTEM_KEY);
         assert_eq!(heard_twice(&adapter), [twice(None, &["TV"], &[])]);
+    }
+
+    #[test]
+    fn the_whole_system_notice_names_the_default_output() {
+        let mut adapter = player_on_the_tv();
+        adapter.audio_mut().set_default_output(SPEAKERS);
+        adapter.select_source(SYSTEM_KEY);
+        // The speakers count as the default output, the TV because the
+        // player plays there: the guide words each its own way.
+        let expected = NoticeMessage::HeardTwice {
+            source: None,
+            mute: vec!["TV".to_owned()],
+            shared: vec!["Speakers".to_owned()],
+            default_output: Some("Speakers".to_owned()),
+        };
+        assert_eq!(heard_twice(&adapter), [expected]);
     }
 
     #[test]

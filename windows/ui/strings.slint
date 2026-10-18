@@ -6,7 +6,7 @@
 // English only for now. @tr marks each string for Slint's gettext translation
 // when a second language is added.
 
-import { SpeakerKind, Availability, RowState } from "types.slint";
+import { SpeakerKind, Availability, GuidePage, RowState } from "types.slint";
 
 export global Strings {
     // Main window
@@ -26,6 +26,9 @@ export global Strings {
     out property <string> dismiss-notice: @tr("Dismiss Notice");
     out property <string> dismiss-all-notices: @tr("Dismiss All");
     out property <string> notices: @tr("Notices");
+    // The button on the double-audio notice that opens its guide.
+    out property <string> notice-show-how: @tr("Show How");
+    out property <string> notice-show-how-label: @tr("Show how to hear it only once");
     out property <string> delay-field-label: @tr("Delay in milliseconds");
     out property <string> source-label: @tr("Audio Source");
     out property <string> equalizer: @tr("Equalizer");
@@ -177,6 +180,58 @@ export global Strings {
             return @tr("You may hear your PC's sound twice: it also plays straight from {0}, where AudioSync plays too. Make an output you don't listen to the Windows default (Sound settings).", shared);
         }
         return @tr("You may hear your PC's sound twice: it also plays straight from {0}, and from {1}, where AudioSync plays too. Make an output you don't listen to the Windows default (Sound settings). Muting {0} alone isn't enough.", mute, shared);
+    }
+
+    // The double-audio guide, opened from Show How on that notice. Each list
+    // is output names joined by commas. AudioSync changes none of these
+    // settings itself; a step's button opens the Settings page where the
+    // user does.
+    out property <string> guide-title: @tr("Avoid Double Audio");
+    out property <string> guide-steps: @tr("Steps");
+    out property <string> guide-footer: @tr("AudioSync doesn't change these settings itself. The notice goes away on its own once the sound plays only through AudioSync.");
+    out property <string> guide-close: @tr("Close");
+
+    public pure function guide-intro-app(source: string, outputs: string) -> string {
+        return @tr("Windows keeps playing {0} straight from {1}, next to AudioSync's synced copies. To hear it only once:", source, outputs);
+    }
+
+    public pure function guide-intro-system(outputs: string) -> string {
+        return @tr("Windows keeps playing your PC's sound straight from {0}, next to AudioSync's synced copies. To hear it only once:", outputs);
+    }
+
+    public pure function guide-route-app(source: string) -> string {
+        return @tr("Open the Volume mixer, find {0} and set its output to one you don't listen to, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on.", source);
+    }
+
+    public pure function guide-change-default(current: string) -> string {
+        return @tr("Open Sound settings and make an output you don't listen to the default instead of {0}, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on.", current);
+    }
+
+    public pure function guide-route-other-apps(outputs: string) -> string {
+        return @tr("Some apps play straight to {0}. In the Volume mixer, set them to an output you don't listen to as well.", outputs);
+    }
+
+    public pure function guide-mute-outputs(outputs: string) -> string {
+        return @tr("Or, if you don't need {0}, mute it: in Sound settings, open it and turn its volume all the way down. AudioSync doesn't play there, so its copies stay as they are.", outputs);
+    }
+
+    public pure function guide-shared-outputs(outputs: string) -> string {
+        return @tr("Muting {0} won't help: AudioSync plays there too, so its copies would go quiet as well.", outputs);
+    }
+
+    public pure function guide-keep-app-unmuted(source: string) -> string {
+        return @tr("Don't mute {0} itself in the Volume mixer: AudioSync would capture silence.", source);
+    }
+
+    // The label of a guide step's button.
+    public pure function guide-open(page: GuidePage) -> string {
+        if page == GuidePage.volume-mixer {
+            return @tr("Open Volume Mixer");
+        }
+        if page == GuidePage.sound {
+            return @tr("Open Sound Settings");
+        }
+        return "";
     }
 
     public pure function speaker-options(name: string) -> string {

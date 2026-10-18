@@ -1,0 +1,95 @@
+// The double-audio guide, opened from Show How on that notice: how to hear
+// the source only once. The Rust side picks the paragraphs from the notice
+// (src/guide.rs); a paragraph with a page has a button that opens that
+// Settings page. AudioSync changes no setting itself. Escape closes it.
+
+import { Button } from "std-widgets.slint";
+import { Tokens } from "tokens.slint";
+import { Strings } from "strings.slint";
+import { GuidePage, GuideStepItem } from "types.slint";
+import { SecondaryText } from "widgets.slint";
+
+export component GuideWindow inherits Window {
+    in property <string> intro;
+    in property <[GuideStepItem]> steps;
+    callback page-requested(GuidePage);
+    callback close-requested();
+
+    title: Strings.guide-title;
+    icon: @image-url("../res/audiosync-256.png");
+    background: Tokens.background;
+    min-width: 360px;
+    preferred-width: 460px;
+    default-font-size: Tokens.font-size-body;
+    // Key events go to the focused item, so Escape needs the scope focused.
+    forward-focus: keys;
+
+    // Called each time the window opens, so Escape works before anything
+    // inside is clicked.
+    public function take-focus() {
+        keys.focus();
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.close-requested();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            padding: 18px;
+            spacing: 14px;
+
+            Text {
+                text: root.intro;
+                color: Tokens.text;
+                wrap: word-wrap;
+            }
+
+            VerticalLayout {
+                spacing: 14px;
+                accessible-role: groupbox;
+                accessible-label: Strings.guide-steps;
+
+                for step in root.steps: VerticalLayout {
+                    spacing: 6px;
+
+                    Text {
+                        text: step.text;
+                        color: Tokens.text;
+                        wrap: word-wrap;
+                    }
+
+                    if step.page != GuidePage.none: HorizontalLayout {
+                        alignment: start;
+                        Button {
+                            text: Strings.guide-open(step.page);
+                            accessible-label: Strings.guide-open(step.page);
+                            clicked => {
+                                root.page-requested(step.page);
+                            }
+                        }
+                    }
+                }
+            }
+
+            SecondaryText {
+                text: Strings.guide-footer;
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                Button {
+                    text: Strings.guide-close;
+                    accessible-label: Strings.guide-close;
+                    clicked => {
+                        root.close-requested();
+                    }
+                }
+            }
+        }
+    }
+}

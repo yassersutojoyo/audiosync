@@ -128,6 +128,7 @@ const UI_FILES: &[(&str, &str)] = &[
     ("flyout.slint", include_str!("../ui/flyout.slint")),
     ("dialogs.slint", include_str!("../ui/dialogs.slint")),
     ("about.slint", include_str!("../ui/about.slint")),
+    ("guide.slint", include_str!("../ui/guide.slint")),
 ];
 
 /// Token colors that are not text on a token background: the wordmark's
@@ -464,4 +465,105 @@ fn no_text_promises_airplay() {
             .contains("root.connected.length == 0 ? Strings.connected-none"),
         "the empty Connected Speakers list uses the plain note"
     );
+}
+
+/// Whether `text` holds a private-use character (the icon font's glyphs), a
+/// Slint escape for one, or a glyph by name, which Narrator would read as
+/// noise.
+fn has_private_use(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    text.chars().any(|c| ('\u{E000}'..='\u{F8FF}').contains(&c))
+        || ["\\u{e", "\\u{f"]
+            .iter()
+            .any(|escape| lower.contains(escape))
+        || text.contains("Glyphs.")
+}
+
+/// No accessible name carries an icon glyph: every `accessible-label` and
+/// every label of AudioSync's own controls is plain text, and the strings
+/// file has no private-use characters at all.
+#[test]
+fn accessible_names_have_no_private_use_characters() {
+    assert!(has_private_use("Glyphs.dismiss") && has_private_use("\"\\u{E711}\""));
+    assert!(!has_private_use("Strings.dismiss-notice"));
+    let mut checked = 0;
+    for (file, source) in UI_FILES {
+        for line in source.lines().map(str::trim) {
+            if line.starts_with("accessible-label:") || line.starts_with("label:") {
+                checked += 1;
+                assert!(!has_private_use(line), "{file}: `{line}`");
+            }
+        }
+    }
+    assert!(checked > 20, "the check found the labels ({checked})");
+    let strings = include_str!("../ui/strings.slint");
+    for line in strings.lines() {
+        assert!(!has_private_use(line), "strings.slint: `{}`", line.trim());
+    }
+}
+
+/// The double-audio guide: the notice's Show How button opens it from the
+/// main window and the flyout, every text it shows is in strings.slint
+/// (translatable, none spelled out in guide.slint), and its buttons only ask
+/// for the Settings pages the Rust side knows.
+#[test]
+fn the_double_audio_guide_is_wired_and_worded_in_strings() {
+    let widgets = include_str!("../ui/widgets.slint");
+    let stack = component_body(widgets, "NoticeStack");
+    assert!(
+        stack.contains("if notice.has-guide:"),
+        "Show How only with a guide"
+    );
+    assert!(stack.contains("root.guide-requested(notice.id);"));
+    for (file, source) in [
+        ("main.slint", include_str!("../ui/main.slint")),
+        ("flyout.slint", include_str!("../ui/flyout.slint")),
+    ] {
+        assert!(
+            source.contains("root.notice-guide-requested(id);"),
+            "{file} passes Show How on"
+        );
+    }
+
+    let guide = include_str!("../ui/guide.slint");
+    assert!(
+        !guide.contains("text: \""),
+        "guide.slint spells out no text"
+    );
+    assert!(guide.contains("Key.Escape") && guide.contains("root.close-requested();"));
+    assert!(guide.contains("root.page-requested(step.page);"));
+
+    let strings = include_str!("../ui/strings.slint");
+    for name in [
+        "notice-show-how",
+        "notice-show-how-label",
+        "guide-title",
+        "guide-steps",
+        "guide-footer",
+        "guide-close",
+    ] {
+        let line = strings
+            .lines()
+            .find(|line| line.contains(&format!("out property <string> {name}:")))
+            .unwrap_or_else(|| panic!("strings.slint has {name}"));
+        assert!(line.contains("@tr(\""), "{name} is translatable");
+    }
+    for function in [
+        "guide-intro-app",
+        "guide-intro-system",
+        "guide-route-app",
+        "guide-change-default",
+        "guide-route-other-apps",
+        "guide-mute-outputs",
+        "guide-shared-outputs",
+        "guide-keep-app-unmuted",
+        "guide-open",
+    ] {
+        let start = strings
+            .find(&format!("public pure function {function}("))
+            .unwrap_or_else(|| panic!("strings.slint has {function}"));
+        let body = &strings[start..];
+        let body = &body[..body.find("\n    }").expect("the function ends")];
+        assert!(body.contains("@tr(\""), "{function} is translatable");
+    }
 }

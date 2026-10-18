@@ -178,6 +178,38 @@ pub fn show_error(text: &str) {
     eprintln!("{text}");
 }
 
+/// Opens a Settings page by its `ms-settings:` URI, through the shell the
+/// way the Settings app documents for launching its pages. Returns whether
+/// the shell took it. Off Windows, it only says which page it would open.
+#[cfg(windows)]
+pub fn open_settings(uri: &str) -> bool {
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::core::{HSTRING, PCWSTR, w};
+
+    let uri = HSTRING::from(uri);
+    // SAFETY: the operation and the URI are NUL-terminated UTF-16 that
+    // outlive the call; no owner window, parameters or directory.
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            &uri,
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // Values above 32 mean success (ShellExecuteW's documented return).
+    result.0 as usize > 32
+}
+
+#[cfg(not(windows))]
+pub fn open_settings(uri: &str) -> bool {
+    eprintln!("would open {uri}");
+    false
+}
+
 /// The local time now, in the user's short time format ("09.40", "9:40 AM"):
 /// when a notice was posted. Hours and minutes when the format can't be read.
 #[cfg(windows)]

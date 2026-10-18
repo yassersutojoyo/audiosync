@@ -161,11 +161,14 @@ pub enum NoticeMessage {
     /// is heard twice. `source` is the app's name, or `None` for the whole
     /// system. `mute` names the outputs AudioSync doesn't play to, which the
     /// user may mute; `shared` the ones AudioSync plays to as well, where
-    /// only sending the source elsewhere helps.
+    /// only sending the source elsewhere helps. `default_output` is the one
+    /// of them that counts because it is Windows' default output (the whole
+    /// system only); any other plays the source because an app plays there.
     HeardTwice {
         source: Option<String>,
         mute: Vec<String>,
         shared: Vec<String>,
+        default_output: Option<String>,
     },
 }
 

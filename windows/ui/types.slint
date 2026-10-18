@@ -39,4 +39,15 @@ export struct NoticeItem {
     id: int,
     message: string,
     time: string,
+    // The notice offers Show How, which opens its guide.
+    has-guide: bool,
+}
+
+// The Settings page a guide step opens, if any.
+export enum GuidePage { none, volume-mixer, sound }
+
+// One paragraph of the double-audio guide, with the page its button opens.
+export struct GuideStepItem {
+    text: string,
+    page: GuidePage,
 }
