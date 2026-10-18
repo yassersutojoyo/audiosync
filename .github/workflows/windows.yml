@@ -87,6 +87,8 @@ jobs:
           name: audiosync-windows-${{ matrix.arch }}
           path: windows/target/${{ matrix.target }}/release/audiosync.exe
           if-no-files-found: error
+          # Test builds only; kept briefly until the artifact ships its own license notices.
+          retention-days: 7
 
   licenses:
     name: Licenses

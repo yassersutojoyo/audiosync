@@ -137,7 +137,9 @@ for arch in arm64 x86_64; do
   fi
 done
 
-# An unchanged library keeps its timestamp, so build.sh doesn't relink for nothing.
+# An unchanged library keeps its timestamp, so build.sh doesn't relink for
+# nothing; a changed one is newer than the app, and build.sh then removes the
+# linked binary so every SwiftPM build system relinks it.
 if ! cmp -s "$work/$lib" "$out/$lib"; then
   mv -f "$work/$lib" "$out/$lib"
 fi

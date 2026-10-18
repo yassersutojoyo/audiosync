@@ -150,7 +150,7 @@ That license asks for an attribution. The one AudioSync uses is the
 `AboutSlint` widget in the app's About dialog, which the top-level menu opens
 (Help > About AudioSync). The widget shows the Made with Slint logo
 (CC-BY-ND-4.0, © SixtyFPS GmbH) unchanged, and the compiled interface also
-carries a permissively licensed icon from Slint's Fluent style.
+carries an icon from Microsoft's Fluent UI System Icons (MIT, © Microsoft Corporation), via Slint's Fluent style.
 
 The Windows app's other Rust dependencies are under permissive licenses. CI
 checks them with `cargo deny check licenses` against the list in
