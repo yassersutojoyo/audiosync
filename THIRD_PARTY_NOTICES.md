@@ -167,8 +167,13 @@ generates it from `windows/Cargo.lock` for that build's target: every crate
 compiled into the executable with its version, license and repository and the
 full text of its license and notice files, plus the Rust standard library's
 copyright notices, Slint's royalty-free license, and the font and icon
-licenses above. The script fails when a crate's license isn't on the
-`windows/deny.toml` list.
+licenses above. It also adds the notices for code that crates took from other
+projects, which their own license files don't carry: AccessKit's code derived
+from Chromium (BSD-3-Clause, © The Chromium Authors) and the image crate's JPEG
+code based on the work of the Independent JPEG Group. The script fails when a
+crate's license isn't allowed by `windows/deny.toml`, or when a crate's source
+points to a license file the package doesn't ship and the script doesn't
+supply.
 
 ## Trademarks
 

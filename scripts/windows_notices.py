@@ -24,10 +24,18 @@ aren't part of the executable, so they're left out; that also keeps the file
 the same whichever system generates it. Slint's compiler, which turns the
 interface into code, is covered by Slint's own section.
 
-The script fails when a crate's license expression is not covered by the
-allow list in windows/deny.toml, so the notices and the CI license check can't
-drift apart. It needs only cargo, rustc (whose rustc component ships the
-standard library's copyright notices) and the Python standard library.
+Some crates contain code from other projects whose notice the crate's own
+license files don't carry (AccessKit's Chromium-derived code, for instance).
+SUPPLEMENTS adds those notices. The script scans each compiled crate's source
+for a reference to a license file ("... found in the LICENSE.chromium file")
+or for third-party code it knows needs a notice, and fails when the package
+doesn't ship that file and no supplement covers it.
+
+The script also fails when a crate's license expression is not covered by
+windows/deny.toml (its allow list, plus the crate's own entry under
+exceptions), so the notices and the CI license check can't drift apart. It
+needs only cargo, rustc (whose rustc component ships the standard library's
+copyright notices) and the Python standard library.
 
 The default output is THIRD-PARTY-NOTICES.txt next to audiosync.exe:
 windows/target/<target>/release/ (or under CARGO_TARGET_DIR when it is set).
@@ -482,7 +490,7 @@ def run(*cmd):
 def clean_text(text):
     """Normalizes line endings and trailing spaces, drops a BOM and blank
     lines at either end."""
-    text = text.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n")
+    text = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     lines = [line.rstrip() for line in text.split("\n")]
     return "\n".join(lines).strip("\n")
 
@@ -508,10 +516,10 @@ def strip_toml_comment(line):
     return "".join(out)
 
 
-def allowed_licenses():
-    """The [licenses] allow list of windows/deny.toml (no TOML parser in the
-    standard library before Python 3.11)."""
-    section, collected = None, None
+def licenses_array(key):
+    """The raw text of an array in the [licenses] section of windows/deny.toml,
+    or None (no TOML parser in the standard library before Python 3.11)."""
+    section, collected, depth = None, None, 0
     with open(os.path.join(WINDOWS, "deny.toml"), encoding="utf-8") as handle:
         for raw in handle:
             line = strip_toml_comment(raw).strip()
@@ -520,19 +528,44 @@ def allowed_licenses():
                 if header:
                     section = header.group(1).strip()
                     continue
-                if section != "licenses" or not re.match(r"^allow\s*=", line):
+                if section != "licenses" or not re.match(r"^{}\s*=".format(key), line):
                     continue
                 collected = []
                 line = line.split("=", 1)[1]
             collected.append(line)
-            if "]" in line:
+            unquoted = re.sub(r'"[^"]*"', "", line)
+            depth += unquoted.count("[") - unquoted.count("]")
+            if depth <= 0:
                 break
-    if not collected:
-        raise NoticeError("windows/deny.toml has no [licenses] allow list")
-    allowed = set(re.findall(r'"([^"]+)"', " ".join(collected)))
-    if not allowed:
-        raise NoticeError("the allow list in windows/deny.toml is empty")
-    return allowed
+    return None if collected is None else " ".join(collected)
+
+
+class LicensePolicy:
+    """The [licenses] allow list of windows/deny.toml and its per-crate
+    exceptions ({ crate = "name" or "name@version", allow = [...] })."""
+
+    def __init__(self):
+        allow = licenses_array("allow")
+        if allow is None:
+            raise NoticeError("windows/deny.toml has no [licenses] allow list")
+        self.allowed = set(re.findall(r'"([^"]+)"', allow))
+        if not self.allowed:
+            raise NoticeError("the allow list in windows/deny.toml is empty")
+        self.exceptions = []
+        for entry in re.findall(r"\{([^{}]*)\}", licenses_array("exceptions") or ""):
+            spec = re.search(r'\b(?:crate|name)\s*=\s*"([^"]+)"', entry)
+            licenses = re.search(r"\ballow\s*=\s*\[([^\]]*)\]", entry)
+            if not spec or not licenses:
+                raise NoticeError("can't read the exception {{{}}} in windows/deny.toml".format(entry.strip()))
+            name, _, version = spec.group(1).partition("@")
+            self.exceptions.append((name, version or None, set(re.findall(r'"([^"]+)"', licenses.group(1)))))
+
+    def for_package(self, package):
+        allowed = set(self.allowed)
+        for name, version, licenses in self.exceptions:
+            if name == package["name"] and version in (None, package["version"]):
+                allowed |= licenses
+        return allowed
 
 
 class Expression:
@@ -582,19 +615,21 @@ class Expression:
         if token is None or token in ("AND", "OR", "WITH", ")") or not re.match(r"^[A-Za-z0-9.+:-]+$", token):
             raise NoticeError("can't parse license expression '{}'".format(self.text))
         if self._peek() == "WITH":
-            # deny.toml allows no exception; such an expression isn't covered.
+            # Covered only when deny.toml names the whole "<id> WITH <exception>";
+            # it has no standard text here, so the package must ship its license.
             self._take()
-            return ("WITH", [token, self._take()])
+            exception = self._take()
+            if exception is None or not re.match(r"^[A-Za-z0-9.+:-]+$", exception):
+                raise NoticeError("can't parse license expression '{}'".format(self.text))
+            return ("WITH", "{} WITH {}".format(token, exception))
         self.ids.append(token)
         return ("ID", token)
 
     def covered_by(self, allowed):
         def evaluate(node):
             kind, value = node
-            if kind == "ID":
+            if kind in ("ID", "WITH"):
                 return value in allowed
-            if kind == "WITH":
-                return False
             results = [evaluate(child) for child in value]
             return any(results) if kind == "OR" else all(results)
         return evaluate(self.tree)
@@ -677,6 +712,91 @@ def holders(package):
     authors = [re.sub(r"\s*<[^>]*>", "", author).strip() for author in package.get("authors") or []]
     authors = [author for author in authors if author]
     return ", ".join(authors) if authors else "the {} authors".format(package["name"])
+
+
+# Code from other projects inside crates -----------------------------------------
+
+SOURCE_EXTENSIONS = (".rs", ".c", ".h", ".cc", ".cpp", ".hpp", ".inc", ".slint")
+_GAP = rb"[\s/*#!]+"  # spaces and comment markers between words of a comment
+# "... governed by a BSD-style license that can be found in the LICENSE.x file."
+LICENSE_REFERENCE = re.compile(
+    rb"\bfound" + _GAP + rb"in" + _GAP + rb"(?:the" + _GAP + rb")?"
+    rb"((?:licen[cs]e|copying|notice|copyright)[A-Za-z0-9_.-]*)" + _GAP + rb"file\b",
+    re.IGNORECASE)
+# Third-party code whose terms ask binary distributions for a notice, though no
+# license file is named: the text the script looks for, and its reference key.
+KNOWN_CODE = {b"Independent JPEG Group": "IJG"}
+
+
+def source_references(package):
+    """{reference: [source paths]} for one package: license files its sources
+    point to, and KNOWN_CODE found in them. Also returns the lower-cased names
+    of every file the package ships."""
+    directory = os.path.dirname(package["manifest_path"])
+    references, shipped = {}, set()
+    for folder, subfolders, names in os.walk(directory):
+        subfolders[:] = sorted(name for name in subfolders if name != "target")
+        for name in sorted(names):
+            shipped.add(name.lower())
+            if not name.endswith(SOURCE_EXTENSIONS):
+                continue
+            path = os.path.join(folder, name)
+            with open(path, "rb") as handle:
+                data = handle.read()
+            relative = os.path.relpath(path, directory).replace(os.sep, "/")
+            found = {match.group(1).decode("ascii") for match in LICENSE_REFERENCE.finditer(data)}
+            found |= {key for marker, key in KNOWN_CODE.items() if marker in data}
+            for reference in found:
+                references.setdefault(reference, []).append(relative)
+    return references, shipped
+
+
+def reference_covered(reference, shipped, expression):
+    """Whether a referenced license file is in the notices without a supplement:
+    the package ships it, or it is the crate's own license (LICENSE-MIT,
+    LICENSE-APACHE, ...), whose text the notices carry anyway."""
+    lowered = reference.lower()
+    if lowered in shipped or any(name.startswith(lowered + ".") for name in shipped):
+        return True
+    suffix = re.sub(r"^(licen[cs]e|copying)[-_.]", "", lowered)
+    return suffix != lowered and any(spdx.lower().startswith(suffix) for spdx in expression.ids)
+
+
+def chromium_notice(package, paths):
+    """AccessKit's code derived from Chromium's accessibility abstraction. Its
+    sources point to LICENSE.chromium, which the packages don't ship; that file
+    is Chromium's BSD-3-Clause license."""
+    return [("Chromium's license (BSD-3-Clause)",
+             "Parts of this crate are derived from Chromium's accessibility abstraction,\n"
+             "(c) The Chromium Authors, under the BSD-style license the sources refer\n"
+             "to as LICENSE.chromium:\n\n" + BSD_3_CLAUSE.format(holders="The Chromium Authors"))]
+
+
+def ijg_notice(package, paths):
+    """Code translated from the Independent JPEG Group's libjpeg: its terms,
+    copied from the comment that opens each such source file, and the statement
+    they ask executable-only distributions to make."""
+    directory = os.path.dirname(package["manifest_path"])
+    texts = []
+    for relative in paths:
+        header = re.match(r"\s*/\*(.*?)\*/", read_text(os.path.join(directory, relative)), re.S)
+        if not header or "Independent JPEG Group" not in header.group(1):
+            raise NoticeError("{} {}: {} mentions the Independent JPEG Group outside its opening comment".format(
+                package["name"], package["version"], relative))
+        texts.append(("Independent JPEG Group notice ({})".format(relative),
+                      "This software is based in part on the work of the Independent JPEG Group.\n\n"
+                      + header.group(1).strip("\n")))
+    return texts
+
+
+# (crate name, reference from source_references) -> function returning the
+# (label, text) notices to add to that crate's entry.
+SUPPLEMENTS = {
+    ("accesskit", "LICENSE.chromium"): chromium_notice,
+    ("accesskit_consumer", "LICENSE.chromium"): chromium_notice,
+    ("accesskit_windows", "LICENSE.chromium"): chromium_notice,
+    ("image", "IJG"): ijg_notice,
+}
 
 
 # Rust standard library -------------------------------------------------------
@@ -779,7 +899,7 @@ def find_package(packages, name):
 
 
 def build(target):
-    allowed = allowed_licenses()
+    policy = LicensePolicy()
     packages, graph = dependency_packages(target)
     local =[p for p in packages if p.get("source") is None]
     crates = sorted((p for p in packages if p.get("source") is not None),
@@ -789,16 +909,28 @@ def build(target):
     for package in local:
         if package.get("license") != "MIT":
             problems.append("{} {} (in this repository) isn't MIT-licensed".format(package["name"], package["version"]))
-    expressions = {}
+    expressions, supplements = {}, {}
     for package in crates:
         if not package.get("license"):
             problems.append("{} {} declares no license expression".format(package["name"], package["version"]))
             continue
         expression = Expression(package["license"])
-        if not expression.covered_by(allowed):
+        if not expression.covered_by(policy.for_package(package)):
             problems.append("{} {}: '{}' isn't covered by windows/deny.toml".format(
                 package["name"], package["version"], package["license"]))
         expressions[package["id"]] = expression
+        references, shipped = source_references(package)
+        for reference, paths in sorted(references.items()):
+            supplement = SUPPLEMENTS.get((package["name"], reference))
+            if supplement:
+                supplements.setdefault(package["id"], []).append((supplement, paths))
+            elif reference in KNOWN_CODE.values():
+                problems.append("{} {}: {} contains {} code, whose notice SUPPLEMENTS doesn't add "
+                                "for this crate".format(package["name"], package["version"], paths[0], reference))
+            elif not reference_covered(reference, shipped, expression):
+                problems.append("{} {}: {} refers to '{}', which the package doesn't ship; "
+                                "add its notice to SUPPLEMENTS".format(
+                                    package["name"], package["version"], paths[0], reference))
     if problems:
         raise NoticeError("\n  ".join(["license problems:"] + problems))
 
@@ -894,15 +1026,19 @@ def build(target):
         files = notice_files(package, expression)
         for label, path in files:
             out.text(label, read_text(path), owner)
-        if files:
-            continue
-        ids = [i for i in dict.fromkeys(expression.ids) if i in TEMPLATES]
-        if not ids:
-            raise NoticeError("{} has no license file and no standard text for '{}'".format(owner, package["license"]))
-        out.add("", "The package has no license file; the standard text of its license",
-                "follows, with the crate's authors as copyright holders.")
-        for spdx in ids:
-            out.text("{} (standard text)".format(spdx), TEMPLATES[spdx].format(holders=holders(package)), owner)
+        if not files:
+            allowed = policy.for_package(package)
+            ids = [i for i in dict.fromkeys(expression.ids) if i in TEMPLATES and i in allowed]
+            # Every license the crate needs (all sides of an AND) must have a text.
+            if not expression.covered_by(set(ids)):
+                raise NoticeError("{} has no license file and no standard text for '{}'".format(owner, package["license"]))
+            out.add("", "The package has no license file; the standard text of its license",
+                    "follows, with the crate's authors as copyright holders.")
+            for spdx in ids:
+                out.text("{} (standard text)".format(spdx), TEMPLATES[spdx].format(holders=holders(package)), owner)
+        for supplement, paths in supplements.get(package["id"], []):
+            for label, text in supplement(package, paths):
+                out.text(label, text, owner)
     out.add("")
     return out.lines, len(crates)
 
