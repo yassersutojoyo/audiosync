@@ -44,7 +44,8 @@ Implements S41 to S59 with the counters of S158 and the prime reset of S159. A r
 - **S87**: the queue holds packed 32-bit frames (L in the low half, R in the high half), so a frame can never be split. A queue of zero frames is refused.
 - **S88, S129, S134**: one consumer token per queue makes a second writer impossible, and `stop()` joins the thread; dropping the control stops it too. The queue is shared by reference count, so it is freed only after the writer let go of it. Writer buffers are allocated in `start()` on the caller's thread; the writer thread allocates nothing after that.
 - **S89, S93**: the open is retried every 50 ms, a full pipe every 2 ms, and an empty queue is polled every 4 ms. Other write errors are handled like `EPIPE`, after one open interval.
-- **S88, S93**: the AirPlay engine keeps reading the pipe across a stop and start, so a stopping writer first completes a partly written frame. It offers only the rest of that frame (1 to 3 bytes, one atomic pipe write) every 2 ms for up to 100 ms, then closes. The rest is abandoned only after a write error or that timeout, which keeps `stop()` well under 300 ms. `clear()` keeps the rest of a frame in flight for the same reason.
+- **S93**: each write offers at most 512 bytes (`ATOMIC_WRITE_BYTES`, the smallest `PIPE_BUF` POSIX allows and the value on macOS) and ends on a frame boundary: it runs from the next unwritten byte to 512 bytes past the first byte of that byte's frame, or to the end of the pending bytes. A non-blocking pipe takes such a write whole or refuses it with `EAGAIN`, so a reader that stalls can't leave a frame partly written, and a short write only comes from a sink that cuts writes anyway. The writer still takes up to 2048 frames from the queue at a time and sends them in these pieces, about 375 writes per second at 48 kHz.
+- **S88, S93**: the AirPlay engine keeps reading the pipe across a stop and start, so a stopping writer that holds a partly written frame (left only by a sink that cuts writes, see above) first completes it. It offers only the rest of that frame (1 to 3 bytes, one atomic pipe write) every 2 ms for up to 100 ms, then closes. The rest is abandoned only after a write error or that timeout, which keeps `stop()` well under 300 ms. `clear()` keeps the rest of a frame in flight for the same reason.
 - **S90**: unwritten audio means queued frames plus frames taken but not yet written. A partly written frame counts as one and is never cut. Discards remove the not-yet-started pending frames first (they are the oldest), then the queue head. The cap is enforced before every open attempt and every write.
 - **S92**: after `EPIPE`, whole frames still pending go to the next connection. Only the rest of the frame being written is abandoned (S93).
 - **S160**: `EINTR` counts as a write error, being "an error other than EAGAIN". A write that takes zero bytes counts as a short write and then waits like a full pipe. Two extra counters, `open_failures` and `bytes_abandoned`, follow the same rules. The producer-side `samplesQueued` (S84) and `frames_dropped` (S87) are separate accessors.
@@ -58,7 +59,7 @@ Implements S41 to S59 with the counters of S158 and the prime reset of S159. A r
 ### Modules
 
 - `eq`: the ten-band equalizer and preamp (S22 to S34), split into `EqControl` (main thread) and `EqProcessor` (capture thread) that share only atomics.
-- `volume`: the cubic volume curve, host-side volume rules, one newest-value slot per volume target (`LatestValues`) and the renderer's gain stage (S64, S65, S70 to S76).
+- `volume`: the cubic volume curve, host-side volume rules, volume writes coalesced per target (`LatestValues`) and the renderer's gain stage (S64, S65, S70 to S76).
 - `channels`: an input device's channels to stereo (S14).
 - `policy`: pure host decisions the Windows app can reuse: delays and the AirPlay sync rule; the capture source, the microphone permission and app quits; the capture check and capture rate changes; sessions, output sync, streaming and source switches; the engine lifecycle and pipe playback; the speaker list, reachability and reconcile; pairing; speaker keys, groups, device lists, layout and notices.
 - `ffi`: the C interface.
@@ -112,9 +113,10 @@ Where the spec left room, these readings satisfy every Observed clause:
 14. S157: rates are compared in Hz as `f64`; a reading that is not finite or not above 0 counts as unreadable and keeps the session playing.
 15. S161: "sorted by UID" is the byte order of the UID strings; a UID the host lists twice counts once.
 16. S162: `session::streaming_after` decides from the numbers of enabled local and AirPlay speakers after the event. A device that leaves or rejoins the lists is an event of its own, and it starts and stops nothing while anything is enabled.
-17. S163: two sources are the same when they have the same kind and identifier (bundle ID or device UID).
-18. S164: a quitting app with an empty bundle ID counts as having none.
+17. S163: two sources are the same when they have the same kind and identifier (bundle ID or device UID). `session::source_pick` answers a pick with `Nothing`, `StoreForNextStart` or `SwitchNow`, listed from the least to the most work; every answer but `Nothing` clears the old source's notices.
+18. S164: the quit rule is read as a dependency. `AudioSource::depends_on_app` holds only for an app source and its own bundle ID; the whole system and input devices depend on no app. A quitting app with an empty bundle ID counts as having none.
 19. S26, S127: after each block, filter state below 1e-30 (600 dB below full scale) is set to 0. Without it, silence after a bass boost leaves the state decaying into subnormal numbers, where it can hold a rounding limit cycle and every biquad step is slow on x86. With it, the Bass Boost preset's state is all zero about 1.3 s after a loud 40 Hz tone stops; a unit test checks that twenty seconds of silence never end a block on subnormal state.
+20. S74: `volume::LatestValues` holds at most one waiting value per target and leaves all timing to the host. `put` reports whether the target had nothing waiting, which is the moment the host queues that target's one flush; any later value rides that flush. The flush takes the latest value with `pop`, and the next value queues a new one.
 
 ### What stays in the host
 
@@ -127,7 +129,7 @@ Some clauses are covered here only in their pure part:
 - S7 and S34: `EqProcessor::equalize_and_deliver` fixes the order; the host wires the ring and the FIFO feed to it.
 - S167: the Local Network hint for an empty list is the host's (S154).
 
-Clauses only the host can implement are listed with a reason in `tests/spec_exempt.txt` (Core Audio, the OwnTone process and its HTTP API, macOS privacy and appearance settings, shell tooling).
+Clauses only the host can implement are listed with a reason in `tests/spec_exempt.txt` (Core Audio, the OwnTone process, its config file and password, and its HTTP API, macOS privacy and appearance settings, shell tooling). S96 and S97 are there by design: the engine's config file and its per-run password belong to the host that launches the engine. The core never launches the engine or calls its API, and it reaches even the pipe only through the host's `PipeSink`, so taking over just the config text would split one host job across two places.
 
 ### Where the two parts meet
 
