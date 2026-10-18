@@ -993,6 +993,7 @@ mod tests {
     use super::*;
     use crate::audio::backend::OutputKind;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
+    use crate::audio::outputs::{EndpointProperties, EndpointReading};
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
 
     const SPEAKERS: &str = "speakers";
@@ -1600,6 +1601,53 @@ mod tests {
             .filter(|m| m.starts_with("listing the outputs failed"))
             .count();
         assert_eq!(failures, 1, "{messages:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn endpoints_left_out_of_the_listing_are_logged_once() {
+        let (mut backend, log, dir) = logged_backend("controller-left-out");
+        backend.enumerate_endpoint(EndpointReading {
+            index: 2,
+            id: Ok("buds-call".to_owned()),
+            properties: Ok(EndpointProperties {
+                name: Some("Headset (Example Buds Hands-Free)".to_owned()),
+                form_factor: Some(5),
+                enumerator: Some("BTHHFENUM".to_owned()),
+                display_port: false,
+            }),
+        });
+        backend.enumerate_endpoint(EndpointReading {
+            index: 3,
+            id: Err("IMMDevice::GetId failed (0x80070490)".to_owned()),
+            properties: Ok(EndpointProperties::default()),
+        });
+        backend.poll();
+        let listed = backend.list_outputs().unwrap();
+        assert_eq!(
+            listed.iter().map(|o| o.id.as_str()).collect::<Vec<_>>(),
+            [HEADPHONES, SPEAKERS],
+            "neither endpoint is listed"
+        );
+        let messages = logged(&log, &dir);
+        let hands_free = "output \"Headset (Example Buds Hands-Free)\" (buds-call) left out: \
+                          a Bluetooth hands-free endpoint, for calls only";
+        let no_id = "render endpoint 3 left out: it couldn't be read \
+                     (IMMDevice::GetId failed (0x80070490))";
+        assert_in_order(
+            &messages,
+            &[
+                "Windows reported a change of the outputs",
+                "outputs listed again, no change (2)",
+                hands_free,
+                no_id,
+                "outputs listed again, no change (2)",
+            ],
+        );
+        for note in [hands_free, no_id] {
+            let count = messages.iter().filter(|m| m.as_str() == note).count();
+            assert_eq!(count, 1, "logged once, not at every listing: {messages:?}");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 
