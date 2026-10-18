@@ -1,0 +1,1134 @@
+//! The AirPlay 1 session with one receiver, from OPTIONS to TEARDOWN.
+//!
+//! [`Session`] is sans-I/O. The driver opens the TCP connection to the
+//! receiver's RAOP port, opens the session's control and timing sockets, and
+//! then feeds the session what happens: the connect result, bytes read,
+//! timer expiries, timing requests seen on the timing socket and UDP send
+//! results. The session answers through [`Session::poll_output`] with bytes
+//! to write, events for the host and the order to close, and through
+//! [`Session::poll_timeout`] with the next time it wants to be woken.
+//!
+//! Request order (P26): OPTIONS, `POST /auth-setup` when the receiver needs it
+//! (P60), the legacy pair-verify when the speaker is paired (P55, through the
+//! [`Verifier`] seam), ANNOUNCE, SETUP, RECORD, then SET_PARAMETER with the
+//! initial volume (P119). One request is in flight at a time (P20). Audio,
+//! sync and retransmission packets may flow only while
+//! [`Session::media_allowed`] says so: after RECORD was answered with 200
+//! and until teardown starts.
+
+use std::collections::VecDeque;
+use std::fmt;
+use std::net::IpAddr;
+use std::time::{Duration, Instant};
+
+use crate::digest::{self, Challenge};
+use crate::error::{ErrorKind, SessionError, UnsupportedReason, Warning};
+use crate::ids::SessionIds;
+use crate::metadata::{Metadata, MetadataError, MetadataSupport};
+use crate::rtsp::{
+    self, JackStatus, Message, Method, ParseError, Parser, Request, Response, TransportPorts,
+};
+use crate::sdp::{self, Codec};
+use crate::volume::{self, Volume};
+
+/// How long a TCP connect may take (P20, P134).
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the sender waits for a response (P20, P134).
+pub const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the sender waits for the TEARDOWN answer (P35, P129).
+pub const TEARDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+/// Idle time after which the sender checks the connection with `OPTIONS *`
+/// (P131).
+pub const KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
+/// Silence on the timing socket that means the receiver is gone, once it has
+/// sent at least one timing request (P131).
+pub const TIMING_SILENCE: Duration = Duration::from_secs(10);
+/// Smallest gap between two volume requests: at most 10 per second (P120).
+pub const VOLUME_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The legacy pair-verify of a paired Apple TV (P55, P56), run on every new
+/// connection before ANNOUNCE. The pairing stage implements it; the session
+/// only carries its two `POST /pair-verify` exchanges, both with
+/// `Content-Type: application/octet-stream`.
+pub trait Verifier: Send {
+    /// The body of the first request.
+    fn first_request(&mut self) -> Vec<u8>;
+    /// The body of the second request, computed from the first response's
+    /// body; `None` when that body is malformed.
+    fn second_request(&mut self, first_response: &[u8]) -> Option<Vec<u8>>;
+}
+
+/// What a session needs to know before it starts.
+pub struct SessionConfig {
+    /// The sender's own address on the connection: request URIs and the SDP
+    /// `o=` line (P23, P28).
+    pub local_addr: IpAddr,
+    /// The receiver address the connection goes to (P17): the SDP `c=` line.
+    pub remote_addr: IpAddr,
+    /// The session's local control port. The socket must be open and
+    /// answering before the session starts, since SETUP announces it (P31).
+    pub control_port: u16,
+    /// The session's local timing port, open before the session starts (P31).
+    pub timing_port: u16,
+    /// From [`Device::choose_codec`](crate::discovery::Device::choose_codec)
+    /// (P74).
+    pub codec: Codec,
+    /// The receiver's `cn` also contains 1, so a refused PCM ANNOUNCE asks for
+    /// a retry with ALAC (P74).
+    pub alac_fallback: bool,
+    /// An Apple TV without stored credentials: a refused ANNOUNCE means
+    /// PairingRequired, not Refused (P46).
+    pub apple_tv_without_credentials: bool,
+    /// The speaker's password, if the host has one (P39). Never logged: the
+    /// `Debug` output hides it.
+    pub password: Option<String>,
+    /// The public key for `POST /auth-setup`, when the receiver needs it
+    /// (P60, [`Device::needs_auth_setup`](crate::discovery::Device::needs_auth_setup)).
+    pub auth_setup_key: Option<[u8; 32]>,
+    /// The pair-verify of a paired Apple TV (P55).
+    pub verifier: Option<Box<dyn Verifier>>,
+    /// The volume sent right after RECORD (P119).
+    pub initial_volume: Volume,
+    /// RAOP `sv=true`: the sender scales the samples and sends no volume
+    /// requests (P121).
+    pub software_volume: bool,
+    /// The metadata types the receiver lists (P123).
+    pub metadata: MetadataSupport,
+}
+
+impl SessionConfig {
+    /// A configuration for an open receiver with ALAC and no metadata.
+    pub fn new(
+        local_addr: IpAddr,
+        remote_addr: IpAddr,
+        control_port: u16,
+        timing_port: u16,
+        initial_volume: Volume,
+    ) -> SessionConfig {
+        SessionConfig {
+            local_addr,
+            remote_addr,
+            control_port,
+            timing_port,
+            codec: Codec::Alac,
+            alac_fallback: false,
+            apple_tv_without_credentials: false,
+            password: None,
+            auth_setup_key: None,
+            verifier: None,
+            initial_volume,
+            software_volume: false,
+            metadata: MetadataSupport::default(),
+        }
+    }
+}
+
+impl fmt::Debug for SessionConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SessionConfig")
+            .field("local_addr", &self.local_addr)
+            .field("remote_addr", &self.remote_addr)
+            .field("control_port", &self.control_port)
+            .field("timing_port", &self.timing_port)
+            .field("codec", &self.codec)
+            .field("alac_fallback", &self.alac_fallback)
+            .field(
+                "apple_tv_without_credentials",
+                &self.apple_tv_without_credentials,
+            )
+            .field("password", &self.password.as_ref().map(|_| "<hidden>"))
+            .field("auth_setup_key", &self.auth_setup_key.is_some())
+            .field("verifier", &self.verifier.is_some())
+            .field("initial_volume", &self.initial_volume)
+            .field("software_volume", &self.software_volume)
+            .field("metadata", &self.metadata)
+            .finish()
+    }
+}
+
+/// Where the session is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    /// Waiting for the TCP connect.
+    Connecting,
+    Options,
+    AuthSetup,
+    Verify,
+    Announce,
+    Setup,
+    Record,
+    /// RECORD succeeded; audio may flow.
+    Playing,
+    /// TEARDOWN is under way.
+    TearingDown,
+    Closed,
+}
+
+/// The receiver's ports from the SETUP answer (P31).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReceiverPorts {
+    /// Where audio goes (P83).
+    pub server_port: u16,
+    /// Where sync packets and retransmission replies go (P83).
+    pub control_port: u16,
+    /// The receiver's timing port; 0 is allowed (P31).
+    pub timing_port: u16,
+}
+
+/// Something the session reports to the host.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionEvent {
+    /// The OPTIONS answer's `Public` list (P27).
+    Methods(Vec<String>),
+    /// The receiver's `Server` header, when first seen or changed (P24).
+    Server(String),
+    /// `Audio-Jack-Status`, when first seen or changed (P24).
+    AudioJack(JackStatus),
+    /// RECORD succeeded: the first packet's sequence number and timestamp,
+    /// the receiver's `Audio-Latency` if it sent one (P32), and its ports.
+    Recording {
+        first_seq: u16,
+        first_rtptime: u32,
+        audio_latency: Option<u32>,
+        receiver_ports: ReceiverPorts,
+    },
+    /// A FLUSH was answered with success (P34).
+    Flushed { seq: u16, rtptime: u32 },
+    /// The level a GET_PARAMETER answer reported (P122). The session's own
+    /// volume doesn't change.
+    VolumeReported(f64),
+    /// Something to show; the session goes on.
+    Warning(Warning),
+    /// The session ended with an error (P133).
+    Failed(SessionError),
+    /// The session ended after a teardown.
+    Closed,
+}
+
+/// What the driver does next.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Output {
+    /// Write these bytes to the RTSP connection.
+    Send(Vec<u8>),
+    /// Tell the host.
+    Event(SessionEvent),
+    /// Close the RTSP connection and stop all UDP traffic to the receiver.
+    Close,
+}
+
+/// The result of one UDP send to the receiver (P141).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UdpSendResult {
+    Sent,
+    /// The send failed with an unreachable error.
+    Unreachable,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Kind {
+    Options { keepalive: bool },
+    AuthSetup,
+    VerifyFirst(Vec<u8>),
+    VerifySecond(Vec<u8>),
+    Announce,
+    Setup,
+    Record,
+    Volume(Volume),
+    ReadVolume,
+    Metadata(Metadata),
+    Flush { seq: u16, rtptime: u32 },
+    Teardown,
+}
+
+impl Kind {
+    fn method(&self) -> Method {
+        match self {
+            Kind::Options { .. } => Method::Options,
+            Kind::AuthSetup | Kind::VerifyFirst(_) | Kind::VerifySecond(_) => Method::Post,
+            Kind::Announce => Method::Announce,
+            Kind::Setup => Method::Setup,
+            Kind::Record => Method::Record,
+            Kind::Volume(_) | Kind::Metadata(_) => Method::SetParameter,
+            Kind::ReadVolume => Method::GetParameter,
+            Kind::Flush { .. } => Method::Flush,
+            Kind::Teardown => Method::Teardown,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct InFlight {
+    kind: Kind,
+    cseq: u32,
+    sent_at: Instant,
+    /// The nonce of the `Authorization` it carried, if any (P38).
+    nonce: Option<String>,
+    /// It is already the retry after a `stale=true` challenge (P38).
+    stale_retried: bool,
+}
+
+#[derive(Debug)]
+struct Auth {
+    challenge: Challenge,
+    /// Requests sent with this nonce, for `nc` (RFC 2617 §3.2.2).
+    count: u32,
+}
+
+/// One AirPlay 1 session.
+#[derive(Debug)]
+pub struct Session {
+    config: SessionConfig,
+    ids: SessionIds,
+    state: State,
+    created_at: Instant,
+    parser: Parser,
+    next_cseq: u32,
+    in_flight: Option<InFlight>,
+    auth: Option<Auth>,
+    session_header: Option<String>,
+    receiver_ports: Option<ReceiverPorts>,
+    outputs: VecDeque<Output>,
+    pending_volume: Option<Volume>,
+    pending_read_volume: bool,
+    pending_flush: Option<(u16, u32)>,
+    metadata_queue: VecDeque<Metadata>,
+    last_volume_sent: Option<Instant>,
+    last_request_at: Option<Instant>,
+    teardown_deadline: Option<Instant>,
+    last_timing_request: Option<Instant>,
+    udp_failures: u8,
+    server: Option<String>,
+    jack: Option<JackStatus>,
+    methods: Option<Vec<String>>,
+}
+
+impl Session {
+    /// A session that waits for its TCP connect, started at `now`.
+    pub fn new(config: SessionConfig, ids: SessionIds, now: Instant) -> Session {
+        Session {
+            config,
+            ids,
+            state: State::Connecting,
+            created_at: now,
+            parser: Parser::new(),
+            next_cseq: 0,
+            in_flight: None,
+            auth: None,
+            session_header: None,
+            receiver_ports: None,
+            outputs: VecDeque::new(),
+            pending_volume: None,
+            pending_read_volume: false,
+            pending_flush: None,
+            metadata_queue: VecDeque::new(),
+            last_volume_sent: None,
+            last_request_at: None,
+            teardown_deadline: None,
+            last_timing_request: None,
+            udp_failures: 0,
+            server: None,
+            jack: None,
+            methods: None,
+        }
+    }
+
+    pub fn state(&self) -> State {
+        self.state
+    }
+
+    pub fn ids(&self) -> &SessionIds {
+        &self.ids
+    }
+
+    /// The request URI, `rtsp://<sender address>/<session-id>` (P23). An IPv6
+    /// address is written as is, without brackets or scope (G16).
+    pub fn uri(&self) -> String {
+        format!("rtsp://{}/{}", self.config.local_addr, self.ids.session_id)
+    }
+
+    /// The receiver's ports, once SETUP succeeded.
+    pub fn receiver_ports(&self) -> Option<ReceiverPorts> {
+        self.receiver_ports
+    }
+
+    /// The receiver's `Server` header, if it sent one (P24).
+    pub fn server(&self) -> Option<&str> {
+        self.server.as_deref()
+    }
+
+    /// The last `Audio-Jack-Status` (P24).
+    pub fn jack_status(&self) -> Option<JackStatus> {
+        self.jack
+    }
+
+    /// The OPTIONS answer's `Public` list, if it had one (P27).
+    pub fn methods(&self) -> Option<&[String]> {
+        self.methods.as_deref()
+    }
+
+    /// Whether audio, sync and retransmission packets may be sent: only after
+    /// RECORD was answered with 200, and not once teardown has started (P26,
+    /// P35).
+    pub fn media_allowed(&self) -> bool {
+        self.state == State::Playing
+    }
+
+    /// The next output, in order.
+    pub fn poll_output(&mut self) -> Option<Output> {
+        self.outputs.pop_front()
+    }
+
+    /// The next time [`Session::handle_timeout`] must run, if any.
+    pub fn poll_timeout(&self) -> Option<Instant> {
+        if self.state == State::Closed {
+            return None;
+        }
+        let mut times = Vec::new();
+        if self.state == State::Connecting {
+            times.push(self.created_at + CONNECT_TIMEOUT);
+        }
+        if let Some(in_flight) = &self.in_flight {
+            times.push(in_flight.sent_at + RESPONSE_TIMEOUT);
+        }
+        times.extend(self.teardown_deadline);
+        times.extend(self.last_timing_request.map(|at| at + TIMING_SILENCE));
+        if self.state == State::Playing && self.in_flight.is_none() {
+            if self.pending_volume.is_some() {
+                times.extend(self.last_volume_sent.map(|at| at + VOLUME_INTERVAL));
+            }
+            times.extend(self.last_request_at.map(|at| at + KEEPALIVE_IDLE));
+        }
+        times.into_iter().min()
+    }
+
+    /// The TCP connect succeeded: OPTIONS goes out.
+    pub fn handle_connected(&mut self, now: Instant) {
+        if self.state == State::Connecting {
+            self.send(Kind::Options { keepalive: false }, now, false);
+        }
+    }
+
+    /// The TCP connect was refused or found no route (P134).
+    pub fn handle_connect_failed(&mut self, _now: Instant) {
+        if self.state == State::Connecting {
+            self.fail(ErrorKind::Unreachable, None, None, None);
+        }
+    }
+
+    /// The receiver closed or reset the connection (P141).
+    pub fn handle_connection_closed(&mut self, _now: Instant) {
+        match self.state {
+            State::Closed => {}
+            State::TearingDown => self.finish(),
+            State::Connecting => self.fail(ErrorKind::Unreachable, None, None, None),
+            _ => self.fail(ErrorKind::Lost, None, None, Some("connection closed")),
+        }
+    }
+
+    /// A timing request arrived on the session's timing socket (P131).
+    pub fn handle_timing_request(&mut self, now: Instant) {
+        if self.state != State::Closed {
+            self.last_timing_request = Some(now);
+        }
+    }
+
+    /// The result of a UDP send to the receiver: two unreachable errors in a
+    /// row mean it is lost (P141).
+    pub fn handle_udp_send(&mut self, result: UdpSendResult, _now: Instant) {
+        match result {
+            UdpSendResult::Sent => self.udp_failures = 0,
+            UdpSendResult::Unreachable => {
+                self.udp_failures = self.udp_failures.saturating_add(1);
+                if self.udp_failures >= 2 {
+                    self.fail(
+                        ErrorKind::Lost,
+                        None,
+                        None,
+                        Some("two UDP sends in a row were unreachable"),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Runs the timers due at `now`.
+    pub fn handle_timeout(&mut self, now: Instant) {
+        if self.state == State::Closed {
+            return;
+        }
+        if self.state == State::Connecting && now >= self.created_at + CONNECT_TIMEOUT {
+            self.fail(
+                ErrorKind::Unreachable,
+                None,
+                None,
+                Some("connect timed out"),
+            );
+            return;
+        }
+        if self
+            .teardown_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.finish();
+            return;
+        }
+        if let Some(in_flight) = &self.in_flight {
+            if now >= in_flight.sent_at + RESPONSE_TIMEOUT {
+                let method = in_flight.kind.method();
+                self.fail(ErrorKind::Timeout, Some(method), None, None);
+                return;
+            }
+        }
+        if self
+            .last_timing_request
+            .is_some_and(|at| now >= at + TIMING_SILENCE)
+        {
+            self.fail(
+                ErrorKind::Lost,
+                None,
+                None,
+                Some("no timing request for 10 s"),
+            );
+            return;
+        }
+        self.drive(now);
+    }
+
+    /// Bytes read from the RTSP connection.
+    pub fn handle_input(&mut self, bytes: &[u8], now: Instant) {
+        if matches!(self.state, State::Closed | State::Connecting) {
+            return;
+        }
+        self.parser.push(bytes);
+        loop {
+            match self.parser.next_message() {
+                Ok(None) => break,
+                Ok(Some(Message::Response(response))) => {
+                    self.on_response(response, now);
+                    if self.state == State::Closed {
+                        return;
+                    }
+                }
+                Ok(Some(Message::Request(_))) | Err(ParseError::UnknownMethod) => {
+                    // The receiver sends no requests in AirPlay 1 (P40).
+                    self.fail(
+                        ErrorKind::ProtocolError,
+                        None,
+                        None,
+                        Some("request from the receiver"),
+                    );
+                    return;
+                }
+                Err(error) => {
+                    let method = self.in_flight.as_ref().map(|f| f.kind.method());
+                    self.fail(ErrorKind::ProtocolError, method, None, Some(error.detail()));
+                    return;
+                }
+            }
+        }
+        self.drive(now);
+    }
+
+    /// Sets the speaker volume (P118, P120). Before RECORD it replaces the
+    /// initial volume; while playing, a newer value replaces one still
+    /// queued. NaN is ignored. With software volume no request is sent
+    /// (P121).
+    pub fn set_volume(&mut self, volume: Volume, now: Instant) {
+        if matches!(volume, Volume::Db(db) if db.is_nan()) {
+            return;
+        }
+        match self.state {
+            State::Closed | State::TearingDown => {}
+            State::Playing if !self.config.software_volume => {
+                self.pending_volume = Some(volume);
+                self.drive(now);
+            }
+            _ => self.config.initial_volume = volume,
+        }
+    }
+
+    /// Asks the receiver for its volume with GET_PARAMETER (P122). Only while
+    /// playing; the answer arrives as [`SessionEvent::VolumeReported`].
+    pub fn read_volume(&mut self, now: Instant) -> bool {
+        if self.state != State::Playing {
+            return false;
+        }
+        self.pending_read_volume = true;
+        self.drive(now);
+        true
+    }
+
+    /// Sends FLUSH naming the first packet that will follow it (P34). Only
+    /// while playing; a newer flush replaces one still queued.
+    pub fn flush(&mut self, seq: u16, rtptime: u32, now: Instant) -> bool {
+        if self.state != State::Playing {
+            return false;
+        }
+        self.pending_flush = Some((seq, rtptime));
+        self.drive(now);
+        true
+    }
+
+    /// Queues a metadata request (P123 to P127). Types the receiver doesn't
+    /// list are refused. Metadata waits behind any pending volume request and
+    /// goes out once the session plays.
+    pub fn send_metadata(&mut self, metadata: Metadata, now: Instant) -> Result<(), MetadataError> {
+        if matches!(self.state, State::Closed | State::TearingDown) {
+            return Err(MetadataError::SessionEnded);
+        }
+        if !self.config.metadata.allows(metadata.kind()) {
+            return Err(MetadataError::NotListed);
+        }
+        metadata.validate()?;
+        self.metadata_queue.push_back(metadata);
+        self.drive(now);
+        Ok(())
+    }
+
+    /// Stops the session (P35, P129): no more media, TEARDOWN once the
+    /// request in flight (if any) is answered, then close after the answer or
+    /// 2 s after this call, whichever comes first. Before SETUP succeeded
+    /// there is no receiver session to tear down, so the connection just
+    /// closes.
+    pub fn teardown(&mut self, now: Instant) {
+        match self.state {
+            State::Closed | State::TearingDown => {}
+            _ if self.session_header.is_none() => self.finish(),
+            _ => {
+                self.state = State::TearingDown;
+                self.teardown_deadline = Some(now + TEARDOWN_TIMEOUT);
+                self.clear_queues();
+                self.drive(now);
+            }
+        }
+    }
+
+    fn clear_queues(&mut self) {
+        self.pending_volume = None;
+        self.pending_read_volume = false;
+        self.pending_flush = None;
+        self.metadata_queue.clear();
+    }
+
+    /// Ends the session with an error (during teardown, just closes).
+    fn fail(
+        &mut self,
+        kind: ErrorKind,
+        method: Option<Method>,
+        status: Option<u16>,
+        detail: Option<&'static str>,
+    ) {
+        self.fail_with(SessionError {
+            kind,
+            method,
+            status,
+            fallback: None,
+            detail,
+        });
+    }
+
+    fn fail_with(&mut self, error: SessionError) {
+        match self.state {
+            State::Closed => {}
+            State::TearingDown => self.finish(),
+            _ => {
+                self.close();
+                self.outputs
+                    .push_back(Output::Event(SessionEvent::Failed(error)));
+            }
+        }
+    }
+
+    /// Ends the session after a teardown.
+    fn finish(&mut self) {
+        if self.state != State::Closed {
+            self.close();
+            self.outputs.push_back(Output::Event(SessionEvent::Closed));
+        }
+    }
+
+    fn close(&mut self) {
+        self.state = State::Closed;
+        self.in_flight = None;
+        self.teardown_deadline = None;
+        self.last_timing_request = None;
+        self.clear_queues();
+        self.outputs.push_back(Output::Close);
+    }
+
+    fn event(&mut self, event: SessionEvent) {
+        self.outputs.push_back(Output::Event(event));
+    }
+
+    /// Sends the next queued request when nothing is in flight.
+    fn drive(&mut self, now: Instant) {
+        if self.in_flight.is_some() {
+            return;
+        }
+        match self.state {
+            State::TearingDown => self.send(Kind::Teardown, now, false),
+            State::Playing => {
+                if let Some((seq, rtptime)) = self.pending_flush.take() {
+                    return self.send(Kind::Flush { seq, rtptime }, now, false);
+                }
+                if let Some(volume) = self.pending_volume {
+                    let ready = self
+                        .last_volume_sent
+                        .is_none_or(|at| now >= at + VOLUME_INTERVAL);
+                    if ready {
+                        self.pending_volume = None;
+                        return self.send(Kind::Volume(volume), now, false);
+                    }
+                }
+                if self.pending_read_volume {
+                    self.pending_read_volume = false;
+                    return self.send(Kind::ReadVolume, now, false);
+                }
+                if self.pending_volume.is_some() {
+                    // Metadata and keep-alives wait behind volume (P120, P127).
+                    return;
+                }
+                if let Some(metadata) = self.metadata_queue.pop_front() {
+                    return self.send(Kind::Metadata(metadata), now, false);
+                }
+                if self
+                    .last_request_at
+                    .is_some_and(|at| now >= at + KEEPALIVE_IDLE)
+                {
+                    self.send(Kind::Options { keepalive: true }, now, false);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Encodes and queues one request with the next CSeq (P21), the common
+    /// headers (P22), `Session` where P25 asks for it and `Authorization`
+    /// once a challenge arrived (P38).
+    fn send(&mut self, kind: Kind, now: Instant, stale_retried: bool) {
+        let cseq = self.next_cseq;
+        self.next_cseq = self.next_cseq.wrapping_add(1);
+        let method = kind.method();
+        let uri = match &kind {
+            Kind::Options { .. } => "*".to_owned(),
+            Kind::AuthSetup => "/auth-setup".to_owned(),
+            Kind::VerifyFirst(_) | Kind::VerifySecond(_) => "/pair-verify".to_owned(),
+            _ => self.uri(),
+        };
+        let mut request = Request::new(method, uri.clone());
+        let headers = &mut request.headers;
+        headers.push("CSeq", cseq.to_string());
+        match &kind {
+            Kind::Options { .. } | Kind::Teardown => {}
+            Kind::AuthSetup => {
+                headers.push("Content-Type", "application/octet-stream");
+                let key = self.config.auth_setup_key.unwrap_or_default();
+                request.body = [&[0x01][..], &key[..]].concat();
+            }
+            Kind::VerifyFirst(body) | Kind::VerifySecond(body) => {
+                headers.push("Content-Type", "application/octet-stream");
+                request.body = body.clone();
+            }
+            Kind::Announce => {
+                headers.push("Content-Type", "application/sdp");
+                request.body = sdp::announce_body(
+                    self.ids.session_id,
+                    self.config.local_addr,
+                    self.config.remote_addr,
+                    self.config.codec,
+                )
+                .into_bytes();
+            }
+            Kind::Setup => headers.push(
+                "Transport",
+                format!(
+                    "RTP/AVP/UDP;unicast;interleaved=0-1;mode=record;control_port={};timing_port={}",
+                    self.config.control_port, self.config.timing_port
+                ),
+            ),
+            Kind::Record => {
+                headers.push("Range", "npt=0-");
+                headers.push(
+                    "RTP-Info",
+                    format!(
+                        "seq={};rtptime={}",
+                        self.ids.first_seq, self.ids.first_rtptime
+                    ),
+                );
+            }
+            Kind::Volume(volume) => {
+                headers.push("Content-Type", "text/parameters");
+                request.body = volume.parameter_body().into_bytes();
+            }
+            Kind::ReadVolume => {
+                headers.push("Content-Type", "text/parameters");
+                request.body = volume::READ_BODY.as_bytes().to_vec();
+            }
+            Kind::Metadata(metadata) => {
+                headers.push("Content-Type", metadata.content_type());
+                headers.push("RTP-Info", format!("rtptime={}", metadata.rtptime()));
+                request.body = metadata.body();
+            }
+            Kind::Flush { seq, rtptime } => {
+                headers.push("RTP-Info", format!("seq={seq};rtptime={rtptime}"));
+            }
+        }
+        let carries_session = matches!(
+            method,
+            Method::Record
+                | Method::SetParameter
+                | Method::GetParameter
+                | Method::Flush
+                | Method::Teardown
+        );
+        if carries_session {
+            if let Some(session) = &self.session_header {
+                request.headers.push("Session", session.clone());
+            }
+        }
+        let mut nonce = None;
+        if let (Some(auth), Some(password)) = (&mut self.auth, &self.config.password) {
+            auth.count = auth.count.wrapping_add(1);
+            let value = digest::authorization(
+                &auth.challenge,
+                password,
+                method,
+                &uri,
+                auth.count,
+                &self.ids.cnonce_hex(),
+            );
+            request.headers.push("Authorization", value);
+            nonce = Some(auth.challenge.nonce.clone());
+        }
+        let headers = &mut request.headers;
+        headers.push("User-Agent", crate::user_agent());
+        headers.push("Client-Instance", self.ids.client_instance_hex());
+        headers.push("DACP-ID", self.ids.client_instance_hex());
+        headers.push("Active-Remote", self.ids.active_remote.to_string());
+        self.outputs.push_back(Output::Send(request.encode()));
+        self.state = match kind {
+            Kind::Options { keepalive: false } => State::Options,
+            Kind::AuthSetup => State::AuthSetup,
+            Kind::VerifyFirst(_) | Kind::VerifySecond(_) => State::Verify,
+            Kind::Announce => State::Announce,
+            Kind::Setup => State::Setup,
+            Kind::Record => State::Record,
+            _ => self.state,
+        };
+        if let Kind::Volume(_) = kind {
+            self.last_volume_sent = Some(now);
+        }
+        self.last_request_at = Some(now);
+        self.in_flight = Some(InFlight {
+            kind,
+            cseq,
+            sent_at: now,
+            nonce,
+            stale_retried,
+        });
+    }
+
+    fn on_response(&mut self, response: Response, now: Instant) {
+        let Some(in_flight) = self.in_flight.take() else {
+            self.fail(
+                ErrorKind::ProtocolError,
+                None,
+                Some(response.code),
+                Some("response without a request"),
+            );
+            return;
+        };
+        let method = in_flight.kind.method();
+        if response.cseq() != Some(in_flight.cseq) {
+            self.fail(
+                ErrorKind::ProtocolError,
+                Some(method),
+                Some(response.code),
+                Some("response CSeq does not match the request"),
+            );
+            return;
+        }
+        self.note_receiver_headers(&response);
+        if self.state == State::TearingDown {
+            // The answer to TEARDOWN ends the session; the answer to a request
+            // sent before the teardown only clears the way for TEARDOWN.
+            if in_flight.kind == Kind::Teardown {
+                self.finish();
+            }
+            return;
+        }
+        if response.code == 401 && in_flight.kind != Kind::AuthSetup {
+            self.on_unauthorized(in_flight, &response, now);
+            return;
+        }
+        let code = response.code;
+        let success = response.is_success();
+        match in_flight.kind {
+            Kind::Options { keepalive } => {
+                if !success {
+                    self.fail(ErrorKind::Refused, Some(method), Some(code), None);
+                } else if !keepalive {
+                    self.on_options(&response, now);
+                }
+            }
+            Kind::AuthSetup => {
+                // The answer proves the receiver to a sender that doesn't
+                // check it; a failure isn't fatal either (P60).
+                if !success {
+                    self.event(SessionEvent::Warning(Warning::AuthSetupFailed {
+                        status: code,
+                    }));
+                }
+                self.after_auth_setup(now);
+            }
+            Kind::VerifyFirst(_) => {
+                if code != 200 {
+                    self.fail(ErrorKind::PairingRequired, Some(method), Some(code), None);
+                    return;
+                }
+                let second = self
+                    .config
+                    .verifier
+                    .as_mut()
+                    .and_then(|verifier| verifier.second_request(&response.body));
+                match second {
+                    Some(body) => self.send(Kind::VerifySecond(body), now, false),
+                    None => self.fail(
+                        ErrorKind::ProtocolError,
+                        Some(method),
+                        Some(code),
+                        Some("malformed pair-verify answer"),
+                    ),
+                }
+            }
+            Kind::VerifySecond(_) => {
+                if code == 200 {
+                    self.send(Kind::Announce, now, false);
+                } else {
+                    self.fail(ErrorKind::PairingRequired, Some(method), Some(code), None);
+                }
+            }
+            Kind::Announce => {
+                if success {
+                    self.send(Kind::Setup, now, false);
+                } else {
+                    self.on_announce_refused(code);
+                }
+            }
+            Kind::Setup => {
+                if success {
+                    self.on_setup(&response, now);
+                } else {
+                    self.on_startup_refused(method, code);
+                }
+            }
+            Kind::Record => {
+                if success {
+                    self.on_record(&response);
+                } else {
+                    self.on_startup_refused(method, code);
+                }
+            }
+            Kind::Volume(_) | Kind::Metadata(_) | Kind::ReadVolume | Kind::Flush { .. }
+                if !success =>
+            {
+                self.event(SessionEvent::Warning(Warning::RequestFailed {
+                    method,
+                    status: code,
+                }));
+            }
+            Kind::ReadVolume => {
+                if let Some(db) = volume::parse_reported(&response.body) {
+                    self.event(SessionEvent::VolumeReported(db));
+                }
+            }
+            Kind::Flush { seq, rtptime } => {
+                // An RTP-Info header in the answer is ignored (P34).
+                self.event(SessionEvent::Flushed { seq, rtptime });
+            }
+            Kind::Volume(_) | Kind::Metadata(_) | Kind::Teardown => {}
+        }
+    }
+
+    /// Server and Audio-Jack-Status, reported when first seen or changed
+    /// (P24).
+    fn note_receiver_headers(&mut self, response: &Response) {
+        if let Some(server) = response.headers.get("Server") {
+            if self.server.as_deref() != Some(server) {
+                self.server = Some(server.to_owned());
+                self.event(SessionEvent::Server(server.to_owned()));
+            }
+        }
+        let jack = response
+            .headers
+            .get("Audio-Jack-Status")
+            .and_then(JackStatus::parse);
+        if let Some(jack) = jack {
+            if self.jack != Some(jack) {
+                self.jack = Some(jack);
+                self.event(SessionEvent::AudioJack(jack));
+                if !jack.connected {
+                    self.event(SessionEvent::Warning(Warning::JackDisconnected));
+                }
+            }
+        }
+    }
+
+    /// A 401 (P36, P38, P39, P135). The first challenge leads to one retry
+    /// with `Authorization`; a `stale=true` challenge to a request that
+    /// carried it leads to one more; any other 401 to a request that carried
+    /// it means the password is wrong.
+    fn on_unauthorized(&mut self, in_flight: InFlight, response: &Response, now: Instant) {
+        let method = in_flight.kind.method();
+        let Some(challenge) = Challenge::from_headers(&response.headers) else {
+            self.fail(
+                ErrorKind::ProtocolError,
+                Some(method),
+                Some(401),
+                Some("401 without a usable digest challenge"),
+            );
+            return;
+        };
+        if self.config.password.is_none() {
+            self.fail(ErrorKind::PasswordRequired, Some(method), Some(401), None);
+            return;
+        }
+        let stale_retry = match in_flight.nonce {
+            None => false,
+            Some(_) if challenge.stale && !in_flight.stale_retried => true,
+            Some(_) => {
+                self.fail(ErrorKind::WrongPassword, Some(method), Some(401), None);
+                return;
+            }
+        };
+        self.auth = Some(Auth {
+            challenge,
+            count: 0,
+        });
+        self.send(in_flight.kind, now, stale_retry || in_flight.stale_retried);
+    }
+
+    /// The OPTIONS answer at the start (P27).
+    fn on_options(&mut self, response: &Response, now: Instant) {
+        if let Some(public) = response.headers.get("Public") {
+            let methods = rtsp::public_methods(public);
+            self.methods = Some(methods.clone());
+            self.event(SessionEvent::Methods(methods.clone()));
+            let required = ["ANNOUNCE", "SETUP", "RECORD"];
+            if !required
+                .iter()
+                .all(|needed| methods.iter().any(|m| m == needed))
+            {
+                self.fail(
+                    ErrorKind::Unsupported(UnsupportedReason::Methods),
+                    Some(Method::Options),
+                    Some(response.code),
+                    None,
+                );
+                return;
+            }
+        }
+        if self.config.auth_setup_key.is_some() {
+            self.send(Kind::AuthSetup, now, false);
+        } else {
+            self.after_auth_setup(now);
+        }
+    }
+
+    fn after_auth_setup(&mut self, now: Instant) {
+        match self.config.verifier.as_mut() {
+            Some(verifier) => {
+                let body = verifier.first_request();
+                self.send(Kind::VerifyFirst(body), now, false);
+            }
+            None => self.send(Kind::Announce, now, false),
+        }
+    }
+
+    /// A refused ANNOUNCE (P46, P74, P137, P138).
+    fn on_announce_refused(&mut self, code: u16) {
+        let client_error = (400..500).contains(&code) && code != 401 && code != 453;
+        let mut error = SessionError::new(ErrorKind::Refused);
+        error.method = Some(Method::Announce);
+        error.status = Some(code);
+        if code == 453 {
+            error.kind = ErrorKind::Busy;
+        } else if client_error && self.config.codec == Codec::Pcm && self.config.alac_fallback {
+            error.fallback = Some(Codec::Alac);
+        } else if client_error && self.config.apple_tv_without_credentials {
+            error.kind = ErrorKind::PairingRequired;
+        }
+        self.fail_with(error);
+    }
+
+    /// A refused SETUP or RECORD: 453 is Busy, anything else Refused (P137,
+    /// P138).
+    fn on_startup_refused(&mut self, method: Method, code: u16) {
+        let kind = if code == 453 {
+            ErrorKind::Busy
+        } else {
+            ErrorKind::Refused
+        };
+        self.fail(kind, Some(method), Some(code), None);
+    }
+
+    /// The SETUP answer (P25, P31): `server_port` and `control_port` are
+    /// required, `timing_port` may be 0 or missing, and `Session` is required.
+    fn on_setup(&mut self, response: &Response, now: Instant) {
+        let ports = response
+            .headers
+            .get("Transport")
+            .map(TransportPorts::parse)
+            .unwrap_or_default();
+        let (Some(server_port), Some(control_port)) = (ports.server_port, ports.control_port)
+        else {
+            self.fail(
+                ErrorKind::ProtocolError,
+                Some(Method::Setup),
+                Some(response.code),
+                Some("SETUP answer without server_port or control_port"),
+            );
+            return;
+        };
+        let Some(session) = response.headers.get("Session").and_then(rtsp::session_id) else {
+            self.fail(
+                ErrorKind::ProtocolError,
+                Some(Method::Setup),
+                Some(response.code),
+                Some("SETUP answer without Session"),
+            );
+            return;
+        };
+        self.session_header = Some(session.to_owned());
+        self.receiver_ports = Some(ReceiverPorts {
+            server_port,
+            control_port,
+            timing_port: ports.timing_port.unwrap_or(0),
+        });
+        self.send(Kind::Record, now, false);
+    }
+
+    /// The RECORD answer (P26, P32, P119): media may flow, and the initial
+    /// volume is queued first.
+    fn on_record(&mut self, response: &Response) {
+        let Some(receiver_ports) = self.receiver_ports else {
+            // RECORD is sent only after a SETUP answer with ports.
+            self.fail(ErrorKind::ProtocolError, Some(Method::Record), None, None);
+            return;
+        };
+        self.state = State::Playing;
+        let audio_latency = response
+            .headers
+            .get("Audio-Latency")
+            .and_then(rtsp::audio_latency);
+        self.event(SessionEvent::Recording {
+            first_seq: self.ids.first_seq,
+            first_rtptime: self.ids.first_rtptime,
+            audio_latency,
+            receiver_ports,
+        });
+        if !self.config.software_volume {
+            self.pending_volume = Some(self.config.initial_volume);
+        }
+    }
+}

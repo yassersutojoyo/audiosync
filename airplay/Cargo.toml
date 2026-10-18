@@ -1,0 +1,13 @@
+[package]
+name = "audiosync-airplay"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "AudioSync's own AirPlay sender: discovery records, RTSP, SDP, digest authentication and the AirPlay 1 session, as sans-I/O state machines."
+repository = "https://github.com/yassersutojoyo/audiosync"
+publish = false
+
+[dependencies]
+getrandom = "0.4.3"
+md-5 = { version = "0.11.0", default-features = false }
