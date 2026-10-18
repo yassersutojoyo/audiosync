@@ -498,7 +498,8 @@ pub unsafe extern "C" fn asc_reader_tolerance_frames(reader: *const AscReader) -
     unsafe { control_of(reader) }.map_or(0, ReaderControl::tolerance_frames)
 }
 
-/// Any thread: asks the next read to re-anchor at the target delay (S41).
+/// Any thread: asks the reader to re-anchor at the target delay, which its
+/// next read with unread frames does (S41, S46).
 ///
 /// # Safety
 ///

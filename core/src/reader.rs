@@ -4,10 +4,15 @@
 //! own delay, with its own drift correction (S9, S58). A read emits exactly N
 //! frames; the indices of the frames a reader emits since its latest prime are
 //! strictly increasing (S49, S159), so no delay change, drift correction,
-//! writer stall, starved render or overrun ever repeats audio. Delay changes
-//! are exact (S46); drift is held inside a dead band of T frames (S50-S52,
-//! S57). During a writer stall a reader plays buffered frames only while it
-//! stays inside the dead band, then holds silence (S53).
+//! writer stall, starved render or overrun ever repeats audio. A reader
+//! anchors (primes) once more than its delay is written and is silent until
+//! then (S45). Drift is held inside a dead band of T frames (S50-S52, S57).
+//! During a writer stall a reader plays buffered frames only while it stays
+//! inside the dead band, then holds silence (S53); a reader that reaches W
+//! is dry and makes no correction until the writer writes again (S44, S52).
+//! A delay change is applied by the first read that finds unread frames, so
+//! a change that reaches a dry reader waits for the writer; with a block
+//! written before each read it is exact (S46).
 //!
 //! The control thread talks to a reader through a [`ReaderControl`]: the
 //! target delay is stored before the resync flag, the flag is raised with
@@ -45,22 +50,28 @@ pub fn delay_ms_to_frames(ms: f64, rate: u32) -> Option<i64> {
 /// Why a read re-positioned the reader (S44 step 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Correction {
-    /// The block follows the previous one.
+    /// No re-positioning: the block follows the previous one, or the read
+    /// was silent because the reader waits to prime (S45) or is dry (S44
+    /// step 2).
     #[default]
     None,
-    /// Not anchored (the first read, or the first after a prime reset):
-    /// anchored at `W - De` and counted as a prime (S45, S158, S159).
+    /// Not anchored (a new reader, or one after a prime reset) and more than
+    /// De frames written: anchored at `W - De` and counted as a prime (S45,
+    /// S158, S159).
     Prime,
-    /// A requested resync, e.g. a delay change: re-anchored at `W - De` (S46).
+    /// A requested resync, e.g. a delay change, applied by the first read
+    /// that finds unread frames: re-anchored at `W - De` (S46).
     Resync,
     /// Behind by more than T: skipped forward to `W - De` (S51).
     SkipForward,
-    /// The frames needed were overwritten (`P` below `W - C + M`, or the
-    /// previous copy was overtaken by the writer): skipped forward to
-    /// `W - De` (S55, S40). Counted as a drift skip.
+    /// The frames needed were overwritten (`P` below the oldest readable
+    /// frame `W - C + M` once that is above 0, or the previous copy was
+    /// overtaken by the writer): skipped forward to `W - De` (S55, S40).
+    /// Counted as a drift skip.
     Overrun,
-    /// Ahead by more than T, whether or not the writer moves: stepped back to
-    /// `W - De`; frames already played are masked (S52, S53).
+    /// Ahead by more than T, whether or not the writer moves, unless the
+    /// reader is dry: stepped back to `W - De`; frames already played are
+    /// masked (S52, S53).
     StepBack,
 }
 
@@ -73,8 +84,8 @@ pub struct ReadReport {
     pub written: i64,
     /// De: the effective delay used (S42).
     pub delay: i64,
-    /// e = (W - P) - De for the P the read started from (0 before the first
-    /// anchor). Positive when behind, negative when ahead.
+    /// e = (W - P) - De for the P the read started from (0 while not
+    /// anchored). Positive when behind, negative when ahead.
     pub error: i64,
     /// Frame index of the block's first frame (P after step 2).
     pub start: i64,
@@ -83,12 +94,14 @@ pub struct ReadReport {
     /// The re-positioning this read made, if any.
     pub correction: Correction,
     /// Leading frames output as silence because they were already played or
-    /// are gone (S44 step 3). Masked silence is not starvation.
+    /// are gone (S44 step 3), or the whole block of a read that waits to
+    /// prime (S45). Masked silence is not starvation.
     pub masked: usize,
     /// Frames copied from the ring.
     pub copied: usize,
     /// Trailing frames output as silence because the read reached W before
-    /// the block was full: a starved render (S53, S158).
+    /// the block was full: a starved render (S53, S158). The whole block of
+    /// a dry read (S44 step 2).
     pub starved: usize,
     /// The post-copy check failed and the copied frames were replaced by
     /// silence (S40); the next read skips forward (S55).
@@ -158,8 +171,10 @@ pub struct ReaderControl {
 }
 
 impl ReaderControl {
-    /// Sets the target delay D in frames and requests a resync, so the next
-    /// read applies it exactly (S46). The target is stored before the flag.
+    /// Sets the target delay D in frames and requests a resync, which the
+    /// next read that finds unread frames applies (S46); while the reader is
+    /// dry, the change waits for the writer. The target is stored before the
+    /// flag.
     pub fn set_delay_frames(&self, frames: i64) {
         self.shared.delay.store(frames.max(0), Ordering::Relaxed);
         self.request_resync();
@@ -182,14 +197,17 @@ impl ReaderControl {
         self.shared.tolerance.load(Ordering::Relaxed)
     }
 
-    /// Asks the next read to re-anchor at its requested delay (S41).
+    /// Asks the reader to re-anchor at its requested delay, which the next
+    /// read that finds unread frames does (S41, S46).
     pub fn request_resync(&self) {
         self.shared.resync.store(true, Ordering::Release);
     }
 
-    /// Asks the next read to return the reader to its initial state (not
-    /// anchored, F = 0; the counters are kept), so that read anchors at
-    /// `W - De` and counts a prime (S159).
+    /// Asks the next read to return the reader to its initial state: not
+    /// anchored and F = 0, with the counters kept, and P kept only to feed
+    /// `lagFrames` until the next prime. The next read that finds more than
+    /// De frames written then anchors at `W - De` and counts a prime, whether
+    /// or not the writer is running (S159).
     pub fn reset_prime(&self) {
         self.shared.prime.store(true, Ordering::Release);
     }
@@ -224,13 +242,14 @@ impl ReaderControl {
 pub struct Reader {
     ring: Arc<Ring>,
     shared: Arc<Shared>,
-    /// P: index of the next frame to read.
+    /// P: index of the next frame to read. Kept by a prime reset (S159).
     next: i64,
     /// F: one past the highest frame index emitted since the latest prime.
     emitted_end: i64,
     anchored: bool,
-    /// The target delay `read_target` applies. Taken from the control only
-    /// with a resync or a prime, never on its own.
+    /// The target delay `read_target` applies. Loaded from the control by
+    /// every read while not anchored and by the read that applies a resync,
+    /// never on its own.
     applied_delay: i64,
     /// Set when a copy failed the post-copy check (S40): the next read skips
     /// forward as for an overrun (S55).
@@ -254,7 +273,7 @@ impl Reader {
     /// Creates a reader of `ring` for a session captured at `capture_rate`.
     /// The tolerance starts at `round(0.035 × capture_rate)` (S50), the target
     /// delay at 0 (floored to one block, S42). Not anchored until its first
-    /// read (S43, S45).
+    /// read that finds more than De frames written (S43, S45).
     pub fn new(ring: Arc<Ring>, capture_rate: u32) -> Reader {
         let shared = Arc::new(Shared::default());
         shared
@@ -292,8 +311,9 @@ impl Reader {
 
     /// Reads `frames` frames (at most `dst.len() / 2`) into the start of
     /// `dst` at delay `delay_frames` with tolerance `tolerance_frames`, the
-    /// interface of S41. Pending prime-reset and resync requests are taken
-    /// by this read.
+    /// interface of S41. A pending prime reset is taken by this read; a
+    /// pending resync waits for the first read that primes or finds unread
+    /// frames (S44 step 2, S46).
     ///
     /// Never allocates, locks or blocks; O(N).
     pub fn read(
@@ -303,81 +323,110 @@ impl Reader {
         delay_frames: i64,
         tolerance_frames: i64,
     ) -> ReadReport {
-        let resync = self.take_requests();
-        self.read_at(dst, frames, delay_frames, tolerance_frames, resync)
+        self.read_at(dst, frames, Some(delay_frames), tolerance_frames)
     }
 
     /// Reads at the delay and tolerance set through [`ReaderControl`].
     ///
-    /// The reader keeps the delay it applies and takes the control's target
-    /// only when it takes a resync request or a prime reset (or anchors for
-    /// the first time). The control stores a target before raising its
-    /// resync flag, so a read between the two keeps the old delay instead of
-    /// applying the new one as a drift correction; the next read applies it
-    /// as a resync (S46, S158). The flag is taken with acquire ordering
-    /// before the target is loaded, so a flagged target is never stale
-    /// (S133).
+    /// The reader keeps the delay it applies. It loads the control's target
+    /// on every read while it is not anchored, and afterwards only on the
+    /// read that applies a resync request. The control stores a target
+    /// before raising its resync flag, so a read between the two keeps the
+    /// old delay instead of applying the new one as a drift correction; the
+    /// next read applies it as a resync (S46, S158). A dry read leaves the
+    /// request for the first read that finds unread frames (S44 step 2). The
+    /// flag is taken with acquire ordering before the target is loaded, so a
+    /// flagged target is never stale (S133).
     pub fn read_target(&mut self, dst: &mut [f32], frames: usize) -> ReadReport {
-        let resync = self.take_requests();
-        if resync || !self.anchored {
+        let tolerance = self.shared.tolerance.load(Ordering::Relaxed);
+        self.read_at(dst, frames, None, tolerance)
+    }
+
+    /// D for this read: the caller's (`given`), or else the control's
+    /// target. The target is loaded only when `load_target` is set, which
+    /// the caller does after taking the resync flag (S133), and is then kept
+    /// as the delay this reader applies.
+    fn delay(&mut self, given: Option<i64>, load_target: bool) -> i64 {
+        if let Some(delay) = given {
+            return delay;
+        }
+        if load_target {
             self.applied_delay = self.shared.delay.load(Ordering::Relaxed);
         }
-        let tolerance = self.shared.tolerance.load(Ordering::Relaxed);
-        self.read_at(dst, frames, self.applied_delay, tolerance, resync)
+        self.applied_delay
     }
 
-    /// Applies a pending prime reset (S159) and takes the resync flag.
-    fn take_requests(&mut self) -> bool {
-        if take(&self.shared.prime) {
-            self.next = 0;
-            self.emitted_end = 0;
-            self.anchored = false;
-            self.reanchor = false;
-        }
-        take(&self.shared.resync)
-    }
-
-    /// One read, S44 steps 1-4.
+    /// One read, S44 steps 1-4, at the caller's delay or at the target.
     fn read_at(
         &mut self,
         dst: &mut [f32],
         frames: usize,
-        delay: i64,
+        given: Option<i64>,
         tolerance: i64,
-        resync: bool,
     ) -> ReadReport {
+        if take(&self.shared.prime) {
+            // S159: the initial state again, except for the counters and P,
+            // which only feeds lagFrames until the next prime.
+            self.emitted_end = 0;
+            self.anchored = false;
+            self.reanchor = false;
+        }
         let frames = frames.min(dst.len() / 2);
         let n = frames as i64;
-        let ring = &*self.ring;
-        let capacity = ring.capacity() as i64;
-        let margin = ring.margin() as i64;
+        let capacity = self.ring.capacity() as i64;
+        let margin = self.ring.margin() as i64;
+        let effective = |delay: i64| delay.max(n).min(capacity - margin - n).max(0);
 
         // Step 1.
-        let w = ring.frames_written() as i64;
-        let de = delay.max(n).min(capacity - margin - n).max(0);
-        let oldest = ring.oldest_readable(w as u64) as i64;
+        let w = self.ring.frames_written() as i64;
+        let oldest = self.ring.oldest_readable(w as u64) as i64;
         let t = tolerance.max(0);
+        let p = self.next;
 
-        // Step 2. Only frames really overwritten (below W - C + M) make an
-        // overrun; a negative P early in a session reads silence (step 3)
-        // and follows the dead-band rules.
-        let e = if self.anchored {
-            (w - self.next) - de
+        // Step 2: the first case that applies decides. The resync flag is
+        // taken before a target is loaded.
+        let (de, correction) = if !self.anchored {
+            // Prime, once more than De frames are written (S45, S159).
+            let flagged = take(&self.shared.resync);
+            let de = effective(self.delay(given, true));
+            if w <= de {
+                if flagged {
+                    // Left as it was: the read that primes clears it.
+                    self.shared.resync.store(true, Ordering::Release);
+                }
+                return self.silent(dst, frames, w, de, false);
+            }
+            (de, Correction::Prime)
+        } else if p >= w {
+            // Dry: P never passes W, so the writer has written nothing since
+            // the reader reached W. No correction, whatever D is, and a
+            // pending resync waits for the first read that finds P < W.
+            let de = effective(self.delay(given, false));
+            return self.silent(dst, frames, w, de, true);
+        } else if take(&self.shared.resync) {
+            (effective(self.delay(given, true)), Correction::Resync)
         } else {
-            0
+            // Drift. Only frames really overwritten make an overrun: a
+            // negative P left by a resync early in a session, while
+            // `oldest` is still 0, reads silence in step 3 and follows the
+            // dead-band rules.
+            let de = effective(self.delay(given, false));
+            let e = (w - p) - de;
+            let correction = if self.reanchor || (oldest > 0 && p < oldest) {
+                Correction::Overrun
+            } else if e > t {
+                Correction::SkipForward
+            } else if e < -t {
+                Correction::StepBack
+            } else {
+                Correction::None
+            };
+            (de, correction)
         };
-        let correction = if !self.anchored {
-            Correction::Prime
-        } else if resync {
-            Correction::Resync
-        } else if self.reanchor || self.next < w - capacity + margin {
-            Correction::Overrun
-        } else if e > t {
-            Correction::SkipForward
-        } else if e < -t {
-            Correction::StepBack
+        let e = if correction == Correction::Prime {
+            0
         } else {
-            Correction::None
+            (w - p) - de
         };
         if correction != Correction::None {
             self.next = w - de;
@@ -388,6 +437,7 @@ impl Reader {
 
         // Step 3. The block splits into masked [p, lo), copied [lo, lim) and
         // starved [lim, end).
+        let ring = &*self.ring;
         let end = p + n;
         let lim = end.min(w).max(p);
         let lo = p.max(self.emitted_end).max(oldest).min(lim);
@@ -433,6 +483,34 @@ impl Reader {
             copied: if rejected { 0 } else { copied },
             starved,
             rejected,
+        }
+    }
+
+    /// A read that ends in step 2 (S44): N frames of silence, with P, F and
+    /// the resync flag left as they are. A reader waiting to prime (S45)
+    /// publishes `W - P` and counts nothing; its block counts as masked. A
+    /// dry reader publishes 0 and counts a starved render of N frames (S158).
+    fn silent(&self, dst: &mut [f32], frames: usize, w: i64, de: i64, dry: bool) -> ReadReport {
+        dst[..frames * 2].fill(0.0);
+        let (lag, error, masked, starved) = if dry {
+            (0, (w - self.next) - de, 0, frames)
+        } else {
+            (w - self.next, 0, frames, 0)
+        };
+        self.shared.lag.store(lag, Ordering::Relaxed);
+        self.count(Correction::None, 0, starved, false);
+        ReadReport {
+            frames,
+            written: w,
+            delay: de,
+            error,
+            start: self.next,
+            lag,
+            correction: Correction::None,
+            masked,
+            copied: 0,
+            starved,
+            rejected: false,
         }
     }
 
