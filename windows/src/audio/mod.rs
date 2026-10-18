@@ -19,6 +19,8 @@
 //!   the equalizer.
 //! - [`outputs`]: which outputs play, at what delay and gain, and their format.
 //! - [`render`]: an output's render pipeline, from the ring to the device.
+//! - [`routing`]: whether the source is heard twice, straight from Windows
+//!   as well as through AudioSync's delayed copies.
 //! - `wasapi` (Windows only): the WASAPI driver; `wasapi::open` gives the
 //!   backend the app runs on.
 //!
@@ -34,6 +36,7 @@ pub mod mock;
 pub mod outputs;
 pub mod process;
 pub mod render;
+pub mod routing;
 #[cfg(windows)]
 pub mod wasapi;
 

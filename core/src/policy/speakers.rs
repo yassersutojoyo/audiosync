@@ -303,6 +303,9 @@ pub enum NoticeSubject {
     Automation(String),
     /// The Local Network permission.
     LocalNetwork,
+    /// The source heard twice: straight from an output as well as through
+    /// AudioSync, where capture can't mute the source (Windows).
+    DoubleAudio,
 }
 
 /// A privacy setting a notice can open (S153); the host maps it to its settings app.
@@ -364,6 +367,15 @@ impl<S: PartialEq, N> Notices<S, N> {
     pub fn get(&self, subject: &S) -> Option<&N> {
         self.items
             .iter()
+            .find(|(existing, _)| existing == subject)
+            .map(|(_, notice)| notice)
+    }
+
+    /// The notice about `subject`, to change in place: it keeps its place in
+    /// the list.
+    pub fn get_mut(&mut self, subject: &S) -> Option<&mut N> {
+        self.items
+            .iter_mut()
             .find(|(existing, _)| existing == subject)
             .map(|(_, notice)| notice)
     }

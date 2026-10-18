@@ -1,6 +1,6 @@
 # Windows audio routing
 
-Research notes for the Windows 11 version of AudioSync (`windows/`). Process loopback capture is built and hardware test 1 has been run (results below); the detect-and-warn, the guided setup and the other hardware tests aren't done yet. The question: how to hear a captured app only through AudioSync's delayed, synced outputs, and not also directly from the PC.
+Research notes for the Windows 11 version of AudioSync (`windows/`). Process loopback capture is built, hardware test 1 has been run (results below) and double audio is detected and warned about ([Detection](#detection)); the guided setup and the other hardware tests aren't done yet. The question: how to hear a captured app only through AudioSync's delayed, synced outputs, and not also directly from the PC.
 
 ## The problem
 
@@ -104,6 +104,26 @@ What it means:
 
 - The session's mute and volume apply before the process loopback tap, for one app and for the whole system alike: 50% is exactly 6 dB down (a linear gain) and mute is digital silence. Auto-muting the source (3b) would silence AudioSync's copies too, so it's out. Guiding the user to send the app, or the Windows default output, to an output they don't listen to stays the recommendation.
 - Endpoint mute sits after the tap: every output endpoint was muted for the whole test and the unmuted session still came through at full level. So muting the endpoint the app plays on, when AudioSync doesn't play there itself, might be a documented alternative to rerouting the app. It silences everything else on that endpoint too, and nothing beyond this run has tested it.
+
+## Detection
+
+While AudioSync streams, it looks at every active output every 3 seconds: its mute and volume (`IAudioEndpointVolume`) and the apps with an active session on it (`IAudioSessionManager2`). It only reads. It never changes a mute, a volume or the default output.
+
+The rule: while AudioSync plays to at least one output, the source is heard twice from any output that isn't muted or at volume 0 where
+
+- the captured app plays (or one of its child processes, since the capture includes them), when one app is captured;
+- anything but AudioSync plays, or that is the Windows default output, when the whole system is captured.
+
+An output AudioSync plays to counts too: the original and the delayed copy meet on the same speaker. That's why the notice names the outputs you can simply mute apart from the ones AudioSync plays to as well. For those, the only fix is sending the app, or the default output, somewhere else.
+
+A few choices I made along the way:
+
+- An output keeps counting for about 15 seconds after the last active session there. Sessions go inactive whenever an app pauses or goes quiet for a moment, and without that hold a second app that plays a sound now and then would make the notice come and go in whole-system mode.
+- A paused app (one app captured, silent everywhere) keeps counting on the outputs AudioSync doesn't play to until it plays somewhere else or that output gets muted. It'll most likely play there again, and a mute shows right away. On an output AudioSync plays to it drops out after the 15 seconds, because moving the app away only shows once it plays again.
+- A virtual cable, or any other software device, counts only while AudioSync plays to it. Otherwise it's taken to be the output nobody listens to that the notice suggests.
+- A dismissed notice stays away for the same source and the same outputs, or fewer of them, until that app quits (for the whole system, until AudioSync quits).
+
+The known miss: a software device that forwards its sound to speakers you hear, like a voice changer or a virtual mixer, isn't flagged when one app is captured and plays into it, unless AudioSync plays to that device too. AudioSync can't see where the device sends its sound. Whole-system mode catches it anyway, because the forwarding app has its own session on the real speakers.
 
 ## AirPlay on Windows
 

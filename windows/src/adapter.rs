@@ -10,7 +10,12 @@
 //! turns it into notices. Notices carry a [`NoticeMessage`]; the UI words it.
 //!
 //! The chosen source, groups, auto-connect marks and notices live here, not in
-//! the audio backend. Like the speakers' settings they are kept in memory only
+//! the audio backend. The double-audio notice (the source heard straight from
+//! an output as well as through AudioSync) follows what the backend reports:
+//! it is posted when the outputs it names change, changed in place when only
+//! which of them AudioSync plays to changes, and cleared when the cause is
+//! gone. Once dismissed, it stays away for the same source and those outputs
+//! (or fewer of them) until that app quits. Like the speakers' settings they are kept in memory only
 //! for now: AudioSync for Windows doesn't save its settings yet.
 //!
 //! Speakers are named by the core's speaker keys (`lc:` and the endpoint ID),
@@ -37,6 +42,7 @@ use crate::audio::backend::{
     StopReason,
 };
 use crate::audio::capture::WHOLE_SYSTEM_NAME;
+use crate::audio::routing::DirectPath;
 use crate::debug_log::DebugLog;
 use crate::ui_model::{
     AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, Source, SourceKind,
@@ -106,6 +112,14 @@ struct Posted {
     time: String,
 }
 
+/// What the double-audio notice is about: the source, by its UI ID, and the
+/// outputs it names, by endpoint ID and name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HeardTwiceSubject {
+    source: String,
+    endpoints: Vec<(String, String)>,
+}
+
 /// The UI's backend over an audio backend. See the module documentation.
 pub struct AudioAdapter<A: AudioBackend> {
     audio: A,
@@ -124,6 +138,11 @@ pub struct AudioAdapter<A: AudioBackend> {
     gate: AutoStartGate,
     notices: Notices<NoticeSubject, Posted>,
     next_notice: u64,
+    /// What the double-audio notice showing is about.
+    heard_twice: Option<HeardTwiceSubject>,
+    /// The outputs named in a double-audio notice the user dismissed, by
+    /// source UI ID, until that app quits.
+    heard_twice_dismissed: BTreeMap<String, BTreeSet<String>>,
     equalizer: EqSettings,
     /// Polls since the sources were last listed.
     polls: u32,
@@ -154,6 +173,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             gate: AutoStartGate::default(),
             notices: Notices::new(),
             next_notice: 1,
+            heard_twice: None,
+            heard_twice_dismissed: BTreeMap::new(),
             equalizer: EqSettings::default(),
             polls: 0,
             clock,
@@ -510,15 +531,107 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::OutputFailed { id, .. } => self.output_failed(&id, false),
             BackendEvent::Stopped { reason } => {
                 let message = match reason {
-                    StopReason::SourceQuit => NoticeMessage::SourceQuit {
-                        source: self.chosen_name(),
-                    },
+                    StopReason::SourceQuit => {
+                        // A dismissed double-audio notice was about this run
+                        // of the app.
+                        self.heard_twice_dismissed.remove(&self.chosen.key());
+                        NoticeMessage::SourceQuit {
+                            source: self.chosen_name(),
+                        }
+                    }
                     StopReason::CaptureFailed(_) => NoticeMessage::CaptureLost,
                 };
                 self.post(NoticeSubject::Source, message);
                 self.refresh_sources();
             }
+            BackendEvent::HeardTwice { paths } => self.heard_twice_changed(paths),
         }
+    }
+
+    /// Takes in where the source is heard straight now: see the module
+    /// documentation.
+    fn heard_twice_changed(&mut self, paths: Vec<DirectPath>) {
+        let subject = HeardTwiceSubject {
+            source: self.chosen.key(),
+            endpoints: paths
+                .iter()
+                .map(|path| (path.endpoint_id.clone(), path.endpoint_name.clone()))
+                .collect(),
+        };
+        let dismissed = !paths.is_empty()
+            && self
+                .heard_twice_dismissed
+                .get(&subject.source)
+                .is_some_and(|dismissed| {
+                    paths
+                        .iter()
+                        .all(|path| dismissed.contains(&path.endpoint_id))
+                });
+        if paths.is_empty() || dismissed {
+            self.heard_twice = None;
+            if self.notices.clear(&[NoticeSubject::DoubleAudio]) {
+                self.log.log(|| {
+                    "notice about DoubleAudio cleared: the source is heard only through \
+                     AudioSync"
+                        .to_owned()
+                });
+            }
+            if dismissed {
+                self.log.log(|| {
+                    format!(
+                        "no notice about DoubleAudio: the user dismissed it for {:?}",
+                        subject.endpoints
+                    )
+                });
+            }
+            return;
+        }
+        let names = |plays_here: bool| -> Vec<String> {
+            paths
+                .iter()
+                .filter(|path| path.audiosync_plays_here == plays_here)
+                .map(|path| path.endpoint_name.clone())
+                .collect()
+        };
+        let message = NoticeMessage::HeardTwice {
+            source: match &self.chosen {
+                Chosen::WholeSystem => None,
+                Chosen::App { name, .. } => Some(name.clone()),
+            },
+            mute: names(false),
+            shared: names(true),
+        };
+        let showing = self.heard_twice.as_ref() == Some(&subject)
+            && self.notices.get(&NoticeSubject::DoubleAudio).is_some();
+        if !showing {
+            self.post(NoticeSubject::DoubleAudio, message);
+        } else if let Some(posted) = self.notices.get_mut(&NoticeSubject::DoubleAudio)
+            && posted.message != message
+        {
+            // The same outputs: only which of them AudioSync plays to
+            // changed, so the notice changes where it is.
+            self.log
+                .log(|| format!("notice about DoubleAudio changed: {message:?}"));
+            posted.message = message;
+        }
+        self.heard_twice = Some(subject);
+    }
+
+    /// Remembers that the user dismissed the double-audio notice showing.
+    fn remember_heard_twice_dismissal(&mut self) {
+        let Some(subject) = self.heard_twice.take() else {
+            return;
+        };
+        self.log.log(|| {
+            format!(
+                "notice about DoubleAudio dismissed: it stays away for {} and {:?}",
+                subject.source, subject.endpoints
+            )
+        });
+        self.heard_twice_dismissed
+            .entry(subject.source)
+            .or_default()
+            .extend(subject.endpoints.into_iter().map(|(id, _)| id));
     }
 
     /// The sources as the UI lists them: what is listed, and the chosen app
@@ -800,11 +913,17 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             .find(|(_, posted)| posted.id == id)
             .map(|(subject, _)| subject.clone());
         if let Some(subject) = subject {
+            if subject == NoticeSubject::DoubleAudio {
+                self.remember_heard_twice_dismissal();
+            }
             self.notices.clear(&[subject]);
         }
     }
 
     fn dismiss_all_notices(&mut self) {
+        if self.notices.get(&NoticeSubject::DoubleAudio).is_some() {
+            self.remember_heard_twice_dismissal();
+        }
         self.notices.clear_all();
     }
 
@@ -888,6 +1007,7 @@ mod tests {
     use super::*;
     use crate::audio::capture::LoopbackMode;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
+    use crate::audio::routing::HOLD_CHECKS;
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
     use crate::ui_model::{MAX_DELAY_MS, SpeakerState};
 
@@ -1570,5 +1690,205 @@ mod tests {
             ],
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    const TV: &str = "tv";
+    const CABLE: &str = "cable";
+
+    /// The double-audio notices showing.
+    fn heard_twice(adapter: &AudioAdapter<MockBackend>) -> Vec<NoticeMessage> {
+        adapter
+            .snapshot()
+            .notices
+            .into_iter()
+            .filter(|notice| matches!(notice.message, NoticeMessage::HeardTwice { .. }))
+            .map(|notice| notice.message)
+            .collect()
+    }
+
+    /// The double-audio notice for `source` (`None` for the whole system),
+    /// naming the outputs to mute and the ones AudioSync plays to as well.
+    fn twice(source: Option<&str>, mute: &[&str], shared: &[&str]) -> NoticeMessage {
+        let names = |list: &[&str]| list.iter().map(|name| (*name).to_owned()).collect();
+        NoticeMessage::HeardTwice {
+            source: source.map(str::to_owned),
+            mute: names(mute),
+            shared: names(shared),
+        }
+    }
+
+    /// The ID of the double-audio notice showing.
+    fn heard_twice_id(adapter: &AudioAdapter<MockBackend>) -> Option<u64> {
+        adapter
+            .snapshot()
+            .notices
+            .into_iter()
+            .find(|notice| matches!(notice.message, NoticeMessage::HeardTwice { .. }))
+            .map(|notice| notice.id)
+    }
+
+    /// Runs the double-audio check now and takes in what it reports.
+    fn check_routing(adapter: &mut AudioAdapter<MockBackend>) {
+        adapter.audio_mut().check_routing_now();
+        adapter.poll();
+    }
+
+    /// The adapter of [`adapter`] with a TV and a virtual cable connected,
+    /// streaming the player to the speakers while it plays on the TV.
+    fn player_on_the_tv() -> AudioAdapter<MockBackend> {
+        let mut adapter = adapter();
+        let audio = adapter.audio_mut();
+        audio.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        audio.connect_output_as(CABLE, "Cable Input", OutputKind::Virtual);
+        audio.play_on(PLAYER_PID, TV);
+        adapter.refresh_devices();
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+        adapter
+    }
+
+    #[test]
+    fn hearing_the_app_twice_raises_one_notice_that_follows_the_routing() {
+        let mut adapter = player_on_the_tv();
+        assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &["TV"], &[])]);
+        assert_eq!(
+            adapter.snapshot().notices[0].subject,
+            "DoubleAudio",
+            "one subject"
+        );
+        // It plays on the speakers as well, which AudioSync plays to: the
+        // TV can be muted, the speakers can't.
+        adapter.audio_mut().play_on(PLAYER_PID, SPEAKERS);
+        check_routing(&mut adapter);
+        assert_eq!(
+            heard_twice(&adapter),
+            [twice(Some("Player"), &["TV"], &["Speakers"])]
+        );
+        // Moved in the volume mixer to a virtual cable nobody listens to, it
+        // is heard once again after a few checks.
+        adapter.audio_mut().pause_on(PLAYER_PID, SPEAKERS);
+        adapter.audio_mut().move_session(PLAYER_PID, TV, CABLE);
+        check_routing(&mut adapter);
+        assert_eq!(heard_twice(&adapter).len(), 1, "held a few checks");
+        for _ in 0..HOLD_CHECKS {
+            check_routing(&mut adapter);
+        }
+        assert!(heard_twice(&adapter).is_empty());
+    }
+
+    #[test]
+    fn the_double_audio_notice_clears_when_the_output_is_muted() {
+        let mut adapter = player_on_the_tv();
+        adapter.audio_mut().mute_output(TV, true);
+        check_routing(&mut adapter);
+        assert!(heard_twice(&adapter).is_empty());
+        adapter.audio_mut().mute_output(TV, false);
+        check_routing(&mut adapter);
+        assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &["TV"], &[])]);
+    }
+
+    #[test]
+    fn the_double_audio_notice_clears_when_streaming_stops() {
+        let mut adapter = player_on_the_tv();
+        adapter.set_running(false);
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        assert!(heard_twice(&adapter).is_empty());
+    }
+
+    #[test]
+    fn the_double_audio_notice_follows_a_new_source() {
+        let mut adapter = player_on_the_tv();
+        adapter.audio_mut().add_app(3000, "video.exe");
+        adapter.refresh_devices();
+        adapter.select_source("app:3000:video.exe");
+        assert!(adapter.snapshot().running);
+        assert!(
+            heard_twice(&adapter).is_empty(),
+            "the new app plays nowhere yet"
+        );
+        // The whole system takes in the player on the TV too.
+        adapter.select_source(SYSTEM_KEY);
+        assert_eq!(heard_twice(&adapter), [twice(None, &["TV"], &[])]);
+    }
+
+    #[test]
+    fn a_dismissed_double_audio_notice_comes_back_only_when_the_routing_changes() {
+        let mut adapter = player_on_the_tv();
+        let id = adapter.snapshot().notices[0].id;
+        adapter.dismiss_notice(id);
+        check_routing(&mut adapter);
+        assert!(heard_twice(&adapter).is_empty(), "nothing changed");
+        adapter.audio_mut().play_on(PLAYER_PID, SPEAKERS);
+        check_routing(&mut adapter);
+        assert_eq!(
+            heard_twice(&adapter),
+            [twice(Some("Player"), &["TV"], &["Speakers"])]
+        );
+    }
+
+    #[test]
+    fn turning_on_an_output_the_notice_names_changes_it_in_place() {
+        let mut adapter = player_on_the_tv();
+        let id = heard_twice_id(&adapter);
+        turn_on(&mut adapter, TV);
+        check_routing(&mut adapter);
+        assert_eq!(heard_twice_id(&adapter), id, "not posted again");
+        assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &[], &["TV"])]);
+        // Dismissed, it stays away while the output goes off and on again.
+        adapter.dismiss_notice(id.unwrap());
+        adapter.set_speaker_enabled(&key(TV), false);
+        check_routing(&mut adapter);
+        turn_on(&mut adapter, TV);
+        check_routing(&mut adapter);
+        assert!(heard_twice(&adapter).is_empty());
+    }
+
+    #[test]
+    fn a_dismissed_double_audio_notice_stays_away_until_the_app_quits() {
+        const BUDS: &str = "buds";
+        let mut adapter = player_on_the_tv();
+        adapter.dismiss_notice(heard_twice_id(&adapter).unwrap());
+        // Streaming off and on again.
+        adapter.set_running(false);
+        adapter.poll();
+        adapter.set_running(true);
+        assert!(adapter.snapshot().running);
+        assert!(heard_twice(&adapter).is_empty(), "after a restart");
+        // Every speaker off, then on again.
+        adapter.set_speaker_enabled(&key(SPEAKERS), false);
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(heard_twice(&adapter).is_empty(), "after the speakers");
+        // Another output: a notice that names it.
+        adapter
+            .audio_mut()
+            .connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        adapter.audio_mut().play_on(PLAYER_PID, BUDS);
+        check_routing(&mut adapter);
+        assert_eq!(
+            heard_twice(&adapter),
+            [twice(Some("Player"), &["Buds", "TV"], &[])]
+        );
+        // Dismissed, it stays away while that output drops out for a moment.
+        adapter.dismiss_all_notices();
+        adapter.audio_mut().disconnect_output(BUDS);
+        check_routing(&mut adapter);
+        adapter
+            .audio_mut()
+            .connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        check_routing(&mut adapter);
+        assert!(heard_twice(&adapter).is_empty(), "after the drop-out");
+        // The app quits and starts again: a notice about the new one.
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        adapter.audio_mut().add_app(2100, "player.exe");
+        adapter.audio_mut().play_on(2100, TV);
+        adapter.set_running(true);
+        assert!(adapter.snapshot().running);
+        assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &["TV"], &[])]);
     }
 }

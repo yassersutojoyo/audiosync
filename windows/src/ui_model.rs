@@ -157,6 +157,16 @@ pub enum NoticeMessage {
     /// A speaker's device went away while it played. It stays on and plays
     /// again once the device is back.
     SpeakerLost { speaker: String },
+    /// The source also plays straight from these outputs, undelayed, so it
+    /// is heard twice. `source` is the app's name, or `None` for the whole
+    /// system. `mute` names the outputs AudioSync doesn't play to, which the
+    /// user may mute; `shared` the ones AudioSync plays to as well, where
+    /// only sending the source elsewhere helps.
+    HeardTwice {
+        source: Option<String>,
+        mute: Vec<String>,
+        shared: Vec<String>,
+    },
 }
 
 /// How a speaker or group row shows: playing only while streaming is on.

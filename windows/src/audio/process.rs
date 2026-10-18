@@ -112,6 +112,18 @@ impl ProcessTable {
         pid == root || self.ancestors(pid).contains(&root)
     }
 
+    /// The IDs of `root` and every running descendant, by
+    /// [`ProcessTable::in_tree`]: what process loopback captures, or leaves
+    /// out, for that tree. `root` is in it even when it doesn't run.
+    pub fn tree(&self, root: u32) -> BTreeSet<u32> {
+        self.entries
+            .keys()
+            .copied()
+            .filter(|&pid| self.in_tree(pid, root))
+            .chain([root])
+            .collect()
+    }
+
     /// The top process of the app `pid` belongs to: the walk goes up while
     /// the parent runs the same executable (compared without regard to
     /// case), so a browser's helper processes lead to its main process.
@@ -249,6 +261,9 @@ pub(crate) mod tests {
         assert!(table.in_tree(401, 300));
         assert!(!table.in_tree(300, 400));
         assert!(!table.in_tree(200, 300));
+        assert_eq!(table.tree(200), BTreeSet::from([200, 201, 202]));
+        assert_eq!(table.tree(300), BTreeSet::from([300, 400, 401]));
+        assert_eq!(table.tree(999), BTreeSet::from([999]), "a root that quit");
     }
 
     #[test]
