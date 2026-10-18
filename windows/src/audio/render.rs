@@ -82,16 +82,22 @@ impl RenderPipeline {
     }
 
     /// Channels per device frame.
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "the WASAPI render loop sizes its packets with it")
+    )]
     pub fn channels(&self) -> usize {
         self.channels
     }
 
     /// The device rate.
+    #[cfg(test)]
     pub fn device_rate(&self) -> u32 {
         self.resampler.output_rate()
     }
 
     /// Device frames played as silence because the resampler lacked input.
+    #[cfg(test)]
     pub fn shortfall_frames(&self) -> u64 {
         self.shortfall_frames
     }

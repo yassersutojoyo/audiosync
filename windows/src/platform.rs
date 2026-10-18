@@ -53,6 +53,38 @@ pub fn show_error(text: &str) {
     eprintln!("{text}");
 }
 
+/// The local time now, in the user's short time format ("09.40", "9:40 AM"):
+/// when a notice was posted. Hours and minutes when the format can't be read.
+#[cfg(windows)]
+pub fn notice_time() -> String {
+    use windows::Win32::Globalization::{GetTimeFormatEx, TIME_NOSECONDS};
+    use windows::Win32::System::SystemInformation::GetLocalTime;
+    use windows::core::PCWSTR;
+
+    let mut text = [0u16; 64];
+    // SAFETY: formats the current local time (no time given) in the user's
+    // locale and format (no locale name, no format) into `text`, whose length
+    // the call is given.
+    let written = unsafe {
+        GetTimeFormatEx(
+            PCWSTR::null(),
+            TIME_NOSECONDS,
+            None,
+            PCWSTR::null(),
+            Some(&mut text),
+        )
+    };
+    // The count includes the terminating NUL; 0 means it failed.
+    match usize::try_from(written) {
+        Ok(length) if length > 1 => String::from_utf16_lossy(&text[..length - 1]),
+        _ => {
+            // SAFETY: only reads the clock.
+            let now = unsafe { GetLocalTime() };
+            format!("{:02}.{:02}", now.wHour, now.wMinute)
+        }
+    }
+}
+
 /// Brings a window that is showing to the front and gives it the keyboard
 /// focus.
 pub fn bring_to_front(window: &slint::Window) {

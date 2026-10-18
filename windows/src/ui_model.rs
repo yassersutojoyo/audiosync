@@ -2,12 +2,13 @@
 //! audio work is done.
 //!
 //! The UI reads an [`AppState`] snapshot from a [`Backend`] and calls the
-//! backend's methods for every user action, then reads a new snapshot. The
-//! real backend (WASAPI capture and outputs, AirPlay) implements the same
-//! trait; until it lands, [`MockBackend`] stands in with example data. Nothing
-//! here makes a sound or opens an audio device.
+//! backend's methods for every user action, then reads a new snapshot. On
+//! Windows the backend is `crate::adapter::AudioAdapter` over the WASAPI audio
+//! backend; elsewhere [`MockBackend`] stands in with example data, for work on
+//! the UI. Nothing here makes a sound or opens an audio device.
 
 use audiosync_core::eq::{self, EqSettings};
+#[cfg(any(not(windows), test))]
 use audiosync_core::volume;
 
 /// The longest per-speaker delay the sync controls accept, in milliseconds
@@ -26,6 +27,10 @@ pub enum SourceKind {
     /// One app's audio.
     App,
     /// An input device (line in, microphone).
+    #[cfg_attr(
+        all(windows, not(test)),
+        expect(dead_code, reason = "the Windows backend offers no input devices yet")
+    )]
     Input,
 }
 
@@ -38,7 +43,8 @@ pub struct Source {
 }
 
 /// The kind of output a speaker is, shown as a small icon and read by Narrator.
-// The WASAPI backend reports every kind; the mock lists only a few.
+// The WASAPI backend reports every kind but AirPlay (Windows has no AirPlay
+// engine yet); the mock lists only a few.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpeakerKind {
@@ -62,6 +68,13 @@ impl SpeakerKind {
 
 /// Whether an AirPlay speaker can simply play.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    all(windows, not(test)),
+    expect(
+        dead_code,
+        reason = "only AirPlay speakers need a code; Windows has none yet"
+    )
+)]
 pub enum Availability {
     Open,
     /// It asks for a PIN or password.
@@ -101,9 +114,38 @@ pub struct Group {
 pub struct Notice {
     pub id: u64,
     pub subject: String,
-    pub message: String,
-    /// Local time it was posted, "HH.MM".
+    pub message: NoticeMessage,
+    /// Local time it was posted, in the user's short time format ("09.40",
+    /// "9:40 AM").
     pub time: String,
+}
+
+/// What a notice says. The UI words it (the notice texts in
+/// `ui/strings.slint`), so no backend builds user-facing text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(dead_code, reason = "only the Windows backend posts notices")
+)]
+pub enum NoticeMessage {
+    /// Streaming was asked to start with no speaker on.
+    NoSpeaker,
+    /// The app being captured quit, so streaming stopped.
+    SourceQuit { source: String },
+    /// The chosen app isn't running, so streaming didn't start.
+    SourceNotRunning { source: String },
+    /// Capturing the chosen app would capture AudioSync's own sound too, so
+    /// streaming didn't start.
+    SourceRefused { source: String },
+    /// Capture couldn't start.
+    CaptureFailed,
+    /// Capture stopped working while streaming, so streaming stopped.
+    CaptureLost,
+    /// A speaker couldn't start, so it was turned off.
+    SpeakerFailed { speaker: String },
+    /// A speaker's device went away while it played. It stays on and plays
+    /// again once the device is back.
+    SpeakerLost { speaker: String },
 }
 
 /// How a speaker or group row shows: playing only while streaming is on.
@@ -221,6 +263,13 @@ pub trait Backend {
     fn dismiss_notice(&mut self, id: u64);
     fn dismiss_all_notices(&mut self);
     fn refresh_devices(&mut self);
+
+    /// Takes in what happened since the last call (devices that came or went,
+    /// a source that quit, an output that failed) and says whether the
+    /// snapshot may have changed. The UI calls it about twice a second.
+    fn poll(&mut self) -> bool {
+        false
+    }
 }
 
 /// Clamps a typed or stepped delay to what the sync controls accept.
@@ -240,17 +289,20 @@ pub fn parse_delay_ms(text: &str) -> Option<f64> {
 }
 
 /// Example data for UI work and tests: no device is opened, nothing plays.
+#[cfg(any(not(windows), test))]
 pub struct MockBackend {
     state: AppState,
     next_id: u64,
 }
 
+#[cfg(any(not(windows), test))]
 impl Default for MockBackend {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(any(not(windows), test))]
 impl MockBackend {
     pub fn new() -> Self {
         let source = |id: &str, name: &str, kind| Source {
@@ -346,14 +398,14 @@ impl MockBackend {
 
     /// Posts a notice about `subject`, replacing an older one about it.
     #[cfg(test)]
-    pub fn post(&mut self, subject: &str, message: &str, time: &str) {
+    pub fn post(&mut self, subject: &str, message: NoticeMessage, time: &str) {
         self.state.notices.retain(|n| n.subject != subject);
         self.state.notices.insert(
             0,
             Notice {
                 id: self.next_id,
                 subject: subject.into(),
-                message: message.into(),
+                message,
                 time: time.into(),
             },
         );
@@ -366,6 +418,7 @@ impl MockBackend {
     }
 }
 
+#[cfg(any(not(windows), test))]
 impl Backend for MockBackend {
     fn snapshot(&self) -> AppState {
         self.state.clone()
@@ -576,19 +629,22 @@ mod tests {
 
     #[test]
     fn a_newer_notice_about_the_same_subject_replaces_the_older_one() {
+        let quit = |source: &str| NoticeMessage::SourceQuit {
+            source: source.into(),
+        };
         let mut backend = MockBackend::new();
-        backend.post("source", "first", "09.40");
-        backend.post("start", "other", "09.41");
-        backend.post("source", "second", "09.42");
+        backend.post("source", quit("first"), "09.40");
+        backend.post("start", NoticeMessage::NoSpeaker, "09.41");
+        backend.post("source", quit("second"), "09.42");
         let messages: Vec<_> = backend
             .snapshot()
             .notices
             .iter()
             .map(|n| n.message.clone())
             .collect();
-        assert_eq!(messages, ["second", "other"]);
+        assert_eq!(messages, [quit("second"), NoticeMessage::NoSpeaker]);
         for n in 0..10 {
-            backend.post(&format!("s{n}"), "x", "09.43");
+            backend.post(&format!("s{n}"), NoticeMessage::CaptureLost, "09.43");
         }
         assert_eq!(backend.snapshot().notices.len(), NOTICE_CAPACITY);
     }

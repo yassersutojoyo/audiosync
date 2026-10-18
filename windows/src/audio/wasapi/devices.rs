@@ -4,22 +4,27 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
-use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+use windows::Win32::Devices::FunctionDiscovery::{
+    PKEY_Device_EnumeratorName, PKEY_Device_FriendlyName,
+};
 use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::{
     DEVICE_STATE, DEVICE_STATE_ACTIVE, EDataFlow, ERole, IMMDevice, IMMDeviceEnumerator,
-    IMMNotificationClient, IMMNotificationClient_Impl, MMDeviceEnumerator, eConsole, eRender,
+    IMMNotificationClient, IMMNotificationClient_Impl, MMDeviceEnumerator,
+    PKEY_AudioEndpoint_FormFactor, PKEY_AudioEndpoint_JackSubType, eConsole, eRender,
 };
+use windows::Win32::Media::KernelStreaming::KSNODETYPE_DISPLAYPORT_INTERFACE;
 use windows::Win32::System::Com::StructuredStorage::PropVariantClear;
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, STGM_READ};
 use windows::Win32::System::Threading::{INFINITE, WaitForSingleObject};
-use windows::Win32::System::Variant::VT_LPWSTR;
-use windows::core::PCWSTR;
+use windows::Win32::System::Variant::{VT_LPWSTR, VT_UI4};
+use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+use windows::core::{GUID, PCWSTR};
 use windows_core::implement;
 
 use super::com::{Apartment, Event, Ready, spawn_ready, system_error, take_com_string};
-use crate::audio::backend::BackendError;
-use crate::audio::outputs::Endpoint;
+use crate::audio::backend::{BackendError, OutputKind};
+use crate::audio::outputs::{Endpoint, output_kind};
 
 /// The device enumerator. COM must be initialized on the calling thread.
 pub(super) fn enumerator() -> Result<IMMDeviceEnumerator, BackendError> {
@@ -53,11 +58,12 @@ pub(super) fn render_endpoints() -> Result<Vec<Endpoint>, BackendError> {
         let Some(id) = device_id(&device) else {
             continue;
         };
-        let name = friendly_name(&device).unwrap_or_else(|| id.clone());
+        let (name, kind) = describe(&device);
         endpoints.push(Endpoint {
             is_default: default_id.as_deref() == Some(id.as_str()),
+            name: name.unwrap_or_else(|| id.clone()),
             id,
-            name,
+            kind,
         });
     }
     endpoints.sort_by(|a, b| a.id.cmp(&b.id));
@@ -71,20 +77,49 @@ fn device_id(device: &IMMDevice) -> Option<String> {
     unsafe { take_com_string(device.GetId().ok()?) }
 }
 
-/// The name Windows shows for `device`.
-fn friendly_name(device: &IMMDevice) -> Option<String> {
+/// The name Windows shows for `device`, and what kind of device it is. A
+/// property that can't be read leaves the name out, or makes the kind
+/// [`OutputKind::Other`].
+fn describe(device: &IMMDevice) -> (Option<String>, OutputKind) {
+    // SAFETY: opens the endpoint's own property store for reading.
+    let Ok(store) = (unsafe { device.OpenPropertyStore(STGM_READ) }) else {
+        return (None, OutputKind::Other);
+    };
+    let name = string_property(&store, &PKEY_Device_FriendlyName);
+    let form_factor = u32_property(&store, &PKEY_AudioEndpoint_FormFactor);
+    let enumerator = string_property(&store, &PKEY_Device_EnumeratorName).unwrap_or_default();
+    let display_port = string_property(&store, &PKEY_AudioEndpoint_JackSubType)
+        .and_then(|text| GUID::try_from(text.trim_matches(['{', '}'])).ok())
+        == Some(KSNODETYPE_DISPLAYPORT_INTERFACE);
+    (name, output_kind(form_factor, &enumerator, display_port))
+}
+
+/// A string property of `store`, if it holds one under `key`.
+fn string_property(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<String> {
     // SAFETY: reads one property into a PROPVARIANT this function owns and
     // clears; its string is read only when the variant says it holds one.
     unsafe {
-        let store = device.OpenPropertyStore(STGM_READ).ok()?;
-        let mut value = store.GetValue(&PKEY_Device_FriendlyName).ok()?;
-        let name = if value.Anonymous.Anonymous.vt == VT_LPWSTR {
+        let mut value = store.GetValue(key).ok()?;
+        let text = if value.Anonymous.Anonymous.vt == VT_LPWSTR {
             value.Anonymous.Anonymous.Anonymous.pwszVal.to_string().ok()
         } else {
             None
         };
         let _ = PropVariantClear(&mut value);
-        name
+        text
+    }
+}
+
+/// An unsigned 32-bit property of `store`, if it holds one under `key`.
+fn u32_property(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<u32> {
+    // SAFETY: reads one property into a PROPVARIANT this function owns and
+    // clears; its number is read only when the variant says it holds one.
+    unsafe {
+        let mut value = store.GetValue(key).ok()?;
+        let number = (value.Anonymous.Anonymous.vt == VT_UI4)
+            .then(|| value.Anonymous.Anonymous.Anonymous.ulVal);
+        let _ = PropVariantClear(&mut value);
+        number
     }
 }
 

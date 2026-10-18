@@ -1,5 +1,7 @@
 //! Connects the windows to a [`Backend`]: fills them from its snapshots and
-//! turns every user action into a backend call, then refreshes.
+//! turns every user action into a backend call, then refreshes. A timer polls
+//! the backend twice a second, so what happens on its own (a device unplugged,
+//! a source that quit) shows too.
 //!
 //! The models are updated in place, row by row, so a slider being dragged or a
 //! field being typed in keeps its focus while the rest of the window updates.
@@ -7,11 +9,12 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::{Rc, Weak};
+use std::time::Duration;
 
 use audiosync_core::eq::{self, EqSettings};
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
-use crate::ui_model::{self, AppState, Backend, SpeakerState};
+use crate::ui_model::{self, AppState, Backend, NoticeMessage, SourceKind, SpeakerState};
 use crate::{
     AboutDialog, Availability, EqualizerWindow, GroupItem, GroupNameDialog, MainWindow, NoticeItem,
     RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
@@ -51,6 +54,9 @@ const MAIN_NOTICE_LIMIT: usize = 4;
 /// The flyout lists only the newest notice and a button for the rest.
 const FLYOUT_NOTICE_LIMIT: usize = 1;
 
+/// How often the backend is polled for what happened on its own.
+const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
 /// Runs after every refresh with the new state.
 type RefreshHook = Box<dyn Fn(&AppState)>;
 
@@ -69,6 +75,8 @@ pub struct App {
     tray_available: Cell<bool>,
     /// Called after every refresh, e.g. to update the tray icon and tooltip.
     on_refresh: RefCell<Option<RefreshHook>>,
+    /// Polls the backend; it stops when the app is dropped.
+    poll_timer: Timer,
 }
 
 /// Runs `action` on the app if it still exists.
@@ -103,6 +111,7 @@ impl App {
             models,
             tray_available: Cell::new(false),
             on_refresh: RefCell::new(None),
+            poll_timer: Timer::default(),
         });
         app.attach_models();
         app.connect_main();
@@ -110,6 +119,11 @@ impl App {
         app.connect_equalizer();
         app.connect_dialogs();
         app.refresh();
+        let weak = Rc::downgrade(&app);
+        app.poll_timer
+            .start(TimerMode::Repeated, POLL_INTERVAL, move || {
+                with_app(&weak, App::poll)
+            });
         Ok(app)
     }
 
@@ -135,6 +149,14 @@ impl App {
     pub fn update(&self, change: impl FnOnce(&mut dyn Backend)) {
         change(self.backend.borrow_mut().as_mut());
         self.refresh();
+    }
+
+    /// Lets the backend take in what happened on its own, and shows it.
+    fn poll(&self) {
+        let changed = self.backend.borrow_mut().poll();
+        if changed {
+            self.refresh();
+        }
     }
 
     /// Shows the main window and brings it to the front.
@@ -190,11 +212,19 @@ impl App {
         let connected: Vec<SpeakerItem> = connected.into_iter().map(|s| item(s, true)).collect();
         let all: Vec<SpeakerItem> = this_pc.iter().chain(&connected).cloned().collect();
         let groups: Vec<GroupItem> = state.groups.iter().map(|g| group_item(&state, g)).collect();
-        let notices: Vec<NoticeItem> = state.notices.iter().map(notice_item).collect();
+        let notices: Vec<NoticeItem> = state
+            .notices
+            .iter()
+            .map(|n| notice_item(&strings, n))
+            .collect();
         let sources: Vec<SharedString> = state
             .sources
             .iter()
-            .map(|s| s.name.as_str().into())
+            .map(|s| match s.kind {
+                // The backend's name for it is English; the UI's is translated.
+                SourceKind::System => strings.get_source_system(),
+                SourceKind::App | SourceKind::Input => s.name.as_str().into(),
+            })
             .collect();
         let source_index = state
             .sources
@@ -634,7 +664,7 @@ impl WindowState for TrayFlyout {
 
 /// The newest `limit` notices: what a window lists. A window that shows
 /// fewer than all of them says how many more there are instead.
-fn newest_notices(notices: &[NoticeItem], limit: usize) -> Vec<NoticeItem> {
+fn newest_notices<T: Clone>(notices: &[T], limit: usize) -> Vec<T> {
     notices.iter().take(limit).cloned().collect()
 }
 
@@ -727,11 +757,35 @@ pub fn group_item(state: &AppState, group: &ui_model::Group) -> GroupItem {
     }
 }
 
-pub fn notice_item(notice: &ui_model::Notice) -> NoticeItem {
+pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeItem {
     NoticeItem {
         id: i32::try_from(notice.id).unwrap_or(i32::MAX),
-        message: notice.message.as_str().into(),
+        message: notice_text(strings, &notice.message),
         time: notice.time.as_str().into(),
+    }
+}
+
+/// A notice in the UI's words.
+fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
+    match message {
+        NoticeMessage::NoSpeaker => strings.get_notice_no_speaker(),
+        NoticeMessage::SourceQuit { source } => {
+            strings.invoke_notice_source_quit(source.as_str().into())
+        }
+        NoticeMessage::SourceNotRunning { source } => {
+            strings.invoke_notice_source_not_running(source.as_str().into())
+        }
+        NoticeMessage::SourceRefused { source } => {
+            strings.invoke_notice_source_refused(source.as_str().into())
+        }
+        NoticeMessage::CaptureFailed => strings.get_notice_capture_failed(),
+        NoticeMessage::CaptureLost => strings.get_notice_capture_lost(),
+        NoticeMessage::SpeakerFailed { speaker } => {
+            strings.invoke_notice_speaker_failed(speaker.as_str().into())
+        }
+        NoticeMessage::SpeakerLost { speaker } => {
+            strings.invoke_notice_speaker_lost(speaker.as_str().into())
+        }
     }
 }
 
@@ -781,14 +835,14 @@ mod tests {
     #[test]
     fn the_flyout_lists_only_the_newest_notice() {
         let mut backend = MockBackend::new();
-        backend.post("source", "older", "09.40");
-        backend.post("start", "newer", "09.41");
-        let notices: Vec<NoticeItem> = backend.snapshot().notices.iter().map(notice_item).collect();
+        backend.post("source", NoticeMessage::CaptureLost, "09.40");
+        backend.post("start", NoticeMessage::NoSpeaker, "09.41");
+        let notices = backend.snapshot().notices;
         let flyout = newest_notices(&notices, FLYOUT_NOTICE_LIMIT);
-        let messages: Vec<_> = flyout.iter().map(|n| n.message.as_str()).collect();
+        let messages: Vec<_> = flyout.iter().map(|n| n.message.clone()).collect();
         // One row: the stack draws no Dismiss All row under it, and the
         // flyout's button opens the main window for the other notice.
-        assert_eq!(messages, ["newer"]);
+        assert_eq!(messages, [NoticeMessage::NoSpeaker]);
         assert_eq!(newest_notices(&notices, MAIN_NOTICE_LIMIT).len(), 2);
     }
 

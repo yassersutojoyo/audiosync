@@ -64,16 +64,6 @@ impl ProcessTable {
         self.entries.contains_key(&pid)
     }
 
-    /// How many processes the snapshot holds.
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Whether the snapshot holds no process.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     /// The parent of `pid`: the process that created it, if that process
     /// still runs, isn't `pid` itself, and wasn't created after `pid` (which
     /// would make it a later process that got the exited parent's ID).

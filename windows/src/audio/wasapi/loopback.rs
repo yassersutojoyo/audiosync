@@ -7,7 +7,7 @@
 //! format, so `Initialize` names the format explicitly, trying
 //! [`CAPTURE_ATTEMPTS`] in order. The capture thread is event-driven, in the
 //! multithreaded apartment and registered with MMCSS; its loop passes each
-//! packet to a [`CaptureConverter`], which writes the ring.
+//! packet to a [`CaptureConverter`], which equalizes it and writes the ring.
 
 use std::ptr;
 use std::slice;
@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::thread::JoinHandle;
 
+use audiosync_core::eq::EqProcessor;
 use audiosync_core::ring::RingWriter;
 use windows::Win32::Foundation::{E_FAIL, ERROR_TIMEOUT, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
@@ -45,7 +46,11 @@ use crate::audio::capture::{
     Activation, CAPTURE_ATTEMPTS, CaptureConverter, LoopbackMode, StreamFormat,
 };
 use crate::audio::controller::{CaptureHandle, CaptureState};
-use crate::audio::outputs::CAPTURE_BUFFER_HNS;
+use crate::audio::outputs::HNS_PER_MS;
+
+/// The buffer a capture stream asks for, 100 ms: room for the capture thread
+/// to be late without losing packets.
+const CAPTURE_BUFFER_HNS: i64 = 100 * HNS_PER_MS;
 
 /// How long a capture waits for its activation to complete, in ms.
 const ACTIVATION_TIMEOUT_MS: u32 = 5_000;
@@ -91,10 +96,12 @@ impl Drop for LoopbackCapture {
     }
 }
 
-/// Starts capturing as `activation` says, writing through `writer`.
+/// Starts capturing as `activation` says, writing through `equalizer` and
+/// `writer`.
 pub(super) fn start(
     activation: Activation,
     writer: RingWriter,
+    equalizer: EqProcessor,
 ) -> Result<LoopbackCapture, BackendError> {
     let source = match activation.mode {
         LoopbackMode::IncludeTree => ProcessWatch::open(activation.target_pid)?,
@@ -108,7 +115,9 @@ pub(super) fn start(
         let failure = Arc::clone(&failure);
         let ended = Arc::clone(&ended);
         spawn_ready("audiosync-capture", move |ready| {
-            run(activation, writer, &stop, &failure, &ended, ready);
+            run(
+                activation, writer, equalizer, &stop, &failure, &ended, ready,
+            );
         })?
     };
     Ok(LoopbackCapture {
@@ -124,6 +133,7 @@ pub(super) fn start(
 fn run(
     activation: Activation,
     writer: RingWriter,
+    equalizer: EqProcessor,
     stop: &Event,
     failure: &AtomicI32,
     ended: &AtomicBool,
@@ -137,7 +147,7 @@ fn run(
         Ok(stream) => stream,
         Err(error) => return ready.fail(error),
     };
-    let mut converter = match CaptureConverter::new(stream.format, writer) {
+    let mut converter = match CaptureConverter::new(stream.format, writer, equalizer) {
         Ok(converter) => converter,
         Err(error) => return ready.fail(error),
     };

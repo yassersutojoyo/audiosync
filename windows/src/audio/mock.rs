@@ -1,5 +1,5 @@
-//! An in-memory driver, and the backend over it: for UI work without
-//! Windows, and for tests of the backend logic.
+//! An in-memory driver, and the backend over it: for tests of the backend
+//! logic and of the UI's adapter over it.
 //!
 //! [`MockBackend`] is the real [`Controller`] over a [`MockDriver`] that
 //! keeps a pretend list of processes, audio sessions and outputs. Nothing
@@ -12,11 +12,12 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use audiosync_core::eq::EqProcessor;
 use audiosync_core::reader::Reader;
 use audiosync_core::ring::RingWriter;
 use audiosync_core::volume::SharedGain;
 
-use super::backend::BackendError;
+use super::backend::{BackendError, OutputKind};
 use super::capture::{Activation, LoopbackMode};
 use super::controller::{CaptureHandle, CaptureState, Controller, Driver, RendererHandle};
 use super::outputs::Endpoint;
@@ -34,6 +35,8 @@ struct CaptureLink {
     state: CaptureState,
     /// The ring writer, until the capture stops.
     writer: Option<RingWriter>,
+    /// The processing half of the capture's equalizer.
+    equalizer: EqProcessor,
 }
 
 fn lock(link: &Mutex<CaptureLink>) -> std::sync::MutexGuard<'_, CaptureLink> {
@@ -188,6 +191,7 @@ impl Driver for MockDriver {
         &mut self,
         activation: Activation,
         writer: RingWriter,
+        equalizer: EqProcessor,
     ) -> Result<MockCapture, BackendError> {
         if let Some(error) = &self.capture_error {
             return Err(error.clone());
@@ -197,6 +201,7 @@ impl Driver for MockDriver {
             activation,
             state: CaptureState::Running,
             writer: Some(writer),
+            equalizer,
         }));
         self.capture = Some(Arc::clone(&link));
         Ok(MockCapture { link })
@@ -237,18 +242,18 @@ impl Controller<MockDriver> {
         Controller::with_driver(MockDriver::new())
     }
 
-    /// A mock with a few apps and outputs, for UI previews. Every output is
-    /// off; the speakers are the default output.
+    /// A mock with a few apps and outputs. Every output is off; the speakers
+    /// are the default output.
     pub fn demo() -> MockBackend {
         let mut backend = MockBackend::empty();
         backend.add_app(2000, "music.exe");
         backend.add_app(3000, "browser.exe");
         backend.add_helper(3001, 3000, "browser.exe");
         backend.add_app(4000, "video.exe");
-        backend.connect_output("speakers", "Speakers");
-        backend.connect_output("headphones", "Headphones");
-        backend.connect_output("tv", "TV (HDMI)");
-        backend.connect_output("bluetooth", "Bluetooth Speaker");
+        backend.connect_output_as("speakers", "Speakers", OutputKind::BuiltIn);
+        backend.connect_output_as("headphones", "Headphones", OutputKind::Headphones);
+        backend.connect_output_as("tv", "TV (HDMI)", OutputKind::Hdmi);
+        backend.connect_output_as("bluetooth", "Bluetooth Speaker", OutputKind::Bluetooth);
         backend.set_default_output("speakers");
         backend
     }
@@ -303,7 +308,7 @@ impl Controller<MockDriver> {
         }
     }
 
-    /// Connects an output, or renames a connected one.
+    /// Connects an output of an unknown kind, or renames a connected one.
     pub fn connect_output(&mut self, id: &str, name: &str) {
         let driver = self.driver_mut();
         match driver.outputs.iter_mut().find(|output| output.id == id) {
@@ -312,9 +317,19 @@ impl Controller<MockDriver> {
                 id: id.to_owned(),
                 name: name.to_owned(),
                 is_default: false,
+                kind: OutputKind::Other,
             }),
         }
         driver.changed = true;
+    }
+
+    /// Connects an output of this kind, or changes a connected one.
+    pub fn connect_output_as(&mut self, id: &str, name: &str, kind: OutputKind) {
+        self.connect_output(id, name);
+        let driver = self.driver_mut();
+        if let Some(output) = driver.outputs.iter_mut().find(|output| output.id == id) {
+            output.kind = kind;
+        }
     }
 
     /// Disconnects an output; an output playing on it stops by itself.
@@ -382,14 +397,27 @@ impl Controller<MockDriver> {
     /// Writes `frames` frames of silence to the running capture's ring, as if
     /// the source played.
     pub fn feed_capture(&mut self, frames: usize) {
+        self.feed_capture_level(frames, 0.0);
+    }
+
+    /// Writes `frames` stereo frames whose every sample is `level` to the
+    /// running capture's ring, through its equalizer as a real capture does,
+    /// and returns what was written; nothing without a running capture.
+    pub fn feed_capture_level(&mut self, frames: usize, level: f32) -> Vec<f32> {
         let Some(link) = &self.driver().capture else {
-            return;
+            return Vec::new();
         };
         let mut link = lock(link);
-        if let Some(writer) = link.writer.as_mut() {
-            let silence = vec![0.0; frames * 2];
-            writer.write(&silence, frames);
-        }
+        let CaptureLink {
+            writer, equalizer, ..
+        } = &mut *link;
+        let Some(writer) = writer.as_mut() else {
+            return Vec::new();
+        };
+        let mut block = vec![level; frames * 2];
+        equalizer.process(&mut block);
+        writer.write(&block, frames);
+        block
     }
 }
 
