@@ -19,6 +19,8 @@ component FlyoutRow inherits HorizontalLayout {
     in property <RowState> state;
     in property <bool> enabled: true;
     callback toggled();
+    // The toggle gained (true) or lost (false) keyboard focus.
+    callback focus-changed(bool);
 
     spacing: 10px;
     padding-top: 3px;
@@ -33,6 +35,9 @@ component FlyoutRow inherits HorizontalLayout {
         description: root.description;
         toggled => {
             root.toggled();
+        }
+        focus-changed(focused) => {
+            root.focus-changed(focused);
         }
     }
 
@@ -78,9 +83,26 @@ export component TrayFlyout inherits Window {
     // Key events go to the focused item, so Escape needs the scope focused.
     forward-focus: focus;
 
-    // Called each time the flyout opens: the last focused control may be
-    // gone, and Escape must work before anything inside is clicked.
+    // Whether a control that a refresh can remove has keyboard focus: the
+    // notice's dismiss button, the button for more notices, or a group or
+    // speaker row. Slint leaves nothing focused when the focused control is
+    // removed, and Escape then does nothing until Tab, so the app calls
+    // `take-focus` when a refresh removed the part that held it. A removed
+    // control never reports losing focus; `take-focus` clears these. (The
+    // flyout lists one notice, so the stack shows no Dismiss All here.)
+    out property <bool> notice-focused;
+    out property <bool> more-notices-focused;
+    out property <bool> group-focused;
+    out property <bool> speaker-focused;
+
+    // Called each time the flyout opens (the last focused control may be
+    // gone, and Escape must work before anything inside is clicked), and
+    // when a refresh removed the control that had the focus.
     public function take-focus() {
+        root.notice-focused = false;
+        root.more-notices-focused = false;
+        root.group-focused = false;
+        root.speaker-focused = false;
         focus.focus();
     }
 
@@ -153,6 +175,9 @@ export component TrayFlyout inherits Window {
                 dismissed-all => {
                     root.notices-dismissed-all();
                 }
+                dismiss-focus-changed(focused) => {
+                    root.notice-focused = focused;
+                }
             }
 
             if root.notice-count > root.notices.length: HorizontalLayout {
@@ -162,6 +187,10 @@ export component TrayFlyout inherits Window {
                     accessible-label: self.text;
                     clicked => {
                         root.open-app();
+                    }
+                    // A standard button reports focus only through has-focus.
+                    changed has-focus => {
+                        root.more-notices-focused = self.has-focus;
                     }
                 }
             }
@@ -211,6 +240,9 @@ export component TrayFlyout inherits Window {
                         toggled => {
                             root.group-toggled(group.id);
                         }
+                        focus-changed(focused) => {
+                            root.group-focused = focused;
+                        }
                     }
 
                     for speaker in root.speakers: FlyoutRow {
@@ -221,6 +253,9 @@ export component TrayFlyout inherits Window {
                         state: speaker.state;
                         toggled => {
                             root.speaker-toggled(speaker.id);
+                        }
+                        focus-changed(focused) => {
+                            root.speaker-focused = focused;
                         }
                     }
                 }

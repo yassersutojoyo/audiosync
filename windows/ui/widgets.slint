@@ -114,6 +114,8 @@ export component IconButton inherits Rectangle {
     in property <color> glyph-color: Tokens.text;
     in property <length> glyph-size: 16px;
     callback clicked();
+    // The button gained (true) or lost (false) keyboard focus.
+    callback focus-changed(bool);
 
     width: 32px;
     height: 32px;
@@ -137,6 +139,9 @@ export component IconButton inherits Rectangle {
                 return accept;
             }
             return reject;
+        }
+        focus-changed-event => {
+            root.focus-changed(self.has-focus);
         }
     }
 
@@ -169,6 +174,8 @@ export component SpeakerBadge inherits Rectangle {
     in property <bool> enabled: true;
     in property <length> size: 32px;
     callback toggled();
+    // The toggle gained (true) or lost (false) keyboard focus.
+    callback focus-changed(bool);
 
     width: root.size;
     height: root.size;
@@ -198,6 +205,9 @@ export component SpeakerBadge inherits Rectangle {
                 return accept;
             }
             return reject;
+        }
+        focus-changed-event => {
+            root.focus-changed(self.has-focus);
         }
     }
 
@@ -650,6 +660,8 @@ export component NoticeStack inherits VerticalLayout {
     in property <[NoticeItem]> notices;
     callback dismissed(int);
     callback dismissed-all();
+    // A notice's dismiss button gained (true) or lost (false) keyboard focus.
+    callback dismiss-focus-changed(bool);
 
     spacing: 6px;
     accessible-role: groupbox;
@@ -697,6 +709,9 @@ export component NoticeStack inherits VerticalLayout {
                     label: Strings.dismiss-notice;
                     clicked => {
                         root.dismissed(notice.id);
+                    }
+                    focus-changed(focused) => {
+                        root.dismiss-focus-changed(focused);
                     }
                 }
             }

@@ -191,6 +191,82 @@ mod tests {
         assert!(include_str!("view.rs").contains("self.equalizer.invoke_take_focus();"));
     }
 
+    /// Slint leaves nothing focused when the focused control is removed, and
+    /// Escape then stops closing the flyout. Every flyout control a refresh
+    /// can remove reports its keyboard focus, take-focus forgets those
+    /// reports, and a refresh that removed the focused control calls it.
+    #[test]
+    fn the_flyout_takes_the_focus_back_when_the_focused_row_goes_away() {
+        let widgets = include_str!("../ui/widgets.slint");
+        for component in [
+            "export component IconButton",
+            "export component SpeakerBadge",
+        ] {
+            let body = handler_body(widgets, component, "focus-changed-event");
+            assert!(
+                body.contains("root.focus-changed(self.has-focus);"),
+                "{component}: {body}"
+            );
+        }
+        let body = handler_body(
+            widgets,
+            "export component NoticeStack",
+            "focus-changed(focused)",
+        );
+        assert!(
+            body.contains("root.dismiss-focus-changed(focused);"),
+            "{body}"
+        );
+
+        let flyout = include_str!("../ui/flyout.slint");
+        let body = handler_body(flyout, "component FlyoutRow", "focus-changed(focused)");
+        assert!(body.contains("root.focus-changed(focused);"), "{body}");
+        let take_focus = &flyout[flyout
+            .find("public function take-focus() {")
+            .expect("take-focus is there")..];
+        let take_focus = &take_focus[..take_focus.find('}').expect("take-focus ends")];
+        assert!(take_focus.contains("focus.focus();"), "{take_focus}");
+        for (element, handler, flag) in [
+            (
+                "NoticeStack {",
+                "dismiss-focus-changed(focused)",
+                "notice-focused",
+            ),
+            (
+                "text: Strings.more-notices(",
+                "changed has-focus",
+                "more-notices-focused",
+            ),
+            (
+                "for group in root.groups: FlyoutRow {",
+                "focus-changed(focused)",
+                "group-focused",
+            ),
+            (
+                "for speaker in root.speakers: FlyoutRow {",
+                "focus-changed(focused)",
+                "speaker-focused",
+            ),
+        ] {
+            let body = handler_body(flyout, element, handler);
+            assert!(
+                body.contains(&format!("root.{flag} = ")),
+                "{element}: {body}"
+            );
+            assert!(
+                take_focus.contains(&format!("root.{flag} = false;")),
+                "take-focus clears {flag}"
+            );
+        }
+
+        let view = include_str!("view.rs");
+        let refresh = &view[view
+            .find("pub fn refresh(&self)")
+            .expect("refresh is there")..];
+        assert!(refresh.contains("self.restore_flyout_focus(flyout_removed);"));
+        assert!(view.contains("flyout.invoke_take_focus();"));
+    }
+
     /// A click changes a switch or combo box before the engine answers; each
     /// handler sets the control back to the state the engine reports.
     #[test]
