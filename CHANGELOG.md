@@ -6,7 +6,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Added
 
-- AirPlay speakers with a screen, such as a TV, show the track that's playing in Spotify or Music: title, artist, album and artwork. With any other source they show "AudioSync" instead of the pipe's file name. It uses the same Automation access to Spotify or Music as Now Playing in the window.
+- AirPlay speakers with a screen, such as a TV, show the track that's playing in Spotify or Music: title, artist, album and artwork. When nothing is playing there, or with any other source, they show "AudioSync", the source's name (such as the app or input device) and "From your Mac" instead of a file name. It uses the same Automation access to Spotify or Music as Now Playing in the window.
 - An optional audio engine written in Rust, for testing. Hold Option while opening the AudioSync menu and choose "Use Rust Audio Engine (Next Start)"; it takes over the next time streaming starts. The built-in engine stays the default, and choosing the item again switches back. On the Rust engine, AirPlay can still end up a little later after an engine restart.
 
 ### Changed
