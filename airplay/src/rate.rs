@@ -158,7 +158,6 @@ impl RateModel {
     }
 
     /// The current R̂ in Hz.
-
     pub fn rate(&self) -> f64 {
         1.0 / self.segments.back().expect("segment").slope
     }

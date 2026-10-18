@@ -9,6 +9,11 @@
 //! quality, on a local network; see `NOTES.md` for why no encoder crate was
 //! used.
 //!
+//! P77 leaves the bitstream to Apple's codec. The layout below is the
+//! author's own reading of the ALAC frame syntax, not taken from any codec
+//! source; the tests decode every payload with an independent decoder set
+//! up from the `a=fmtp` line and must get the input back bit for bit.
+//!
 //! The configuration matches `a=fmtp:96` (P29, [`crate::sdp::ALAC_FMTP`]):
 //! frame length 352, 16 bits, 2 channels, 44 100 Hz. Every frame holds
 //! exactly the configured frame length, so no frame carries an explicit
