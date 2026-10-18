@@ -182,15 +182,15 @@ pub fn preset(id: &str) -> Option<&'static Preset> {
 /// Normalized biquad coefficients (a0 = 1).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Biquad {
-    /// Feed-forward coefficient of x[n].
+    /// Feed-forward coefficient of `x[n]`.
     pub b0: f64,
-    /// Feed-forward coefficient of x[n−1].
+    /// Feed-forward coefficient of `x[n−1]`.
     pub b1: f64,
-    /// Feed-forward coefficient of x[n−2].
+    /// Feed-forward coefficient of `x[n−2]`.
     pub b2: f64,
-    /// Feedback coefficient of y[n−1].
+    /// Feedback coefficient of `y[n−1]`.
     pub a1: f64,
-    /// Feedback coefficient of y[n−2].
+    /// Feedback coefficient of `y[n−2]`.
     pub a2: f64,
 }
 

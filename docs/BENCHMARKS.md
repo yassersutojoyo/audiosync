@@ -11,6 +11,8 @@ The part of the engine that runs all the time while you listen:
 
 Capture itself isn't in it (a process tap needs the recording permission and real audio), and neither is OwnTone or a real AirPlay speaker. A producer thread stands in for the tap: it writes 512-frame blocks paced by the system's uptime clock, into a ring buffer the same size as the app's. A paced reader on the pipe stands in for the engine.
 
+Both scripts run either engine: the Swift one (the default) or, with `--engine rust`, the Rust core, whose ring, delay readers, gain stages and pipe feed then take the place of the Swift ones, as they do in the app with `engineImpl` set to `rust` (see [DEVELOPMENT.md](DEVELOPMENT.md)). The output units and the harness are the same, so the two sets of numbers compare directly.
+
 ## Staying silent
 
 Every local output gets gain 0 before its first render callback can run, so the audio that reaches the device is all zeros. The harness picks virtual outputs first and then built-in ones, and never an AirPlay output, a Bluetooth device or an input device. You can name outputs with `--device`, but AirPlay is refused. Nothing changes system audio settings: no default device, sample rate or volume. `caffeinate -i` keeps the Mac from idle-sleeping while a script runs.
@@ -29,7 +31,7 @@ Every 10 seconds the harness writes one record to `windows.jsonl` and `windows.c
 - FIFO path: reader underruns (the reader keeps 200 ms read-ahead and plays at 48 kHz; an underrun is that buffer running dry, after which it rebuffers), gaps in the decoded counter, latency (newest frame produced minus newest frame received), and the writer's pipe-full waits, short writes, backlog skips and write errors.
 - CPU % of the harness (from `getrusage`), its memory footprint, and how late the producer ran.
 
-The counters come from read-only atomics in `DelayReader` and `FifoFeed`. They're relaxed atomic adds, so the render callback and the FIFO writer don't allocate, lock or log because of them, and they don't change what gets played.
+The counters come from read-only atomics in `DelayReader` and `FifoFeed`, or in the core's readers and FIFO feed, which keep the same ones. They're relaxed atomic adds, so the render callback and the FIFO writer don't allocate, lock or log because of them, and they don't change what gets played. The lag is measured the same way on both: the newest frame written when it's sampled, minus the next frame the output will read.
 
 `bench.sh` runs two configurations, `--minutes` each (60 by default, so a plain run takes two hours and the drift between two outputs is measured over a full hour):
 
@@ -43,11 +45,13 @@ At the end of a run the harness checks that each output rendered at least 95% of
 ## Running it
 
 ```bash
-Tests/bench.sh     # 2 × 60 min: writes Tests/baseline/swift.json and the Swift results below
-Tests/soak.sh      # 60 min, judged against that baseline
+Tests/bench.sh                 # 2 × 60 min: writes Tests/baseline/swift.json and the Swift results below
+Tests/bench.sh --engine rust   # the same on the Rust core: Tests/baseline/rust.json and the Rust results
+Tests/soak.sh                  # 60 min, judged against the Swift baseline
+Tests/soak.sh --engine rust    # 60 min on the Rust core, judged against its own baseline
 ```
 
-Both take `--minutes N` and `--out DIR` (by default the logs go to a new folder under `$TMPDIR`). For `bench.sh`, N is per configuration, at least 1. `soak.sh` also takes `--baseline FILE` and `--device NAME` (AirPlay, aggregate and multi-output devices are refused). `bench.sh` takes `--baseline-out FILE` and `--no-doc`; without `--no-doc` it rewrites the Swift results between the marker comments below, so the table always matches the baseline it came from. It needs `python3`, which comes with the Command Line Tools.
+Both take `--engine swift|rust` (`swift` by default), `--minutes N` and `--out DIR` (by default the logs go to a new folder under `$TMPDIR`), and both build the Rust core first, since the harness links it. Each engine has its own baseline, `Tests/baseline/<engine>.json`. For `bench.sh`, N is per configuration, at least 1. `soak.sh` also takes `--baseline FILE`, for example the Swift baseline for a Rust run (it then warns that the engines differ), and `--device NAME` (AirPlay, aggregate and multi-output devices are refused). `bench.sh` takes `--baseline-out FILE` and `--no-doc`; without `--no-doc` it rewrites the results between the marker comments below from the baselines, one column per engine, so the table always matches them. `--doc-only` just rewrites that table. It needs `python3`, which comes with the Command Line Tools.
 
 `summary.txt` in the output folder has the verdict. `soak.sh` exits 0 on PASS, 1 on FAIL, 2 when it can't start (the harness doesn't compile, fewer than two usable outputs, or a baseline that lacks a metric the run is judged on) and 3 when there's no baseline file. It warns, on stderr and in the summary, when the baseline came from another Mac model, another macOS version or other outputs. Ctrl-C stops the harness too.
 
@@ -66,10 +70,10 @@ Both take `--minutes N` and `--out DIR` (by default the logs go to a new folder 
 
 The release baseline is a full `Tests/bench.sh` run (60 minutes per configuration).
 
-The Rust column is reserved for the Rust core (`core/`), measured the same way once it runs inside the app; it stays empty until then.
+The Rust column is the Rust core (`core/`) measured the same way, with `--engine rust`; it stays empty until `Tests/baseline/rust.json` exists.
 
-<!-- bench:swift:begin -->
-Run: 60 min per configuration, 2026-10-17, on 3f7069d.
+<!-- bench:results:begin -->
+Swift: 60 min per configuration, 2026-10-17, on 3f7069d.
 
 Machine: MacBook Air (Mac16,12), Apple M4, 16 GB, macOS 26.6.2 (25G83). Outputs: Microsoft Teams Audio, MacBook Air Speakers; local + FIFO used Microsoft Teams Audio.
 
@@ -91,4 +95,4 @@ Machine: MacBook Air (Mac16,12), Apple M4, 16 GB, macOS 26.6.2 (25G83). Outputs:
 | Local + FIFO: local dropouts per hour | 0 | |
 | Local + FIFO: CPU % mean (harness / ps) | 1.405 / 0.87 | |
 | Real AirPlay | not available | |
-<!-- bench:swift:end -->
+<!-- bench:results:end -->

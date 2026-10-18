@@ -7,8 +7,10 @@
 //! stays at zero. Other test threads never track, so they cannot interfere.
 //!
 //! The audio-path modules also forbid unsafe code and contain no lock types,
-//! checked here against their sources (read at run time, so the check works on
-//! any checkout's line endings and path separators).
+//! and the C interface's audio-path files, which hold the crate's unsafe code,
+//! contain no lock types either; both are checked here against their sources
+//! (read at run time, so the check works on any checkout's line endings and
+//! path separators).
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -381,30 +383,69 @@ fn audio_path_modules_use_only_atomics() {
         ("eq.rs", "yield"),
         ("fifo.rs", "park"),
     ];
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     for (name, waits) in modules {
-        let path = src.join(name);
-        let source =
-            fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let source = source_file(&[name]);
         assert!(
             source.contains("#![forbid(unsafe_code)]"),
             "{name} must forbid unsafe code"
         );
-        let code = production_part(&source);
-        assert_eq!(forbidden_words(&code), [] as [&str; 0], "{name}");
-        let mut thread_calls = code.match_indices("thread::").map(|(at, _)| &code[at..]);
-        let allowed = |call: &str| match waits {
-            "yield" => call.starts_with("thread::yield_now"),
-            "park" => ["thread::park_timeout", "thread::Builder", "thread::{"]
-                .iter()
-                .any(|prefix| call.starts_with(prefix)),
-            _ => false,
-        };
-        assert!(thread_calls.all(allowed), "{name} blocks");
-        if waits != "park" {
-            assert!(!code.contains("park"), "{name} parks");
-        }
+        assert_waits_only_as_allowed(name, &production_part(&source), waits);
     }
+}
+
+// covers: S126, S128, S129
+#[test]
+fn c_interface_audio_calls_use_only_atomics() {
+    // The C interface's files with audio-path calls: the equalizer and the
+    // gain (ffi.rs), the ring and its readers, the resampler and the output
+    // stage, and the FIFO feed and its writer. They hold the crate's unsafe
+    // code, so they can't forbid it, but the rest of the scan applies. None
+    // of them waits: the host's FIFO writer thread sleeps between steps,
+    // outside the core. The sync rule (ffi/sync.rs) is a control-thread call.
+    let files: [&[&str]; 4] = [
+        &["ffi.rs"],
+        &["ffi", "ring.rs"],
+        &["ffi", "render.rs"],
+        &["ffi", "fifo.rs"],
+    ];
+    for parts in files {
+        let name = parts.join("/");
+        let code = production_part(&source_file(parts));
+        assert!(
+            code.contains("#[unsafe(no_mangle)]"),
+            "{name} exports nothing"
+        );
+        assert_waits_only_as_allowed(&name, &code, "none");
+    }
+}
+
+/// Asserts that a module's production code holds no word of
+/// [`NOT_REAL_TIME`] and waits only as `waits` allows: "none", "yield" (a
+/// `thread::yield_now`) or "park" (the FIFO writer thread's parking and
+/// spawning).
+fn assert_waits_only_as_allowed(name: &str, code: &str, waits: &str) {
+    assert_eq!(forbidden_words(code), [] as [&str; 0], "{name}");
+    let mut thread_calls = code.match_indices("thread::").map(|(at, _)| &code[at..]);
+    let allowed = |call: &str| match waits {
+        "yield" => call.starts_with("thread::yield_now"),
+        "park" => ["thread::park_timeout", "thread::Builder", "thread::{"]
+            .iter()
+            .any(|prefix| call.starts_with(prefix)),
+        _ => false,
+    };
+    assert!(thread_calls.all(allowed), "{name} blocks");
+    if waits != "park" {
+        assert!(!code.contains("park"), "{name} parks");
+    }
+}
+
+/// A source file under `src/`, by its path components.
+fn source_file(parts: &[&str]) -> String {
+    let path = parts.iter().fold(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        |path, part| path.join(part),
+    );
+    fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
 /// Compile-time check that what audio threads share is thread-safe.
