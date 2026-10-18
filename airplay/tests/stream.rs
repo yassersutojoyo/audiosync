@@ -1007,7 +1007,7 @@ fn restart_timeline() {
 
     // The host restarts its capture at 5 s; its new frames count from 0.
     let restart_at = rig.t();
-    let pending_before = rig.writer.position();
+    let pending_before = rig.writer.position() as i64;
     rig.stream.restart(rig.now);
     rig.drain();
     let mut host = Host::new(restart_at);

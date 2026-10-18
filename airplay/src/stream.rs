@@ -182,10 +182,13 @@ pub enum StreamEvent {
         at: Instant,
     },
     /// L or the timeline's mapping changed: local outputs re-anchor (P98,
-    /// P114, P143). `origin` is the input ring position of frame 0.
+    /// P114, P143). Frame n of the timeline is the host's frame at input
+    /// ring position n + `origin` (`InputWriter::position`). Sent when Lf
+    /// changes, when the timeline restarts (`restarted`), and when a paused
+    /// capture resumes and its frames are placed anew (P112).
     Timeline {
         latency: Duration,
-        origin: u64,
+        origin: i64,
         restarted: bool,
     },
 }
@@ -620,8 +623,8 @@ pub struct Stream {
     input: InputReader,
     model: RateModel,
     margin: Margin,
-    /// The input ring position of timeline frame 0.
-    origin: u64,
+    /// Frame n of the timeline is at input ring position n + `origin`.
+    origin: i64,
     /// The absolute packet number of timeline packet 0; the stores are
     /// keyed by absolute numbers, which never repeat across restarts.
     packet_base: u64,
@@ -703,8 +706,9 @@ impl Stream {
         self.clock.instant(self.model.time(n))
     }
 
-    /// The input ring position of timeline frame 0 (P113, P114).
-    pub fn origin(&self) -> u64 {
+    /// Frame n of the timeline is the host's frame at input ring position
+    /// n + `origin` (P113, P114).
+    pub fn origin(&self) -> i64 {
         self.origin
     }
 
@@ -800,6 +804,14 @@ impl Stream {
         let t = self.clock.seconds(now);
         self.take_arrivals();
         self.margin.advance(t);
+        // Packets more than L past their time would be heard after their
+        // own play time: rather than send them all, the timeline starts
+        // over, as a capture restart would (P143).
+        self.model.ensure(last_frame(self.next_cut));
+        let overdue = t - (self.model.time(last_frame(self.next_cut)) + self.margin.value());
+        if overdue > f64::from(self.latency_frames) / NOMINAL_RATE {
+            self.restart_timeline(t);
+        }
         loop {
             self.model.ensure(last_frame(self.next_cut));
             if self.model.time(last_frame(self.next_cut)) + self.margin.value() > t + DUE_TOLERANCE
@@ -878,10 +890,14 @@ impl Stream {
         let first = context.first_due(speaker.delay, t);
         speaker.start_at(first, speaker.first_rtptime);
         if let Some(own) = &mut speaker.own {
-            // Packets cut before the speaker joined, which its delay may
-            // still reach, get its encoding too.
+            // Packets cut before the speaker joined get its encoding too, as
+            // far back as a delay can reach, so a later delay increase finds
+            // them (P100, P121).
             let mut frames = [[0i16; 2]; FRAMES_PER_PACKET];
-            for packet in first..self.next_cut {
+            let oldest = self
+                .next_cut
+                .saturating_sub((DELAY_PACKETS + MARGIN_PACKETS) as u64);
+            for packet in oldest..self.next_cut {
                 let number = self.packet_base + packet;
                 if let Some((payload, silent)) = self.pcm.get(number) {
                     audio::read_pcm_payload(payload, &mut frames);
@@ -990,7 +1006,13 @@ impl Stream {
     pub fn restart(&mut self, now: Instant) {
         self.handle_timeout(now);
         let t = self.clock.seconds(now);
-        self.origin = self.input.rebase();
+        self.restart_timeline(t);
+        self.publish();
+    }
+
+    /// Starts the timeline over at `t` seconds (P143).
+    fn restart_timeline(&mut self, t: f64) {
+        self.origin = self.input.rebase() as i64;
         self.packet_base += self.next_cut + 1;
         self.next_cut = 0;
         self.model.reset(t);
@@ -1015,7 +1037,6 @@ impl Stream {
             origin: self.origin,
             restarted: true,
         });
-        self.publish();
     }
 
     /// A packet from the receiver on a speaker's control socket: a
@@ -1098,24 +1119,52 @@ impl Stream {
         })
     }
 
-    /// Feeds the host's arrivals to the model and M.
+    /// Feeds the host's arrivals to the model and M. A resumed capture's
+    /// first write (the writer moved up to the floor) is placed where its
+    /// frames would be had they just arrived on schedule: its last frame at
+    /// the n whose c(n) is its arrival, never before the first frame not
+    /// yet cut. The frames in between stay silence the stream inserted
+    /// (P96, P112), and the rate model and M see the resumed audio on time.
     fn take_arrivals(&mut self) {
-        let origin = self.origin;
+        let floor = self.input.floor();
+        let first_uncut = (self.next_cut * PACKET_FRAMES) as i64;
+        let mut origin = self.origin;
+        let mut resumed = false;
         let model = &mut self.model;
         let margin = &mut self.margin;
-        self.input.drain_arrivals(|end, nanos| {
-            if end <= origin {
+        self.input.drain_arrivals(|arrival| {
+            let at = arrival.nanos as f64 / 1e9;
+            // Unless the stream already cut into those frames under the
+            // old placement.
+            if arrival.resync && floor <= arrival.start {
+                let count = (arrival.end - arrival.start) as i64;
+                let first = (model.frame_at(at) - count + 1).max(first_uncut);
+                origin = arrival.start as i64 - first;
+                model.forget_arrivals();
+                resumed = true;
+            }
+            let end = arrival.end as i64 - origin;
+            if end <= 0 {
                 return;
             }
-            let at = nanos as f64 / 1e9;
-            let (residual, block) = model.observe((end - origin) as i64, at);
+            let start = (arrival.start as i64 - origin).max(0);
+            let (residual, block) = model.observe(start, end, at);
             margin.observe(at, residual, block);
         });
+        self.origin = origin;
+        if resumed {
+            self.events.push_back(StreamEvent::Timeline {
+                latency: self.latency(),
+                origin,
+                restarted: false,
+            });
+        }
     }
 
     /// Cuts and encodes the next packet of the timeline (P80, P112).
     fn cut(&mut self) {
-        let start = self.origin + self.next_cut * PACKET_FRAMES;
+        let start = (self.next_cut * PACKET_FRAMES) as i64 + self.origin;
+
         let silent = self.input.cut(start, &mut self.frames);
         let number = self.packet_base + self.next_cut;
         encode(Codec::Pcm, &self.frames, &mut self.pcm, number, silent);

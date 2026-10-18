@@ -210,6 +210,8 @@ pub struct Rig {
     pub events: Vec<StreamEvent>,
     /// (time, M) after every step.
     pub margins: Vec<(f64, f64)>,
+    /// (time, R̂) after every step.
+    pub rates: Vec<(f64, f64)>,
 }
 
 impl Rig {
@@ -227,6 +229,7 @@ impl Rig {
             sent: Vec::new(),
             events: Vec::new(),
             margins: Vec::new(),
+            rates: Vec::new(),
         }
     }
 
@@ -277,6 +280,7 @@ impl Rig {
         self.stream.handle_timeout(self.now);
         self.drain();
         self.margins.push((t, self.stream.margin().as_secs_f64()));
+        self.rates.push((t, self.stream.rate()));
     }
 
     /// Runs for `duration`, waking exactly when the stream or the host

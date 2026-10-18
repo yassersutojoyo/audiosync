@@ -33,7 +33,7 @@ fn rate_model_tracks_drift() {
             // points.
             let probe = end + 300;
             let predicted = model.time(probe);
-            model.observe(end, at);
+            model.observe(end - 441, end, at);
             assert_eq!(model.time(probe), predicted);
             // Fix c(n) a packet ahead, as the stream does when it cuts.
             while sync_point(mark) <= end + PACKET {
@@ -257,7 +257,7 @@ fn host_contract_local_alignment() {
             _ => None,
         })
         .expect("timeline");
-    assert_eq!(origin, position);
+    assert_eq!(origin, position as i64);
     rig.host = Some(Host::new(restarted));
     rig.run_for(Duration::from_secs(3));
     check(&rig, restarted);

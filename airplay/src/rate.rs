@@ -10,9 +10,11 @@
 //! R̂ changes only at the timeline's sync points (the first packet start at
 //! or after each multiple of 44 100 frames, P94). At each, R̂ follows the
 //! host's frame rate measured on the sender clock: a least-squares fit of
-//! (frame, arrival time) over the last 30 s, plus a correction that steers
-//! c(n) onto the fitted line over about four seconds, so an offset from the
-//! start dies out too. The change is limited so that the predicted time of
+//! (frame, arrival time) over the last 30 s (a fixed prior slope until the
+//! points span 10 s), plus a gentle correction that steers c(n) onto the
+//! fitted line (over about ten seconds, and never by more than 50 ppm of
+//! R̂), so an offset from the start or from a resumed capture dies out
+//! too. The change is limited so that the predicted time of
 //! any frame up to the next sync point moves by at most 0.5 ms, and R̂ stays
 //! within ±1000 ppm of 44 100 Hz (P101). Earlier segments never change, so
 //! every speaker sees the same c(n) for every frame at all times (P102).
@@ -46,11 +48,15 @@ pub const SYNC_INTERVAL_FRAMES: i64 = SAMPLE_RATE as i64;
 /// The fit uses at most one point per this many seconds, which bounds its
 /// memory whatever the host's block size.
 const POINT_SPACING: f64 = 0.008;
-/// The fitted slope replaces the current one only once the points span this
-/// long; before, the slope stays and only the offset is steered.
-const MIN_SLOPE_SPAN: f64 = 5.0;
+/// The fitted slope is used only once the points span this long; before,
+/// a fixed prior slope (nominal, or R̂ from before a resumed capture) is,
+/// and only the offset is steered. Extrapolating with R̂'s own current
+/// slope instead would feed its error back into itself.
+const MIN_SLOPE_SPAN: f64 = 10.0;
 /// The offset to the fitted line is steered away over this many frames.
-const CORRECTION_FRAMES: f64 = 4.0 * NOMINAL_RATE;
+const CORRECTION_FRAMES: f64 = 10.0 * NOMINAL_RATE;
+/// The share of R̂ that steering the offset may take: 50 ppm.
+const MAX_CORRECTION: f64 = 50e-6;
 /// Segments kept for c(n) of past frames: well over the 3 s largest delay
 /// plus the 2 s largest latency that sync packets look back.
 const KEPT_SEGMENTS: usize = 64;
@@ -82,8 +88,8 @@ pub struct RateModel {
     next_mark: i64,
     /// Fit points: (frame, arrival time).
     points: VecDeque<(i64, f64)>,
-    /// The end of the previous arrival, for the block size.
-    last_end: Option<i64>,
+    /// The slope used while the points span less than [`MIN_SLOPE_SPAN`].
+    prior_slope: f64,
 }
 
 fn nominal_slope() -> f64 {
@@ -97,7 +103,7 @@ impl RateModel {
             segments: VecDeque::with_capacity(KEPT_SEGMENTS + 1),
             next_mark: 1,
             points: VecDeque::with_capacity(KEPT_POINTS + 1),
-            last_end: None,
+            prior_slope: nominal_slope(),
         };
         model.reset(start);
         model
@@ -113,7 +119,7 @@ impl RateModel {
         });
         self.next_mark = 1;
         self.points.clear();
-        self.last_end = None;
+        self.prior_slope = nominal_slope();
     }
 
     /// c(n) in seconds. Frames before the first segment extend it
@@ -130,7 +136,29 @@ impl RateModel {
         segment.time + (n - segment.start) as f64 * segment.slope
     }
 
+    /// The frame whose c(n) is the last at or before `at` seconds: the
+    /// inverse of [`RateModel::time`], extended the same way.
+    pub fn frame_at(&self, at: f64) -> i64 {
+        let segment = self
+            .segments
+            .iter()
+            .rev()
+            .find(|segment| segment.time <= at)
+            .or_else(|| self.segments.front())
+            .expect("the model always has a segment");
+        segment.start + ((at - segment.time) / segment.slope).floor() as i64
+    }
+
+    /// Forgets the arrivals seen so far: a resumed capture has its own
+    /// phase, and a fit across the pause would bend R̂. c(n) and R̂ stay;
+    /// the fit starts again from the next arrival.
+    pub fn forget_arrivals(&mut self) {
+        self.points.clear();
+        self.prior_slope = self.segments.back().expect("segment").slope;
+    }
+
     /// The current R̂ in Hz.
+
     pub fn rate(&self) -> f64 {
         1.0 / self.segments.back().expect("segment").slope
     }
@@ -143,17 +171,14 @@ impl RateModel {
         }
     }
 
-    /// Takes one arrival: the host's frames up to (not including) `end`
+    /// Takes one arrival: the host's frames `start` to `end` (not included)
     /// arrived at `at` seconds. Returns the residual of the last of them
     /// (arrival after c, positive when late) and the block's length in
     /// seconds, for M.
-    pub fn observe(&mut self, end: i64, at: f64) -> (f64, f64) {
+    pub fn observe(&mut self, start: i64, end: i64, at: f64) -> (f64, f64) {
         let residual = at - self.time(end - 1);
-        let block = match self.last_end {
-            Some(last) if end > last => (end - last) as f64 / NOMINAL_RATE,
-            _ => 0.0,
-        };
-        self.last_end = Some(end);
+        let block = (end - start).max(0) as f64 / NOMINAL_RATE;
+
         let spaced = self
             .points
             .back()
@@ -209,7 +234,7 @@ impl RateModel {
             / count as f64;
         let mean_t = self.points.iter().map(|&(_, t)| t).sum::<f64>() / count as f64;
         let span = self.points[count - 1].1 - self.points[0].1;
-        let mut slope = current;
+        let mut slope = self.prior_slope;
         if span >= MIN_SLOPE_SPAN {
             let (mut sxx, mut sxt) = (0.0, 0.0);
             for &(n, t) in &self.points {
@@ -222,7 +247,11 @@ impl RateModel {
             }
         }
         let fitted = mean_t + ((start - base) as f64 - mean_n) * slope;
-        slope + (fitted - time) / CORRECTION_FRAMES
+        // The offset is steered away gently: it is at most the host's
+        // jitter, which M covers, and steering it fast would make R̂ (and
+        // the rate the sync packets imply) follow every jittered placement.
+        let limit = MAX_CORRECTION * slope;
+        slope + ((fitted - time) / CORRECTION_FRAMES).clamp(-limit, limit)
     }
 }
 

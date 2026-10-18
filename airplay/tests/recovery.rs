@@ -77,6 +77,10 @@ fn a_paused_capture_that_resumes_in_real_time_is_heard_again_at_once() {
     // took the pause for the host's rate or jitter.
     let error = rate_error_ppm(&rig);
     assert!(error.abs() < 50.0, "R̂ off by {error} ppm");
+    for &(t, rate) in &rig.rates {
+        let ppm = (rate / 44_100.0 - 1.0) * 1e6;
+        assert!(ppm.abs() < 100.0, "R̂ off by {ppm} ppm at {t}");
+    }
     for &(t, margin) in &rig.margins {
         if t > resumed + 1.0 {
             assert!(margin <= 0.030, "M = {margin} at {t}");
@@ -98,7 +102,7 @@ fn a_short_pause_comes_back_within_a_block() {
     host.pauses = vec![(1_000, 0.3)];
     rig.host = Some(host);
     let id = rig.add(speaker(1, Codec::Alac));
-    rig.run_for(Duration::from_secs(20));
+    rig.run_for(Duration::from_secs(50));
     let audio = rig.audio(id);
     let resumed = arrival_of_block(&rig, 1_000, 0.3);
     let back = first_with_audio(&audio, 10.1);
@@ -109,7 +113,11 @@ fn a_short_pause_comes_back_within_a_block() {
         packet.at - resumed
     );
     assert_continuous(&audio, back);
-    assert!(rate_error_ppm(&rig).abs() < 50.0);
+    assert!(
+        rate_error_ppm(&rig).abs() < 50.0,
+        "R̂ off by {} ppm",
+        rate_error_ppm(&rig)
+    );
 }
 
 // covers: P143

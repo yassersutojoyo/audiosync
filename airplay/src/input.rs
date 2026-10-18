@@ -5,13 +5,25 @@
 //! preallocated single-producer, single-consumer ring and return, without
 //! allocating, locking, blocking, logging or touching the file system (P6).
 //! Every frame the host hands over gets the next ring position, and ring
-//! position = timeline frame (offset by the timeline's origin): the stream
-//! cuts packet j from positions 352·j to 352·j + 351 at its send time. A
-//! frame whose position was already cut (its packet went out with silence
-//! in its place) is dropped, so the timeline never stalls or shifts (P112);
-//! when the ring is full the write keeps what fits and drops the rest
-//! (P112). Each write also records when its frames arrived, for the rate
-//! model (P101).
+//! position = timeline frame plus the stream's offset: the stream cuts
+//! packet j from the positions of frames 352·j to 352·j + 351 at its send
+//! time. A frame whose position was already cut (its packet went out with
+//! silence in its place) is dropped, so a host that falls briefly behind
+//! and catches up lands back in place and the timeline never stalls or
+//! shifts (P112); when the ring is full the write keeps what fits and drops
+//! the rest (P112).
+//!
+//! A host that is far behind, or that stays behind while it delivers at
+//! real-time pace, didn't fall behind: its capture paused and resumed (a
+//! loopback delivers nothing while the source is silent). Its frames are
+//! then no longer late copies of the cut positions but new audio, so the
+//! write moves up to the first position not yet cut, the skipped positions
+//! stay the silence the stream inserted (P96), and the stream places the
+//! resumed frames on the timeline as if they had just arrived on schedule.
+//!
+//! Each write that lands in time records when its frames arrived, for the
+//! rate model and the send margin (P84, P101); late writes record nothing,
+//! so a pause is never taken for the host's rate or jitter.
 //!
 //! Frames are stored one per atomic word (left in the high half), so both
 //! sides stay in safe Rust: the writer stores the slots, then publishes its
@@ -30,6 +42,22 @@ pub const MIN_INPUT_FRAMES: usize = SAMPLE_RATE as usize;
 /// Arrival records the ring holds between two reads; a record that doesn't
 /// fit is dropped, which only thins the rate model's data.
 const ARRIVAL_RECORDS: usize = 1024;
+/// A write at least this far behind the first position not yet cut is a
+/// resumed capture, not a late one: one second.
+pub const RESYNC_FRAMES: u64 = SAMPLE_RATE as u64;
+/// The arrival record of a resumed write carries this bit in its start.
+const RESYNC_BIT: u64 = 1 << 63;
+
+/// One arrival record: the host's frames from ring position `start` up to
+/// (not including) `end` arrived at `nanos` from the clock origin; `resync`
+/// says the write moved up to the floor (a resumed capture).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Arrival {
+    pub start: u64,
+    pub end: u64,
+    pub nanos: i64,
+    pub resync: bool,
+}
 
 struct Shared {
     /// Arrival times are nanoseconds from this instant (the sender clock's
@@ -42,7 +70,9 @@ struct Shared {
     floor: AtomicU64,
     /// Frames handed over by the host, kept or not.
     received: AtomicU64,
-    /// Arrival records: the position after a write and the time it came.
+    /// Arrival records: the positions a write filled (the resync flag in
+    /// the start's top bit) and the time it came.
+    arrival_start: Box<[AtomicU64]>,
     arrival_end: Box<[AtomicU64]>,
     arrival_at: Box<[AtomicU64]>,
     arrivals_written: AtomicU64,
@@ -60,6 +90,7 @@ pub(crate) fn ring(frames: usize, origin: Instant) -> (InputWriter, InputReader)
         write: AtomicU64::new(0),
         floor: AtomicU64::new(0),
         received: AtomicU64::new(0),
+        arrival_start: atomics(ARRIVAL_RECORDS),
         arrival_end: atomics(ARRIVAL_RECORDS),
         arrival_at: atomics(ARRIVAL_RECORDS),
         arrivals_written: AtomicU64::new(0),
@@ -68,6 +99,7 @@ pub(crate) fn ring(frames: usize, origin: Instant) -> (InputWriter, InputReader)
     (
         InputWriter {
             shared: shared.clone(),
+            late: None,
         },
         InputReader {
             shared,
@@ -89,6 +121,8 @@ fn unpack(word: u32) -> Frame {
 /// audio thread, and not `Clone`: there is one producer.
 pub struct InputWriter {
     shared: Arc<Shared>,
+    /// The arrival time and size of the last write, when it was late.
+    late: Option<(Instant, u64)>,
 }
 
 impl InputWriter {
@@ -125,26 +159,44 @@ impl InputWriter {
         let floor = shared.floor.load(Ordering::Acquire);
         let start = shared.write.load(Ordering::Relaxed);
         let count = frames as u64;
-        // Frames whose positions were already cut are late: dropped, their
-        // positions kept, so later frames stay where they belong.
-        let late = floor.saturating_sub(start).min(count);
-        let mut position = start + late;
-        let room = (capacity + floor).saturating_sub(position);
+        let behind = floor.saturating_sub(start);
+        // Still behind at real-time pace (at least half the time the last
+        // late write's frames last): not catching up, so resumed.
+        let paced = self.late.is_some_and(|(previous, size)| {
+            at.saturating_duration_since(previous).as_secs_f64() * f64::from(SAMPLE_RATE)
+                >= size as f64 / 2.0
+        });
+        let resync = behind > 0 && (behind >= RESYNC_FRAMES || paced);
+        // Otherwise frames whose positions were already cut are late:
+        // dropped, their positions kept, so later frames stay where they
+        // belong (P112).
+        let (late, first) = if resync {
+            (0, floor)
+        } else {
+            let late = behind.min(count);
+            (late, start + late)
+        };
+        let room = (capacity + floor).saturating_sub(first);
         let keep = (count - late).min(room);
         for index in 0..keep {
-            let slot = ((position + index) % capacity) as usize;
+            let slot = ((first + index) % capacity) as usize;
             shared.slots[slot].store(frame((late + index) as usize), Ordering::Relaxed);
         }
-        position += keep;
-        shared.write.store(position, Ordering::Release);
+        let end = first + keep;
+        shared.write.store(end.max(start), Ordering::Release);
         shared.received.fetch_add(count, Ordering::Release);
-        if position > start {
-            self.record_arrival(position, at);
+        if late > 0 {
+            self.late = Some((at, count));
+        } else {
+            self.late = None;
+            if keep > 0 {
+                self.record_arrival(first, end, at, resync);
+            }
         }
         keep as usize
     }
 
-    fn record_arrival(&self, end: u64, at: Instant) {
+    fn record_arrival(&self, start: u64, end: u64, at: Instant, resync: bool) {
         let shared = &*self.shared;
         let written = shared.arrivals_written.load(Ordering::Relaxed);
         let read = shared.arrivals_read.load(Ordering::Acquire);
@@ -156,7 +208,10 @@ impl InputWriter {
             None => -(shared.origin.duration_since(at).as_nanos() as i64),
         };
         let slot = (written % ARRIVAL_RECORDS as u64) as usize;
+        let flag = if resync { RESYNC_BIT } else { 0 };
+        shared.arrival_start[slot].store(start | flag, Ordering::Relaxed);
         shared.arrival_end[slot].store(end, Ordering::Relaxed);
+
         shared.arrival_at[slot].store(nanos as u64, Ordering::Relaxed);
         shared
             .arrivals_written
@@ -192,32 +247,46 @@ pub(crate) struct InputReader {
 }
 
 impl InputReader {
-    /// Cuts the 352 frames from `start` on into `out`, silence where the
-    /// writer hasn't filled them yet, and moves the floor past them; later
-    /// frames for those positions are dropped (P112). Returns the number of
-    /// silent frames.
-    pub fn cut(&mut self, start: u64, out: &mut PacketFrames) -> u16 {
+    /// Cuts the 352 frames from ring position `start` on into `out`,
+    /// silence where the writer hasn't filled them (positions before the
+    /// floor or the ring's start included), and moves the floor past them;
+    /// later frames for those positions are dropped (P112). Returns the
+    /// number of silent frames.
+    pub fn cut(&mut self, start: i64, out: &mut PacketFrames) -> u16 {
         let shared = &*self.shared;
         let capacity = shared.slots.len() as u64;
         let floor = shared.floor.load(Ordering::Relaxed);
         let written = shared.write.load(Ordering::Acquire);
         let mut silent = 0u16;
         for (index, frame) in out.iter_mut().enumerate() {
-            let position = start + index as u64;
-            if position >= floor && position < written {
-                *frame =
-                    unpack(shared.slots[(position % capacity) as usize].load(Ordering::Relaxed));
-                self.taken += 1;
-            } else {
-                *frame = [0, 0];
-                silent += 1;
+            let position = start + index as i64;
+            let held = u64::try_from(position)
+                .ok()
+                .filter(|&position| position >= floor && position < written);
+            match held {
+                Some(position) => {
+                    let word = shared.slots[(position % capacity) as usize].load(Ordering::Relaxed);
+                    *frame = unpack(word);
+                    self.taken += 1;
+                }
+                None => {
+                    *frame = [0, 0];
+                    silent += 1;
+                }
             }
         }
-        let end = start + out.len() as u64;
-        if end > floor {
-            shared.floor.store(end, Ordering::Release);
+        let end = start + out.len() as i64;
+        if let Ok(end) = u64::try_from(end) {
+            if end > floor {
+                shared.floor.store(end, Ordering::Release);
+            }
         }
         silent
+    }
+
+    /// The first ring position not yet cut.
+    pub fn floor(&self) -> u64 {
+        self.shared.floor.load(Ordering::Relaxed)
     }
 
     /// Starts a new timeline at the writer's position: frames not yet cut
@@ -235,19 +304,23 @@ impl InputReader {
         written.max(floor)
     }
 
-    /// Calls `record(end position, nanoseconds from the clock origin)` for
-    /// each arrival since the last call, in order.
-    pub fn drain_arrivals(&mut self, mut record: impl FnMut(u64, i64)) {
+    /// Calls `record` for each arrival since the last call, in order.
+    pub fn drain_arrivals(&mut self, mut record: impl FnMut(Arrival)) {
         let shared = &*self.shared;
         let written = shared.arrivals_written.load(Ordering::Acquire);
         let mut read = shared.arrivals_read.load(Ordering::Relaxed);
         while read < written {
             let slot = (read % ARRIVAL_RECORDS as u64) as usize;
-            let end = shared.arrival_end[slot].load(Ordering::Relaxed);
-            let at = shared.arrival_at[slot].load(Ordering::Relaxed) as i64;
-            record(end, at);
+            let start = shared.arrival_start[slot].load(Ordering::Relaxed);
+            record(Arrival {
+                start: start & !RESYNC_BIT,
+                end: shared.arrival_end[slot].load(Ordering::Relaxed),
+                nanos: shared.arrival_at[slot].load(Ordering::Relaxed) as i64,
+                resync: start & RESYNC_BIT != 0,
+            });
             read += 1;
         }
+
         shared.arrivals_read.store(read, Ordering::Release);
     }
 
