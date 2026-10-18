@@ -51,6 +51,10 @@ output you don't listen to, and turn the others on in AudioSync.
 [docs/WINDOWS_AUDIO_ROUTING.md](../docs/WINDOWS_AUDIO_ROUTING.md) explains why
 and lists the tests worth running on a real PC.
 
+If something acts up, start it from PowerShell with
+`$env:AUDIOSYNC_DEBUG=1; .\audiosync.exe` and read
+`%TEMP%\audiosync-debug.log` (`src/debug_log.rs`; [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md) says what it records).
+
 ## On a Mac
 
 The Windows-only code sits behind `#[cfg(windows)]`, so `cargo test` runs the
