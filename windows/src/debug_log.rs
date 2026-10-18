@@ -6,7 +6,7 @@
 //! Then the app empties `audiosync-debug.log` in the temporary folder
 //! (`%TEMP%\audiosync-debug.log`) at launch and appends one line per event,
 //! each starting with the time in UTC, to the millisecond
-//! (`2026-10-18T17:52:13.456Z`).
+//! (`2026-10-18T17:52:13.456Z`), up to [`MAX_BYTES`].
 //!
 //! A message is built only while the log is on: [`DebugLog::log`] takes a
 //! closure. The thread that logs never touches the file: lines go over a
@@ -17,7 +17,7 @@
 //! keep for a status line every few seconds while streaming.
 
 use std::ffi::OsStr;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -29,6 +29,10 @@ pub const ENV_VAR: &str = "AUDIOSYNC_DEBUG";
 
 /// The log's file name, in the temporary folder.
 pub const FILE_NAME: &str = "audiosync-debug.log";
+
+/// The most the log grows to, so a PC that streams for days doesn't fill
+/// its disk (the status line alone adds a few MB a day).
+pub const MAX_BYTES: u64 = 50 * 1024 * 1024;
 
 /// What the writer thread is asked to do.
 enum Request {
@@ -56,13 +60,25 @@ impl DebugLog {
     /// A log written to `path`, emptied first, or one that writes nothing
     /// for `None` and when the file can't be created.
     pub fn new(path: Option<PathBuf>) -> DebugLog {
-        let Some(file) = path.and_then(|path| File::create(path).ok()) else {
+        DebugLog::with_limit(path, MAX_BYTES)
+    }
+
+    /// [`DebugLog::new`] that stops growing at `max_bytes` instead of
+    /// [`MAX_BYTES`].
+    fn with_limit(path: Option<PathBuf>, max_bytes: u64) -> DebugLog {
+        // Emptied, then reopened for appending: every write lands at the
+        // end even if something else truncates or writes the file meanwhile.
+        let file = path.and_then(|path| {
+            File::create(&path).ok()?;
+            OpenOptions::new().append(true).open(path).ok()
+        });
+        let Some(file) = file else {
             return DebugLog::default();
         };
         let (writer, requests) = mpsc::channel();
         let started = thread::Builder::new()
             .name("audiosync-debug-log".to_owned())
-            .spawn(move || write_requests(&requests, file));
+            .spawn(move || write_requests(&requests, file, max_bytes));
         DebugLog {
             writer: started.ok().map(|_| writer),
         }
@@ -104,18 +120,47 @@ pub fn log_path(setting: Option<&OsStr>, dir: &Path) -> Option<PathBuf> {
     (setting == Some(OsStr::new("1"))).then(|| dir.join(FILE_NAME))
 }
 
+/// A writer that counts the bytes it passes on.
+struct Counted<W> {
+    inner: W,
+    written: u64,
+}
+
+impl<W: Write> Write for Counted<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.written += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 /// The writer thread: appends each line and flushes whenever no request
 /// waits, until every clone of the log is gone. A line that can't be
-/// written is dropped.
-fn write_requests(requests: &Receiver<Request>, file: File) {
-    let mut out = BufWriter::new(file);
+/// written is dropped. Once the file holds `max_bytes`, one last line says
+/// so and later lines are dropped.
+fn write_requests(requests: &Receiver<Request>, file: File, max_bytes: u64) {
+    let mut out = Counted {
+        inner: BufWriter::new(file),
+        written: 0,
+    };
     while let Ok(request) = requests.recv() {
         let mut next = Some(request);
         while let Some(request) = next {
             match request {
-                Request::Line(time, text) => {
+                Request::Line(time, text) if out.written < max_bytes => {
                     let _ = write_line(&mut out, time, &text);
+                    if out.written >= max_bytes {
+                        let full = format!(
+                            "the debug log is full ({max_bytes} bytes); later lines are dropped"
+                        );
+                        let _ = write_line(&mut out, time, &full);
+                    }
                 }
+                Request::Line(..) => {}
                 Request::Flush(done) => {
                     let _ = out.flush();
                     let _ = done.send(());
@@ -311,6 +356,42 @@ mod tests {
         log.log(|| "this launch".to_owned());
         assert!(log.flush(TEST_FLUSH));
         assert_eq!(read_messages(&path), ["this launch"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_log_stops_growing_at_its_limit() {
+        let dir = test_dir("log-limit");
+        let path = dir.join(FILE_NAME);
+        let log = DebugLog::with_limit(Some(path.clone()), 200);
+        for n in 0..20 {
+            log.log(|| format!("line {n:02} of a long run"));
+        }
+        assert!(log.flush(TEST_FLUSH));
+        let messages = read_messages(&path);
+        assert!(messages.len() < 20, "{} lines", messages.len());
+        assert!(messages[0].starts_with("line 00"));
+        let full = "the debug log is full (200 bytes); later lines are dropped";
+        assert_eq!(messages.last().map(String::as_str), Some(full));
+        assert_eq!(messages.iter().filter(|m| m.as_str() == full).count(), 1);
+        let size = fs::metadata(&path).unwrap().len();
+        assert!(size < 200 + 2 * 128, "{size} bytes");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn lines_land_at_the_end_after_the_file_was_emptied_meanwhile() {
+        let dir = test_dir("log-append");
+        let path = dir.join(FILE_NAME);
+        let log = DebugLog::new(Some(path.clone()));
+        log.log(|| "before someone empties the file".to_owned());
+        assert!(log.flush(TEST_FLUSH));
+        fs::write(&path, "").unwrap();
+        log.log(|| "after".to_owned());
+        assert!(log.flush(TEST_FLUSH));
+        let bytes = fs::read(&path).unwrap();
+        assert!(!bytes.contains(&0), "no gap of NUL bytes");
+        assert_eq!(read_messages(&path), ["after"]);
         let _ = fs::remove_dir_all(dir);
     }
 
