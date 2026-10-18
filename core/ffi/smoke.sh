@@ -1,7 +1,10 @@
 #!/bin/bash
 # Builds audiosync-core as a static library and runs a small Swift program that
 # calls it through include/audiosync_core.h: the version, the volume curve, the
-# presets and one equalizer pass. Nothing plays; no audio device is touched.
+# presets, one equalizer pass, a ring with a delay reader (exact delays, no
+# frame played twice), the FIFO feed's PCM16 conversion with its writer stepped
+# through C callbacks that record the bytes, and the AirPlay sync rule. Nothing
+# plays; no audio device or pipe is touched.
 #
 # macOS only (needs swiftc from Xcode or the Command Line Tools).
 # Usage: core/ffi/smoke.sh

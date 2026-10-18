@@ -2,8 +2,8 @@ import CAudioSyncCore
 
 /// audiosync-core, the Rust audio core in `core/`, linked into the app as a
 /// static library (`scripts/build_core.sh` builds it, `Package.swift` links it).
-/// Nothing in the audio path calls it yet; launch logs its version, so a debug
-/// log shows which core a build carries.
+/// Sessions run on it when `engineImpl` says so (CoreEngine.swift has its engine
+/// parts); launch logs its version, so a debug log shows which core a build carries.
 enum AudioSyncCore {
     /// The crate version, for example "0.1.0".
     static var version: String {
