@@ -77,6 +77,7 @@ Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) desc
 - `FifoFeed.swift`: real-time 48 kHz PCM16 into the engine's pipe
 - `AirPlayEngine.swift`: starts, configures and supervises the bundled OwnTone
 - `OwnToneClient.swift`: the client for the engine's local API
+- `PipeMetadata.swift`: the track's title, artist, album and artwork, written into the engine's metadata pipe so AirPlay speakers with a screen show them (`ReceiverInfo.swift` decides what they show)
 - `AirPlayPairing.swift`: speakers the engine switched off, and PIN or password pairing
 
 The app side: `AppDelegate.swift` holds app state, persistence, launch and quit, and its extensions split out windows (`+Windows`), groups and auto-connect (`+Groups`), local outputs (`+Outputs`), AirPlay speakers (`+AirPlay`) and streaming and notices (`+Engine`). The UI is SwiftUI in `MainWindow.swift` and `MenuBar.swift`, with the app menus in `MainMenu.swift`. Smaller pieces: `AudioDevices.swift` (Core Audio device helpers), `Volume.swift` (the loudness curve), `SpeakerGroups.swift`, `NowPlaying.swift` (Spotify and Music), `Diagnostics.swift` (the debug log) and `main.swift` (keeps one copy running).
