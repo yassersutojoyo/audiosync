@@ -328,6 +328,16 @@ pub struct RenderFormat {
     pub convert: bool,
 }
 
+/// How an output's stream was set up, for the debug log: its format and the
+/// size of its buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StreamSetup {
+    /// The format it renders in.
+    pub format: RenderFormat,
+    /// The stream buffer, in device frames.
+    pub buffer_frames: u32,
+}
+
 /// `SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT`.
 const STEREO_MASK: u32 = 0x3;
 

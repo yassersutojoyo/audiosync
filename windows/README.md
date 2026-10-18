@@ -11,8 +11,9 @@ one app, or everything the PC plays except AudioSync itself, and plays it on
 the outputs you turn on, each at its own delay and volume, through the
 equalizer. There's no AirPlay on Windows yet, and nothing is saved: the
 speakers you turned on, their delays and volumes, groups and the equalizer
-start over at every launch. It hasn't been tried on real Windows hardware yet;
-CI builds and tests it. [docs/WINDOWS_UI.md](../docs/WINDOWS_UI.md) maps each
+start over at every launch. So far it has only been started on one Windows 11
+PC, with nothing playing, and nobody has listened to it there yet; CI builds and
+tests it. [docs/WINDOWS_UI.md](../docs/WINDOWS_UI.md) maps each
 part of the Mac main window to its Windows counterpart and lists the keyboard
 shortcuts.
 
@@ -50,6 +51,11 @@ output too, without the delay. To hear only AudioSync's copies, send the app
 output you don't listen to, and turn the others on in AudioSync.
 [docs/WINDOWS_AUDIO_ROUTING.md](../docs/WINDOWS_AUDIO_ROUTING.md) explains why
 and lists the tests worth running on a real PC.
+
+If something acts up, start it from PowerShell with
+`$env:AUDIOSYNC_DEBUG=1; .\audiosync.exe` and read
+`%TEMP%\audiosync-debug.log`, which starts over at every launch and stops at
+50 MB (`src/debug_log.rs`; [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md) says what it records).
 
 ## On a Mac
 

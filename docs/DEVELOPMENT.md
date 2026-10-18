@@ -65,6 +65,14 @@ AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync
 
 It writes to `/tmp/audiosync-debug.log`.
 
+The Windows app has the same switch. Exit it from the tray icon's menu, then start it from PowerShell in the folder that holds `audiosync.exe`:
+
+```powershell
+$env:AUDIOSYNC_DEBUG=1; .\audiosync.exe
+```
+
+The log lands in `%TEMP%\audiosync-debug.log` and starts over at every launch; it stops at 50 MB with a line that says so. Each line starts with the time in UTC; the first lines name the app and Windows versions and the PC's local time, so you can line the two clocks up. After that it lists the outputs and sources it found, what you switched, what the session rules decided, every output and capture that started or stopped and why, device changes and errors. While streaming, a status line every five seconds shows the frames captured and, for each output, its delay, volume and how often it ran dry or had to correct drift. The variable stays set until you close that PowerShell window.
+
 ## Where things are
 
 Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) describes the engine's behavior clause by clause, and [`EDGE_CASES.md`](EDGE_CASES.md) what happens when devices, sleep or the engine change under a session. [`WINDOWS_AUDIO_ROUTING.md`](WINDOWS_AUDIO_ROUTING.md) weighs how a future Windows version could avoid double audio when capturing an app. The audio path, roughly in order:
@@ -98,7 +106,7 @@ Two Rust folders sit next to the Swift package.
 cd core && cargo test
 ```
 
-`windows/` is a Windows 11 version of AudioSync in development, written in Rust with a [Slint](https://slint.dev) interface. It gets its audio work from the same core: the ring, the delay readers, the resampler, the volume curve, the equalizer and the session rules. It has its screens (the main window, the equalizer, a tray icon with a flyout, the About dialog), and on Windows they drive a WASAPI backend that captures one app or the whole system through process loopback and plays it on the outputs you turn on; on a Mac the window shows example speakers from a mock backend instead. It hasn't been tried on real Windows hardware yet: CI checks the formatting, runs clippy and the tests, and builds it for x64 and ARM64, each build with the license notices `scripts/windows_notices.py` writes for it. On Windows you need rustup with the stable MSVC toolchain and the Visual Studio Build Tools ("Desktop development with C++"), then `cargo test` and `cargo build --release` in `windows/`. On a Mac, `cargo test` runs its logic tests and `cargo check --target x86_64-pc-windows-msvc` checks the Windows code, but can't link it. [`windows/README.md`](../windows/README.md) has the details, and [`WINDOWS_AUDIO_ROUTING.md`](WINDOWS_AUDIO_ROUTING.md) weighs how it could capture one app without playing it twice.
+`windows/` is a Windows 11 version of AudioSync in development, written in Rust with a [Slint](https://slint.dev) interface. It gets its audio work from the same core: the ring, the delay readers, the resampler, the volume curve, the equalizer and the session rules. It has its screens (the main window, the equalizer, a tray icon with a flyout, the About dialog), and on Windows they drive a WASAPI backend that captures one app or the whole system through process loopback and plays it on the outputs you turn on; on a Mac the window shows example speakers from a mock backend instead. So far it has only been started on one Windows 11 PC, with nothing playing: it runs and lists the outputs, but nobody has listened to it there yet. CI checks the formatting, runs clippy and the tests, and builds it for x64 and ARM64, each build with the license notices `scripts/windows_notices.py` writes for it. On Windows you need rustup with the stable MSVC toolchain and the Visual Studio Build Tools ("Desktop development with C++"), then `cargo test` and `cargo build --release` in `windows/`. On a Mac, `cargo test` runs its logic tests and `cargo check --target x86_64-pc-windows-msvc` checks the Windows code, but can't link it. [`windows/README.md`](../windows/README.md) has the details, and [`WINDOWS_AUDIO_ROUTING.md`](WINDOWS_AUDIO_ROUTING.md) weighs how it could capture one app without playing it twice.
 
 ### Running the engine on the Rust core
 

@@ -136,7 +136,7 @@ impl DeviceWatcher {
     pub(super) fn start() -> Result<DeviceWatcher, BackendError> {
         let changed = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(Event::manual_reset()?);
-        let thread = {
+        let (thread, ()) = {
             let changed = Arc::clone(&changed);
             let stop = Arc::clone(&stop);
             spawn_ready("audiosync-devices", move |ready| {
@@ -175,7 +175,7 @@ fn watch(changed: &Arc<AtomicBool>, stop: &Event, ready: Ready) {
         Ok(registration) => registration,
         Err(error) => return ready.fail(error),
     };
-    ready.ok();
+    ready.ok(());
     // SAFETY: waits on an event that outlives this thread's use of it.
     unsafe { WaitForSingleObject(stop.raw(), INFINITE) };
     drop(registration);
