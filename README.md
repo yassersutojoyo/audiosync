@@ -55,7 +55,7 @@ I don't have a paid Apple developer account, so releases aren't notarized and ma
 
 Auto-update is off for now. To update, quit AudioSync and replace the app with the one from [Releases](https://github.com/yassersutojoyo/audiosync/releases). [`CHANGELOG.md`](CHANGELOG.md) has what changed.
 
-You can also build it yourself. You need Homebrew and the Xcode 16 command line tools, then:
+You can also build it yourself. You need Homebrew, the Xcode 16 command line tools and a Rust toolchain ([rustup](https://rustup.rs)), then:
 
 ```bash
 git clone https://github.com/yassersutojoyo/audiosync
