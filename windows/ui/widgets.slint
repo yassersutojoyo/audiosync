@@ -90,10 +90,13 @@ export component Card inherits Rectangle {
     }
 }
 
+// A section's visible title. Narrator hears it as the label of the section
+// (a group) or of the control below it, so the text itself is skipped.
 export component SectionTitle inherits Text {
     font-size: Tokens.font-size-body;
     font-weight: 600;
     color: Tokens.secondary-text;
+    accessible-role: none;
 }
 
 // Small secondary text (captions, notes, values).
@@ -639,6 +642,8 @@ export component NoticeStack inherits VerticalLayout {
     callback dismissed-all();
 
     spacing: 6px;
+    accessible-role: groupbox;
+    accessible-label: Strings.notices;
 
     for notice[index] in root.notices: Rectangle {
         visible: index < root.limit;

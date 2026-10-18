@@ -54,3 +54,22 @@ example speakers stands in: nothing plays and no audio device is opened.
 | Escape | Close the flyout, the equalizer or a dialog |
 
 A focused control shows a ring in the focus color while it has keyboard focus.
+
+## Narrator and contrast
+
+Every control has an accessible role, a label and, where it has one, a value:
+a speaker's toggle reads as "Kitchen, AirPlay, toggle switch, On" with its
+note ("Asks for a code") or what selecting it does as the description, and
+each slider reads its speaker's name and value. The sections (This PC, Groups,
+Connected Speakers, Notices) are named groups, so Narrator says where the focus
+is. Icons beside text are decorative and hidden from Narrator. A test in
+`windows/src/contrast.rs` fails when a control in `ui/` has no accessible
+label, or when one of AudioSync's own controls lacks a role, a default action
+or a focus ring.
+
+Text colors meet 4.5:1 on every background they're drawn on, in light and
+dark (the lowest is 5.07:1). The pairs are listed in `brand/tokens.json`, and
+a unit test in `windows/src/contrast.rs` computes each ratio and fails below
+4.5:1; another fails when a `.slint` file draws text in a token color that no
+pair covers. The focus ring reaches 3:1 on every background. Text inside the
+standard controls (buttons, lists, fields) uses the Fluent style's own colors.

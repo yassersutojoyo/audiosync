@@ -30,6 +30,8 @@ component SpeakerSection inherits VerticalLayout {
     callback auto-connect-toggled(string, bool);
 
     spacing: 6px;
+    accessible-role: groupbox;
+    accessible-label: root.title;
 
     SectionTitle {
         text: root.title;
@@ -450,6 +452,8 @@ export component MainWindow inherits Window {
 
                     if root.groups.length > 0: VerticalLayout {
                         spacing: 6px;
+                        accessible-role: groupbox;
+                        accessible-label: Strings.groups;
 
                         SectionTitle {
                             text: Strings.groups;

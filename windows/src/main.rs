@@ -10,6 +10,8 @@
 // output stays visible.
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
+#[cfg(test)]
+mod contrast;
 mod os_version;
 #[cfg(any(windows, test))]
 mod placement;
