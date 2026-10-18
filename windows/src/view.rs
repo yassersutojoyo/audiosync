@@ -879,13 +879,18 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::SpeakerLost { speaker } => {
             strings.invoke_notice_speaker_lost(speaker.as_str().into())
         }
-        NoticeMessage::HeardTwice { source, endpoints } => {
-            let endpoints = SharedString::from(endpoints.join(", "));
+        NoticeMessage::HeardTwice {
+            source,
+            mute,
+            shared,
+        } => {
+            let mute = SharedString::from(mute.join(", "));
+            let shared = SharedString::from(shared.join(", "));
             match source {
                 Some(source) => {
-                    strings.invoke_notice_heard_twice_app(source.as_str().into(), endpoints)
+                    strings.invoke_notice_heard_twice_app(source.as_str().into(), mute, shared)
                 }
-                None => strings.invoke_notice_heard_twice_system(endpoints),
+                None => strings.invoke_notice_heard_twice_system(mute, shared),
             }
         }
     }

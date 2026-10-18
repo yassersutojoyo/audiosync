@@ -44,7 +44,9 @@ use super::capture::{
 use super::outputs::OutputParams;
 use super::outputs::{AirPlay, Endpoint, Listing, ListingNote, OutputPolicy, StreamSetup};
 use super::process::ProcessTable;
-use super::routing::{self, Captured, DirectPath, DirectReason, EndpointAudio, EndpointVolume};
+use super::routing::{
+    self, Captured, DirectPath, DirectReason, EndpointAudio, EndpointVolume, PlayedOn,
+};
 use crate::debug_log::DebugLog;
 
 /// How often the debug log gets a status line while a session runs.
@@ -166,7 +168,7 @@ struct RoutingState {
     /// When the check last ran; `None` until the session's first check.
     last_check: Option<Instant>,
     /// The endpoints the source played on at the last check.
-    played_on: Vec<String>,
+    played_on: Vec<PlayedOn>,
     /// What was last reported: empty while the source is heard only through
     /// AudioSync.
     reported: Vec<DirectPath>,
@@ -1234,7 +1236,7 @@ mod tests {
     use crate::audio::backend::OutputKind;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
     use crate::audio::outputs::{EndpointProperties, EndpointReading};
-    use crate::audio::routing::{DirectPath, DirectReason};
+    use crate::audio::routing::{DirectPath, DirectReason, HOLD_CHECKS};
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
 
     const SPEAKERS: &str = "speakers";
@@ -2050,6 +2052,9 @@ mod tests {
         backend.play_on(PLAYER_PID, TV);
         assert_eq!(check_routing(&mut backend), [[TV]]);
         backend.move_session(PLAYER_PID, TV, CABLE);
+        for _ in 0..HOLD_CHECKS {
+            assert!(check_routing(&mut backend).is_empty(), "the TV is held");
+        }
         assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
         // A virtual device AudioSync plays to passes the sound on to
         // something the user listens to.
@@ -2079,8 +2084,13 @@ mod tests {
         backend.play_on(PLAYER_PID, TV);
         assert_eq!(check_routing(&mut backend), [[TV]]);
         backend.pause_on(PLAYER_PID, TV);
-        assert!(check_routing(&mut backend).is_empty(), "still reported");
+        for _ in 0..HOLD_CHECKS * 2 {
+            assert!(check_routing(&mut backend).is_empty(), "still reported");
+        }
         backend.play_on(PLAYER_PID, CABLE);
+        for _ in 0..HOLD_CHECKS {
+            assert!(check_routing(&mut backend).is_empty(), "held a few checks");
+        }
         assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
     }
 
@@ -2153,7 +2163,39 @@ mod tests {
         backend.set_default_output(SPEAKERS);
         backend.pause_on(PLAYER_PID, HEADPHONES);
         backend.play_on(PLAYER_PID, SPEAKERS);
+        assert_eq!(
+            check_routing(&mut backend),
+            [[HEADPHONES, SPEAKERS]],
+            "the headphones are held a few checks"
+        );
+        for _ in 1..HOLD_CHECKS {
+            assert!(check_routing(&mut backend).is_empty());
+        }
         assert_eq!(check_routing(&mut backend), [[SPEAKERS]]);
+    }
+
+    #[test]
+    fn another_app_pausing_now_and_then_doesnt_flap_the_whole_system_report() {
+        let mut backend = backend();
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.set_default_output(TV);
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(heard_twice(&backend.poll()), [[TV]]);
+        // One app plays on the TV all along, another on the headphones now
+        // and then.
+        backend.play_on(PLAYER_PID, TV);
+        backend.add_app(3000, "video.exe");
+        backend.play_on(3000, HEADPHONES);
+        assert_eq!(check_routing(&mut backend), [[HEADPHONES, TV]]);
+        for _ in 0..3 {
+            backend.pause_on(3000, HEADPHONES);
+            for _ in 0..HOLD_CHECKS {
+                assert!(check_routing(&mut backend).is_empty(), "held");
+            }
+            backend.play_on(3000, HEADPHONES);
+            assert!(check_routing(&mut backend).is_empty());
+        }
     }
 
     #[test]

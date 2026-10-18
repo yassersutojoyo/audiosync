@@ -159,10 +159,13 @@ pub enum NoticeMessage {
     SpeakerLost { speaker: String },
     /// The source also plays straight from these outputs, undelayed, so it
     /// is heard twice. `source` is the app's name, or `None` for the whole
-    /// system.
+    /// system. `mute` names the outputs AudioSync doesn't play to, which the
+    /// user may mute; `shared` the ones AudioSync plays to as well, where
+    /// only sending the source elsewhere helps.
     HeardTwice {
         source: Option<String>,
-        endpoints: Vec<String>,
+        mute: Vec<String>,
+        shared: Vec<String>,
     },
 }
 

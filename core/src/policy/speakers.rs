@@ -371,6 +371,15 @@ impl<S: PartialEq, N> Notices<S, N> {
             .map(|(_, notice)| notice)
     }
 
+    /// The notice about `subject`, to change in place: it keeps its place in
+    /// the list.
+    pub fn get_mut(&mut self, subject: &S) -> Option<&mut N> {
+        self.items
+            .iter_mut()
+            .find(|(existing, _)| existing == subject)
+            .map(|(_, notice)| notice)
+    }
+
     /// Number of notices.
     pub fn len(&self) -> usize {
         self.items.len()

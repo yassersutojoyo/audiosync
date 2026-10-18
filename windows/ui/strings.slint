@@ -152,17 +152,31 @@ export global Strings {
         return @tr("{} was disconnected. It plays again as soon as it's back.", speaker);
     }
 
-    // Windows can't mute the captured app, so it also plays straight from an
-    // output, undelayed, next to AudioSync's delayed copies. `endpoints` is
-    // one output's name, or several joined by commas.
-    public pure function notice-heard-twice-app(source: string, endpoints: string) -> string {
-        return @tr("You may hear {0} twice: it also plays straight from {1}. Send it to an output you don't listen to (Volume mixer), or mute {1} if AudioSync doesn't play there.", source, endpoints);
+    // Windows can't mute the captured app, so it also plays straight from
+    // some outputs, undelayed, next to AudioSync's delayed copies. `mute`
+    // names the ones AudioSync doesn't play to (muting them helps), `shared`
+    // the ones AudioSync plays to as well (only moving the app helps); each is
+    // one output's name, several joined by commas, or empty.
+    public pure function notice-heard-twice-app(source: string, mute: string, shared: string) -> string {
+        if shared == "" {
+            return @tr("You may hear {0} twice: it also plays straight from {1}. Send it to an output you don't listen to (Volume mixer), or mute {1}.", source, mute);
+        }
+        if mute == "" {
+            return @tr("You may hear {0} twice: it also plays straight from {1}, where AudioSync plays too. Send it to an output you don't listen to (Volume mixer).", source, shared);
+        }
+        return @tr("You may hear {0} twice: it also plays straight from {1}, and from {2}, where AudioSync plays too. Send it to an output you don't listen to (Volume mixer). Muting {1} alone isn't enough.", source, mute, shared);
     }
 
-    // The same while the whole system is captured: everything Windows plays
-    // on its default output is heard there too.
-    public pure function notice-heard-twice-system(endpoints: string) -> string {
-        return @tr("You may hear your PC's sound twice: it also plays straight from {0}. Make an output you don't listen to the Windows default (Sound settings), or mute {0} if AudioSync doesn't play there.", endpoints);
+    // The same while the whole system is captured: what Windows plays on its
+    // default output, or another app plays elsewhere, is heard there too.
+    public pure function notice-heard-twice-system(mute: string, shared: string) -> string {
+        if shared == "" {
+            return @tr("You may hear your PC's sound twice: it also plays straight from {0}. Make an output you don't listen to the Windows default (Sound settings), or mute {0}.", mute);
+        }
+        if mute == "" {
+            return @tr("You may hear your PC's sound twice: it also plays straight from {0}, where AudioSync plays too. Make an output you don't listen to the Windows default (Sound settings).", shared);
+        }
+        return @tr("You may hear your PC's sound twice: it also plays straight from {0}, and from {1}, where AudioSync plays too. Make an output you don't listen to the Windows default (Sound settings). Muting {0} alone isn't enough.", mute, shared);
     }
 
     public pure function speaker-options(name: string) -> string {

@@ -13,23 +13,28 @@
 //! otherwise it is taken for the output nobody listens to that the notice
 //! suggests, since what passes its sound on to speakers is out of sight.
 //!
-//! - One app: an endpoint where a process of the captured tree has an active
-//!   audio session.
+//! - One app: an endpoint where a process of the captured tree plays.
 //! - The whole system: Windows' default output, whatever plays there now,
-//!   and any other endpoint where a process outside AudioSync's tree has an
-//!   active session.
+//!   and any other endpoint where a process outside AudioSync's tree plays.
 //!
-//! A source that pauses usually ends its active sessions, and plays on the
-//! same endpoint when it resumes. So while no captured process has an active
-//! session anywhere, the endpoints where the source last had one still count
-//! (`last_played_on`); an active session elsewhere replaces them, which is how
-//! an app moved to another output in the volume mixer is noticed.
+//! The source plays on an endpoint while it has an active audio session
+//! there, and for [`HOLD_CHECKS`] checks after its last one: sessions turn
+//! inactive whenever an app pauses or goes quiet for a moment, and the
+//! answer shouldn't flip with them. One app that is silent everywhere (most
+//! likely paused) keeps counting on the endpoints AudioSync doesn't play to
+//! for as long as it stays silent: it will play there again, and muting them
+//! shows at once. An endpoint AudioSync plays to ages as usual, since moving
+//! the app away from it shows only once the app plays again.
 //!
 //! [`check`] is the decision, plain Rust over a snapshot the driver takes;
 //! the controller runs it every few seconds while streaming and reports a
 //! change as [`BackendEvent::HeardTwice`](super::backend::BackendEvent).
 
 use std::collections::BTreeSet;
+
+/// How many checks an endpoint keeps counting after the source's last active
+/// session there: about 15 seconds at the controller's pace.
+pub const HOLD_CHECKS: u32 = 5;
 
 /// What the capture takes in, by process.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,11 +91,20 @@ impl EndpointAudio {
     }
 }
 
+/// An endpoint the source plays on, carried from one check to the next.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlayedOn {
+    /// The endpoint ID.
+    pub endpoint_id: String,
+    /// Checks since the source's last active session there: 0 while it has
+    /// one.
+    pub idle_checks: u32,
+}
+
 /// Why the source plays straight from an endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DirectReason {
-    /// A captured process has an active session there, or had one last while
-    /// the source is silent now.
+    /// The source plays there (see [`PlayedOn`]).
     Session,
     /// The whole system is captured and this is Windows' default output.
     DefaultEndpoint,
@@ -116,38 +130,22 @@ pub struct RoutingCheck {
     /// The endpoints the source is heard from straight, by endpoint ID;
     /// empty when it is heard only through AudioSync.
     pub paths: Vec<DirectPath>,
-    /// The endpoints the source plays on, for the next check's
-    /// `last_played_on`: where a captured process has an active session, or
-    /// `last_played_on` again while none has.
-    pub played_on: Vec<String>,
+    /// The endpoints the source plays on, by endpoint ID, for the next
+    /// check's `last_played_on`.
+    pub played_on: Vec<PlayedOn>,
 }
 
 /// Where the source captured as `captured` is heard straight, from the
 /// active render endpoints in `endpoints`, while AudioSync plays to the
-/// endpoints in `rendered`. See the module documentation.
+/// endpoints in `rendered`, after the last check's `played_on`. See the
+/// module documentation.
 pub fn check(
     captured: &Captured,
     endpoints: &[EndpointAudio],
     rendered: &[String],
-    last_played_on: &[String],
+    last_played_on: &[PlayedOn],
 ) -> RoutingCheck {
-    let mut played_on: Vec<String> = endpoints
-        .iter()
-        .filter(|endpoint| {
-            endpoint
-                .active_pids
-                .iter()
-                .any(|&pid| captured.captures(pid))
-        })
-        .map(|endpoint| endpoint.id.clone())
-        .collect();
-    if played_on.is_empty() {
-        // The source is silent now; it most likely plays again where it
-        // played last.
-        played_on = last_played_on.to_vec();
-    }
-    played_on.sort();
-    played_on.dedup();
+    let played_on = played_on(captured, endpoints, rendered, last_played_on);
     if rendered.is_empty() {
         // Without a copy, nothing is heard twice.
         return RoutingCheck {
@@ -165,7 +163,7 @@ pub fn check(
             }
             let reason = if whole_system && endpoint.is_default {
                 DirectReason::DefaultEndpoint
-            } else if played_on.contains(&endpoint.id) {
+            } else if played_on.iter().any(|p| p.endpoint_id == endpoint.id) {
                 DirectReason::Session
             } else {
                 return None;
@@ -181,6 +179,36 @@ pub fn check(
     paths.sort_by(|a, b| a.endpoint_id.cmp(&b.endpoint_id));
     paths.dedup_by(|a, b| a.endpoint_id == b.endpoint_id);
     RoutingCheck { paths, played_on }
+}
+
+/// The endpoints the source plays on now, after `last`: see the module
+/// documentation.
+fn played_on(
+    captured: &Captured,
+    endpoints: &[EndpointAudio],
+    rendered: &[String],
+    last: &[PlayedOn],
+) -> Vec<PlayedOn> {
+    let _ = rendered;
+    let mut active: Vec<PlayedOn> = endpoints
+        .iter()
+        .filter(|endpoint| {
+            endpoint
+                .active_pids
+                .iter()
+                .any(|&pid| captured.captures(pid))
+        })
+        .map(|endpoint| PlayedOn {
+            endpoint_id: endpoint.id.clone(),
+            idle_checks: 0,
+        })
+        .collect();
+    if active.is_empty() {
+        active = last.to_vec();
+    }
+    active.sort_by(|a, b| a.endpoint_id.cmp(&b.endpoint_id));
+    active.dedup_by(|a, b| a.endpoint_id == b.endpoint_id);
+    active
 }
 
 #[cfg(test)]
@@ -225,6 +253,16 @@ mod tests {
         list.iter().map(|id| (*id).to_owned()).collect()
     }
 
+    /// Where the source played, with the checks since its last session.
+    fn played(list: &[(&str, u32)]) -> Vec<PlayedOn> {
+        list.iter()
+            .map(|(id, idle_checks)| PlayedOn {
+                endpoint_id: (*id).to_owned(),
+                idle_checks: *idle_checks,
+            })
+            .collect()
+    }
+
     /// The endpoint IDs and reasons of the answer.
     fn heard(check: &RoutingCheck) -> Vec<(&str, DirectReason)> {
         check
@@ -232,6 +270,25 @@ mod tests {
             .iter()
             .map(|path| (path.endpoint_id.as_str(), path.reason))
             .collect()
+    }
+
+    /// Runs `checks` checks over the same endpoints from `last`, and returns
+    /// the last answer.
+    fn checks(
+        checks: u32,
+        captured: &Captured,
+        endpoints: &[EndpointAudio],
+        rendered: &[String],
+        last: &[PlayedOn],
+    ) -> RoutingCheck {
+        let mut answer = RoutingCheck {
+            paths: Vec::new(),
+            played_on: last.to_vec(),
+        };
+        for _ in 0..checks {
+            answer = check(captured, endpoints, rendered, &answer.played_on);
+        }
+        answer
     }
 
     #[test]
@@ -247,7 +304,7 @@ mod tests {
                 audiosync_plays_here: false,
             }]
         );
-        assert_eq!(answer.played_on, ["speakers"]);
+        assert_eq!(answer.played_on, played(&[("speakers", 0)]));
     }
 
     #[test]
@@ -268,7 +325,7 @@ mod tests {
         assert!(answer.paths.is_empty(), "{answer:?}");
         assert_eq!(
             answer.played_on,
-            ["speakers"],
+            played(&[("speakers", 0)]),
             "where it plays still counts"
         );
     }
@@ -313,29 +370,110 @@ mod tests {
         let endpoints = [cable, endpoint("tv", &[OWN])];
         let answer = check(&player(), &endpoints, &ids(&["tv"]), &[]);
         assert!(answer.paths.is_empty(), "{answer:?}");
-        assert_eq!(answer.played_on, ["cable"]);
+        assert_eq!(answer.played_on, played(&[("cable", 0)]));
         let answer = check(&player(), &endpoints, &ids(&["cable", "tv"]), &[]);
         assert_eq!(heard(&answer), [("cable", DirectReason::Session)]);
     }
 
     #[test]
-    fn a_paused_app_still_counts_where_it_played_last() {
-        let endpoints = [endpoint("speakers", &[]), endpoint("tv", &[OWN])];
-        let answer = check(&player(), &endpoints, &ids(&["tv"]), &ids(&["speakers"]));
-        assert_eq!(heard(&answer), [("speakers", DirectReason::Session)]);
-        assert_eq!(answer.played_on, ["speakers"]);
+    fn a_paused_app_still_counts_where_audiosync_doesnt_play() {
+        let endpoints = [endpoint("speakers", &[OWN]), endpoint("tv", &[])];
+        let last = played(&[("speakers", 0), ("tv", 0)]);
+        let answer = check(&player(), &endpoints, &ids(&["speakers"]), &last);
+        assert_eq!(
+            heard(&answer),
+            [
+                ("speakers", DirectReason::Session),
+                ("tv", DirectReason::Session)
+            ]
+        );
+        // The TV counts for as long as the app stays silent; the speakers,
+        // which AudioSync plays to, only for a few checks.
+        let answer = checks(
+            HOLD_CHECKS * 3,
+            &player(),
+            &endpoints,
+            &ids(&["speakers"]),
+            &last,
+        );
+        assert_eq!(heard(&answer), [("tv", DirectReason::Session)]);
+        assert_eq!(answer.played_on, played(&[("tv", 0)]));
     }
 
     #[test]
-    fn an_app_moved_to_another_output_counts_only_there() {
+    fn an_app_moved_to_another_output_drops_the_old_one_after_a_few_checks() {
         let endpoints = [
             endpoint("speakers", &[]),
             endpoint("cable", &[PLAYER]),
             endpoint("tv", &[OWN]),
         ];
-        let answer = check(&player(), &endpoints, &ids(&["tv"]), &ids(&["speakers"]));
+        let last = played(&[("speakers", 0)]);
+        let answer = checks(HOLD_CHECKS, &player(), &endpoints, &ids(&["tv"]), &last);
+        assert_eq!(
+            heard(&answer),
+            [
+                ("cable", DirectReason::Session),
+                ("speakers", DirectReason::Session)
+            ]
+        );
+        assert_eq!(
+            answer.played_on,
+            played(&[("cable", 0), ("speakers", HOLD_CHECKS)])
+        );
+        let answer = check(&player(), &endpoints, &ids(&["tv"]), &answer.played_on);
         assert_eq!(heard(&answer), [("cable", DirectReason::Session)]);
-        assert_eq!(answer.played_on, ["cable"]);
+        assert_eq!(answer.played_on, played(&[("cable", 0)]));
+    }
+
+    #[test]
+    fn another_app_pausing_now_and_then_doesnt_flip_the_whole_system_answer() {
+        // The player plays on the TV all along, another app on the
+        // headphones now and then.
+        let playing = [
+            default_endpoint("tv", &[OWN, PLAYER]),
+            endpoint("headphones", &[OTHER]),
+        ];
+        let quiet = [
+            default_endpoint("tv", &[OWN, PLAYER]),
+            endpoint("headphones", &[]),
+        ];
+        let rendered = ids(&["tv"]);
+        let both = [
+            ("headphones", DirectReason::Session),
+            ("tv", DirectReason::DefaultEndpoint),
+        ];
+        let mut answer = check(&whole_system(), &playing, &rendered, &[]);
+        assert_eq!(heard(&answer), both);
+        for _ in 0..3 {
+            answer = checks(
+                HOLD_CHECKS,
+                &whole_system(),
+                &quiet,
+                &rendered,
+                &answer.played_on,
+            );
+            assert_eq!(heard(&answer), both, "held while it is quiet");
+            answer = check(&whole_system(), &playing, &rendered, &answer.played_on);
+            assert_eq!(heard(&answer), both);
+        }
+        // Quiet for longer, it drops out.
+        let answer = checks(
+            HOLD_CHECKS + 1,
+            &whole_system(),
+            &quiet,
+            &rendered,
+            &answer.played_on,
+        );
+        assert_eq!(heard(&answer), [("tv", DirectReason::DefaultEndpoint)]);
+        assert_eq!(answer.played_on, played(&[("tv", 0)]));
+    }
+
+    #[test]
+    fn an_endpoint_that_went_away_drops_out_after_a_few_checks() {
+        let endpoints = [endpoint("tv", &[OWN])];
+        let last = played(&[("buds", 0)]);
+        let answer = checks(HOLD_CHECKS + 1, &player(), &endpoints, &ids(&["tv"]), &last);
+        assert!(answer.played_on.is_empty(), "{answer:?}");
     }
 
     #[test]
