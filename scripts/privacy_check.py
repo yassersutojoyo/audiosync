@@ -86,7 +86,7 @@ def name_patterns(path):
     # inside the folder is caught; other entries must end at a word boundary.
     return [
         re.compile(
-            r"(?<![A-Za-z0-9_])" + re.escape(e) + ("" if e.endswith("/") else r"(?![A-Za-z0-9_-])"),
+            r"(?<![A-Za-z0-9_])" + re.escape(e) + ("" if e.endswith("/") else r"(?![A-Za-z0-9_])"),
             re.IGNORECASE,
         )
         for e in entries
@@ -142,6 +142,7 @@ def self_test():
         "planid.md": "Done for Plan A1.",
         "name.md": f"Ask {marker.capitalize()} about it.",
         "folder.md": "The plan is in zebrafolder/STATUS.md.",
+        "hyphen.md": f"Run the {marker}-reviewer agent.",
     }
     clean = (
         "Logs: C:\\Users\\<you>\\AppData, /Users/<you>/Library, %USERPROFILE%, "
