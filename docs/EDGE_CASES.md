@@ -96,7 +96,7 @@ Manual: choose Music as the source and stream it. Quit Music: streaming stops wi
 
 ## EC7: Engine restart (OwnTone killed)
 
-Expected: AirPlay goes quiet while the speaker list stays as it was. About two seconds later a new engine starts, and on its first answer every AirPlay speaker that was on is selected again at the same master volume and plays, with no notice. AirPlay comes back with the latency it had before the restart, so the local speakers still line up with it at their saved delays. Local speakers keep playing throughout. After more than five starts within a minute the engine gives up: the AirPlay section says "The AirPlay engine stopped after repeated crashes." and offers Retry.
+Expected: AirPlay goes quiet while the speaker list stays as it was. About two seconds later a new engine starts, and on its first answer (or, if it hasn't found them yet, as soon as it lists them) every AirPlay speaker that was on is selected again at the same master volume and plays, with no notice. AirPlay comes back with the latency it had before the restart, so the local speakers still line up with it at their saved delays. Local speakers keep playing throughout. After more than five starts within a minute the engine gives up: the AirPlay section says "The AirPlay engine stopped after repeated crashes." and offers Retry.
 
 Code path:
 - `AirPlayEngine.launch` sets the process `terminationHandler`, which reports the exit to `AirPlayEngineLifecycle.exited` (`EngineLifecycle.swift`) and starts again after 2 s; `AirPlayEngineLifecycle.willLaunch` is the crash-loop guard (`maxStarts` within `window`).
