@@ -176,6 +176,15 @@ mod probe {
         init_com()?;
         println!("Windows {}", windows_build());
         let enumerator = enumerator()?;
+        // A run that stopped early (Ctrl+C, a closed console) left the
+        // endpoints muted; measuring now would save "muted" as the original.
+        let left = saved_state()?;
+        if left.exists() {
+            return Err(format!(
+                "{} is left from a run that stopped early; run `mute_probe restore` first",
+                left.display()
+            ));
+        }
         let mut endpoints = MutedEndpoints::mute_all(&enumerator)?;
         let result = measure_all(&enumerator);
         endpoints.restore();
@@ -448,23 +457,36 @@ mod probe {
             endpoints: Vec::new(),
             restored: false,
         };
+        // Lines that can't be restored now (unreadable, or an endpoint that's
+        // unplugged or disabled) are written back for a later restore, so
+        // one missing endpoint never costs the others their saved state.
+        let mut kept = String::new();
         for line in text.lines().filter(|line| !line.is_empty()) {
             let mut fields = line.split('\t');
-            let (Some(id), Some(muted), Some(level)) =
-                (fields.next(), fields.next(), fields.next())
-            else {
-                return Err(format!("unreadable line in {}: {line:?}", path.display()));
+            let (Some(id), Some(muted), Some(Ok(level))) = (
+                fields.next(),
+                fields.next(),
+                fields.next().map(str::parse::<f32>),
+            ) else {
+                println!("unreadable line {line:?}: kept");
+                kept.push_str(line);
+                kept.push('\n');
+                continue;
             };
-            let level: f32 = level
-                .parse()
-                .map_err(|error| format!("unreadable volume {level:?}: {error}"))?;
             // SAFETY: calls on live COM objects this function owns.
-            let volume = unsafe {
+            let found = unsafe {
                 enumerator
                     .GetDevice(&HSTRING::from(id))
-                    .map_err(|e| failed("IMMDeviceEnumerator::GetDevice", &e))?
-                    .Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
-                    .map_err(|e| failed("IMMDevice::Activate(IAudioEndpointVolume)", &e))?
+                    .and_then(|device| device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None))
+            };
+            let volume = match found {
+                Ok(volume) => volume,
+                Err(error) => {
+                    println!("endpoint {id} isn't there ({error}): kept for a later restore");
+                    kept.push_str(line);
+                    kept.push('\n');
+                    continue;
+                }
             };
             guard.endpoints.push(Endpoint {
                 id: id.to_string(),
@@ -474,7 +496,15 @@ mod probe {
             });
         }
         guard.restore();
-        Ok(())
+        if kept.is_empty() {
+            return Ok(());
+        }
+        std::fs::write(&path, kept)
+            .map_err(|error| format!("writing {} failed: {error}", path.display()))?;
+        Err(format!(
+            "some endpoints weren't restored; they stay in {} (plug them back in and run `mute_probe restore` again)",
+            path.display()
+        ))
     }
 
     impl Drop for MutedEndpoints {
