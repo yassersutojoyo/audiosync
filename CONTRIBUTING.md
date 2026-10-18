@@ -20,4 +20,4 @@ CI builds the Rust audio core and the app (`scripts/build_core.sh`, then `swift 
 
 AudioSync tries to stay focused: capture one source, play it in sync on local and AirPlay speakers, and keep the AirPlay engine self-contained. Big new dependencies or features outside that are unlikely to be merged, so open an issue first if you're planning one.
 
-The AirPlay engine (OwnTone) is GPL and runs as a separate process. AudioSync only talks to it through the config file it writes, command-line arguments, signals, the local HTTP API and the audio pipe. Changes to the engine itself go in as patches in `setup.sh`, each listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Please don't copy code from other projects into AudioSync.
+The AirPlay engine (OwnTone) is GPL and runs as a separate process. AudioSync only talks to it through the config file it writes, command-line arguments, signals, the local HTTP API, the audio pipe and its track-metadata pipe. Changes to the engine itself go in as patches in `setup.sh`, each listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Please don't copy code from other projects into AudioSync.

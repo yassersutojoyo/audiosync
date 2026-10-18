@@ -14,8 +14,8 @@ third-party crates are test and benchmark tools that never reach the app) and,
 compiled in with it, parts of the Rust standard library, see
 [App frameworks and libraries](#app-frameworks-and-libraries).
 
-The engine runs as a separate process that AudioSync talks to over a named
-pipe and a local HTTP API. Each component stays under its own license. The
+The engine runs as a separate process that AudioSync talks to over named
+pipes (audio and track metadata) and a local HTTP API. Each component stays under its own license. The
 app also carries, in `Contents/Resources/ThirdParty/`:
 
 - this file
