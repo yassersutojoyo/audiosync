@@ -34,7 +34,7 @@ at every launch.
 | Now Playing | Later | Needs the Windows media session API |
 | Master Volume | Same | |
 | Equalizer card and window | Same: on/off, presets (Custom when none matches), preamp, ten bands, Reset | View > Equalizer (Ctrl+E); presets, band limits and the filters come from `audiosync-core`. It changes the captured audio once, so every speaker hears it |
-| This Mac | This PC | The PC's own outputs: its speakers or line out, and headphones on its jack. USB, Bluetooth, HDMI, DisplayPort and virtual outputs are under Connected Speakers, each with its kind |
+| This Mac | This PC | The PC's own outputs: its speakers or line out, and headphones on its jack. USB, Bluetooth, HDMI, DisplayPort and virtual outputs are under Connected Speakers, each with its kind. A Bluetooth hands-free endpoint ("Hands-Free", the call profile) is left out on purpose: it carries mono, low-bandwidth call audio, and opening it puts the device in call mode. A headset's stereo endpoint, when it has one, is listed |
 | Groups | Same: toggle, members, Rename Group… and Delete Group | In a context menu: right-click, the Menu key, or the "…" button |
 | Connected Speakers | Same: toggle, kind icon, availability note, auto-connect mark, volume | Kind icons come from Segoe Fluent Icons. With none listed it says "No connected speakers"; the Mac's note about the AirPlay engine isn't shown, since Windows has no AirPlay yet |
 | Per-speaker delay (sync controls) | Same: −100, −10, a field that applies as you type, +10, +100, and the hint | Local outputs only, as on the Mac |
