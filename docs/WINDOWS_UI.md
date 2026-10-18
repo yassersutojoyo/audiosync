@@ -27,17 +27,18 @@ at every launch.
 | Streaming switch | Switch in the header; Speakers > Turn Streaming On/Off; the tray menu | |
 | Options (gear) menu: New Group, Refresh Devices | Speakers menu: New Group from Active Speakers… (Ctrl+N), Refresh Devices (F5) | Windows keeps commands in the menu bar |
 | Options menu: Appearance | Not offered | The app follows the Windows light or dark mode |
-| Options menu: Show Virtual Devices, Launch at Login, Guide, Check for Updates | Later | Virtual devices are always listed for now; the rest need saved settings, the Windows startup-apps setting, a Windows guide and an update channel |
+| Options menu: Show Virtual Devices | View > Show Virtual Devices | Off by default, as on the Mac, but the Mac remembers the choice and Windows turns it off again at every launch (nothing is saved yet): a virtual output (a loopback driver, a voice changer) is listed only while this is on or while the output is turned on |
+| Options menu: Launch at Login, Guide, Check for Updates | Later | They need saved settings, the Windows startup-apps setting, a Windows guide and an update channel |
 | Notices | Same, each with a dismiss button, plus Dismiss All | The tray flyout shows the newest one and "n more notices…". Windows posts them for streaming turned on with no speaker, an app that quit or isn't running, capture that failed, a speaker that couldn't start, and a speaker that was disconnected (that one clears itself once the speaker is back; a speaker whose stream only restarts, after a format change, gets none) |
 | Audio Source | Same (a drop-down list) | All System Audio (everything but AudioSync), then each app that plays audio, by name. The list is read again every few seconds and with Refresh Devices; the chosen app stays chosen while it's paused or after it quits, and streaming finds it whenever it runs (restarted too), even before it plays again |
 | Now Playing | Later | Needs the Windows media session API |
 | Master Volume | Same | |
 | Equalizer card and window | Same: on/off, presets (Custom when none matches), preamp, ten bands, Reset | View > Equalizer (Ctrl+E); presets, band limits and the filters come from `audiosync-core`. It changes the captured audio once, so every speaker hears it |
-| This Mac | This PC | The PC's own outputs: its speakers or line out, and headphones on its jack. USB, Bluetooth, HDMI, DisplayPort and virtual outputs are under Connected Speakers, each with its kind |
+| This Mac | This PC | The PC's own outputs: its speakers or line out, and headphones on its jack. USB, Bluetooth, HDMI, DisplayPort and virtual outputs are under Connected Speakers, each with its kind. A Bluetooth hands-free endpoint ("Hands-Free", the call profile) is left out on purpose: it carries mono, low-bandwidth call audio, and opening it puts the device in call mode. A headset's stereo endpoint, when it has one, is listed |
 | Groups | Same: toggle, members, Rename Group… and Delete Group | In a context menu: right-click, the Menu key, or the "…" button |
-| Connected Speakers | Same: toggle, kind icon, availability note, auto-connect mark, volume | Kind icons come from Segoe Fluent Icons |
+| Connected Speakers | Same: toggle, kind icon, availability note, auto-connect mark, volume | Kind icons come from Segoe Fluent Icons. With none listed it says "No connected speakers"; the Mac's note about the AirPlay engine isn't shown, since Windows has no AirPlay yet |
 | Per-speaker delay (sync controls) | Same: −100, −10, a field that applies as you type, +10, +100, and the hint | Local outputs only, as on the Mac |
-| AirPlay problem with Retry | Later | Comes with the Windows AirPlay engine; until then the empty note shows |
+| AirPlay problem with Retry | Later | Comes with the Windows AirPlay engine; until then nothing in the Windows app mentions AirPlay |
 | Local Network hint | Not needed | Windows has no Local Network permission (the firewall may ask once the AirPlay engine runs) |
 | Menu bar panel | Tray icon and flyout | Left click opens the flyout, double click the main window, right click a menu (Open AudioSync, Turn Streaming On/Off, Exit AudioSync). Escape or a click elsewhere closes the flyout |
 | Closing the window keeps the app in the menu bar | Closing it keeps the app in the tray | File > Exit (or Exit in the tray) quits |
@@ -64,14 +65,18 @@ A focused control shows a ring in the focus color while it has keyboard focus.
 ## Narrator and contrast
 
 Every control has an accessible role, a label and, where it has one, a value:
-a speaker's toggle reads as "Kitchen, AirPlay, toggle switch, On" with its
-note ("Asks for a code") or what selecting it does as the description, and
-each slider reads its speaker's name and value. The sections (This PC, Groups,
-Connected Speakers, Notices) are named groups, so Narrator says where the focus
-is. Icons beside text are decorative and hidden from Narrator. A test in
-`windows/src/contrast.rs` fails when a control in `ui/` has no accessible
-label, or when one of AudioSync's own controls lacks a role, a default action
-or a focus ring.
+a speaker's toggle reads as "Desk Speaker, USB, toggle button, On" with what
+selecting it does as the description, and each slider reads its speaker's
+name and value. The on/off toggles (streaming, the equalizer, each speaker and
+group) are toggle buttons rather than switches, because Slint 1.18 tells
+Windows that a switch can't take keyboard focus. The sections (This PC,
+Groups, Connected Speakers, Notices) are named groups, so Narrator says where
+the focus is. Icons, the brand mark, section titles and values a control
+already reads are decorative and hidden from Narrator. Tests in
+`windows/src/contrast.rs` fail when a control in `ui/` has no accessible
+label, when one of AudioSync's own controls lacks a role, a default action
+or a focus ring, when a toggle uses the switch role, or when a decorative
+piece would still reach Narrator.
 
 Text colors meet 4.5:1 on every background they're drawn on, in light and
 dark (the lowest is 5.07:1). The pairs are listed in `brand/tokens.json`, and

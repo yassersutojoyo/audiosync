@@ -6,7 +6,7 @@
 // focus ring while it has keyboard focus, acts on Space and Enter, and
 // carries an accessible role, label and (where it has one) value.
 
-import { Button, LineEdit, Slider } from "std-widgets.slint";
+import { Button, LineEdit, Slider, Switch } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Availability, GroupItem, NoticeItem, RowState, SpeakerItem, SpeakerKind } from "types.slint";
@@ -58,15 +58,27 @@ export global Glyphs {
 
 // An icon from the icon font. Decorative: Narrator skips it, and the control
 // it belongs to carries the label.
-export component Glyph inherits Text {
+//
+// The decorative pieces here wrap their Text or Image in a layout or a
+// Rectangle instead of inheriting it: Slint 1.18 exposes every instance of a
+// component whose root is a Text or Image to Narrator, `accessible-role:
+// none` or not (each icon showed up as an element named by its private-use
+// character). A child element set to `none` stays hidden.
+export component Glyph inherits HorizontalLayout {
     in property <string> glyph;
-    text: root.glyph;
-    font-family: "Segoe Fluent Icons";
-    font-size: 16px;
-    color: Tokens.text;
-    horizontal-alignment: center;
-    vertical-alignment: center;
-    accessible-role: none;
+    in property <color> color: Tokens.text;
+    in property <length> font-size: 16px;
+    in property <TextVerticalAlignment> vertical-alignment: center;
+
+    Text {
+        text: root.glyph;
+        font-family: "Segoe Fluent Icons";
+        font-size: root.font-size;
+        color: root.color;
+        horizontal-alignment: center;
+        vertical-alignment: root.vertical-alignment;
+        accessible-role: none;
+    }
 }
 
 // The keyboard focus ring: drawn only while the control has keyboard focus.
@@ -92,11 +104,16 @@ export component Card inherits Rectangle {
 
 // A section's visible title. Narrator hears it as the label of the section
 // (a group) or of the control below it, so the text itself is skipped.
-export component SectionTitle inherits Text {
-    font-size: Tokens.font-size-body;
-    font-weight: 600;
-    color: Tokens.secondary-text;
-    accessible-role: none;
+export component SectionTitle inherits HorizontalLayout {
+    in property <string> text;
+
+    Text {
+        text: root.text;
+        font-size: Tokens.font-size-body;
+        font-weight: 600;
+        color: Tokens.secondary-text;
+        accessible-role: none;
+    }
 }
 
 // Small secondary text (captions, notes, values).
@@ -104,6 +121,27 @@ export component SecondaryText inherits Text {
     font-size: Tokens.font-size-caption;
     color: Tokens.secondary-text;
     wrap: word-wrap;
+}
+
+// Small secondary text that Narrator skips, because the control or group it
+// belongs to already says it (a slider's value, a speaker's note, a notice's
+// time). A wrapper, like Glyph.
+export component QuietText inherits HorizontalLayout {
+    in property <string> text;
+    in property <length> font-size: Tokens.font-size-caption;
+    in property <TextHorizontalAlignment> horizontal-alignment: left;
+    in property <TextVerticalAlignment> vertical-alignment: top;
+    in property <TextWrap> wrap: word-wrap;
+
+    Text {
+        text: root.text;
+        font-size: root.font-size;
+        color: Tokens.secondary-text;
+        horizontal-alignment: root.horizontal-alignment;
+        vertical-alignment: root.vertical-alignment;
+        wrap: root.wrap;
+        accessible-role: none;
+    }
 }
 
 // A borderless button showing an icon; `label` is what Narrator reads.
@@ -185,7 +223,8 @@ export component SpeakerBadge inherits Rectangle {
     border-color: Tokens.teal-text;
     opacity: root.enabled ? 1 : Tokens.disabled-opacity;
     forward-focus: focus;
-    accessible-role: switch;
+    // A toggle button, not a switch: see ToggleSwitch.
+    accessible-role: button;
     accessible-label: root.label;
     accessible-checkable: true;
     accessible-checked: root.state != RowState.off;
@@ -264,12 +303,27 @@ export component Wordmark inherits HorizontalLayout {
 }
 
 // The brand mark, in the logo color while streaming and grey while off.
-export component BrandMark inherits Image {
+// Decorative (the wordmark beside it names the app); a wrapper, like Glyph.
+export component BrandMark inherits Rectangle {
     in property <bool> running;
-    source: @image-url("../../brand/audiosync-mark.svg");
-    colorize: root.running ? Tokens.logo : Tokens.secondary-text;
-    image-fit: contain;
-    accessible-role: none;
+
+    Image {
+        width: 100%;
+        height: 100%;
+        source: @image-url("../../brand/audiosync-mark.svg");
+        colorize: root.running ? Tokens.logo : Tokens.secondary-text;
+        image-fit: contain;
+        accessible-role: none;
+    }
+}
+
+// The on/off switch for streaming and the equalizer. Narrator hears a toggle
+// button: Slint 1.18 tells Windows that only some roles (button, check box,
+// slider and the like) take keyboard focus, so the standard `switch` role
+// read as not focusable although Tab reaches it. The look, Space and the
+// focus ring are the standard Switch's.
+export component ToggleSwitch inherits Switch {
+    accessible-role: button;
 }
 
 // A volume slider with its value. `changed` reports every move.
@@ -298,13 +352,12 @@ export component VolumeSlider inherits HorizontalLayout {
         }
     }
 
-    SecondaryText {
+    QuietText {
         text: Strings.volume-value(slider.value);
         width: 26px;
         horizontal-alignment: right;
         vertical-alignment: center;
         font-size: Tokens.font-size-caption;
-        accessible-role: none;
     }
 }
 
@@ -438,11 +491,10 @@ export component SpeakerRow inherits Rectangle {
                             color: root.item.state == RowState.playing ? Tokens.teal-text : Tokens.secondary-text;
                         }
 
-                        if root.item.availability != Availability.open: SecondaryText {
+                        if root.item.availability != Availability.open: QuietText {
                             text: Strings.availability(root.item.availability);
                             vertical-alignment: center;
                             wrap: no-wrap;
-                            accessible-role: none;
                         }
 
                         if root.item.auto-connect: Glyph {
@@ -617,9 +669,8 @@ export component GroupRow inherits Rectangle {
                     accessible-role: none;
                 }
 
-                SecondaryText {
+                QuietText {
                     text: Strings.group-members(root.item.available, root.item.total);
-                    accessible-role: none;
                 }
             }
 
@@ -695,9 +746,8 @@ export component NoticeStack inherits VerticalLayout {
                     accessible-role: none;
                 }
 
-                SecondaryText {
+                QuietText {
                     text: notice.time;
-                    accessible-role: none;
                 }
             }
 
