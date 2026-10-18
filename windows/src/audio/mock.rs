@@ -18,13 +18,25 @@ use audiosync_core::ring::RingWriter;
 use audiosync_core::volume::SharedGain;
 
 use super::backend::{BackendError, OutputKind};
-use super::capture::{Activation, LoopbackMode};
+use super::capture::{Activation, CAPTURE_ATTEMPTS, CaptureAttempt, LoopbackMode};
 use super::controller::{CaptureHandle, CaptureState, Controller, Driver, RendererHandle};
-use super::outputs::Endpoint;
+use super::outputs::{Endpoint, RenderFormat, StreamSetup};
 use super::process::{ProcessEntry, ProcessTable};
 
 /// AudioSync's process ID in the mock.
 pub const MOCK_OWN_PID: u32 = 1000;
+
+/// How every mock output says its stream is set up: stereo float at 48 kHz,
+/// with a 20 ms buffer.
+pub const MOCK_STREAM: StreamSetup = StreamSetup {
+    format: RenderFormat {
+        rate: 48_000,
+        channels: 2,
+        channel_mask: 0x3,
+        convert: false,
+    },
+    buffer_frames: 960,
+};
 
 /// The mock's Explorer, which started AudioSync and every mock app.
 const EXPLORER_PID: u32 = 900;
@@ -52,6 +64,11 @@ impl CaptureHandle for MockCapture {
     fn state(&self) -> CaptureState {
         lock(&self.link).state.clone()
     }
+
+    /// The first way a real capture tries.
+    fn setup(&self) -> Option<CaptureAttempt> {
+        Some(CAPTURE_ATTEMPTS[0])
+    }
 }
 
 impl Drop for MockCapture {
@@ -77,6 +94,10 @@ impl RendererHandle for MockRenderer {
 
     fn has_ended(&self) -> bool {
         self.ended.load(Ordering::Relaxed)
+    }
+
+    fn setup(&self) -> Option<StreamSetup> {
+        Some(MOCK_STREAM)
     }
 }
 

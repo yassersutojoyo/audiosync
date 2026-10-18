@@ -154,13 +154,13 @@ impl Drop for ProAudioTask {
     }
 }
 
-/// How a starting thread tells the thread that started it that it runs, or
-/// why it couldn't start.
-pub(super) struct Ready(mpsc::Sender<Result<(), BackendError>>);
+/// How a starting thread tells the thread that started it that it runs, with
+/// what it set up (`T`), or why it couldn't start.
+pub(super) struct Ready<T = ()>(mpsc::Sender<Result<T, BackendError>>);
 
-impl Ready {
-    pub(super) fn ok(self) {
-        let _ = self.0.send(Ok(()));
+impl<T> Ready<T> {
+    pub(super) fn ok(self, setup: T) {
+        let _ = self.0.send(Ok(setup));
     }
 
     pub(super) fn fail(self, error: BackendError) {
@@ -169,12 +169,12 @@ impl Ready {
 }
 
 /// Runs `body` on a new thread named `name` and waits until it reports
-/// through its [`Ready`]. A thread that couldn't start is joined, and its
-/// error returned.
-pub(super) fn spawn_ready(
+/// through its [`Ready`]; returns the thread and what it set up. A thread
+/// that couldn't start is joined, and its error returned.
+pub(super) fn spawn_ready<T: Send + 'static>(
     name: &str,
-    body: impl FnOnce(Ready) + Send + 'static,
-) -> Result<JoinHandle<()>, BackendError> {
+    body: impl FnOnce(Ready<T>) + Send + 'static,
+) -> Result<(JoinHandle<()>, T), BackendError> {
     let (sender, receiver) = mpsc::channel();
     let thread = thread::Builder::new()
         .name(name.to_owned())
@@ -186,7 +186,7 @@ pub(super) fn spawn_ready(
                 .map_or(E_FAIL.0, |code| HRESULT::from_win32(code as u32).0),
         })?;
     match receiver.recv() {
-        Ok(Ok(())) => Ok(thread),
+        Ok(Ok(setup)) => Ok((thread, setup)),
         Ok(Err(error)) => {
             let _ = thread.join();
             Err(error)

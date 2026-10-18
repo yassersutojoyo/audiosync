@@ -26,7 +26,7 @@ use super::com::{
 use super::devices::enumerator;
 use crate::audio::backend::BackendError;
 use crate::audio::controller::RendererHandle;
-use crate::audio::outputs::{RenderFormat, render_buffer_hns, render_format};
+use crate::audio::outputs::{RenderFormat, StreamSetup, render_buffer_hns, render_format};
 use crate::audio::render::RenderPipeline;
 
 /// The flags of every render stream: event-driven, and without volume
@@ -53,6 +53,8 @@ pub struct EndpointRenderer {
     stop: Arc<Event>,
     ended: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    /// How the render thread set up its stream.
+    setup: StreamSetup,
 }
 
 impl RendererHandle for EndpointRenderer {
@@ -62,6 +64,10 @@ impl RendererHandle for EndpointRenderer {
 
     fn has_ended(&self) -> bool {
         self.ended.load(Ordering::Acquire)
+    }
+
+    fn setup(&self) -> Option<StreamSetup> {
+        Some(self.setup)
     }
 }
 
@@ -84,7 +90,7 @@ pub(super) fn start(
     let id = endpoint_id.to_owned();
     let stop = Arc::new(Event::manual_reset()?);
     let ended = Arc::new(AtomicBool::new(false));
-    let thread = {
+    let (thread, setup) = {
         let stop = Arc::clone(&stop);
         let ended = Arc::clone(&ended);
         spawn_ready("audiosync-output", move |ready| {
@@ -95,6 +101,7 @@ pub(super) fn start(
         stop,
         ended,
         thread: Some(thread),
+        setup,
     })
 }
 
@@ -105,7 +112,7 @@ fn run(
     gain: Arc<SharedGain>,
     stop: &Event,
     ended: &AtomicBool,
-    ready: Ready,
+    ready: Ready<StreamSetup>,
 ) {
     let _apartment = match Apartment::enter() {
         Ok(apartment) => apartment,
@@ -129,7 +136,10 @@ fn run(
     if let Err(error) = unsafe { stream.client.Start() } {
         return ready.fail(device_error("IAudioClient::Start", &error));
     }
-    ready.ok();
+    ready.ok(StreamSetup {
+        format: stream.format,
+        buffer_frames: stream.buffer_frames,
+    });
     let lost = render_loop(&stream, &mut pipeline, stop);
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };
