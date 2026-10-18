@@ -116,7 +116,7 @@ Where the spec left room, these readings satisfy every Observed clause:
 17. S163: two sources are the same when they have the same kind and identifier (bundle ID or device UID). `session::source_pick` answers a pick with `Nothing`, `StoreForNextStart` or `SwitchNow`, listed from the least to the most work; every answer but `Nothing` clears the old source's notices.
 18. S164: the quit rule is read as a dependency. `AudioSource::depends_on_app` holds only for an app source and its own bundle ID; the whole system and input devices depend on no app. A quitting app with an empty bundle ID counts as having none.
 19. S26, S127: after each block, filter state below 1e-30 (600 dB below full scale) is set to 0. Without it, silence after a bass boost leaves the state decaying into subnormal numbers, where it can hold a rounding limit cycle and every biquad step is slow on x86. With it, the Bass Boost preset's state is all zero about 1.3 s after a loud 40 Hz tone stops; a unit test checks that twenty seconds of silence never end a block on subnormal state.
-20. S74: `volume::LatestValues` holds at most one waiting value per target and leaves all timing to the host. `put` reports whether the target had nothing waiting, which is the moment the host queues that target's one flush; the flush takes the newest value with `pop`, and the next value starts a new round.
+20. S74: `volume::LatestValues` holds at most one waiting value per target and leaves all timing to the host. `put` reports whether the target had nothing waiting, which is the moment the host queues that target's one flush; any later value rides that flush. The flush takes the latest value with `pop`, and the next value queues a new one.
 
 ### What stays in the host
 
