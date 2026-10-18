@@ -1,0 +1,95 @@
+// The dialog that names a group: New Speaker Group and Rename Group. Enter
+// confirms, Escape cancels.
+
+import { Button, LineEdit } from "std-widgets.slint";
+import { Tokens } from "tokens.slint";
+import { Strings } from "strings.slint";
+
+export component GroupNameDialog inherits Dialog {
+    in property <string> heading;
+    in property <string> message;
+    in property <string> placeholder;
+    in property <string> confirm-label;
+    in-out property <string> name;
+    // False for a message without a name field.
+    in property <bool> show-field: true;
+    callback confirmed(string);
+    callback cancelled();
+
+    title: root.heading;
+    icon: @image-url("../res/audiosync-256.png");
+    background: Tokens.background;
+    default-font-size: Tokens.font-size-body;
+    preferred-width: 380px;
+
+    // Bumped each time the dialog opens, so the name field takes the cursor.
+    property <int> focus-request;
+
+    // Puts the cursor in the name field each time the dialog opens, or the
+    // keyboard focus on the dialog (for Escape) when it has no field.
+    public function prepare() {
+        root.focus-request += 1;
+        if !root.show-field {
+            keys.focus();
+        }
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.cancelled();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            padding: 18px;
+            spacing: 12px;
+
+            Text {
+                text: root.message;
+                color: Tokens.text;
+                wrap: word-wrap;
+            }
+
+            // Left out (not just hidden) without a field, so it takes no row.
+            if root.show-field: LineEdit {
+                property <int> focus-request: root.focus-request;
+                text <=> root.name;
+                placeholder-text: root.placeholder;
+                accessible-label: Strings.new-group-field-label;
+                init => {
+                    self.focus();
+                    self.select-all();
+                }
+                changed focus-request => {
+                    self.focus();
+                    self.select-all();
+                }
+                accepted => {
+                    root.confirmed(self.text);
+                }
+            }
+        }
+    }
+
+    Button {
+        text: root.confirm-label;
+        primary: true;
+        dialog-button-role: accept;
+        accessible-label: root.confirm-label;
+        clicked => {
+            root.confirmed(root.name);
+        }
+    }
+
+    Button {
+        text: Strings.cancel;
+        dialog-button-role: reject;
+        accessible-label: Strings.cancel;
+        clicked => {
+            root.cancelled();
+        }
+    }
+}

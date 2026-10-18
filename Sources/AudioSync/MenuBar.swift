@@ -326,7 +326,7 @@ final class MenuBarController: NSObject {
 /// A borderless, non-activating panel with the popover material and rounded
 /// corners, the shape of a menu bar extra.
 final class MenuBarPanel: NSPanel {
-    static let cornerRadius: CGFloat = 14
+    static let cornerRadius = BrandTokens.Radius.panel
     var onCancel: () -> Void = {}
     /// The content's ideal size changed (a notice appeared, a speaker left…).
     var onContentSize: (CGSize) -> Void = { _ in }
@@ -457,7 +457,7 @@ struct MenuBarView: View {
             .padding(.horizontal, -6)
             .id(model.panelSession)
         }
-        .padding(12)
+        .padding(BrandTokens.Spacing.panelPadding)
         .frame(width: 280)
         .overlay(RoundedRectangle(cornerRadius: MenuBarPanel.cornerRadius)
             .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
@@ -625,7 +625,7 @@ private struct CompactRow: View {
             .padding(.horizontal, 6)
             .frame(height: height)
             .contentShape(Rectangle())
-            .background(RoundedRectangle(cornerRadius: 7)
+            .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.control)
                 .fill(hover.isHovered && isEnabled ? Color.primary.opacity(0.07) : Color.clear))
             .opacity(isEnabled ? 1 : 0.45)
         }
@@ -652,7 +652,7 @@ private struct PanelButton: View {
                 .padding(.horizontal, 6)
                 .frame(height: 24)
                 .contentShape(Rectangle())
-                .background(RoundedRectangle(cornerRadius: 7)
+                .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.control)
                     .fill(hover.isHovered ? Color.primary.opacity(0.07) : Color.clear))
         }
         .buttonStyle(.plain)

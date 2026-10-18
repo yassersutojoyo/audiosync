@@ -1,5 +1,5 @@
 //! Compiles the Slint UI and, for Windows targets, embeds the application
-//! manifest and the version information in the executable.
+//! manifest, the icons and the version information in the executable.
 
 use std::env;
 use std::fs;
@@ -15,18 +15,32 @@ fn main() {
     }
 }
 
-/// Writes a resource script for `res/audiosync.exe.manifest` and the version
-/// information, and has it linked into the executable.
+/// Writes a resource script for `res/audiosync.exe.manifest`, the icons in
+/// `res/` and the version information, and has it linked into the executable.
 fn embed_windows_resources() {
-    let manifest = cargo_path("CARGO_MANIFEST_DIR")
-        .join("res")
-        .join("audiosync.exe.manifest");
-    println!("cargo::rerun-if-changed={}", manifest.display());
+    let res = cargo_path("CARGO_MANIFEST_DIR").join("res");
     // The resource compiler reads a backslash in a string as an escape.
-    let manifest = manifest
-        .to_str()
-        .expect("the manifest path is UTF-8")
-        .replace('\\', "/");
+    let resource = |name: &str| {
+        let path = res.join(name);
+        println!("cargo::rerun-if-changed={}", path.display());
+        path.to_str()
+            .expect("the resource path is UTF-8")
+            .replace('\\', "/")
+    };
+    let manifest = resource("audiosync.exe.manifest");
+    // Icon 1 is the app icon Explorer shows; 2 to 5 are the tray icons
+    // (src/tray.rs): for a light and a dark taskbar, streaming and off.
+    let icons = [
+        "audiosync.ico",
+        "tray-light.ico",
+        "tray-dark.ico",
+        "tray-light-off.ico",
+        "tray-dark-off.ico",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(index, name)| format!("{} ICON \"{}\"\n", index + 1, resource(name)))
+    .collect::<String>();
 
     let version = cargo_var("CARGO_PKG_VERSION");
     let numeric_version = format!(
@@ -42,6 +56,7 @@ fn embed_windows_resources() {
     let script = format!(
         r#"1 24 "{manifest}"
 
+{icons}
 1 VERSIONINFO
 FILEVERSION {numeric_version}
 PRODUCTVERSION {numeric_version}

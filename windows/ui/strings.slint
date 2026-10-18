@@ -1,0 +1,299 @@
+// Every user-facing string of the Windows app, worded like the macOS app's
+// AppText (Sources/AudioSync/Localization.swift), with Windows words where the
+// platform differs ("This PC", "Exit"). The Rust side reads the tray menu and
+// tooltip from here too, so nothing is spelled out anywhere else.
+//
+// English only for now. @tr marks each string for Slint's gettext translation
+// when a second language is added.
+
+import { SpeakerKind, Availability, RowState } from "types.slint";
+
+export global Strings {
+    // Main window
+    out property <string> app-name: "AudioSync";
+    out property <string> main-window-title: "AudioSync";
+    out property <string> streaming-switch: @tr("Streaming");
+    out property <string> turn-on: @tr("Turn On");
+    out property <string> turn-off: @tr("Turn Off");
+    out property <string> on: @tr("On");
+    out property <string> off: @tr("Off");
+    out property <string> will-play: @tr("Will play");
+    out property <string> will-play-help: @tr("Plays when streaming starts. Select to start streaming.");
+    out property <string> status-off: @tr("Off");
+    out property <string> air-play-empty: @tr("The AirPlay engine is starting, or no AirPlay speakers were found");
+    out property <string> master-volume-title: @tr("Master Volume");
+    out property <string> master-volume: @tr("Master volume");
+    out property <string> dismiss-notice: @tr("Dismiss Notice");
+    out property <string> dismiss-all-notices: @tr("Dismiss All");
+    out property <string> notices: @tr("Notices");
+    out property <string> delay-field-label: @tr("Delay in milliseconds");
+    out property <string> source-label: @tr("Audio Source");
+    out property <string> equalizer: @tr("Equalizer");
+    out property <string> groups: @tr("Groups");
+    out property <string> this-pc-section: @tr("This PC");
+    out property <string> connected-section: @tr("Connected Speakers");
+    out property <string> this-pc-none: @tr("No built-in output");
+    out property <string> sync-adjust: @tr("Adjust sync");
+    out property <string> sync-hint: @tr("Heard this speaker first? Raise the value. Heard it late? Lower it.");
+    out property <string> milliseconds-unit: @tr("ms");
+    out property <string> auto-connect: @tr("Auto-connect when available");
+
+    // Groups
+    out property <string> new-group: @tr("New Group from Active Speakers…");
+    out property <string> new-group-title: @tr("New Speaker Group");
+    out property <string> new-group-message: @tr("The speakers that are on right now become this group. Select the group later to switch them all at once.");
+    out property <string> new-group-placeholder: @tr("Living room, Office…");
+    out property <string> new-group-field-label: @tr("Group name");
+    out property <string> new-group-needs-speakers: @tr("Turn on the speakers you want in the group first, then create it.");
+    out property <string> ok: @tr("OK");
+    out property <string> create: @tr("Create");
+    out property <string> cancel: @tr("Cancel");
+    out property <string> delete-group: @tr("Delete Group");
+    out property <string> rename-group: @tr("Rename Group…");
+    out property <string> rename-group-title: @tr("Rename Group");
+    out property <string> rename: @tr("Rename");
+    out property <string> refresh-devices: @tr("Refresh Devices");
+
+    // Menu bar (Windows names: File > Exit, View)
+    out property <string> menu-file: @tr("File");
+    out property <string> menu-close-window: @tr("Close Window");
+    out property <string> menu-exit: @tr("Exit");
+    out property <string> menu-speakers: @tr("Speakers");
+    out property <string> menu-turn-streaming-on: @tr("Turn Streaming On");
+    out property <string> menu-turn-streaming-off: @tr("Turn Streaming Off");
+    out property <string> menu-view: @tr("View");
+    out property <string> menu-help: @tr("Help");
+    out property <string> menu-about: @tr("About AudioSync");
+
+    // Tray icon and its flyout (the macOS menu bar panel)
+    out property <string> open-app: @tr("Open AudioSync");
+    out property <string> exit-app: @tr("Exit AudioSync");
+    out property <string> exit-short: @tr("Exit");
+    out property <string> flyout-title: @tr("AudioSync quick settings");
+
+    // Equalizer
+    out property <string> equalizer-title: @tr("Equalizer");
+    out property <string> equalizer-custom: @tr("Custom");
+    out property <string> equalizer-reset: @tr("Reset");
+    out property <string> equalizer-preamp: @tr("Pre");
+    out property <string> equalizer-preamp-accessibility: @tr("Preamp");
+    out property <string> equalizer-presets: @tr("Presets");
+
+    // About dialog
+    public pure function version(version: string) -> string {
+        return @tr("Version {}", version);
+    }
+
+    public pure function core-version(version: string) -> string {
+        return @tr("Audio core {}", version);
+    }
+
+    // A window or dialog that failed to open; `detail` is the system's reason.
+    public pure function window-failed(detail: string) -> string {
+        return @tr("AudioSync couldn't open a window: {}", detail);
+    }
+
+    // The status under the wordmark (and the tray icon's tooltip).
+    public pure function status(running: bool, speakers: int) -> string {
+        if !running {
+            return root.status-off;
+        }
+        if speakers == 0 {
+            return @tr("Streaming");
+        }
+        return @tr("Streaming to {n} speaker" | "Streaming to {n} speakers" % speakers);
+    }
+
+    public pure function tray-tooltip(running: bool, speakers: int) -> string {
+        return @tr("{} – {}", root.app-name, root.status(running, speakers));
+    }
+
+    // The link under the newest notice in the flyout to the window that lists the others.
+    public pure function more-notices(count: int) -> string {
+        return @tr("{n} more notice…" | "{n} more notices…" % count);
+    }
+
+    public pure function speaker-options(name: string) -> string {
+        return @tr("Options for {}", name);
+    }
+
+    // A row's accessible value.
+    public pure function value(state: RowState) -> string {
+        if state == RowState.off {
+            return root.off;
+        }
+        if state == RowState.will-play {
+            return root.will-play;
+        }
+        return root.on;
+    }
+
+    // What selecting a row does, read after its value.
+    public pure function help(state: RowState) -> string {
+        if state == RowState.off {
+            return root.turn-on;
+        }
+        if state == RowState.will-play {
+            return root.will-play-help;
+        }
+        return root.turn-off;
+    }
+
+    // The note next to an AirPlay speaker that can't simply play.
+    public pure function availability(a: Availability) -> string {
+        if a == Availability.needs-code {
+            return @tr("Asks for a code");
+        }
+        if a == Availability.password-unsupported {
+            return @tr("Password not supported");
+        }
+        return "";
+    }
+
+    public pure function speaker-kind(kind: SpeakerKind) -> string {
+        if kind == SpeakerKind.airplay {
+            return @tr("AirPlay");
+        }
+        if kind == SpeakerKind.built-in {
+            return @tr("Built-in");
+        }
+        if kind == SpeakerKind.headphones {
+            return @tr("Headphones");
+        }
+        if kind == SpeakerKind.bluetooth {
+            return @tr("Bluetooth");
+        }
+        if kind == SpeakerKind.usb {
+            return @tr("USB");
+        }
+        if kind == SpeakerKind.hdmi {
+            return @tr("HDMI");
+        }
+        if kind == SpeakerKind.display-port {
+            return @tr("DisplayPort");
+        }
+        if kind == SpeakerKind.virtual {
+            return @tr("Virtual");
+        }
+        return @tr("Other");
+    }
+
+    // A speaker row's accessible label: "Kitchen, AirPlay".
+    public pure function speaker-label(name: string, kind: SpeakerKind, show-kind: bool) -> string {
+        if !show-kind {
+            return name;
+        }
+        return @tr("{}, {}", name, root.speaker-kind(kind));
+    }
+
+    public pure function volume-of(name: string) -> string {
+        return @tr("{} volume", name);
+    }
+
+    public pure function volume-value(volume: float) -> string {
+        return round(volume);
+    }
+
+    public pure function delay-of(name: string) -> string {
+        return @tr("{} delay", name);
+    }
+
+    public pure function delay-value(ms: int) -> string {
+        return @tr("{} {}", ms, root.milliseconds-unit);
+    }
+
+    // The label of a delay step button: "−100", "+10".
+    public pure function delay-step(delta: int) -> string {
+        return delta < 0 ? "−" + (-delta) : "+" + delta;
+    }
+
+    public pure function delay-step-accessibility(delta: int) -> string {
+        if delta < 0 {
+            return @tr("Decrease delay by {} {}", -delta, root.milliseconds-unit);
+        }
+        return @tr("Increase delay by {} {}", delta, root.milliseconds-unit);
+    }
+
+    public pure function group-members(available: int, total: int) -> string {
+        if available == total {
+            return @tr("{n} speaker" | "{n} speakers" % total);
+        }
+        return @tr("{} of {} speakers available", available, total);
+    }
+
+    // A new group's name when none was typed.
+    public pure function numbered-group(n: int) -> string {
+        return @tr("Group {}", n);
+    }
+
+    public pure function rename-group-message(name: string) -> string {
+        return @tr("Enter a new name for “{}”.", name);
+    }
+
+    public pure function equalizer-caption(max-gain: int) -> string {
+        return @tr("±{} dB · applied to every speaker", max-gain);
+    }
+
+    public pure function equalizer-preset(id: string) -> string {
+        if id == "flat" {
+            return @tr("Flat");
+        }
+        if id == "bassBoost" {
+            return @tr("Bass Boost");
+        }
+        if id == "bassCut" {
+            return @tr("Bass Cut");
+        }
+        if id == "trebleBoost" {
+            return @tr("Treble Boost");
+        }
+        if id == "vocal" {
+            return @tr("Vocal");
+        }
+        if id == "rock" {
+            return @tr("Rock");
+        }
+        if id == "pop" {
+            return @tr("Pop");
+        }
+        if id == "jazz" {
+            return @tr("Jazz");
+        }
+        if id == "classical" {
+            return @tr("Classical");
+        }
+        if id == "electronic" {
+            return @tr("Electronic");
+        }
+        if id == "loudness" {
+            return @tr("Loudness");
+        }
+        if id == "smallSpeakers" {
+            return @tr("Small Speakers");
+        }
+        return id;
+    }
+
+    // A band's short label under its slider: "32", "125", "1k", "16k".
+    public pure function equalizer-band-short(hz: float) -> string {
+        return hz >= 1000 ? floor(hz / 1000) + "k" : floor(hz);
+    }
+
+    // A band's spoken name: "125 Hz", "1 kHz".
+    public pure function equalizer-band-name(hz: float) -> string {
+        return hz >= 1000 ? @tr("{} kHz", floor(hz / 1000)) : @tr("{} Hz", floor(hz));
+    }
+
+    // A gain above its slider: "+2.5", "+3", "0", "−1.5" (0.5 dB steps).
+    public pure function equalizer-gain(db: float) -> string {
+        if round(db * 10) == 0 {
+            return "0";
+        }
+        return (db > 0 ? "+" : "−") + (round(abs(db) * 10) / 10);
+    }
+
+    // A gain as Narrator reads it: "+2.5 dB".
+    public pure function equalizer-gain-value(db: float) -> string {
+        return @tr("{} dB", root.equalizer-gain(db));
+    }
+}

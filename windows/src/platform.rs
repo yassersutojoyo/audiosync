@@ -52,3 +52,90 @@ pub fn show_error(text: &str) {
 pub fn show_error(text: &str) {
     eprintln!("{text}");
 }
+
+/// Brings a window that is showing to the front and gives it the keyboard
+/// focus.
+pub fn bring_to_front(window: &slint::Window) {
+    use slint::winit_030::WinitWindowAccessor;
+    window.with_winit_window(|window| window.focus_window());
+}
+
+/// Whether the taskbar (and the notification area) uses the light theme, so
+/// the tray icon picks its dark-on-light variant. Dark when it can't be read,
+/// the Windows 11 default.
+#[cfg(windows)]
+pub fn taskbar_is_light() -> bool {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+    use windows::core::w;
+
+    let mut value: u32 = 0;
+    let mut size = size_of::<u32>() as u32;
+    // SAFETY: `value` and `size` are valid for writes of a DWORD, which is
+    // what RRF_RT_REG_DWORD limits the result to; the key and value names
+    // are NUL-terminated UTF-16 literals.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+            w!("SystemUsesLightTheme"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut value).cast()),
+            Some(&raw mut size),
+        )
+    };
+    status.is_ok() && value != 0
+}
+
+/// The small icon size (`SM_CXSMICON` by `SM_CYSMICON`) at the system DPI,
+/// which the notification area uses: 16 px at 100% scaling, 20 at 125%, 24
+/// at 150%. `None` when it can't be read, to let Windows pick.
+#[cfg(windows)]
+pub fn small_icon_size() -> Option<(u32, u32)> {
+    use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetSystemMetricsForDpi};
+    use windows::Win32::UI::WindowsAndMessaging::{SM_CXSMICON, SM_CYSMICON};
+
+    // SAFETY: both calls only read system settings.
+    let (width, height) = unsafe {
+        let dpi = GetDpiForSystem();
+        (
+            GetSystemMetricsForDpi(SM_CXSMICON, dpi),
+            GetSystemMetricsForDpi(SM_CYSMICON, dpi),
+        )
+    };
+    let width = u32::try_from(width).ok().filter(|&w| w > 0)?;
+    let height = u32::try_from(height).ok().filter(|&h| h > 0)?;
+    Some((width, height))
+}
+
+/// The work area (the monitor minus the taskbar) of the monitor at a point,
+/// in physical pixels.
+#[cfg(windows)]
+pub fn work_area_at(x: f64, y: f64) -> Option<crate::placement::Bounds> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+    };
+
+    let point = POINT {
+        x: x.round() as i32,
+        y: y.round() as i32,
+    };
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: MonitorFromPoint takes the point by value; `info` is a valid,
+    // writable MONITORINFO whose size field is set.
+    let found = unsafe {
+        let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+        GetMonitorInfoW(monitor, &mut info)
+    };
+    let work = info.rcWork;
+    found.as_bool().then(|| crate::placement::Bounds {
+        x: f64::from(work.left),
+        y: f64::from(work.top),
+        width: f64::from(work.right - work.left),
+        height: f64::from(work.bottom - work.top),
+    })
+}

@@ -1,16 +1,30 @@
 //! AudioSync for Windows 11 (in development).
 //!
-//! For now this is the application shell: the Windows 11 check at startup,
-//! the main window with its menu, and the About dialog. The audio work will
-//! come from `audiosync-core`, which the macOS app shares; so far only its
-//! version shows, in the About dialog.
+//! The Windows 11 check at startup, then the main window, the equalizer, the
+//! tray icon with its flyout, and the About dialog, laid out like the macOS
+//! app. The data comes through the `Backend` trait in `ui_model`; until the
+//! WASAPI backend lands, a mock with example speakers stands in, so nothing
+//! plays and no audio device is opened.
 
 // No console window next to the app. Test builds keep the console so their
 // output stays visible.
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
+mod audio;
+#[cfg(test)]
+mod contrast;
 mod os_version;
+#[cfg(any(windows, test))]
+mod placement;
 mod platform;
+// Generated from brand/tokens.json: rustfmt leaves it as the generator wrote it.
+#[cfg(test)]
+#[rustfmt::skip]
+mod tokens;
+#[cfg(windows)]
+mod tray;
+mod ui_model;
+mod view;
 
 use std::process::ExitCode;
 
@@ -33,38 +47,26 @@ fn main() -> ExitCode {
     }
 }
 
-/// Shows the main window and runs the UI until it closes.
+/// Shows the main window and runs the UI until the user exits.
 fn run() -> Result<(), slint::PlatformError> {
-    let main_window = MainWindow::new()?;
-    let about = AboutDialog::new()?;
-    about.set_version(env!("CARGO_PKG_VERSION").into());
-    about.set_core_version(audiosync_core::VERSION.into());
+    let app = view::App::new(Box::new(ui_model::MockBackend::new()))?;
 
-    let about_handle = about.as_weak();
-    main_window.on_about_requested(move || {
-        if let Some(about) = about_handle.upgrade()
-            && let Err(error) = about.show()
-        {
-            platform::show_error(&format!("The About window could not open: {error}"));
+    // With a tray icon, closing the main window keeps AudioSync running in
+    // the notification area; without one (or off Windows), it quits.
+    #[cfg(windows)]
+    let _tray = match tray::Tray::create(&app) {
+        Ok(tray) => {
+            app.set_tray_available(true);
+            Some(tray)
         }
-    });
-
-    let about_handle = about.as_weak();
-    about.on_ok_clicked(move || {
-        if let Some(about) = about_handle.upgrade() {
-            // A window that fails to hide stays open; the user can still close it.
-            let _ = about.hide();
+        Err(error) => {
+            eprintln!("no tray icon: {error}");
+            None
         }
-    });
+    };
 
-    // Closing the main window quits the app, even while the About dialog is
-    // open.
-    main_window.window().on_close_requested(|| {
-        let _ = slint::quit_event_loop();
-        slint::CloseRequestResponse::HideWindow
-    });
-
-    main_window.run()
+    app.show_main();
+    slint::run_event_loop_until_quit()
 }
 
 #[cfg(test)]
@@ -83,5 +85,127 @@ mod tests {
             main.contains("MenuBar {") && main.contains("root.about-requested();"),
             "the top-level menu opens the About dialog"
         );
+    }
+
+    /// The statements of the first handler `handler =>` after `after` in a
+    /// .slint source, up to the handler's closing brace.
+    fn handler_body<'a>(source: &'a str, after: &str, handler: &str) -> &'a str {
+        let from = source.find(after).expect("the element is there");
+        let rest = &source[from..];
+        let start = rest
+            .find(&format!("{handler} => {{"))
+            .expect("the handler is there");
+        let body = &rest[start..];
+        &body[..body.find('}').expect("the handler ends")]
+    }
+
+    /// The flyout's Dismiss All dismisses the notices (it used to open the
+    /// main window), and the stack draws that row only for the rows it shows.
+    #[test]
+    fn dismiss_all_in_the_flyout_dismisses_the_notices() {
+        let flyout = include_str!("../ui/flyout.slint");
+        let body = handler_body(flyout, "NoticeStack {", "dismissed-all");
+        assert!(body.contains("root.notices-dismissed-all();"), "{body}");
+        assert!(!body.contains("open-app"), "{body}");
+
+        let widgets = include_str!("../ui/widgets.slint");
+        let stack = &widgets[widgets
+            .find("export component NoticeStack")
+            .expect("NoticeStack is there")..];
+        assert!(
+            stack.contains("for notice in root.notices:")
+                && stack.contains("if root.notices.length > 1:")
+                && !stack.contains("visible:"),
+            "the stack lists every notice it gets and no hidden ones"
+        );
+    }
+
+    /// Key events go to the focused item: the flyout and the equalizer focus
+    /// their Escape handler when they open.
+    #[test]
+    fn escape_works_as_soon_as_the_flyout_or_equalizer_opens() {
+        let flyout = include_str!("../ui/flyout.slint");
+        let equalizer = include_str!("../ui/equalizer.slint");
+        assert!(flyout.contains("forward-focus: focus;") && flyout.contains("focus := FocusScope"));
+        assert!(
+            equalizer.contains("forward-focus: keys;") && equalizer.contains("keys := FocusScope")
+        );
+        assert!(include_str!("tray.rs").contains("app.flyout.invoke_take_focus();"));
+        assert!(include_str!("view.rs").contains("self.equalizer.invoke_take_focus();"));
+    }
+
+    /// A click changes a switch or combo box before the engine answers; each
+    /// handler sets the control back to the state the engine reports.
+    #[test]
+    fn switches_and_combo_boxes_show_the_engine_state_after_a_click() {
+        for (file, source, pairs) in [
+            (
+                "main.slint",
+                include_str!("../ui/main.slint"),
+                [
+                    ("power := Switch", "self.checked = root.running;"),
+                    (
+                        "source := ComboBox",
+                        "self.current-index = root.source-index;",
+                    ),
+                ],
+            ),
+            (
+                "flyout.slint",
+                include_str!("../ui/flyout.slint"),
+                [
+                    ("power := Switch", "self.checked = root.running;"),
+                    (
+                        "source := ComboBox",
+                        "self.current-index = root.source-index;",
+                    ),
+                ],
+            ),
+            (
+                "equalizer.slint",
+                include_str!("../ui/equalizer.slint"),
+                [
+                    ("power := Switch", "self.checked = root.enabled;"),
+                    (
+                        "presets := ComboBox",
+                        "self.current-index = root.preset-index;",
+                    ),
+                ],
+            ),
+        ] {
+            for (element, reset) in pairs {
+                let handler = if element.ends_with("Switch") {
+                    "toggled"
+                } else {
+                    "selected"
+                };
+                let body = handler_body(source, element, handler);
+                assert!(
+                    body.contains(reset),
+                    "{file}: {element} resets after {handler}"
+                );
+            }
+        }
+    }
+
+    /// The contrast pairs name colors and opacities that brand/tokens.json has.
+    #[test]
+    fn the_contrast_pairs_name_known_tokens() {
+        use crate::tokens::{COLORS, CONTRAST_PAIRS, OPACITIES};
+        let color = |name: &str| COLORS.iter().any(|c| c.name == name);
+        for (foreground, background) in CONTRAST_PAIRS {
+            let (base, opacity) = foreground.split_once('@').unwrap_or((foreground, ""));
+            assert!(color(base), "{foreground} is a color token");
+            assert!(
+                opacity.is_empty() || OPACITIES.iter().any(|(name, _)| *name == opacity),
+                "{foreground} names a known opacity"
+            );
+            assert!(color(background), "{background} is a color token");
+        }
+        let teal = COLORS
+            .iter()
+            .find(|c| c.name == "teal")
+            .expect("a teal token");
+        assert_eq!((teal.light, teal.dark), ([28, 159, 145], [28, 159, 145]));
     }
 }

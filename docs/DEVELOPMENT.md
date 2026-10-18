@@ -83,7 +83,7 @@ The app side: `AppDelegate.swift` holds app state, persistence, launch and quit,
 
 `AudioSyncCore.swift` is the app's side of the Rust core (`core/`, imported through the `CAudioSyncCore` module in `Sources/CAudioSyncCore`); for now it only logs the core's version at launch.
 
-All user-facing text goes through `AppText` in `Localization.swift`. `Brand.swift` has the brand colors and typeface; `BrandMark.swift` is generated, so don't edit it.
+All user-facing text goes through `AppText` in `Localization.swift`. `Brand.swift` turns the design tokens into SwiftUI colors, the typeface and the wordmark; the values themselves live in `brand/tokens.json` and reach the app through the generated `BrandTokens.swift`. `BrandMark.swift` and `BrandTokens.swift` are generated, so don't edit them.
 
 Outside the app: `setup.sh`, `build.sh` and `scripts/bundle_engine.py` build and bundle the engine, `scripts/build_core.sh` builds the Rust core, `make-dmg.sh` packages a release, and `scripts/archive_sources.sh` gathers library sources for one (see `RELEASE.md`).
 
@@ -97,11 +97,15 @@ Two Rust folders sit next to the Swift package.
 cd core && cargo test
 ```
 
-`windows/` is a Windows 11 version of AudioSync in development, written in Rust with a [Slint](https://slint.dev) interface. It will get its audio work from the same core, which for now it links only to show the core's version in the About dialog. So far it opens an empty window with a Help menu and an About dialog, and it hasn't been tried on real Windows hardware: CI checks the formatting, runs clippy and the tests, and builds it for x64 and ARM64, nothing more. On Windows you need rustup with the stable MSVC toolchain and the Visual Studio Build Tools ("Desktop development with C++"), then `cargo test` and `cargo build --release` in `windows/`. On a Mac, `cargo test` runs its logic tests and `cargo check --target x86_64-pc-windows-msvc` checks the Windows code, but can't link it. [`windows/README.md`](../windows/README.md) has the details, and [`WINDOWS_AUDIO_ROUTING.md`](WINDOWS_AUDIO_ROUTING.md) weighs how it could capture one app without playing it twice.
+`windows/` is a Windows 11 version of AudioSync in development, written in Rust with a [Slint](https://slint.dev) interface. It will get its audio work from the same core, which for now it links only to show the core's version in the About dialog. So far it has its screens (the main window, the equalizer, a tray icon with a flyout, the About dialog), filled with example speakers from a mock backend so nothing plays yet, and it hasn't been tried on real Windows hardware: CI checks the formatting, runs clippy and the tests, and builds it for x64 and ARM64, nothing more. On Windows you need rustup with the stable MSVC toolchain and the Visual Studio Build Tools ("Desktop development with C++"), then `cargo test` and `cargo build --release` in `windows/`. On a Mac, `cargo test` runs its logic tests and `cargo check --target x86_64-pc-windows-msvc` checks the Windows code, but can't link it. [`windows/README.md`](../windows/README.md) has the details, and [`WINDOWS_AUDIO_ROUTING.md`](WINDOWS_AUDIO_ROUTING.md) weighs how it could capture one app without playing it twice.
 
 ## Logo, icons and screenshots
 
-The logo, app icon and wordmark are generated from the sources in `brand/` by `scripts/brand/build-brand.sh`; [`brand/README.md`](../brand/README.md) explains how. Don't edit `AppIcon.icns`, `icon-source.png`, the `site/` icons, `site/wordmark.svg` or `BrandMark.swift` by hand. CI checks the generated SVGs and `BrandMark.swift`, but not the PNG and ICNS files, so regenerate those yourself.
+The logo, app icon and wordmark are generated from the sources in `brand/` by `scripts/brand/build-brand.sh`; [`brand/README.md`](../brand/README.md) explains how. Don't edit `AppIcon.icns`, `icon-source.png`, the `site/` icons, `site/wordmark.svg`, `BrandMark.swift` or the Windows icons in `windows/res/` (from `scripts/brand/windows-icons.sh`) by hand.
+
+The design tokens (colors for light and dark, the typeface, spacing, corner radii and opacities) live in `brand/tokens.json`. `python3 -I scripts/brand/tokens.py` writes them into `Sources/AudioSync/BrandTokens.swift` for the Mac app, `windows/ui/tokens.slint` and `windows/src/tokens.rs` for the Windows app and its contrast test, and the CSS variables between the `tokens:begin` and `tokens:end` comments in `site/index.html`; `--check` only reports what's out of date. Change a token in the JSON and rerun the script, never the outputs.
+
+CI regenerates the brand SVGs, `BrandMark.swift` and every token output and fails on any difference, but it doesn't check the PNG, ICNS and ICO files (including `windows/res/`), so regenerate those yourself.
 
 The screenshots in `docs/images` come from `scripts/screenshots/render.sh`. It draws the app's own SwiftUI views offscreen from mock data, in light and dark, so it needs no installed app, engine, permissions or audio devices. Control styling follows the macOS you run it on, so re-render after a UI change.
 

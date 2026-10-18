@@ -1,0 +1,187 @@
+// The equalizer window: on/off, presets, the preamp and ten bands (32 Hz to
+// 16 kHz, ±12 dB in 0.5 dB steps), and Reset. Opened with Ctrl+E or from
+// the Equalizer card.
+
+import { Button, ComboBox, Slider, Switch } from "std-widgets.slint";
+import { Tokens } from "tokens.slint";
+import { Strings } from "strings.slint";
+import { SecondaryText } from "widgets.slint";
+
+// One vertical gain slider with its value above and its label below.
+component Band inherits VerticalLayout {
+    in property <float> gain;
+    in property <string> short-label;
+    in property <string> name;
+    in property <float> max-gain;
+    callback changed(float);
+
+    spacing: 6px;
+    alignment: center;
+    // A drag replaces the slider's binding; keep it in step with the model.
+    changed gain => {
+        slider.value = root.gain;
+    }
+
+    SecondaryText {
+        text: Strings.equalizer-gain(slider.value);
+        horizontal-alignment: center;
+        wrap: no-wrap;
+        accessible-role: none;
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        slider := Slider {
+            orientation: vertical;
+            height: 140px;
+            minimum: -root.max-gain;
+            maximum: root.max-gain;
+            step: 0.5;
+            value: root.gain;
+            accessible-label: root.name;
+            accessible-value: Strings.equalizer-gain-value(self.value);
+            changed(value) => {
+                // The keyboard and the pointer both land on 0.5 dB steps.
+                root.changed(round(value * 2) / 2);
+            }
+        }
+    }
+
+    SecondaryText {
+        text: root.short-label;
+        horizontal-alignment: center;
+        wrap: no-wrap;
+        accessible-role: none;
+    }
+}
+
+export component EqualizerWindow inherits Window {
+    in property <bool> enabled;
+    in property <float> preamp;
+    in property <[float]> gains;
+    in property <[float]> band-hz;
+    in property <float> max-gain: 12;
+    // The preset names; the last entry is "Custom" while no preset matches.
+    in property <[string]> preset-names;
+    in property <int> preset-index;
+    callback enabled-toggled(bool);
+    callback preamp-changed(float);
+    callback gain-changed(int, float);
+    callback preset-selected(int);
+    callback reset();
+    callback close-requested();
+
+    title: Strings.equalizer-title;
+    icon: @image-url("../res/audiosync-256.png");
+    background: Tokens.background;
+    min-width: 560px;
+    preferred-width: 600px;
+    default-font-size: Tokens.font-size-body;
+    // Key events go to the focused item, so Escape needs the scope focused.
+    forward-focus: keys;
+
+    // Called each time the window opens, so Escape works before anything
+    // inside is clicked.
+    public function take-focus() {
+        keys.focus();
+    }
+
+    changed enabled => {
+        power.checked = root.enabled;
+    }
+    changed preset-index => {
+        presets.current-index = root.preset-index;
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.close-requested();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            padding: 18px;
+            spacing: 14px;
+
+            HorizontalLayout {
+                spacing: 12px;
+
+                power := Switch {
+                    text: Strings.equalizer-title;
+                    checked: root.enabled;
+                    accessible-label: Strings.equalizer-title;
+                    toggled => {
+                        root.enabled-toggled(self.checked);
+                        self.checked = root.enabled;
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                presets := ComboBox {
+                    width: 170px;
+                    model: root.preset-names;
+                    current-index: root.preset-index;
+                    accessible-label: Strings.equalizer-presets;
+                    selected => {
+                        root.preset-selected(self.current-index);
+                        self.current-index = root.preset-index;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 4px;
+                opacity: root.enabled ? 1 : Tokens.disabled-opacity;
+
+                Band {
+                    gain: root.preamp;
+                    short-label: Strings.equalizer-preamp;
+                    name: Strings.equalizer-preamp-accessibility;
+                    max-gain: root.max-gain;
+                    changed(value) => {
+                        root.preamp-changed(value);
+                    }
+                }
+
+                Rectangle {
+                    width: 1px;
+                    background: Tokens.separator;
+                }
+
+                for gain[index] in root.gains: Band {
+                    gain: gain;
+                    short-label: Strings.equalizer-band-short(root.band-hz[index]);
+                    name: Strings.equalizer-band-name(root.band-hz[index]);
+                    max-gain: root.max-gain;
+                    changed(value) => {
+                        root.gain-changed(index, value);
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+
+                SecondaryText {
+                    text: Strings.equalizer-caption(root.max-gain);
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                Button {
+                    text: Strings.equalizer-reset;
+                    accessible-label: Strings.equalizer-reset;
+                    clicked => {
+                        root.reset();
+                    }
+                }
+            }
+        }
+    }
+}
