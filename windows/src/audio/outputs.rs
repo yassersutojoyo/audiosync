@@ -148,31 +148,100 @@ pub struct Listing {
     pub notes: Vec<ListingNote>,
 }
 
+impl std::fmt::Display for ListingNote {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ListingNote::HandsFree { id, name } => {
+                let name = name.as_deref().unwrap_or("(no name)");
+                write!(
+                    f,
+                    "output {name:?} ({id}) left out: a Bluetooth hands-free endpoint, \
+                     for calls only"
+                )
+            }
+            ListingNote::NoId { index, error } => write!(
+                f,
+                "render endpoint {index} left out: it couldn't be read ({error})"
+            ),
+            ListingNote::NoProperties { id, error } => write!(
+                f,
+                "output {id} listed under its ID, kind unknown: its properties couldn't \
+                 be read ({error})"
+            ),
+        }
+    }
+}
+
+/// The enumerator name (`PKEY_Device_EnumeratorName`) the endpoints of
+/// Windows' Bluetooth Hands-Free Profile audio driver report.
+pub const HANDS_FREE_ENUMERATOR: &str = "BTHHFENUM";
+
+/// Whether an endpoint whose device has this enumerator is a Bluetooth
+/// hands-free one, which AudioSync doesn't list.
+///
+/// A Bluetooth headset gets two render endpoints from Windows: a stereo one
+/// from its A2DP profile (enumerator `BTHENUM`), and a call one from its
+/// Hands-Free Profile (`BTHHFENUM`). The call one carries mono,
+/// low-bandwidth audio, and opening it switches the headset to call mode,
+/// which interrupts its stereo sound. A phone that uses the PC for its calls
+/// gets a hands-free endpoint too.
+///
+/// The enumerator tells them apart; the form factor can't, since a
+/// headset's hands-free endpoint says `Headset` and a phone's says
+/// `Speakers`, while a USB or wired headset that plays in stereo says
+/// `Headset` as well.
+pub fn is_hands_free(enumerator: &str) -> bool {
+    enumerator.eq_ignore_ascii_case(HANDS_FREE_ENUMERATOR)
+}
+
 /// Turns what was read about each active render endpoint into the outputs to
 /// list. `default_id` is the ID of Windows' default output, if there is one.
+///
+/// Every endpoint is listed except a Bluetooth hands-free one
+/// ([`is_hands_free`]) and one without an ID, which nothing could play to.
+/// One whose properties can't be read is listed under its ID as an output
+/// of unknown kind. The notes say what was left out, or listed without its
+/// properties, and why, so nothing goes missing without a word in the log.
 pub fn list_endpoints(readings: Vec<EndpointReading>, default_id: Option<&str>) -> Listing {
-    let mut endpoints = Vec::new();
+    let mut listing = Listing::default();
     for reading in readings {
-        let Ok(id) = reading.id else {
-            continue;
+        let id = match reading.id {
+            Ok(id) => id,
+            Err(error) => {
+                listing.notes.push(ListingNote::NoId {
+                    index: reading.index,
+                    error,
+                });
+                continue;
+            }
         };
-        let properties = reading.properties.unwrap_or_default();
-        endpoints.push(Endpoint {
+        let properties = match reading.properties {
+            Ok(properties) => properties,
+            Err(error) => {
+                listing.notes.push(ListingNote::NoProperties {
+                    id: id.clone(),
+                    error,
+                });
+                EndpointProperties::default()
+            }
+        };
+        let enumerator = properties.enumerator.as_deref().unwrap_or_default();
+        if is_hands_free(enumerator) {
+            listing.notes.push(ListingNote::HandsFree {
+                id,
+                name: properties.name,
+            });
+            continue;
+        }
+        listing.endpoints.push(Endpoint {
             is_default: default_id == Some(id.as_str()),
+            kind: output_kind(properties.form_factor, enumerator, properties.display_port),
             name: properties.name.unwrap_or_else(|| id.clone()),
-            kind: output_kind(
-                properties.form_factor,
-                properties.enumerator.as_deref().unwrap_or_default(),
-                properties.display_port,
-            ),
             id,
         });
     }
-    endpoints.sort_by(|a, b| a.id.cmp(&b.id));
-    Listing {
-        endpoints,
-        notes: Vec::new(),
-    }
+    listing.endpoints.sort_by(|a, b| a.id.cmp(&b.id));
+    listing
 }
 
 /// Whether AirPlay speakers exist to line local outputs up with.

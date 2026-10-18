@@ -20,7 +20,9 @@ use audiosync_core::volume::SharedGain;
 use super::backend::{BackendError, OutputKind};
 use super::capture::{Activation, CAPTURE_ATTEMPTS, CaptureAttempt, LoopbackMode};
 use super::controller::{CaptureHandle, CaptureState, Controller, Driver, RendererHandle};
-use super::outputs::{Endpoint, RenderFormat, StreamSetup};
+use super::outputs::{
+    Endpoint, EndpointReading, Listing, RenderFormat, StreamSetup, list_endpoints,
+};
 use super::process::{ProcessEntry, ProcessTable};
 
 /// AudioSync's process ID in the mock.
@@ -106,6 +108,9 @@ pub struct MockDriver {
     processes: Vec<ProcessEntry>,
     session_pids: Vec<u32>,
     outputs: Vec<Endpoint>,
+    /// Endpoints as Windows would describe them, which go through the
+    /// listing's own rules.
+    readings: Vec<EndpointReading>,
     changed: bool,
     listing_error: Option<BackendError>,
     output_errors: BTreeMap<String, BackendError>,
@@ -145,6 +150,7 @@ impl MockDriver {
             ],
             session_pids: Vec::new(),
             outputs: Vec::new(),
+            readings: Vec::new(),
             changed: false,
             listing_error: None,
             output_errors: BTreeMap::new(),
@@ -197,11 +203,13 @@ impl Driver for MockDriver {
         Ok(self.session_pids.clone())
     }
 
-    fn outputs(&mut self) -> Result<Vec<Endpoint>, BackendError> {
-        match &self.listing_error {
-            Some(error) => Err(error.clone()),
-            None => Ok(self.outputs.clone()),
+    fn outputs(&mut self) -> Result<Listing, BackendError> {
+        if let Some(error) = &self.listing_error {
+            return Err(error.clone());
         }
+        let mut listing = list_endpoints(self.readings.clone(), None);
+        listing.endpoints.extend(self.outputs.iter().cloned());
+        Ok(listing)
     }
 
     fn outputs_changed(&mut self) -> bool {
@@ -379,6 +387,14 @@ impl Controller<MockDriver> {
     pub fn disconnect_output_unnoticed(&mut self, id: &str) {
         let driver = self.driver_mut();
         driver.outputs.retain(|output| output.id != id);
+        driver.changed = true;
+    }
+
+    /// Adds an endpoint as Windows would describe it, which the listing
+    /// lists or leaves out by its own rules.
+    pub fn enumerate_endpoint(&mut self, reading: EndpointReading) {
+        let driver = self.driver_mut();
+        driver.readings.push(reading);
         driver.changed = true;
     }
 

@@ -23,8 +23,8 @@ use windows::core::{GUID, PCWSTR};
 use windows_core::implement;
 
 use super::com::{Apartment, Event, Ready, spawn_ready, system_error, take_com_string};
-use crate::audio::backend::{BackendError, OutputKind};
-use crate::audio::outputs::{Endpoint, output_kind};
+use crate::audio::backend::BackendError;
+use crate::audio::outputs::{EndpointProperties, EndpointReading, Listing, list_endpoints};
 
 /// The device enumerator. COM must be initialized on the calling thread.
 pub(super) fn enumerator() -> Result<IMMDeviceEnumerator, BackendError> {
@@ -34,64 +34,78 @@ pub(super) fn enumerator() -> Result<IMMDeviceEnumerator, BackendError> {
 }
 
 /// The active render endpoints (Bluetooth ones included while connected),
-/// by ID.
-pub(super) fn render_endpoints() -> Result<Vec<Endpoint>, BackendError> {
+/// by ID, without the Bluetooth hands-free ones, and notes for the log on
+/// what was left out and why (see [`list_endpoints`]).
+///
+/// Windows can leave a hands-free endpoint out of the enumeration itself
+/// (seen with the one a PC gets for a phone whose calls it handles: active,
+/// and found by its ID, yet not enumerated), but a connected headset's
+/// hands-free endpoint is enumerated next to its stereo one.
+pub(super) fn render_endpoints() -> Result<Listing, BackendError> {
     let _apartment = Apartment::enter()?;
     let enumerator = enumerator()?;
     // SAFETY: calls on a live enumerator; no default output is an error,
     // which leaves `default_id` empty.
     let default_id = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
         .ok()
-        .and_then(|device| device_id(&device));
+        .and_then(|device| device_id(&device).ok());
     // SAFETY: as above.
     let devices = unsafe { enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE) }
         .map_err(|error| system_error("IMMDeviceEnumerator::EnumAudioEndpoints", &error))?;
     // SAFETY: a call on the live collection.
     let count = unsafe { devices.GetCount() }
         .map_err(|error| system_error("IMMDeviceCollection::GetCount", &error))?;
-    let mut endpoints = Vec::new();
-    for index in 0..count {
-        // SAFETY: an index below the count; a device that fails is skipped.
-        let Ok(device) = (unsafe { devices.Item(index) }) else {
-            continue;
-        };
-        let Some(id) = device_id(&device) else {
-            continue;
-        };
-        let (name, kind) = describe(&device);
-        endpoints.push(Endpoint {
-            is_default: default_id.as_deref() == Some(id.as_str()),
-            name: name.unwrap_or_else(|| id.clone()),
-            id,
-            kind,
-        });
-    }
-    endpoints.sort_by(|a, b| a.id.cmp(&b.id));
-    Ok(endpoints)
+    let readings = (0..count)
+        .map(|index| {
+            // SAFETY: an index below the count; a device that fails is
+            // noted and left out.
+            match unsafe { devices.Item(index) } {
+                Ok(device) => EndpointReading {
+                    index,
+                    id: device_id(&device),
+                    properties: properties(&device),
+                },
+                Err(error) => EndpointReading {
+                    index,
+                    id: Err(failure("IMMDeviceCollection::Item", &error)),
+                    properties: Ok(EndpointProperties::default()),
+                },
+            }
+        })
+        .collect();
+    Ok(list_endpoints(readings, default_id.as_deref()))
 }
 
-/// The endpoint ID of `device`.
-fn device_id(device: &IMMDevice) -> Option<String> {
+/// The endpoint ID of `device`, or why it couldn't be read.
+fn device_id(device: &IMMDevice) -> Result<String, String> {
     // SAFETY: GetId hands over a COM-allocated string, which
     // take_com_string copies and frees.
-    unsafe { take_com_string(device.GetId().ok()?) }
+    let text = unsafe { device.GetId() }.map_err(|error| failure("IMMDevice::GetId", &error))?;
+    // SAFETY: as above.
+    unsafe { take_com_string(text) }.ok_or_else(|| "IMMDevice::GetId gave no ID".to_owned())
 }
 
-/// The name Windows shows for `device`, and what kind of device it is. A
-/// property that can't be read leaves the name out, or makes the kind
-/// [`OutputKind::Other`].
-fn describe(device: &IMMDevice) -> (Option<String>, OutputKind) {
+/// The properties of `device` the listing uses, or why its property store
+/// couldn't be opened. A property that can't be read is left out.
+fn properties(device: &IMMDevice) -> Result<EndpointProperties, String> {
     // SAFETY: opens the endpoint's own property store for reading.
-    let Ok(store) = (unsafe { device.OpenPropertyStore(STGM_READ) }) else {
-        return (None, OutputKind::Other);
-    };
-    let name = string_property(&store, &PKEY_Device_FriendlyName);
-    let form_factor = u32_property(&store, &PKEY_AudioEndpoint_FormFactor);
-    let enumerator = string_property(&store, &PKEY_Device_EnumeratorName).unwrap_or_default();
-    let display_port = string_property(&store, &PKEY_AudioEndpoint_JackSubType)
-        .and_then(|text| GUID::try_from(text.trim_matches(['{', '}'])).ok())
-        == Some(KSNODETYPE_DISPLAYPORT_INTERFACE);
-    (name, output_kind(form_factor, &enumerator, display_port))
+    let store = unsafe { device.OpenPropertyStore(STGM_READ) }
+        .map_err(|error| failure("IMMDevice::OpenPropertyStore", &error))?;
+    Ok(EndpointProperties {
+        name: string_property(&store, &PKEY_Device_FriendlyName),
+        form_factor: u32_property(&store, &PKEY_AudioEndpoint_FormFactor),
+        enumerator: string_property(&store, &PKEY_Device_EnumeratorName),
+        display_port: string_property(&store, &PKEY_AudioEndpoint_JackSubType)
+            .and_then(|text| GUID::try_from(text.trim_matches(['{', '}'])).ok())
+            == Some(KSNODETYPE_DISPLAYPORT_INTERFACE),
+    })
+}
+
+/// A failed call, for a listing note.
+fn failure(call: &str, error: &windows::core::Error) -> String {
+    // `{:08X}` of a negative i32 prints its two's complement, the way
+    // Windows writes HRESULTs.
+    format!("{call} failed (0x{:08X})", error.code().0)
 }
 
 /// A string property of `store`, if it holds one under `key`.

@@ -36,7 +36,7 @@ use super::capture::{
 };
 #[cfg(test)]
 use super::outputs::OutputParams;
-use super::outputs::{AirPlay, Endpoint, OutputPolicy, StreamSetup};
+use super::outputs::{AirPlay, Endpoint, Listing, ListingNote, OutputPolicy, StreamSetup};
 use super::process::ProcessTable;
 use crate::debug_log::DebugLog;
 
@@ -94,8 +94,9 @@ pub trait Driver {
     /// output.
     fn session_pids(&mut self) -> Result<Vec<u32>, BackendError>;
 
-    /// The connected render endpoints.
-    fn outputs(&mut self) -> Result<Vec<Endpoint>, BackendError>;
+    /// The connected render endpoints, and notes for the log on the ones
+    /// left out or listed without their properties.
+    fn outputs(&mut self) -> Result<Listing, BackendError>;
 
     /// Whether outputs may have changed since the last call.
     fn outputs_changed(&mut self) -> bool;
@@ -164,6 +165,9 @@ pub struct Controller<D: Driver> {
     /// error that repeats at every poll is logged once.
     listing_error: Option<BackendError>,
     sources_error: Option<BackendError>,
+    /// The notes of the last listing: notes that repeat at every listing
+    /// are logged once.
+    listing_notes: Vec<ListingNote>,
     /// When the log last got a status line, and the frames captured then.
     last_status: Option<(Instant, u64)>,
 }
@@ -185,6 +189,7 @@ impl<D: Driver> Controller<D> {
             setups: BTreeMap::new(),
             listing_error: None,
             sources_error: None,
+            listing_notes: Vec::new(),
             last_status: None,
         }
     }
@@ -248,8 +253,11 @@ impl<D: Driver> Controller<D> {
     /// and the error when listing failed. A failed listing keeps the last
     /// list, and the next refresh lists again.
     fn refresh_outputs(&mut self) -> (bool, Result<(), BackendError>) {
-        let mut listed = match self.driver.outputs() {
-            Ok(listed) => listed,
+        let Listing {
+            endpoints: mut listed,
+            notes,
+        } = match self.driver.outputs() {
+            Ok(listing) => listing,
             Err(error) => {
                 self.listing_ok = false;
                 if self.listing_error.as_ref() != Some(&error) {
@@ -270,6 +278,14 @@ impl<D: Driver> Controller<D> {
             Some(_) if !changed => format!("outputs listed again, no change ({})", listed.len()),
             _ => describe_listing(previous, &listed, &self.setups),
         });
+        // An endpoint left out, or listed without its properties, is
+        // logged with the full listing and whenever the notes change.
+        if previous.is_none() || notes != self.listing_notes {
+            for note in &notes {
+                self.log.log(|| note.to_string());
+            }
+        }
+        self.listing_notes = notes;
         for endpoint in &listed {
             self.names
                 .insert(endpoint.id.clone(), endpoint.name.clone());
