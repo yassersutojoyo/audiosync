@@ -252,21 +252,21 @@ fn the_same_rate_or_an_unreadable_one_keeps_playing() {
 #[test]
 fn only_the_source_apps_own_quit_ends_the_session() {
     let spotify = app("com.spotify.client");
-    assert!(spotify.ends_when_app_quits(Some("com.spotify.client")));
+    assert!(spotify.depends_on_app(Some("com.spotify.client")));
     let ended = reaction(&Incident::SourceAppQuit);
     assert!(ended.stop_session && ended.deselect_airplay && !ended.alert);
     // Another app quitting changes nothing.
-    assert!(!spotify.ends_when_app_quits(Some("com.apple.Music")));
-    assert!(!spotify.ends_when_app_quits(Some("com.spotify.client.helper")));
+    assert!(!spotify.depends_on_app(Some("com.apple.Music")));
+    assert!(!spotify.depends_on_app(Some("com.spotify.client.helper")));
     // An app without a bundle ID changes nothing.
-    assert!(!spotify.ends_when_app_quits(None));
-    assert!(!app("").ends_when_app_quits(Some("")));
+    assert!(!spotify.depends_on_app(None));
+    assert!(!app("").depends_on_app(Some("")));
     // The whole-system source and an input source never end on a quit.
     let input = AudioSource::Input {
         uid: "BuiltInMicrophoneDevice".to_owned(),
     };
     for quitting in [Some("com.spotify.client"), Some(""), None] {
-        assert!(!AudioSource::System.ends_when_app_quits(quitting));
-        assert!(!input.ends_when_app_quits(quitting));
+        assert!(!AudioSource::System.depends_on_app(quitting));
+        assert!(!input.depends_on_app(quitting));
     }
 }

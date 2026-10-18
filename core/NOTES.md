@@ -58,7 +58,7 @@ Implements S41 to S59 with the counters of S158 and the prime reset of S159. A r
 ### Modules
 
 - `eq`: the ten-band equalizer and preamp (S22 to S34), split into `EqControl` (main thread) and `EqProcessor` (capture thread) that share only atomics.
-- `volume`: the cubic volume curve, host-side volume rules, one newest-value slot per volume target (`LatestValues`) and the renderer's gain stage (S64, S65, S70 to S76).
+- `volume`: the cubic volume curve, host-side volume rules, volume writes coalesced per target (`LatestValues`) and the renderer's gain stage (S64, S65, S70 to S76).
 - `channels`: an input device's channels to stereo (S14).
 - `policy`: pure host decisions the Windows app can reuse: delays and the AirPlay sync rule; the capture source, the microphone permission and app quits; the capture check and capture rate changes; sessions, output sync, streaming and source switches; the engine lifecycle and pipe playback; the speaker list, reachability and reconcile; pairing; speaker keys, groups, device lists, layout and notices.
 - `ffi`: the C interface.
@@ -112,9 +112,10 @@ Where the spec left room, these readings satisfy every Observed clause:
 14. S157: rates are compared in Hz as `f64`; a reading that is not finite or not above 0 counts as unreadable and keeps the session playing.
 15. S161: "sorted by UID" is the byte order of the UID strings; a UID the host lists twice counts once.
 16. S162: `session::streaming_after` decides from the numbers of enabled local and AirPlay speakers after the event. A device that leaves or rejoins the lists is an event of its own, and it starts and stops nothing while anything is enabled.
-17. S163: two sources are the same when they have the same kind and identifier (bundle ID or device UID).
-18. S164: a quitting app with an empty bundle ID counts as having none.
+17. S163: two sources are the same when they have the same kind and identifier (bundle ID or device UID). `session::source_pick` answers a pick with `Nothing`, `StoreForNextStart` or `SwitchNow`, listed from the least to the most work; every answer but `Nothing` clears the old source's notices.
+18. S164: the quit rule is read as a dependency. `AudioSource::depends_on_app` holds only for an app source and its own bundle ID; the whole system and input devices depend on no app. A quitting app with an empty bundle ID counts as having none.
 19. S26, S127: after each block, filter state below 1e-30 (600 dB below full scale) is set to 0. Without it, silence after a bass boost leaves the state decaying into subnormal numbers, where it can hold a rounding limit cycle and every biquad step is slow on x86. With it, the Bass Boost preset's state is all zero about 1.3 s after a loud 40 Hz tone stops; a unit test checks that twenty seconds of silence never end a block on subnormal state.
+20. S74: `volume::LatestValues` holds at most one waiting value per target and leaves all timing to the host. `put` reports whether the target had nothing waiting, which is the moment the host queues that target's one flush; the flush takes the newest value with `pop`, and the next value starts a new round.
 
 ### What stays in the host
 
@@ -127,7 +128,7 @@ Some clauses are covered here only in their pure part:
 - S7 and S34: `EqProcessor::equalize_and_deliver` fixes the order; the host wires the ring and the FIFO feed to it.
 - S167: the Local Network hint for an empty list is the host's (S154).
 
-Clauses only the host can implement are listed with a reason in `tests/spec_exempt.txt` (Core Audio, the OwnTone process and its HTTP API, macOS privacy and appearance settings, shell tooling).
+Clauses only the host can implement are listed with a reason in `tests/spec_exempt.txt` (Core Audio, the OwnTone process, its config file and password, and its HTTP API, macOS privacy and appearance settings, shell tooling). S96 and S97 are there by design: the engine's config file and its per-run password belong to the host that launches the engine. The core never launches the engine or calls its API, and it reaches even the pipe only through the host's `PipeSink`, so taking over just the config text would split one host job across two places.
 
 ### Where the two parts meet
 

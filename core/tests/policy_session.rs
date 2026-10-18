@@ -4,10 +4,10 @@
 
 use audiosync_core::policy::pairing::DropReason;
 use audiosync_core::policy::session::{
-    AFTER_START, AfterStart, AutoStartGate, Click, Incident, OutputSync, Reaction, SourceChoice,
-    SpeakerEvent, SpeakerKind, SpeakerState, StartOrigin, StreamingAction, TurnOff, TurnOn,
-    choose_source, click, may_start, reaction, source_switch, speaker_state, streaming_after,
-    sync_outputs, turn_off, turn_on,
+    AFTER_START, AfterStart, AutoStartGate, Click, Incident, OutputSync, Reaction, SourcePick,
+    SpeakerEvent, SpeakerKind, SpeakerState, StartOrigin, StreamingAction, TurnOff, TurnOn, click,
+    may_start, reaction, source_pick, source_switch, speaker_state, streaming_after, sync_outputs,
+    turn_off, turn_on,
 };
 use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::speakers::{NoticeSubject, SpeakerKey};
@@ -444,7 +444,7 @@ fn streaming_keeps_running_while_the_only_speaker_is_unplugged() {
 
 // covers: S163, S141
 #[test]
-fn picking_a_source_rebuilds_remembers_or_changes_nothing() {
+fn picking_a_source_switches_now_stores_it_or_does_nothing() {
     let system = AudioSource::System;
     let spotify = AudioSource::App {
         bundle_id: "com.spotify.client".to_owned(),
@@ -454,43 +454,46 @@ fn picking_a_source_rebuilds_remembers_or_changes_nothing() {
     };
     // Switching while streaming rebuilds the capture; the speakers stay on
     // and the AirPlay speakers stay selected.
-    let switch = choose_source(&system, &spotify, true);
-    let SourceChoice::Rebuild(how) = switch else {
-        panic!("expected a rebuild, got {switch:?}");
+    let switch = source_pick(&system, &spotify, true);
+    let SourcePick::SwitchNow(how) = switch else {
+        panic!("expected a switch now, got {switch:?}");
     };
     assert_eq!(how, source_switch(true));
     assert!(how.stop_keeping_airplay);
     assert_eq!(how.start, Some(StartOrigin::User));
     // So does switching to an input device.
     assert_eq!(
-        choose_source(&spotify, &mic, true),
-        SourceChoice::Rebuild(source_switch(true))
+        source_pick(&spotify, &mic, true),
+        SourcePick::SwitchNow(source_switch(true))
     );
-    // Switching while stopped only remembers the choice.
-    assert_eq!(choose_source(&system, &mic, false), SourceChoice::Remember);
+    // Switching while stopped only stores the pick for the next start.
+    assert_eq!(
+        source_pick(&system, &mic, false),
+        SourcePick::StoreForNextStart
+    );
     let music = AudioSource::App {
         bundle_id: "com.apple.Music".to_owned(),
     };
     assert_eq!(
-        choose_source(&spotify, &music, false),
-        SourceChoice::Remember
+        source_pick(&spotify, &music, false),
+        SourcePick::StoreForNextStart
     );
-    // Choosing the source already in use changes nothing.
+    // Picking the source already in use changes nothing.
     for streaming in [true, false] {
         assert_eq!(
-            choose_source(&spotify, &spotify.clone(), streaming),
-            SourceChoice::Unchanged
+            source_pick(&spotify, &spotify.clone(), streaming),
+            SourcePick::Nothing
         );
         assert_eq!(
-            choose_source(&system, &AudioSource::System, streaming),
-            SourceChoice::Unchanged
+            source_pick(&system, &AudioSource::System, streaming),
+            SourcePick::Nothing
         );
     }
     // Any real change clears the old source's notices; no change clears none.
     let cleared = [NoticeSubject::Source, NoticeSubject::Capture];
     assert_eq!(switch.clears(), cleared);
-    assert_eq!(SourceChoice::Remember.clears(), cleared);
-    assert!(SourceChoice::Unchanged.clears().is_empty());
+    assert_eq!(SourcePick::StoreForNextStart.clears(), cleared);
+    assert!(SourcePick::Nothing.clears().is_empty());
 }
 
 // covers: S146

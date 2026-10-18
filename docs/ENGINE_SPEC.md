@@ -292,7 +292,7 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 
 | Check | Clauses |
 |---|---|
-| shellcheck 0.11.0 passed (16 scripts) | S156 |
+| shellcheck 0.11.0 passed (N scripts) | S156 |
 
 ### ring buffer
 

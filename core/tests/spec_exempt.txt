@@ -11,8 +11,8 @@ S61 The renderer object wraps a Core Audio output unit; its pure parts are S56, 
 S66 A renderer's delay call measured on real hardware; its pure parts are S3 and S46.
 S67 Frames a real output device renders per second.
 S82 OwnTone working folder layout and creating the pipe before the engine launches; the FIFO feed gets the path.
-S96 OwnTone configuration file contents.
-S97 OwnTone configuration password removal after the first API answer.
+S96 Host-side by design: the engine's config file belongs to the host that launches the engine, which writes it before each launch with that run's password.
+S97 Host-side by design: the password and the config file belong to the host that launches the engine; its API client (S101) sees the first answer, and the host rewrites its own file.
 S101 OwnTone HTTP client transport: poll cadence, timeouts, serial write queue, path encoding.
 S110 Quit sequence: OwnTone API write drain and process signals.
 S111 The app's SIGTERM handler stops the OwnTone process.

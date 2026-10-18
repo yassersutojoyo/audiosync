@@ -97,13 +97,22 @@ pub enum VolumeTarget {
     Output(String),
 }
 
-/// One slot per key holding the newest value not yet sent, so a burst of
-/// slider moves reaches the engine as one request carrying the last value
-/// (S74).
+/// Volume writes waiting for the engine, coalesced per target (S74). `K`
+/// names the target (the host uses [`VolumeTarget`]: the master or one
+/// AirPlay speaker) and `V` is the value to send.
 ///
-/// Putting a value into an empty slot means a send has to be scheduled for
-/// that key. Values put before the send runs overwrite the slot. The send
-/// empties the slot and gets the newest value. Each key has its own slot.
+/// A target has at most one value waiting, and it is always the most recent
+/// one, so a slider drag costs one request per flush instead of one per
+/// movement. Timing stays with the caller: [`put`](Self::put) tells it when
+/// a target had nothing waiting, which is the only time it queues a flush
+/// for that target. Until the flush runs, newer values simply replace the
+/// waiting one. The flush takes the value with [`pop`](Self::pop), which
+/// leaves the target with nothing waiting, so the next value queues a new
+/// flush. Targets are independent entries: a value for one never replaces
+/// another's.
+///
+/// The entries are a short vector searched linearly, holding only the
+/// targets that have a value waiting.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LatestValues<K, V> {
     slots: Vec<(K, V)>,
@@ -116,14 +125,16 @@ impl<K, V> Default for LatestValues<K, V> {
 }
 
 impl<K: PartialEq, V: Copy> LatestValues<K, V> {
-    /// No values held.
+    /// A table with nothing waiting.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Holds `value` as the newest for `key`. Returns true when the slot was
-    /// empty, so the caller schedules one send for `key`; false when a send
-    /// is already scheduled and will carry this value instead.
+    /// Makes `value` the one to send for `key`, replacing any value already
+    /// waiting for it. Returns true when nothing was waiting: the caller then
+    /// queues one flush for `key`. Returns false when a flush is already
+    /// queued; that flush sends the newest value it finds, so it picks this
+    /// one up.
     pub fn put(&mut self, key: K, value: V) -> bool {
         match self.slots.iter_mut().find(|(held, _)| *held == key) {
             Some(slot) => {
@@ -137,24 +148,25 @@ impl<K: PartialEq, V: Copy> LatestValues<K, V> {
         }
     }
 
-    /// For the scheduled send: empties the slot of `key` and returns its
-    /// newest value, or `None` when the slot was empty.
+    /// Takes the value waiting for `key`, as its flush does right before
+    /// sending, and leaves nothing waiting for it. `None` when nothing is
+    /// waiting.
     pub fn pop(&mut self, key: &K) -> Option<V> {
         let index = self.slots.iter().position(|(held, _)| held == key)?;
         Some(self.slots.remove(index).1)
     }
 
-    /// Whether `key` holds a value.
+    /// Whether a value is waiting for `key`.
     pub fn holds(&self, key: &K) -> bool {
         self.slots.iter().any(|(held, _)| held == key)
     }
 
-    /// Keys holding a value.
+    /// How many targets have a value waiting.
     pub fn len(&self) -> usize {
         self.slots.len()
     }
 
-    /// Whether no key holds a value.
+    /// Whether no target has a value waiting.
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
     }

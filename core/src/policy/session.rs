@@ -317,43 +317,48 @@ pub fn source_switch(running: bool) -> SourceSwitch {
     }
 }
 
-/// The notices a change of source clears: the old source's (S163).
-static SOURCE_CHANGE_CLEARS: [NoticeSubject; 2] = [NoticeSubject::Source, NoticeSubject::Capture];
+/// Notices about a source that is being replaced (S163).
+static OLD_SOURCE_NOTICES: [NoticeSubject; 2] = [NoticeSubject::Source, NoticeSubject::Capture];
 
-/// What picking a capture source does (S163).
+/// The host's answer when the user picks a capture source (S163), from the
+/// least to the most work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SourceChoice {
-    /// The source already in use was picked: nothing changes.
-    Unchanged,
-    /// Not streaming: remember the new source for the next start.
-    Remember,
-    /// Streaming: remember the new source and rebuild the capture as this
-    /// switch says (S141). Speakers stay on and AirPlay speakers stay
-    /// selected.
-    Rebuild(SourceSwitch),
+pub enum SourcePick {
+    /// The pick is the source already in use, so there is nothing to do.
+    Nothing,
+    /// No session runs: the pick becomes the stored source and waits for the
+    /// next start to capture it.
+    StoreForNextStart,
+    /// A session runs: the pick becomes the stored source and the capture
+    /// moves to it right away, following this switch (S141). Whatever kind
+    /// the new source is, input devices included, the move keeps every
+    /// speaker on and every AirPlay speaker selected.
+    SwitchNow(SourceSwitch),
 }
 
-impl SourceChoice {
-    /// The notices to clear: the old source's "source" and "capture"
-    /// notices on any real change, none otherwise.
+impl SourcePick {
+    /// The notices this pick makes obsolete: when the source changes, the old
+    /// source's "source" and "capture" notices no longer apply; when it
+    /// doesn't, nothing is cleared.
     pub fn clears(&self) -> &'static [NoticeSubject] {
         match self {
-            SourceChoice::Unchanged => &[],
-            SourceChoice::Remember | SourceChoice::Rebuild(_) => &SOURCE_CHANGE_CLEARS,
+            SourcePick::Nothing => &[],
+            SourcePick::StoreForNextStart | SourcePick::SwitchNow(_) => &OLD_SOURCE_NOTICES,
         }
     }
 }
 
-/// Picking `picked` as the capture source while `current` is in use (S163).
-/// Any other source, an input device included, is a real change: remembered
-/// while not streaming, rebuilt at once while streaming.
-pub fn choose_source(current: &AudioSource, picked: &AudioSource, streaming: bool) -> SourceChoice {
+/// What picking `picked` does while `current` is the stored source;
+/// `streaming` says whether a session runs (S163). A pick that differs from
+/// `current` in kind or identifier always changes the source; whether the
+/// capture follows now or at the next start depends only on `streaming`.
+pub fn source_pick(current: &AudioSource, picked: &AudioSource, streaming: bool) -> SourcePick {
     if picked == current {
-        SourceChoice::Unchanged
-    } else if streaming {
-        SourceChoice::Rebuild(source_switch(true))
+        SourcePick::Nothing
+    } else if !streaming {
+        SourcePick::StoreForNextStart
     } else {
-        SourceChoice::Remember
+        SourcePick::SwitchNow(source_switch(true))
     }
 }
 
