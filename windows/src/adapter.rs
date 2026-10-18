@@ -10,7 +10,12 @@
 //! turns it into notices. Notices carry a [`NoticeMessage`]; the UI words it.
 //!
 //! The chosen source, groups, auto-connect marks and notices live here, not in
-//! the audio backend. Like the speakers' settings they are kept in memory only
+//! the audio backend. The double-audio notice (the source heard straight from
+//! an output as well as through AudioSync) follows what the backend reports:
+//! it is posted when the outputs it names change, changed in place when only
+//! which of them AudioSync plays to changes, and cleared when the cause is
+//! gone. Once dismissed, it stays away for the same source and those outputs
+//! (or fewer of them) until that app quits. Like the speakers' settings they are kept in memory only
 //! for now: AudioSync for Windows doesn't save its settings yet.
 //!
 //! Speakers are named by the core's speaker keys (`lc:` and the endpoint ID),
@@ -37,6 +42,7 @@ use crate::audio::backend::{
     StopReason,
 };
 use crate::audio::capture::WHOLE_SYSTEM_NAME;
+use crate::audio::routing::DirectPath;
 use crate::debug_log::DebugLog;
 use crate::ui_model::{
     AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, Source, SourceKind,
@@ -106,6 +112,14 @@ struct Posted {
     time: String,
 }
 
+/// What the double-audio notice is about: the source, by its UI ID, and the
+/// outputs it names, by endpoint ID and name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HeardTwiceSubject {
+    source: String,
+    endpoints: Vec<(String, String)>,
+}
+
 /// The UI's backend over an audio backend. See the module documentation.
 pub struct AudioAdapter<A: AudioBackend> {
     audio: A,
@@ -124,6 +138,11 @@ pub struct AudioAdapter<A: AudioBackend> {
     gate: AutoStartGate,
     notices: Notices<NoticeSubject, Posted>,
     next_notice: u64,
+    /// What the double-audio notice showing is about.
+    heard_twice: Option<HeardTwiceSubject>,
+    /// The outputs named in a double-audio notice the user dismissed, by
+    /// source UI ID, until that app quits.
+    heard_twice_dismissed: BTreeMap<String, BTreeSet<String>>,
     equalizer: EqSettings,
     /// Polls since the sources were last listed.
     polls: u32,
@@ -154,6 +173,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             gate: AutoStartGate::default(),
             notices: Notices::new(),
             next_notice: 1,
+            heard_twice: None,
+            heard_twice_dismissed: BTreeMap::new(),
             equalizer: EqSettings::default(),
             polls: 0,
             clock,
@@ -510,42 +531,107 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::OutputFailed { id, .. } => self.output_failed(&id, false),
             BackendEvent::Stopped { reason } => {
                 let message = match reason {
-                    StopReason::SourceQuit => NoticeMessage::SourceQuit {
-                        source: self.chosen_name(),
-                    },
+                    StopReason::SourceQuit => {
+                        // A dismissed double-audio notice was about this run
+                        // of the app.
+                        self.heard_twice_dismissed.remove(&self.chosen.key());
+                        NoticeMessage::SourceQuit {
+                            source: self.chosen_name(),
+                        }
+                    }
                     StopReason::CaptureFailed(_) => NoticeMessage::CaptureLost,
                 };
                 self.post(NoticeSubject::Source, message);
                 self.refresh_sources();
             }
-            // One notice while the source is heard twice, replaced when the
-            // outputs it plays on straight change, and cleared once it's
-            // heard only through AudioSync again.
-            BackendEvent::HeardTwice { paths } if paths.is_empty() => {
-                if self.notices.clear(&[NoticeSubject::DoubleAudio]) {
-                    self.log.log(|| {
-                        "notice about DoubleAudio cleared: the source is heard only \
-                         through AudioSync"
-                            .to_owned()
-                    });
-                }
-            }
-            BackendEvent::HeardTwice { paths } => {
-                let source = match &self.chosen {
-                    Chosen::WholeSystem => None,
-                    Chosen::App { name, .. } => Some(name.clone()),
-                };
-                let mute = paths.into_iter().map(|path| path.endpoint_name).collect();
-                self.post(
-                    NoticeSubject::DoubleAudio,
-                    NoticeMessage::HeardTwice {
-                        source,
-                        mute,
-                        shared: Vec::new(),
-                    },
-                );
-            }
+            BackendEvent::HeardTwice { paths } => self.heard_twice_changed(paths),
         }
+    }
+
+    /// Takes in where the source is heard straight now: see the module
+    /// documentation.
+    fn heard_twice_changed(&mut self, paths: Vec<DirectPath>) {
+        let subject = HeardTwiceSubject {
+            source: self.chosen.key(),
+            endpoints: paths
+                .iter()
+                .map(|path| (path.endpoint_id.clone(), path.endpoint_name.clone()))
+                .collect(),
+        };
+        let dismissed = !paths.is_empty()
+            && self
+                .heard_twice_dismissed
+                .get(&subject.source)
+                .is_some_and(|dismissed| {
+                    paths
+                        .iter()
+                        .all(|path| dismissed.contains(&path.endpoint_id))
+                });
+        if paths.is_empty() || dismissed {
+            self.heard_twice = None;
+            if self.notices.clear(&[NoticeSubject::DoubleAudio]) {
+                self.log.log(|| {
+                    "notice about DoubleAudio cleared: the source is heard only through \
+                     AudioSync"
+                        .to_owned()
+                });
+            }
+            if dismissed {
+                self.log.log(|| {
+                    format!(
+                        "no notice about DoubleAudio: the user dismissed it for {:?}",
+                        subject.endpoints
+                    )
+                });
+            }
+            return;
+        }
+        let names = |plays_here: bool| -> Vec<String> {
+            paths
+                .iter()
+                .filter(|path| path.audiosync_plays_here == plays_here)
+                .map(|path| path.endpoint_name.clone())
+                .collect()
+        };
+        let message = NoticeMessage::HeardTwice {
+            source: match &self.chosen {
+                Chosen::WholeSystem => None,
+                Chosen::App { name, .. } => Some(name.clone()),
+            },
+            mute: names(false),
+            shared: names(true),
+        };
+        let showing = self.heard_twice.as_ref() == Some(&subject)
+            && self.notices.get(&NoticeSubject::DoubleAudio).is_some();
+        if !showing {
+            self.post(NoticeSubject::DoubleAudio, message);
+        } else if let Some(posted) = self.notices.get_mut(&NoticeSubject::DoubleAudio)
+            && posted.message != message
+        {
+            // The same outputs: only which of them AudioSync plays to
+            // changed, so the notice changes where it is.
+            self.log
+                .log(|| format!("notice about DoubleAudio changed: {message:?}"));
+            posted.message = message;
+        }
+        self.heard_twice = Some(subject);
+    }
+
+    /// Remembers that the user dismissed the double-audio notice showing.
+    fn remember_heard_twice_dismissal(&mut self) {
+        let Some(subject) = self.heard_twice.take() else {
+            return;
+        };
+        self.log.log(|| {
+            format!(
+                "notice about DoubleAudio dismissed: it stays away for {} and {:?}",
+                subject.source, subject.endpoints
+            )
+        });
+        self.heard_twice_dismissed
+            .entry(subject.source)
+            .or_default()
+            .extend(subject.endpoints.into_iter().map(|(id, _)| id));
     }
 
     /// The sources as the UI lists them: what is listed, and the chosen app
@@ -827,11 +913,17 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             .find(|(_, posted)| posted.id == id)
             .map(|(subject, _)| subject.clone());
         if let Some(subject) = subject {
+            if subject == NoticeSubject::DoubleAudio {
+                self.remember_heard_twice_dismissal();
+            }
             self.notices.clear(&[subject]);
         }
     }
 
     fn dismiss_all_notices(&mut self) {
+        if self.notices.get(&NoticeSubject::DoubleAudio).is_some() {
+            self.remember_heard_twice_dismissal();
+        }
         self.notices.clear_all();
     }
 
