@@ -267,7 +267,8 @@ impl Resampler {
 
     /// Input frames that must still be supplied for the next `output_frames`
     /// output frames to be produced, so a renderer can size each reader
-    /// request from the converter's needs (S62).
+    /// request from the converter's needs (S62). Computed in 128 bits, so an
+    /// absurd request saturates at `usize::MAX` instead of overflowing.
     pub fn input_frames_for(&self, output_frames: usize) -> usize {
         if output_frames == 0 {
             return 0;
@@ -275,9 +276,11 @@ impl Resampler {
         if self.passthrough {
             return output_frames;
         }
-        let steps = (output_frames - 1) as u64;
-        let last_pos = self.pos as u64 + (self.frac + steps * self.num) / self.den;
-        (last_pos + self.half as u64 + 1).saturating_sub(self.held as u64) as usize
+        let steps = (output_frames - 1) as u128;
+        let advance = (u128::from(self.frac) + steps * u128::from(self.num)) / u128::from(self.den);
+        let last_pos = self.pos as u128 + advance;
+        let needed = (last_pos + self.half as u128 + 1).saturating_sub(self.held as u128);
+        usize::try_from(needed).unwrap_or(usize::MAX)
     }
 
     /// Converts interleaved stereo `input` into interleaved stereo `output`.
@@ -730,6 +733,21 @@ mod tests {
                 assert_eq!(r.process(&[], &mut out[..2]), (0, usize::from(more == 0)));
             }
         }
+    }
+
+    // covers: S62
+    #[test]
+    fn an_absurd_request_saturates_instead_of_overflowing() {
+        // 383 999 and 48 000 share no factor, so each output frame steps the
+        // input by 383 999 / 48 000: a huge request overflows 64 bits.
+        let r = Resampler::new(383_999, 48_000).unwrap();
+        assert_eq!(r.input_frames_for(usize::MAX), usize::MAX);
+        let large = 1usize << 50;
+        assert_eq!(
+            r.input_frames_for(large) as u128,
+            (large as u128 - 1) * 383_999 / 48_000 + r.pos as u128 + r.half as u128 + 1
+                - r.held as u128
+        );
     }
 
     // covers: S85

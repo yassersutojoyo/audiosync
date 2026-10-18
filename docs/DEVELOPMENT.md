@@ -49,7 +49,7 @@ Tests/run-tests.sh               # shellcheck, ring buffer, logic and FIFO tests
 Tests/run-tests.sh --hardware    # adds a silent engine test on every real output device
 ```
 
-The tests are standalone Swift files in `Tests/`, no XCTest. Run the `--hardware` variant too when you touch the audio path.
+The tests are standalone Swift files in `Tests/`, no XCTest. Run the `--hardware` variant too when you touch the audio path. The script also builds the Rust core (`scripts/build_core.sh`) and runs the parity suite, `Tests/paritytest.swift`: the ring buffer, logic and FIFO suites' checks on both engines' parts (see "Running the engine on the Rust core" below). The core's delay readers go through those checks twice, once with the delay passed to each read and once the way the app's renderers drive them (`setDelay(ms:)`, then `readAtTarget`). Anything the core doesn't match yet prints as KNOWN: it doesn't fail the run until the core gets it right, and then it does, so the check gets tightened. `--hardware` runs the engine test once on each engine.
 
 [EDGE_CASES.md](EDGE_CASES.md) lists what AudioSync does when devices, the source, the engine or the network change mid-session (EC1 to EC12), which checks cover each case, and the manual steps for the rest.
 
@@ -81,7 +81,7 @@ Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) desc
 
 The app side: `AppDelegate.swift` holds app state, persistence, launch and quit, and its extensions split out windows (`+Windows`), groups and auto-connect (`+Groups`), local outputs (`+Outputs`), AirPlay speakers (`+AirPlay`) and streaming and notices (`+Engine`). The UI is SwiftUI in `MainWindow.swift` and `MenuBar.swift`, with the app menus in `MainMenu.swift`. Smaller pieces: `AudioDevices.swift` (Core Audio device helpers), `Volume.swift` (the loudness curve), `SpeakerGroups.swift`, `NowPlaying.swift` (Spotify and Music), `Diagnostics.swift` (the debug log) and `main.swift` (keeps one copy running).
 
-`AudioSyncCore.swift` is the app's side of the Rust core (`core/`, imported through the `CAudioSyncCore` module in `Sources/CAudioSyncCore`); for now it only logs the core's version at launch.
+The app's side of the Rust core (`core/`, imported through the `CAudioSyncCore` module in `Sources/CAudioSyncCore`): `CoreEngine.swift` wraps the core's engine parts, `EngineParts.swift` has the protocols both engines' parts implement and picks one engine's set for each session, `EngineImpl.swift` reads the setting that chooses, and `AudioSyncCore.swift` logs the core's version at launch.
 
 All user-facing text goes through `AppText` in `Localization.swift`. `Brand.swift` turns the design tokens into SwiftUI colors, the typeface and the wordmark; the values themselves live in `brand/tokens.json` and reach the app through the generated `BrandTokens.swift`. `BrandMark.swift` and `BrandTokens.swift` are generated, so don't edit them.
 
@@ -98,6 +98,10 @@ cd core && cargo test
 ```
 
 `windows/` is a Windows 11 version of AudioSync in development, written in Rust with a [Slint](https://slint.dev) interface. It gets its audio work from the same core: the ring, the delay readers, the resampler, the volume curve, the equalizer and the session rules. It has its screens (the main window, the equalizer, a tray icon with a flyout, the About dialog), and on Windows they drive a WASAPI backend that captures one app or the whole system through process loopback and plays it on the outputs you turn on; on a Mac the window shows example speakers from a mock backend instead. It hasn't been tried on real Windows hardware yet: CI checks the formatting, runs clippy and the tests, and builds it for x64 and ARM64, each build with the license notices `scripts/windows_notices.py` writes for it. On Windows you need rustup with the stable MSVC toolchain and the Visual Studio Build Tools ("Desktop development with C++"), then `cargo test` and `cargo build --release` in `windows/`. On a Mac, `cargo test` runs its logic tests and `cargo check --target x86_64-pc-windows-msvc` checks the Windows code, but can't link it. [`windows/README.md`](../windows/README.md) has the details, and [`WINDOWS_AUDIO_ROUTING.md`](WINDOWS_AUDIO_ROUTING.md) weighs how it could capture one app without playing it twice.
+
+### Running the engine on the Rust core
+
+The app's audio engine runs on the Swift modules by default. The `engineImpl` setting runs it on the core instead: capture (the process tap or input device) and the Core Audio output units stay in Swift, while the delay ring, the per-speaker delay readers with their drift correction, the equalizer, the volume curve and output gain, the AirPlay sync rule and the PCM16 conversion for the AirPlay pipe come from `core/`. To switch, hold Option while you open the AudioSync menu and pick "Use Rust Audio Engine (Next Start)", or run `defaults write io.github.yassersutojoyo.audiosync engineImpl rust` (`swift` switches back; any other value counts as `swift`). `AUDIOSYNC_ENGINE=rust` or `swift` in the environment wins over the setting, which is how the tests pick an engine. The choice is read when streaming starts, so a change applies the next time it starts, and the debug log names each session's engine (`session engine: rust (setting)`). One known difference so far: if capture stalls and you change a speaker's delay by less than the 35 ms drift dead band, the Swift engine applies the change once audio comes back, but the core loses it, and that speaker stays off by the change until its delay changes again or it restarts. `Tests/soak.sh` and `Tests/bench.sh` take `--engine` too ([BENCHMARKS.md](BENCHMARKS.md)).
 
 ## Logo, icons and screenshots
 
