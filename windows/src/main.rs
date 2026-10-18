@@ -9,6 +9,7 @@
 // output stays visible.
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
+mod audio;
 mod os_version;
 mod platform;
 
