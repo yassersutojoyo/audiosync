@@ -1,5 +1,6 @@
 //! The WASAPI driver: process loopback capture, one render stream per
-//! output, endpoint listing and notifications, and the process snapshot.
+//! output, endpoint listing and notifications, the process snapshot, and the
+//! read-only endpoint snapshot of the double-audio check.
 //!
 //! Each audio thread initializes COM in the multithreaded apartment and makes
 //! its own COM objects; only endpoint IDs, the ring's reader and writer, and
@@ -11,6 +12,7 @@ mod devices;
 mod endpoint;
 mod loopback;
 mod processes;
+mod routing;
 
 use std::sync::Arc;
 
@@ -67,7 +69,7 @@ impl Driver for WasapiDriver {
     }
 
     fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError> {
-        Ok(Vec::new())
+        routing::endpoint_audio()
     }
 
     fn start_capture(

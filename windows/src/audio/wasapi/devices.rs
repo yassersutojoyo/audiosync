@@ -77,7 +77,7 @@ pub(super) fn render_endpoints() -> Result<Listing, BackendError> {
 }
 
 /// The endpoint ID of `device`, or why it couldn't be read.
-fn device_id(device: &IMMDevice) -> Result<String, String> {
+pub(super) fn device_id(device: &IMMDevice) -> Result<String, String> {
     // SAFETY: GetId hands over a COM-allocated string, which
     // take_com_string copies and frees.
     let text = unsafe { device.GetId() }.map_err(|error| failure("IMMDevice::GetId", &error))?;
@@ -87,7 +87,7 @@ fn device_id(device: &IMMDevice) -> Result<String, String> {
 
 /// The properties of `device` the listing uses, or why its property store
 /// couldn't be opened. A property that can't be read is left out.
-fn properties(device: &IMMDevice) -> Result<EndpointProperties, String> {
+pub(super) fn properties(device: &IMMDevice) -> Result<EndpointProperties, String> {
     // SAFETY: opens the endpoint's own property store for reading.
     let store = unsafe { device.OpenPropertyStore(STGM_READ) }
         .map_err(|error| failure("IMMDevice::OpenPropertyStore", &error))?;
