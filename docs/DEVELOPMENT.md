@@ -71,7 +71,7 @@ The Windows app has the same switch. Exit it from the tray icon's menu, then sta
 $env:AUDIOSYNC_DEBUG=1; .\audiosync.exe
 ```
 
-The log lands in `%TEMP%\audiosync-debug.log` and starts over at every launch. Each line starts with the time in UTC; the first lines name the app and Windows versions and the PC's local time, so you can line the two clocks up. After that it lists the outputs and sources it found, what you switched, what the session rules decided, every output and capture that started or stopped and why, device changes and errors. While streaming, a status line every five seconds shows the frames captured and, for each output, its delay, volume and how often it ran dry or had to correct drift. The variable stays set until you close that PowerShell window.
+The log lands in `%TEMP%\audiosync-debug.log` and starts over at every launch; it stops at 50 MB with a line that says so. Each line starts with the time in UTC; the first lines name the app and Windows versions and the PC's local time, so you can line the two clocks up. After that it lists the outputs and sources it found, what you switched, what the session rules decided, every output and capture that started or stopped and why, device changes and errors. While streaming, a status line every five seconds shows the frames captured and, for each output, its delay, volume and how often it ran dry or had to correct drift. The variable stays set until you close that PowerShell window.
 
 ## Where things are
 
