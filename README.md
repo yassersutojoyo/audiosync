@@ -33,7 +33,7 @@ I built this because I wanted my Mac's audio on every speaker in the house at on
 
 It's a small Mac app written in Swift, with a main window and a menu bar panel, free and MIT-licensed. It's an early alpha, so expect rough edges.
 
-There's a Windows 11 version on the way too, written in Rust. It already runs on a PC and plays to its own speakers, headphones and Bluetooth outputs, each with its own delay. There's no AirPlay on Windows yet; AudioSync is getting its own AirPlay sender for that.
+There's a Windows 11 version on the way too, written in Rust. It's built to play all system audio, or one app, to the PC's own speakers, headphones and Bluetooth outputs, each with its own delay. It isn't out yet, doesn't save its settings and has no AirPlay so far; AirPlay is planned.
 
 ## Multi-room audio on macOS
 
