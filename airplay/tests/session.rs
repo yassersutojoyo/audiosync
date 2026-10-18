@@ -353,7 +353,7 @@ fn options_records_the_method_list_and_needs_announce_setup_and_record() {
         event,
         SessionEvent::Methods(methods) if methods.contains(&"SET_PARAMETER".to_owned())
     )));
-    assert_eq!(link.session.methods().map(<[String]>::len), Some(9));
+    assert_eq!(link.session.methods().map(<[String]>::len), Some(7));
 
     // A missing Public header is accepted.
     let mut receiver = FakeReceiver::new();
@@ -397,7 +397,7 @@ fn announce_carries_the_sdp_for_the_chosen_codec() {
     assert!(!body.contains("fmtp"));
 }
 
-// covers: P31
+// Part of P31 (sockets open and answering before SETUP need P82, transport stage).
 #[test]
 fn rtsp_setup_transport_announces_the_local_ports_and_reads_the_receivers() {
     let link = playing();
@@ -1166,7 +1166,8 @@ fn metadata_requests_follow_the_listed_types() {
     assert_eq!(link.keys().len(), before);
 }
 
-// covers: P130, P131, P141
+// covers: P130, P131
+// Part of P141 (other speakers keep playing: stream stage).
 #[test]
 fn keepalive_ap1() {
     // OPTIONS after 30 s without a request; a silent stream never ends it.

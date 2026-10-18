@@ -114,7 +114,7 @@ impl Default for FakeReceiver {
             held: Vec::new(),
             refuse_pcm: None,
             public: Some(
-                "ANNOUNCE, SETUP, RECORD, PAUSE, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER"
+                "OPTIONS, ANNOUNCE, SETUP, RECORD, SET_PARAMETER, FLUSH, TEARDOWN"
                     .to_owned(),
             ),
             transport: "RTP/AVP/UDP;unicast;mode=record;server_port=50000;control_port=50001;timing_port=50002"

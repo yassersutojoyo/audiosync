@@ -74,4 +74,4 @@ Seams for later stages:
 
 ### Spec coverage
 
-`tests/spec_coverage.rs` reads the spec and fails unless every clause is named by a `// covers:` line or listed in `tests/spec_pending.txt`, never both. A clause counts as covered only when everything it asks of the sender is done; a test for part of a pending clause says "Part of P121" in a plain comment. After this stage: 144 clauses, 62 covered, 82 pending (audio and RTP, timing, pairing crypto, stream and transport, AirPlay 2). The test also checks that the IDs run P1 to Pn without gaps and that every clause names a source.
+`tests/spec_coverage.rs` reads the spec and fails unless every clause is named by a `// covers:` line or listed in `tests/spec_pending.txt`, never both. A clause counts as covered only when everything it asks of the sender is done; a test for part of a pending clause says "Part of P121" in a plain comment. After this stage: 144 clauses, 58 covered, 86 pending (audio and RTP, timing, pairing crypto, stream and transport, AirPlay 2). The test also checks that the IDs run P1 to Pn without gaps and that every clause names a source.

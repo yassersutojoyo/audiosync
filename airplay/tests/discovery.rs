@@ -18,8 +18,8 @@ use audiosync_airplay::sdp::Codec;
 use audiosync_airplay::session::State;
 use common::{FakeReceiver, Link, config};
 
-const RAOP_NAME: &str = "0050C212A23F@Living Room";
-const ID: DeviceId = DeviceId([0x00, 0x50, 0xC2, 0x12, 0xA2, 0x3F]);
+const RAOP_NAME: &str = "00005E005301@Living Room";
+const ID: DeviceId = DeviceId([0x00, 0x00, 0x5E, 0x00, 0x53, 0x01]);
 
 fn v4(a: u8, b: u8, c: u8, d: u8) -> ScopedAddr {
     ScopedAddr::new(IpAddr::V4(Ipv4Addr::new(a, b, c, d)))
@@ -86,7 +86,7 @@ impl Browser for ReplayBrowser {
     }
 }
 
-// covers: P7
+// Part of P7 (live mDNS browsing comes with the transport stage).
 #[test]
 fn discovery_browse_follows_ptr_to_srv_txt_and_addresses_for_both_types() {
     assert_eq!(ServiceKind::Raop.service_type(), "_raop._tcp");
@@ -139,7 +139,7 @@ fn discovery_browse_follows_ptr_to_srv_txt_and_addresses_for_both_types() {
         DnsRecord::Txt {
             kind: ServiceKind::AirPlay,
             instance: "Living Room".to_owned(),
-            strings: strings(&["deviceid=00:50:c2:12:a2:3f", "features=0x1234ABCD,0x6"]),
+            strings: strings(&["deviceid=00:00:5e:00:53:01", "features=0x1234ABCD,0x6"]),
             ttl: 4500,
         },
     ];
@@ -206,32 +206,32 @@ fn discovery_browse_follows_ptr_to_srv_txt_and_addresses_for_both_types() {
 fn a_raop_instance_name_is_id_at_name() {
     assert_eq!(parse_raop_instance(RAOP_NAME), Some((ID, "Living Room")));
     assert_eq!(
-        parse_raop_instance("0050c212a23f@Kitchen @ Home"),
+        parse_raop_instance("00005e005301@Kitchen @ Home"),
         Some((ID, "Kitchen @ Home"))
     );
-    assert_eq!(parse_raop_instance("0050C212A23@Short"), None);
-    assert_eq!(parse_raop_instance("0050C212A23G@Not hex"), None);
+    assert_eq!(parse_raop_instance("00005E00530@Short"), None);
+    assert_eq!(parse_raop_instance("00005E00530G@Not hex"), None);
     assert_eq!(parse_raop_instance("Living Room"), None);
 }
 
 // covers: P9
 #[test]
 fn airplay_deviceid_is_six_colon_separated_bytes() {
-    assert_eq!(DeviceId::from_colon_form("00:50:C2:12:A2:3F"), Some(ID));
-    assert_eq!(DeviceId::from_colon_form("00:50:c2:12:a2:3f"), Some(ID));
+    assert_eq!(DeviceId::from_colon_form("00:00:5E:00:53:01"), Some(ID));
+    assert_eq!(DeviceId::from_colon_form("00:00:5e:00:53:01"), Some(ID));
     assert_eq!(DeviceId::from_colon_form("0:50:C2:12:A2:3F"), None);
-    assert_eq!(DeviceId::from_colon_form("00:50:C2:12:A2"), None);
-    assert_eq!(DeviceId::from_colon_form("0050C212A23F"), None);
-    let record = airplay("Living Room", &["deviceid=00:50:C2:12:A2:3F"]);
+    assert_eq!(DeviceId::from_colon_form("00:00:5E:00:53"), None);
+    assert_eq!(DeviceId::from_colon_form("00005E005301"), None);
+    let record = airplay("Living Room", &["deviceid=00:00:5E:00:53:01"]);
     assert_eq!(record.device_key(), DeviceKey::Id(ID));
 }
 
 // covers: P10
 #[test]
 fn discovery_merges_raop_and_airplay_into_one_device() {
-    assert_eq!(ID.to_string(), "0050C212A23F");
+    assert_eq!(ID.to_string(), "00005E005301");
     let mut directory = Directory::new();
-    let events = directory.apply(BrowseEvent::Resolved(raop("0050c212a23f@Speaker", &[])));
+    let events = directory.apply(BrowseEvent::Resolved(raop("00005e005301@Speaker", &[])));
     let devices = updated(&events);
     assert_eq!(devices.len(), 1);
     assert_eq!(devices[0].name, "Speaker", "RAOP name after the @");
@@ -240,7 +240,7 @@ fn discovery_merges_raop_and_airplay_into_one_device() {
 
     let events = directory.apply(BrowseEvent::Resolved(airplay(
         "Living Room",
-        &["deviceid=00:50:C2:12:A2:3F"],
+        &["deviceid=00:00:5E:00:53:01"],
     )));
     let devices = updated(&events);
     assert_eq!(devices.len(), 1);
@@ -283,7 +283,7 @@ fn discovery_merges_raop_and_airplay_into_one_device() {
     assert_eq!(updated(&events)[0].name, "Speaker");
     let events = directory.apply(BrowseEvent::Removed {
         kind: ServiceKind::Raop,
-        instance: "0050c212a23f@Speaker".to_owned(),
+        instance: "00005e005301@Speaker".to_owned(),
     });
     assert_eq!(events, [DirectoryEvent::Removed(DeviceKey::Id(ID))]);
 }
@@ -386,7 +386,7 @@ fn raop_txt_keys_are_read() {
 fn airplay_txt_keys_are_read() {
     let key = "ab".repeat(32);
     let txt = Txt::parse(&strings(&[
-        "deviceid=00:50:C2:12:A2:3F",
+        "deviceid=00:00:5E:00:53:01",
         "features=0x1234ABCD,0x6",
         "flags=0x244",
         "model=Speaker1,1",
@@ -721,7 +721,7 @@ fn discovery_codec_choice_is_alac_unless_pcm_is_enabled_or_alone() {
     );
 }
 
-// covers: P17
+// Part of P17 (the UDP traffic on the connected address comes with the transport stage).
 #[test]
 fn discovery_addresses_ipv4_first_then_ipv6_global_then_link_local() {
     let link_local_v4 = v4(169, 254, 10, 20);
