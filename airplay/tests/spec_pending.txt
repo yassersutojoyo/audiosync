@@ -5,7 +5,6 @@
 
 # Stream and transport: several sessions, threads, sockets.
 P7 Partly done: record parsing and merging (discovery.rs); live mDNS browsing behind the Browser trait comes with the transport stage.
-P17 Partly done: address order (discovery.rs); keeping a session's UDP traffic on the address it connected to comes with the transport stage.
 P31 Partly done: the SETUP Transport header (session.rs); sockets open and answering before SETUP need P82.
 P141 Partly done: one session's loss handling (session.rs); other speakers keep playing is stream-stage work.
 P3 Several sessions with their own sockets, RTP numbering and SSRC need the stream and transport stage; each Session is already independent.

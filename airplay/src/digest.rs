@@ -20,6 +20,10 @@ pub struct Challenge {
     pub opaque: Option<String>,
     /// The challenge offers `qop=auth` (P37).
     pub qop_auth: bool,
+    /// The challenge carries a `qop` directive at all. With `qop_auth` false
+    /// it asks only for options the sender doesn't implement, such as
+    /// `auth-int`; see [`Challenge::needs_unsupported_qop`].
+    pub qop_offered: bool,
     /// `stale=true`: only the nonce expired (P38).
     pub stale: bool,
 }
@@ -38,6 +42,7 @@ impl Challenge {
         let mut nonce = None;
         let mut opaque = None;
         let mut qop_auth = false;
+        let mut qop_offered = false;
         let mut stale = false;
         for (name, value) in auth_params(&value[scheme_end..])? {
             match name.as_str() {
@@ -46,6 +51,7 @@ impl Challenge {
                 "opaque" => opaque = Some(value),
                 "stale" => stale = value.eq_ignore_ascii_case("true"),
                 "qop" => {
+                    qop_offered = true;
                     qop_auth = value
                         .split(',')
                         .any(|option| option.trim().eq_ignore_ascii_case("auth"));
@@ -59,16 +65,34 @@ impl Challenge {
             nonce: nonce?,
             opaque,
             qop_auth,
+            qop_offered,
             stale,
         })
     }
 
-    /// The first Digest challenge among a response's `WWW-Authenticate`
-    /// headers.
+    /// A `qop` directive without `auth`: the receiver insists on a quality
+    /// of protection the sender doesn't implement (such as `auth-int`, RFC
+    /// 2617 §3.2.1), so no answer can satisfy it. Answering without `qop`
+    /// would only be read as a wrong password, so the session reports a
+    /// protocol error instead (P37, P140).
+    pub fn needs_unsupported_qop(&self) -> bool {
+        self.qop_offered && !self.qop_auth
+    }
+
+    /// The Digest challenge among a response's `WWW-Authenticate` headers:
+    /// the first one the sender can answer, otherwise the first one.
     pub fn from_headers(headers: &Headers) -> Option<Challenge> {
-        headers
+        let mut first = None;
+        for challenge in headers
             .get_all("WWW-Authenticate")
-            .find_map(Challenge::parse)
+            .filter_map(Challenge::parse)
+        {
+            if !challenge.needs_unsupported_qop() {
+                return Some(challenge);
+            }
+            first.get_or_insert(challenge);
+        }
+        first
     }
 }
 

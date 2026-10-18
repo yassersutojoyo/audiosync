@@ -4,7 +4,7 @@
 
 mod common;
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::discovery::{
@@ -719,10 +719,31 @@ fn discovery_codec_choice_is_alac_unless_pcm_is_enabled_or_alone() {
         directory.codec_for(&DeviceKey::Id(DeviceId([0; 6])), true),
         None
     );
+
+    // The choice outlives the device's absence from the network.
+    let removed = directory.apply(BrowseEvent::Removed {
+        kind: ServiceKind::Raop,
+        instance: RAOP_NAME.to_owned(),
+    });
+    assert_eq!(removed, [DirectoryEvent::Removed(key.clone())]);
+    assert_eq!(directory.codec_for(&key, true), None);
+    directory.apply(BrowseEvent::Resolved(raop(RAOP_NAME, &["cn=0,1"])));
+    assert_eq!(
+        directory.codec_for(&key, true),
+        Some(Ok(Codec::Alac)),
+        "still ALAC after the device came back"
+    );
+
+    // A refusal can be remembered for a device that isn't listed yet.
+    let mut directory = Directory::new();
+    directory.remember_pcm_refused(&key);
+    directory.apply(BrowseEvent::Resolved(raop(RAOP_NAME, &["cn=0,1"])));
+    assert_eq!(directory.codec_for(&key, true), Some(Ok(Codec::Alac)));
 }
 
-// Part of P17 (the UDP traffic on the connected address comes with the transport stage).
+// covers: P17
 #[test]
+
 fn discovery_addresses_ipv4_first_then_ipv6_global_then_link_local() {
     let link_local_v4 = v4(169, 254, 10, 20);
     let global_v6 = v6([0x2001, 0xdb8, 0, 0, 0, 0, 0, 5], 0);
@@ -747,6 +768,19 @@ fn discovery_addresses_ipv4_first_then_ipv6_global_then_link_local() {
     record.addresses = vec![link_local_v6, ipv4];
     let device = Device::from_records(DeviceKey::Id(ID), Some(&record), None).expect("device");
     assert_eq!(device.connect_addresses(), [ipv4, link_local_v6]);
+    // The session takes them with the SRV port, the scope kept.
+    assert_eq!(
+        device.connect_socket_addrs(),
+        [
+            SocketAddr::new(ipv4.ip, 7000),
+            SocketAddr::V6(SocketAddrV6::new(
+                Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 5),
+                7000,
+                0,
+                3
+            )),
+        ]
+    );
 }
 
 // covers: P18, P19

@@ -227,8 +227,6 @@ pub enum ParseError {
     ContentLength,
     /// The head or the body is larger than the limits below.
     TooLarge,
-    /// The bytes aren't UTF-8 text where text is required.
-    Encoding,
 }
 
 impl fmt::Display for ParseError {
@@ -245,7 +243,6 @@ impl ParseError {
             ParseError::HeaderLine => "malformed header line",
             ParseError::ContentLength => "malformed Content-Length",
             ParseError::TooLarge => "message too large",
-            ParseError::Encoding => "message head is not UTF-8",
         }
     }
 }
@@ -258,7 +255,10 @@ pub const MAX_HEAD_BYTES: usize = 64 * 1024;
 pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 /// Reads messages from a byte stream. Lines end in CRLF; a bare LF is
-/// accepted too, as RFC 2326 §4 asks of receivers of RTSP text.
+/// accepted too, as RFC 2326 §4 asks of receivers of RTSP text. Empty lines
+/// before a start line are skipped, and a head that isn't UTF-8 is read with
+/// each invalid sequence replaced by U+FFFD, so a stray byte in a header
+/// value doesn't end the session (P140 then judges what is left).
 #[derive(Debug, Default)]
 pub struct Parser {
     buffer: Vec<u8>,
@@ -282,6 +282,14 @@ impl Parser {
     /// The next complete message, `Ok(None)` while one is still incomplete.
     /// After an error the stream can't be trusted and should be closed.
     pub fn next_message(&mut self) -> Result<Option<Message>, ParseError> {
+        let stray = self
+            .buffer
+            .iter()
+            .take_while(|&&byte| byte == b'\r' || byte == b'\n')
+            .count();
+        if stray > 0 {
+            self.buffer.drain(..stray);
+        }
         let Some((head_len, body_start)) = find_head_end(&self.buffer) else {
             if self.buffer.len() > MAX_HEAD_BYTES {
                 return Err(ParseError::TooLarge);
@@ -291,8 +299,7 @@ impl Parser {
         if head_len > MAX_HEAD_BYTES {
             return Err(ParseError::TooLarge);
         }
-        let head =
-            std::str::from_utf8(&self.buffer[..head_len]).map_err(|_| ParseError::Encoding)?;
+        let head = String::from_utf8_lossy(&self.buffer[..head_len]).into_owned();
         let mut lines = head
             .split('\n')
             .map(|line| line.strip_suffix('\r').unwrap_or(line));

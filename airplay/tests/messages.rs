@@ -7,7 +7,7 @@ use audiosync_airplay::digest::{self, Challenge, QopAuth};
 use audiosync_airplay::discovery::Features;
 use audiosync_airplay::metadata::{MetadataSupport, dmap_chunk};
 use audiosync_airplay::rtsp::{
-    JackKind, JackStatus, Message, Method, ParseError, Parser, Request, TransportPorts,
+    Headers, JackKind, JackStatus, Message, Method, ParseError, Parser, Request, TransportPorts,
     audio_latency, public_methods, session_id,
 };
 use audiosync_airplay::sdp::{ALAC_FMTP, Codec, announce_body};
@@ -273,6 +273,59 @@ fn digest_challenges_parse_with_quotes_stale_and_algorithm() {
     assert!(
         Challenge::parse("Digest realm=\"raop, nonce=\"n\"").is_none(),
         "open quote"
+    );
+
+    // qop: `auth` among the options is usable; only `auth-int` is not.
+    let both = Challenge::parse("Digest realm=\"raop\", nonce=\"n\", qop=\"auth-int, auth\"")
+        .expect("parsed");
+    assert!(both.qop_auth && !both.needs_unsupported_qop());
+    let int_only =
+        Challenge::parse("Digest realm=\"raop\", nonce=\"n\", qop=\"auth-int\"").expect("parsed");
+    assert!(!int_only.qop_auth && int_only.needs_unsupported_qop());
+    let none = Challenge::parse("Digest realm=\"raop\", nonce=\"n\"").expect("parsed");
+    assert!(!none.qop_offered && !none.needs_unsupported_qop());
+    // Among several challenges the first usable one wins.
+    let mut headers = Headers::new();
+    headers.push(
+        "WWW-Authenticate",
+        "Digest realm=\"a\", nonce=\"1\", qop=\"auth-int\"",
+    );
+    headers.push("WWW-Authenticate", "Digest realm=\"b\", nonce=\"2\"");
+    assert_eq!(
+        Challenge::from_headers(&headers).map(|c| c.realm),
+        Some("b".to_owned())
+    );
+}
+
+#[test]
+fn the_parser_skips_stray_line_ends_and_reads_bad_bytes_lossily() {
+    // Empty lines before a status line are skipped (RFC 2326 §4, as in
+    // HTTP/1.1 robustness): a receiver that ends a message with an extra
+    // CRLF doesn't end the session.
+    let mut parser = Parser::new();
+    parser.push(b"RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n\r\n\r\nRTSP/1.0 200 OK\r\nCSeq: 2\r\n\r\n");
+    for cseq in [1, 2] {
+        let Ok(Some(Message::Response(parsed))) = parser.next_message() else {
+            panic!("response {cseq}");
+        };
+        assert_eq!(parsed.cseq(), Some(cseq));
+    }
+    assert_eq!(parser.next_message(), Ok(None));
+    parser.push(b"\n\r\n");
+    assert_eq!(
+        parser.next_message(),
+        Ok(None),
+        "line ends alone are no message"
+    );
+    assert_eq!(parser.buffered(), 0);
+
+    // A header value that isn't UTF-8 is read with U+FFFD in place of the
+    // bad bytes; the message itself is fine.
+    let parsed = response(b"RTSP/1.0 200 OK\r\nCSeq: 4\r\nServer: Fake\xff\xfeReceiver\r\n\r\n");
+    assert_eq!(parsed.cseq(), Some(4));
+    assert_eq!(
+        parsed.headers.get("Server"),
+        Some("Fake\u{fffd}\u{fffd}Receiver")
     );
 }
 

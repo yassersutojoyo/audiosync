@@ -9,19 +9,23 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::error::SessionError;
 use audiosync_airplay::ids::SessionIds;
 use audiosync_airplay::rtsp::{Message, Method, Parser, Request, Response};
-use audiosync_airplay::session::{Output, Session, SessionConfig, SessionEvent};
+use audiosync_airplay::session::{Connection, Output, Session, SessionConfig, SessionEvent};
 use audiosync_airplay::volume::Volume;
 use md5::{Digest, Md5};
 
-/// Documentation addresses (RFC 5737).
+/// Documentation addresses (RFC 5737, and RFC 3849 for IPv6).
 pub const SENDER: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10));
 pub const RECEIVER: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 20));
+pub const SENDER_V6: IpAddr = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x10));
+pub const RECEIVER_V6: IpAddr = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x20));
+/// The receiver's RAOP port in the tests (any SRV port would do).
+pub const RAOP_PORT: u16 = 7000;
 pub const CONTROL_PORT: u16 = 49_152;
 pub const TIMING_PORT: u16 = 49_153;
 
@@ -33,17 +37,24 @@ pub fn ids() -> SessionIds {
         first_seq: 17_000,
         first_rtptime: 2_000_000_000,
         cnonce: 0x0a4f_113b,
+        ssrc: 0x5EED_0001,
     }
 }
 
 pub fn config() -> SessionConfig {
     SessionConfig::new(
-        SENDER,
-        RECEIVER,
-        CONTROL_PORT,
-        TIMING_PORT,
+        vec![SocketAddr::new(RECEIVER, RAOP_PORT)],
         Volume::Db(-15.0),
     )
+}
+
+/// The connection a driver reports for a local address.
+pub fn connection(local: IpAddr) -> Connection {
+    Connection {
+        local,
+        control_port: CONTROL_PORT,
+        timing_port: TIMING_PORT,
+    }
 }
 
 /// A password-protected receiver's digest settings.
@@ -53,6 +64,8 @@ pub struct PasswordGate {
     pub realm: String,
     pub nonce: String,
     pub qop: bool,
+    /// The `qop` options offered when `qop` is set.
+    pub qop_options: String,
     /// The n-th request that carries a valid `Authorization` (1-based) is
     /// answered with a `stale=true` challenge and a new nonce.
     pub stale_on: Option<usize>,
@@ -65,6 +78,7 @@ impl PasswordGate {
             realm: "raop".to_owned(),
             nonce: "a1b2c3d4e5f60718293a4b5c6d7e8f90".to_owned(),
             qop: false,
+            qop_options: "auth".to_owned(),
             stale_on: None,
         }
     }
@@ -203,7 +217,7 @@ impl FakeReceiver {
         let challenge = |nonce: &str, stale: bool| {
             let mut value = format!("Digest realm=\"{}\", nonce=\"{nonce}\"", gate.realm);
             if gate.qop {
-                value.push_str(", qop=\"auth\"");
+                value.push_str(&format!(", qop=\"{}\"", gate.qop_options));
             }
             if stale {
                 value.push_str(", stale=true");
@@ -326,6 +340,8 @@ pub struct Link {
     pub events: Vec<SessionEvent>,
     /// Requests as the sender wrote them.
     pub sent: Vec<Vec<u8>>,
+    /// The addresses the session asked to connect to, in order.
+    pub connects: Vec<SocketAddr>,
     pub closed: bool,
     pub start: Instant,
     pub now: Instant,
@@ -343,15 +359,22 @@ impl Link {
             receiver,
             events: Vec::new(),
             sent: Vec::new(),
+            connects: Vec::new(),
             closed: false,
             start,
             now: start,
         }
     }
 
-    /// Connects and runs the exchange as far as it goes.
+    /// Completes the connect attempt in progress, from the documentation
+    /// address of its family, and runs the exchange as far as it goes.
     pub fn connect(&mut self) -> &mut Link {
-        self.session.handle_connected(self.now);
+        self.pump();
+        let local = match self.connects.last() {
+            Some(SocketAddr::V6(_)) => SENDER_V6,
+            _ => SENDER,
+        };
+        self.session.handle_connected(connection(local), self.now);
         self.pump();
         self
     }
@@ -367,6 +390,7 @@ impl Link {
                         self.session.handle_input(&reply, self.now);
                     }
                 }
+                Output::Connect(address) => self.connects.push(address),
                 Output::Event(event) => self.events.push(event),
                 Output::Close => self.closed = true,
             }
