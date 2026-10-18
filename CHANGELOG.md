@@ -8,6 +8,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - AirPlay speakers with a screen, such as a TV, show the track that's playing in Spotify or Music: title, artist, album and artwork. With any other source they show "AudioSync" instead of the pipe's file name.
 
+### Fixed
+
+- Switching streaming off and on while music plays no longer leaves the AirPlay speakers a second or two behind your other speakers for the rest of the session. They also keep their timing when the audio stops for a moment with streaming on, for example across sleep. The bundled engine gets a ninth small patch for this; see `THIRD_PARTY_NOTICES.md`.
+
 ## [0.4.1] — 2026-10-17
 
 ### Changed
