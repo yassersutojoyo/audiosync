@@ -82,8 +82,13 @@ def name_patterns(path):
             entries = [line.split("#", 1)[0].strip() for line in handle]
     except OSError:
         return None
+    # A folder entry ("name/") matches with anything after it, so a path
+    # inside the folder is caught; other entries must end at a word boundary.
     return [
-        re.compile(r"(?<![A-Za-z0-9_])" + re.escape(e) + r"(?![A-Za-z0-9_-])", re.IGNORECASE)
+        re.compile(
+            r"(?<![A-Za-z0-9_])" + re.escape(e) + ("" if e.endswith("/") else r"(?![A-Za-z0-9_-])"),
+            re.IGNORECASE,
+        )
         for e in entries
         if e
     ]
@@ -136,6 +141,7 @@ def self_test():
         "winhost.md": "Runner DESKTOP-AB12CD3 passed.",
         "planid.md": "Done for Plan A1.",
         "name.md": f"Ask {marker.capitalize()} about it.",
+        "folder.md": "The plan is in zebrafolder/STATUS.md.",
     }
     clean = (
         "Logs: C:\\Users\\<you>\\AppData, /Users/<you>/Library, %USERPROFILE%, "
@@ -153,7 +159,7 @@ def self_test():
             handle.write(clean)
         listing = os.path.join(root, "names.txt")
         with open(listing, "w", encoding="utf-8") as handle:
-            handle.write("# sample list\n" + marker + "\n")
+            handle.write("# sample list\n" + marker + "\nzebrafolder/\n")
         names = name_patterns(listing)
         git(root, "add", "--", *leaks, "clean.md")
         files = git(root, "ls-files").split()
