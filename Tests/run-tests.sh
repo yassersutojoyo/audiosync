@@ -3,7 +3,11 @@
 # just the Command Line Tools). Usage: Tests/run-tests.sh [--hardware]
 #   --hardware  also runs the engine test, which opens real output devices at
 #               zero volume (silent) to check render flow and delay end to end,
-#               once on the Swift engine and once on the Rust core.
+#               once on the Swift engine and once on the Rust core, and the pipe
+#               start test, which runs a private AirPlay engine (the bundled one,
+#               or AUDIOSYNC_PIPESTART_ENGINE) with only its fifo output in
+#               .build/scratch-pipestart and times how late audio leaves the
+#               pipe after streaming pauses, stops and starts again.
 # Also runs shellcheck on the scripts in scripts/shellcheck-files.txt, and fails
 # if shellcheck isn't installed (brew install shellcheck). The core parity suite,
 # the soak harness and the engine test link the Rust core, so this builds it
@@ -81,6 +85,9 @@ if [ "${1:-}" = "--hardware" ]; then
   for engine in swift rust; do
     AUDIOSYNC_ENGINE=$engine "$OUT/engine/run" || status=1
   done
+  echo "▶ pipe start latency (a private engine and its fifo output, no audio device), on each pipe feed"
+  build pipestart Tests/pipestart.swift "${ENGINE_PARTS[@]}" AirPlayEngineConfig.swift OwnTonePlayer.swift -- "${CORE[@]}"
+  "$OUT/pipestart/run" "$PWD/.build/scratch-pipestart" || status=1
 fi
 
 exit $status
