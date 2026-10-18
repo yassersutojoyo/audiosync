@@ -123,8 +123,8 @@ pub enum BackendError {
     /// The chosen app is AudioSync itself, or a process AudioSync started.
     OwnProcess,
     /// AudioSync runs inside the chosen app's process tree (that app started
-    /// it), or may as Windows sees it, so capturing the tree could capture
-    /// AudioSync's own output too.
+    /// it), or may where process creation times can't tell, so capturing the
+    /// tree could capture AudioSync's own output too.
     ContainsAudioSync,
     /// The chosen app is no longer running.
     SourceGone,

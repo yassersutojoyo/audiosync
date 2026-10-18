@@ -3,16 +3,18 @@
 //! Windows records, for each process, the ID of the process that created it.
 //! That ID is kept after the parent exits and may then be reused by an
 //! unrelated process, so a parent only counts when it was created no later
-//! than its child. Creation times that couldn't be read count as a real
-//! parent: for the decisions made here, seeing a relationship that isn't
-//! there only makes AudioSync refuse a capture it could have made, never
-//! capture itself.
+//! than its child. Creation times are compared only when both were read: a
+//! parent counts when its creation time or its child's couldn't be read, and
+//! when both fall in the same clock tick. For the decisions made here, seeing
+//! a relationship that isn't there only makes AudioSync refuse a capture it
+//! could have made, never capture itself.
 //!
-//! Whether Windows makes the same check when process loopback walks a tree
-//! isn't documented. So [`ProcessTable::in_recorded_tree`] follows every
-//! recorded parent ID, reused or not, for the decision where a relationship
-//! that Windows might see must count: whether AudioSync is inside an app's
-//! tree.
+//! The same rule decides whether AudioSync runs inside an app's tree, which
+//! keeps it from capturing its own output. That assumes process loopback,
+//! whose tree walk Windows doesn't document, doesn't count a process as the
+//! parent of one created before it either. Creation times follow the system
+//! clock, so a clock set back between two process starts can hide a real
+//! parent.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -104,29 +106,10 @@ impl ProcessTable {
         ancestors
     }
 
-    /// Whether `pid` is `root` or one of its descendants.
+    /// Whether `pid` is `root` or one of its descendants, by
+    /// [`ProcessTable::ancestors`].
     pub fn in_tree(&self, pid: u32, root: u32) -> bool {
         pid == root || self.ancestors(pid).contains(&root)
-    }
-
-    /// Whether `pid` is `root`, or `root` is reached by following the
-    /// recorded parent IDs up from `pid`, whatever the creation times say.
-    /// It finds every relationship [`ProcessTable::in_tree`] finds, and also
-    /// those through a parent ID that a later process reused. The walk stops
-    /// at a process missing from the snapshot and at a loop.
-    pub fn in_recorded_tree(&self, pid: u32, root: u32) -> bool {
-        let mut seen = BTreeSet::new();
-        let mut current = pid;
-        while seen.insert(current) {
-            if current == root {
-                return true;
-            }
-            match self.entries.get(&current) {
-                Some(entry) => current = entry.parent_pid,
-                None => return false,
-            }
-        }
-        false
     }
 
     /// The top process of the app `pid` belongs to: the walk goes up while
@@ -209,8 +192,31 @@ pub(crate) mod tests {
         let table = ProcessTable::new([
             entry(10, 20, Some(5), "app.exe"),
             entry(20, 1, None, "protected.exe"),
+            entry(30, 20, None, "unknown.exe"),
+        ]);
+        assert_eq!(table.parent(10), Some(20), "the parent's time is unknown");
+        assert_eq!(table.parent(30), Some(20), "the child's time is unknown");
+    }
+
+    #[test]
+    fn a_parent_created_in_the_same_clock_tick_counts() {
+        let table = ProcessTable::new([
+            entry(10, 20, Some(5), "app.exe"),
+            entry(20, 1, Some(5), "launcher.exe"),
         ]);
         assert_eq!(table.parent(10), Some(20));
+    }
+
+    #[test]
+    fn ancestry_ends_at_an_id_that_a_later_process_got() {
+        // Explorer's creator (90) exited long ago, and an app started after
+        // Explorer got its ID.
+        let mut entries: Vec<ProcessEntry> = desktop().entries.into_values().collect();
+        entries.push(entry(90, 200, Some(50), "player.exe"));
+        let table = ProcessTable::new(entries);
+        assert_eq!(table.ancestors(401), vec![400, 300, 100]);
+        assert!(!table.in_tree(401, 90));
+        assert!(!table.in_tree(401, 200), "nor the app that started it");
     }
 
     #[test]
@@ -246,45 +252,18 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_recorded_tree_also_follows_reused_parent_ids() {
-        // AudioSync (400) was started by 300, which exited; a later app got
-        // its ID.
-        let table = ProcessTable::new([
-            entry(100, 90, Some(10), "explorer.exe"),
-            entry(300, 100, Some(50), "player.exe"),
-            entry(400, 300, Some(40), "audiosync.exe"),
-        ]);
-        assert!(!table.in_tree(400, 300));
-        assert!(table.in_recorded_tree(400, 300));
-        assert!(table.in_recorded_tree(400, 100));
-        assert!(table.in_recorded_tree(400, 400));
-        assert!(!table.in_recorded_tree(300, 400));
-    }
-
-    #[test]
-    fn a_recorded_tree_holds_every_tree_relationship() {
-        let table = desktop();
-        for (pid, root) in [(200, 200), (202, 200), (401, 300), (401, 100)] {
-            assert!(table.in_tree(pid, root));
-            assert!(table.in_recorded_tree(pid, root), "{pid} in {root}");
-        }
-        assert!(!table.in_recorded_tree(300, 400));
-        assert!(!table.in_recorded_tree(200, 300));
-    }
-
-    #[test]
-    fn a_recorded_tree_walk_ends_at_a_loop_or_a_missing_process() {
+    fn a_tree_walk_ends_at_a_loop_or_a_missing_process() {
         let table = ProcessTable::new([
             entry(10, 20, None, "a.exe"),
             entry(20, 30, None, "b.exe"),
             entry(30, 10, None, "c.exe"),
             entry(40, 40, None, "d.exe"),
         ]);
-        assert!(table.in_recorded_tree(10, 30));
-        assert!(!table.in_recorded_tree(10, 99));
-        assert!(!table.in_recorded_tree(40, 10));
-        assert!(!table.in_recorded_tree(9999, 10));
-        assert!(table.in_recorded_tree(9999, 9999));
+        assert!(table.in_tree(10, 30));
+        assert!(!table.in_tree(10, 99));
+        assert!(!table.in_tree(40, 10));
+        assert!(!table.in_tree(9999, 10));
+        assert!(table.in_tree(9999, 9999));
     }
 
     #[test]
