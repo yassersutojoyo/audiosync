@@ -87,6 +87,18 @@ All user-facing text goes through `AppText` in `Localization.swift`. `Brand.swif
 
 Outside the app: `setup.sh`, `build.sh` and `scripts/bundle_engine.py` build and bundle the engine, `scripts/build_core.sh` builds the Rust core, `make-dmg.sh` packages a release, and `scripts/archive_sources.sh` gathers library sources for one (see `RELEASE.md`).
 
+## The Rust core and the Windows app
+
+Two Rust folders sit next to the Swift package.
+
+`core/` is `audiosync-core`, the platform-independent audio core: the delay ring buffer, drift correction, resampling, the equalizer, volume, the sync policies and PCM16 conversion. It's written from [`ENGINE_SPEC.md`](ENGINE_SPEC.md), and [`core/NOTES.md`](../core/NOTES.md) records how it reads the spec where there was room to choose. The macOS app links it as described under Building. Its tests need only a Rust toolchain, no audio hardware:
+
+```bash
+cd core && cargo test
+```
+
+`windows/` is a Windows 11 version of AudioSync in development, written in Rust with a [Slint](https://slint.dev) interface and built on the same core. So far it opens an empty window with a Help menu and an About dialog, and it hasn't been tried on real Windows hardware: CI checks the formatting, runs clippy and the tests, and builds it for x64 and ARM64, nothing more. On Windows you need rustup with the stable MSVC toolchain and the Visual Studio Build Tools ("Desktop development with C++"), then `cargo test` and `cargo build --release` in `windows/`. On a Mac, `cargo test` runs its logic tests and `cargo check --target x86_64-pc-windows-msvc` checks the Windows code, but can't link it. [`windows/README.md`](../windows/README.md) has the details, and [`WINDOWS_AUDIO_ROUTING.md`](WINDOWS_AUDIO_ROUTING.md) weighs how it could capture one app without playing it twice.
+
 ## Logo, icons and screenshots
 
 The logo, app icon and wordmark are generated from the sources in `brand/` by `scripts/brand/build-brand.sh`; [`brand/README.md`](../brand/README.md) explains how. Don't edit `AppIcon.icns`, `icon-source.png`, the `site/` icons, `site/wordmark.svg` or `BrandMark.swift` by hand. CI checks the generated SVGs and `BrandMark.swift`, but not the PNG and ICNS files, so regenerate those yourself.
