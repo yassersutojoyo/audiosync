@@ -131,8 +131,56 @@ pub fn check(
     rendered: &[String],
     last_played_on: &[String],
 ) -> RoutingCheck {
-    let _ = (captured, endpoints, rendered, last_played_on);
-    RoutingCheck::default()
+    let mut played_on: Vec<String> = endpoints
+        .iter()
+        .filter(|endpoint| {
+            endpoint
+                .active_pids
+                .iter()
+                .any(|&pid| captured.captures(pid))
+        })
+        .map(|endpoint| endpoint.id.clone())
+        .collect();
+    if played_on.is_empty() {
+        // The source is silent now; it most likely plays again where it
+        // played last.
+        played_on = last_played_on.to_vec();
+    }
+    played_on.sort();
+    played_on.dedup();
+    if rendered.is_empty() {
+        // Without a copy, nothing is heard twice.
+        return RoutingCheck {
+            paths: Vec::new(),
+            played_on,
+        };
+    }
+    let whole_system = matches!(captured, Captured::AllExcept(_));
+    let mut paths: Vec<DirectPath> = endpoints
+        .iter()
+        .filter_map(|endpoint| {
+            let audiosync_plays_here = rendered.contains(&endpoint.id);
+            if !endpoint.audible() || (endpoint.virtual_device && !audiosync_plays_here) {
+                return None;
+            }
+            let reason = if whole_system && endpoint.is_default {
+                DirectReason::DefaultEndpoint
+            } else if played_on.contains(&endpoint.id) {
+                DirectReason::Session
+            } else {
+                return None;
+            };
+            Some(DirectPath {
+                endpoint_id: endpoint.id.clone(),
+                endpoint_name: endpoint.name.clone(),
+                reason,
+                audiosync_plays_here,
+            })
+        })
+        .collect();
+    paths.sort_by(|a, b| a.endpoint_id.cmp(&b.endpoint_id));
+    paths.dedup_by(|a, b| a.endpoint_id == b.endpoint_id);
+    RoutingCheck { paths, played_on }
 }
 
 #[cfg(test)]

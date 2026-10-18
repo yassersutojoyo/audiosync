@@ -518,7 +518,29 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.post(NoticeSubject::Source, message);
                 self.refresh_sources();
             }
-            BackendEvent::HeardTwice { .. } => {}
+            // One notice while the source is heard twice, replaced when the
+            // outputs it plays on straight change, and cleared once it's
+            // heard only through AudioSync again.
+            BackendEvent::HeardTwice { paths } if paths.is_empty() => {
+                if self.notices.clear(&[NoticeSubject::DoubleAudio]) {
+                    self.log.log(|| {
+                        "notice about DoubleAudio cleared: the source is heard only \
+                         through AudioSync"
+                            .to_owned()
+                    });
+                }
+            }
+            BackendEvent::HeardTwice { paths } => {
+                let source = match &self.chosen {
+                    Chosen::WholeSystem => None,
+                    Chosen::App { name, .. } => Some(name.clone()),
+                };
+                let endpoints = paths.into_iter().map(|path| path.endpoint_name).collect();
+                self.post(
+                    NoticeSubject::DoubleAudio,
+                    NoticeMessage::HeardTwice { source, endpoints },
+                );
+            }
         }
     }
 

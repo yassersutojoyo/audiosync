@@ -16,6 +16,12 @@
 //! ([`DebugLog`]), from the thread that calls it, never from an audio
 //! thread; while a session runs, [`AudioBackend::poll`] adds a status line
 //! every few seconds from the counters the audio threads keep.
+//!
+//! While a session runs, [`AudioBackend::poll`] also checks every few
+//! seconds whether the source is heard twice, straight from an output as
+//! well as through AudioSync ([`routing`](super::routing)), from a read-only
+//! snapshot of the endpoints and the processes, and reports a change as
+//! [`BackendEvent::HeardTwice`].
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -38,7 +44,7 @@ use super::capture::{
 use super::outputs::OutputParams;
 use super::outputs::{AirPlay, Endpoint, Listing, ListingNote, OutputPolicy, StreamSetup};
 use super::process::ProcessTable;
-use super::routing::EndpointAudio;
+use super::routing::{self, Captured, DirectPath, DirectReason, EndpointAudio, EndpointVolume};
 use crate::debug_log::DebugLog;
 
 /// How often the debug log gets a status line while a session runs.
@@ -137,6 +143,8 @@ pub trait Driver {
 /// A running session.
 struct Session<D: Driver> {
     source: SourceId,
+    /// What the capture takes in.
+    activation: Activation,
     ring: Arc<Ring>,
     capture: D::Capture,
     /// The control half of the capture's equalizer.
@@ -150,6 +158,20 @@ struct Playing<R> {
     control: ReaderControl,
     gain: Arc<SharedGain>,
     handle: R,
+}
+
+/// The double-audio check of the running session.
+#[derive(Default)]
+struct RoutingState {
+    /// When the check last ran; `None` until the session's first check.
+    last_check: Option<Instant>,
+    /// The endpoints the source played on at the last check.
+    played_on: Vec<String>,
+    /// What was last reported: empty while the source is heard only through
+    /// AudioSync.
+    reported: Vec<DirectPath>,
+    /// The last error of the check: an error that repeats is logged once.
+    error: Option<BackendError>,
 }
 
 /// The audio backend over a driver. See the module documentation.
@@ -182,6 +204,8 @@ pub struct Controller<D: Driver> {
     listing_notes: Vec<ListingNote>,
     /// When the log last got a status line, and the frames captured then.
     last_status: Option<(Instant, u64)>,
+    /// The double-audio check of the running session.
+    routing: RoutingState,
 }
 
 impl<D: Driver> Controller<D> {
@@ -203,6 +227,7 @@ impl<D: Driver> Controller<D> {
             sources_error: None,
             listing_notes: Vec::new(),
             last_status: None,
+            routing: RoutingState::default(),
         }
     }
 
@@ -487,6 +512,14 @@ impl<D: Driver> Controller<D> {
                 started.elapsed().as_millis()
             )
         });
+        // Without a session, nothing is heard twice.
+        let routing = std::mem::take(&mut self.routing);
+        if !routing.reported.is_empty() {
+            self.log
+                .log(|| "double audio: none, streaming stopped".to_owned());
+            self.pending
+                .push(BackendEvent::HeardTwice { paths: Vec::new() });
+        }
     }
 
     /// Logs how the session is doing, at most every [`STATUS_INTERVAL`]:
@@ -589,6 +622,7 @@ impl<D: Driver> Controller<D> {
         });
         self.session = Some(Session {
             source: source.clone(),
+            activation,
             ring,
             capture,
             equalizer,
@@ -603,13 +637,88 @@ impl<D: Driver> Controller<D> {
     /// Checks whether the source is heard twice, at the first poll of a
     /// session and then every [`ROUTING_INTERVAL`].
     fn check_routing_if_due(&mut self, now: Instant) {
-        let _ = now;
+        if self.session.is_none() {
+            return;
+        }
+        let due = self
+            .routing
+            .last_check
+            .is_none_or(|last| now.saturating_duration_since(last) >= ROUTING_INTERVAL);
+        if due {
+            self.check_routing(now);
+        }
     }
 
     /// Checks whether the source is heard twice now, whenever the last check
     /// ran; the next poll reports a change.
     #[cfg(test)]
-    pub fn check_routing_now(&mut self) {}
+    pub fn check_routing_now(&mut self) {
+        if self.session.is_some() {
+            self.check_routing(Instant::now());
+        }
+    }
+
+    /// Checks whether the source of the running session is heard twice, and
+    /// queues [`BackendEvent::HeardTwice`] when the answer changed. A
+    /// snapshot that fails keeps the last answer.
+    fn check_routing(&mut self, now: Instant) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        self.routing.last_check = Some(now);
+        let activation = session.activation;
+        let rendered: Vec<String> = session.outputs.keys().cloned().collect();
+        let snapshot = self
+            .driver
+            .endpoint_audio()
+            .and_then(|endpoints| Ok((endpoints, self.driver.processes()?)));
+        let (mut endpoints, processes) = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                if self.routing.error.as_ref() != Some(&error) {
+                    self.log
+                        .log(|| format!("the double-audio check failed: {error}"));
+                    self.routing.error = Some(error);
+                }
+                return;
+            }
+        };
+        if self.routing.error.take().is_some() {
+            self.log
+                .log(|| "the double-audio check works again".to_owned());
+        }
+        for endpoint in &mut endpoints {
+            if endpoint.name.is_empty() {
+                endpoint.name = self
+                    .names
+                    .get(&endpoint.id)
+                    .cloned()
+                    .unwrap_or_else(|| endpoint.id.clone());
+            }
+        }
+        let tree = processes.tree(activation.target_pid);
+        let captured = match activation.mode {
+            LoopbackMode::IncludeTree => Captured::Only(tree),
+            LoopbackMode::ExcludeTree => Captured::AllExcept(tree),
+        };
+        let answer = routing::check(&captured, &endpoints, &rendered, &self.routing.played_on);
+        self.routing.played_on = answer.played_on;
+        if answer.paths != self.routing.reported {
+            self.log.log(|| {
+                describe_routing(
+                    &answer.paths,
+                    &self.routing.reported,
+                    &endpoints,
+                    &captured,
+                    &rendered,
+                )
+            });
+            self.routing.reported.clone_from(&answer.paths);
+            self.pending.push(BackendEvent::HeardTwice {
+                paths: answer.paths,
+            });
+        }
+    }
 
     /// The sources to offer, from the processes and audio sessions now.
     fn read_sources(&mut self) -> Result<Vec<SourceInfo>, BackendError> {
@@ -859,7 +968,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
             }
         }
         self.report_failures(failures);
-        self.log_status_if_due(Instant::now());
+        let now = Instant::now();
+        self.check_routing_if_due(now);
+        self.log_status_if_due(now);
         let events = std::mem::take(&mut self.pending);
         for event in &events {
             self.log
@@ -918,6 +1029,99 @@ fn describe_listing(
         text.push_str(&format!("\n  - \"{}\" ({}): gone", gone.name, gone.id));
     }
     text
+}
+
+/// The log lines for a double-audio answer of `paths` after `previous`: a
+/// heading, each endpoint the source is heard from straight and why, with
+/// its mute and volume, then each endpoint dropped since and why.
+fn describe_routing(
+    paths: &[DirectPath],
+    previous: &[DirectPath],
+    endpoints: &[EndpointAudio],
+    captured: &Captured,
+    rendered: &[String],
+) -> String {
+    let mut text = if paths.is_empty() {
+        "double audio: none, the source is heard only through AudioSync".to_owned()
+    } else {
+        format!(
+            "double audio: the source plays straight from {} output(s) too",
+            paths.len()
+        )
+    };
+    for path in paths {
+        let endpoint = endpoints.iter().find(|e| e.id == path.endpoint_id);
+        let why = match path.reason {
+            DirectReason::DefaultEndpoint => {
+                "Windows' default output, and the whole system is captured".to_owned()
+            }
+            DirectReason::Session => {
+                let pids: Vec<String> = endpoint
+                    .map(|endpoint| {
+                        endpoint
+                            .active_pids
+                            .iter()
+                            .filter(|&&pid| captured.captures(pid))
+                            .map(u32::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                match pids.as_slice() {
+                    [] => "the source played there last and is silent now".to_owned(),
+                    [pid] => format!("an active session of process {pid}"),
+                    _ => format!("active sessions of processes {}", pids.join(", ")),
+                }
+            }
+        };
+        let volume = describe_volume(endpoint.and_then(|endpoint| endpoint.volume));
+        let plays = if path.audiosync_plays_here {
+            "; AudioSync plays there too"
+        } else {
+            ""
+        };
+        text.push_str(&format!(
+            "\n  \"{}\" ({}): {why}; {volume}{plays}",
+            path.endpoint_name, path.endpoint_id
+        ));
+    }
+    for gone in previous.iter().filter(|gone| {
+        !paths
+            .iter()
+            .any(|path| path.endpoint_id == gone.endpoint_id)
+    }) {
+        let why = match endpoints.iter().find(|e| e.id == gone.endpoint_id) {
+            None => "not connected anymore",
+            Some(_) if rendered.is_empty() => "AudioSync plays to no output",
+            Some(endpoint) => match endpoint.volume {
+                Some(volume) if volume.muted => "muted",
+                Some(volume) if volume.level <= 0.0 => "volume 0",
+                _ if endpoint.virtual_device && !rendered.contains(&endpoint.id) => {
+                    "a software device AudioSync doesn't play to"
+                }
+                _ if gone.reason == DirectReason::DefaultEndpoint && !endpoint.is_default => {
+                    "not Windows' default output anymore"
+                }
+                _ => "the source doesn't play there anymore",
+            },
+        };
+        text.push_str(&format!(
+            "\n  no longer \"{}\" ({}): {why}",
+            gone.endpoint_name, gone.endpoint_id
+        ));
+    }
+    text
+}
+
+/// An endpoint's mute and volume, as the log shows them.
+fn describe_volume(volume: Option<EndpointVolume>) -> String {
+    match volume {
+        Some(volume) => format!(
+            "{}, volume {:.2}",
+            if volume.muted { "muted" } else { "not muted" },
+            volume.level
+        ),
+        None => "mute and volume unknown".to_owned(),
+    }
 }
 
 /// A source as the log names it.
@@ -1301,7 +1505,11 @@ mod tests {
         backend.start(&SourceId::WholeSystem).unwrap();
         backend.fail_listing(Some(listing_error()));
         backend.set_default_output(SPEAKERS);
-        assert!(backend.poll().is_empty());
+        // The speakers, now the default output, play the whole system
+        // straight too; the double-audio tests cover that report.
+        let mut events = backend.poll();
+        events.retain(|event| !matches!(event, BackendEvent::HeardTwice { .. }));
+        assert!(events.is_empty(), "{events:?}");
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
 
         backend.fail_listing(None);
