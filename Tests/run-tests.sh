@@ -34,6 +34,16 @@ status=0
 echo "▶ shellcheck"
 scripts/shellcheck.sh || status=1
 
+echo "▶ side effects in debug logging"
+# DBG.log takes an autoclosure that only runs with AUDIOSYNC_DEBUG=1, so a
+# call inside its message never happens in a normal run.
+if grep -nE 'DBG\.log\(.*\b(perform|send|write|open|close)\(' "$SRC"/*.swift; then
+  echo "FAIL: a call inside DBG.log(...) only runs when debugging is on"
+  status=1
+else
+  echo "PASSED"
+fi
+
 echo "▶ ring buffer"
 build ring Tests/ringtest.swift RingBuffer.swift
 "$OUT/ring/run" > "$OUT/ring.log" || status=1
