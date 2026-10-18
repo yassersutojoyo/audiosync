@@ -276,7 +276,7 @@ mod tests {
                 "main.slint",
                 include_str!("../ui/main.slint"),
                 [
-                    ("power := Switch", "self.checked = root.running;"),
+                    ("power := ToggleSwitch", "self.checked = root.running;"),
                     (
                         "source := ComboBox",
                         "self.current-index = root.source-index;",
@@ -287,7 +287,7 @@ mod tests {
                 "flyout.slint",
                 include_str!("../ui/flyout.slint"),
                 [
-                    ("power := Switch", "self.checked = root.running;"),
+                    ("power := ToggleSwitch", "self.checked = root.running;"),
                     (
                         "source := ComboBox",
                         "self.current-index = root.source-index;",
@@ -298,7 +298,7 @@ mod tests {
                 "equalizer.slint",
                 include_str!("../ui/equalizer.slint"),
                 [
-                    ("power := Switch", "self.checked = root.enabled;"),
+                    ("power := ToggleSwitch", "self.checked = root.enabled;"),
                     (
                         "presets := ComboBox",
                         "self.current-index = root.preset-index;",

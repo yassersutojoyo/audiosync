@@ -100,6 +100,15 @@ pub struct Speaker {
     pub availability: Availability,
 }
 
+impl Speaker {
+    /// Whether the speaker lists show it. As on the Mac, a virtual output (a
+    /// loopback driver, a voice changer, a meeting app's device) is listed
+    /// only while Show Virtual Devices is on or while it is turned on.
+    pub fn is_listed(&self, show_virtual: bool) -> bool {
+        show_virtual || self.enabled || self.kind != SpeakerKind::Virtual
+    }
+}
+
 /// A named set of speakers switched together.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Group {
@@ -573,6 +582,30 @@ mod tests {
                 "Living Room"
             ]
         );
+    }
+
+    #[test]
+    fn virtual_outputs_are_listed_only_when_shown_or_on() {
+        let speaker = |kind, enabled| Speaker {
+            id: "local:x".into(),
+            name: "X".into(),
+            kind,
+            enabled,
+            volume: 60.0,
+            delay_ms: Some(0.0),
+            auto_connect: false,
+            availability: Availability::Open,
+        };
+        assert!(!speaker(SpeakerKind::Virtual, false).is_listed(false));
+        assert!(speaker(SpeakerKind::Virtual, false).is_listed(true));
+        assert!(speaker(SpeakerKind::Virtual, true).is_listed(false));
+        for kind in [
+            SpeakerKind::BuiltIn,
+            SpeakerKind::Usb,
+            SpeakerKind::Bluetooth,
+        ] {
+            assert!(speaker(kind, false).is_listed(false), "{kind:?}");
+        }
     }
 
     #[test]
