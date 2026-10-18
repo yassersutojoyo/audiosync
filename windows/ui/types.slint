@@ -1,0 +1,42 @@
+// The data the Rust side passes to the windows (see src/view.rs).
+
+// How a speaker or group row shows: playing only while streaming is on.
+export enum RowState { off, will-play, playing }
+
+// The kind of output, shown as a small icon after a connected speaker's name.
+export enum SpeakerKind { airplay, built-in, headphones, bluetooth, usb, hdmi, display-port, virtual, other }
+
+// Whether an AirPlay speaker can simply play.
+export enum Availability { open, needs-code, password-unsupported }
+
+export struct SpeakerItem {
+    id: string,
+    name: string,
+    kind: SpeakerKind,
+    // Connected speakers show their kind; the PC's own outputs don't.
+    show-kind: bool,
+    state: RowState,
+    volume: float,
+    // Local outputs have a sync delay; AirPlay speakers don't.
+    has-delay: bool,
+    delay-ms: int,
+    // What the delay field shows: the applied value, or what is being typed.
+    delay-text: string,
+    sync-open: bool,
+    auto-connect: bool,
+    availability: Availability,
+}
+
+export struct GroupItem {
+    id: string,
+    name: string,
+    state: RowState,
+    available: int,
+    total: int,
+}
+
+export struct NoticeItem {
+    id: int,
+    message: string,
+    time: string,
+}

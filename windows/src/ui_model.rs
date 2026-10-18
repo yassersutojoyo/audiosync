@@ -1,0 +1,606 @@
+//! What the interface shows and what it can ask for, independent of how the
+//! audio work is done.
+//!
+//! The UI reads an [`AppState`] snapshot from a [`Backend`] and calls the
+//! backend's methods for every user action, then reads a new snapshot. The
+//! real backend (WASAPI capture and outputs, AirPlay) implements the same
+//! trait; until it lands, [`MockBackend`] stands in with example data. Nothing
+//! here makes a sound or opens an audio device.
+
+use audiosync_core::eq::{self, EqSettings};
+use audiosync_core::volume;
+
+/// The longest per-speaker delay the sync controls accept, in milliseconds
+/// (the macOS app's limit too).
+pub const MAX_DELAY_MS: f64 = 20_000.0;
+
+/// The most notices kept at once; the oldest drops off past it.
+#[cfg(test)]
+pub const NOTICE_CAPACITY: usize = 4;
+
+/// Where a source's audio comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceKind {
+    /// Everything the PC plays.
+    System,
+    /// One app's audio.
+    App,
+    /// An input device (line in, microphone).
+    Input,
+}
+
+/// Something AudioSync can capture.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Source {
+    pub id: String,
+    pub name: String,
+    pub kind: SourceKind,
+}
+
+/// The kind of output a speaker is, shown as a small icon and read by Narrator.
+// The WASAPI backend reports every kind; the mock lists only a few.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpeakerKind {
+    AirPlay,
+    BuiltIn,
+    Headphones,
+    Bluetooth,
+    Usb,
+    Hdmi,
+    DisplayPort,
+    Virtual,
+    Other,
+}
+
+impl SpeakerKind {
+    /// The PC's own outputs, listed under "This PC" (like "This Mac").
+    pub fn is_this_pc(self) -> bool {
+        matches!(self, SpeakerKind::BuiltIn | SpeakerKind::Headphones)
+    }
+}
+
+/// Whether an AirPlay speaker can simply play.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Availability {
+    Open,
+    /// It asks for a PIN or password.
+    NeedsCode,
+    /// An older receiver with a password AudioSync can't send.
+    PasswordUnsupported,
+}
+
+/// One output: a local device or an AirPlay speaker.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Speaker {
+    pub id: String,
+    pub name: String,
+    pub kind: SpeakerKind,
+    /// Chosen by the user; it plays while streaming is on.
+    pub enabled: bool,
+    /// 0 to 100.
+    pub volume: f64,
+    /// The sync delay of a local output; AirPlay speakers have none (the
+    /// AirPlay engine keeps them in sync).
+    pub delay_ms: Option<f64>,
+    pub auto_connect: bool,
+    pub availability: Availability,
+}
+
+/// A named set of speakers switched together.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Group {
+    pub id: String,
+    pub name: String,
+    pub members: Vec<String>,
+}
+
+/// A problem worth telling the user about. A newer notice about the same
+/// subject replaces the older one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Notice {
+    pub id: u64,
+    pub subject: String,
+    pub message: String,
+    /// Local time it was posted, "HH.MM".
+    pub time: String,
+}
+
+/// How a speaker or group row shows: playing only while streaming is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpeakerState {
+    Off,
+    /// Chosen, and plays once streaming starts.
+    WillPlay,
+    Playing,
+}
+
+impl SpeakerState {
+    pub fn new(enabled: bool, streaming: bool) -> Self {
+        match (enabled, streaming) {
+            (false, _) => SpeakerState::Off,
+            (true, false) => SpeakerState::WillPlay,
+            (true, true) => SpeakerState::Playing,
+        }
+    }
+
+    /// What a click on the row does: anything but playing turns on.
+    pub fn click_turns_on(self) -> bool {
+        self != SpeakerState::Playing
+    }
+}
+
+/// Everything the windows show.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AppState {
+    /// Streaming is on.
+    pub running: bool,
+    pub sources: Vec<Source>,
+    pub source_id: String,
+    /// 0 to 100.
+    pub master_volume: f64,
+    pub speakers: Vec<Speaker>,
+    pub groups: Vec<Group>,
+    pub equalizer: EqSettings,
+    /// Newest first.
+    pub notices: Vec<Notice>,
+}
+
+impl AppState {
+    pub fn speaker(&self, id: &str) -> Option<&Speaker> {
+        self.speakers.iter().find(|s| s.id == id)
+    }
+
+    pub fn speaker_state(&self, speaker: &Speaker) -> SpeakerState {
+        SpeakerState::new(speaker.enabled, self.running)
+    }
+
+    /// The members of `group` that are present right now.
+    pub fn available_members<'a>(&'a self, group: &'a Group) -> impl Iterator<Item = &'a Speaker> {
+        group.members.iter().filter_map(|id| self.speaker(id))
+    }
+
+    /// A group is on when all its present members are.
+    pub fn group_state(&self, group: &Group) -> SpeakerState {
+        let mut present = self.available_members(group).peekable();
+        let all_on = present.peek().is_some() && present.all(|s| s.enabled);
+        SpeakerState::new(all_on, self.running)
+    }
+
+    /// Speakers switched on right now.
+    pub fn active_speakers(&self) -> usize {
+        self.speakers.iter().filter(|s| s.enabled).count()
+    }
+
+    /// The speaker lists both windows show: the PC's own outputs in their
+    /// order, then every other speaker by name, case-insensitively.
+    pub fn layout(&self) -> (Vec<&Speaker>, Vec<&Speaker>) {
+        let this_pc = self
+            .speakers
+            .iter()
+            .filter(|s| s.kind.is_this_pc())
+            .collect();
+        let mut connected: Vec<&Speaker> = self
+            .speakers
+            .iter()
+            .filter(|s| !s.kind.is_this_pc())
+            .collect();
+        // A stable sort keeps the order of equal names.
+        connected.sort_by_key(|s| s.name.to_lowercase());
+        (this_pc, connected)
+    }
+}
+
+/// Why a new group wasn't made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupError {
+    /// No speaker is on, so the group would be empty.
+    NoActiveSpeakers,
+}
+
+/// The audio side, as the UI sees it. Every method is called on the UI
+/// thread and returns quickly; the real backend does its work elsewhere and
+/// reports through the next snapshot.
+pub trait Backend {
+    fn snapshot(&self) -> AppState;
+    fn set_running(&mut self, on: bool);
+    fn select_source(&mut self, id: &str);
+    fn set_master_volume(&mut self, volume: f64);
+    fn set_speaker_enabled(&mut self, id: &str, on: bool);
+    fn set_speaker_volume(&mut self, id: &str, volume: f64);
+    fn set_speaker_delay(&mut self, id: &str, ms: f64);
+    fn set_auto_connect(&mut self, id: &str, on: bool);
+    /// Turns every present member on, or all of them off when the group is on.
+    fn toggle_group(&mut self, id: &str);
+    /// Makes a group of the speakers that are on now. The UI names it
+    /// ("Group 2") when the user leaves the name empty.
+    fn new_group(&mut self, name: &str) -> Result<(), GroupError>;
+    fn rename_group(&mut self, id: &str, name: &str);
+    fn delete_group(&mut self, id: &str);
+    fn set_equalizer(&mut self, settings: EqSettings);
+    fn dismiss_notice(&mut self, id: u64);
+    fn dismiss_all_notices(&mut self);
+    fn refresh_devices(&mut self);
+}
+
+/// Clamps a typed or stepped delay to what the sync controls accept.
+pub fn clamp_delay_ms(ms: f64) -> f64 {
+    if ms.is_nan() {
+        0.0
+    } else {
+        ms.clamp(0.0, MAX_DELAY_MS).round()
+    }
+}
+
+/// Parses what the user typed in a delay field ("120", "120,5"); `None`
+/// while it isn't a number yet.
+pub fn parse_delay_ms(text: &str) -> Option<f64> {
+    let value: f64 = text.trim().replace(',', ".").parse().ok()?;
+    value.is_finite().then(|| clamp_delay_ms(value))
+}
+
+/// Example data for UI work and tests: no device is opened, nothing plays.
+pub struct MockBackend {
+    state: AppState,
+    next_id: u64,
+}
+
+impl Default for MockBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MockBackend {
+    pub fn new() -> Self {
+        let source = |id: &str, name: &str, kind| Source {
+            id: id.into(),
+            name: name.into(),
+            kind,
+        };
+        let speaker = |id: &str, name: &str, kind, enabled, delay_ms| Speaker {
+            id: id.into(),
+            name: name.into(),
+            kind,
+            enabled,
+            volume: volume::DEFAULT_LOCAL_POSITION,
+            delay_ms,
+            auto_connect: false,
+            availability: Availability::Open,
+        };
+        let mut speakers = vec![
+            speaker(
+                "local:speakers",
+                "Speakers",
+                SpeakerKind::BuiltIn,
+                true,
+                Some(0.0),
+            ),
+            speaker(
+                "local:headphones",
+                "Headphones",
+                SpeakerKind::Headphones,
+                false,
+                Some(0.0),
+            ),
+            speaker(
+                "airplay:kitchen",
+                "Kitchen",
+                SpeakerKind::AirPlay,
+                true,
+                None,
+            ),
+            speaker(
+                "airplay:living",
+                "Living Room",
+                SpeakerKind::AirPlay,
+                false,
+                None,
+            ),
+            speaker(
+                "local:desk",
+                "Desk Speaker",
+                SpeakerKind::Usb,
+                false,
+                Some(120.0),
+            ),
+            speaker(
+                "local:bt",
+                "Headset",
+                SpeakerKind::Bluetooth,
+                false,
+                Some(250.0),
+            ),
+            speaker(
+                "airplay:bedroom",
+                "Bedroom",
+                SpeakerKind::AirPlay,
+                false,
+                None,
+            ),
+        ];
+        speakers[3].availability = Availability::NeedsCode;
+        speakers[6].availability = Availability::PasswordUnsupported;
+        speakers[2].auto_connect = true;
+        let state = AppState {
+            running: false,
+            sources: vec![
+                source("system", "All System Audio", SourceKind::System),
+                source("app:player", "Music Player", SourceKind::App),
+                source("app:browser", "Web Browser", SourceKind::App),
+                source("input:line", "Line In", SourceKind::Input),
+            ],
+            source_id: "system".into(),
+            master_volume: volume::DEFAULT_MASTER_POSITION,
+            speakers,
+            groups: vec![Group {
+                id: "group:1".into(),
+                name: "Downstairs".into(),
+                members: vec!["airplay:kitchen".into(), "airplay:living".into()],
+            }],
+            equalizer: EqSettings::default(),
+            notices: Vec::new(),
+        };
+        MockBackend { state, next_id: 1 }
+    }
+
+    /// Posts a notice about `subject`, replacing an older one about it.
+    #[cfg(test)]
+    pub fn post(&mut self, subject: &str, message: &str, time: &str) {
+        self.state.notices.retain(|n| n.subject != subject);
+        self.state.notices.insert(
+            0,
+            Notice {
+                id: self.next_id,
+                subject: subject.into(),
+                message: message.into(),
+                time: time.into(),
+            },
+        );
+        self.next_id += 1;
+        self.state.notices.truncate(NOTICE_CAPACITY);
+    }
+
+    fn speaker_mut(&mut self, id: &str) -> Option<&mut Speaker> {
+        self.state.speakers.iter_mut().find(|s| s.id == id)
+    }
+}
+
+impl Backend for MockBackend {
+    fn snapshot(&self) -> AppState {
+        self.state.clone()
+    }
+
+    fn set_running(&mut self, on: bool) {
+        self.state.running = on;
+    }
+
+    fn select_source(&mut self, id: &str) {
+        if self.state.sources.iter().any(|s| s.id == id) {
+            self.state.source_id = id.into();
+        }
+    }
+
+    fn set_master_volume(&mut self, position: f64) {
+        self.state.master_volume = volume::clamp_position(position);
+    }
+
+    fn set_speaker_enabled(&mut self, id: &str, on: bool) {
+        if let Some(speaker) = self.speaker_mut(id) {
+            speaker.enabled = on;
+        }
+        // Like the Mac: turning a speaker on starts streaming.
+        if on {
+            self.state.running = true;
+        }
+    }
+
+    fn set_speaker_volume(&mut self, id: &str, position: f64) {
+        if let Some(speaker) = self.speaker_mut(id) {
+            speaker.volume = volume::clamp_position(position);
+        }
+    }
+
+    fn set_speaker_delay(&mut self, id: &str, ms: f64) {
+        if let Some(speaker) = self.speaker_mut(id)
+            && speaker.delay_ms.is_some()
+        {
+            speaker.delay_ms = Some(clamp_delay_ms(ms));
+        }
+    }
+
+    fn set_auto_connect(&mut self, id: &str, on: bool) {
+        if let Some(speaker) = self.speaker_mut(id) {
+            speaker.auto_connect = on;
+        }
+    }
+
+    fn toggle_group(&mut self, id: &str) {
+        let Some(group) = self.state.groups.iter().find(|g| g.id == id).cloned() else {
+            return;
+        };
+        let turn_on = self.state.group_state(&group).click_turns_on();
+        for member in &group.members {
+            if let Some(speaker) = self.speaker_mut(member) {
+                speaker.enabled = turn_on;
+            }
+        }
+        if turn_on {
+            self.state.running = true;
+        }
+    }
+
+    fn new_group(&mut self, name: &str) -> Result<(), GroupError> {
+        let members: Vec<String> = self
+            .state
+            .speakers
+            .iter()
+            .filter(|s| s.enabled)
+            .map(|s| s.id.clone())
+            .collect();
+        if members.is_empty() {
+            return Err(GroupError::NoActiveSpeakers);
+        }
+        self.state.groups.push(Group {
+            id: format!("group:{}", self.next_id),
+            name: name.trim().to_string(),
+            members,
+        });
+        self.next_id += 1;
+        Ok(())
+    }
+
+    fn rename_group(&mut self, id: &str, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        if let Some(group) = self.state.groups.iter_mut().find(|g| g.id == id) {
+            group.name = name.into();
+        }
+    }
+
+    fn delete_group(&mut self, id: &str) {
+        self.state.groups.retain(|g| g.id != id);
+    }
+
+    fn set_equalizer(&mut self, settings: EqSettings) {
+        self.state.equalizer = settings.quantized();
+    }
+
+    fn dismiss_notice(&mut self, id: u64) {
+        self.state.notices.retain(|n| n.id != id);
+    }
+
+    fn dismiss_all_notices(&mut self) {
+        self.state.notices.clear();
+    }
+
+    fn refresh_devices(&mut self) {}
+}
+
+/// The preset whose gains these settings have, if any (else the UI says "Custom").
+pub fn matching_preset_index(settings: &EqSettings) -> Option<usize> {
+    eq::PRESETS
+        .iter()
+        .position(|preset| preset.gains_db == settings.gains_db)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_speaker_plays_only_while_streaming() {
+        assert_eq!(SpeakerState::new(false, true), SpeakerState::Off);
+        assert_eq!(SpeakerState::new(true, false), SpeakerState::WillPlay);
+        assert_eq!(SpeakerState::new(true, true), SpeakerState::Playing);
+        assert!(SpeakerState::WillPlay.click_turns_on());
+        assert!(!SpeakerState::Playing.click_turns_on());
+    }
+
+    #[test]
+    fn this_pc_comes_first_then_the_rest_by_name() {
+        let state = MockBackend::new().snapshot();
+        let (this_pc, connected) = state.layout();
+        let names = |list: &[&Speaker]| list.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&this_pc), ["Speakers", "Headphones"]);
+        assert_eq!(
+            names(&connected),
+            [
+                "Bedroom",
+                "Desk Speaker",
+                "Headset",
+                "Kitchen",
+                "Living Room"
+            ]
+        );
+    }
+
+    #[test]
+    fn turning_a_speaker_on_starts_streaming() {
+        let mut backend = MockBackend::new();
+        backend.set_speaker_enabled("local:desk", true);
+        let state = backend.snapshot();
+        assert!(state.running);
+        assert_eq!(
+            state.speaker_state(state.speaker("local:desk").unwrap()),
+            SpeakerState::Playing
+        );
+    }
+
+    #[test]
+    fn a_group_is_on_when_all_its_present_members_are() {
+        let mut backend = MockBackend::new();
+        let group = backend.snapshot().groups[0].clone();
+        assert_eq!(backend.snapshot().group_state(&group), SpeakerState::Off);
+        backend.toggle_group(&group.id);
+        let state = backend.snapshot();
+        assert_eq!(state.group_state(&group), SpeakerState::Playing);
+        backend.toggle_group(&group.id);
+        let state = backend.snapshot();
+        assert!(state.available_members(&group).all(|s| !s.enabled));
+    }
+
+    #[test]
+    fn a_new_group_needs_a_speaker_that_is_on() {
+        let mut backend = MockBackend::new();
+        for id in ["local:speakers", "airplay:kitchen"] {
+            backend.set_speaker_enabled(id, false);
+        }
+        assert_eq!(
+            backend.new_group("Office"),
+            Err(GroupError::NoActiveSpeakers)
+        );
+        backend.set_speaker_enabled("local:desk", true);
+        assert_eq!(backend.new_group(" Office "), Ok(()));
+        let group = backend.snapshot().groups.last().cloned().unwrap();
+        assert_eq!(group.name, "Office");
+        assert_eq!(group.members, ["local:desk"]);
+    }
+
+    #[test]
+    fn delays_are_whole_milliseconds_within_the_limit() {
+        assert_eq!(parse_delay_ms("120"), Some(120.0));
+        assert_eq!(parse_delay_ms(" 99,6 "), Some(100.0));
+        assert_eq!(parse_delay_ms("-5"), Some(0.0));
+        assert_eq!(parse_delay_ms("999999"), Some(MAX_DELAY_MS));
+        assert_eq!(parse_delay_ms(""), None);
+        assert_eq!(parse_delay_ms("12a"), None);
+        assert_eq!(parse_delay_ms("inf"), None);
+        let mut backend = MockBackend::new();
+        backend.set_speaker_delay("airplay:kitchen", 50.0);
+        let state = backend.snapshot();
+        assert_eq!(state.speaker("airplay:kitchen").unwrap().delay_ms, None);
+    }
+
+    #[test]
+    fn a_newer_notice_about_the_same_subject_replaces_the_older_one() {
+        let mut backend = MockBackend::new();
+        backend.post("source", "first", "09.40");
+        backend.post("start", "other", "09.41");
+        backend.post("source", "second", "09.42");
+        let messages: Vec<_> = backend
+            .snapshot()
+            .notices
+            .iter()
+            .map(|n| n.message.clone())
+            .collect();
+        assert_eq!(messages, ["second", "other"]);
+        for n in 0..10 {
+            backend.post(&format!("s{n}"), "x", "09.43");
+        }
+        assert_eq!(backend.snapshot().notices.len(), NOTICE_CAPACITY);
+    }
+
+    #[test]
+    fn the_equalizer_is_quantized_and_matches_presets() {
+        let mut backend = MockBackend::new();
+        let mut settings = EqSettings::default();
+        settings.gains_db[0] = 3.3;
+        backend.set_equalizer(settings);
+        assert_eq!(backend.snapshot().equalizer.gains_db[0], 3.5);
+        assert_eq!(matching_preset_index(&EqSettings::default()), Some(0));
+        assert_eq!(matching_preset_index(&backend.snapshot().equalizer), None);
+    }
+}

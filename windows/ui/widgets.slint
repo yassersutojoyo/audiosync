@@ -1,0 +1,702 @@
+// The pieces the main window and the tray flyout share: cards, section
+// titles, icon buttons, speaker and group rows, the sync controls, notices
+// and the wordmark.
+//
+// Keyboard and Narrator: every control here is reachable with Tab, shows a
+// focus ring while it has keyboard focus, acts on Space and Enter, and
+// carries an accessible role, label and (where it has one) value.
+
+import { Button, LineEdit, Slider } from "std-widgets.slint";
+import { Tokens } from "tokens.slint";
+import { Strings } from "strings.slint";
+import { Availability, GroupItem, NoticeItem, RowState, SpeakerItem, SpeakerKind } from "types.slint";
+
+import "../../brand/fonts/Poppins-Medium.ttf";
+
+// Segoe Fluent Icons code points (the icon font Windows 11 ships).
+export global Glyphs {
+    out property <string> speakers: "\u{E7F5}";
+    out property <string> headphones: "\u{E7F6}";
+    out property <string> bluetooth: "\u{E702}";
+    out property <string> usb: "\u{E88E}";
+    out property <string> display: "\u{E7F4}";
+    out property <string> network: "\u{E701}";
+    out property <string> device: "\u{E772}";
+    out property <string> group: "\u{E902}";
+    out property <string> more: "\u{E712}";
+    out property <string> dismiss: "\u{E711}";
+    out property <string> warning: "\u{E7BA}";
+    out property <string> chevron-right: "\u{E76C}";
+    out property <string> equalizer: "\u{E9E9}";
+    out property <string> timer: "\u{E916}";
+    out property <string> auto-connect: "\u{E945}";
+    out property <string> volume-low: "\u{E993}";
+    out property <string> volume-high: "\u{E995}";
+
+    public pure function speaker(kind: SpeakerKind) -> string {
+        if kind == SpeakerKind.airplay {
+            return root.network;
+        }
+        if kind == SpeakerKind.headphones {
+            return root.headphones;
+        }
+        if kind == SpeakerKind.bluetooth {
+            return root.bluetooth;
+        }
+        if kind == SpeakerKind.usb {
+            return root.usb;
+        }
+        if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
+            return root.display;
+        }
+        if kind == SpeakerKind.built-in {
+            return root.speakers;
+        }
+        return root.device;
+    }
+}
+
+// An icon from the icon font. Decorative: Narrator skips it, and the control
+// it belongs to carries the label.
+export component Glyph inherits Text {
+    in property <string> glyph;
+    text: root.glyph;
+    font-family: "Segoe Fluent Icons";
+    font-size: 16px;
+    color: Tokens.text;
+    horizontal-alignment: center;
+    vertical-alignment: center;
+    accessible-role: none;
+}
+
+// The keyboard focus ring: drawn only while the control has keyboard focus.
+component FocusRing inherits Rectangle {
+    in property <bool> visible-focus;
+    border-width: root.visible-focus ? 2px : 0px;
+    border-color: Tokens.focus;
+}
+
+// A rounded panel on the window background.
+export component Card inherits Rectangle {
+    in property <length> inner-padding: Tokens.spacing-card-padding;
+    background: Tokens.surface;
+    border-radius: Tokens.radius-card;
+    border-width: 1px;
+    border-color: Tokens.separator;
+
+    VerticalLayout {
+        padding: root.inner-padding;
+        @children
+    }
+}
+
+export component SectionTitle inherits Text {
+    font-size: Tokens.font-size-body;
+    font-weight: 600;
+    color: Tokens.secondary-text;
+}
+
+// Small secondary text (captions, notes, values).
+export component SecondaryText inherits Text {
+    font-size: Tokens.font-size-caption;
+    color: Tokens.secondary-text;
+    wrap: word-wrap;
+}
+
+// A borderless button showing an icon; `label` is what Narrator reads.
+export component IconButton inherits Rectangle {
+    in property <string> glyph;
+    in property <string> label;
+    in property <bool> enabled: true;
+    in property <color> glyph-color: Tokens.text;
+    in property <length> glyph-size: 16px;
+    callback clicked();
+
+    width: 32px;
+    height: 32px;
+    border-radius: Tokens.radius-control;
+    background: touch.has-hover && root.enabled ? Tokens.text.with-alpha(0.07) : transparent;
+    opacity: root.enabled ? 1 : Tokens.disabled-opacity;
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    focus := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    Glyph {
+        glyph: root.glyph;
+        color: root.glyph-color;
+        font-size: root.glyph-size;
+    }
+
+    FocusRing {
+        visible-focus: focus.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
+// The round toggle at the start of a speaker or group row: filled while it
+// plays, outlined while it waits for streaming, grey while off.
+export component SpeakerBadge inherits Rectangle {
+    in property <string> glyph;
+    in property <RowState> state;
+    in property <string> label;
+    in property <string> description;
+    in property <bool> enabled: true;
+    in property <length> size: 32px;
+    callback toggled();
+
+    width: root.size;
+    height: root.size;
+    border-radius: root.size / 2;
+    background: root.state == RowState.playing ? Tokens.teal.with-alpha(0.14) : root.state == RowState.off ? Tokens.text.with-alpha(0.08) : transparent;
+    border-width: root.state == RowState.off ? 0px : max(1.5px, root.size / 18);
+    border-color: Tokens.teal-text;
+    opacity: root.enabled ? 1 : Tokens.disabled-opacity;
+    forward-focus: focus;
+    accessible-role: switch;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.state != RowState.off;
+    accessible-value: Strings.value(root.state);
+    accessible-description: root.description;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.toggled();
+    }
+
+    focus := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.toggled();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.toggled();
+        }
+    }
+
+    Glyph {
+        glyph: root.glyph;
+        font-size: root.size * 0.45;
+        color: root.state == RowState.off ? Tokens.secondary-text : Tokens.teal-text;
+    }
+
+    FocusRing {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: self.width / 2;
+        visible-focus: focus.has-focus;
+    }
+}
+
+// "audiosync": "audio" in the text color, "sync" in the logo color, set in
+// Poppins Medium like the logo.
+export component Wordmark inherits HorizontalLayout {
+    in property <length> size: Tokens.font-size-wordmark;
+    alignment: start;
+    accessible-role: text;
+    accessible-label: Strings.app-name;
+
+    Text {
+        text: "audio";
+        font-family: Tokens.brand-font;
+        font-weight: Tokens.brand-font-weight;
+        font-size: root.size;
+        letter-spacing: Tokens.brand-tracking * root.size;
+        color: Tokens.text;
+        accessible-role: none;
+    }
+
+    Text {
+        text: "sync";
+        font-family: Tokens.brand-font;
+        font-weight: Tokens.brand-font-weight;
+        font-size: root.size;
+        letter-spacing: Tokens.brand-tracking * root.size;
+        color: Tokens.logo;
+        accessible-role: none;
+    }
+}
+
+// The brand mark, in the logo color while streaming and grey while off.
+export component BrandMark inherits Image {
+    in property <bool> running;
+    source: @image-url("../../brand/audiosync-mark.svg");
+    colorize: root.running ? Tokens.logo : Tokens.secondary-text;
+    image-fit: contain;
+    accessible-role: none;
+}
+
+// A volume slider with its value. `changed` reports every move.
+export component VolumeSlider inherits HorizontalLayout {
+    in property <float> volume;
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback changed(float);
+
+    spacing: 8px;
+    // A user's drag replaces the slider's binding; keep it in step with the model.
+    changed volume => {
+        slider.value = root.volume;
+    }
+
+    slider := Slider {
+        minimum: 0;
+        maximum: 100;
+        step: 1;
+        value: root.volume;
+        enabled: root.enabled;
+        accessible-label: root.label;
+        accessible-value: Strings.volume-value(self.value);
+        changed(value) => {
+            root.changed(value);
+        }
+    }
+
+    SecondaryText {
+        text: Strings.volume-value(slider.value);
+        width: 26px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        font-size: Tokens.font-size-caption;
+        accessible-role: none;
+    }
+}
+
+// The per-speaker sync offset: coarse and fine steps, and a field that
+// applies as you type.
+export component SyncControls inherits VerticalLayout {
+    in property <string> name;
+    in property <string> delay-text;
+    callback stepped(int);
+    callback edited(string);
+
+    spacing: 6px;
+    // Typing replaces the field's binding; show the applied value after a step.
+    changed delay-text => {
+        if field.text != root.delay-text {
+            field.text = root.delay-text;
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 4px;
+        alignment: start;
+
+        for delta in [-100, -10]: Button {
+            text: Strings.delay-step(delta);
+            accessible-label: Strings.delay-step-accessibility(delta);
+            clicked => {
+                root.stepped(delta);
+            }
+        }
+
+        field := LineEdit {
+            width: 72px;
+            text: root.delay-text;
+            horizontal-alignment: center;
+            input-type: number;
+            accessible-label: Strings.delay-of(root.name);
+            edited(text) => {
+                root.edited(text);
+            }
+        }
+
+        Text {
+            text: Strings.milliseconds-unit;
+            color: Tokens.secondary-text;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        for delta in [10, 100]: Button {
+            text: Strings.delay-step(delta);
+            accessible-label: Strings.delay-step-accessibility(delta);
+            clicked => {
+                root.stepped(delta);
+            }
+        }
+    }
+
+    SecondaryText {
+        text: Strings.sync-hint;
+    }
+}
+
+// One speaker: its toggle, name, kind, sync delay, options and volume.
+export component SpeakerRow inherits Rectangle {
+    in property <SpeakerItem> item;
+    callback toggled();
+    callback volume-changed(float);
+    callback sync-toggled();
+    callback delay-stepped(int);
+    callback delay-edited(string);
+    callback auto-connect-toggled(bool);
+
+    background: root.item.state == RowState.playing ? Tokens.playing-row : transparent;
+    border-radius: Tokens.radius-row;
+
+    menu := ContextMenuArea {
+        Menu {
+            MenuItem {
+                title: Strings.auto-connect;
+                checkable: true;
+                checked: root.item.auto-connect;
+                activated => {
+                    root.auto-connect-toggled(!root.item.auto-connect);
+                }
+            }
+        }
+
+        VerticalLayout {
+            padding-left: Tokens.spacing-row-padding-x;
+            padding-right: Tokens.spacing-row-padding-x;
+            padding-top: Tokens.spacing-row-padding-y;
+            padding-bottom: Tokens.spacing-row-padding-y;
+            spacing: 8px;
+
+            HorizontalLayout {
+                spacing: 12px;
+
+                VerticalLayout {
+                    alignment: center;
+                    SpeakerBadge {
+                        glyph: Glyphs.speaker(root.item.kind);
+                        state: root.item.state;
+                        label: Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind);
+                        description: Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.help(root.item.state);
+                        toggled => {
+                            root.toggled();
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 2px;
+
+                    HorizontalLayout {
+                        spacing: 6px;
+
+                        Text {
+                            text: root.item.name;
+                            font-size: Tokens.font-size-body;
+                            font-weight: root.item.state == RowState.playing ? 600 : 400;
+                            color: Tokens.text;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            accessible-role: none;
+                        }
+
+                        if root.item.show-kind: Glyph {
+                            glyph: Glyphs.speaker(root.item.kind);
+                            font-size: 12px;
+                            color: root.item.state == RowState.playing ? Tokens.teal-text : Tokens.secondary-text;
+                        }
+
+                        if root.item.availability != Availability.open: SecondaryText {
+                            text: Strings.availability(root.item.availability);
+                            vertical-alignment: center;
+                            wrap: no-wrap;
+                            accessible-role: none;
+                        }
+
+                        if root.item.auto-connect: Glyph {
+                            glyph: Glyphs.auto-connect;
+                            font-size: 11px;
+                            color: Tokens.teal-text;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        if root.item.has-delay: Rectangle {
+                            min-width: delay-row.preferred-width + 8px;
+                            border-radius: Tokens.radius-control;
+                            background: delay-touch.has-hover ? Tokens.text.with-alpha(0.07) : transparent;
+                            forward-focus: delay-focus;
+                            accessible-role: button;
+                            accessible-label: Strings.delay-of(root.item.name);
+                            accessible-value: Strings.delay-value(root.item.delay-ms);
+                            accessible-description: Strings.sync-adjust;
+                            accessible-expandable: true;
+                            accessible-expanded: root.item.sync-open;
+                            accessible-action-default => {
+                                root.sync-toggled();
+                            }
+
+                            delay-focus := FocusScope {
+                                focus-on-click: false;
+                                key-pressed(event) => {
+                                    if event.text == " " || event.text == Key.Return {
+                                        root.sync-toggled();
+                                        return accept;
+                                    }
+                                    return reject;
+                                }
+                            }
+
+                            delay-touch := TouchArea {
+                                clicked => {
+                                    root.sync-toggled();
+                                }
+                            }
+
+                            delay-row := HorizontalLayout {
+                                spacing: 3px;
+                                alignment: center;
+
+                                Glyph {
+                                    glyph: Glyphs.timer;
+                                    font-size: 12px;
+                                    color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
+                                }
+
+                                Text {
+                                    text: Strings.delay-value(root.item.delay-ms);
+                                    font-size: Tokens.font-size-callout;
+                                    color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                            }
+
+                            FocusRing {
+                                visible-focus: delay-focus.has-focus;
+                                border-radius: parent.border-radius;
+                            }
+                        }
+
+                        options := IconButton {
+                            glyph: Glyphs.more;
+                            label: Strings.speaker-options(root.item.name);
+                            glyph-color: Tokens.teal-text;
+                            clicked => {
+                                menu.show({ x: self.x, y: self.y + self.height });
+                            }
+                        }
+                    }
+
+                    VolumeSlider {
+                        volume: root.item.volume;
+                        label: Strings.volume-of(root.item.name);
+                        enabled: root.item.state != RowState.off;
+                        changed(value) => {
+                            root.volume-changed(value);
+                        }
+                    }
+                }
+            }
+
+            if root.item.has-delay && root.item.sync-open: HorizontalLayout {
+                padding-left: 44px;
+
+                SyncControls {
+                    name: root.item.name;
+                    delay-text: root.item.delay-text;
+                    stepped(delta) => {
+                        root.delay-stepped(delta);
+                    }
+                    edited(text) => {
+                        root.delay-edited(text);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One group: its toggle, name and members, and its options (rename, delete).
+export component GroupRow inherits Rectangle {
+    in property <GroupItem> item;
+    callback toggled();
+    callback rename();
+    callback delete();
+
+    background: root.item.state == RowState.playing ? Tokens.playing-row : transparent;
+    border-radius: Tokens.radius-row;
+
+    menu := ContextMenuArea {
+        Menu {
+            MenuItem {
+                title: Strings.rename-group;
+                activated => {
+                    root.rename();
+                }
+            }
+
+            MenuItem {
+                title: Strings.delete-group;
+                activated => {
+                    root.delete();
+                }
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: Tokens.spacing-row-padding-x;
+            padding-right: Tokens.spacing-row-padding-x;
+            padding-top: Tokens.spacing-row-padding-y;
+            padding-bottom: Tokens.spacing-row-padding-y;
+            spacing: 12px;
+
+            VerticalLayout {
+                alignment: center;
+                SpeakerBadge {
+                    glyph: Glyphs.group;
+                    state: root.item.state;
+                    enabled: root.item.available > 0;
+                    label: root.item.name;
+                    description: Strings.group-members(root.item.available, root.item.total);
+                    toggled => {
+                        root.toggled();
+                    }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                opacity: root.item.available == 0 ? Tokens.disabled-opacity : 1;
+
+                Text {
+                    text: root.item.name;
+                    font-size: Tokens.font-size-body;
+                    font-weight: root.item.state == RowState.playing ? 600 : 400;
+                    color: Tokens.text;
+                    overflow: elide;
+                    accessible-role: none;
+                }
+
+                SecondaryText {
+                    text: Strings.group-members(root.item.available, root.item.total);
+                    accessible-role: none;
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    glyph: Glyphs.more;
+                    label: Strings.speaker-options(root.item.name);
+                    glyph-color: Tokens.teal-text;
+                    clicked => {
+                        menu.show({ x: self.x, y: self.y + self.height });
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A thin line between rows.
+export component Divider inherits Rectangle {
+    height: 1px;
+    background: Tokens.separator;
+}
+
+// The notices, newest first, each with its own dismiss button.
+export component NoticeStack inherits VerticalLayout {
+    in property <[NoticeItem]> notices;
+    in property <int> limit: 4;
+    callback dismissed(int);
+    callback dismissed-all();
+
+    spacing: 6px;
+
+    for notice[index] in root.notices: Rectangle {
+        visible: index < root.limit;
+        background: Tokens.notice;
+        border-radius: Tokens.radius-card - 2px;
+
+        HorizontalLayout {
+            padding: 10px;
+            spacing: 10px;
+
+            Glyph {
+                glyph: Glyphs.warning;
+                color: Tokens.text;
+                vertical-alignment: top;
+                width: 18px;
+            }
+
+            VerticalLayout {
+                spacing: 2px;
+                accessible-role: text;
+                accessible-label: notice.message;
+
+                Text {
+                    text: notice.message;
+                    color: Tokens.text;
+                    font-size: Tokens.font-size-callout;
+                    wrap: word-wrap;
+                    accessible-role: none;
+                }
+
+                SecondaryText {
+                    text: notice.time;
+                    accessible-role: none;
+                }
+            }
+
+            VerticalLayout {
+                alignment: start;
+                IconButton {
+                    glyph: Glyphs.dismiss;
+                    glyph-size: 12px;
+                    label: Strings.dismiss-notice;
+                    clicked => {
+                        root.dismissed(notice.id);
+                    }
+                }
+            }
+        }
+    }
+
+    if root.notices.length > 1: HorizontalLayout {
+        alignment: end;
+        Button {
+            text: Strings.dismiss-all-notices;
+            accessible-label: Strings.dismiss-all-notices;
+            clicked => {
+                root.dismissed-all();
+            }
+        }
+    }
+}

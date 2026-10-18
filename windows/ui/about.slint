@@ -4,32 +4,39 @@
 // widget in an About dialog reachable from the top-level menu. Keep it here.
 
 import { AboutSlint, StandardButton, VerticalBox } from "std-widgets.slint";
+import { Tokens } from "tokens.slint";
+import { Strings } from "strings.slint";
 
 export component AboutDialog inherits Dialog {
     in property <string> version;
     in property <string> core-version;
 
-    title: @tr("About AudioSync");
+    title: Strings.menu-about;
+    icon: @image-url("../res/audiosync-256.png");
+    background: Tokens.background;
     preferred-width: 360px;
 
     VerticalBox {
         alignment: start;
 
         Text {
-            text: "AudioSync";
-            font-size: 20px;
+            text: Strings.app-name;
+            font-size: Tokens.font-size-title;
             font-weight: 600;
+            color: Tokens.text;
             horizontal-alignment: center;
         }
 
         Text {
-            text: @tr("Version {}", root.version);
+            text: Strings.version(root.version);
+            color: Tokens.text;
             horizontal-alignment: center;
         }
 
         Text {
-            text: @tr("Audio core {}", root.core-version);
-            font-size: 11px;
+            text: Strings.core-version(root.core-version);
+            font-size: Tokens.font-size-caption;
+            color: Tokens.secondary-text;
             horizontal-alignment: center;
         }
 

@@ -74,6 +74,7 @@ menu bar icon is the mark as a template image, dimmed while streaming is off
 ```bash
 scripts/brand/build-brand.sh   # icons, wordmarks, SwiftUI mark, AppIcon.icns, site icons and wordmark
 scripts/brand/trace-mark.sh    # re-trace the mark from source/ (needs: brew install potrace)
+scripts/brand/windows-icons.sh # the Windows app and tray icons in windows/res/
 ```
 
 `build-brand.sh` writes `audiosync-icon*.svg`, `audiosync-wordmark*.svg`,

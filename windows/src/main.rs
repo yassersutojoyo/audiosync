@@ -1,20 +1,27 @@
 //! AudioSync for Windows 11 (in development).
 //!
-//! For now this is the application shell: the Windows 11 check at startup,
-//! the main window with its menu, and the About dialog. The audio work will
-//! come from `audiosync-core`, which the macOS app shares; so far only its
-//! version shows, in the About dialog.
+//! The Windows 11 check at startup, then the main window, the equalizer, the
+//! tray icon with its flyout, and the About dialog, laid out like the macOS
+//! app. The data comes through the `Backend` trait in `ui_model`; until the
+//! WASAPI backend lands, a mock with example speakers stands in, so nothing
+//! plays and no audio device is opened.
 
 // No console window next to the app. Test builds keep the console so their
 // output stays visible.
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
 mod os_version;
+#[cfg(any(windows, test))]
+mod placement;
 mod platform;
 // Generated from brand/tokens.json: rustfmt leaves it as the generator wrote it.
 #[cfg(test)]
 #[rustfmt::skip]
 mod tokens;
+#[cfg(windows)]
+mod tray;
+mod ui_model;
+mod view;
 
 use std::process::ExitCode;
 
@@ -37,38 +44,26 @@ fn main() -> ExitCode {
     }
 }
 
-/// Shows the main window and runs the UI until it closes.
+/// Shows the main window and runs the UI until the user exits.
 fn run() -> Result<(), slint::PlatformError> {
-    let main_window = MainWindow::new()?;
-    let about = AboutDialog::new()?;
-    about.set_version(env!("CARGO_PKG_VERSION").into());
-    about.set_core_version(audiosync_core::VERSION.into());
+    let app = view::App::new(Box::new(ui_model::MockBackend::new()))?;
 
-    let about_handle = about.as_weak();
-    main_window.on_about_requested(move || {
-        if let Some(about) = about_handle.upgrade()
-            && let Err(error) = about.show()
-        {
-            platform::show_error(&format!("The About window could not open: {error}"));
+    // With a tray icon, closing the main window keeps AudioSync running in
+    // the notification area; without one (or off Windows), it quits.
+    #[cfg(windows)]
+    let _tray = match tray::Tray::create(&app) {
+        Ok(tray) => {
+            app.set_tray_available(true);
+            Some(tray)
         }
-    });
-
-    let about_handle = about.as_weak();
-    about.on_ok_clicked(move || {
-        if let Some(about) = about_handle.upgrade() {
-            // A window that fails to hide stays open; the user can still close it.
-            let _ = about.hide();
+        Err(error) => {
+            eprintln!("no tray icon: {error}");
+            None
         }
-    });
+    };
 
-    // Closing the main window quits the app, even while the About dialog is
-    // open.
-    main_window.window().on_close_requested(|| {
-        let _ = slint::quit_event_loop();
-        slint::CloseRequestResponse::HideWindow
-    });
-
-    main_window.run()
+    app.show_main();
+    slint::run_event_loop_until_quit()
 }
 
 #[cfg(test)]
