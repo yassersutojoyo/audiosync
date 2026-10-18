@@ -8,6 +8,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - AirPlay speakers with a screen, such as a TV, show the track that's playing in Spotify or Music: title, artist, album and artwork. With any other source they show "AudioSync" instead of the pipe's file name.
 
+### Fixed
+
+- An AirPlay speaker no longer jumps to full volume when streaming starts or after the AirPlay engine restarts. Each AirPlay speaker keeps its own volume, and the master slider scales it the way it scales local speakers, never above the speaker's own slider.
+
 ## [0.4.1] — 2026-10-17
 
 ### Changed
