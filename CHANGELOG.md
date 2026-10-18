@@ -10,7 +10,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
-- An AirPlay speaker no longer jumps to full volume when streaming starts or after the AirPlay engine restarts. Each AirPlay speaker keeps its own volume, and the master slider scales it the way it scales local speakers, never above the speaker's own slider.
+- An AirPlay speaker no longer jumps to full volume when streaming starts or after the AirPlay engine restarts. Each AirPlay speaker keeps its own volume, and the master slider scales it too, never above its own slider. After the update each AirPlay speaker starts at 60% or lower the first time, so set its slider once.
 
 ## [0.4.1] — 2026-10-17
 
