@@ -59,6 +59,7 @@ fn executable_name(wide: &[u16]) -> String {
 }
 
 /// When the process was created, in file time ticks, if it can be queried.
+/// A zero time is no creation time, so it doesn't count as the earliest.
 fn creation_time(pid: u32) -> Option<u64> {
     if pid == 0 {
         return None;
@@ -82,7 +83,8 @@ fn creation_time(pid: u32) -> Option<u64> {
         )
     }
     .ok()?;
-    Some((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+    let created = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+    (created != 0).then_some(created)
 }
 
 /// The IDs of the processes that own an audio session on an active render

@@ -85,6 +85,7 @@ Defer: the undocumented policy interface (an opt-in experiment at most, only aft
 6. **Multi-process apps.** A browser playing from a child process: include tree captures it, and the route or mute applies to the right executable.
 7. **Drift.** Capture an app paced by endpoint A while rendering to B and to AirPlay for 30 minutes; check lag stays within the drift-correction bounds.
 8. **Builds.** Repeat 1 to 4 on each supported Windows 11 feature update (23H2, 24H2, 25H2), and on every new one before release.
+9. **Reused ancestor ID.** Start AudioSync from a helper process that then exits, start processes until one gets the helper's old process ID, and capture that process with include tree. AudioSync's own output must not come through. AudioSync now accepts such an app because it checks process creation times; if Windows' include-tree walk follows recorded parent IDs without that check, go back to refusing any app whose recorded ancestors include AudioSync's.
 
 ## AirPlay on Windows (out of scope)
 

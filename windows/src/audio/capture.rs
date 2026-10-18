@@ -7,10 +7,11 @@
 //! without AudioSync). AudioSync must never capture its own output, or the
 //! delayed copies would be captured again and echo (spec S10). So the whole
 //! system excludes AudioSync's own tree, and an app is refused when its tree
-//! contains AudioSync, or AudioSync's tree contains it. Whether the app's
-//! tree contains AudioSync is decided on every recorded parent ID, reused or
-//! not, since Windows doesn't document whether its tree walk checks creation
-//! times: when unsure, AudioSync refuses rather than capture itself.
+//! contains AudioSync, or AudioSync's tree contains it. Both are decided on
+//! process creation times where they can be read (see [`super::process`]),
+//! so an app that only got the ID of an exited process in AudioSync's
+//! ancestry can be captured. Where they can't be read, or AudioSync is
+//! missing from the snapshot, AudioSync refuses rather than capture itself.
 
 use audiosync_core::channels::input_to_stereo;
 use audiosync_core::eq::EqProcessor;
@@ -52,8 +53,11 @@ pub struct Activation {
 /// of its top process, unless that process is not an app, no longer runs,
 /// is AudioSync or one of its descendants, or may be an ancestor of AudioSync
 /// (which happens when the user picks the app that started AudioSync, such
-/// as Explorer or a terminal, or an app that got the ID of a process in
-/// AudioSync's ancestry after it exited).
+/// as Explorer or a terminal). An app that got the ID of a process in
+/// AudioSync's ancestry after that process exited is no ancestor when the
+/// creation times show it started after the process that names that ID as
+/// its parent. When they can't show it, it counts as one, and every app does
+/// while AudioSync is missing from `processes`.
 pub fn decide_activation(
     source: &SourceId,
     own_pid: u32,
@@ -84,9 +88,11 @@ pub fn decide_activation(
     if processes.in_tree(root_pid, own_pid) {
         return Err(BackendError::OwnProcess);
     }
-    // Every recorded parent ID counts here, reused or not: Windows may walk
-    // them without checking creation times.
-    if processes.in_recorded_tree(own_pid, root_pid) {
+    // AudioSync's ancestors: the walk up its recorded parent IDs stops where
+    // a process created after the child holds the ID, and goes on where a
+    // creation time is unknown. Without AudioSync's own entry, nothing is
+    // ruled out.
+    if !processes.contains(own_pid) || processes.in_tree(own_pid, root_pid) {
         return Err(BackendError::ContainsAudioSync);
     }
     Ok(Activation {
@@ -546,27 +552,91 @@ mod tests {
         );
     }
 
+    /// Explorer (100) started a terminal (300) that started AudioSync (400),
+    /// which started a helper (401). Explorer's creator (90) exited long ago,
+    /// and a player that Explorer started later got its ID; `player_created`
+    /// is when, if known.
+    fn reused_explorer_parent(player_created: Option<u64>) -> ProcessTable {
+        ProcessTable::new([
+            entry(90, 100, player_created, "player.exe"),
+            entry(100, 90, Some(10), "explorer.exe"),
+            entry(300, 100, Some(30), "terminal.exe"),
+            entry(400, 300, Some(40), "audiosync.exe"),
+            entry(401, 400, Some(41), "helper.exe"),
+        ])
+    }
+
     #[test]
-    fn an_app_that_got_the_id_of_audiosyncs_exited_launcher_is_refused() {
-        // AudioSync's launcher (300) exited, and a player started later got
-        // its ID. Windows may still count AudioSync in the player's tree.
+    fn an_app_that_got_the_id_of_an_exited_ancestor_can_be_captured() {
+        let table = reused_explorer_parent(Some(60));
+        assert_eq!(
+            decide_activation(&app(90), OWN_PID, &table),
+            Ok(Activation {
+                mode: LoopbackMode::IncludeTree,
+                target_pid: 90,
+            })
+        );
+        let sources = source_list(&table, &[90], OWN_PID);
+        assert_eq!(sources.len(), 2, "offered: {sources:?}");
+        assert_eq!(sources[1].id, app(90));
+    }
+
+    #[test]
+    fn audiosyncs_real_ancestors_and_children_stay_refused() {
+        let table = reused_explorer_parent(Some(60));
+        for (pid, refusal) in [
+            (300, BackendError::ContainsAudioSync),
+            (100, BackendError::ContainsAudioSync),
+            (401, BackendError::OwnProcess),
+            (4242, BackendError::SourceGone),
+        ] {
+            assert_eq!(
+                decide_activation(&app(pid), OWN_PID, &table),
+                Err(refusal),
+                "{pid}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_app_that_may_be_an_ancestor_is_refused() {
+        // The player can't be opened, so whether it started after Explorer
+        // is unknown.
+        let table = reused_explorer_parent(None);
+        assert_eq!(
+            decide_activation(&app(90), OWN_PID, &table),
+            Err(BackendError::ContainsAudioSync)
+        );
+        assert_eq!(source_list(&table, &[90], OWN_PID).len(), 1);
+    }
+
+    #[test]
+    fn an_app_that_got_the_id_of_audiosyncs_exited_launcher_can_be_captured() {
+        // AudioSync's launcher (300) exited, and a player started after
+        // AudioSync got its ID.
         let table = ProcessTable::new([
             entry(100, 90, Some(10), "explorer.exe"),
             entry(300, 100, Some(50), "player.exe"),
             entry(400, 300, Some(40), "audiosync.exe"),
         ]);
-        assert_eq!(table.parent(400), None, "not its parent by creation time");
         assert_eq!(
             decide_activation(&app(300), 400, &table),
+            Ok(Activation {
+                mode: LoopbackMode::IncludeTree,
+                target_pid: 300,
+            })
+        );
+    }
+
+    #[test]
+    fn no_app_is_captured_while_audiosync_is_missing_from_the_snapshot() {
+        let table = ProcessTable::new([entry(200, 100, Some(20), "player.exe")]);
+        assert_eq!(
+            decide_activation(&app(200), OWN_PID, &table),
             Err(BackendError::ContainsAudioSync)
         );
-        assert_eq!(
-            decide_activation(&app(100), 400, &table),
-            Err(BackendError::ContainsAudioSync),
-            "nor the app above it"
-        );
-        let sources = source_list(&table, &[300], 400);
-        assert_eq!(sources.len(), 1, "not offered: {sources:?}");
+        assert_eq!(source_list(&table, &[200], OWN_PID).len(), 1);
+        assert!(decide_activation(&SourceId::WholeSystem, OWN_PID, &table).is_ok());
     }
 
     #[test]
@@ -619,6 +689,7 @@ mod tests {
             entry(10, 1, None, "zebra.exe"),
             entry(20, 1, None, "Alpha.exe"),
             entry(30, 1, None, "mid.exe"),
+            entry(99, 1, None, "audiosync.exe"),
         ]);
         let names: Vec<String> = source_list(&table, &[10, 20, 30], 99)
             .into_iter()

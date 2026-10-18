@@ -1,5 +1,6 @@
 //! Capture sources as the host stores them (S12), the microphone permission an
-//! input source needs (S15), and which app quitting ends a session (S164).
+//! input source needs (S15), and the app a source depends on, whose quitting
+//! ends a session (S164).
 
 /// What the engine captures (S11).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -63,16 +64,21 @@ impl AudioSource {
         matches!(self, AudioSource::Input { .. })
     }
 
-    /// Whether the session capturing this source ends because an app quit
-    /// (S142, S164). `quitting_bundle_id` is the quitting app's bundle ID, if
-    /// it has one. Only an app source can end this way, and only through
-    /// its own app; the whole-system and input-device sources never do.
-    pub fn ends_when_app_quits(&self, quitting_bundle_id: Option<&str>) -> bool {
-        match (self, quitting_bundle_id) {
-            (AudioSource::App { bundle_id }, Some(quitting)) => {
-                !quitting.is_empty() && quitting == bundle_id
+    /// Whether this source lives only as long as the app whose bundle ID is
+    /// `app_bundle_id`, so that app quitting ends the session capturing it
+    /// (S164, S142). The host passes the bundle ID of the app that quit, if
+    /// it has one.
+    ///
+    /// Only an app source depends on an app, and only on its own: the IDs
+    /// must match exactly. The whole system and an input device outlive every
+    /// app, and a quit that comes without a bundle ID (or with an empty one)
+    /// can't be traced to any source.
+    pub fn depends_on_app(&self, app_bundle_id: Option<&str>) -> bool {
+        match self {
+            AudioSource::System | AudioSource::Input { .. } => false,
+            AudioSource::App { bundle_id } => {
+                app_bundle_id.is_some_and(|app| !app.is_empty() && app == bundle_id)
             }
-            _ => false,
         }
     }
 }
