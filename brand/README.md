@@ -41,6 +41,22 @@ Poppins font.
 | Off-white | `#F6F6F6` | "audio" on dark backgrounds |
 | Charcoal | `#292929` | "audio" on light backgrounds |
 
+## Design tokens
+
+`tokens.json` holds the colors (light and dark), the typeface, spacing and corner
+radii that the Mac app, the Windows app and the website share. Edit it, then run
+
+```bash
+python3 -I scripts/brand/tokens.py
+```
+
+which writes `Sources/AudioSync/BrandTokens.swift` (the Mac app's `Brand` constants
+read it), `windows/ui/tokens.slint` and `windows/src/tokens.rs` (the Windows app and
+its contrast test), and the CSS variables between the `tokens:begin` and
+`tokens:end` comments in `site/index.html`. CI runs it and fails when a generated
+file differs. The contrast pairs at the end of the file are the text colors on the
+backgrounds the Windows app draws them on; its tests fail below 4.5:1.
+
 ## Typeface
 
 The wordmark is set in [Poppins](https://github.com/itfoundry/Poppins) Medium with
@@ -58,6 +74,7 @@ menu bar icon is the mark as a template image, dimmed while streaming is off
 ```bash
 scripts/brand/build-brand.sh   # icons, wordmarks, SwiftUI mark, AppIcon.icns, site icons and wordmark
 scripts/brand/trace-mark.sh    # re-trace the mark from source/ (needs: brew install potrace)
+scripts/brand/windows-icons.sh # the Windows app and tray icons in windows/res/
 ```
 
 `build-brand.sh` writes `audiosync-icon*.svg`, `audiosync-wordmark*.svg`,

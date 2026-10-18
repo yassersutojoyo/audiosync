@@ -16,13 +16,17 @@ path = "src/main.rs"
 audiosync-core = { path = "../core" }
 # Used under the Slint Royalty-free Desktop, Mobile, and Web Applications
 # License 2.0, checked for the 1.18 line; see THIRD_PARTY_NOTICES.md.
-slint = "~1.18.1"
+# unstable-winit-030: the winit window behind a Slint window, to focus it and
+# to close the tray flyout when it loses focus. Pinned to the 1.18 line, like
+# Slint itself.
+slint = { version = "~1.18.1", features = ["unstable-winit-030"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Wdk_System_SystemServices",
     "Win32_Devices_FunctionDiscovery",
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_Media_Audio",
     "Win32_Media_KernelStreaming",
     "Win32_Media_Multimedia",
@@ -30,6 +34,7 @@ windows = { version = "0.62", features = [
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_Variant",
@@ -38,6 +43,8 @@ windows = { version = "0.62", features = [
 ] }
 # The code `#[implement]` generates for the COM callbacks names this crate.
 windows-core = "0.62"
+# The notification-area icon and its menu (MIT OR Apache-2.0).
+tray-icon = { version = "0.26.1", default-features = false }
 
 [build-dependencies]
 embed-resource = "3.0.12"

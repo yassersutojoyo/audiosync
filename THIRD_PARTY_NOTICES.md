@@ -145,6 +145,13 @@ the macOS app, and no Windows build has been released.
 | Component | License |
 |---|---|
 | [Slint](https://slint.dev) 1.18, © SixtyFPS GmbH (the user interface toolkit) | GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0; used under the Slint Royalty-free Desktop, Mobile, and Web Applications License 2.0 |
+| [tray-icon](https://github.com/tauri-apps/tray-icon) 0.26 and [muda](https://github.com/tauri-apps/muda) 0.21, © the Tauri Programme within The Commons Conservancy (the notification-area icon and its menu) | MIT OR Apache-2.0 |
+| [Poppins](https://github.com/itfoundry/Poppins) Medium, © 2020 The Poppins Project Authors (the wordmark typeface, compiled into the executable from `brand/fonts/`) | SIL Open Font License 1.1 |
+
+The icons inside the Windows app's controls come from Segoe Fluent Icons, the
+icon font Windows 11 ships; the app uses the installed font and doesn't bundle
+it. The app and tray icons in `windows/res/` are generated from AudioSync's own
+brand mark (`scripts/brand/windows-icons.sh`).
 
 That license asks for an attribution. The one AudioSync uses is the
 `AboutSlint` widget in the app's About dialog, which the top-level menu opens

@@ -1,22 +1,512 @@
-// The main window. Empty for now; the menu bar leads to the About dialog.
+// The main window: the same sections as the macOS app's main window, in the
+// same order. Header (mark, wordmark, status, streaming switch), notices,
+// then a left column (audio source, master volume, equalizer) and the
+// speaker list (This PC, Groups, Connected Speakers). The menu bar carries
+// the Windows shortcuts. Tab order follows the reading order.
+
+import { ComboBox, ScrollView, Switch } from "std-widgets.slint";
+import { Tokens } from "tokens.slint";
+import { Strings } from "strings.slint";
+import { GroupItem, NoticeItem, RowState, SpeakerItem } from "types.slint";
+import { BrandMark, Card, Divider, Glyph, Glyphs, GroupRow, NoticeStack, SecondaryText, SectionTitle, SpeakerRow, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
+export { EqualizerWindow } from "equalizer.slint";
+export { TrayFlyout } from "flyout.slint";
+export { GroupNameDialog } from "dialogs.slint";
+export { Strings } from "strings.slint";
+export { Availability, GroupItem, NoticeItem, RowState, SpeakerItem, SpeakerKind } from "types.slint";
+
+// A titled card of speaker rows, with a note when it has none.
+component SpeakerSection inherits VerticalLayout {
+    in property <string> title;
+    in property <[SpeakerItem]> speakers;
+    in property <string> note;
+    callback toggled(string);
+    callback volume-changed(string, float);
+    callback sync-toggled(string);
+    callback delay-stepped(string, int);
+    callback delay-edited(string, string);
+    callback auto-connect-toggled(string, bool);
+
+    spacing: 6px;
+    accessible-role: groupbox;
+    accessible-label: root.title;
+
+    SectionTitle {
+        text: root.title;
+    }
+
+    Card {
+        inner-padding: 4px;
+
+        for speaker[index] in root.speakers: VerticalLayout {
+            if index > 0: HorizontalLayout {
+                padding-left: 52px;
+                Divider { }
+            }
+
+            SpeakerRow {
+                item: speaker;
+                toggled => {
+                    root.toggled(speaker.id);
+                }
+                volume-changed(value) => {
+                    root.volume-changed(speaker.id, value);
+                }
+                sync-toggled => {
+                    root.sync-toggled(speaker.id);
+                }
+                delay-stepped(delta) => {
+                    root.delay-stepped(speaker.id, delta);
+                }
+                delay-edited(text) => {
+                    root.delay-edited(speaker.id, text);
+                }
+                auto-connect-toggled(on) => {
+                    root.auto-connect-toggled(speaker.id, on);
+                }
+            }
+        }
+
+        if root.note != "": VerticalLayout {
+            if root.speakers.length > 0: Divider { }
+
+            HorizontalLayout {
+                padding: 10px;
+                SecondaryText {
+                    text: root.note;
+                    font-size: Tokens.font-size-callout;
+                }
+            }
+        }
+    }
+}
+
+// The Equalizer card: opens the equalizer window and says whether it is on.
+component EqualizerCard inherits Rectangle {
+    in property <bool> on;
+    callback clicked();
+
+    background: Tokens.surface;
+    border-radius: Tokens.radius-card;
+    border-width: 1px;
+    border-color: touch.has-hover ? Tokens.teal : Tokens.separator;
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: Strings.equalizer;
+    accessible-value: root.on ? Strings.on : Strings.off;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding: Tokens.spacing-card-padding;
+        spacing: 10px;
+
+        Glyph {
+            glyph: Glyphs.equalizer;
+            color: Tokens.teal-text;
+            width: 20px;
+        }
+
+        Text {
+            text: Strings.equalizer;
+            color: Tokens.text;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            accessible-role: none;
+        }
+
+        if root.on: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: Tokens.teal;
+            }
+        }
+
+        Text {
+            text: root.on ? Strings.on : Strings.off;
+            color: Tokens.secondary-text;
+            font-size: Tokens.font-size-callout;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        Glyph {
+            glyph: Glyphs.chevron-right;
+            font-size: 10px;
+            color: Tokens.secondary-text;
+        }
+    }
+
+    Rectangle {
+        border-width: focus.has-focus ? 2px : 0px;
+        border-color: Tokens.focus;
+        border-radius: root.border-radius;
+    }
+}
 
 export component MainWindow inherits Window {
+    in property <bool> running;
+    in property <string> status;
+    in property <[string]> sources;
+    in property <int> source-index;
+    in property <float> master-volume;
+    in property <bool> equalizer-on;
+    in property <[SpeakerItem]> this-pc;
+    in property <[SpeakerItem]> connected;
+    in property <[GroupItem]> groups;
+    in property <[NoticeItem]> notices;
+    // Under Connected Speakers while no AirPlay speaker is listed.
+    in property <string> connected-note;
+
+    callback power-toggled(bool);
+    callback source-selected(int);
+    callback master-volume-changed(float);
+    callback equalizer-requested();
+    callback speaker-toggled(string);
+    callback speaker-volume-changed(string, float);
+    callback sync-toggled(string);
+    callback delay-stepped(string, int);
+    callback delay-edited(string, string);
+    callback auto-connect-toggled(string, bool);
+    callback group-toggled(string);
+    callback group-rename-requested(string);
+    callback group-deleted(string);
+    callback new-group-requested();
+    callback refresh-devices();
+    callback notice-dismissed(int);
+    callback notices-dismissed-all();
+    callback close-requested();
+    callback exit-requested();
     callback about-requested();
 
-    title: "AudioSync";
-    preferred-width: 640px;
-    preferred-height: 400px;
+    title: Strings.main-window-title;
+    icon: @image-url("../res/audiosync-256.png");
+    min-width: 720px;
+    min-height: 460px;
+    preferred-width: 900px;
+    preferred-height: 640px;
+    background: Tokens.background;
+    default-font-size: Tokens.font-size-body;
+
+    // Rust sets these; a user's click or drag replaces the controls' bindings.
+    changed running => {
+        power.checked = root.running;
+    }
+    changed source-index => {
+        source.current-index = root.source-index;
+    }
 
     MenuBar {
         Menu {
-            title: @tr("Help");
+            title: Strings.menu-file;
 
             MenuItem {
-                title: @tr("About AudioSync");
+                title: Strings.menu-close-window;
+                shortcut: @keys(Control + W);
+                activated => {
+                    root.close-requested();
+                }
+            }
+
+            MenuSeparator { }
+
+            MenuItem {
+                title: Strings.menu-exit;
+                activated => {
+                    root.exit-requested();
+                }
+            }
+        }
+
+        Menu {
+            title: Strings.menu-speakers;
+
+            MenuItem {
+                title: root.running ? Strings.menu-turn-streaming-off : Strings.menu-turn-streaming-on;
+                activated => {
+                    root.power-toggled(!root.running);
+                }
+            }
+
+            MenuSeparator { }
+
+            MenuItem {
+                title: Strings.new-group;
+                shortcut: @keys(Control + N);
+                activated => {
+                    root.new-group-requested();
+                }
+            }
+
+            MenuItem {
+                title: Strings.refresh-devices;
+                shortcut: @keys(F5);
+                activated => {
+                    root.refresh-devices();
+                }
+            }
+        }
+
+        Menu {
+            title: Strings.menu-view;
+
+            MenuItem {
+                title: Strings.equalizer;
+                shortcut: @keys(Control + E);
+                activated => {
+                    root.equalizer-requested();
+                }
+            }
+        }
+
+        Menu {
+            title: Strings.menu-help;
+
+            MenuItem {
+                title: Strings.menu-about;
                 activated => {
                     root.about-requested();
+                }
+            }
+        }
+    }
+
+    VerticalLayout {
+        padding-left: Tokens.spacing-window-margin;
+        padding-right: Tokens.spacing-window-margin;
+        padding-top: 12px;
+        padding-bottom: Tokens.spacing-window-margin;
+        spacing: 14px;
+
+        // Header
+        HorizontalLayout {
+            spacing: 12px;
+
+            BrandMark {
+                running: root.running;
+                width: 32px;
+                height: 32px;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+
+                Wordmark { }
+
+                SecondaryText {
+                    text: root.status;
+                    font-size: Tokens.font-size-callout;
+                    accessible-role: text;
+                    accessible-label: self.text;
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                power := Switch {
+                    text: Strings.streaming-switch;
+                    checked: root.running;
+                    accessible-label: Strings.streaming-switch;
+                    toggled => {
+                        root.power-toggled(self.checked);
+                    }
+                }
+            }
+        }
+
+        if root.notices.length > 0: NoticeStack {
+            notices: root.notices;
+            dismissed(id) => {
+                root.notice-dismissed(id);
+            }
+            dismissed-all => {
+                root.notices-dismissed-all();
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Tokens.spacing-column-gap;
+
+            // Left column
+            VerticalLayout {
+                width: 280px;
+                spacing: Tokens.spacing-card-gap;
+                alignment: start;
+
+                Card {
+                    VerticalLayout {
+                        spacing: 8px;
+
+                        SectionTitle {
+                            text: Strings.source-label;
+                        }
+
+                        source := ComboBox {
+                            model: root.sources;
+                            current-index: root.source-index;
+                            accessible-label: Strings.source-label;
+                            selected => {
+                                root.source-selected(self.current-index);
+                            }
+                        }
+                    }
+                }
+
+                Card {
+                    VerticalLayout {
+                        spacing: 8px;
+
+                        SectionTitle {
+                            text: Strings.master-volume-title;
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            Glyph {
+                                glyph: Glyphs.volume-low;
+                                font-size: 12px;
+                                color: Tokens.secondary-text;
+                            }
+
+                            VolumeSlider {
+                                volume: root.master-volume;
+                                label: Strings.master-volume;
+                                changed(value) => {
+                                    root.master-volume-changed(value);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                EqualizerCard {
+                    on: root.equalizer-on;
+                    clicked => {
+                        root.equalizer-requested();
+                    }
+                }
+            }
+
+            // Speakers: this PC first (few, stable rows), then groups, then
+            // every connected speaker by name.
+            scroll := ScrollView {
+                horizontal-stretch: 1;
+
+                speaker-list := VerticalLayout {
+                    spacing: Tokens.spacing-section-gap;
+                    padding-bottom: 4px;
+                    padding-right: 4px;
+
+                    SpeakerSection {
+                        title: Strings.this-pc-section;
+                        speakers: root.this-pc;
+                        note: root.this-pc.length == 0 ? Strings.this-pc-none : "";
+                        toggled(id) => {
+                            root.speaker-toggled(id);
+                        }
+                        volume-changed(id, value) => {
+                            root.speaker-volume-changed(id, value);
+                        }
+                        sync-toggled(id) => {
+                            root.sync-toggled(id);
+                        }
+                        delay-stepped(id, delta) => {
+                            root.delay-stepped(id, delta);
+                        }
+                        delay-edited(id, text) => {
+                            root.delay-edited(id, text);
+                        }
+                        auto-connect-toggled(id, on) => {
+                            root.auto-connect-toggled(id, on);
+                        }
+                    }
+
+                    if root.groups.length > 0: VerticalLayout {
+                        spacing: 6px;
+                        accessible-role: groupbox;
+                        accessible-label: Strings.groups;
+
+                        SectionTitle {
+                            text: Strings.groups;
+                        }
+
+                        Card {
+                            inner-padding: 4px;
+
+                            for group[index] in root.groups: VerticalLayout {
+                                if index > 0: HorizontalLayout {
+                                    padding-left: 52px;
+                                    Divider { }
+                                }
+
+                                GroupRow {
+                                    item: group;
+                                    toggled => {
+                                        root.group-toggled(group.id);
+                                    }
+                                    rename => {
+                                        root.group-rename-requested(group.id);
+                                    }
+                                    delete => {
+                                        root.group-deleted(group.id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    SpeakerSection {
+                        title: Strings.connected-section;
+                        speakers: root.connected;
+                        note: root.connected-note;
+                        toggled(id) => {
+                            root.speaker-toggled(id);
+                        }
+                        volume-changed(id, value) => {
+                            root.speaker-volume-changed(id, value);
+                        }
+                        sync-toggled(id) => {
+                            root.sync-toggled(id);
+                        }
+                        delay-stepped(id, delta) => {
+                            root.delay-stepped(id, delta);
+                        }
+                        delay-edited(id, text) => {
+                            root.delay-edited(id, text);
+                        }
+                        auto-connect-toggled(id, on) => {
+                            root.auto-connect-toggled(id, on);
+                        }
+                    }
                 }
             }
         }

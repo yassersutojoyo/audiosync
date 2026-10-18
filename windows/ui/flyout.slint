@@ -1,0 +1,241 @@
+// The tray flyout: what the macOS app's menu bar panel offers, opened by
+// clicking the AudioSync icon in the notification area. Streaming on and
+// off, the newest notice, the source, the master volume and every speaker
+// and group, then Open AudioSync and Exit. Escape or a click elsewhere
+// closes it.
+
+import { Button, ComboBox, ScrollView, Switch } from "std-widgets.slint";
+import { Tokens } from "tokens.slint";
+import { Strings } from "strings.slint";
+import { GroupItem, NoticeItem, RowState, SpeakerItem } from "types.slint";
+import { BrandMark, Divider, Glyphs, NoticeStack, SecondaryText, SectionTitle, SpeakerBadge, VolumeSlider, Wordmark } from "widgets.slint";
+
+// A compact row: the toggle and the name.
+component FlyoutRow inherits HorizontalLayout {
+    in property <string> glyph;
+    in property <string> name;
+    in property <string> label;
+    in property <string> description;
+    in property <RowState> state;
+    in property <bool> enabled: true;
+    callback toggled();
+
+    spacing: 10px;
+    padding-top: 3px;
+    padding-bottom: 3px;
+
+    SpeakerBadge {
+        size: 26px;
+        glyph: root.glyph;
+        state: root.state;
+        enabled: root.enabled;
+        label: root.label;
+        description: root.description;
+        toggled => {
+            root.toggled();
+        }
+    }
+
+    Text {
+        text: root.name;
+        color: Tokens.text;
+        font-weight: root.state == RowState.playing ? 600 : 400;
+        vertical-alignment: center;
+        overflow: elide;
+        horizontal-stretch: 1;
+        accessible-role: none;
+    }
+}
+
+export component TrayFlyout inherits Window {
+    in property <bool> running;
+    in property <string> status;
+    in property <[string]> sources;
+    in property <int> source-index;
+    in property <float> master-volume;
+    in property <[SpeakerItem]> speakers;
+    in property <[GroupItem]> groups;
+    in property <[NoticeItem]> notices;
+    callback power-toggled(bool);
+    callback source-selected(int);
+    callback master-volume-changed(float);
+    callback speaker-toggled(string);
+    callback group-toggled(string);
+    callback notice-dismissed(int);
+    callback open-app();
+    callback exit-app();
+    callback close-requested();
+
+    title: Strings.flyout-title;
+    no-frame: true;
+    always-on-top: true;
+    width: 320px;
+    background: Tokens.surface;
+    default-font-size: Tokens.font-size-body;
+
+    changed running => {
+        power.checked = root.running;
+    }
+    changed source-index => {
+        source.current-index = root.source-index;
+    }
+
+    // The window has no frame; draw its edge.
+    Rectangle {
+        border-width: 1px;
+        border-color: Tokens.separator;
+    }
+
+    focus := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.close-requested();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            padding: Tokens.spacing-panel-padding;
+            spacing: 10px;
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                BrandMark {
+                    running: root.running;
+                    width: 24px;
+                    height: 24px;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Wordmark {
+                        size: 15px;
+                    }
+
+                    SecondaryText {
+                        text: root.status;
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                power := Switch {
+                    checked: root.running;
+                    accessible-label: Strings.streaming-switch;
+                    toggled => {
+                        root.power-toggled(self.checked);
+                    }
+                }
+            }
+
+            if root.notices.length > 0: NoticeStack {
+                notices: root.notices;
+                limit: 1;
+                dismissed(id) => {
+                    root.notice-dismissed(id);
+                }
+                dismissed-all => {
+                    root.open-app();
+                }
+            }
+
+            if root.notices.length > 1: HorizontalLayout {
+                alignment: start;
+                Button {
+                    text: Strings.more-notices(root.notices.length - 1);
+                    accessible-label: self.text;
+                    clicked => {
+                        root.open-app();
+                    }
+                }
+            }
+
+            Divider { }
+
+            SectionTitle {
+                text: Strings.source-label;
+            }
+
+            source := ComboBox {
+                model: root.sources;
+                current-index: root.source-index;
+                accessible-label: Strings.source-label;
+                selected => {
+                    root.source-selected(self.current-index);
+                }
+            }
+
+            SectionTitle {
+                text: Strings.master-volume-title;
+            }
+
+            VolumeSlider {
+                volume: root.master-volume;
+                label: Strings.master-volume;
+                changed(value) => {
+                    root.master-volume-changed(value);
+                }
+            }
+
+            Divider { }
+
+            ScrollView {
+                max-height: 260px;
+                preferred-height: list.preferred-height;
+
+                list := VerticalLayout {
+                    for group in root.groups: FlyoutRow {
+                        glyph: Glyphs.group;
+                        name: group.name;
+                        label: group.name;
+                        description: Strings.group-members(group.available, group.total);
+                        state: group.state;
+                        enabled: group.available > 0;
+                        toggled => {
+                            root.group-toggled(group.id);
+                        }
+                    }
+
+                    for speaker in root.speakers: FlyoutRow {
+                        glyph: Glyphs.speaker(speaker.kind);
+                        name: speaker.name;
+                        label: Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind);
+                        description: Strings.help(speaker.state);
+                        state: speaker.state;
+                        toggled => {
+                            root.speaker-toggled(speaker.id);
+                        }
+                    }
+                }
+            }
+
+            Divider { }
+
+            HorizontalLayout {
+                spacing: 8px;
+
+                Button {
+                    text: Strings.open-app;
+                    primary: true;
+                    horizontal-stretch: 1;
+                    accessible-label: Strings.open-app;
+                    clicked => {
+                        root.open-app();
+                    }
+                }
+
+                Button {
+                    text: Strings.exit-short;
+                    accessible-label: Strings.exit-app;
+                    clicked => {
+                        root.exit-app();
+                    }
+                }
+            }
+        }
+    }
+}
