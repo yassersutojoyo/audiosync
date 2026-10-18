@@ -33,9 +33,12 @@ use crate::audio::render::RenderPipeline;
 /// settings that Windows would remember for AudioSync's session.
 const RENDER_FLAGS: u32 = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_NOPERSIST;
 
-/// How long the render loop waits for the device before it checks again, in
-/// ms.
-const WAIT_MS: u32 = 2_000;
+/// How long the render loop waits for the device before it checks that the
+/// stream still works, in ms. A working stream asks for audio every device
+/// period (about 10 ms). One that Windows invalidated (its device was
+/// unplugged or changed its format, or Windows audio restarted) may stop
+/// asking without a word; only a call on the stream then tells.
+const WAIT_MS: u32 = 500;
 
 /// How long the render loop waits for the device while fading out, in ms; a
 /// device that stops asking for audio then just stops.
@@ -235,10 +238,13 @@ fn prefill_silence(stream: &RenderStream) -> Result<(), BackendError> {
 ///
 /// After a stop request it renders a fade-out, then silence, until two whole
 /// buffers were written: everything still queued in the device is then
-/// silent, and the stream stops without a click.
+/// silent, and the stream stops without a click. A stream that no longer
+/// works has nothing to fade out, so it ends at once.
 ///
 /// Real-time: waits for the device's event, then fills the free part of the
-/// buffer. Never allocates, locks or logs.
+/// buffer. When the device hasn't asked for [`WAIT_MS`], it does the same:
+/// the padding call fails once Windows invalidated the stream, which ends the
+/// loop as lost. Never allocates, locks or logs.
 fn render_loop(stream: &RenderStream, pipeline: &mut RenderPipeline, stop: &Event) -> bool {
     let both = [stop.raw(), stream.event.raw()];
     let device_ready = WAIT_EVENT(WAIT_OBJECT_0.0 + 1);
@@ -254,13 +260,18 @@ fn render_loop(stream: &RenderStream, pipeline: &mut RenderPipeline, stop: &Even
         };
         match fading {
             None if wait == WAIT_OBJECT_0 => {
+                // A stream Windows invalidated may never ask for the
+                // fade-out, so it ends now rather than after FADE_WAIT_MS.
+                // SAFETY: a call on the stream this thread owns.
+                if unsafe { stream.client.GetCurrentPadding() }.is_err() {
+                    return true;
+                }
                 fading = Some((0, 0));
                 continue;
             }
-            None if wait == device_ready => {}
+            None if wait == device_ready || wait == WAIT_TIMEOUT => {}
             Some(_) if wait == WAIT_OBJECT_0 => {}
             Some(_) if wait == WAIT_TIMEOUT => return false,
-            None if wait == WAIT_TIMEOUT => continue,
             _ => return true,
         }
         // SAFETY: calls on the stream this thread owns.

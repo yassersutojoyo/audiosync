@@ -7,6 +7,12 @@
 //! parent: for the decisions made here, seeing a relationship that isn't
 //! there only makes AudioSync refuse a capture it could have made, never
 //! capture itself.
+//!
+//! Whether Windows makes the same check when process loopback walks a tree
+//! isn't documented. So [`ProcessTable::in_recorded_tree`] follows every
+//! recorded parent ID, reused or not, for the decision where a relationship
+//! that Windows might see must count: whether AudioSync is inside an app's
+//! tree.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -102,6 +108,26 @@ impl ProcessTable {
     /// Whether `pid` is `root` or one of its descendants.
     pub fn in_tree(&self, pid: u32, root: u32) -> bool {
         pid == root || self.ancestors(pid).contains(&root)
+    }
+
+    /// Whether `pid` is `root`, or `root` is reached by following the
+    /// recorded parent IDs up from `pid`, whatever the creation times say.
+    /// It finds every relationship [`ProcessTable::in_tree`] finds, and also
+    /// those through a parent ID that a later process reused. The walk stops
+    /// at a process missing from the snapshot and at a loop.
+    pub fn in_recorded_tree(&self, pid: u32, root: u32) -> bool {
+        let mut seen = BTreeSet::new();
+        let mut current = pid;
+        while seen.insert(current) {
+            if current == root {
+                return true;
+            }
+            match self.entries.get(&current) {
+                Some(entry) => current = entry.parent_pid,
+                None => return false,
+            }
+        }
+        false
     }
 
     /// The top process of the app `pid` belongs to: the walk goes up while
@@ -218,6 +244,48 @@ pub(crate) mod tests {
         assert!(table.in_tree(401, 300));
         assert!(!table.in_tree(300, 400));
         assert!(!table.in_tree(200, 300));
+    }
+
+    #[test]
+    fn a_recorded_tree_also_follows_reused_parent_ids() {
+        // AudioSync (400) was started by 300, which exited; a later app got
+        // its ID.
+        let table = ProcessTable::new([
+            entry(100, 90, Some(10), "explorer.exe"),
+            entry(300, 100, Some(50), "player.exe"),
+            entry(400, 300, Some(40), "audiosync.exe"),
+        ]);
+        assert!(!table.in_tree(400, 300));
+        assert!(table.in_recorded_tree(400, 300));
+        assert!(table.in_recorded_tree(400, 100));
+        assert!(table.in_recorded_tree(400, 400));
+        assert!(!table.in_recorded_tree(300, 400));
+    }
+
+    #[test]
+    fn a_recorded_tree_holds_every_tree_relationship() {
+        let table = desktop();
+        for (pid, root) in [(200, 200), (202, 200), (401, 300), (401, 100)] {
+            assert!(table.in_tree(pid, root));
+            assert!(table.in_recorded_tree(pid, root), "{pid} in {root}");
+        }
+        assert!(!table.in_recorded_tree(300, 400));
+        assert!(!table.in_recorded_tree(200, 300));
+    }
+
+    #[test]
+    fn a_recorded_tree_walk_ends_at_a_loop_or_a_missing_process() {
+        let table = ProcessTable::new([
+            entry(10, 20, None, "a.exe"),
+            entry(20, 30, None, "b.exe"),
+            entry(30, 10, None, "c.exe"),
+            entry(40, 40, None, "d.exe"),
+        ]);
+        assert!(table.in_recorded_tree(10, 30));
+        assert!(!table.in_recorded_tree(10, 99));
+        assert!(!table.in_recorded_tree(40, 10));
+        assert!(!table.in_recorded_tree(9999, 10));
+        assert!(table.in_recorded_tree(9999, 9999));
     }
 
     #[test]

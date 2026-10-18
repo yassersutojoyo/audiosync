@@ -27,7 +27,8 @@ pub enum SourceId {
 pub struct SourceInfo {
     /// What to pass to [`AudioBackend::start`].
     pub id: SourceId,
-    /// The name to show.
+    /// The app's name, from its executable. For [`SourceId::WholeSystem`] it
+    /// is an English fallback: the UI shows its own, translated label.
     pub name: String,
     /// The app's executable file name, such as `spotify.exe`. It stays the
     /// same when the app restarts (its process ID doesn't), so the UI can
@@ -90,13 +91,15 @@ pub enum StopReason {
     CaptureFailed(BackendError),
 }
 
-/// Why something failed.
+/// Why something failed. The UI words each variant in its own, translated
+/// text; [`fmt::Display`] gives English for logs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BackendError {
     /// The chosen app is AudioSync itself, or a process AudioSync started.
     OwnProcess,
     /// AudioSync runs inside the chosen app's process tree (that app started
-    /// it), so capturing the tree would capture AudioSync's own output too.
+    /// it), or may as Windows sees it, so capturing the tree could capture
+    /// AudioSync's own output too.
     ContainsAudioSync,
     /// The chosen app is no longer running.
     SourceGone,
@@ -117,13 +120,15 @@ pub enum BackendError {
     Unsupported,
 }
 
+/// A sentence in English for logs and diagnostics. It isn't shown to the
+/// user as it is: the UI's text is translated.
 impl fmt::Display for BackendError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BackendError::OwnProcess => f.write_str("AudioSync can't capture its own sound."),
             BackendError::ContainsAudioSync => f.write_str(
-                "This app started AudioSync, so capturing it would capture AudioSync too. \
-                 Pick All System Audio instead.",
+                "AudioSync may run inside this app's process tree, so capturing the app \
+                 could capture AudioSync too.",
             ),
             BackendError::SourceGone => f.write_str("The app isn't running anymore."),
             BackendError::NotAnApp => f.write_str("That process isn't an app."),
@@ -210,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn every_error_has_a_sentence_for_the_user() {
+    fn every_error_reads_as_a_sentence_in_the_log() {
         let errors = [
             BackendError::OwnProcess,
             BackendError::ContainsAudioSync,

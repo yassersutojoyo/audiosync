@@ -6,8 +6,9 @@
 //! and one renderer per playing output, each reading the ring through its own
 //! delay reader. Outputs are added and removed by the core's output sync
 //! (spec S117, S161), keyed by endpoint ID. An output whose device goes away
-//! stops by itself and stays on; it plays again once the device is listed
-//! (S68). An output that can't start is turned off and reported (S69).
+//! stops, whether its stream notices or the device list no longer shows the
+//! device, and stays on; it plays again once the device is listed (S68). An
+//! output that can't start is turned off and reported (S69).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -113,10 +114,11 @@ struct Playing<R> {
 pub struct Controller<D: Driver> {
     driver: D,
     policy: OutputPolicy,
-    /// The connected endpoints, sorted by ID, as last listed.
+    /// The connected endpoints, sorted by ID, as last listed successfully.
     present: Vec<Endpoint>,
-    /// Whether the endpoints were listed at least once.
-    listed: bool,
+    /// Whether the last listing worked: false before the first one and after
+    /// a failed one, so the next refresh lists again.
+    listing_ok: bool,
     session: Option<Session<D>>,
     /// Events for the next poll.
     pending: Vec<BackendEvent>,
@@ -129,7 +131,7 @@ impl<D: Driver> Controller<D> {
             driver,
             policy: OutputPolicy::new(AirPlay::Unavailable),
             present: Vec::new(),
-            listed: false,
+            listing_ok: false,
             session: None,
             pending: Vec::new(),
         }
@@ -174,27 +176,30 @@ impl<D: Driver> Controller<D> {
     }
 
     /// Lists the connected endpoints again. Returns whether the list changed,
-    /// and the error when listing failed (the list is then empty, so nothing
-    /// is added until listing works again).
+    /// and the error when listing failed. A failed listing keeps the last
+    /// list, and the next refresh lists again.
     fn refresh_outputs(&mut self) -> (bool, Result<(), BackendError>) {
-        let (mut listed, result) = match self.driver.outputs() {
-            Ok(listed) => (listed, Ok(())),
-            Err(error) => (Vec::new(), Err(error)),
+        let mut listed = match self.driver.outputs() {
+            Ok(listed) => listed,
+            Err(error) => {
+                self.listing_ok = false;
+                return (false, Err(error));
+            }
         };
         listed.sort_by(|a, b| a.id.cmp(&b.id));
         listed.dedup_by(|a, b| a.id == b.id);
         let changed = listed != self.present;
         self.present = listed;
-        self.listed = true;
-        (changed, result)
+        self.listing_ok = true;
+        (changed, Ok(()))
     }
 
     /// Lists the endpoints again when the driver says they may have changed,
-    /// when `force` is set or when they were never listed, and queues
-    /// [`BackendEvent::OutputsChanged`] when the list differs.
+    /// when `force` is set, or when the last listing failed or never ran, and
+    /// queues [`BackendEvent::OutputsChanged`] when the list differs.
     fn refresh_if_needed(&mut self, force: bool) {
         let notified = self.driver.outputs_changed();
-        if force || notified || !self.listed {
+        if force || notified || !self.listing_ok {
             let (changed, _) = self.refresh_outputs();
             if changed && !self.pending.contains(&BackendEvent::OutputsChanged) {
                 self.pending.push(BackendEvent::OutputsChanged);
@@ -253,6 +258,32 @@ impl<D: Driver> Controller<D> {
             }
         }
         failures
+    }
+
+    /// Stops the playing outputs whose device the last successful listing
+    /// doesn't show, and returns their IDs. A stream may not notice that its
+    /// device went away (Windows can stop signalling it without a word), but
+    /// the device list does (S68).
+    fn stop_unlisted_outputs(&mut self) -> Vec<String> {
+        let Some(session) = self.session.as_mut() else {
+            return Vec::new();
+        };
+        let present = &self.present;
+        let unlisted: Vec<String> = session
+            .outputs
+            .keys()
+            .filter(|id| !present.iter().any(|endpoint| endpoint.id == **id))
+            .cloned()
+            .collect();
+        let mut stopped: Vec<Playing<D::Renderer>> = unlisted
+            .iter()
+            .filter_map(|id| session.outputs.remove(id))
+            .collect();
+        for playing in &mut stopped {
+            playing.handle.request_stop();
+        }
+        drop(stopped);
+        unlisted
     }
 
     fn report_failures(&mut self, failures: Vec<(String, BackendError)>) {
@@ -461,10 +492,13 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // A stopped output may mean a device went away before its
         // notification arrived, so the list is read again then too.
         self.refresh_if_needed(!ended.is_empty());
+        // An output whose device is no longer listed is lost too, whether or
+        // not its stream noticed.
+        ended.extend(self.stop_unlisted_outputs());
         let failures = self.sync_outputs();
         for id in ended {
             // An output whose device is still there plays again at once
-            // (after a format change, say); one that doesn't is lost.
+            // (after a format change, say); one that isn't is lost.
             if !self.is_playing(&id) && !failures.iter().any(|(failed, _)| *failed == id) {
                 self.pending.push(BackendEvent::OutputLost { id });
             }
@@ -670,6 +704,96 @@ mod tests {
             backend.playing_params(HEADPHONES).unwrap().delay_frames,
             14_400
         );
+    }
+
+    #[test]
+    fn an_unplugged_output_whose_stream_never_notices_is_lost_and_comes_back() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+
+        // Its renderer never ends by itself: the device list tells.
+        backend.disconnect_output_unnoticed(HEADPHONES);
+        let events = backend.poll();
+        assert!(events.contains(&BackendEvent::OutputLost {
+            id: HEADPHONES.to_owned(),
+        }));
+        assert!(events.contains(&BackendEvent::OutputsChanged));
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        assert_eq!(
+            backend.driver().renderers_faded(),
+            1,
+            "its renderer stopped"
+        );
+        assert!(backend.policy().settings(HEADPHONES).enabled, "it stays on");
+        assert!(backend.poll().is_empty(), "reported once");
+
+        backend.connect_output(HEADPHONES, "Headphones");
+        assert_eq!(backend.poll(), [BackendEvent::OutputsChanged]);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES],
+            "started again"
+        );
+    }
+
+    #[test]
+    fn an_output_the_ui_saw_disappear_is_lost_at_the_next_poll() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.disconnect_output_unnoticed(HEADPHONES);
+        let outputs = backend.list_outputs().unwrap();
+        assert!(outputs.iter().all(|output| output.id != HEADPHONES));
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputLost {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+        assert_eq!(playing(&backend), [SPEAKERS]);
+    }
+
+    fn listing_error() -> BackendError {
+        BackendError::System {
+            call: "IMMDeviceEnumerator::EnumAudioEndpoints",
+            code: 0x8000_4005_u32 as i32,
+        }
+    }
+
+    #[test]
+    fn a_failed_listing_is_tried_again_without_a_device_change() {
+        let mut backend = MockBackend::empty();
+        backend.connect_output(SPEAKERS, "Speakers");
+        backend.set_output_enabled(SPEAKERS, true).unwrap();
+        backend.fail_listing(Some(listing_error()));
+        assert_eq!(backend.list_outputs(), Err(listing_error()));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(playing(&backend).is_empty(), "nothing listed yet");
+
+        // Listing works again, and no device changed since.
+        backend.fail_listing(None);
+        assert_eq!(backend.poll(), [BackendEvent::OutputsChanged]);
+        assert_eq!(playing(&backend), [SPEAKERS]);
+    }
+
+    #[test]
+    fn a_failed_listing_keeps_the_last_list_and_the_outputs_that_play() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_listing(Some(listing_error()));
+        backend.set_default_output(SPEAKERS);
+        assert!(backend.poll().is_empty());
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+
+        backend.fail_listing(None);
+        assert_eq!(backend.poll(), [BackendEvent::OutputsChanged]);
+        let outputs = backend.list_outputs().unwrap();
+        assert!(
+            outputs
+                .iter()
+                .any(|output| output.id == SPEAKERS && output.is_default)
+        );
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
     #[test]

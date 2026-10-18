@@ -50,9 +50,12 @@ use crate::audio::outputs::CAPTURE_BUFFER_HNS;
 /// How long a capture waits for its activation to complete, in ms.
 const ACTIVATION_TIMEOUT_MS: u32 = 5_000;
 
-/// How long the capture loop waits for a packet before it checks again, in
-/// ms. A process tree that plays nothing may deliver nothing.
-const WAIT_MS: u32 = 2_000;
+/// How long the capture loop waits for a packet before it checks that the
+/// stream still works, in ms. A process tree that plays nothing may deliver
+/// nothing, and a stream that Windows invalidated (when Windows audio
+/// restarts, say) may stop signalling without a word; only a call on the
+/// stream then tells.
+const WAIT_MS: u32 = 500;
 
 /// A running process loopback capture.
 pub struct LoopbackCapture {
@@ -67,12 +70,13 @@ pub struct LoopbackCapture {
 
 impl CaptureHandle for LoopbackCapture {
     fn state(&self) -> CaptureState {
+        // An app that quit comes first: its stream may fail because of it.
+        if self.source.as_ref().is_some_and(ProcessWatch::has_exited) {
+            return CaptureState::SourceQuit;
+        }
         if self.ended.load(Ordering::Acquire) {
             let code = HRESULT(self.failure.load(Ordering::Relaxed));
             return CaptureState::Failed(device_code_error("process loopback capture", code));
-        }
-        if self.source.as_ref().is_some_and(ProcessWatch::has_exited) {
-            return CaptureState::SourceQuit;
         }
         CaptureState::Running
     }
@@ -328,8 +332,9 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for ActivationDone_Impl {
 /// Captures until `stop` is set (`Ok`) or a call fails (its HRESULT).
 ///
 /// Real-time: waits for Windows' packet event, then reads every packet and
-/// hands it to the converter. Never allocates, locks or logs; it leaves on
-/// the first error.
+/// hands it to the converter. When no packet came for [`WAIT_MS`], it does
+/// the same: the packet size call fails once Windows invalidated the stream.
+/// Never allocates, locks or logs; it leaves on the first error.
 fn capture_loop(
     stream: &CaptureStream,
     converter: &mut CaptureConverter,
@@ -344,10 +349,7 @@ fn capture_loop(
         if wait == WAIT_OBJECT_0 {
             return Ok(());
         }
-        if wait == WAIT_TIMEOUT {
-            continue;
-        }
-        if wait != packet_ready {
+        if wait != packet_ready && wait != WAIT_TIMEOUT {
             return Err(E_FAIL);
         }
         loop {
