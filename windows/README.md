@@ -11,8 +11,9 @@ one app, or everything the PC plays except AudioSync itself, and plays it on
 the outputs you turn on, each at its own delay and volume, through the
 equalizer. There's no AirPlay on Windows yet, and nothing is saved: the
 speakers you turned on, their delays and volumes, groups and the equalizer
-start over at every launch. It hasn't been tried on real Windows hardware yet;
-CI builds and tests it. [docs/WINDOWS_UI.md](../docs/WINDOWS_UI.md) maps each
+start over at every launch. So far it has only been started on one Windows 11
+PC, with nothing playing, and nobody has listened to it there yet; CI builds and
+tests it. [docs/WINDOWS_UI.md](../docs/WINDOWS_UI.md) maps each
 part of the Mac main window to its Windows counterpart and lists the keyboard
 shortcuts.
 
