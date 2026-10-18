@@ -102,7 +102,12 @@ cargo check --target aarch64-pc-windows-msvc
 
 CI (`.github/workflows/windows.yml`) checks formatting, runs clippy and the
 tests, builds both architectures in release mode and keeps each
-`audiosync.exe` as a workflow artifact. It doesn't publish anything.
+`audiosync.exe` as a workflow artifact for a week, next to the
+`THIRD-PARTY-NOTICES.txt` that `scripts/windows_notices.py` writes for that
+build. It doesn't publish anything. To write the notices yourself (any OS,
+for either target): `python3 -I scripts/windows_notices.py
+x86_64-pc-windows-msvc`; the file lands next to `audiosync.exe` in
+`windows/target/<target>/release/`.
 
 ## License
 
