@@ -4,17 +4,31 @@
  *
  * Audio crosses this interface one whole buffer at a time: a pointer to
  * interleaved stereo float32 frames (L, R) plus a frame count, never one
- * sample per call. The audio-path calls, asc_eq_process and asc_apply_gain,
- * never allocate, lock, wait or make a system call.
+ * sample per call. The core owns no thread, device, file or pipe: the host
+ * captures, plays, opens the pipe and runs every thread, and calls in here.
  *
- * Threading of an equalizer handle: asc_eq_process runs on one capture thread
- * at a time; every other asc_eq_* call on the handle runs on one control
- * thread at a time (the two may run concurrently); asc_eq_destroy runs once no
- * other call on the handle can run. All other functions are thread-safe.
+ * Real-time calls (marked "Real-time safe") never allocate, free, lock, wait,
+ * log or make a system call, and never panic: bad arguments make them do
+ * nothing or saturate.
  *
- * Every pointer argument may be NULL, which makes the call do nothing (or
- * return false, 0 or NULL). A buffer argument otherwise points to the stated
- * number of aligned, valid elements that nothing else touches during the call.
+ * Threads. Each handle lists which thread runs which call:
+ * - an audio call (capture thread, output thread or FIFO writer thread) runs
+ *   on one thread at a time per handle;
+ * - a control call runs on one control thread at a time per handle, and may
+ *   run while that handle's audio call runs;
+ * - an "any thread" call is a lock-free atomic operation and may run anywhere,
+ *   at any time, while the handle lives;
+ * - a destroy call runs once no other call on that handle can run.
+ * Handles that share audio (a ring and its writer and readers, a FIFO feed
+ * and its writer) are reference-counted inside, so they may be destroyed in
+ * any order. Functions without a handle are thread-safe.
+ *
+ * Pointers. A handle argument may be NULL, which makes the call do nothing
+ * and return false, 0, NULL or an all-zero struct, unless its comment says
+ * otherwise. A buffer argument points to the stated number of aligned, valid
+ * elements that nothing else touches during the call, and the buffers of one
+ * call don't overlap. A buffer may be NULL when that number is 0, and a NULL
+ * buffer with a nonzero count makes the call do nothing.
  *
  * This header is written by hand; a test in core/src/ffi.rs fails when it no
  * longer matches the Rust definitions.
@@ -40,6 +54,43 @@ extern "C" {
 /* Number of equalizer presets. */
 #define ASC_EQ_PRESETS 12
 
+/* The ring's safety margin M in frames: no ring holds fewer than twice this. */
+#define ASC_RING_MARGIN_FRAMES 8192
+
+/* Smallest ring capacity in frames (twice the margin). */
+#define ASC_RING_MIN_FRAMES 16384
+
+/* Largest ring capacity in frames: 24 s at 384 kHz. */
+#define ASC_RING_MAX_FRAMES 9216000
+
+/* How a read re-positioned its reader (AscReadReport.correction). */
+#define ASC_CORRECTION_NONE 0         /* the block follows the previous one */
+#define ASC_CORRECTION_PRIME 1        /* first anchor, or the first after a prime reset */
+#define ASC_CORRECTION_RESYNC 2       /* a requested resync, e.g. a delay change */
+#define ASC_CORRECTION_SKIP_FORWARD 3 /* behind by more than the tolerance */
+#define ASC_CORRECTION_OVERRUN 4      /* the frames it needed were overwritten */
+#define ASC_CORRECTION_STEP_BACK 5    /* ahead by more than the tolerance */
+
+/* The pipe's format: 48 kHz, signed 16-bit little-endian stereo, 4 bytes a frame. */
+#define ASC_PIPE_RATE 48000
+#define ASC_PIPE_FRAME_BYTES 4
+
+/* The most bytes one write callback is offered: the smallest PIPE_BUF POSIX allows. */
+#define ASC_PIPE_WRITE_MAX_BYTES 512
+
+/* The usual FIFO queue length in seconds. */
+#define ASC_FIFO_DEFAULT_QUEUE_SECONDS 4
+
+/* What a pipe callback reports (AscPipeOpenFn, AscPipeWriteFn). */
+#define ASC_PIPE_OK 0          /* opened, or wrote *written bytes */
+#define ASC_PIPE_NO_READER 1   /* open: no process reads the FIFO yet (ENXIO) */
+#define ASC_PIPE_INTERRUPTED 2 /* open or write: interrupted by a signal (EINTR) */
+#define ASC_PIPE_WOULD_BLOCK 3 /* write: the pipe is full (EAGAIN) */
+#define ASC_PIPE_BROKEN 4      /* write: the reader went away (EPIPE) */
+#define ASC_PIPE_FAILED 5      /* open or write: any other error */
+
+/* ---- Version and volume ------------------------------------------------- */
+
 /* The crate version, for example "0.1.0" (static string, never freed). */
 const char *asc_version(void);
 
@@ -52,12 +103,17 @@ double asc_volume_gain(double position);
 /* Volume slider position of a linear gain 0...1: 100 * cbrt(g), clamped. */
 double asc_volume_position(double gain);
 
+/* A local output's linear gain: asc_volume_gain(local) * asc_volume_gain(master). */
+double asc_output_gain(double local_position, double master_position);
+
 /*
  * Multiplies frames x 2 interleaved samples by gain, in place. Gain 0 (or a
  * negative or non-finite gain) gives exact zeros; any NaN or infinity in the
  * result becomes 0. Real-time safe.
  */
 void asc_apply_gain(float *interleaved, size_t frames, float gain);
+
+/* ---- Equalizer ---------------------------------------------------------- */
 
 /* Number of equalizer bands (ASC_EQ_BANDS). */
 size_t asc_eq_band_count(void);
@@ -74,7 +130,10 @@ const char *asc_eq_preset_id(size_t preset);
 /* Writes a preset's ASC_EQ_BANDS band gains (dB) to gains_db; false for a bad index. */
 bool asc_eq_preset_gains(size_t preset, double *gains_db);
 
-/* An equalizer instance; create, use and destroy it through the calls below. */
+/*
+ * An equalizer. asc_eq_process runs on the capture thread; every other
+ * asc_eq_* call is a control call.
+ */
 typedef struct AscEqualizer AscEqualizer;
 
 /*
@@ -105,6 +164,405 @@ void asc_eq_process(AscEqualizer *eq, float *interleaved, size_t frames);
 
 /* Control thread: how often a channel produced NaN or infinity and was reset. */
 uint64_t asc_eq_nan_resets(const AscEqualizer *eq);
+
+/* ---- Delay ring, writer and readers ------------------------------------- */
+
+/*
+ * The shared delay ring: interleaved stereo float32 frames at the capture
+ * rate, written by one writer and read by any number of readers, each at its
+ * own delay. Its query calls run on any thread.
+ */
+typedef struct AscRing AscRing;
+
+/*
+ * The ring's single writer. asc_ring_write runs on the capture thread;
+ * asc_ring_writer_reset runs on the control thread while capture is stopped.
+ */
+typedef struct AscRingWriter AscRingWriter;
+
+/*
+ * A delay reader bound to one ring, one per local output. The read calls run
+ * on that output's IO thread; every other asc_reader_* call runs on any thread.
+ */
+typedef struct AscReader AscReader;
+
+/* What one read did. */
+typedef struct AscReadReport {
+    size_t frames;       /* frames written to dst */
+    int64_t written;     /* frames written to the ring when the read started (W) */
+    int64_t delay;       /* the effective delay applied, in frames */
+    int64_t error;       /* how far behind (positive) or ahead (negative) the reader was */
+    int64_t start;       /* ring index of the block's first frame */
+    int64_t lag;         /* the published lag: W minus the next frame to read */
+    int32_t correction;  /* an ASC_CORRECTION_* code */
+    size_t masked;       /* leading frames of silence: already played, gone, or before the stream */
+    size_t copied;       /* frames copied from the ring */
+    size_t starved;      /* trailing frames of silence: the ring had nothing newer */
+    bool rejected;       /* the writer overtook the copy, which became silence */
+} AscReadReport;
+
+/* A reader's diagnostic counters: monotonic, read without blocking the reader. */
+typedef struct AscReaderCounters {
+    uint64_t primes;                /* anchors because the reader was not anchored */
+    uint64_t resyncs;               /* anchors that applied a requested resync */
+    uint64_t drift_skips;           /* skip-forward corrections (behind, or overrun) */
+    uint64_t drift_skip_frames;     /* frames those corrections skipped */
+    uint64_t drift_silences;        /* step-back corrections (ahead) */
+    uint64_t drift_silence_frames;  /* frames of silence those corrections inserted */
+    uint64_t starved_renders;       /* reads that reached the newest frame before the block was full */
+    uint64_t starved_frames;        /* frames of silence those reads ended with */
+    uint64_t rejected_copies;       /* copies the writer overtook */
+} AscReaderCounters;
+
+/* Ring capacity in frames for 24 s at capture rate `rate`; 0 outside 8000...384000 Hz. */
+size_t asc_ring_capacity_for_rate(uint32_t rate);
+
+/*
+ * Creates an empty ring of capacity_frames frames. Returns NULL outside
+ * ASC_RING_MIN_FRAMES...ASC_RING_MAX_FRAMES.
+ */
+AscRing *asc_ring_create(size_t capacity_frames);
+
+/* Destroys a ring handle; its writer and readers keep the frames alive. */
+void asc_ring_destroy(AscRing *ring);
+
+/* The capacity in frames. */
+size_t asc_ring_capacity(const AscRing *ring);
+
+/* Whether the ring holds 24 s at capture rate `rate`, which also lies in 8000...384000 Hz. */
+bool asc_ring_supports_rate(const AscRing *ring, uint32_t rate);
+
+/* Any thread: frames written since the last reset (the session's frames captured). */
+uint64_t asc_ring_frames_written(const AscRing *ring);
+
+/* Takes the ring's only writer; NULL while another writer exists. */
+AscRingWriter *asc_ring_writer_create(AscRing *ring);
+
+/* Destroys the writer, so the ring can hand out a new one. */
+void asc_ring_writer_destroy(AscRingWriter *writer);
+
+/*
+ * Capture thread: appends `frames` stereo frames. Any count is accepted; once
+ * the ring is full the oldest frames are overwritten, and a write larger than
+ * the ring keeps only its last frames. Never waits for readers. Real-time safe.
+ */
+void asc_ring_write(AscRingWriter *writer, const float *interleaved, size_t frames);
+
+/*
+ * Control thread, at a session start: makes all history unreadable and
+ * restarts the frame count at 0. Call it only while no capture callback runs
+ * and no reader of the ring exists.
+ */
+void asc_ring_writer_reset(AscRingWriter *writer);
+
+/*
+ * Creates a reader of `ring` for a session captured at capture_rate (Hz). Its
+ * delay starts at 0 (one block) and its drift tolerance at 35 ms; it anchors
+ * on its first read. Returns NULL outside 8000...384000 Hz.
+ */
+AscReader *asc_reader_create(AscRing *ring, uint32_t capture_rate);
+
+/* Destroys a reader. */
+void asc_reader_destroy(AscReader *reader);
+
+/*
+ * Output thread: fills dst with exactly `frames` stereo frames, read at the
+ * delay set by asc_reader_set_delay_frames. Steady state plays every frame
+ * once, in order; a delay change is exact; drift is corrected outside the
+ * tolerance; silence fills what the ring can't give, and no frame plays twice
+ * (until a prime reset). report may be NULL. Real-time safe.
+ */
+void asc_reader_read(AscReader *reader, float *dst, size_t frames, AscReadReport *report);
+
+/*
+ * Output thread: as asc_reader_read, at delay_frames with tolerance_frames
+ * given by the caller instead of the stored ones. Real-time safe.
+ */
+void asc_reader_read_at(AscReader *reader, float *dst, size_t frames, int64_t delay_frames,
+                        int64_t tolerance_frames, AscReadReport *report);
+
+/* Any thread: sets the target delay in frames (negative counts as 0) and requests a resync. */
+void asc_reader_set_delay_frames(AscReader *reader, int64_t frames);
+
+/* Any thread: the target delay in frames. */
+int64_t asc_reader_delay_frames(const AscReader *reader);
+
+/* Any thread: sets the drift tolerance in frames (negative counts as 0). */
+void asc_reader_set_tolerance_frames(AscReader *reader, int64_t frames);
+
+/* Any thread: the drift tolerance in frames. */
+int64_t asc_reader_tolerance_frames(const AscReader *reader);
+
+/* Any thread: asks the next read to re-anchor at the target delay. */
+void asc_reader_request_resync(AscReader *reader);
+
+/*
+ * Any thread: asks the next read to start over like a new reader (it anchors
+ * and counts a prime); the counters are kept.
+ */
+void asc_reader_reset_prime(AscReader *reader);
+
+/* Any thread: the lag published by the last read, in frames (delay minus one block when steady). */
+int64_t asc_reader_lag_frames(const AscReader *reader);
+
+/* Any thread: a snapshot of the counters; fields may come from different reads. */
+AscReaderCounters asc_reader_counters(const AscReader *reader);
+
+/* ---- Rate conversion and the output stage ------------------------------- */
+
+/*
+ * A streaming stereo resampler that carries its phase across blocks, e.g.
+ * from the capture rate to an output device's rate. All calls on one
+ * resampler run on one thread at a time.
+ */
+typedef struct AscResampler AscResampler;
+
+/* What one asc_resampler_process call consumed and produced. */
+typedef struct AscResampleCount {
+    size_t input_frames;   /* input frames consumed */
+    size_t output_frames;  /* output frames produced */
+} AscResampleCount;
+
+/*
+ * The output stage of one local output: channel mapping and gain. The gain
+ * calls run on any thread; the apply and render calls run on the output thread.
+ */
+typedef struct AscGainStage AscGainStage;
+
+/*
+ * Creates a resampler; NULL unless both rates lie in 8000...384000 Hz. Equal
+ * rates pass samples through unchanged.
+ */
+AscResampler *asc_resampler_create(uint32_t input_rate, uint32_t output_rate);
+
+/* Destroys a resampler. */
+void asc_resampler_destroy(AscResampler *resampler);
+
+/* Changes the input rate and starts a new stream; false for an unsupported rate. Never allocates. */
+bool asc_resampler_set_input_rate(AscResampler *resampler, uint32_t input_rate);
+
+/* Starts a new stream: clears the history and the phase. */
+void asc_resampler_reset(AscResampler *resampler);
+
+/* The content delay in input frames (0 when passing through). */
+size_t asc_resampler_latency_frames(const AscResampler *resampler);
+
+/*
+ * Input frames still needed before the next output_frames output frames can
+ * be produced, so a reader request can be sized from the converter's needs.
+ */
+size_t asc_resampler_input_frames_for(const AscResampler *resampler, size_t output_frames);
+
+/*
+ * Converts input_frames stereo frames into at most output_frames stereo
+ * frames. Consumes input until it runs out or the output is full; call again
+ * with the rest. Non-finite input becomes silence and clears the history.
+ * Real-time safe.
+ */
+AscResampleCount asc_resampler_process(AscResampler *resampler, const float *input, size_t input_frames,
+                                       float *output, size_t output_frames);
+
+/* Creates an output stage at linear gain `gain` (negative or non-finite counts as 0). */
+AscGainStage *asc_gain_stage_create(float gain);
+
+/* Destroys an output stage. */
+void asc_gain_stage_destroy(AscGainStage *stage);
+
+/*
+ * Any thread: sets the linear gain (negative or non-finite counts as 0). The
+ * output thread ramps to it across its next buffer and holds it after that.
+ */
+void asc_gain_stage_set_gain(AscGainStage *stage, float gain);
+
+/* Any thread: the gain last set. */
+float asc_gain_stage_gain(const AscGainStage *stage);
+
+/*
+ * Output thread: multiplies frames x channels interleaved samples by the gain
+ * in place. Gain 0 gives exact zeros and any NaN or infinity becomes 0; the
+ * first buffer plays at the gain already set. Real-time safe.
+ */
+void asc_gain_stage_apply(AscGainStage *stage, float *interleaved, size_t frames, size_t channels);
+
+/*
+ * Output thread: maps `frames` stereo frames onto a device buffer of
+ * frames x channels interleaved samples (L to the first channel, R to the
+ * second, 0 to the rest; (L + R) / 2 on a one-channel device), then applies
+ * the gain as asc_gain_stage_apply does. Returns the frames written; 0 when
+ * channels is 0. Real-time safe.
+ */
+size_t asc_gain_stage_render(AscGainStage *stage, const float *stereo, size_t frames, float *device,
+                             size_t channels);
+
+/* ---- FIFO feed: PCM16 for the AirPlay engine's pipe --------------------- */
+
+/*
+ * Converts `samples` floats to signed 16-bit: NaN gives 0, anything else
+ * round(clamp(x, -1, 1) x 32767), ties away from zero. Returns the count
+ * converted. Real-time safe.
+ */
+size_t asc_convert_to_pcm16(const float *input, int16_t *output, size_t samples);
+
+/*
+ * The pipe as the host's FIFO writer thread implements it with POSIX calls.
+ * Every callback gets the sink's context. The core calls them only from
+ * asc_fifo_writer_step and asc_fifo_writer_close_step, on the calling thread.
+ */
+
+/* Opens the pipe write-only and non-blocking: ASC_PIPE_OK, NO_READER, INTERRUPTED or FAILED. */
+typedef int32_t (*AscPipeOpenFn)(void *context);
+
+/*
+ * Writes up to `length` bytes (1...ASC_PIPE_WRITE_MAX_BYTES, whole frames)
+ * from `bytes`: ASC_PIPE_OK with the count in *written (a short write is
+ * fine), or WOULD_BLOCK, INTERRUPTED, BROKEN or FAILED.
+ */
+typedef int32_t (*AscPipeWriteFn)(void *context, const uint8_t *bytes, size_t length, size_t *written);
+
+/* Closes the descriptor the open callback opened. */
+typedef void (*AscPipeCloseFn)(void *context);
+
+/* The host's pipe: a context pointer and three callbacks (a NULL callback fails). */
+typedef struct AscPipeSink {
+    void *context;
+    AscPipeOpenFn open;
+    AscPipeWriteFn write;
+    AscPipeCloseFn close;
+} AscPipeSink;
+
+/*
+ * The FIFO feed's counters: monotonic over the feed's life, read without
+ * blocking anyone; starting and stopping a writer resets nothing.
+ */
+typedef struct AscFifoCounters {
+    uint64_t opens;                 /* successful opens of the pipe */
+    uint64_t write_errors;          /* failed writes other than a full pipe */
+    uint64_t backlog_skips;         /* times the 250 ms backlog cap dropped audio */
+    uint64_t backlog_skip_samples;  /* 16-bit samples those drops removed */
+    uint64_t pipe_full_waits;       /* waits on a full pipe */
+    uint64_t short_writes;          /* writes that took only part of the bytes */
+    uint64_t bytes_written;         /* bytes the pipe accepted */
+    uint64_t open_failures;         /* failed opens, mostly while no reader exists */
+    uint64_t bytes_abandoned;       /* bytes of a partly written frame given up */
+    uint64_t samples_queued;        /* 16-bit samples asc_fifo_feed queued (frames x 2) */
+    uint64_t frames_dropped;        /* 48 kHz frames asc_fifo_feed dropped on a full queue */
+} AscFifoCounters;
+
+/*
+ * The FIFO feed: converts captured audio to 48 kHz PCM16 into a lock-free
+ * queue. asc_fifo_set_input_rate and asc_fifo_feed run on the capture
+ * thread, or on the control thread while capture is stopped; the other
+ * calls run on any thread.
+ */
+typedef struct AscFifoFeed AscFifoFeed;
+
+/*
+ * The feed's single writer, driven by the host's writer thread: each step
+ * does one bounded piece of work through the host's AscPipeSink.
+ */
+typedef struct AscFifoWriter AscFifoWriter;
+
+/*
+ * Creates a feed whose queue holds queue_seconds x 48 000 frames, converting
+ * from 48 kHz until asc_fifo_set_input_rate. NULL outside 1...3600 seconds.
+ */
+AscFifoFeed *asc_fifo_create(uint32_t queue_seconds);
+
+/* Destroys a feed handle; a writer still alive keeps the queue alive. */
+void asc_fifo_destroy(AscFifoFeed *feed);
+
+/*
+ * At each session start, before the first asc_fifo_feed: sets the capture
+ * rate and resets the converter. False outside 8000...384000 Hz. Never
+ * allocates.
+ */
+bool asc_fifo_set_input_rate(AscFifoFeed *feed, uint32_t rate);
+
+/*
+ * Capture thread: converts `frames` stereo frames to 48 kHz PCM16 and queues
+ * them, dropping what doesn't fit. Never touches the pipe; works whether or
+ * not a writer runs. Returns the 48 kHz frames queued. Real-time safe.
+ */
+size_t asc_fifo_feed(AscFifoFeed *feed, const float *interleaved, size_t frames);
+
+/* Any thread: a snapshot of the counters; fields may come from different moments. */
+AscFifoCounters asc_fifo_counters(const AscFifoFeed *feed);
+
+/*
+ * Control thread, at a writer start: takes the queue's only consumer and
+ * empties the queue, so writing starts with what is fed next. NULL while
+ * another writer exists.
+ */
+AscFifoWriter *asc_fifo_writer_create(AscFifoFeed *feed);
+
+/*
+ * Destroys a writer, so the feed can hand out a new one. Close the pipe with
+ * asc_fifo_writer_close_step first; this calls no callback.
+ */
+void asc_fifo_writer_destroy(AscFifoWriter *writer);
+
+/*
+ * Writer thread: one bounded piece of work. It keeps the unwritten audio at
+ * or under 250 ms (dropping the oldest whole frames), opens the pipe while it
+ * is closed, otherwise makes one write of at most ASC_PIPE_WRITE_MAX_BYTES
+ * that ends on a frame boundary, resumes a short write at the next byte and
+ * reopens after a broken pipe on a frame boundary. Returns the microseconds
+ * to sleep before the next step (or until the host wakes the thread to
+ * stop); 0 means step again at once. A NULL writer or sink does nothing and
+ * returns the open retry pause.
+ */
+uint32_t asc_fifo_writer_step(AscFifoWriter *writer, const AscPipeSink *sink);
+
+/*
+ * Writer thread, once stopping: one step of closing the pipe on a frame
+ * boundary. Returns true while a frame the reader got only part of is still
+ * being completed: sleep *pause_us microseconds (pause_us may be NULL) and
+ * call again. Returns false once the pipe is closed; after about 100 ms of
+ * pauses the rest of that frame is given up, so a stop stays well under
+ * 300 ms. The writer may step again afterwards.
+ */
+bool asc_fifo_writer_close_step(AscFifoWriter *writer, const AscPipeSink *sink, uint32_t *pause_us);
+
+/* ---- AirPlay sync rule (local output delays) ----------------------------- */
+
+/*
+ * Inputs of the AirPlay sync rule. IDs are AirPlay output IDs as
+ * NUL-terminated UTF-8, compared whole; a NULL array (with any count), a NULL
+ * entry or an entry that isn't valid UTF-8 counts as no ID.
+ */
+typedef struct AscSyncInput {
+    const char *const *enabled_ids;  /* AirPlay outputs the user enabled */
+    size_t enabled_count;
+    const char *const *listed_ids;   /* the AirPlay engine's latest output list */
+    size_t listed_count;
+    bool was_chosen;                 /* airplay_chosen of the previous decision */
+} AscSyncInput;
+
+/* The sync rule's decision. */
+typedef struct AscSyncDecision {
+    bool airplay_chosen;  /* some enabled AirPlay output is listed now */
+    bool flipped;         /* airplay_chosen changed: give every running local output its new effective delay */
+} AscSyncDecision;
+
+/* Decides whether an AirPlay speaker is chosen, and whether that flipped. A NULL input gives all false. */
+AscSyncDecision asc_sync_decide(const AscSyncInput *input);
+
+/* A local output's effective delay: its configured delay while an AirPlay speaker is chosen, otherwise 0. */
+double asc_sync_effective_delay_ms(double configured_ms, bool airplay_chosen);
+
+/*
+ * A delay input from the user, ready to store: clamped to 0...20 000 ms into
+ * *sanitized_ms. False, writing nothing, for a non-finite value (which is
+ * ignored) or a NULL sanitized_ms.
+ */
+bool asc_delay_sanitize_ms(double delay_ms, double *sanitized_ms);
+
+/*
+ * A delay in frames at `rate` Hz: floor(delay_ms x rate / 1000) into *frames
+ * (a negative delay counts as 0). False, writing nothing, for a non-finite
+ * delay or a NULL frames.
+ */
+bool asc_delay_ms_to_frames(double delay_ms, uint32_t rate, int64_t *frames);
 
 #ifdef __cplusplus
 }

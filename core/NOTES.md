@@ -2,7 +2,7 @@
 
 Everything in this crate is written from `docs/ENGINE_SPEC.md`, whose clause IDs (`S1` and up) appear in comments and test names, and from public documentation (Rust and Swift docs, the RBJ Audio EQ Cookbook, the cargo-deny docs). No other source in this repository was used.
 
-Where the spec leaves room, the readings below were chosen; each one satisfies every Observed clause. The crate was built in two parts, and these notes keep one section for each.
+Where the spec leaves room, the readings below were chosen; each one satisfies every Observed clause. The crate was built in three parts, and these notes keep one section for each.
 
 ## Audio path: ring, delay reader, resampler, conversion and FIFO feed
 
@@ -62,7 +62,7 @@ Implements S41 to S59 with the counters of S158 and the prime reset of S159. A r
 - `volume`: the cubic volume curve, host-side volume rules, volume writes coalesced per target (`LatestValues`) and the renderer's gain stage (S64, S65, S70 to S76).
 - `channels`: an input device's channels to stereo (S14).
 - `policy`: pure host decisions the Windows app can reuse: delays and the AirPlay sync rule; the capture source, the microphone permission and app quits; the capture check and capture rate changes; sessions, output sync, streaming and source switches; the engine lifecycle and pipe playback; the speaker list, reachability and reconcile; pairing; speaker keys, groups, device lists, layout and notices.
-- `ffi`: the C interface.
+- `ffi`: the C interface, `ffi.rs` plus `ffi/ring.rs`, `ffi/render.rs`, `ffi/fifo.rs` and `ffi/sync.rs` (see the last part).
 
 ### C interface
 
@@ -71,17 +71,17 @@ Decision: a plain C ABI (`extern "C"` with `#[unsafe(no_mangle)]`) declared by t
 Why:
 
 - Real time. Audio crosses the boundary a whole buffer at a time, as a pointer plus a frame count, and is processed in place: no copy and no allocation. UniFFI passes buffers through its own serialized `RustBuffer`, which allocates and copies on every call, so it can't sit on a Core Audio callback.
-- No runtime or build dependency. UniFFI needs its crate, generated bindings and a build step; cbindgen needs a tool in CI. The surface is 16 functions.
+- No runtime or build dependency. UniFFI needs its crate, generated bindings and a build step; cbindgen needs a tool in CI. The surface was 16 functions at first and is 66 now.
 - Swift imports a C header directly through a module map, and a Windows host can use the same header or link the `rlib`.
-- The header can't drift silently: a unit test in `src/ffi.rs` parses the header and the Rust definitions, maps the types, and fails when any prototype, `ASC_ABI_VERSION`, `ASC_EQ_BANDS` or `ASC_EQ_PRESETS` differs. CI runs it with the other tests, so "the header is current" is checked without a generator.
+- The header can't drift silently: a unit test in `src/ffi.rs` parses the header and the Rust definitions, maps the types, and fails when any prototype, struct, handle, callback type or `#define` differs. CI runs it with the other tests, so "the header is current" is checked without a generator.
 
-Contract (also in the header): `asc_eq_process` runs on one capture thread at a time; the other `asc_eq_*` calls on a handle run on one control thread at a time; the two touch different fields of the handle. Null pointers make a call do nothing. All `unsafe` code of the crate is in `src/ffi.rs`, every block with a SAFETY comment (`clippy::undocumented_unsafe_blocks` is on there); the other modules `#![forbid(unsafe_code)]`.
+Contract (also in the header): `asc_eq_process` runs on one capture thread at a time; the other `asc_eq_*` calls on a handle run on one control thread at a time; the two touch different fields of the handle. Null pointers make a call do nothing. All `unsafe` code of the crate is in the `ffi` module (`src/ffi.rs` and `src/ffi/`), every block with a SAFETY comment (`clippy::undocumented_unsafe_blocks` is on there); the other modules `#![forbid(unsafe_code)]`.
 
-`ffi/smoke.sh` builds the static library and a small Swift program (`ffi/swift-smoke/`, module map plus `main.swift`) that calls the version, the volume curve, the presets and one equalizer pass through the header. CI runs it on macOS. It touches no audio device.
+`ffi/smoke.sh` builds the static library and a small Swift program (`ffi/swift-smoke/`, module map plus `main.swift`) that calls the version, the volume curve, the presets, one equalizer pass, a ring with a reader, the FIFO feed and the sync rule through the header. CI runs it on macOS. It touches no audio device and no pipe.
 
 ### Real-time checks
 
-- A counting global allocator in the test module of `src/ffi.rs` (there so that every `unsafe` line stays in that file) proves that the equalizer (including picking up new settings while the control thread keeps publishing, and the non-finite reset path), `equalize_and_deliver`, the C process call, `GainStage`, `apply_gain` and `input_to_stereo` neither allocate nor free. `tests/realtime.rs` does the same for the ring, the reader, the resampler, the conversion, the FIFO feed and the FIFO writer.
+- A counting global allocator in the test module of `src/ffi.rs` (there so that every `unsafe` line stays in the `ffi` module) proves that the equalizer (including picking up new settings while the control thread keeps publishing, and the non-finite reset path), `equalize_and_deliver`, the C process call, `GainStage`, `apply_gain` and `input_to_stereo` neither allocate nor free. `tests/realtime.rs` does the same for the ring, the reader, the resampler, the conversion, the FIFO feed and the FIFO writer.
 - `tests/realtime.rs` also scans the production code of every audio-path module for locks, blocking waits, logging and file access. It reads the sources at run time and normalizes line ends, so it works on any checkout.
 - The equalizer shares two coefficient sets of `AtomicU64` values plus SeqCst `active` and `reading` indices; there is no lock anywhere. Building fails on a target without native 64-bit atomics (S128).
 - A unit test counts biquad steps: exactly 20 per frame (S127).
@@ -139,3 +139,41 @@ Clauses only the host can implement are listed with a reason in `tests/spec_exem
 ### Spec coverage checker
 
 `tests/spec_coverage.rs` reads `../docs/ENGINE_SPEC.md`, collects every clause ID and scans `src/` and `tests/` for lines of the exact form `// covers: S44, S49`. It checks that every clause carries an Observed or Required tag and that the IDs are S1 to Sn, each once, in any document order (S1); that every `// covers:` line is well formed and names existing clauses; that the exempt list is well formed; and that every clause is covered or exempt, with no exempt clause covered after all.
+
+## The audio engine through the C interface
+
+This part extends the C interface so a host can run its whole audio engine on the core: the ring and its writer, delay readers, the resampler and an output stage, PCM16 conversion and the FIFO feed, and the AirPlay sync rule. The core still owns no thread, device, file or pipe. Adding functions is compatible, so `ASC_ABI_VERSION` stays 1.
+
+### Handles and threads
+
+- Opaque handles with create and destroy: `AscRing`, `AscRingWriter`, `AscReader`, `AscResampler`, `AscGainStage`, `AscFifoFeed` and `AscFifoWriter`, next to `AscEqualizer`. Plain data crosses as `#[repr(C)]` structs: `AscReadReport`, `AscReaderCounters`, `AscResampleCount`, `AscFifoCounters`, `AscPipeSink`, `AscSyncInput` and `AscSyncDecision`. Codes are `int32_t` values with `#define`s, not C enums, whose size C leaves to the compiler.
+- S128, S134: a ring handle, its writer and its readers each hold the ring by `Arc`, and a feed handle and its writer each hold the queue, so they can be destroyed in any order; the memory goes with the last of them, on the thread that destroys it. Destroy calls belong on the control thread once the audio threads stopped.
+- S132, S133: a handle that an audio thread shares with other threads keeps the two sides in separate fields (`Reader` and `ReaderControl`, `GainStage` and `SharedGain`, `FifoProducer` and `FifoFeed`). Every call borrows only its own field through the raw pointer, never the whole handle, so a read and a control call can overlap without a `&mut` aliasing anything. The other side's calls are relaxed atomic stores and loads, or the release flag and acquire exchange of a resync.
+- S35, S39: `asc_ring_writer_create` returns NULL while a writer exists. "No reader exists" at a reset stays the host's duty, as in Rust: `asc_ring_writer_reset` doesn't check it.
+- S41, S46: `asc_reader_read` reads at the target that `asc_reader_set_delay_frames` stores before raising the resync flag; `asc_reader_read_at` is S41's read with the caller's delay and tolerance. Both fill an optional `AscReadReport`, all zero when nothing was read.
+- S16, S36: a ring's capacity runs from 16 384 frames (twice the margin) to 24 s at 384 kHz (9 216 000 frames, about 74 MB); `asc_ring_capacity_for_rate` gives the 24 s capacity of a rate. The upper bound keeps a nonsense capacity from overflowing the allocation size.
+- S62: `Resampler::input_frames_for`, behind `asc_resampler_input_frames_for`, now computes in 128 bits and saturates; a request near `usize::MAX` used to overflow (a panic in debug builds).
+- S63 to S65: `asc_gain_stage_render` maps stereo onto the device's channels at gain 1, then runs the gain stage, which plays the first buffer at the gain set, ramps across one buffer after a change and zeroes non-finite values. `asc_gain_stage_apply` runs the stage alone on a buffer the host already mapped.
+
+### Real-time rules at the boundary
+
+- A real-time call takes a pointer and a count, returns at once for a NULL handle, a NULL buffer with a nonzero count or a count whose byte size can't exist (above `isize::MAX`), and otherwise calls the Rust code, which never allocates, locks or panics. A NULL buffer with a count of 0 is an empty buffer. Absurd values saturate: a delay beyond the ring is capped (S42), a huge resampler request saturates, a write count above what was offered is clamped.
+- Nothing unwinds across the boundary: release builds abort on panic, an `extern "C"` function aborts rather than unwind, and the tests drive every function with NULL handles, NULL buffers, zero counts and `usize::MAX`.
+
+### FIFO writer
+
+- S88, S129: the host owns the writer thread and the pipe. At each start it creates an `AscFifoWriter`, which takes the queue's only consumer (a second writer is refused) and empties the queue, then calls `asc_fifo_writer_step` in a loop, sleeping the microseconds each step returns: 0 to step again, 2 000 on a full pipe, 4 000 with nothing queued, 50 000 while the pipe has no reader. To stop, it wakes the thread, calls `asc_fifo_writer_close_step` until it returns false, destroys the writer and joins the thread.
+- The pipe is an `AscPipeSink`: a context pointer and three C callbacks, `open` (`open(2)` write-only with `O_NONBLOCK`, then `F_SETNOSIGPIPE`), `write` (`write(2)`) and `close` (`close(2)`). They report `ASC_PIPE_*` codes for success, `ENXIO`, `EINTR`, `EAGAIN` and `EPIPE`; any other code counts as a failure, and a NULL callback fails. They run only inside a step, on the host's writer thread, so the frame alignment, the 512-byte writes, the backlog cap, resuming a short write and reconnecting on a frame boundary (S89 to S93) are the core's `FifoWriter`, unchanged.
+- S88, S93: `asc_fifo_writer_close_step` completes a partly written frame, then closes the pipe. Each attempt is charged at least the 2 ms full-pipe pause against a 100 ms budget, so an interrupted callback can't loop forever and a stop stays well under 300 ms; after that the rest of the frame is given up, as `FifoControl::stop` does.
+- S84, S87, S160: `asc_fifo_counters` returns the writer's counters plus `samples_queued` and `frames_dropped` in one struct.
+
+### Sync rule
+
+- S78 to S80: `asc_sync_decide` takes the enabled AirPlay IDs, the engine's listed IDs and the previous decision, and returns whether an AirPlay speaker is chosen and whether that flipped; `asc_sync_effective_delay_ms` gives each output its delay. IDs are UTF-8 C strings; a NULL entry or one that isn't UTF-8 matches nothing. The rule is `policy::delay::airplay_chosen` itself, called with two vectors of IDs, so the call allocates: it belongs on the control thread. `asc_delay_sanitize_ms` (S77, S124) and `asc_delay_ms_to_frames` (S3) are the matching helpers.
+
+### Checks
+
+- The drift test in `src/ffi.rs` reads every file of the `ffi` module and fails when a file is missing from its list. It compares the prototypes, the `#[repr(C)]` structs field by field, the opaque handles, the callback types and every `#define` with the Rust definitions, and every `Asc` type the header names must be declared in it.
+- The counting allocator in `src/ffi.rs` proves that every real-time call of the C interface neither allocates nor frees: the ring write, both reads, the reader's control calls and counters, the resampler, the gain stage, PCM16 conversion, the FIFO feed and its rate change, and writer steps and close steps through a pipe sink that refuses opens, fills up, cuts writes short, gets interrupted and breaks. It does so on one thread, and on five threads at once (capture, two outputs, the FIFO writer and a control thread), each counted on its own.
+- `ffi/smoke.sh` checks from Swift: a ring with a reader at 4096, 8192 and 2048 frames of delay (every block starts exactly the delay behind the writer, a longer delay inserts exactly its extra frames of silence, a shorter one skips ahead on the next block, no frame plays twice), PCM16 conversion, the FIFO writer stepped through Swift `@convention(c)` callbacks that record the bytes, 2 s at 44.1 kHz becoming 96 000 frames at 48 kHz, and the sync rule over Swift strings passed as a C array.
+- `scripts/build_core.sh` still prelinks the library and exports exactly the header's functions: 66 global symbols on each architecture.

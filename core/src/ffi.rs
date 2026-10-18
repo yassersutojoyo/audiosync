@@ -3,17 +3,28 @@
 //!
 //! Audio crosses the boundary a whole buffer at a time: a pointer to
 //! interleaved stereo float32 frames plus a frame count, never per sample. The
-//! audio-path calls (`asc_eq_process`, `asc_apply_gain`) never allocate, lock,
-//! wait or make a system call (S126).
+//! real-time calls never allocate, lock, wait, make a system call or panic
+//! (S126): bad arguments make them do nothing or saturate.
 //!
-//! Threading contract of an equalizer handle (S113, S132): `asc_eq_process`
-//! runs on one capture thread at a time; every other `asc_eq_*` call on the
-//! handle runs on one control thread at a time; `asc_eq_destroy` runs once no
-//! other call on the handle can run. The two threads touch different fields of
-//! the handle ([`EqProcessor`] and [`EqControl`]), which share only atomics.
+//! - This module: the version, the volume curve and the equalizer, plus the
+//!   helpers that turn the host's pointers into slices.
+//! - [`ring`]: the delay ring, its single writer and its readers (S35-S59).
+//! - [`render`]: the resampler and a local output's output stage (S62-S65).
+//! - [`fifo`]: PCM16 conversion and the FIFO feed, whose writer the host's
+//!   thread steps through C callbacks for the pipe (S83-S95, S160).
+//! - [`sync`]: the AirPlay sync rule and the delay helpers (S3, S77-S80).
 //!
-//! This is the crate's only module with `unsafe` code; each block states why it
-//! is sound.
+//! Threading (S113, S132): each handle states which thread makes which call.
+//! A handle that an audio thread shares with other threads keeps the two
+//! sides in separate fields that share only atomics, and each call borrows
+//! only its own side, never the whole handle. For an equalizer,
+//! `asc_eq_process` runs on one capture thread at a time and borrows the
+//! [`EqProcessor`]; every other `asc_eq_*` call runs on one control thread at
+//! a time and borrows the [`EqControl`]; `asc_eq_destroy` runs once no other
+//! call on the handle can run.
+//!
+//! This module and its submodules hold all of the crate's `unsafe` code; each
+//! block states why it is sound.
 
 #![warn(clippy::undocumented_unsafe_blocks)]
 
@@ -24,8 +35,18 @@ use crate::eq::{
 };
 use crate::volume;
 
+pub mod fifo;
+pub mod render;
+pub mod ring;
+pub mod sync;
+
+pub use self::fifo::*;
+pub use self::render::*;
+pub use self::ring::*;
+pub use self::sync::*;
+
 /// Version of this C interface, bumped on any incompatible change; the header's
-/// `ASC_ABI_VERSION`.
+/// `ASC_ABI_VERSION`. Adding functions is compatible.
 pub const ABI_VERSION: u32 = 1;
 
 const VERSION_C: &CStr =
@@ -57,11 +78,57 @@ pub struct AscEqualizer {
     processor: EqProcessor,
 }
 
+/// The number of samples in `frames` frames of `channels` channels, if such
+/// a float buffer can exist.
+fn samples_for(frames: usize, channels: usize) -> Option<usize> {
+    frames
+        .checked_mul(channels)
+        .filter(|&samples| samples <= isize::MAX as usize / size_of::<f32>())
+}
+
 /// The number of samples in `frames` stereo frames, if such a buffer can exist.
 fn stereo_samples(frames: usize) -> Option<usize> {
-    frames
-        .checked_mul(2)
-        .filter(|&samples| samples <= isize::MAX as usize / size_of::<f32>())
+    samples_for(frames, 2)
+}
+
+/// `len` of the host's elements at `ptr` as a slice: empty when `len` is 0
+/// (`ptr` may then be null); `None` for a null `ptr` with a nonzero `len`, or
+/// for a length no buffer can have.
+///
+/// # Safety
+///
+/// Unless null, `ptr` points to `len` aligned, initialized elements that
+/// nothing writes during `'a`.
+unsafe fn host_slice<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
+    if len == 0 {
+        return Some(&[]);
+    }
+    if ptr.is_null() || len > isize::MAX as usize / size_of::<T>().max(1) {
+        return None;
+    }
+    // SAFETY: non-null; by the caller's contract `len` aligned, initialized
+    // elements that nothing writes during 'a; the size fits in isize.
+    Some(unsafe { std::slice::from_raw_parts(ptr, len) })
+}
+
+/// `len` of the host's writable elements at `ptr` as a slice, by the rules
+/// of [`host_slice`].
+///
+/// # Safety
+///
+/// Unless null, `ptr` points to `len` aligned, initialized elements that
+/// nothing else reads or writes during `'a`.
+unsafe fn host_slice_mut<'a, T>(ptr: *mut T, len: usize) -> Option<&'a mut [T]> {
+    if len == 0 {
+        return Some(&mut []);
+    }
+    if ptr.is_null() || len > isize::MAX as usize / size_of::<T>().max(1) {
+        return None;
+    }
+    // SAFETY: non-null; by the caller's contract `len` aligned, initialized
+    // elements that only this borrow touches during 'a; the size fits in
+    // isize.
+    Some(unsafe { std::slice::from_raw_parts_mut(ptr, len) })
 }
 
 /// The crate version as a static C string.
@@ -86,6 +153,13 @@ pub extern "C" fn asc_volume_gain(position: f64) -> f64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_volume_position(gain: f64) -> f64 {
     volume::position_for_gain(gain)
+}
+
+/// [`volume::output_gain`]: a local output's gain from its own position and
+/// the master position (S71).
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_output_gain(local_position: f64, master_position: f64) -> f64 {
+    volume::output_gain(local_position, master_position)
 }
 
 /// [`volume::apply_gain`] on `frames` interleaved stereo frames, in place (S64, S65).
@@ -279,10 +353,21 @@ pub unsafe extern "C" fn asc_eq_nan_resets(eq: *const AscEqualizer) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::f64::consts::PI;
+    use std::fs;
+    use std::path::Path;
 
     const HEADER: &str = include_str!("../include/audiosync_core.h");
-    const SOURCE: &str = include_str!("ffi.rs");
+
+    /// Every source file of the C interface, by its path under `src/`.
+    const SOURCES: [(&str, &str); 5] = [
+        ("ffi.rs", include_str!("ffi.rs")),
+        ("ffi/fifo.rs", include_str!("ffi/fifo.rs")),
+        ("ffi/render.rs", include_str!("ffi/render.rs")),
+        ("ffi/ring.rs", include_str!("ffi/ring.rs")),
+        ("ffi/sync.rs", include_str!("ffi/sync.rs")),
+    ];
 
     fn sine_block(frames: usize, start: usize) -> Vec<f32> {
         (start..start + frames)
@@ -295,21 +380,33 @@ mod tests {
 
     /// The C spelling of a Rust type used in this interface.
     fn c_type(rust: &str) -> String {
+        let rust = rust.trim();
         if let Some(inner) = rust.strip_prefix("*mut ") {
             return format!("{}*", c_type(inner));
         }
         if let Some(inner) = rust.strip_prefix("*const ") {
-            return format!("const {}*", c_type(inner));
+            return if inner.trim_start().starts_with('*') {
+                format!("{} const*", c_type(inner))
+            } else {
+                format!("const {}*", c_type(inner))
+            };
         }
         match rust {
             "f64" => "double",
             "f32" => "float",
             "bool" => "bool",
             "usize" => "size_t",
+            "u8" => "uint8_t",
+            "i16" => "int16_t",
+            "i32" => "int32_t",
             "u32" => "uint32_t",
+            "i64" => "int64_t",
             "u64" => "uint64_t",
             "c_char" => "char",
-            "AscEqualizer" => "AscEqualizer",
+            "c_void" => "void",
+            name if name.starts_with("Asc") && name.chars().all(|c| c.is_ascii_alphanumeric()) => {
+                name
+            }
             other => panic!("no C spelling for the Rust type `{other}`"),
         }
         .to_owned()
@@ -319,52 +416,148 @@ mod tests {
         text.chars().filter(|c| !c.is_whitespace()).collect()
     }
 
-    /// The C prototype of every exported function, from this file's Rust source.
-    fn prototypes_from_rust() -> Vec<String> {
-        let lines: Vec<&str> = SOURCE.lines().collect();
-        let mut prototypes = Vec::new();
-        for (index, line) in lines.iter().enumerate() {
-            if line.trim() != "#[unsafe(no_mangle)]" {
-                continue;
+    /// A Rust parameter list (`a: T, b: U,`) in C.
+    fn c_params(params: &str) -> String {
+        let params: Vec<String> = params
+            .split(',')
+            .map(str::trim)
+            .filter(|param| !param.is_empty())
+            .map(|param| {
+                let (name, ty) = param.split_once(':').unwrap();
+                format!("{} {}", c_type(ty), name.trim())
+            })
+            .collect();
+        if params.is_empty() {
+            "void".to_owned()
+        } else {
+            params.join(", ")
+        }
+    }
+
+    /// A Rust return type (`-> T`, or nothing) in C.
+    fn c_return(tail: &str) -> String {
+        match tail.trim().strip_prefix("->") {
+            Some(ty) => c_type(ty),
+            None => "void".to_owned(),
+        }
+    }
+
+    /// The lines of a source file before its first test module.
+    fn production_lines(source: &str) -> Vec<&str> {
+        source
+            .lines()
+            .take_while(|line| line.trim() != "#[cfg(test)]")
+            .collect()
+    }
+
+    /// `lines`, trimmed and joined by spaces, through the first line that
+    /// ends with `last`.
+    fn joined(lines: &[&str], last: char) -> String {
+        let mut text = String::new();
+        for line in lines {
+            text.push_str(line.trim());
+            text.push(' ');
+            if line.trim_end().ends_with(last) {
+                break;
             }
-            let mut signature = String::new();
-            for next in &lines[index + 1..] {
-                signature.push_str(next.trim());
-                signature.push(' ');
-                if next.trim_end().ends_with('{') {
-                    break;
+        }
+        text
+    }
+
+    /// What one side declares for C, in C spelling without whitespace:
+    /// function prototypes, structs with their fields, opaque handles and
+    /// callback types.
+    #[derive(Debug, Default)]
+    struct Declarations {
+        functions: Vec<String>,
+        structs: BTreeMap<String, Vec<String>>,
+        handles: BTreeSet<String>,
+        callbacks: BTreeMap<String, String>,
+    }
+
+    /// The fields of the `#[repr(C)]` struct whose body starts after `lines[0]`.
+    fn rust_fields(lines: &[&str]) -> Vec<String> {
+        lines[1..]
+            .iter()
+            .map(|line| line.trim())
+            .take_while(|line| *line != "}")
+            .filter(|line| !line.is_empty() && !line.starts_with("//"))
+            .map(|line| {
+                let field = line
+                    .strip_prefix("pub ")
+                    .unwrap_or_else(|| panic!("a private field in a C struct: {line}"));
+                let (name, ty) = field.trim_end_matches(',').split_once(':').unwrap();
+                without_whitespace(&format!("{} {};", c_type(ty), name.trim()))
+            })
+            .collect()
+    }
+
+    /// A callback type alias, `pub type AscX = Option<unsafe extern "C"
+    /// fn(...) -> T>;`, as a C typedef.
+    fn rust_callback(text: &str) -> (String, String) {
+        let (name, value) = text
+            .strip_prefix("pub type ")
+            .and_then(|rest| rest.split_once('='))
+            .unwrap_or_else(|| panic!("not a type alias: {text}"));
+        let name = name.trim();
+        let signature = value
+            .trim()
+            .strip_suffix(';')
+            .and_then(|value| value.trim().strip_prefix("Option<"))
+            .and_then(|value| value.trim().strip_suffix('>'))
+            .map(|value| value.trim().trim_end_matches(',').trim())
+            .and_then(|value| value.strip_prefix("unsafe extern \"C\" fn"))
+            .and_then(|value| value.trim().strip_prefix('('))
+            .unwrap_or_else(|| panic!("{name} is not an optional C function pointer"));
+        let (params, tail) = signature.rsplit_once(')').unwrap();
+        let typedef = format!(
+            "typedef {} (*{name})({});",
+            c_return(tail),
+            c_params(params)
+        );
+        (name.to_owned(), without_whitespace(&typedef))
+    }
+
+    /// Everything the Rust sources export to C.
+    fn rust_declarations() -> Declarations {
+        let mut found = Declarations::default();
+        for (_, source) in SOURCES {
+            let lines = production_lines(source);
+            for (index, line) in lines.iter().enumerate() {
+                let line = line.trim();
+                if line == "#[unsafe(no_mangle)]" {
+                    let signature = joined(&lines[index + 1..], '{');
+                    assert!(
+                        signature.contains("extern \"C\" fn "),
+                        "not a C function: {signature}"
+                    );
+                    let (_, after_fn) = signature.split_once("fn ").unwrap();
+                    let (name, rest) = after_fn.split_once('(').unwrap();
+                    let (params, tail) = rest.rsplit_once(')').unwrap();
+                    let ret = c_return(tail.trim().trim_end_matches('{'));
+                    let prototype = format!("{ret} {name}({});", c_params(params));
+                    found.functions.push(without_whitespace(&prototype));
+                } else if let Some(rest) = line.strip_prefix("pub struct ") {
+                    let name = rest.trim_end_matches('{').trim().to_owned();
+                    let repr_c = lines[..index]
+                        .iter()
+                        .rev()
+                        .map(|line| line.trim())
+                        .take_while(|line| line.starts_with("#[") || line.starts_with("///"))
+                        .any(|line| line == "#[repr(C)]");
+                    if repr_c {
+                        found.structs.insert(name, rust_fields(&lines[index..]));
+                    } else {
+                        found.handles.insert(name);
+                    }
+                } else if line.starts_with("pub type ") {
+                    let (name, typedef) = rust_callback(&joined(&lines[index..], ';'));
+                    found.callbacks.insert(name, typedef);
                 }
             }
-            assert!(
-                signature.contains("extern \"C\" fn "),
-                "not a C function: {signature}"
-            );
-            let (_, after_fn) = signature.split_once("fn ").unwrap();
-            let (name, rest) = after_fn.split_once('(').unwrap();
-            let (params, tail) = rest.rsplit_once(')').unwrap();
-            let tail = tail.trim().trim_end_matches('{').trim();
-            let ret = match tail.strip_prefix("->") {
-                Some(ty) => c_type(ty.trim()),
-                None => "void".to_owned(),
-            };
-            let params: Vec<String> = params
-                .split(',')
-                .map(str::trim)
-                .filter(|param| !param.is_empty())
-                .map(|param| {
-                    let (param_name, ty) = param.split_once(':').unwrap();
-                    format!("{} {}", c_type(ty.trim()), param_name.trim())
-                })
-                .collect();
-            let params = if params.is_empty() {
-                "void".to_owned()
-            } else {
-                params.join(", ")
-            };
-            prototypes.push(without_whitespace(&format!("{ret} {name}({params});")));
         }
-        prototypes.sort();
-        prototypes
+        found.functions.sort();
+        found
     }
 
     /// The header without comments.
@@ -380,53 +573,222 @@ mod tests {
         code
     }
 
-    /// Every function prototype the header declares.
-    fn prototypes_from_header() -> Vec<String> {
-        let declarations: String = header_code()
+    /// The header's statements without comments or preprocessor lines; a
+    /// struct definition is one statement.
+    fn header_statements() -> Vec<String> {
+        let code = header_code()
             .lines()
             .map(str::trim)
             .filter(|line| !line.starts_with('#') && *line != "extern \"C\" {" && *line != "}")
             .collect::<Vec<_>>()
             .join(" ");
-        let mut prototypes: Vec<String> = declarations
-            .split(';')
-            .map(str::trim)
-            .filter(|statement| statement.contains('(') && !statement.starts_with("typedef"))
-            .map(|statement| without_whitespace(&format!("{statement};")))
-            .collect();
-        prototypes.sort();
-        prototypes
+        let mut statements = Vec::new();
+        let mut current = String::new();
+        let mut depth = 0usize;
+        for c in code.chars() {
+            match c {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                ';' if depth == 0 => {
+                    statements.push(current.trim().to_owned());
+                    current.clear();
+                    continue;
+                }
+                _ => {}
+            }
+            current.push(c);
+        }
+        assert!(
+            current.trim().is_empty(),
+            "unterminated statement: {current}"
+        );
+        statements
     }
 
-    fn header_define(name: &str) -> Option<String> {
-        header_code().lines().find_map(|line| {
-            let rest = line.trim().strip_prefix("#define ")?;
-            let (key, value) = rest.split_once(char::is_whitespace)?;
-            (key == name).then(|| value.trim().to_owned())
-        })
+    /// Everything the header declares.
+    fn header_declarations() -> Declarations {
+        let mut found = Declarations::default();
+        for statement in header_statements() {
+            if let Some(rest) = statement.strip_prefix("typedef struct ") {
+                match rest.split_once('{') {
+                    Some((name, body)) => {
+                        let (fields, alias) = body.rsplit_once('}').unwrap();
+                        assert_eq!(name.trim(), alias.trim(), "{statement}");
+                        let fields = fields
+                            .split(';')
+                            .map(str::trim)
+                            .filter(|field| !field.is_empty())
+                            .map(|field| without_whitespace(&format!("{field};")))
+                            .collect();
+                        found.structs.insert(name.trim().to_owned(), fields);
+                    }
+                    None => {
+                        let words: Vec<&str> = rest.split_whitespace().collect();
+                        assert!(
+                            words.len() == 2 && words[0] == words[1],
+                            "not an opaque handle: {statement}"
+                        );
+                        found.handles.insert(words[0].to_owned());
+                    }
+                }
+            } else if statement.starts_with("typedef ") {
+                let (_, after) = statement
+                    .split_once("(*")
+                    .unwrap_or_else(|| panic!("not a callback type: {statement}"));
+                let (name, _) = after.split_once(')').unwrap();
+                found.callbacks.insert(
+                    name.trim().to_owned(),
+                    without_whitespace(&format!("{statement};")),
+                );
+            } else {
+                assert!(statement.contains('('), "not a prototype: {statement}");
+                found
+                    .functions
+                    .push(without_whitespace(&format!("{statement};")));
+            }
+        }
+        found.functions.sort();
+        found
+    }
+
+    /// The `Asc...` type names a C statement mentions (function names start
+    /// with a lowercase `asc_`).
+    fn type_names(statement: &str) -> Vec<&str> {
+        statement
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|word| word.starts_with("Asc"))
+            .collect()
+    }
+
+    fn header_defines() -> BTreeMap<String, String> {
+        header_code()
+            .lines()
+            .filter_map(|line| {
+                let rest = line.trim().strip_prefix("#define ")?;
+                let (key, value) = rest.split_once(char::is_whitespace)?;
+                Some((key.to_owned(), value.trim().to_owned()))
+            })
+            .collect()
     }
 
     #[test]
-    fn the_header_declares_exactly_the_exported_functions() {
-        let from_rust = prototypes_from_rust();
-        let from_header = prototypes_from_header();
+    fn rust_types_have_their_c_spelling() {
+        assert_eq!(c_type("*const *const c_char"), "const char* const*");
+        assert_eq!(c_type("*mut *const u8"), "const uint8_t**");
+        assert_eq!(c_type("*const AscReader"), "const AscReader*");
+        assert_eq!(c_type("*mut c_void"), "void*");
+        assert_eq!(
+            rust_callback(
+                "pub type AscF = Option<unsafe extern \"C\" fn(a: *mut c_void, b: usize,) -> i32,>;"
+            ),
+            (
+                "AscF".to_owned(),
+                "typedefint32_t(*AscF)(void*a,size_tb);".to_owned()
+            )
+        );
+        assert_eq!(
+            type_names("AscResampleCount asc_resampler_process(const AscRing *ring, AscX*)"),
+            ["AscResampleCount", "AscRing", "AscX"]
+        );
+    }
+
+    #[test]
+    fn every_source_of_the_interface_is_checked() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("ffi");
+        let mut found: Vec<String> = fs::read_dir(&dir)
+            .unwrap_or_else(|error| panic!("{}: {error}", dir.display()))
+            .map(|entry| format!("ffi/{}", entry.unwrap().file_name().to_string_lossy()))
+            .collect();
+        found.push("ffi.rs".to_owned());
+        found.sort();
+        let listed: Vec<&str> = SOURCES.iter().map(|(path, _)| *path).collect();
+        assert_eq!(found, listed);
+    }
+
+    #[test]
+    fn the_header_declares_exactly_what_the_rust_code_exports() {
+        let rust = rust_declarations();
         assert!(
-            from_rust.len() >= 15,
+            rust.functions.len() >= 60,
             "found {} exported functions",
-            from_rust.len()
+            rust.functions.len()
         );
+        assert!(rust.structs.len() >= 7, "found {:?}", rust.structs.keys());
+        assert!(rust.handles.len() >= 8, "found {:?}", rust.handles);
+        assert_eq!(rust.callbacks.len(), 3, "found {:?}", rust.callbacks.keys());
+        let header = header_declarations();
+        let out_of_date = "include/audiosync_core.h is out of date";
+        assert_eq!(header.functions, rust.functions, "{out_of_date}: functions");
+        assert_eq!(header.structs, rust.structs, "{out_of_date}: structs");
+        assert_eq!(header.handles, rust.handles, "{out_of_date}: handles");
+        assert_eq!(header.callbacks, rust.callbacks, "{out_of_date}: callbacks");
+        let declared: BTreeSet<&str> = header
+            .structs
+            .keys()
+            .chain(&header.handles)
+            .chain(header.callbacks.keys())
+            .map(String::as_str)
+            .collect();
+        for statement in header_statements() {
+            for name in type_names(&statement) {
+                assert!(
+                    declared.contains(name),
+                    "{name} is not declared: {statement}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_header_constants_match_the_rust_ones() {
+        let expected: BTreeMap<String, String> = [
+            ("ASC_ABI_VERSION", ABI_VERSION.to_string()),
+            ("ASC_EQ_BANDS", BAND_COUNT.to_string()),
+            ("ASC_EQ_PRESETS", PRESET_COUNT.to_string()),
+            (
+                "ASC_RING_MARGIN_FRAMES",
+                crate::ring::MIN_MARGIN_FRAMES.to_string(),
+            ),
+            ("ASC_RING_MIN_FRAMES", MIN_RING_FRAMES.to_string()),
+            ("ASC_RING_MAX_FRAMES", MAX_RING_FRAMES.to_string()),
+            ("ASC_CORRECTION_NONE", CORRECTION_NONE.to_string()),
+            ("ASC_CORRECTION_PRIME", CORRECTION_PRIME.to_string()),
+            ("ASC_CORRECTION_RESYNC", CORRECTION_RESYNC.to_string()),
+            (
+                "ASC_CORRECTION_SKIP_FORWARD",
+                CORRECTION_SKIP_FORWARD.to_string(),
+            ),
+            ("ASC_CORRECTION_OVERRUN", CORRECTION_OVERRUN.to_string()),
+            ("ASC_CORRECTION_STEP_BACK", CORRECTION_STEP_BACK.to_string()),
+            ("ASC_PIPE_RATE", crate::fifo::PIPE_RATE.to_string()),
+            (
+                "ASC_PIPE_FRAME_BYTES",
+                crate::convert::PIPE_FRAME_BYTES.to_string(),
+            ),
+            (
+                "ASC_PIPE_WRITE_MAX_BYTES",
+                crate::fifo::ATOMIC_WRITE_BYTES.to_string(),
+            ),
+            (
+                "ASC_FIFO_DEFAULT_QUEUE_SECONDS",
+                crate::fifo::DEFAULT_QUEUE_SECONDS.to_string(),
+            ),
+            ("ASC_PIPE_OK", PIPE_OK.to_string()),
+            ("ASC_PIPE_NO_READER", PIPE_NO_READER.to_string()),
+            ("ASC_PIPE_INTERRUPTED", PIPE_INTERRUPTED.to_string()),
+            ("ASC_PIPE_WOULD_BLOCK", PIPE_WOULD_BLOCK.to_string()),
+            ("ASC_PIPE_BROKEN", PIPE_BROKEN.to_string()),
+            ("ASC_PIPE_FAILED", PIPE_FAILED.to_string()),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), value))
+        .collect();
         assert_eq!(
-            from_header, from_rust,
-            "include/audiosync_core.h is out of date"
-        );
-        assert_eq!(
-            header_define("ASC_ABI_VERSION"),
-            Some(ABI_VERSION.to_string())
-        );
-        assert_eq!(header_define("ASC_EQ_BANDS"), Some(BAND_COUNT.to_string()));
-        assert_eq!(
-            header_define("ASC_EQ_PRESETS"),
-            Some(PRESET_COUNT.to_string())
+            header_defines(),
+            expected,
+            "include/audiosync_core.h is out of date: constants"
         );
     }
 
@@ -440,6 +802,20 @@ mod tests {
         assert_eq!(asc_volume_gain(0.0), 0.0);
         assert_eq!(asc_volume_gain(100.0), 1.0);
         assert!((asc_volume_position(0.125) - 50.0).abs() < 1e-9);
+    }
+
+    // covers: S71
+    #[test]
+    fn an_outputs_gain_is_its_own_times_the_masters() {
+        assert_eq!(asc_output_gain(50.0, 100.0), 0.125);
+        assert_eq!(asc_output_gain(100.0, 0.0), 0.0);
+        assert_eq!(asc_output_gain(60.0, 50.0), volume::output_gain(60.0, 50.0));
+        assert_eq!(
+            asc_output_gain(60.0, 50.0),
+            asc_volume_gain(60.0) * asc_volume_gain(50.0)
+        );
+        assert_eq!(asc_output_gain(f64::NAN, 100.0), 0.0);
+        assert_eq!(asc_output_gain(150.0, 100.0), 1.0);
     }
 
     // covers: S70
@@ -581,6 +957,7 @@ mod realtime {
     use crate::volume::{GainStage, SharedGain};
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
+    use std::ffi::c_void;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -726,5 +1103,414 @@ mod realtime {
         unsafe { asc_eq_destroy(handle) };
         assert_eq!(events, 0, "the audio path allocated or freed memory");
         assert!(ring_sum.is_finite() && fifo_sum.is_finite());
+    }
+
+    /// A pipe for the real-time proofs: it never allocates, counts the bytes
+    /// it takes and answers from a fixed cycle that includes refused opens,
+    /// a full pipe, short writes, an interrupted call and a broken pipe.
+    #[derive(Default)]
+    struct CyclingPipe {
+        calls: usize,
+        bytes: u64,
+    }
+
+    unsafe extern "C" fn cycling_open(context: *mut c_void) -> i32 {
+        // SAFETY: the proofs pass a live CyclingPipe that only the thread
+        // stepping the writer touches.
+        let pipe = unsafe { &mut *context.cast::<CyclingPipe>() };
+        pipe.calls += 1;
+        if pipe.calls % 5 == 0 {
+            PIPE_NO_READER
+        } else {
+            PIPE_OK
+        }
+    }
+
+    unsafe extern "C" fn cycling_write(
+        context: *mut c_void,
+        _bytes: *const u8,
+        length: usize,
+        written: *mut usize,
+    ) -> i32 {
+        // SAFETY: as in cycling_open.
+        let pipe = unsafe { &mut *context.cast::<CyclingPipe>() };
+        pipe.calls += 1;
+        let taken = match pipe.calls % 11 {
+            3 => return PIPE_WOULD_BLOCK,
+            7 => return PIPE_BROKEN,
+            9 => return PIPE_INTERRUPTED,
+            5 => (length / 2 + 1).min(length),
+            _ => length,
+        };
+        pipe.bytes += taken as u64;
+        // SAFETY: the core passes a writable count.
+        unsafe { written.write(taken) };
+        PIPE_OK
+    }
+
+    unsafe extern "C" fn cycling_close(_context: *mut c_void) {}
+
+    fn cycling_sink(pipe: &mut CyclingPipe) -> AscPipeSink {
+        AscPipeSink {
+            context: (pipe as *mut CyclingPipe).cast(),
+            open: Some(cycling_open),
+            write: Some(cycling_write),
+            close: Some(cycling_close),
+        }
+    }
+
+    /// Interleaved stereo test audio: a quiet saw on both channels.
+    fn saw(frames: usize) -> Vec<f32> {
+        (0..frames * 2)
+            .map(|i| ((i / 2) % 100) as f32 / 400.0 - 0.125)
+            .collect()
+    }
+
+    // covers: S126, S127, S128, S129, S133
+    #[test]
+    fn every_real_time_call_of_the_c_interface_never_touches_the_heap() {
+        // Setup may allocate: the handles and the buffers.
+        let ring = asc_ring_create(asc_ring_capacity_for_rate(48_000));
+        // SAFETY: `ring` is live.
+        let writer = unsafe { asc_ring_writer_create(ring) };
+        // A session start resets the ring before any reader exists (S39).
+        // SAFETY: `writer` is live and no reader exists yet.
+        let reset = heap_events(|| unsafe { asc_ring_writer_reset(writer) });
+        // SAFETY: `ring` is live.
+        let (near, far) = unsafe {
+            (
+                asc_reader_create(ring, 48_000),
+                asc_reader_create(ring, 48_000),
+            )
+        };
+        let resampler = asc_resampler_create(48_000, 44_100);
+        let stage = asc_gain_stage_create(0.5);
+        let eq = asc_eq_create(48_000.0);
+        let feed = asc_fifo_create(1);
+        // SAFETY: `feed` is live.
+        let fifo_writer = unsafe { asc_fifo_writer_create(feed) };
+        let mut pipe = CyclingPipe::default();
+        let sink = cycling_sink(&mut pipe);
+        let gains = PRESETS[1].gains_db;
+        // SAFETY: `eq` is live and `gains` holds BAND_COUNT doubles.
+        unsafe { asc_eq_set_settings(eq, true, -2.0, gains.as_ptr()) };
+        let mut capture = saw(512);
+        capture[6] = f32::NAN;
+        capture[7] = f32::INFINITY;
+        let large = saw(20_000);
+        let mut block = vec![0.0f32; 512 * 2];
+        let mut out = vec![0.0f32; 8192 * 2];
+        let mut converted = vec![0.0f32; 1024 * 2];
+        let mut device = vec![0.0f32; 512 * 6];
+        let mut pcm = vec![0i16; 1024 * 2];
+        let mut report = AscReadReport::default();
+
+        let events = heap_events(|| {
+            for round in 0..600usize {
+                // SAFETY: every handle is live and used under its threading
+                // contract (all from this one thread); every buffer holds the
+                // frames passed with it.
+                unsafe {
+                    // The capture thread; it pauses for a while now and then.
+                    block.copy_from_slice(&capture);
+                    asc_eq_process(eq, block.as_mut_ptr(), 512);
+                    if round % 97 == 13 {
+                        asc_ring_write(writer, large.as_ptr(), 20_000);
+                    } else if !(20..25).contains(&(round % 50)) {
+                        asc_ring_write(writer, block.as_ptr(), 512);
+                    }
+                    if round % 101 == 0 {
+                        let rate = [48_000, 44_100, 96_000][round / 101 % 3];
+                        asc_fifo_set_input_rate(feed, rate);
+                    }
+                    asc_fifo_feed(feed, block.as_ptr(), 512);
+                    // Any thread: the atomic control calls and the counters.
+                    if round % 37 == 0 {
+                        asc_reader_set_delay_frames(near, 4096 + round as i64);
+                        asc_reader_set_tolerance_frames(far, 1680);
+                        asc_reader_request_resync(far);
+                        asc_gain_stage_set_gain(stage, (round % 4) as f32 / 4.0);
+                    }
+                    if round % 151 == 0 {
+                        asc_reader_reset_prime(near);
+                    }
+                    std::hint::black_box((
+                        asc_reader_delay_frames(near),
+                        asc_reader_tolerance_frames(far),
+                        asc_reader_lag_frames(near),
+                        asc_reader_counters(far),
+                        asc_gain_stage_gain(stage),
+                        asc_ring_frames_written(ring),
+                        asc_ring_capacity(ring),
+                        asc_ring_supports_rate(ring, 44_100),
+                        asc_fifo_counters(feed),
+                    ));
+                    // An output at the capture rate with six channels.
+                    asc_reader_read(near, out.as_mut_ptr(), 512, &mut report);
+                    asc_gain_stage_render(stage, out.as_ptr(), 512, device.as_mut_ptr(), 6);
+                    // An output at 44.1 kHz, fed through the resampler.
+                    let need = asc_resampler_input_frames_for(resampler, 441);
+                    asc_reader_read_at(
+                        far,
+                        out.as_mut_ptr(),
+                        need,
+                        9000,
+                        1680,
+                        std::ptr::null_mut(),
+                    );
+                    let made = asc_resampler_process(
+                        resampler,
+                        out.as_ptr(),
+                        need,
+                        converted.as_mut_ptr(),
+                        1024,
+                    );
+                    asc_gain_stage_apply(stage, converted.as_mut_ptr(), made.output_frames, 2);
+                    asc_apply_gain(converted.as_mut_ptr(), made.output_frames, 0.5);
+                    asc_convert_to_pcm16(
+                        converted.as_ptr(),
+                        pcm.as_mut_ptr(),
+                        made.output_frames * 2,
+                    );
+                    // The FIFO writer thread.
+                    for _ in 0..3 {
+                        std::hint::black_box(asc_fifo_writer_step(fifo_writer, &sink));
+                    }
+                }
+            }
+            // The FIFO writer thread, stopping.
+            let mut pause = 0u32;
+            // SAFETY: the writer and the sink are live.
+            while unsafe { asc_fifo_writer_close_step(fifo_writer, &sink, &mut pause) } {}
+        });
+
+        // SAFETY: every handle is live; each is destroyed once.
+        let (near_counters, far_counters) = unsafe {
+            let counters = (asc_reader_counters(near), asc_reader_counters(far));
+            asc_fifo_writer_destroy(fifo_writer);
+            asc_fifo_destroy(feed);
+            asc_eq_destroy(eq);
+            asc_gain_stage_destroy(stage);
+            asc_resampler_destroy(resampler);
+            asc_reader_destroy(near);
+            asc_reader_destroy(far);
+            asc_ring_writer_destroy(writer);
+            asc_ring_destroy(ring);
+            counters
+        };
+        assert_eq!(reset, 0, "the ring reset allocated or freed memory");
+        assert_eq!(events, 0, "a real-time call allocated or freed memory");
+        assert!(report.frames == 512 && pipe.bytes > 0);
+        assert!(near_counters.primes > 1 && near_counters.resyncs > 0);
+        assert!(far_counters.drift_skips + far_counters.drift_silences > 0);
+    }
+
+    /// A handle that test threads share; each thread makes only the calls
+    /// that the handle's threading contract gives it.
+    struct Handle<T>(*mut T);
+
+    impl<T> Clone for Handle<T> {
+        fn clone(&self) -> Self {
+            *self
+        }
+    }
+
+    impl<T> Copy for Handle<T> {}
+
+    // SAFETY: the pointer is only passed to the C interface, by threads that
+    // follow the handle's threading contract.
+    unsafe impl<T> Send for Handle<T> {}
+
+    impl<T> Handle<T> {
+        /// The pointer. A method, so a closure captures the whole Handle.
+        fn get(self) -> *mut T {
+            self.0
+        }
+    }
+
+    // covers: S126, S128, S132, S133
+    #[test]
+    fn audio_threads_and_a_control_thread_share_handles_without_the_heap() {
+        const ROUNDS: usize = 3000;
+        let ring = asc_ring_create(asc_ring_capacity_for_rate(48_000));
+        // SAFETY: `ring` is live.
+        let (writer, near, far) = unsafe {
+            (
+                asc_ring_writer_create(ring),
+                asc_reader_create(ring, 48_000),
+                asc_reader_create(ring, 48_000),
+            )
+        };
+        let near_stage = asc_gain_stage_create(1.0);
+        let far_stage = asc_gain_stage_create(1.0);
+        let resampler = asc_resampler_create(48_000, 44_100);
+        let eq = asc_eq_create(48_000.0);
+        let feed = asc_fifo_create(1);
+        // SAFETY: `feed` is live.
+        let fifo_writer = unsafe { asc_fifo_writer_create(feed) };
+        let mut pipe = CyclingPipe::default();
+        let sink = cycling_sink(&mut pipe);
+        let (ring_h, writer_h, near_h, far_h) =
+            (Handle(ring), Handle(writer), Handle(near), Handle(far));
+        let (near_stage_h, far_stage_h, resampler_h, eq_h) = (
+            Handle(near_stage),
+            Handle(far_stage),
+            Handle(resampler),
+            Handle(eq),
+        );
+        let (feed_h, fifo_writer_h) = (Handle(feed), Handle(fifo_writer));
+        let sink_h = Handle((&raw const sink).cast_mut());
+
+        let events: Vec<usize> = std::thread::scope(|scope| {
+            let capture = scope.spawn(move || {
+                let mut block = saw(512);
+                heap_events(|| {
+                    for _ in 0..ROUNDS {
+                        // SAFETY: this thread makes every capture-side call
+                        // on these handles; `block` holds 512 frames.
+                        unsafe {
+                            asc_eq_process(eq_h.get(), block.as_mut_ptr(), 512);
+                            asc_ring_write(writer_h.get(), block.as_ptr(), 512);
+                            asc_fifo_feed(feed_h.get(), block.as_ptr(), 512);
+                        }
+                    }
+                })
+            });
+            let near_output = scope.spawn(move || {
+                let mut out = vec![0.0f32; 512 * 2];
+                let mut device = vec![0.0f32; 512 * 2];
+                heap_events(|| {
+                    for _ in 0..ROUNDS {
+                        // SAFETY: this thread makes every read of `near` and
+                        // every output-side call of its stage.
+                        unsafe {
+                            asc_reader_read(
+                                near_h.get(),
+                                out.as_mut_ptr(),
+                                512,
+                                std::ptr::null_mut(),
+                            );
+                            asc_gain_stage_render(
+                                near_stage_h.get(),
+                                out.as_ptr(),
+                                512,
+                                device.as_mut_ptr(),
+                                2,
+                            );
+                        }
+                    }
+                })
+            });
+            let far_output = scope.spawn(move || {
+                let mut out = vec![0.0f32; 2048 * 2];
+                let mut converted = vec![0.0f32; 1024 * 2];
+                heap_events(|| {
+                    for _ in 0..ROUNDS {
+                        // SAFETY: this thread makes every read of `far`, every
+                        // resampler call and every output-side call of its stage.
+                        unsafe {
+                            let need = asc_resampler_input_frames_for(resampler_h.get(), 441);
+                            asc_reader_read(
+                                far_h.get(),
+                                out.as_mut_ptr(),
+                                need,
+                                std::ptr::null_mut(),
+                            );
+                            let made = asc_resampler_process(
+                                resampler_h.get(),
+                                out.as_ptr(),
+                                need,
+                                converted.as_mut_ptr(),
+                                1024,
+                            );
+                            asc_gain_stage_apply(
+                                far_stage_h.get(),
+                                converted.as_mut_ptr(),
+                                made.output_frames,
+                                2,
+                            );
+                        }
+                    }
+                })
+            });
+            let fifo_thread = scope.spawn(move || {
+                heap_events(|| {
+                    // SAFETY: this thread makes every call on the FIFO writer,
+                    // and only it touches the pipe behind the sink.
+                    unsafe {
+                        for _ in 0..ROUNDS {
+                            asc_fifo_writer_step(fifo_writer_h.get(), sink_h.get());
+                        }
+                        let mut pause = 0u32;
+                        while asc_fifo_writer_close_step(
+                            fifo_writer_h.get(),
+                            sink_h.get(),
+                            &mut pause,
+                        ) {}
+                    }
+                })
+            });
+            let control = scope.spawn(move || {
+                let gains = PRESETS[4].gains_db;
+                heap_events(|| {
+                    for round in 0..ROUNDS {
+                        // SAFETY: every call here is an any-thread call, or an
+                        // equalizer control call, which only this thread makes.
+                        unsafe {
+                            if round % 100 == 0 {
+                                asc_reader_set_delay_frames(near_h.get(), 2048 + round as i64);
+                                asc_reader_request_resync(far_h.get());
+                                asc_gain_stage_set_gain(
+                                    near_stage_h.get(),
+                                    (round % 3) as f32 / 2.0,
+                                );
+                                asc_gain_stage_set_gain(far_stage_h.get(), 0.25);
+                                asc_eq_set_settings(
+                                    eq_h.get(),
+                                    round % 200 == 0,
+                                    -1.0,
+                                    gains.as_ptr(),
+                                );
+                            }
+                            if round % 777 == 0 {
+                                asc_reader_reset_prime(far_h.get());
+                            }
+                            std::hint::black_box((
+                                asc_reader_lag_frames(near_h.get()),
+                                asc_reader_counters(far_h.get()),
+                                asc_reader_delay_frames(near_h.get()),
+                                asc_ring_frames_written(ring_h.get()),
+                                asc_fifo_counters(feed_h.get()),
+                                asc_gain_stage_gain(far_stage_h.get()),
+                                asc_eq_nan_resets(eq_h.get()),
+                            ));
+                        }
+                    }
+                })
+            });
+            [capture, near_output, far_output, fifo_thread, control]
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect()
+        });
+
+        // SAFETY: every thread has finished; each handle is destroyed once.
+        let written = unsafe {
+            let written = asc_ring_frames_written(ring);
+            asc_fifo_writer_destroy(fifo_writer);
+            asc_fifo_destroy(feed);
+            asc_eq_destroy(eq);
+            asc_resampler_destroy(resampler);
+            asc_gain_stage_destroy(near_stage);
+            asc_gain_stage_destroy(far_stage);
+            asc_reader_destroy(near);
+            asc_reader_destroy(far);
+            asc_ring_writer_destroy(writer);
+            asc_ring_destroy(ring);
+            written
+        };
+        assert_eq!(events, [0; 5], "a thread allocated or freed memory");
+        assert_eq!(written, (ROUNDS * 512) as u64);
+        assert!(pipe.calls > 0);
     }
 }
