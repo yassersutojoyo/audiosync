@@ -45,7 +45,7 @@ With an ad-hoc signature the code hash changes on every build, and the permissio
 
 ```bash
 open -a AudioSync
-Tests/run-tests.sh               # shellcheck, ring buffer, logic and FIFO tests, no audio hardware
+Tests/run-tests.sh               # shellcheck, private references, ring buffer, logic and FIFO tests, no audio hardware
 Tests/run-tests.sh --hardware    # adds a silent engine test on every real output device
 ```
 
