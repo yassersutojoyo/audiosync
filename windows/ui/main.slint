@@ -1,5 +1,7 @@
 // The main window. Empty for now; the menu bar leads to the About dialog.
 
+import { Tokens } from "tokens.slint";
+
 export { AboutDialog } from "about.slint";
 
 export component MainWindow inherits Window {
@@ -8,6 +10,7 @@ export component MainWindow inherits Window {
     title: "AudioSync";
     preferred-width: 640px;
     preferred-height: 400px;
+    background: Tokens.background;
 
     MenuBar {
         Menu {

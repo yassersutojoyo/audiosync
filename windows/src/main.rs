@@ -11,6 +11,10 @@
 
 mod os_version;
 mod platform;
+// Generated from brand/tokens.json: rustfmt leaves it as the generator wrote it.
+#[cfg(test)]
+#[rustfmt::skip]
+mod tokens;
 
 use std::process::ExitCode;
 
@@ -83,5 +87,26 @@ mod tests {
             main.contains("MenuBar {") && main.contains("root.about-requested();"),
             "the top-level menu opens the About dialog"
         );
+    }
+
+    /// The contrast pairs name colors and opacities that brand/tokens.json has.
+    #[test]
+    fn the_contrast_pairs_name_known_tokens() {
+        use crate::tokens::{COLORS, CONTRAST_PAIRS, OPACITIES};
+        let color = |name: &str| COLORS.iter().any(|c| c.name == name);
+        for (foreground, background) in CONTRAST_PAIRS {
+            let (base, opacity) = foreground.split_once('@').unwrap_or((foreground, ""));
+            assert!(color(base), "{foreground} is a color token");
+            assert!(
+                opacity.is_empty() || OPACITIES.iter().any(|(name, _)| *name == opacity),
+                "{foreground} names a known opacity"
+            );
+            assert!(color(background), "{background} is a color token");
+        }
+        let teal = COLORS
+            .iter()
+            .find(|c| c.name == "teal")
+            .expect("a teal token");
+        assert_eq!((teal.light, teal.dark), ([28, 159, 145], [28, 159, 145]));
     }
 }

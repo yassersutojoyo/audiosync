@@ -1,28 +1,22 @@
 import AppKit
 import SwiftUI
 
-/// AudioSync's brand colors and typeface (see brand/README.md).
+/// AudioSync's brand colors and typeface (see brand/README.md). The values come
+/// from the design tokens (brand/tokens.json, generated into BrandTokens.swift).
 enum Brand {
     /// The brand teal, #1C9F91. Also the app's accent color.
-    static let teal = Color(red: 28 / 255, green: 159 / 255, blue: 145 / 255)
+    static let teal = color(BrandTokens.Light.teal)
 
     /// Teal on light appearances, the brand mint (#63DAC2) on dark ones, as in the logo artwork.
-    static let logo = Color(nsColor: NSColor(name: "AudioSyncLogo") { appearance in
-        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor(srgbRed: 99 / 255, green: 218 / 255, blue: 194 / 255, alpha: 1)
-            : NSColor(srgbRed: 28 / 255, green: 159 / 255, blue: 145 / 255, alpha: 1)
-    })
+    static let logo = dynamic("AudioSyncLogo", light: BrandTokens.Light.logo, dark: BrandTokens.Dark.logo)
 
     /// Teal for small text (WCAG AA needs 4.5:1), same hue as the brand teal.
     /// #1C9F91 itself is only 3.27:1 on white and 3.92:1 on the dark window
     /// background (#323232), so each appearance gets its own shade:
     /// - light: #147167, 5.85:1 on white, 4.95:1 on the light window background (#ECECEC)
     /// - dark: #20B6A6, 5.07:1 on #323232, 6.59:1 on #1E1E1E
-    static let tealText = Color(nsColor: NSColor(name: "AudioSyncTealText") { appearance in
-        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor(srgbRed: 32 / 255, green: 182 / 255, blue: 166 / 255, alpha: 1)
-            : NSColor(srgbRed: 20 / 255, green: 113 / 255, blue: 103 / 255, alpha: 1)
-    })
+    static let tealText = dynamic("AudioSyncTealText",
+                                  light: BrandTokens.Light.tealText, dark: BrandTokens.Dark.tealText)
 
     /// Small secondary text (captions, notes, values), in place of `.secondary`.
     /// WCAG AA needs 4.5:1 for small text, and `.secondary` misses it in light
@@ -33,12 +27,27 @@ enum Brand {
     /// - this: light 5.59 window, 5.46 panel, 5.45 playing row;
     ///   dark 6.64 window, 6.00 panel, 6.25 playing row
     /// Icons beside text may stay `.secondary`: non-text graphics need only 3:1.
-    static let secondaryText = Color.primary.opacity(0.7)
+    static let secondaryText = Color.primary.opacity(BrandTokens.Opacity.secondaryText)
 
     /// Poppins Medium, bundled in Contents/Resources/Fonts (registered through
     /// ATSApplicationFontsPath in Info.plist). SwiftUI falls back to the system
     /// font when it is missing, e.g. when the binary runs outside the app bundle.
-    static let fontName = "Poppins-Medium"
+    static let fontName = BrandTokens.Typography.brandFontName
+
+    private static func color(_ rgb: BrandRGB) -> Color {
+        Color(red: rgb.red, green: rgb.green, blue: rgb.blue)
+    }
+
+    private static func nsColor(_ rgb: BrandRGB) -> NSColor {
+        NSColor(srgbRed: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
+    }
+
+    /// A color with one value in light appearances and another in dark ones.
+    private static func dynamic(_ name: NSColor.Name, light: BrandRGB, dark: BrandRGB) -> Color {
+        Color(nsColor: NSColor(name: name) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? nsColor(dark) : nsColor(light)
+        })
+    }
 }
 
 /// The "audiosync" wordmark: "audio" in the label color, "sync" in the logo color.
@@ -48,7 +57,7 @@ struct Wordmark: View {
     var body: some View {
         Text(text)
             .font(.custom(Brand.fontName, size: size))
-            .tracking(-0.02 * size)
+            .tracking(BrandTokens.Typography.brandTracking * size)
             // Poppins' line box (ascent 1.05 em, descent 0.35 em) leaves about 0.3 em
             // empty above the ascenders and 0.09 em below the "y": trim it so the
             // wordmark lines up with the text around it like a system font does.
