@@ -163,6 +163,7 @@ pub extern "C" fn asc_output_gain(local_position: f64, master_position: f64) -> 
 }
 
 /// [`volume::apply_gain`] on `frames` interleaved stereo frames, in place (S64, S65).
+/// Real-time safe.
 ///
 /// # Safety
 ///
@@ -306,6 +307,7 @@ pub unsafe extern "C" fn asc_eq_set_sample_rate(eq: *mut AscEqualizer, sample_ra
 }
 
 /// Capture thread: equalizes `frames` interleaved stereo frames in place (S26).
+/// Real-time safe.
 ///
 /// # Safety
 ///
@@ -660,6 +662,80 @@ mod tests {
             .collect()
     }
 
+    /// The mark of a real-time call, in the header and in the Rust docs.
+    const REAL_TIME: &str = "Real-time safe";
+
+    /// `text` as its words joined by single spaces, without comment markers,
+    /// so a phrase that wraps across comment lines is still found.
+    fn words(text: &str) -> String {
+        text.split_whitespace()
+            .filter(|word| !["*", "///"].contains(word))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// The C functions whose Rust doc comment marks them real-time safe.
+    fn rust_real_time_calls() -> BTreeSet<String> {
+        let mut marked = BTreeSet::new();
+        for (_, source) in SOURCES {
+            let lines = production_lines(source);
+            for (index, line) in lines.iter().enumerate() {
+                if line.trim() != "#[unsafe(no_mangle)]" {
+                    continue;
+                }
+                let mut doc: Vec<&str> = lines[..index]
+                    .iter()
+                    .rev()
+                    .map(|line| line.trim())
+                    .take_while(|line| line.starts_with("///") || line.starts_with("#["))
+                    .collect();
+                doc.reverse();
+                if words(&doc.join(" ")).contains(REAL_TIME) {
+                    let signature = joined(&lines[index + 1..], '{');
+                    let (_, after_fn) = signature.split_once("fn ").unwrap();
+                    let (name, _) = after_fn.split_once('(').unwrap();
+                    marked.insert(name.trim().to_owned());
+                }
+            }
+        }
+        marked
+    }
+
+    /// The functions whose header comment marks them real-time safe: each
+    /// prototype that directly follows a comment with the mark.
+    fn header_real_time_calls() -> BTreeSet<String> {
+        let mut marked = BTreeSet::new();
+        let mut rest = HEADER;
+        while let Some(start) = rest.find("/*") {
+            let end = start + rest[start..].find("*/").expect("unterminated comment");
+            let comment = &rest[start + 2..end];
+            rest = &rest[end + 2..];
+            let code = &rest[..rest.find("/*").unwrap_or(rest.len())];
+            let Some((statement, _)) = code.split_once(';') else {
+                continue;
+            };
+            let statement = statement.trim();
+            if !words(comment).contains(REAL_TIME)
+                || statement.starts_with('#')
+                || statement.starts_with("typedef")
+            {
+                continue;
+            }
+            let Some((head, _)) = statement.split_once('(') else {
+                continue;
+            };
+            let name = head
+                .split_whitespace()
+                .last()
+                .unwrap_or_default()
+                .trim_start_matches('*');
+            if name.starts_with("asc_") {
+                marked.insert(name.to_owned());
+            }
+        }
+        marked
+    }
+
     fn header_defines() -> BTreeMap<String, String> {
         header_code()
             .lines()
@@ -738,6 +814,29 @@ mod tests {
                     "{name} is not declared: {statement}"
                 );
             }
+        }
+    }
+
+    // covers: S126
+    #[test]
+    fn the_header_and_the_rust_docs_mark_the_same_real_time_calls() {
+        let header = header_real_time_calls();
+        assert!(header.len() >= 13, "found {header:?}");
+        assert_eq!(
+            header,
+            rust_real_time_calls(),
+            "include/audiosync_core.h is out of date: the \"{REAL_TIME}\" marks"
+        );
+        // The counting-allocator proof in this file makes every marked call.
+        let (_, proof) = SOURCES[0]
+            .1
+            .split_once("\nmod realtime {")
+            .expect("the allocation proof");
+        for name in &header {
+            assert!(
+                proof.contains(&format!("{name}(")),
+                "the allocation proof never calls {name}"
+            );
         }
     }
 
@@ -1248,7 +1347,12 @@ mod realtime {
                     // An output at the capture rate with six channels.
                     asc_reader_read(near, out.as_mut_ptr(), 512, &mut report);
                     asc_gain_stage_render(stage, out.as_ptr(), 512, device.as_mut_ptr(), 6);
-                    // An output at 44.1 kHz, fed through the resampler.
+                    // An output at 44.1 kHz, fed through the resampler,
+                    // which now and then starts a new stream.
+                    if round % 89 == 0 {
+                        asc_resampler_reset(resampler);
+                    }
+                    std::hint::black_box(asc_resampler_latency_frames(resampler));
                     let need = asc_resampler_input_frames_for(resampler, 441);
                     asc_reader_read_at(
                         far,
@@ -1405,10 +1509,14 @@ mod realtime {
                 let mut out = vec![0.0f32; 2048 * 2];
                 let mut converted = vec![0.0f32; 1024 * 2];
                 heap_events(|| {
-                    for _ in 0..ROUNDS {
+                    for round in 0..ROUNDS {
                         // SAFETY: this thread makes every read of `far`, every
                         // resampler call and every output-side call of its stage.
                         unsafe {
+                            if round % 500 == 0 {
+                                asc_resampler_reset(resampler_h.get());
+                            }
+                            std::hint::black_box(asc_resampler_latency_frames(resampler_h.get()));
                             let need = asc_resampler_input_frames_for(resampler_h.get(), 441);
                             asc_reader_read(
                                 far_h.get(),

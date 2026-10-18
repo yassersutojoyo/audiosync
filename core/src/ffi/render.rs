@@ -77,7 +77,7 @@ pub unsafe extern "C" fn asc_resampler_set_input_rate(
         .is_some_and(|handle| handle.resampler.set_input_rate(input_rate).is_ok())
 }
 
-/// Clears the history and the phase (S94).
+/// Clears the history and the phase (S94). Real-time safe.
 ///
 /// # Safety
 ///
@@ -91,7 +91,7 @@ pub unsafe extern "C" fn asc_resampler_reset(resampler: *mut AscResampler) {
     }
 }
 
-/// The content delay in input frames.
+/// The content delay in input frames, 0 when passing through. Real-time safe.
 ///
 /// # Safety
 ///
@@ -121,7 +121,9 @@ pub unsafe extern "C" fn asc_resampler_input_frames_for(
 }
 
 /// Converts `input_frames` stereo frames into at most `output_frames`
-/// (S62, S85, S125). Real-time safe.
+/// (S62, S85, S125). With different rates a non-finite input sample becomes
+/// silence and clears the history; equal rates pass every sample through
+/// unchanged (S85), NaN and infinity included. Real-time safe.
 ///
 /// # Safety
 ///
@@ -433,9 +435,10 @@ mod tests {
         }
     }
 
-    // covers: S125
+    // covers: S85, S123, S125
     #[test]
-    fn non_finite_input_never_leaves_the_resampler() {
+    fn non_finite_input_becomes_silence_only_when_the_rates_differ() {
+        // Different rates: nothing non-finite comes out.
         let handle = asc_resampler_create(44_100, 48_000);
         let mut input = wave(441, 3);
         input[10] = f32::NAN;
@@ -445,6 +448,7 @@ mod tests {
         unsafe {
             let count =
                 asc_resampler_process(handle, input.as_ptr(), 441, output.as_mut_ptr(), 600);
+            assert!(count.output_frames > 400);
             assert!(
                 output[..count.output_frames * 2]
                     .iter()
@@ -452,6 +456,24 @@ mod tests {
             );
             asc_resampler_destroy(handle);
         }
+        // Equal rates: every sample passes through bit for bit, and nothing
+        // is held, so the next finite block comes out finite.
+        let handle = asc_resampler_create(48_000, 48_000);
+        let input = [f32::NAN, f32::INFINITY, 0.5, 0.5, f32::NEG_INFINITY, -0.25];
+        let mut output = [0.0f32; 6];
+        let finite = [0.25f32, -0.25];
+        let mut after = [f32::NAN; 2];
+        // SAFETY: `handle` is live; each buffer holds the frames passed with it.
+        unsafe {
+            let count = asc_resampler_process(handle, input.as_ptr(), 3, output.as_mut_ptr(), 3);
+            assert_eq!((count.input_frames, count.output_frames), (3, 3));
+            asc_resampler_process(handle, finite.as_ptr(), 1, after.as_mut_ptr(), 1);
+            assert_eq!(asc_resampler_latency_frames(handle), 0);
+            asc_resampler_destroy(handle);
+        }
+        let bits = |samples: &[f32]| samples.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&output), bits(&input));
+        assert_eq!(after, finite);
     }
 
     // covers: S94

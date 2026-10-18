@@ -173,8 +173,8 @@ unsafe fn put_report(report: *mut AscReadReport, value: AscReadReport) {
 }
 
 /// Runs `read` on the output side of a reader handle with the destination
-/// block, and returns its report; an all-zero report when the handle or the
-/// block is missing.
+/// block, and returns its report; an all-zero report, without reading, when
+/// the block is empty or the handle or the block is missing.
 ///
 /// # Safety
 ///
@@ -187,6 +187,13 @@ unsafe fn read_with(
     frames: usize,
     read: impl FnOnce(&mut Reader, &mut [f32]) -> ReadReport,
 ) -> AscReadReport {
+    // A read of 0 frames leaves a pending resync or prime reset to the next
+    // read (S46). Taken here, it would anchor a block that doesn't advance
+    // with the writer: the next read would start late by whatever was written
+    // in between, inside the dead band, so nothing would ever correct it.
+    if frames == 0 {
+        return AscReadReport::default();
+    }
     let Some(samples) = stereo_samples(frames) else {
         return AscReadReport::default();
     };
@@ -396,7 +403,8 @@ pub unsafe extern "C" fn asc_reader_destroy(reader: *mut AscReader) {
 }
 
 /// Output thread: reads `frames` frames at the target delay
-/// ([`Reader::read_target`], S41-S59). Real-time safe.
+/// ([`Reader::read_target`], S41-S59). A read of 0 frames does nothing and
+/// leaves pending requests to the next read. Real-time safe.
 ///
 /// # Safety
 ///
@@ -789,6 +797,64 @@ mod tests {
         }
     }
 
+    // covers: S46, S56, S159
+    #[test]
+    fn an_empty_read_leaves_a_resync_or_a_prime_to_the_next_read() {
+        let mut session = Session::new();
+        let reader = session.reader(4096);
+        for _ in 0..20 {
+            session.write(BLOCK);
+            read(reader, BLOCK);
+        }
+        // An output cycle that needs no input, as a resampled output's can.
+        let read_nothing = || {
+            let mut report = AscReadReport {
+                frames: 99,
+                ..AscReadReport::default()
+            };
+            // SAFETY: `reader` is live; a buffer of 0 frames may be null.
+            unsafe { asc_reader_read(reader, std::ptr::null_mut(), 0, &mut report) };
+            assert_eq!(report, AscReadReport::default(), "nothing was read");
+            report.frames = 99;
+            // SAFETY: as above.
+            unsafe { asc_reader_read_at(reader, std::ptr::null_mut(), 0, 8192, 1680, &mut report) };
+            assert_eq!(report, AscReadReport::default(), "nothing was read");
+        };
+        let check = |session: &mut Session, first: i32| {
+            for round in 0..40 {
+                session.write(BLOCK);
+                let (_, report) = read(reader, BLOCK);
+                let expected = if round == 0 { first } else { CORRECTION_NONE };
+                assert_eq!(report.correction, expected, "round {round}");
+                assert_eq!(
+                    report.start,
+                    session.next as i64 - 8192,
+                    "round {round}: exactly the delay behind W"
+                );
+            }
+            // SAFETY: `reader` is live.
+            let lag = unsafe { asc_reader_lag_frames(reader) };
+            assert_eq!(lag, 8192 - BLOCK as i64);
+        };
+        // A delay change, then empty reads, then the writer's next block.
+        // SAFETY: `reader` is live.
+        unsafe { asc_reader_set_delay_frames(reader, 8192) };
+        read_nothing();
+        check(&mut session, CORRECTION_RESYNC);
+        // The same for a prime reset.
+        // SAFETY: `reader` is live.
+        unsafe { asc_reader_reset_prime(reader) };
+        read_nothing();
+        check(&mut session, CORRECTION_PRIME);
+        // SAFETY: `reader` is live, then destroyed once.
+        unsafe {
+            let counters = asc_reader_counters(reader);
+            assert_eq!((counters.primes, counters.resyncs), (2, 1));
+            assert_eq!(counters.drift_skips + counters.drift_silences, 0);
+            asc_reader_destroy(reader);
+        }
+    }
+
     // covers: S41, S50, S51, S52
     #[test]
     fn read_at_takes_the_delay_and_tolerance_from_the_caller() {
@@ -1023,8 +1089,15 @@ mod tests {
             asc_reader_read(reader, dst.as_mut_ptr(), usize::MAX, &mut report);
             assert_eq!(report, AscReadReport::default());
             assert_eq!(asc_reader_counters(reader).primes, 0, "nothing was read");
-            // An empty read is a read: it anchors.
+            // Nor is an empty read: the reader anchors on its first real read.
+            report.frames = 99;
             asc_reader_read(reader, std::ptr::null_mut(), 0, &mut report);
+            assert_eq!(report, AscReadReport::default());
+            report.frames = 99;
+            asc_reader_read_at(reader, dst.as_mut_ptr(), 0, 0, 0, &mut report);
+            assert_eq!(report, AscReadReport::default());
+            assert_eq!(asc_reader_counters(reader).primes, 0, "nothing was read");
+            asc_reader_read(reader, dst.as_mut_ptr(), 4, &mut report);
             assert_eq!(report.correction, CORRECTION_PRIME);
             asc_reader_destroy(reader);
         }

@@ -270,7 +270,9 @@ void asc_reader_destroy(AscReader *reader);
  * delay set by asc_reader_set_delay_frames. Steady state plays every frame
  * once, in order; a delay change is exact; drift is corrected outside the
  * tolerance; silence fills what the ring can't give, and no frame plays twice
- * (until a prime reset). report may be NULL. Real-time safe.
+ * (until a prime reset). A read of 0 frames does nothing: a pending resync or
+ * prime reset waits for the next read, and the report is all zeros. report
+ * may be NULL. Real-time safe.
  */
 void asc_reader_read(AscReader *reader, float *dst, size_t frames, AscReadReport *report);
 
@@ -341,23 +343,26 @@ void asc_resampler_destroy(AscResampler *resampler);
 /* Changes the input rate and starts a new stream; false for an unsupported rate. Never allocates. */
 bool asc_resampler_set_input_rate(AscResampler *resampler, uint32_t input_rate);
 
-/* Starts a new stream: clears the history and the phase. */
+/* Starts a new stream: clears the history and the phase. Real-time safe. */
 void asc_resampler_reset(AscResampler *resampler);
 
-/* The content delay in input frames (0 when passing through). */
+/* The content delay in input frames (0 when passing through). Real-time safe. */
 size_t asc_resampler_latency_frames(const AscResampler *resampler);
 
 /*
  * Input frames still needed before the next output_frames output frames can
- * be produced, so a reader request can be sized from the converter's needs.
+ * be produced, so the output thread can size each reader request from the
+ * converter's needs; saturates at SIZE_MAX. Real-time safe.
  */
 size_t asc_resampler_input_frames_for(const AscResampler *resampler, size_t output_frames);
 
 /*
  * Converts input_frames stereo frames into at most output_frames stereo
  * frames. Consumes input until it runs out or the output is full; call again
- * with the rest. Non-finite input becomes silence and clears the history.
- * Real-time safe.
+ * with the rest. When the rates differ, non-finite input becomes silence and
+ * clears the history. Equal rates pass every sample through unchanged, NaN
+ * and infinity included; the output stage and PCM16 conversion deal with
+ * those. Real-time safe.
  */
 AscResampleCount asc_resampler_process(AscResampler *resampler, const float *input, size_t input_frames,
                                        float *output, size_t output_frames);
