@@ -22,7 +22,7 @@ use audiosync_core::volume::SharedGain;
 use super::backend::BackendError;
 use super::capture::Activation;
 use super::controller::{Controller, Driver};
-use super::outputs::Endpoint;
+use super::outputs::{Endpoint, Listing};
 use super::process::ProcessTable;
 
 /// The platform calls of the Windows backend.
@@ -57,7 +57,7 @@ impl Driver for WasapiDriver {
         processes::audio_session_pids()
     }
 
-    fn outputs(&mut self) -> Result<Vec<Endpoint>, BackendError> {
+    fn outputs(&mut self) -> Result<Listing, BackendError> {
         devices::render_endpoints()
     }
 

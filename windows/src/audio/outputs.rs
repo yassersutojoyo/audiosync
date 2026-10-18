@@ -84,6 +84,166 @@ pub fn output_kind(form_factor: Option<u32>, enumerator: &str, display_port: boo
     }
 }
 
+/// What the listing read about one render endpoint, before deciding whether
+/// to list it. A call that failed keeps its error text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EndpointReading {
+    /// Its position in Windows' collection of endpoints.
+    pub index: u32,
+    /// Its endpoint ID, or why the endpoint or its ID couldn't be read.
+    pub id: Result<String, String>,
+    /// Its properties, or why its property store couldn't be opened.
+    pub properties: Result<EndpointProperties, String>,
+}
+
+/// The properties of an endpoint that the listing uses. One that can't be
+/// read is left out.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EndpointProperties {
+    /// The name Windows shows (`PKEY_Device_FriendlyName`).
+    pub name: Option<String>,
+    /// Its form factor (`PKEY_AudioEndpoint_FormFactor`).
+    pub form_factor: Option<u32>,
+    /// The enumerator of its device (`PKEY_Device_EnumeratorName`).
+    pub enumerator: Option<String>,
+    /// Whether its jack is DisplayPort (`PKEY_AudioEndpoint_JackSubType`).
+    pub display_port: bool,
+}
+
+/// Something the listing did with an endpoint that the log should say.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ListingNote {
+    /// Left out: a Bluetooth hands-free endpoint.
+    HandsFree {
+        /// Its endpoint ID.
+        id: String,
+        /// Its name, if it could be read.
+        name: Option<String>,
+    },
+    /// Left out: the endpoint or its ID couldn't be read, so nothing could
+    /// play to it.
+    NoId {
+        /// Its position in Windows' collection.
+        index: u32,
+        /// Why.
+        error: String,
+    },
+    /// Listed under its ID, as an output of unknown kind: its properties
+    /// couldn't be read.
+    NoProperties {
+        /// Its endpoint ID.
+        id: String,
+        /// Why.
+        error: String,
+    },
+}
+
+/// The outputs to list, by ID, and what the log should say about the
+/// endpoints left out or listed without their properties.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Listing {
+    /// The endpoints to list, sorted by ID.
+    pub endpoints: Vec<Endpoint>,
+    /// What the log should say, in the order Windows gave the endpoints.
+    pub notes: Vec<ListingNote>,
+}
+
+impl std::fmt::Display for ListingNote {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ListingNote::HandsFree { id, name } => {
+                let name = name.as_deref().unwrap_or("(no name)");
+                write!(
+                    f,
+                    "output {name:?} ({id}) left out: a Bluetooth hands-free endpoint, \
+                     for calls only"
+                )
+            }
+            ListingNote::NoId { index, error } => write!(
+                f,
+                "render endpoint {index} left out: it couldn't be read ({error})"
+            ),
+            ListingNote::NoProperties { id, error } => write!(
+                f,
+                "output {id} listed under its ID, kind unknown: its properties couldn't \
+                 be read ({error})"
+            ),
+        }
+    }
+}
+
+/// The enumerator name (`PKEY_Device_EnumeratorName`) the endpoints of
+/// Windows' Bluetooth Hands-Free Profile audio driver report.
+pub const HANDS_FREE_ENUMERATOR: &str = "BTHHFENUM";
+
+/// Whether an endpoint whose device has this enumerator is a Bluetooth
+/// hands-free one, which AudioSync doesn't list.
+///
+/// A Bluetooth headset gets two render endpoints from Windows: a stereo one
+/// from its A2DP profile (enumerator `BTHENUM`), and a call one from its
+/// Hands-Free Profile (`BTHHFENUM`). The call one carries mono,
+/// low-bandwidth audio, and opening it switches the headset to call mode,
+/// which interrupts its stereo sound. A phone that uses the PC for its calls
+/// gets a hands-free endpoint too.
+///
+/// The enumerator tells them apart; the form factor can't, since a
+/// headset's hands-free endpoint says `Headset` and a phone's says
+/// `Speakers`, while a USB or wired headset that plays in stereo says
+/// `Headset` as well.
+pub fn is_hands_free(enumerator: &str) -> bool {
+    enumerator.eq_ignore_ascii_case(HANDS_FREE_ENUMERATOR)
+}
+
+/// Turns what was read about each active render endpoint into the outputs to
+/// list. `default_id` is the ID of Windows' default output, if there is one.
+///
+/// Every endpoint is listed except a Bluetooth hands-free one
+/// ([`is_hands_free`]) and one without an ID, which nothing could play to.
+/// One whose properties can't be read is listed under its ID as an output
+/// of unknown kind. The notes say what was left out, or listed without its
+/// properties, and why, so nothing goes missing without a word in the log.
+pub fn list_endpoints(readings: Vec<EndpointReading>, default_id: Option<&str>) -> Listing {
+    let mut listing = Listing::default();
+    for reading in readings {
+        let id = match reading.id {
+            Ok(id) => id,
+            Err(error) => {
+                listing.notes.push(ListingNote::NoId {
+                    index: reading.index,
+                    error,
+                });
+                continue;
+            }
+        };
+        let properties = match reading.properties {
+            Ok(properties) => properties,
+            Err(error) => {
+                listing.notes.push(ListingNote::NoProperties {
+                    id: id.clone(),
+                    error,
+                });
+                EndpointProperties::default()
+            }
+        };
+        let enumerator = properties.enumerator.as_deref().unwrap_or_default();
+        if is_hands_free(enumerator) {
+            listing.notes.push(ListingNote::HandsFree {
+                id,
+                name: properties.name,
+            });
+            continue;
+        }
+        listing.endpoints.push(Endpoint {
+            is_default: default_id == Some(id.as_str()),
+            kind: output_kind(properties.form_factor, enumerator, properties.display_port),
+            name: properties.name.unwrap_or_else(|| id.clone()),
+            id,
+        });
+    }
+    listing.endpoints.sort_by(|a, b| a.id.cmp(&b.id));
+    listing
+}
+
 /// Whether AirPlay speakers exist to line local outputs up with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AirPlay {
@@ -457,6 +617,130 @@ mod tests {
         assert_eq!(kind(8, "HDAUDIO"), OutputKind::Other, "S/PDIF");
         assert_eq!(kind(0, "SWD"), OutputKind::Other, "a remote session");
         assert_eq!(output_kind(None, "", false), OutputKind::Other);
+    }
+
+    fn reading(index: u32, id: &str, name: &str, form: u32, bus: &str) -> EndpointReading {
+        EndpointReading {
+            index,
+            id: Ok(id.to_owned()),
+            properties: Ok(EndpointProperties {
+                name: Some(name.to_owned()),
+                form_factor: Some(form),
+                enumerator: Some(bus.to_owned()),
+                display_port: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn bluetooth_hands_free_endpoints_are_left_out_and_noted() {
+        let listing = list_endpoints(
+            vec![
+                reading(0, "b", "Headphones (Example Buds)", 3, "BTHENUM"),
+                reading(1, "c", "Headset (Example Buds Hands-Free)", 5, "BTHHFENUM"),
+                reading(2, "a", "Speakers (Example Phone HF Audio)", 1, "BthHfEnum"),
+            ],
+            Some("b"),
+        );
+        assert_eq!(
+            listing.endpoints,
+            vec![Endpoint {
+                id: "b".to_owned(),
+                name: "Headphones (Example Buds)".to_owned(),
+                is_default: true,
+                kind: OutputKind::Bluetooth,
+            }],
+            "the stereo endpoint stays, whatever the hands-free one's form factor"
+        );
+        assert_eq!(
+            listing.notes,
+            vec![
+                ListingNote::HandsFree {
+                    id: "c".to_owned(),
+                    name: Some("Headset (Example Buds Hands-Free)".to_owned()),
+                },
+                ListingNote::HandsFree {
+                    id: "a".to_owned(),
+                    name: Some("Speakers (Example Phone HF Audio)".to_owned()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn headsets_on_other_buses_are_listed() {
+        let listing = list_endpoints(
+            vec![
+                reading(0, "a", "Headset (Example USB Headset)", 5, "USB"),
+                reading(1, "b", "Headset Earphone (Example Jack)", 5, "HDAUDIO"),
+            ],
+            None,
+        );
+        assert_eq!(ids(&listing.endpoints), ["a", "b"]);
+        assert!(listing.notes.is_empty());
+    }
+
+    #[test]
+    fn an_endpoint_whose_properties_fail_is_listed_under_its_id_and_noted() {
+        let listing = list_endpoints(
+            vec![EndpointReading {
+                index: 0,
+                id: Ok("a".to_owned()),
+                properties: Err("IMMDevice::OpenPropertyStore: access denied".to_owned()),
+            }],
+            None,
+        );
+        assert_eq!(
+            listing.endpoints,
+            vec![Endpoint {
+                id: "a".to_owned(),
+                name: "a".to_owned(),
+                is_default: false,
+                kind: OutputKind::Other,
+            }]
+        );
+        assert_eq!(
+            listing.notes,
+            vec![ListingNote::NoProperties {
+                id: "a".to_owned(),
+                error: "IMMDevice::OpenPropertyStore: access denied".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn an_endpoint_without_an_id_is_left_out_and_noted() {
+        let listing = list_endpoints(
+            vec![
+                EndpointReading {
+                    index: 0,
+                    id: Err("IMMDevice::GetId: element not found".to_owned()),
+                    properties: Ok(EndpointProperties::default()),
+                },
+                reading(1, "b", "Speakers (Example)", 1, "HDAUDIO"),
+            ],
+            None,
+        );
+        assert_eq!(ids(&listing.endpoints), ["b"]);
+        assert_eq!(
+            listing.notes,
+            vec![ListingNote::NoId {
+                index: 0,
+                error: "IMMDevice::GetId: element not found".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_name_that_cannot_be_read_falls_back_to_the_id() {
+        let mut nameless = reading(0, "a", "", 1, "HDAUDIO");
+        if let Ok(properties) = &mut nameless.properties {
+            properties.name = None;
+        }
+        let listing = list_endpoints(vec![nameless], None);
+        assert_eq!(listing.endpoints[0].name, "a");
+        assert_eq!(listing.endpoints[0].kind, OutputKind::BuiltIn);
+        assert!(listing.notes.is_empty());
     }
 
     fn ids(endpoints: &[Endpoint]) -> Vec<&str> {

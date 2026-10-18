@@ -36,7 +36,7 @@ use super::capture::{
 };
 #[cfg(test)]
 use super::outputs::OutputParams;
-use super::outputs::{AirPlay, Endpoint, OutputPolicy, StreamSetup};
+use super::outputs::{AirPlay, Endpoint, Listing, ListingNote, OutputPolicy, StreamSetup};
 use super::process::ProcessTable;
 use crate::debug_log::DebugLog;
 
@@ -94,8 +94,9 @@ pub trait Driver {
     /// output.
     fn session_pids(&mut self) -> Result<Vec<u32>, BackendError>;
 
-    /// The connected render endpoints.
-    fn outputs(&mut self) -> Result<Vec<Endpoint>, BackendError>;
+    /// The connected render endpoints, and notes for the log on the ones
+    /// left out or listed without their properties.
+    fn outputs(&mut self) -> Result<Listing, BackendError>;
 
     /// Whether outputs may have changed since the last call.
     fn outputs_changed(&mut self) -> bool;
@@ -164,6 +165,9 @@ pub struct Controller<D: Driver> {
     /// error that repeats at every poll is logged once.
     listing_error: Option<BackendError>,
     sources_error: Option<BackendError>,
+    /// The notes of the last listing: notes that repeat at every listing
+    /// are logged once.
+    listing_notes: Vec<ListingNote>,
     /// When the log last got a status line, and the frames captured then.
     last_status: Option<(Instant, u64)>,
 }
@@ -185,6 +189,7 @@ impl<D: Driver> Controller<D> {
             setups: BTreeMap::new(),
             listing_error: None,
             sources_error: None,
+            listing_notes: Vec::new(),
             last_status: None,
         }
     }
@@ -248,8 +253,11 @@ impl<D: Driver> Controller<D> {
     /// and the error when listing failed. A failed listing keeps the last
     /// list, and the next refresh lists again.
     fn refresh_outputs(&mut self) -> (bool, Result<(), BackendError>) {
-        let mut listed = match self.driver.outputs() {
-            Ok(listed) => listed,
+        let Listing {
+            endpoints: mut listed,
+            notes,
+        } = match self.driver.outputs() {
+            Ok(listing) => listing,
             Err(error) => {
                 self.listing_ok = false;
                 if self.listing_error.as_ref() != Some(&error) {
@@ -270,6 +278,14 @@ impl<D: Driver> Controller<D> {
             Some(_) if !changed => format!("outputs listed again, no change ({})", listed.len()),
             _ => describe_listing(previous, &listed, &self.setups),
         });
+        // An endpoint left out, or listed without its properties, is
+        // logged with the full listing and whenever the notes change.
+        if previous.is_none() || notes != self.listing_notes {
+            for note in &notes {
+                self.log.log(|| note.to_string());
+            }
+        }
+        self.listing_notes = notes;
         for endpoint in &listed {
             self.names
                 .insert(endpoint.id.clone(), endpoint.name.clone());
@@ -977,6 +993,7 @@ mod tests {
     use super::*;
     use crate::audio::backend::OutputKind;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
+    use crate::audio::outputs::{EndpointProperties, EndpointReading};
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
 
     const SPEAKERS: &str = "speakers";
@@ -1584,6 +1601,53 @@ mod tests {
             .filter(|m| m.starts_with("listing the outputs failed"))
             .count();
         assert_eq!(failures, 1, "{messages:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn endpoints_left_out_of_the_listing_are_logged_once() {
+        let (mut backend, log, dir) = logged_backend("controller-left-out");
+        backend.enumerate_endpoint(EndpointReading {
+            index: 2,
+            id: Ok("buds-call".to_owned()),
+            properties: Ok(EndpointProperties {
+                name: Some("Headset (Example Buds Hands-Free)".to_owned()),
+                form_factor: Some(5),
+                enumerator: Some("BTHHFENUM".to_owned()),
+                display_port: false,
+            }),
+        });
+        backend.enumerate_endpoint(EndpointReading {
+            index: 3,
+            id: Err("IMMDevice::GetId failed (0x80070490)".to_owned()),
+            properties: Ok(EndpointProperties::default()),
+        });
+        backend.poll();
+        let listed = backend.list_outputs().unwrap();
+        assert_eq!(
+            listed.iter().map(|o| o.id.as_str()).collect::<Vec<_>>(),
+            [HEADPHONES, SPEAKERS],
+            "neither endpoint is listed"
+        );
+        let messages = logged(&log, &dir);
+        let hands_free = "output \"Headset (Example Buds Hands-Free)\" (buds-call) left out: \
+                          a Bluetooth hands-free endpoint, for calls only";
+        let no_id = "render endpoint 3 left out: it couldn't be read \
+                     (IMMDevice::GetId failed (0x80070490))";
+        assert_in_order(
+            &messages,
+            &[
+                "Windows reported a change of the outputs",
+                "outputs listed again, no change (2)",
+                hands_free,
+                no_id,
+                "outputs listed again, no change (2)",
+            ],
+        );
+        for note in [hands_free, no_id] {
+            let count = messages.iter().filter(|m| m.as_str() == note).count();
+            assert_eq!(count, 1, "logged once, not at every listing: {messages:?}");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 
