@@ -1,0 +1,5 @@
+// The C interface of audiosync-core (core/). Package.swift links the library.
+module CAudioSyncCore {
+    header "../../core/include/audiosync_core.h"
+    export *
+}

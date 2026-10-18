@@ -39,6 +39,9 @@ echo "▶ fifo"
 build fifo Tests/fifotest.swift FifoFeed.swift
 "$OUT/fifo/run" || status=1
 
+echo "▶ soak harness (compile only; Tests/soak.sh and Tests/bench.sh run it)"
+Tests/build-harness.sh "$OUT/soaktest" || status=1
+
 if [ "${1:-}" = "--hardware" ]; then
   echo "▶ engine (real output devices, silent)"
   build engine Tests/enginetest.swift OutputRenderer.swift RingBuffer.swift AudioDevices.swift \

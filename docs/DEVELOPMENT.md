@@ -4,7 +4,9 @@ Notes for building AudioSync yourself and finding your way around the code. For 
 
 ## Building
 
-You need macOS 15 (Sequoia) or later, [Homebrew](https://brew.sh) (only for the build tools `pkg-config` and `cmake`, plus `nasm` on Intel Macs), and the Command Line Tools for Xcode 16 or later (`xcode-select --install`), which bring Swift 6 and the `python3` the build uses.
+You need macOS 15 (Sequoia) or later, [Homebrew](https://brew.sh) (only for the build tools `pkg-config` and `cmake`, plus `nasm` on Intel Macs), the Command Line Tools for Xcode 16 or later (`xcode-select --install`), which bring Swift 6 and the `python3` the build uses, and a Rust toolchain for the audio core in `core/`: install it with [rustup](https://rustup.rs).
+
+The first build needs network access: it adds the two Apple targets to your Rust toolchain and fetches the crates.io index for the core's test-only dependencies. Later builds work offline.
 
 ```bash
 git clone https://github.com/yassersutojoyo/audiosync
@@ -16,6 +18,8 @@ cd audiosync
 
 After that, `./build.sh` is all you need day to day. It builds the app, bundles the engine and every library it needs (so the app runs on Macs without Homebrew), signs it, and installs it to `/Applications`, or `~/Applications` if `/Applications` isn't writable. Without an engine the app still builds and runs, just without AirPlay speakers.
 
+The app links the audio core, the Rust crate in `core/` (see `core/NOTES.md`). `build.sh` first runs `scripts/build_core.sh`, which builds it for Apple silicon and Intel (with rustup, it adds a missing target itself) and joins both into one static library, `core/target/universal-apple-darwin/release/libaudiosync_core.a`. That library exports only the functions in `core/include/audiosync_core.h`, so none of the Rust standard library's own symbols can stand in for the system's. A plain `swift build`, a scratch build included, links that file: run the script first, or the link stops with "library 'audiosync_core' not found".
+
 Everything is built with `MACOSX_DEPLOYMENT_TARGET=15.0`, the app's `LSMinimumSystemVersion`, so the engine runs on macOS 15 and later, whatever macOS the release is built on. C library functions the SDK marks as newer than 15.0 (`pipe2`, `dup3` and a few others) are reported as missing to `configure`, because a weak import of one is NULL on an older macOS and crashes the engine. `setup.sh` checks the libraries and the engine after building them, and `bundle_engine.py` checks everything it bundles again: the build fails if anything needs a newer macOS than `LSMinimumSystemVersion`, weak-imports from libSystem, or links something outside the app and the system.
 
 A few environment variables change what the scripts do:
@@ -23,7 +27,7 @@ A few environment variables change what the scripts do:
 - `AUDIOSYNC_INSTALL_DIR`: install somewhere other than `/Applications`
 - `AUDIOSYNC_ENGINE`: bundle a different engine binary
 - `AUDIOSYNC_ADHOC=1`: sign ad-hoc instead of with the local identity
-- `AUDIOSYNC_SKIP_BREW=1`: `setup.sh` skips Homebrew (handy offline)
+- `AUDIOSYNC_SKIP_BREW=1`: `setup.sh` skips Homebrew (handy offline, once the Rust core has been built at least once)
 - `AUDIOSYNC_ENGINE_ONLY=1`: `setup.sh` stops after building the engine
 - `AUDIOSYNC_BUILD_DIR`: build the libraries and the engine somewhere other than `~/.audiosync-build` (for a test build that leaves your usual engine alone; `build.sh` and `archive_sources.sh` follow it too)
 - `AUDIOSYNC_ALLOW_NEWER_ENGINE=1`: `bundle_engine.py` only warns when the engine needs a newer macOS or has libraries it can't trace to `setup.sh`, for a local build deliberately linked against Homebrew. AirPlay then won't start on older systems, so never use it for a release
@@ -51,6 +55,8 @@ The tests are standalone Swift files in `Tests/`, no XCTest. Run the `--hardware
 
 The test run starts with `scripts/shellcheck.sh`, which checks every script in `scripts/shellcheck-files.txt` and fails if shellcheck is missing. CI runs the same script with the same pinned shellcheck version (different versions flag different things), so install that version: `brew install shellcheck` gives it today, and `scripts/shellcheck.sh --install <dir>` downloads exactly the pinned release (then put `<dir>` on your `PATH`). A new shell script goes into that list, or the check fails.
 
+`Tests/soak.sh` (an hour of silent playback, judged against a baseline) and `Tests/bench.sh` (writes that baseline) take long, so `run-tests.sh` only compiles their harness. [BENCHMARKS.md](BENCHMARKS.md) explains both.
+
 For a debug log, quit AudioSync and start it from Terminal:
 
 ```bash
@@ -61,7 +67,7 @@ It writes to `/tmp/audiosync-debug.log`.
 
 ## Where things are
 
-Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) describes the engine's behavior clause by clause, and [`EDGE_CASES.md`](EDGE_CASES.md) what happens when devices, sleep or the engine change under a session. The audio path, roughly in order:
+Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) describes the engine's behavior clause by clause, and [`EDGE_CASES.md`](EDGE_CASES.md) what happens when devices, sleep or the engine change under a session. [`WINDOWS_AUDIO_ROUTING.md`](WINDOWS_AUDIO_ROUTING.md) weighs how a future Windows version could avoid double audio when capturing an app. The audio path, roughly in order:
 
 - `AudioSource.swift`, `ProcessTapCapture.swift`: what to capture (system, one app, an input device) and the capture itself
 - `Equalizer.swift`: the 10-band EQ (`EqualizerWindow.swift` is its window)
@@ -75,9 +81,23 @@ Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) desc
 
 The app side: `AppDelegate.swift` holds app state, persistence, launch and quit, and its extensions split out windows (`+Windows`), groups and auto-connect (`+Groups`), local outputs (`+Outputs`), AirPlay speakers (`+AirPlay`) and streaming and notices (`+Engine`). The UI is SwiftUI in `MainWindow.swift` and `MenuBar.swift`, with the app menus in `MainMenu.swift`. Smaller pieces: `AudioDevices.swift` (Core Audio device helpers), `Volume.swift` (the loudness curve), `SpeakerGroups.swift`, `NowPlaying.swift` (Spotify and Music), `Diagnostics.swift` (the debug log) and `main.swift` (keeps one copy running).
 
+`AudioSyncCore.swift` is the app's side of the Rust core (`core/`, imported through the `CAudioSyncCore` module in `Sources/CAudioSyncCore`); for now it only logs the core's version at launch.
+
 All user-facing text goes through `AppText` in `Localization.swift`. `Brand.swift` has the brand colors and typeface; `BrandMark.swift` is generated, so don't edit it.
 
-Outside the app: `setup.sh`, `build.sh` and `scripts/bundle_engine.py` build and bundle the engine, `make-dmg.sh` packages a release, and `scripts/archive_sources.sh` gathers library sources for one (see `RELEASE.md`).
+Outside the app: `setup.sh`, `build.sh` and `scripts/bundle_engine.py` build and bundle the engine, `scripts/build_core.sh` builds the Rust core, `make-dmg.sh` packages a release, and `scripts/archive_sources.sh` gathers library sources for one (see `RELEASE.md`).
+
+## The Rust core and the Windows app
+
+Two Rust folders sit next to the Swift package.
+
+`core/` is `audiosync-core`, the platform-independent audio core: the delay ring buffer, drift correction, resampling, the equalizer, volume, the sync policies and PCM16 conversion. It's written from [`ENGINE_SPEC.md`](ENGINE_SPEC.md), and [`core/NOTES.md`](../core/NOTES.md) records how it reads the spec where there was room to choose. The macOS app links it as described under Building. Its tests need only a Rust toolchain, no audio hardware:
+
+```bash
+cd core && cargo test
+```
+
+`windows/` is a Windows 11 version of AudioSync in development, written in Rust with a [Slint](https://slint.dev) interface. It will get its audio work from the same core, which for now it links only to show the core's version in the About dialog. So far it opens an empty window with a Help menu and an About dialog, and it hasn't been tried on real Windows hardware: CI checks the formatting, runs clippy and the tests, and builds it for x64 and ARM64, nothing more. On Windows you need rustup with the stable MSVC toolchain and the Visual Studio Build Tools ("Desktop development with C++"), then `cargo test` and `cargo build --release` in `windows/`. On a Mac, `cargo test` runs its logic tests and `cargo check --target x86_64-pc-windows-msvc` checks the Windows code, but can't link it. [`windows/README.md`](../windows/README.md) has the details, and [`WINDOWS_AUDIO_ROUTING.md`](WINDOWS_AUDIO_ROUTING.md) weighs how it could capture one app without playing it twice.
 
 ## Logo, icons and screenshots
 

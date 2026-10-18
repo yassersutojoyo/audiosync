@@ -1,0 +1,25 @@
+# Clauses of docs/ENGINE_SPEC.md that only the host application can implement,
+# so no test in core/ can cover them. One per line: the clause ID, a space, the
+# reason. tests/spec_coverage.rs fails if a clause listed here gains a
+# `// covers:` test, so keep this list honest and short.
+S6 Architecture overview only; each component it names has its own clauses.
+S10 Core Audio process tap that leaves AudioSync's own process out of the system source.
+S11 Core Audio process objects and responsible PIDs that make up an app source.
+S13 Core Audio process tap that mutes the tapped processes' own output.
+S60 Core Audio output device enumeration and device object IDs.
+S61 The renderer object wraps a Core Audio output unit; its pure parts are S56, S62, S64 and S65.
+S66 A renderer's delay call measured on real hardware; its pure parts are S3 and S46.
+S67 Frames a real output device renders per second.
+S82 OwnTone working folder layout and creating the pipe before the engine launches; the FIFO feed gets the path.
+S96 OwnTone configuration file contents.
+S97 OwnTone configuration password removal after the first API answer.
+S101 OwnTone HTTP client transport: poll cadence, timeouts, serial write queue, path encoding.
+S110 Quit sequence: OwnTone API write drain and process signals.
+S111 The app's SIGTERM handler stops the OwnTone process.
+S112 Engine control interface of the host's engine wrapper (Core Audio device IDs, callbacks).
+S113 Main-thread dispatch of the host's control calls and callbacks.
+S114 Session start orchestration, which starts Core Audio capture after the core's ring, equalizer and FIFO.
+S115 Session stop orchestration, which stops Core Audio capture and renderers.
+S154 macOS Local Network privacy permission and its Bonjour browser states.
+S155 AppKit appearance setting.
+S156 Repository shell tooling (shellcheck), checked by CI and Tests/run-tests.sh.

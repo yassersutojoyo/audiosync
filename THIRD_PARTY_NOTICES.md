@@ -8,7 +8,11 @@ inside `AudioSync.app`:
 - `Contents/Frameworks/*.dylib`, `Contents/Frameworks/owntone-sqlext.so`: its libraries
 
 Every build also ships the Poppins font (`Contents/Resources/Fonts/`), see
-[Fonts](#fonts).
+[Fonts](#fonts). The app binary also contains AudioSync's audio core (`core/`,
+written in Rust and MIT-licensed like the rest of AudioSync; its only
+third-party crates are test and benchmark tools that never reach the app) and,
+compiled in with it, parts of the Rust standard library, see
+[App frameworks and libraries](#app-frameworks-and-libraries).
 
 The engine runs as a separate process that AudioSync talks to over a named
 pipe and a local HTTP API. Each component stays under its own license. The
@@ -19,6 +23,7 @@ app also carries, in `Contents/Resources/ThirdParty/`:
 - the exact library versions it was built with (`versions.txt`)
 - each library's own license files (`licenses/<library>/`)
 - the Poppins font license (`licenses/poppins/OFL.txt`)
+- the Rust standard library's copyright notices and license texts (`licenses/rust/`)
 
 The engine as distributed is covered by OwnTone's license, the GNU GPL
 version 2 or later. The libraries it links keep their own licenses, all of them
@@ -117,11 +122,12 @@ The engine also uses macOS's own zlib, libcurl and libxml2, which are part of
 the system and not bundled. The sources of the GPL- and LGPL-licensed libraries
 above are attached to each release, as described above.
 
-## App frameworks
+## App frameworks and libraries
 
 | Component | License |
 |---|---|
 | [Sparkle](https://sparkle-project.org) 2.9.5 (update framework, currently disabled; license in `licenses/sparkle/`) | MIT |
+| [Rust standard library](https://github.com/rust-lang/rust), © The Rust Project Developers (the parts the audio core uses, compiled into the app binary; its copyright notices, which also cover the crates it is built from, its license texts and the Rust version in `licenses/rust/`) | MIT OR Apache-2.0 |
 
 ## Fonts
 
@@ -130,6 +136,26 @@ above are attached to each release, as described above.
 | [Poppins](https://github.com/itfoundry/Poppins) Medium, © 2020 The Poppins Project Authors (the wordmark typeface, in `Contents/Resources/Fonts/`; license in `licenses/poppins/OFL.txt`; also in this repository as `brand/fonts/`) | SIL Open Font License 1.1 |
 
 The wordmark SVGs in `brand/` are outlined from Poppins Medium.
+
+## Windows app (in development, not released)
+
+`windows/` is the start of a Windows 11 version of AudioSync. None of it is in
+the macOS app, and no Windows build has been released.
+
+| Component | License |
+|---|---|
+| [Slint](https://slint.dev) 1.18, © SixtyFPS GmbH (the user interface toolkit) | GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0; used under the Slint Royalty-free Desktop, Mobile, and Web Applications License 2.0 |
+
+That license asks for an attribution. The one AudioSync uses is the
+`AboutSlint` widget in the app's About dialog, which the top-level menu opens
+(Help > About AudioSync). The widget shows the Made with Slint logo
+(CC-BY-ND-4.0, © SixtyFPS GmbH) unchanged, and the compiled interface also
+carries an icon from Microsoft's Fluent UI System Icons (MIT, © Microsoft Corporation), via Slint's Fluent style.
+
+The Windows app's other Rust dependencies are under permissive licenses. CI
+checks them with `cargo deny check licenses` against the list in
+`windows/deny.toml`. Full notices for the Windows app, the Rust standard
+library included, will be written before any Windows release.
 
 ## Trademarks
 
