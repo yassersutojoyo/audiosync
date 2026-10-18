@@ -44,7 +44,7 @@ use super::com::{
 use super::processes::ProcessWatch;
 use crate::audio::backend::BackendError;
 use crate::audio::capture::{
-    Activation, CAPTURE_ATTEMPTS, CaptureConverter, LoopbackMode, StreamFormat,
+    Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, LoopbackMode, StreamFormat,
 };
 use crate::audio::controller::{CaptureHandle, CaptureState};
 use crate::audio::outputs::HNS_PER_MS;
@@ -72,6 +72,8 @@ pub struct LoopbackCapture {
     thread: Option<JoinHandle<()>>,
     /// The captured app, to notice when it quits.
     source: Option<ProcessWatch>,
+    /// How Windows accepted to deliver the capture.
+    setup: CaptureAttempt,
 }
 
 impl CaptureHandle for LoopbackCapture {
@@ -85,6 +87,10 @@ impl CaptureHandle for LoopbackCapture {
             return CaptureState::Failed(device_code_error("process loopback capture", code));
         }
         CaptureState::Running
+    }
+
+    fn setup(&self) -> Option<CaptureAttempt> {
+        Some(self.setup)
     }
 }
 
@@ -111,7 +117,7 @@ pub(super) fn start(
     let stop = Arc::new(Event::manual_reset()?);
     let failure = Arc::new(AtomicI32::new(0));
     let ended = Arc::new(AtomicBool::new(false));
-    let thread = {
+    let (thread, setup) = {
         let stop = Arc::clone(&stop);
         let failure = Arc::clone(&failure);
         let ended = Arc::clone(&ended);
@@ -127,6 +133,7 @@ pub(super) fn start(
         ended,
         thread: Some(thread),
         source,
+        setup,
     })
 }
 
@@ -138,7 +145,7 @@ fn run(
     stop: &Event,
     failure: &AtomicI32,
     ended: &AtomicBool,
-    ready: Ready,
+    ready: Ready<CaptureAttempt>,
 ) {
     let _apartment = match Apartment::enter() {
         Ok(apartment) => apartment,
@@ -157,7 +164,10 @@ fn run(
     if let Err(error) = unsafe { stream.client.Start() } {
         return ready.fail(system_error("IAudioClient::Start", &error));
     }
-    ready.ok();
+    ready.ok(CaptureAttempt {
+        format: stream.format,
+        autoconvert: stream.autoconvert,
+    });
     let result = capture_loop(&stream, &mut converter, stop);
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };
@@ -175,6 +185,8 @@ struct CaptureStream {
     /// it is closed after them.
     event: Event,
     format: StreamFormat,
+    /// Whether Windows converts to `format`.
+    autoconvert: bool,
 }
 
 /// Activates and initializes a capture, trying each format of
@@ -200,7 +212,7 @@ fn open_stream(activation: Activation) -> Result<CaptureStream, BackendError> {
             )
         };
         match initialized {
-            Ok(()) => return finish_stream(client, attempt.format),
+            Ok(()) => return finish_stream(client, attempt),
             Err(error) => {
                 first_error.get_or_insert(system_error("IAudioClient::Initialize", &error));
             }
@@ -212,7 +224,7 @@ fn open_stream(activation: Activation) -> Result<CaptureStream, BackendError> {
 /// Connects an initialized client to its event and capture service.
 fn finish_stream(
     client: IAudioClient,
-    format: StreamFormat,
+    attempt: CaptureAttempt,
 ) -> Result<CaptureStream, BackendError> {
     let event = Event::auto_reset()?;
     // SAFETY: calls on an initialized client; the event outlives the stream.
@@ -225,7 +237,8 @@ fn finish_stream(
         client,
         capture,
         event,
-        format,
+        format: attempt.format,
+        autoconvert: attempt.autoconvert,
     })
 }
 

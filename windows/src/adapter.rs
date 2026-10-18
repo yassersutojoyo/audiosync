@@ -18,6 +18,10 @@
 //! Windows has them. Sources are `system`, or `app:` with the app's process ID
 //! and executable (`app:2000:spotify.exe`), so a process ID that Windows gives
 //! to another app later is never taken for the chosen one.
+//!
+//! The debug log gets what the user asked for, what the session rules
+//! decided, the notices posted and the source list whenever it changes; the
+//! audio backend logs what it did itself.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -33,6 +37,7 @@ use crate::audio::backend::{
     StopReason,
 };
 use crate::audio::capture::WHOLE_SYSTEM_NAME;
+use crate::debug_log::DebugLog;
 use crate::ui_model::{
     AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, Source, SourceKind,
     Speaker, SpeakerKind, clamp_delay_ms,
@@ -124,12 +129,15 @@ pub struct AudioAdapter<A: AudioBackend> {
     polls: u32,
     /// The local time now, as a notice shows it.
     clock: fn() -> String,
+    /// The debug log; it writes nothing unless `AUDIOSYNC_DEBUG=1`.
+    log: DebugLog,
 }
 
 impl<A: AudioBackend> AudioAdapter<A> {
     /// The adapter over `audio`, stopped, with the sources and outputs listed
-    /// now. `clock` gives the time a notice shows.
-    pub fn new(audio: A, clock: fn() -> String) -> AudioAdapter<A> {
+    /// now. `clock` gives the time a notice shows; what happens goes to
+    /// `log`.
+    pub fn new(audio: A, clock: fn() -> String, log: DebugLog) -> AudioAdapter<A> {
         let mut adapter = AudioAdapter {
             audio,
             sources: vec![SourceInfo {
@@ -149,8 +157,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
             equalizer: EqSettings::default(),
             polls: 0,
             clock,
+            log,
         };
         adapter.list_devices();
+        adapter
+            .log
+            .log(|| format!("source chosen: {WHOLE_SYSTEM_NAME} (the default)"));
         adapter
     }
 
@@ -193,6 +205,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Posts a notice, replacing an older one about the same subject.
     fn post(&mut self, subject: NoticeSubject, message: NoticeMessage) {
+        self.log
+            .log(|| format!("notice about {subject:?}: {message:?}"));
         let id = self.next_notice;
         self.next_notice += 1;
         let time = (self.clock)();
@@ -249,6 +263,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if hits.is_empty() {
             return;
         }
+        self.log.log(|| {
+            let names: Vec<String> = hits.iter().map(|id| self.output_name(id)).collect();
+            format!("auto-connect: switching on {}", names.join(", "))
+        });
         for id in hits {
             if !self.is_enabled(id) && self.audio.set_output_enabled(id, true).is_err() {
                 self.output_failed(id, false);
@@ -294,6 +312,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 *name = listed_name.clone();
             }
         }
+        if sources != self.sources {
+            self.log.log(|| {
+                let listed: Vec<String> = sources.iter().map(describe_source).collect();
+                format!("sources listed: {}", listed.join("; "))
+            });
+        }
+        if chosen != self.chosen {
+            self.log
+                .log(|| format!("the chosen app now runs as {}", chosen.key()));
+        }
         let changed = sources != self.sources || chosen != self.chosen;
         self.sources = sources;
         self.chosen = chosen;
@@ -323,6 +351,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .find_app(*root_pid, executable)?
                 .ok_or(BackendError::SourceGone)?;
             self.chosen = Chosen::from_source(&app);
+            self.log.log(|| {
+                format!(
+                    "the chosen app runs as {}, without an audio stream yet",
+                    self.chosen.key()
+                )
+            });
         }
         Ok(self.chosen.id())
     }
@@ -338,12 +372,27 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 NoticeSubject::Capture,
             ]);
         } else if !self.gate.allows(origin) {
+            self.log.log(|| {
+                format!(
+                    "start ({origin:?}) held back: streaming was switched off, \
+                     or an automatic start failed"
+                )
+            });
             return;
         }
         if !may_start(self.enabled_count()) {
+            self.log
+                .log(|| format!("start ({origin:?}) refused: no speaker is on"));
             self.post(NoticeSubject::Start, NoticeMessage::NoSpeaker);
             return;
         }
+        self.log.log(|| {
+            format!(
+                "start ({origin:?}): {}, {} speaker(s) on",
+                self.chosen_name(),
+                self.enabled_count()
+            )
+        });
         let started = self
             .chosen_source()
             .and_then(|source| self.audio.start(&source));
@@ -356,6 +405,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.take_events();
             }
             Err(error) => {
+                self.log
+                    .log(|| format!("start ({origin:?}) failed: {error}"));
                 self.gate.start_failed(origin);
                 self.audio.stop();
                 let message = self.start_problem(&error);
@@ -393,6 +444,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.post(subject, NoticeMessage::SpeakerFailed { speaker });
         }
         if reaction.stop_session {
+            self.log.log(|| {
+                format!(
+                    "streaming stops: {} couldn't start and no other speaker is on",
+                    self.output_name(endpoint_id)
+                )
+            });
             self.audio.stop();
         }
     }
@@ -407,6 +464,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             0,
         );
         if action == StreamingAction::Stop {
+            self.log
+                .log(|| "streaming stops: no speaker is on anymore".to_owned());
             self.audio.stop();
         }
     }
@@ -532,6 +591,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn set_running(&mut self, on: bool) {
+        self.log.log(|| {
+            let state = if on { "on" } else { "off" };
+            format!("the user switched streaming {state}")
+        });
         if !on {
             if self.running() {
                 self.gate.user_switched_off();
@@ -569,6 +632,13 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         if picked.key() == self.chosen.key() {
             return;
         }
+        self.log.log(|| {
+            let name = match &picked {
+                Chosen::WholeSystem => WHOLE_SYSTEM_NAME,
+                Chosen::App { name, .. } => name,
+            };
+            format!("source chosen: {name} ({})", picked.key())
+        });
         self.chosen = picked;
         self.notices
             .clear(&[NoticeSubject::Source, NoticeSubject::Capture]);
@@ -589,6 +659,13 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let Some(endpoint_id) = local_id(id) else {
             return;
         };
+        self.log.log(|| {
+            let state = if on { "on" } else { "off" };
+            format!(
+                "the user switched {} {state}",
+                self.output_name(&endpoint_id)
+            )
+        });
         if on {
             // A new attempt.
             self.notices.clear(&[speaker_subject(&endpoint_id)]);
@@ -619,6 +696,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn set_auto_connect(&mut self, id: &str, on: bool) {
+        self.log.log(|| {
+            let state = if on { "on" } else { "off" };
+            format!("auto-connect {state} for {id}")
+        });
         if on {
             self.auto_connect.insert(id.to_owned());
         } else {
@@ -642,6 +723,14 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         // While streaming is off, a click starts it, even for a group that
         // is on already.
         let turn_on = state.group_state(group).click_turns_on();
+        self.log.log(|| {
+            let switched = if turn_on { "on" } else { "off" };
+            format!(
+                "the user switched group \"{}\" {switched}: {} speaker(s) present",
+                group.name,
+                members.len()
+            )
+        });
         for endpoint_id in &members {
             if turn_on {
                 if self.running() && self.is_enabled(endpoint_id) {
@@ -673,6 +762,13 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         if members.is_empty() {
             return Err(GroupError::NoActiveSpeakers);
         }
+        self.log.log(|| {
+            format!(
+                "group \"{}\" made of {} speaker(s)",
+                name.trim(),
+                members.len()
+            )
+        });
         self.groups.push(Group {
             id: format!("group:{}", self.next_group),
             name: name.trim().to_owned(),
@@ -713,6 +809,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn refresh_devices(&mut self) {
+        self.log
+            .log(|| "the user asked to list the devices again".to_owned());
         self.list_devices();
     }
 
@@ -759,6 +857,17 @@ fn speaker_subject(endpoint_id: &str) -> NoticeSubject {
     NoticeSubject::Speaker(SpeakerKey::Local(endpoint_id.to_owned()))
 }
 
+/// A listed source as the debug log names it.
+fn describe_source(source: &SourceInfo) -> String {
+    match source.id {
+        SourceId::WholeSystem => source.name.clone(),
+        SourceId::App { root_pid } => format!(
+            "{} ({}, process {root_pid})",
+            source.name, source.executable
+        ),
+    }
+}
+
 /// The UI's ID of a listed source.
 fn source_key(source: &SourceInfo) -> String {
     match source.id {
@@ -779,6 +888,7 @@ mod tests {
     use super::*;
     use crate::audio::capture::LoopbackMode;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
+    use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
     use crate::ui_model::{MAX_DELAY_MS, SpeakerState};
 
     const SPEAKERS: &str = "speakers";
@@ -791,7 +901,7 @@ mod tests {
         audio.connect_output(SPEAKERS, "Speakers");
         audio.connect_output(HEADPHONES, "Headphones");
         audio.add_app(PLAYER_PID, "player.exe");
-        AudioAdapter::new(audio, || "09.41".to_owned())
+        AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default())
     }
 
     /// The UI's ID of output `endpoint_id`.
@@ -872,7 +982,7 @@ mod tests {
         audio.connect_output_as("jack", "Headphones", OutputKind::Headphones);
         audio.connect_output_as("internal", "Speakers", OutputKind::BuiltIn);
         audio.connect_output_as("bt", "Buds", OutputKind::Bluetooth);
-        let state = AudioAdapter::new(audio, String::new).snapshot();
+        let state = AudioAdapter::new(audio, String::new, DebugLog::default()).snapshot();
         let (this_pc, connected) = state.layout();
         let rows = |list: &[&Speaker]| -> Vec<(String, SpeakerKind)> {
             list.iter().map(|s| (s.name.clone(), s.kind)).collect()
@@ -1418,5 +1528,47 @@ mod tests {
         adapter.toggle_group("group:9");
         adapter.dismiss_notice(42);
         assert_eq!(adapter.snapshot(), before);
+    }
+
+    #[test]
+    fn user_actions_decisions_and_notices_are_logged() {
+        let dir = test_dir("adapter-actions");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.connect_output(HEADPHONES, "Headphones");
+        audio.add_app(PLAYER_PID, "player.exe");
+        audio.set_debug_log(log.clone());
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), log.clone());
+        adapter.set_running(true);
+        adapter.select_source(&player());
+        adapter.set_speaker_enabled(&key(SPEAKERS), true);
+        adapter.set_speaker_enabled(&key(SPEAKERS), false);
+        assert!(log.flush(TEST_FLUSH));
+        assert_in_order(
+            &read_messages(&dir.join(FILE_NAME)),
+            &[
+                "outputs listed: 2",
+                "sources listed: All System Audio; Player (player.exe, process 2000)",
+                "source chosen: All System Audio (the default)",
+                "the user switched streaming on",
+                "start (User) refused: no speaker is on",
+                "notice about Start: NoSpeaker",
+                "source chosen: Player (app:2000:player.exe)",
+                "the user switched Speakers on",
+                "output \"Speakers\" (speakers) switched on",
+                "start (User): Player, 1 speaker(s) on",
+                "starting: capturing the app of process 2000",
+                "capture started: process 2000 and its children",
+                "output \"Speakers\" (speakers) started:",
+                "the user switched Speakers off",
+                "output \"Speakers\" (speakers) switched off",
+                "output \"Speakers\" (speakers) stopped: switched off",
+                "streaming stops: no speaker is on anymore",
+                "stopping",
+                "session ended:",
+            ],
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
