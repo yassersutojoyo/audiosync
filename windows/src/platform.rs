@@ -33,6 +33,131 @@ pub fn windows_version() -> Option<OsVersion> {
     None
 }
 
+/// The system the app runs on, for the debug log: the Windows version with
+/// its update revision and release name, the app's architecture and, when
+/// it differs, the PC's, and the local time, which tells how the log's UTC
+/// times map to the PC's clock.
+#[cfg(windows)]
+pub fn system_summary() -> String {
+    use windows::core::w;
+
+    let version = windows_version().map_or_else(
+        || "Windows, version unknown".to_owned(),
+        |v| format!("Windows {}.{}.{}", v.major, v.minor, v.build),
+    );
+    let revision = registry_u32(
+        w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"),
+        w!("UBR"),
+    )
+    .map_or_else(String::new, |revision| format!(".{revision}"));
+    let release = registry_string(
+        w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"),
+        w!("DisplayVersion"),
+    )
+    .map_or_else(String::new, |name| format!(" ({name})"));
+    let arch = std::env::consts::ARCH;
+    let machine = match native_machine() {
+        Some(native) if native != arch => format!("{arch} build, running on {native}"),
+        _ => arch.to_owned(),
+    };
+    format!(
+        "{version}{revision}{release}, {machine}, local time {}",
+        notice_time()
+    )
+}
+
+#[cfg(not(windows))]
+pub fn system_summary() -> String {
+    format!(
+        "{} on {}, not Windows: example speakers only",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    )
+}
+
+/// The PC's own architecture, by the names Rust gives them, even when the
+/// app runs emulated (an x64 build on an ARM64 PC); `None` when it can't be
+/// read or has no such name.
+#[cfg(windows)]
+fn native_machine() -> Option<&'static str> {
+    use windows::Win32::System::SystemInformation::{
+        IMAGE_FILE_MACHINE, IMAGE_FILE_MACHINE_AMD64, IMAGE_FILE_MACHINE_ARM64,
+        IMAGE_FILE_MACHINE_I386,
+    };
+    use windows::Win32::System::Threading::{GetCurrentProcess, IsWow64Process2};
+
+    let mut process = IMAGE_FILE_MACHINE::default();
+    let mut native = IMAGE_FILE_MACHINE::default();
+    // SAFETY: both pointers are valid for writes of an IMAGE_FILE_MACHINE;
+    // the current process's pseudo handle needs no closing.
+    unsafe { IsWow64Process2(GetCurrentProcess(), &raw mut process, Some(&raw mut native)) }
+        .ok()?;
+    if native == IMAGE_FILE_MACHINE_AMD64 {
+        Some("x86_64")
+    } else if native == IMAGE_FILE_MACHINE_ARM64 {
+        Some("aarch64")
+    } else if native == IMAGE_FILE_MACHINE_I386 {
+        Some("x86")
+    } else {
+        None
+    }
+}
+
+/// A DWORD value of the key `key` under `HKEY_LOCAL_MACHINE`.
+#[cfg(windows)]
+fn registry_u32(key: windows::core::PCWSTR, name: windows::core::PCWSTR) -> Option<u32> {
+    use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RegGetValueW};
+
+    let mut value: u32 = 0;
+    let mut size = size_of::<u32>() as u32;
+    // SAFETY: `value` and `size` are valid for writes of a DWORD, which is
+    // what RRF_RT_REG_DWORD limits the result to; the key and value names
+    // are NUL-terminated UTF-16 literals.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            key,
+            name,
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut value).cast()),
+            Some(&raw mut size),
+        )
+    };
+    status.is_ok().then_some(value)
+}
+
+/// A short string value of the key `key` under `HKEY_LOCAL_MACHINE`; `None`
+/// when it is missing or longer than 63 characters.
+#[cfg(windows)]
+fn registry_string(key: windows::core::PCWSTR, name: windows::core::PCWSTR) -> Option<String> {
+    use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
+
+    let mut text = [0u16; 64];
+    let mut size = size_of_val(&text) as u32;
+    // SAFETY: `text` is valid for writes of `size` bytes, and RegGetValueW
+    // writes no more (it fails when the value doesn't fit) and terminates
+    // the string; the key and value names are NUL-terminated UTF-16
+    // literals.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            key,
+            name,
+            RRF_RT_REG_SZ,
+            None,
+            Some(text.as_mut_ptr().cast()),
+            Some(&raw mut size),
+        )
+    };
+    if status.is_err() {
+        return None;
+    }
+    // The size is in bytes and counts the terminating NUL.
+    let length = (size as usize / 2).saturating_sub(1).min(text.len());
+    Some(String::from_utf16_lossy(&text[..length]))
+}
+
 /// Tells the user why the app stops: a message box on Windows, stderr
 /// elsewhere.
 #[cfg(windows)]

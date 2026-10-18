@@ -6,6 +6,9 @@
 //! that is the adapter over the WASAPI audio backend, which captures and plays
 //! for real. On other hosts, where the UI is worked on, a mock with example
 //! speakers stands in: nothing plays and no audio device is opened.
+//!
+//! With `AUDIOSYNC_DEBUG=1` in the environment, the app writes what it does
+//! to `%TEMP%\audiosync-debug.log` (`debug_log`).
 
 // No console window next to the app. Test builds keep the console so their
 // output stays visible.
@@ -17,6 +20,7 @@ mod adapter;
 mod audio;
 #[cfg(test)]
 mod contrast;
+mod debug_log;
 mod os_version;
 #[cfg(any(windows, test))]
 mod placement;
@@ -31,27 +35,54 @@ mod ui_model;
 mod view;
 
 use std::process::ExitCode;
+use std::time::Duration;
 
 #[cfg(windows)]
 use slint::ComponentHandle;
 
+use debug_log::DebugLog;
+
 slint::include_modules!();
 
+/// How long the app waits, as it stops, for the debug log to reach its file.
+const LOG_FLUSH_AT_EXIT: Duration = Duration::from_secs(1);
+
 fn main() -> ExitCode {
+    let log = DebugLog::from_env();
+    log.log(|| {
+        format!(
+            "AudioSync for Windows {} (audiosync-core {}), process {}; times are UTC",
+            env!("CARGO_PKG_VERSION"),
+            audiosync_core::VERSION,
+            std::process::id(),
+        )
+    });
+    log.log(|| format!("system: {}", platform::system_summary()));
     if let Some(version) = platform::windows_version()
         && !os_version::is_supported(version)
     {
-        platform::show_error(os_version::UNSUPPORTED_MESSAGE);
+        stop_with_error(&log, os_version::UNSUPPORTED_MESSAGE);
         return ExitCode::FAILURE;
     }
 
-    match run() {
-        Ok(()) => ExitCode::SUCCESS,
+    match run(&log) {
+        Ok(()) => {
+            log.log(|| "exiting".to_owned());
+            log.flush(LOG_FLUSH_AT_EXIT);
+            ExitCode::SUCCESS
+        }
         Err(error) => {
-            platform::show_error(&error.message());
+            stop_with_error(&log, &error.message());
             ExitCode::FAILURE
         }
     }
+}
+
+/// Logs why the app can't run, then tells the user.
+fn stop_with_error(log: &DebugLog, message: &str) {
+    log.log(|| format!("cannot run: {message}"));
+    log.flush(LOG_FLUSH_AT_EXIT);
+    platform::show_error(message);
 }
 
 /// Why AudioSync couldn't start.
@@ -87,42 +118,49 @@ impl From<slint::PlatformError> for StartError {
 }
 
 /// What the windows show and drive: the Windows audio backend, through the
-/// adapter that keeps the UI's own state.
+/// adapter that keeps the UI's own state. Both log to `log`.
 #[cfg(windows)]
-fn backend() -> Result<Box<dyn ui_model::Backend>, StartError> {
-    let audio = audio::wasapi::open().map_err(StartError::Audio)?;
+fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
+    let mut audio = audio::wasapi::open().map_err(StartError::Audio)?;
+    log.log(|| "audio: the WASAPI backend is open".to_owned());
+    audio.set_debug_log(log.clone());
     Ok(Box::new(adapter::AudioAdapter::new(
         audio,
         platform::notice_time,
+        log.clone(),
     )))
 }
 
 /// Off Windows, example speakers to work on the UI with.
 #[cfg(not(windows))]
-fn backend() -> Result<Box<dyn ui_model::Backend>, StartError> {
+fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
+    log.log(|| "audio: example speakers from the mock backend; nothing plays".to_owned());
     Ok(Box::new(ui_model::MockBackend::new()))
 }
 
 /// Shows the main window and runs the UI until the user exits.
-fn run() -> Result<(), StartError> {
-    let app = view::App::new(backend()?)?;
+fn run(log: &DebugLog) -> Result<(), StartError> {
+    let app = view::App::new(backend(log)?)?;
 
     // With a tray icon, closing the main window keeps AudioSync running in
     // the notification area; without one (or off Windows), it quits.
     #[cfg(windows)]
     let _tray = match tray::Tray::create(&app) {
         Ok(tray) => {
+            log.log(|| "tray icon: shown".to_owned());
             app.set_tray_available(true);
             Some(tray)
         }
         Err(error) => {
-            eprintln!("no tray icon: {error}");
+            log.log(|| format!("tray icon: not shown ({error}); closing the main window quits"));
             None
         }
     };
 
     app.show_main();
+    log.log(|| "main window: shown".to_owned());
     slint::run_event_loop_until_quit()?;
+    log.log(|| "the event loop ended".to_owned());
     Ok(())
 }
 
