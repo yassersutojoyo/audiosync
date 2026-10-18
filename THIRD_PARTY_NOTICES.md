@@ -161,8 +161,14 @@ brand mark (`scripts/brand/windows-icons.sh`).
 
 The Windows app's other Rust dependencies are under permissive licenses. CI
 checks them with `cargo deny check licenses` against the list in
-`windows/deny.toml`. Full notices for the Windows app, the Rust standard
-library included, will be written before any Windows release.
+`windows/deny.toml`. Each Windows test build CI uploads comes with a
+`THIRD-PARTY-NOTICES.txt` next to `audiosync.exe`. `scripts/windows_notices.py`
+generates it from `windows/Cargo.lock` for that build's target: every crate
+compiled into the executable with its version, license and repository and the
+full text of its license and notice files, plus the Rust standard library's
+copyright notices, Slint's royalty-free license, and the font and icon
+licenses above. The script fails when a crate's license isn't on the
+`windows/deny.toml` list.
 
 ## Trademarks
 
