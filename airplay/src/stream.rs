@@ -30,7 +30,8 @@ use crate::alac;
 use crate::audio::{self, FRAMES_PER_PACKET, PACKET_FRAMES, PCM_PAYLOAD_BYTES, PacketFrames};
 use crate::clock::SenderClock;
 use crate::input::{self, InputReader, InputWriter};
-use crate::rate::{Margin, NOMINAL_RATE, RateModel};
+use crate::rate::{MAX_MARGIN, Margin, NOMINAL_RATE, RateModel};
+
 use crate::rtp::{self, HEADER_BYTES, RESEND_PREFIX_BYTES, ResendRequest, RtpHeader, SyncPacket};
 use crate::sdp::Codec;
 use crate::session::MediaDestinations;
@@ -1148,6 +1149,17 @@ impl Stream {
                 return;
             }
             let start = (arrival.start as i64 - origin).max(0);
+            if arrival.late {
+                // A late block tells M how late the host can be (P84), but
+                // its frames were dropped, so it stays out of the rate fit.
+                // A residual longer than M can ever be is a pause, not
+                // jitter, and doesn't count.
+                let residual = model.residual(end, at);
+                if residual <= MAX_MARGIN {
+                    margin.observe(at, residual, (end - start) as f64 / NOMINAL_RATE);
+                }
+                return;
+            }
             let (residual, block) = model.observe(start, end, at);
             margin.observe(at, residual, block);
         });

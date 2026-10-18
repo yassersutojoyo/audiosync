@@ -21,9 +21,10 @@
 //! stay the silence the stream inserted (P96), and the stream places the
 //! resumed frames on the timeline as if they had just arrived on schedule.
 //!
-//! Each write that lands in time records when its frames arrived, for the
-//! rate model and the send margin (P84, P101); late writes record nothing,
-//! so a pause is never taken for the host's rate or jitter.
+//! Each write records when its frames arrived. Writes that land in time
+//! feed the rate model and the send margin (P84, P101); a late write is
+//! flagged, so its lateness can raise the margin while it stays out of the
+//! rate fit, and a pause is never taken for the host's rate.
 //!
 //! Frames are stored one per atomic word (left in the high half), so both
 //! sides stay in safe Rust: the writer stores the slots, then publishes its
@@ -47,16 +48,21 @@ const ARRIVAL_RECORDS: usize = 1024;
 pub const RESYNC_FRAMES: u64 = SAMPLE_RATE as u64;
 /// The arrival record of a resumed write carries this bit in its start.
 const RESYNC_BIT: u64 = 1 << 63;
+/// The arrival record of a late write carries this bit in its start.
+const LATE_BIT: u64 = 1 << 62;
 
 /// One arrival record: the host's frames from ring position `start` up to
-/// (not including) `end` arrived at `nanos` from the clock origin; `resync`
-/// says the write moved up to the floor (a resumed capture).
+/// (not including) `end` arrived at `nanos` from the clock origin. `resync`
+/// says the write moved up to the floor (a resumed capture); `late` says
+/// some of its frames came after their positions were cut, so they were
+/// dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Arrival {
     pub start: u64,
     pub end: u64,
     pub nanos: i64,
     pub resync: bool,
+    pub late: bool,
 }
 
 struct Shared {
@@ -187,16 +193,17 @@ impl InputWriter {
         shared.received.fetch_add(count, Ordering::Release);
         if late > 0 {
             self.late = Some((at, count));
+            self.record_arrival(start, end, at, LATE_BIT);
         } else {
             self.late = None;
             if keep > 0 {
-                self.record_arrival(first, end, at, resync);
+                self.record_arrival(first, end, at, if resync { RESYNC_BIT } else { 0 });
             }
         }
         keep as usize
     }
 
-    fn record_arrival(&self, start: u64, end: u64, at: Instant, resync: bool) {
+    fn record_arrival(&self, start: u64, end: u64, at: Instant, flag: u64) {
         let shared = &*self.shared;
         let written = shared.arrivals_written.load(Ordering::Relaxed);
         let read = shared.arrivals_read.load(Ordering::Acquire);
@@ -208,10 +215,8 @@ impl InputWriter {
             None => -(shared.origin.duration_since(at).as_nanos() as i64),
         };
         let slot = (written % ARRIVAL_RECORDS as u64) as usize;
-        let flag = if resync { RESYNC_BIT } else { 0 };
         shared.arrival_start[slot].store(start | flag, Ordering::Relaxed);
         shared.arrival_end[slot].store(end, Ordering::Relaxed);
-
         shared.arrival_at[slot].store(nanos as u64, Ordering::Relaxed);
         shared
             .arrivals_written
@@ -313,10 +318,11 @@ impl InputReader {
             let slot = (read % ARRIVAL_RECORDS as u64) as usize;
             let start = shared.arrival_start[slot].load(Ordering::Relaxed);
             record(Arrival {
-                start: start & !RESYNC_BIT,
+                start: start & !(RESYNC_BIT | LATE_BIT),
                 end: shared.arrival_end[slot].load(Ordering::Relaxed),
                 nanos: shared.arrival_at[slot].load(Ordering::Relaxed) as i64,
                 resync: start & RESYNC_BIT != 0,
+                late: start & LATE_BIT != 0,
             });
             read += 1;
         }

@@ -157,6 +157,13 @@ impl RateModel {
         self.prior_slope = self.segments.back().expect("segment").slope;
     }
 
+    /// The residual of frames up to (not including) `end` that arrived at
+    /// `at` seconds: how long after c(n) of the last of them they came,
+    /// without taking them into the fit.
+    pub fn residual(&self, end: i64, at: f64) -> f64 {
+        at - self.time(end - 1)
+    }
+
     /// The current R̂ in Hz.
     pub fn rate(&self) -> f64 {
         1.0 / self.segments.back().expect("segment").slope
@@ -175,7 +182,7 @@ impl RateModel {
     /// (arrival after c, positive when late) and the block's length in
     /// seconds, for M.
     pub fn observe(&mut self, start: i64, end: i64, at: f64) -> (f64, f64) {
-        let residual = at - self.time(end - 1);
+        let residual = self.residual(end, at);
         let block = (end - start).max(0) as f64 / NOMINAL_RATE;
 
         let spaced = self
