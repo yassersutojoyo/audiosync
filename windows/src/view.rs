@@ -5,6 +5,9 @@
 //!
 //! The models are updated in place, row by row, so a slider being dragged or a
 //! field being typed in keeps its focus while the rest of the window updates.
+//! A list whose length changes is rebuilt; when that removes the control that
+//! had the focus in the tray flyout, the flyout takes the focus back so Escape
+//! still closes it.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -56,6 +59,56 @@ const FLYOUT_NOTICE_LIMIT: usize = 1;
 
 /// How often the backend is polled for what happened on its own.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// The parts of the tray flyout that a refresh can remove, with the controls
+/// in them: the listed notice, the button for more notices, the group rows
+/// and the speaker rows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct FlyoutParts {
+    notices: bool,
+    more_notices: bool,
+    groups: bool,
+    speakers: bool,
+}
+
+impl FlyoutParts {
+    /// Whether a part is set in both.
+    fn overlaps(self, other: FlyoutParts) -> bool {
+        (self.notices && other.notices)
+            || (self.more_notices && other.more_notices)
+            || (self.groups && other.groups)
+            || (self.speakers && other.speakers)
+    }
+}
+
+/// What the tray flyout shows: how many notices there are and how many of
+/// them it lists, and how many groups and speakers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct FlyoutCounts {
+    notices: usize,
+    listed_notices: usize,
+    groups: usize,
+    speakers: usize,
+}
+
+impl FlyoutCounts {
+    /// Whether the flyout shows the button for the notices it doesn't list.
+    fn shows_more_notices(self) -> bool {
+        self.notices > self.listed_notices
+    }
+
+    /// The parts that a refresh to `next` removes. A list whose length
+    /// changes is rebuilt ([`sync_model`]), so all its rows go, even the
+    /// ones whose items come back.
+    fn removed_by(self, next: FlyoutCounts) -> FlyoutParts {
+        FlyoutParts {
+            notices: self.listed_notices != next.listed_notices,
+            more_notices: self.shows_more_notices() && !next.shows_more_notices(),
+            groups: self.groups != next.groups,
+            speakers: self.speakers != next.speakers,
+        }
+    }
+}
 
 /// Runs after every refresh with the new state.
 type RefreshHook = Box<dyn Fn(&AppState)>;
@@ -236,19 +289,30 @@ impl App {
             .iter()
             .any(|s| s.kind == ui_model::SpeakerKind::AirPlay);
         let status = strings.invoke_status(state.running, count(state.active_speakers()));
+        let flyout_notices = newest_notices(&notices, FLYOUT_NOTICE_LIMIT);
 
         let m = &self.models;
+        let flyout_shown = FlyoutCounts {
+            notices: usize::try_from(self.flyout.get_notice_count()).unwrap_or(0),
+            listed_notices: m.flyout_notices.row_count(),
+            groups: m.groups.row_count(),
+            speakers: m.all_speakers.row_count(),
+        };
+        let flyout_removed = flyout_shown.removed_by(FlyoutCounts {
+            notices: notices.len(),
+            listed_notices: flyout_notices.len(),
+            groups: groups.len(),
+            speakers: all.len(),
+        });
         sync_model(&m.sources, sources);
         sync_model(&m.this_pc, this_pc);
         sync_model(&m.connected, connected);
         sync_model(&m.all_speakers, all);
         sync_model(&m.groups, groups);
         sync_model(&m.notices, newest_notices(&notices, MAIN_NOTICE_LIMIT));
-        sync_model(
-            &m.flyout_notices,
-            newest_notices(&notices, FLYOUT_NOTICE_LIMIT),
-        );
+        sync_model(&m.flyout_notices, flyout_notices);
         self.flyout.set_notice_count(count(notices.len()));
+        self.restore_flyout_focus(flyout_removed);
 
         for window in [&self.main as &dyn WindowState, &self.flyout] {
             window.show_state(&state, &status, source_index);
@@ -264,6 +328,23 @@ impl App {
         drop(ui);
         if let Some(callback) = self.on_refresh.borrow().as_ref() {
             callback(&state);
+        }
+    }
+
+    /// Gives the keyboard focus back to the open flyout when a refresh
+    /// removed the control that had it (a notice dismissed with the
+    /// keyboard, a speaker unplugged): Slint then leaves nothing focused,
+    /// and Escape would not close the flyout until Tab focused something.
+    fn restore_flyout_focus(&self, removed: FlyoutParts) {
+        let flyout = &self.flyout;
+        let focused = FlyoutParts {
+            notices: flyout.get_notice_focused(),
+            more_notices: flyout.get_more_notices_focused(),
+            groups: flyout.get_group_focused(),
+            speakers: flyout.get_speaker_focused(),
+        };
+        if focused.overlaps(removed) && flyout.window().is_visible() {
+            flyout.invoke_take_focus();
         }
     }
 
@@ -853,5 +934,88 @@ mod tests {
         assert_eq!(model.iter().collect::<Vec<_>>(), [1, 5, 3]);
         sync_model(&model, vec![4]);
         assert_eq!(model.iter().collect::<Vec<_>>(), [4]);
+    }
+
+    /// The flyout with two notices (it lists the newest), one group and
+    /// three speakers.
+    const FLYOUT: FlyoutCounts = FlyoutCounts {
+        notices: 2,
+        listed_notices: 1,
+        groups: 1,
+        speakers: 3,
+    };
+
+    #[test]
+    fn a_refresh_removes_the_flyout_lists_whose_length_changes() {
+        assert_eq!(FLYOUT.removed_by(FLYOUT), FlyoutParts::default());
+        let unplugged = FlyoutCounts {
+            speakers: 2,
+            ..FLYOUT
+        };
+        assert_eq!(
+            FLYOUT.removed_by(unplugged),
+            FlyoutParts {
+                speakers: true,
+                ..FlyoutParts::default()
+            }
+        );
+        let group_added = FlyoutCounts {
+            groups: 2,
+            ..FLYOUT
+        };
+        assert!(FLYOUT.removed_by(group_added).groups, "rows are rebuilt");
+    }
+
+    #[test]
+    fn dismissing_notices_removes_the_more_button_then_the_last_notice() {
+        // The newest notice is dismissed: the next one takes its row, and
+        // the button for the rest goes.
+        let one_left = FlyoutCounts {
+            notices: 1,
+            ..FLYOUT
+        };
+        assert_eq!(
+            FLYOUT.removed_by(one_left),
+            FlyoutParts {
+                more_notices: true,
+                ..FlyoutParts::default()
+            }
+        );
+        let none_left = FlyoutCounts {
+            notices: 0,
+            listed_notices: 0,
+            ..FLYOUT
+        };
+        assert_eq!(
+            one_left.removed_by(none_left),
+            FlyoutParts {
+                notices: true,
+                ..FlyoutParts::default()
+            }
+        );
+        assert!(!none_left.removed_by(FLYOUT).more_notices, "it came back");
+    }
+
+    #[test]
+    fn the_flyout_takes_the_focus_back_only_from_a_removed_part() {
+        let notice = FlyoutParts {
+            notices: true,
+            ..FlyoutParts::default()
+        };
+        let speakers = FlyoutParts {
+            speakers: true,
+            ..FlyoutParts::default()
+        };
+        assert!(notice.overlaps(notice));
+        assert!(
+            !speakers.overlaps(FlyoutParts {
+                notices: true,
+                more_notices: true,
+                groups: true,
+                speakers: false,
+            }),
+            "a focused speaker row keeps its focus when other parts change"
+        );
+        assert!(!FlyoutParts::default().overlaps(notice), "nothing focused");
     }
 }
