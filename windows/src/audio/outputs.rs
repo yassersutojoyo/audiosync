@@ -1,4 +1,5 @@
-//! Which outputs play, at what delay and gain, and in what format.
+//! Which outputs play, at what delay and gain, and in what format, and what
+//! kind of device each is.
 //!
 //! The user's settings are kept per endpoint ID, whether the device is
 //! connected or not. The output policy of the core decides which renderers to
@@ -24,7 +25,7 @@ use audiosync_core::volume::{
 };
 
 use super::SESSION_RATE;
-use super::backend::BackendError;
+use super::backend::{BackendError, OutputKind};
 
 /// A connected render endpoint.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,6 +36,52 @@ pub struct Endpoint {
     pub name: String,
     /// Whether it is Windows' default output.
     pub is_default: bool,
+    /// What kind of device it is.
+    pub kind: OutputKind,
+}
+
+/// `EndpointFormFactor` values, as Windows documents them.
+pub mod form_factor {
+    /// `Speakers`.
+    pub const SPEAKERS: u32 = 1;
+    /// `LineLevel`: a line out.
+    pub const LINE_LEVEL: u32 = 2;
+    /// `Headphones`.
+    pub const HEADPHONES: u32 = 3;
+    /// `Headset`.
+    pub const HEADSET: u32 = 5;
+    /// `DigitalAudioDisplayDevice`: a display or TV, over HDMI or
+    /// DisplayPort.
+    pub const DIGITAL_AUDIO_DISPLAY: u32 = 9;
+}
+
+/// The kind of an output, from what Windows says about its endpoint: its form
+/// factor (`PKEY_AudioEndpoint_FormFactor`, an `EndpointFormFactor` value),
+/// the enumerator of its device (`PKEY_Device_EnumeratorName`: `HDAUDIO` for
+/// the PC's own audio, `USB`, `BTHENUM` and other `BTH` names for Bluetooth,
+/// `ROOT` for most software devices), and whether its jack is DisplayPort
+/// (`PKEY_AudioEndpoint_JackSubType`).
+///
+/// The enumerator decides first, since a USB or Bluetooth headset reports the
+/// same form factor as the PC's headphone jack; any other enumerator leaves it
+/// to the form factor.
+pub fn output_kind(form_factor: Option<u32>, enumerator: &str, display_port: bool) -> OutputKind {
+    let bus = enumerator.to_ascii_uppercase();
+    if bus.starts_with("BTH") {
+        return OutputKind::Bluetooth;
+    }
+    match bus.as_str() {
+        "USB" => return OutputKind::Usb,
+        "ROOT" => return OutputKind::Virtual,
+        _ => {}
+    }
+    match form_factor {
+        Some(form_factor::DIGITAL_AUDIO_DISPLAY) if display_port => OutputKind::DisplayPort,
+        Some(form_factor::DIGITAL_AUDIO_DISPLAY) => OutputKind::Hdmi,
+        Some(form_factor::HEADPHONES | form_factor::HEADSET) => OutputKind::Headphones,
+        Some(form_factor::SPEAKERS | form_factor::LINE_LEVEL) => OutputKind::BuiltIn,
+        _ => OutputKind::Other,
+    }
 }
 
 /// Whether AirPlay speakers exist to line local outputs up with.
@@ -43,6 +90,13 @@ pub enum AirPlay {
     /// No AirPlay engine on this platform: outputs play at their own delay.
     Unavailable,
     /// An AirPlay engine runs; `chosen` says whether a speaker is chosen (S79).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Windows has no AirPlay engine yet; the rule is tested"
+        )
+    )]
     Available {
         /// Whether an AirPlay speaker is chosen.
         chosen: bool,
@@ -98,6 +152,7 @@ pub struct OutputPlan {
 
 impl OutputPlan {
     /// Whether nothing needs to change.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.attach.is_empty() && self.detach.is_empty()
     }
@@ -183,13 +238,15 @@ impl OutputPolicy {
         self.master
     }
 
-    /// Whether AirPlay speakers exist to line up with.
-    pub fn airplay(&self) -> AirPlay {
-        self.airplay
-    }
-
     /// Changes the AirPlay state. Returns true when the delay of outputs
     /// changes because of it, so running renderers need new delays (S80).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Windows has no AirPlay engine yet; the rule is tested"
+        )
+    )]
     pub fn set_airplay(&mut self, airplay: AirPlay) -> bool {
         let changed = airplay != self.airplay;
         self.airplay = airplay;
@@ -315,10 +372,6 @@ pub const MIN_RENDER_BUFFER_HNS: i64 = 20 * HNS_PER_MS;
 /// The largest render buffer, 200 ms.
 pub const MAX_RENDER_BUFFER_HNS: i64 = 200 * HNS_PER_MS;
 
-/// The buffer a capture stream asks for, 100 ms: room for the capture thread
-/// to be late without losing packets.
-pub const CAPTURE_BUFFER_HNS: i64 = 100 * HNS_PER_MS;
-
 /// The buffer an event-driven shared-mode render stream asks for, given the
 /// endpoint's default period: two periods, so a render thread that wakes up
 /// late still finds the device a period ahead, and at least 20 ms (at most
@@ -338,7 +391,62 @@ mod tests {
             id: id.to_owned(),
             name: format!("Output {id}"),
             is_default: false,
+            kind: OutputKind::Other,
         }
+    }
+
+    #[test]
+    fn the_bus_tells_bluetooth_usb_and_software_devices() {
+        let headphones = Some(form_factor::HEADPHONES);
+        assert_eq!(
+            output_kind(headphones, "BTHENUM", false),
+            OutputKind::Bluetooth
+        );
+        assert_eq!(
+            output_kind(headphones, "BthHFEnum", false),
+            OutputKind::Bluetooth
+        );
+        assert_eq!(
+            output_kind(Some(form_factor::SPEAKERS), "BTHLEDevice", false),
+            OutputKind::Bluetooth
+        );
+        assert_eq!(
+            output_kind(Some(form_factor::HEADSET), "USB", false),
+            OutputKind::Usb
+        );
+        assert_eq!(
+            output_kind(Some(form_factor::SPEAKERS), "ROOT", false),
+            OutputKind::Virtual
+        );
+    }
+
+    #[test]
+    fn the_form_factor_tells_the_rest() {
+        let kind = |form, bus| output_kind(Some(form), bus, false);
+        assert_eq!(kind(form_factor::SPEAKERS, "HDAUDIO"), OutputKind::BuiltIn);
+        assert_eq!(
+            kind(form_factor::LINE_LEVEL, "HDAUDIO"),
+            OutputKind::BuiltIn
+        );
+        assert_eq!(
+            kind(form_factor::HEADPHONES, "HDAUDIO"),
+            OutputKind::Headphones
+        );
+        assert_eq!(
+            kind(form_factor::HEADSET, "INTELAUDIO"),
+            OutputKind::Headphones
+        );
+        assert_eq!(
+            kind(form_factor::DIGITAL_AUDIO_DISPLAY, "HDAUDIO"),
+            OutputKind::Hdmi
+        );
+        assert_eq!(
+            output_kind(Some(form_factor::DIGITAL_AUDIO_DISPLAY), "HDAUDIO", true),
+            OutputKind::DisplayPort
+        );
+        assert_eq!(kind(8, "HDAUDIO"), OutputKind::Other, "S/PDIF");
+        assert_eq!(kind(0, "SWD"), OutputKind::Other, "a remote session");
+        assert_eq!(output_kind(None, "", false), OutputKind::Other);
     }
 
     fn ids(endpoints: &[Endpoint]) -> Vec<&str> {

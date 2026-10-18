@@ -64,14 +64,13 @@ impl ProcessTable {
         self.entries.contains_key(&pid)
     }
 
-    /// How many processes the snapshot holds.
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Whether the snapshot holds no process.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+    /// The IDs of the processes that run `executable` (compared without
+    /// regard to case), lowest first.
+    pub fn running(&self, executable: &str) -> impl Iterator<Item = u32> {
+        self.entries
+            .values()
+            .filter(move |entry| entry.executable.eq_ignore_ascii_case(executable))
+            .map(|entry| entry.pid)
     }
 
     /// The parent of `pid`: the process that created it, if that process
@@ -301,5 +300,13 @@ pub(crate) mod tests {
         let table = desktop();
         assert_eq!(table.app_root(9999), 9999);
         assert!(table.ancestors(9999).is_empty());
+    }
+
+    #[test]
+    fn processes_are_found_by_their_executable_whatever_its_case() {
+        let table = desktop();
+        let browsers: Vec<u32> = table.running("BROWSER.exe").collect();
+        assert_eq!(browsers, [200, 201, 202]);
+        assert_eq!(table.running("player.exe").count(), 0);
     }
 }

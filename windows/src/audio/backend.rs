@@ -9,6 +9,8 @@
 
 use std::fmt;
 
+use audiosync_core::eq::EqSettings;
+
 /// What AudioSync captures.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SourceId {
@@ -36,6 +38,27 @@ pub struct SourceInfo {
     pub executable: String,
 }
 
+/// What kind of device an output is, as Windows describes its endpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputKind {
+    /// The PC's own speakers or line out.
+    BuiltIn,
+    /// Headphones or a headset on the PC's own jack.
+    Headphones,
+    /// A Bluetooth device.
+    Bluetooth,
+    /// A USB device.
+    Usb,
+    /// A display or TV over HDMI.
+    Hdmi,
+    /// A display over DisplayPort.
+    DisplayPort,
+    /// A software device, such as a virtual cable.
+    Virtual,
+    /// Anything else (S/PDIF, a remote session), or not known.
+    Other,
+}
+
 /// A connected output device (a render endpoint) and its settings.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutputInfo {
@@ -43,6 +66,8 @@ pub struct OutputInfo {
     pub id: String,
     /// The name Windows shows for it.
     pub name: String,
+    /// What kind of device it is.
+    pub kind: OutputKind,
     /// Whether it is Windows' default output. AudioSync plays to each output
     /// by ID, so this is for display only.
     pub is_default: bool,
@@ -116,12 +141,11 @@ pub enum BackendError {
         /// Its HRESULT.
         code: i32,
     },
-    /// This build has no audio backend for the platform.
-    Unsupported,
 }
 
-/// A sentence in English for logs and diagnostics. It isn't shown to the
-/// user as it is: the UI's text is translated.
+/// A sentence in English for logs and diagnostics. The UI words errors in
+/// its own, translated text; this sentence reaches the user only as the
+/// detail under that text when Windows audio can't be opened at startup.
 impl fmt::Display for BackendError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -143,7 +167,6 @@ impl fmt::Display for BackendError {
                 // way Windows writes HRESULTs.
                 write!(f, "{call} failed (0x{code:08X}).")
             }
-            BackendError::Unsupported => f.write_str("Audio isn't available on this platform."),
         }
     }
 }
@@ -157,8 +180,28 @@ pub trait AudioBackend {
     /// app whose capture would include them, are left out.
     fn list_sources(&mut self) -> Result<Vec<SourceInfo>, BackendError>;
 
-    /// The connected outputs, by name, with their settings.
+    /// The app that runs `executable` now, whether or not it has opened an
+    /// audio stream: the app of process `root_pid` while that process still
+    /// runs `executable`, else another app that runs it, or `None` when none
+    /// does. The source list offers only apps with an audio stream, but a
+    /// capture can start before its app plays (just opened, or paused).
+    fn find_app(
+        &mut self,
+        root_pid: u32,
+        executable: &str,
+    ) -> Result<Option<SourceInfo>, BackendError>;
+
+    /// Lists the connected outputs again, and returns them by name, with
+    /// their settings. A failed listing keeps the last list.
     fn list_outputs(&mut self) -> Result<Vec<OutputInfo>, BackendError>;
+
+    /// The connected outputs as last listed, by name, with their current
+    /// settings. Unlike [`AudioBackend::list_outputs`], it doesn't ask the
+    /// system again, so it is cheap enough for every refresh of the UI.
+    fn outputs(&self) -> Vec<OutputInfo>;
+
+    /// The IDs of the outputs turned on, connected or not, sorted.
+    fn enabled_outputs(&self) -> Vec<String>;
 
     /// Starts capturing `source` and playing it on every enabled, connected
     /// output. A running session is stopped first.
@@ -169,9 +212,6 @@ pub trait AudioBackend {
 
     /// The source being captured, or `None` when stopped.
     fn running_source(&self) -> Option<SourceId>;
-
-    /// Frames captured since the start: 0 until the source plays something.
-    fn frames_captured(&self) -> u64;
 
     /// Turns an output on or off. While playing, an output turned on starts
     /// at once if it is connected; if it can't start, it is turned off again
@@ -192,6 +232,11 @@ pub trait AudioBackend {
 
     /// The master volume slider position.
     fn master_volume(&self) -> f64;
+
+    /// Sets the equalizer, live: it changes the captured audio once, before
+    /// the ring, so every output hears the same equalized sound. The
+    /// settings are kept for the next start.
+    fn set_equalizer(&mut self, settings: EqSettings);
 
     /// Handles device changes, lost outputs and the end of capture, and
     /// returns what the UI should know. Call it about twice a second.
@@ -224,7 +269,6 @@ mod tests {
             BackendError::DeviceGone,
             BackendError::UnsupportedFormat,
             BackendError::System { call: "x", code: 1 },
-            BackendError::Unsupported,
         ];
         for error in errors {
             let text = error.to_string();

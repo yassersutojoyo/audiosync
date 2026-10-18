@@ -2,17 +2,20 @@
 //! policy, and what happens when devices come and go. The platform calls go
 //! through a [`Driver`]: WASAPI on Windows, an in-memory mock in tests.
 //!
-//! A session owns one ring at [`SESSION_RATE`], one capture writing to it,
-//! and one renderer per playing output, each reading the ring through its own
-//! delay reader. Outputs are added and removed by the core's output sync
-//! (spec S117, S161), keyed by endpoint ID. An output whose device goes away
-//! stops, whether its stream notices or the device list no longer shows the
-//! device, and stays on; it plays again once the device is listed (S68). An
-//! output that can't start is turned off and reported (S69).
+//! A session owns one ring at [`SESSION_RATE`], one capture writing to it
+//! through the equalizer, and one renderer per playing output, each reading
+//! the ring through its own delay reader. Each session gets a new equalizer:
+//! the capture thread owns its processing half, the session its control half,
+//! which takes new settings live. Outputs are added and removed by the core's
+//! output sync (spec S117, S161), keyed by endpoint ID. An output whose
+//! device goes away stops, whether its stream notices or the device list no
+//! longer shows the device, and stays on; it plays again once the device is
+//! listed (S68). An output that can't start is turned off and reported (S69).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
 use audiosync_core::reader::{Reader, ReaderControl};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
@@ -21,8 +24,10 @@ use super::SESSION_RATE;
 use super::backend::{
     AudioBackend, BackendError, BackendEvent, OutputInfo, SourceId, SourceInfo, StopReason,
 };
-use super::capture::{Activation, decide_activation, source_list};
-use super::outputs::{AirPlay, Endpoint, OutputParams, OutputPolicy};
+use super::capture::{Activation, decide_activation, running_app, source_list};
+#[cfg(test)]
+use super::outputs::OutputParams;
+use super::outputs::{AirPlay, Endpoint, OutputPolicy};
 use super::process::ProcessTable;
 
 /// How a running capture is doing.
@@ -76,11 +81,13 @@ pub trait Driver {
     fn outputs_changed(&mut self) -> bool;
 
     /// Starts capturing as `activation` says, writing to the ring through
-    /// `writer`. Returns once the capture runs, or with why it couldn't start.
+    /// `equalizer` and `writer`. Returns once the capture runs, or with why
+    /// it couldn't start.
     fn start_capture(
         &mut self,
         activation: Activation,
         writer: RingWriter,
+        equalizer: EqProcessor,
     ) -> Result<Self::Capture, BackendError>;
 
     /// Starts rendering to `endpoint` through `reader`, at the gain in
@@ -99,6 +106,8 @@ struct Session<D: Driver> {
     source: SourceId,
     ring: Arc<Ring>,
     capture: D::Capture,
+    /// The control half of the capture's equalizer.
+    equalizer: EqControl,
     /// The playing outputs, by endpoint ID.
     outputs: BTreeMap<String, Playing<D::Renderer>>,
 }
@@ -120,12 +129,15 @@ pub struct Controller<D: Driver> {
     /// a failed one, so the next refresh lists again.
     listing_ok: bool,
     session: Option<Session<D>>,
+    /// The equalizer settings, for the running session and the next.
+    equalizer: EqSettings,
     /// Events for the next poll.
     pending: Vec<BackendEvent>,
 }
 
 impl<D: Driver> Controller<D> {
-    /// A stopped backend over `driver`, with no output set.
+    /// A stopped backend over `driver`, with no output set and the equalizer
+    /// off.
     pub fn with_driver(driver: D) -> Controller<D> {
         Controller {
             driver,
@@ -133,21 +145,25 @@ impl<D: Driver> Controller<D> {
             present: Vec::new(),
             listing_ok: false,
             session: None,
+            equalizer: EqSettings::default(),
             pending: Vec::new(),
         }
     }
 
     /// The driver.
+    #[cfg(test)]
     pub fn driver(&self) -> &D {
         &self.driver
     }
 
     /// The driver, to change.
+    #[cfg(test)]
     pub fn driver_mut(&mut self) -> &mut D {
         &mut self.driver
     }
 
     /// The output settings.
+    #[cfg(test)]
     pub fn policy(&self) -> &OutputPolicy {
         &self.policy
     }
@@ -161,12 +177,21 @@ impl<D: Driver> Controller<D> {
     }
 
     /// The delay and gain a playing output applies right now.
+    #[cfg(test)]
     pub fn playing_params(&self, id: &str) -> Option<OutputParams> {
         let playing = self.session.as_ref()?.outputs.get(id)?;
         Some(OutputParams {
             delay_frames: playing.control.delay_frames(),
             gain: playing.gain.get(),
         })
+    }
+
+    /// Frames captured since the start: 0 until the source plays something.
+    #[cfg(test)]
+    pub fn frames_captured(&self) -> u64 {
+        self.session
+            .as_ref()
+            .map_or(0, |session| session.ring.frames_written())
     }
 
     fn is_playing(&self, id: &str) -> bool {
@@ -352,8 +377,21 @@ impl<D: Driver> AudioBackend for Controller<D> {
         ))
     }
 
+    fn find_app(
+        &mut self,
+        root_pid: u32,
+        executable: &str,
+    ) -> Result<Option<SourceInfo>, BackendError> {
+        let processes = self.driver.processes()?;
+        Ok(running_app(&processes, root_pid, executable))
+    }
+
     fn list_outputs(&mut self) -> Result<Vec<OutputInfo>, BackendError> {
         self.refresh_outputs().1?;
+        Ok(self.outputs())
+    }
+
+    fn outputs(&self) -> Vec<OutputInfo> {
         let mut outputs: Vec<OutputInfo> = self
             .present
             .iter()
@@ -362,6 +400,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 OutputInfo {
                     id: endpoint.id.clone(),
                     name: endpoint.name.clone(),
+                    kind: endpoint.kind,
                     is_default: endpoint.is_default,
                     enabled: settings.enabled,
                     delay_ms: settings.delay_ms,
@@ -376,7 +415,15 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 .cmp(&b.name.to_lowercase())
                 .then_with(|| a.id.cmp(&b.id))
         });
-        Ok(outputs)
+        outputs
+    }
+
+    fn enabled_outputs(&self) -> Vec<String> {
+        self.policy
+            .enabled_ids()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
     }
 
     fn start(&mut self, source: &SourceId) -> Result<(), BackendError> {
@@ -388,11 +435,17 @@ impl<D: Driver> AudioBackend for Controller<D> {
         let activation = decide_activation(source, self.driver.own_pid(), &processes)?;
         let ring = Ring::for_rate(SESSION_RATE).map_err(|_| BackendError::UnsupportedFormat)?;
         let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
-        let capture = self.driver.start_capture(activation, writer)?;
+        // The capture equalizes at the session rate, after any resampling
+        // (a positive rate is always accepted).
+        let (mut equalizer, processor) = eq::equalizer();
+        equalizer.set_sample_rate(f64::from(SESSION_RATE));
+        equalizer.set_settings(self.equalizer);
+        let capture = self.driver.start_capture(activation, writer, processor)?;
         self.session = Some(Session {
             source: source.clone(),
             ring,
             capture,
+            equalizer,
             outputs: BTreeMap::new(),
         });
         self.refresh_if_needed(false);
@@ -407,12 +460,6 @@ impl<D: Driver> AudioBackend for Controller<D> {
 
     fn running_source(&self) -> Option<SourceId> {
         self.session.as_ref().map(|session| session.source.clone())
-    }
-
-    fn frames_captured(&self) -> u64 {
-        self.session
-            .as_ref()
-            .map_or(0, |session| session.ring.frames_written())
     }
 
     fn set_output_enabled(&mut self, id: &str, enabled: bool) -> Result<(), BackendError> {
@@ -457,6 +504,13 @@ impl<D: Driver> AudioBackend for Controller<D> {
 
     fn master_volume(&self) -> f64 {
         self.policy.master()
+    }
+
+    fn set_equalizer(&mut self, settings: EqSettings) {
+        self.equalizer = settings;
+        if let Some(session) = self.session.as_mut() {
+            session.equalizer.set_settings(settings);
+        }
     }
 
     fn poll(&mut self) -> Vec<BackendEvent> {
@@ -965,5 +1019,36 @@ mod tests {
         backend.poll();
         assert_eq!(playing(&backend), ["later"]);
         assert_eq!(backend.playing_params("later").unwrap().delay_frames, 1_920);
+    }
+
+    #[test]
+    fn the_equalizer_set_while_stopped_applies_at_the_start_then_live() {
+        let mut backend = backend();
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: 6.0,
+            ..EqSettings::default()
+        });
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let raised = 0.25 * 10f32.powf(6.0 / 20.0);
+        let out = backend.feed_capture_level(4, 0.25);
+        assert_eq!(out.len(), 8);
+        assert!(out.iter().all(|s| (s - raised).abs() < 1e-4), "{out:?}");
+
+        backend.set_equalizer(EqSettings::default());
+        assert_eq!(backend.feed_capture_level(4, 0.25), [0.25; 8], "off");
+    }
+
+    #[test]
+    fn enabled_outputs_count_the_ones_not_connected() {
+        let mut backend = backend();
+        backend.set_output_enabled("away", true).unwrap();
+        assert_eq!(backend.enabled_outputs(), ["away", HEADPHONES, SPEAKERS]);
+        let listed: Vec<String> = backend.outputs().into_iter().map(|o| o.id).collect();
+        assert_eq!(
+            listed,
+            [HEADPHONES, SPEAKERS],
+            "only connected ones are listed"
+        );
     }
 }
