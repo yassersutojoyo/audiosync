@@ -29,7 +29,7 @@ at every launch.
 | Options menu: Appearance | Not offered | The app follows the Windows light or dark mode |
 | Options menu: Show Virtual Devices | View > Show Virtual Devices | Off by default, as on the Mac, but the Mac remembers the choice and Windows turns it off again at every launch (nothing is saved yet): a virtual output (a loopback driver, a voice changer) is listed only while this is on or while the output is turned on |
 | Options menu: Launch at Login, Guide, Check for Updates | Later | They need saved settings, the Windows startup-apps setting, a Windows guide and an update channel |
-| Notices | Same, each with a dismiss button, plus Dismiss All | The tray flyout shows the newest one and "n more notices…". Windows posts them for streaming turned on with no speaker, an app that quit or isn't running, capture that failed, a speaker that couldn't start, a speaker that was disconnected (that one clears itself once the speaker is back; a speaker whose stream only restarts, after a format change, gets none), and a source you may hear twice because it also plays straight from an output. That last one names the outputs you can mute apart from the ones AudioSync plays to as well, clears itself once the cause is gone, and once dismissed stays away for the same source and outputs ([how it's detected](WINDOWS_AUDIO_ROUTING.md#detection)) |
+| Notices | Same, each with a dismiss button, plus Dismiss All | The tray flyout shows the newest one and "n more notices…". Windows posts them for streaming turned on with no speaker, an app that quit or isn't running, capture that failed, a speaker that couldn't start, a speaker that was disconnected (that one clears itself once the speaker is back; a speaker whose stream only restarts, after a format change, gets none), and a source you may hear twice because it also plays straight from an output. That last one names the outputs you can mute apart from the ones AudioSync plays to as well, clears itself once the cause is gone, and once dismissed stays away for the same source and outputs ([how it's detected](WINDOWS_AUDIO_ROUTING.md#detection)). Its Show How button opens a short guide that fits the case: for one app, send it to an output you don't listen to in the Volume mixer; for the whole system, make such an output the Windows default (and move any app that plays straight to another output). Muting is offered only when every output named is one AudioSync doesn't play to, and the guide warns that muting the app itself silences AudioSync too. Its buttons open the Volume mixer or Sound settings; AudioSync never changes those settings itself |
 | Audio Source | Same (a drop-down list) | All System Audio (everything but AudioSync), then each app that plays audio, by name. The list is read again every few seconds and with Refresh Devices; the chosen app stays chosen while it's paused or after it quits, and streaming finds it whenever it runs (restarted too), even before it plays again |
 | Now Playing | Later | Needs the Windows media session API |
 | Master Volume | Same | |
@@ -58,7 +58,7 @@ at every launch.
 | F5 | Refresh devices |
 | Ctrl+E | Equalizer |
 | Ctrl+W | Close the window (AudioSync stays in the tray) |
-| Escape | Close the flyout, the equalizer or a dialog |
+| Escape | Close the flyout, the equalizer, the double-audio guide or a dialog |
 
 A focused control shows a ring in the focus color while it has keyboard focus.
 
@@ -75,8 +75,8 @@ the focus is. Icons, the brand mark, section titles and values a control
 already reads are decorative and hidden from Narrator. Tests in
 `windows/src/contrast.rs` fail when a control in `ui/` has no accessible
 label, when one of AudioSync's own controls lacks a role, a default action
-or a focus ring, when a toggle uses the switch role, or when a decorative
-piece would still reach Narrator.
+or a focus ring, when a toggle uses the switch role, when an accessible name
+holds an icon glyph, or when a decorative piece would still reach Narrator.
 
 Text colors meet 4.5:1 on every background they're drawn on, in light and
 dark (the lowest is 5.07:1). The pairs are listed in `brand/tokens.json`, and

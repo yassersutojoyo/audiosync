@@ -532,6 +532,13 @@ fn the_double_audio_guide_is_wired_and_worded_in_strings() {
     );
     assert!(guide.contains("Key.Escape") && guide.contains("root.close-requested();"));
     assert!(guide.contains("root.page-requested(step.page);"));
+    let wrapping =
+        guide.matches("wrap: word-wrap;").count() + guide.matches("SecondaryText {").count();
+    assert_eq!(
+        guide.matches("min-height: self.preferred-height;").count(),
+        wrapping,
+        "every wrapping text in the guide keeps the height of all its lines"
+    );
 
     let strings = include_str!("../ui/strings.slint");
     for name in [

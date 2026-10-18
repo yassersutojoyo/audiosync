@@ -1,6 +1,6 @@
 # Windows audio routing
 
-Research notes for the Windows 11 version of AudioSync (`windows/`). Process loopback capture is built, hardware test 1 has been run (results below) and double audio is detected and warned about ([Detection](#detection)); the guided setup and the other hardware tests aren't done yet. The question: how to hear a captured app only through AudioSync's delayed, synced outputs, and not also directly from the PC.
+Research notes for the Windows 11 version of AudioSync (`windows/`). Process loopback capture is built, hardware test 1 has been run (results below) and double audio is detected and warned about ([Detection](#detection)), with a guide on the notice for fixing the routing by hand; the other hardware tests aren't done yet. The question: how to hear a captured app only through AudioSync's delayed, synced outputs, and not also directly from the PC.
 
 ## The problem
 

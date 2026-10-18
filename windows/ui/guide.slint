@@ -39,6 +39,9 @@ export component GuideWindow inherits Window {
             return reject;
         }
 
+        // Each wrapping text asks for the height of all its lines: without
+        // `min-height`, the window opens as tall as one line each and the
+        // paragraphs overlap.
         VerticalLayout {
             padding: 18px;
             spacing: 14px;
@@ -47,6 +50,7 @@ export component GuideWindow inherits Window {
                 text: root.intro;
                 color: Tokens.text;
                 wrap: word-wrap;
+                min-height: self.preferred-height;
             }
 
             VerticalLayout {
@@ -61,6 +65,7 @@ export component GuideWindow inherits Window {
                         text: step.text;
                         color: Tokens.text;
                         wrap: word-wrap;
+                        min-height: self.preferred-height;
                     }
 
                     if step.page != GuidePage.none: HorizontalLayout {
@@ -78,6 +83,7 @@ export component GuideWindow inherits Window {
 
             SecondaryText {
                 text: Strings.guide-footer;
+                min-height: self.preferred-height;
             }
 
             HorizontalLayout {
