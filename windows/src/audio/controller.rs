@@ -38,10 +38,15 @@ use super::capture::{
 use super::outputs::OutputParams;
 use super::outputs::{AirPlay, Endpoint, Listing, ListingNote, OutputPolicy, StreamSetup};
 use super::process::ProcessTable;
+use super::routing::EndpointAudio;
 use crate::debug_log::DebugLog;
 
 /// How often the debug log gets a status line while a session runs.
 const STATUS_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How often a running session checks whether the source is heard twice
+/// ([`routing`](super::routing)).
+const ROUTING_INTERVAL: Duration = Duration::from_secs(3);
 
 /// How a running capture is doing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,6 +105,13 @@ pub trait Driver {
 
     /// Whether outputs may have changed since the last call.
     fn outputs_changed(&mut self) -> bool;
+
+    /// A snapshot of the active render endpoints for the double-audio check
+    /// ([`routing`](super::routing)): each one's name, whether it is the
+    /// default output, its mute and master volume, and the processes with an
+    /// active audio session on it. It only reads: no mute, volume or default
+    /// output changes.
+    fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError>;
 
     /// Starts capturing as `activation` says, writing to the ring through
     /// `equalizer` and `writer`. Returns once the capture runs, or with why
@@ -588,6 +600,17 @@ impl<D: Driver> Controller<D> {
         Ok(())
     }
 
+    /// Checks whether the source is heard twice, at the first poll of a
+    /// session and then every [`ROUTING_INTERVAL`].
+    fn check_routing_if_due(&mut self, now: Instant) {
+        let _ = now;
+    }
+
+    /// Checks whether the source is heard twice now, whenever the last check
+    /// ran; the next poll reports a change.
+    #[cfg(test)]
+    pub fn check_routing_now(&mut self) {}
+
     /// The sources to offer, from the processes and audio sessions now.
     fn read_sources(&mut self) -> Result<Vec<SourceInfo>, BackendError> {
         let processes = self.driver.processes()?;
@@ -983,6 +1006,19 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
             format!("output {} failed: {error}", label(names, id))
         }
         BackendEvent::Stopped { reason } => format!("stopped: {}", describe_stop(reason)),
+        BackendEvent::HeardTwice { paths } if paths.is_empty() => {
+            "the source is heard only through AudioSync again".to_owned()
+        }
+        BackendEvent::HeardTwice { paths } => {
+            let endpoints: Vec<String> = paths
+                .iter()
+                .map(|path| label(names, &path.endpoint_id))
+                .collect();
+            format!(
+                "the source is heard twice, straight from {}",
+                endpoints.join(", ")
+            )
+        }
     }
 }
 
@@ -994,6 +1030,7 @@ mod tests {
     use crate::audio::backend::OutputKind;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
     use crate::audio::outputs::{EndpointProperties, EndpointReading};
+    use crate::audio::routing::{DirectPath, DirectReason};
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
 
     const SPEAKERS: &str = "speakers";
@@ -1716,6 +1753,298 @@ mod tests {
                         drift skips 0 (0 frames), drift silences 0 (0 frames), rejected copies 0";
         let outputs = messages.iter().filter(|m| m.starts_with("  output "));
         assert!(outputs.clone().count() == 2 && outputs.clone().all(|m| m.ends_with(counters)));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The double-audio reports among `events`: the endpoint IDs of each.
+    fn heard_twice(events: &[BackendEvent]) -> Vec<Vec<String>> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                BackendEvent::HeardTwice { paths } => {
+                    Some(paths.iter().map(|path| path.endpoint_id.clone()).collect())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Runs the double-audio check now, and returns what the next poll
+    /// reports about it.
+    fn check_routing(backend: &mut MockBackend) -> Vec<Vec<String>> {
+        backend.check_routing_now();
+        heard_twice(&backend.poll())
+    }
+
+    const TV: &str = "tv";
+    const CABLE: &str = "cable";
+
+    /// The backend of [`backend`] with a TV and a virtual cable connected
+    /// and off, streaming the player.
+    fn streaming_player() -> MockBackend {
+        let mut backend = backend();
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.connect_output_as(CABLE, "Cable Input", OutputKind::Virtual);
+        backend.list_outputs().unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert!(
+            heard_twice(&backend.poll()).is_empty(),
+            "the player is silent"
+        );
+        backend
+    }
+
+    #[test]
+    fn an_app_heard_straight_from_an_output_is_reported_when_that_changes() {
+        let mut backend = streaming_player();
+        backend.play_on(PLAYER_PID, TV);
+        let events = {
+            backend.check_routing_now();
+            backend.poll()
+        };
+        let paths: Vec<&DirectPath> = events
+            .iter()
+            .flat_map(|event| match event {
+                BackendEvent::HeardTwice { paths } => paths.iter().collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            [&DirectPath {
+                endpoint_id: TV.to_owned(),
+                endpoint_name: "TV".to_owned(),
+                reason: DirectReason::Session,
+                audiosync_plays_here: false,
+            }]
+        );
+        assert!(
+            check_routing(&mut backend).is_empty(),
+            "no change, no report"
+        );
+        // It plays on an output AudioSync plays to as well.
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        assert_eq!(check_routing(&mut backend), [[SPEAKERS, TV]]);
+        // A helper process of the app counts as the app.
+        backend.add_helper(PLAYER_PID + 1, PLAYER_PID, "player.exe");
+        backend.pause_on(PLAYER_PID, SPEAKERS);
+        backend.play_on(PLAYER_PID + 1, SPEAKERS);
+        assert!(check_routing(&mut backend).is_empty(), "the same outputs");
+    }
+
+    #[test]
+    fn an_app_moved_to_a_virtual_cable_is_heard_once_again() {
+        let mut backend = streaming_player();
+        backend.play_on(PLAYER_PID, TV);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+        backend.move_session(PLAYER_PID, TV, CABLE);
+        assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
+        // A virtual device AudioSync plays to passes the sound on to
+        // something the user listens to.
+        backend.set_output_enabled(CABLE, true).unwrap();
+        assert_eq!(check_routing(&mut backend), [[CABLE]]);
+    }
+
+    #[test]
+    fn muting_the_output_or_turning_it_down_to_0_clears_the_report() {
+        let mut backend = streaming_player();
+        backend.play_on(PLAYER_PID, TV);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+        backend.mute_output(TV, true);
+        assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
+        backend.mute_output(TV, false);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+        backend.set_output_level(TV, 0.0);
+        assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
+        // An output whose volume can't be read counts as heard.
+        backend.hide_output_volume(TV);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+    }
+
+    #[test]
+    fn a_paused_app_stays_reported_where_it_played() {
+        let mut backend = streaming_player();
+        backend.play_on(PLAYER_PID, TV);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+        backend.pause_on(PLAYER_PID, TV);
+        assert!(check_routing(&mut backend).is_empty(), "still reported");
+        backend.play_on(PLAYER_PID, CABLE);
+        assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
+    }
+
+    #[test]
+    fn stopping_or_changing_the_source_clears_the_report() {
+        let mut backend = streaming_player();
+        backend.play_on(PLAYER_PID, TV);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+        backend.stop();
+        assert_eq!(heard_twice(&backend.poll()), [Vec::<String>::new()]);
+        assert!(check_routing(&mut backend).is_empty(), "nothing streams");
+
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(heard_twice(&backend.poll()), [[TV]]);
+        backend.add_app(3000, "video.exe");
+        backend.start(&SourceId::App { root_pid: 3000 }).unwrap();
+        assert_eq!(
+            heard_twice(&backend.poll()),
+            [Vec::<String>::new()],
+            "the new source plays nowhere yet"
+        );
+    }
+
+    #[test]
+    fn nothing_is_heard_twice_while_no_output_plays() {
+        let mut backend = streaming_player();
+        backend.play_on(PLAYER_PID, TV);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
+    }
+
+    #[test]
+    fn the_whole_system_is_heard_twice_from_the_default_output() {
+        let mut backend = backend();
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.set_default_output(TV);
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let events = backend.poll();
+        let reasons: Vec<(String, DirectReason, bool)> = events
+            .iter()
+            .flat_map(|event| match event {
+                BackendEvent::HeardTwice { paths } => paths
+                    .iter()
+                    .map(|path| {
+                        (
+                            path.endpoint_id.clone(),
+                            path.reason,
+                            path.audiosync_plays_here,
+                        )
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        // AudioSync's own sessions on the speakers and headphones don't
+        // count.
+        assert_eq!(
+            reasons,
+            [(TV.to_owned(), DirectReason::DefaultEndpoint, false)]
+        );
+        backend.play_on(PLAYER_PID, HEADPHONES);
+        assert_eq!(check_routing(&mut backend), [[HEADPHONES, TV]]);
+        backend.set_default_output(SPEAKERS);
+        backend.pause_on(PLAYER_PID, HEADPHONES);
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        assert_eq!(check_routing(&mut backend), [[SPEAKERS]]);
+    }
+
+    #[test]
+    fn the_check_runs_at_the_first_poll_then_every_few_seconds() {
+        let mut backend = backend();
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.list_outputs().unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.play_on(PLAYER_PID, TV);
+        let start = Instant::now();
+        backend.check_routing_if_due(start);
+        assert_eq!(heard_twice(&backend.poll()), [[TV]], "the first check");
+        backend.mute_output(TV, true);
+        backend.check_routing_if_due(start + ROUTING_INTERVAL / 2);
+        assert!(heard_twice(&backend.poll()).is_empty(), "not due yet");
+        backend.check_routing_if_due(start + ROUTING_INTERVAL);
+        assert_eq!(heard_twice(&backend.poll()), [Vec::<String>::new()]);
+    }
+
+    #[test]
+    fn a_snapshot_that_fails_keeps_the_last_answer() {
+        let mut backend = streaming_player();
+        backend.play_on(PLAYER_PID, TV);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+        backend.fail_endpoint_audio(Some(listing_error()));
+        backend.mute_output(TV, true);
+        assert!(check_routing(&mut backend).is_empty());
+        backend.fail_endpoint_audio(None);
+        assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
+    }
+
+    #[test]
+    fn double_audio_is_logged_when_it_changes() {
+        let (mut backend, log, dir) = logged_backend("controller-double-audio");
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.list_outputs().unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        backend.play_on(PLAYER_PID, TV);
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        backend.set_output_level(SPEAKERS, 0.25);
+        check_routing(&mut backend);
+        check_routing(&mut backend);
+        backend.mute_output(SPEAKERS, true);
+        check_routing(&mut backend);
+        backend.fail_endpoint_audio(Some(listing_error()));
+        check_routing(&mut backend);
+        check_routing(&mut backend);
+        backend.fail_endpoint_audio(None);
+        backend.pause_on(PLAYER_PID, TV);
+        backend.pause_on(PLAYER_PID, SPEAKERS);
+        backend.mute_output(SPEAKERS, false);
+        check_routing(&mut backend);
+        backend.stop();
+        backend.poll();
+        let messages = logged(&log, &dir);
+        assert_in_order(
+            &messages,
+            &[
+                "double audio: the source plays straight from 2 output(s) too",
+                "  \"Speakers\" (speakers): an active session of process 2000; \
+                 not muted, volume 0.25; AudioSync plays there too",
+                "  \"TV\" (tv): an active session of process 2000; \
+                 not muted, volume 1.00",
+                "event: the source is heard twice, straight from \"Speakers\" (speakers), \
+                 \"TV\" (tv)",
+                "double audio: the source plays straight from 1 output(s) too",
+                "  \"TV\" (tv): an active session of process 2000; not muted, volume 1.00",
+                "  no longer \"Speakers\" (speakers): muted",
+                "event: the source is heard twice, straight from \"TV\" (tv)",
+                "the double-audio check failed: \
+                 IMMDeviceEnumerator::EnumAudioEndpoints failed (0x80004005).",
+                "double audio: the source plays straight from 2 output(s) too",
+                "  \"Speakers\" (speakers): the source played there last and is silent now; \
+                 not muted, volume 0.25; AudioSync plays there too",
+                "  \"TV\" (tv): the source played there last and is silent now; \
+                 not muted, volume 1.00",
+                "double audio: none, streaming stopped",
+                "event: the source is heard only through AudioSync again",
+            ],
+        );
+        let failures = messages
+            .iter()
+            .filter(|m| m.starts_with("the double-audio check failed"))
+            .count();
+        assert_eq!(failures, 1, "logged once: {messages:?}");
+        let changes = messages
+            .iter()
+            .filter(|m| m.starts_with("double audio:"))
+            .count();
+        assert_eq!(changes, 4, "only changes are logged: {messages:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

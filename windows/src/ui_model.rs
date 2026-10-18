@@ -157,6 +157,13 @@ pub enum NoticeMessage {
     /// A speaker's device went away while it played. It stays on and plays
     /// again once the device is back.
     SpeakerLost { speaker: String },
+    /// The source also plays straight from these outputs, undelayed, so it
+    /// is heard twice. `source` is the app's name, or `None` for the whole
+    /// system.
+    HeardTwice {
+        source: Option<String>,
+        endpoints: Vec<String>,
+    },
 }
 
 /// How a speaker or group row shows: playing only while streaming is on.

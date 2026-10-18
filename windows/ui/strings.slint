@@ -152,6 +152,19 @@ export global Strings {
         return @tr("{} was disconnected. It plays again as soon as it's back.", speaker);
     }
 
+    // Windows can't mute the captured app, so it also plays straight from an
+    // output, undelayed, next to AudioSync's delayed copies. `endpoints` is
+    // one output's name, or several joined by commas.
+    public pure function notice-heard-twice-app(source: string, endpoints: string) -> string {
+        return @tr("You may hear {0} twice: it also plays straight from {1}. Send it to an output you don't listen to (Volume mixer), or mute {1} if AudioSync doesn't play there.", source, endpoints);
+    }
+
+    // The same while the whole system is captured: everything Windows plays
+    // on its default output is heard there too.
+    public pure function notice-heard-twice-system(endpoints: string) -> string {
+        return @tr("You may hear your PC's sound twice: it also plays straight from {0}. Make an output you don't listen to the Windows default (Sound settings), or mute {0} if AudioSync doesn't play there.", endpoints);
+    }
+
     public pure function speaker-options(name: string) -> string {
         return @tr("Options for {}", name);
     }

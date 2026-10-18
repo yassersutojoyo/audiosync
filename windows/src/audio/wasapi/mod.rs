@@ -24,6 +24,7 @@ use super::capture::Activation;
 use super::controller::{Controller, Driver};
 use super::outputs::{Endpoint, Listing};
 use super::process::ProcessTable;
+use super::routing::EndpointAudio;
 
 /// The platform calls of the Windows backend.
 pub struct WasapiDriver {
@@ -63,6 +64,10 @@ impl Driver for WasapiDriver {
 
     fn outputs_changed(&mut self) -> bool {
         self.watcher.take_changed()
+    }
+
+    fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError> {
+        Ok(Vec::new())
     }
 
     fn start_capture(

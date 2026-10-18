@@ -11,6 +11,8 @@ use std::fmt;
 
 use audiosync_core::eq::EqSettings;
 
+use super::routing::DirectPath;
+
 /// What AudioSync captures.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SourceId {
@@ -104,6 +106,15 @@ pub enum BackendEvent {
     Stopped {
         /// Why it stopped.
         reason: StopReason,
+    },
+    /// Whether the source is heard twice: straight from Windows, undelayed,
+    /// as well as through AudioSync's delayed copies. Checked every few
+    /// seconds while streaming and reported when the answer changes.
+    HeardTwice {
+        /// The endpoints the source is heard from straight, by endpoint ID;
+        /// empty once it is heard only through AudioSync again, or streaming
+        /// stopped.
+        paths: Vec<DirectPath>,
     },
 }
 

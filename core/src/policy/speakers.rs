@@ -303,6 +303,9 @@ pub enum NoticeSubject {
     Automation(String),
     /// The Local Network permission.
     LocalNetwork,
+    /// The source heard twice: straight from an output as well as through
+    /// AudioSync, where capture can't mute the source (Windows).
+    DoubleAudio,
 }
 
 /// A privacy setting a notice can open (S153); the host maps it to its settings app.

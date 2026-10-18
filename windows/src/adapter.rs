@@ -518,6 +518,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.post(NoticeSubject::Source, message);
                 self.refresh_sources();
             }
+            BackendEvent::HeardTwice { .. } => {}
         }
     }
 
@@ -1570,5 +1571,121 @@ mod tests {
             ],
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    const TV: &str = "tv";
+    const CABLE: &str = "cable";
+
+    /// The double-audio notices showing.
+    fn heard_twice(adapter: &AudioAdapter<MockBackend>) -> Vec<NoticeMessage> {
+        adapter
+            .snapshot()
+            .notices
+            .into_iter()
+            .filter(|notice| matches!(notice.message, NoticeMessage::HeardTwice { .. }))
+            .map(|notice| notice.message)
+            .collect()
+    }
+
+    fn twice(source: Option<&str>, endpoints: &[&str]) -> NoticeMessage {
+        NoticeMessage::HeardTwice {
+            source: source.map(str::to_owned),
+            endpoints: endpoints.iter().map(|name| (*name).to_owned()).collect(),
+        }
+    }
+
+    /// Runs the double-audio check now and takes in what it reports.
+    fn check_routing(adapter: &mut AudioAdapter<MockBackend>) {
+        adapter.audio_mut().check_routing_now();
+        adapter.poll();
+    }
+
+    /// The adapter of [`adapter`] with a TV and a virtual cable connected,
+    /// streaming the player to the speakers while it plays on the TV.
+    fn player_on_the_tv() -> AudioAdapter<MockBackend> {
+        let mut adapter = adapter();
+        let audio = adapter.audio_mut();
+        audio.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        audio.connect_output_as(CABLE, "Cable Input", OutputKind::Virtual);
+        audio.play_on(PLAYER_PID, TV);
+        adapter.refresh_devices();
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+        adapter
+    }
+
+    #[test]
+    fn hearing_the_app_twice_raises_one_notice_that_follows_the_routing() {
+        let mut adapter = player_on_the_tv();
+        assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &["TV"])]);
+        assert_eq!(
+            adapter.snapshot().notices[0].subject,
+            "DoubleAudio",
+            "one subject"
+        );
+        // It plays on the speakers as well, which AudioSync plays to.
+        adapter.audio_mut().play_on(PLAYER_PID, SPEAKERS);
+        check_routing(&mut adapter);
+        assert_eq!(
+            heard_twice(&adapter),
+            [twice(Some("Player"), &["Speakers", "TV"])]
+        );
+        // Moved in the volume mixer to a virtual cable nobody listens to.
+        adapter.audio_mut().pause_on(PLAYER_PID, SPEAKERS);
+        adapter.audio_mut().move_session(PLAYER_PID, TV, CABLE);
+        check_routing(&mut adapter);
+        assert!(heard_twice(&adapter).is_empty());
+    }
+
+    #[test]
+    fn the_double_audio_notice_clears_when_the_output_is_muted() {
+        let mut adapter = player_on_the_tv();
+        adapter.audio_mut().mute_output(TV, true);
+        check_routing(&mut adapter);
+        assert!(heard_twice(&adapter).is_empty());
+        adapter.audio_mut().mute_output(TV, false);
+        check_routing(&mut adapter);
+        assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &["TV"])]);
+    }
+
+    #[test]
+    fn the_double_audio_notice_clears_when_streaming_stops() {
+        let mut adapter = player_on_the_tv();
+        adapter.set_running(false);
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        assert!(heard_twice(&adapter).is_empty());
+    }
+
+    #[test]
+    fn the_double_audio_notice_follows_a_new_source() {
+        let mut adapter = player_on_the_tv();
+        adapter.audio_mut().add_app(3000, "video.exe");
+        adapter.refresh_devices();
+        adapter.select_source("app:3000:video.exe");
+        assert!(adapter.snapshot().running);
+        assert!(
+            heard_twice(&adapter).is_empty(),
+            "the new app plays nowhere yet"
+        );
+        // The whole system takes in the player on the TV too.
+        adapter.select_source(SYSTEM_KEY);
+        assert_eq!(heard_twice(&adapter), [twice(None, &["TV"])]);
+    }
+
+    #[test]
+    fn a_dismissed_double_audio_notice_comes_back_only_when_the_routing_changes() {
+        let mut adapter = player_on_the_tv();
+        let id = adapter.snapshot().notices[0].id;
+        adapter.dismiss_notice(id);
+        check_routing(&mut adapter);
+        assert!(heard_twice(&adapter).is_empty(), "nothing changed");
+        adapter.audio_mut().play_on(PLAYER_PID, SPEAKERS);
+        check_routing(&mut adapter);
+        assert_eq!(
+            heard_twice(&adapter),
+            [twice(Some("Player"), &["Speakers", "TV"])]
+        );
     }
 }
