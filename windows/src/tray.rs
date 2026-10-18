@@ -1,8 +1,9 @@
 //! The notification-area (tray) icon: the Windows counterpart of the macOS
 //! menu bar item. A left click opens the flyout, a double click the main
 //! window, and a right click a short menu (Open AudioSync, streaming on or
-//! off, Exit). The icon follows the taskbar's light or dark mode and dims
-//! while streaming is off; its tooltip says what is streaming.
+//! off, Exit). The icon follows the taskbar's light or dark mode (checked
+//! every few seconds, so a theme change shows without a state change) and
+//! dims while streaming is off; its tooltip says what is streaming.
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -32,6 +33,10 @@ const REOPEN_GUARD: Duration = Duration::from_millis(300);
 /// Logical pixels between the flyout and the taskbar.
 const FLYOUT_GAP: f64 = 12.0;
 
+/// How often the taskbar's theme and the icon size are checked again. A
+/// registry read and a system metric: cheap enough to poll.
+const THEME_CHECK: Duration = Duration::from_secs(2);
+
 thread_local! {
     /// The app, for tray events, which arrive through `invoke_from_event_loop`.
     static APP: RefCell<Weak<App>> = const { RefCell::new(Weak::new()) };
@@ -41,7 +46,27 @@ thread_local! {
 pub struct Tray {
     icon: TrayIcon,
     toggle_item: MenuItem,
-    shown: Cell<Option<u16>>,
+    /// The icon variant showing now, so it is replaced only when it changes.
+    shown: Cell<Option<IconChoice>>,
+    running: Cell<bool>,
+    theme_timer: slint::Timer,
+}
+
+/// Which icon resource the tray shows, and at what size.
+#[derive(Clone, Copy, PartialEq)]
+struct IconChoice {
+    ordinal: u16,
+    size: Option<(u32, u32)>,
+}
+
+impl IconChoice {
+    /// The variant for the taskbar's current theme and scale.
+    fn current(running: bool) -> IconChoice {
+        IconChoice {
+            ordinal: icon_ordinal(platform::taskbar_is_light(), running),
+            size: platform::small_icon_size(),
+        }
+    }
 }
 
 /// Why the tray icon couldn't be made.
@@ -77,9 +102,9 @@ impl Tray {
         .map_err(|e| TrayError(e.to_string()))?;
 
         let state = app.snapshot();
-        let ordinal = icon_ordinal(platform::taskbar_is_light(), state.running);
+        let choice = IconChoice::current(state.running);
         let icon = TrayIconBuilder::new()
-            .with_icon(load_icon(ordinal)?)
+            .with_icon(load_icon(choice)?)
             .with_tooltip(strings.invoke_tray_tooltip(state.running, 0))
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
@@ -89,7 +114,9 @@ impl Tray {
         let tray = Rc::new(Tray {
             icon,
             toggle_item,
-            shown: Cell::new(Some(ordinal)),
+            shown: Cell::new(Some(choice)),
+            running: Cell::new(state.running),
+            theme_timer: slint::Timer::default(),
         });
 
         APP.with(|cell| *cell.borrow_mut() = Rc::downgrade(app));
@@ -115,6 +142,14 @@ impl Tray {
                 tray.show_state(state);
             }
         });
+        // The taskbar's theme can change while nothing else does.
+        let weak = Rc::downgrade(&tray);
+        tray.theme_timer
+            .start(slint::TimerMode::Repeated, THEME_CHECK, move || {
+                if let Some(tray) = weak.upgrade() {
+                    tray.show_icon();
+                }
+            });
         tray.show_state(&state);
         Ok(tray)
     }
@@ -133,12 +168,19 @@ impl Tray {
         } else {
             strings.get_menu_turn_streaming_on()
         });
-        let ordinal = icon_ordinal(platform::taskbar_is_light(), state.running);
-        if self.shown.get() != Some(ordinal)
-            && let Ok(icon) = load_icon(ordinal)
+        self.running.set(state.running);
+        self.show_icon();
+    }
+
+    /// Shows the icon variant for the current theme, scale and state, if it
+    /// isn't showing already.
+    fn show_icon(&self) {
+        let choice = IconChoice::current(self.running.get());
+        if self.shown.get() != Some(choice)
+            && let Ok(icon) = load_icon(choice)
             && self.icon.set_icon(Some(icon)).is_ok()
         {
-            self.shown.set(Some(ordinal));
+            self.shown.set(Some(choice));
         }
     }
 }
@@ -160,9 +202,10 @@ fn icon_ordinal(light_taskbar: bool, running: bool) -> u16 {
     }
 }
 
-fn load_icon(ordinal: u16) -> Result<Icon, TrayError> {
-    // The system picks the size for the tray at the current scaling.
-    Icon::from_resource(ordinal, None).map_err(|e| TrayError(e.to_string()))
+fn load_icon(choice: IconChoice) -> Result<Icon, TrayError> {
+    // The small icon size, so the 16, 20 and 24 px frames are used; without
+    // a size, Windows loads the 32 px (large icon) frame and shrinks it.
+    Icon::from_resource(choice.ordinal, choice.size).map_err(|e| TrayError(e.to_string()))
 }
 
 fn on_tray_event(event: TrayIconEvent) {
@@ -248,4 +291,5 @@ fn show_flyout(app: &App, icon: Bounds) {
         y.round() as i32,
     ));
     platform::bring_to_front(flyout);
+    app.flyout.invoke_take_focus();
 }

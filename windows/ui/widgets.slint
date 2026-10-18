@@ -507,7 +507,11 @@ export component SpeakerRow inherits Rectangle {
                             label: Strings.speaker-options(root.item.name);
                             glyph-color: Tokens.teal-text;
                             clicked => {
-                                menu.show({ x: self.x, y: self.y + self.height });
+                                // show() takes a point in the menu area, not in this button's layout.
+                                menu.show({
+                                    x: self.absolute-position.x - menu.absolute-position.x,
+                                    y: self.absolute-position.y - menu.absolute-position.y + self.height,
+                                });
                             }
                         }
                     }
@@ -620,7 +624,11 @@ export component GroupRow inherits Rectangle {
                     label: Strings.speaker-options(root.item.name);
                     glyph-color: Tokens.teal-text;
                     clicked => {
-                        menu.show({ x: self.x, y: self.y + self.height });
+                        // show() takes a point in the menu area, not in this button's layout.
+                        menu.show({
+                            x: self.absolute-position.x - menu.absolute-position.x,
+                            y: self.absolute-position.y - menu.absolute-position.y + self.height,
+                        });
                     }
                 }
             }
@@ -634,10 +642,12 @@ export component Divider inherits Rectangle {
     background: Tokens.separator;
 }
 
-// The notices, newest first, each with its own dismiss button.
+// The notices, newest first, each with its own dismiss button. It lists
+// every notice in `notices`; a window that shows only the newest few passes
+// just those (a hidden row would still take its place in the layout), so the
+// Dismiss All row appears only when more than one notice is on screen.
 export component NoticeStack inherits VerticalLayout {
     in property <[NoticeItem]> notices;
-    in property <int> limit: 4;
     callback dismissed(int);
     callback dismissed-all();
 
@@ -645,8 +655,7 @@ export component NoticeStack inherits VerticalLayout {
     accessible-role: groupbox;
     accessible-label: Strings.notices;
 
-    for notice[index] in root.notices: Rectangle {
-        visible: index < root.limit;
+    for notice in root.notices: Rectangle {
         background: Tokens.notice;
         border-radius: Tokens.radius-card - 2px;
 

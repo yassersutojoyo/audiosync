@@ -55,13 +55,16 @@ export component TrayFlyout inherits Window {
     in property <float> master-volume;
     in property <[SpeakerItem]> speakers;
     in property <[GroupItem]> groups;
+    // The newest notice only (or none); `notice-count` counts them all.
     in property <[NoticeItem]> notices;
+    in property <int> notice-count;
     callback power-toggled(bool);
     callback source-selected(int);
     callback master-volume-changed(float);
     callback speaker-toggled(string);
     callback group-toggled(string);
     callback notice-dismissed(int);
+    callback notices-dismissed-all();
     callback open-app();
     callback exit-app();
     callback close-requested();
@@ -72,6 +75,14 @@ export component TrayFlyout inherits Window {
     width: 320px;
     background: Tokens.surface;
     default-font-size: Tokens.font-size-body;
+    // Key events go to the focused item, so Escape needs the scope focused.
+    forward-focus: focus;
+
+    // Called each time the flyout opens: the last focused control may be
+    // gone, and Escape must work before anything inside is clicked.
+    public function take-focus() {
+        focus.focus();
+    }
 
     changed running => {
         power.checked = root.running;
@@ -128,25 +139,26 @@ export component TrayFlyout inherits Window {
                     accessible-label: Strings.streaming-switch;
                     toggled => {
                         root.power-toggled(self.checked);
+                        // Show what the engine did, even if it refused.
+                        self.checked = root.running;
                     }
                 }
             }
 
             if root.notices.length > 0: NoticeStack {
                 notices: root.notices;
-                limit: 1;
                 dismissed(id) => {
                     root.notice-dismissed(id);
                 }
                 dismissed-all => {
-                    root.open-app();
+                    root.notices-dismissed-all();
                 }
             }
 
-            if root.notices.length > 1: HorizontalLayout {
+            if root.notice-count > root.notices.length: HorizontalLayout {
                 alignment: start;
                 Button {
-                    text: Strings.more-notices(root.notices.length - 1);
+                    text: Strings.more-notices(root.notice-count - root.notices.length);
                     accessible-label: self.text;
                     clicked => {
                         root.open-app();
@@ -166,6 +178,7 @@ export component TrayFlyout inherits Window {
                 accessible-label: Strings.source-label;
                 selected => {
                     root.source-selected(self.current-index);
+                    self.current-index = root.source-index;
                 }
             }
 

@@ -77,6 +77,14 @@ export component EqualizerWindow inherits Window {
     min-width: 560px;
     preferred-width: 600px;
     default-font-size: Tokens.font-size-body;
+    // Key events go to the focused item, so Escape needs the scope focused.
+    forward-focus: keys;
+
+    // Called each time the window opens, so Escape works before anything
+    // inside is clicked.
+    public function take-focus() {
+        keys.focus();
+    }
 
     changed enabled => {
         power.checked = root.enabled;
@@ -85,7 +93,7 @@ export component EqualizerWindow inherits Window {
         presets.current-index = root.preset-index;
     }
 
-    FocusScope {
+    keys := FocusScope {
         key-pressed(event) => {
             if event.text == Key.Escape {
                 root.close-requested();
@@ -107,6 +115,7 @@ export component EqualizerWindow inherits Window {
                     accessible-label: Strings.equalizer-title;
                     toggled => {
                         root.enabled-toggled(self.checked);
+                        self.checked = root.enabled;
                     }
                 }
 
@@ -121,6 +130,7 @@ export component EqualizerWindow inherits Window {
                     accessible-label: Strings.equalizer-presets;
                     selected => {
                         root.preset-selected(self.current-index);
+                        self.current-index = root.preset-index;
                     }
                 }
             }

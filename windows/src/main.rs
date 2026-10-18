@@ -87,6 +87,107 @@ mod tests {
         );
     }
 
+    /// The statements of the first handler `handler =>` after `after` in a
+    /// .slint source, up to the handler's closing brace.
+    fn handler_body<'a>(source: &'a str, after: &str, handler: &str) -> &'a str {
+        let from = source.find(after).expect("the element is there");
+        let rest = &source[from..];
+        let start = rest
+            .find(&format!("{handler} => {{"))
+            .expect("the handler is there");
+        let body = &rest[start..];
+        &body[..body.find('}').expect("the handler ends")]
+    }
+
+    /// The flyout's Dismiss All dismisses the notices (it used to open the
+    /// main window), and the stack draws that row only for the rows it shows.
+    #[test]
+    fn dismiss_all_in_the_flyout_dismisses_the_notices() {
+        let flyout = include_str!("../ui/flyout.slint");
+        let body = handler_body(flyout, "NoticeStack {", "dismissed-all");
+        assert!(body.contains("root.notices-dismissed-all();"), "{body}");
+        assert!(!body.contains("open-app"), "{body}");
+
+        let widgets = include_str!("../ui/widgets.slint");
+        let stack = &widgets[widgets
+            .find("export component NoticeStack")
+            .expect("NoticeStack is there")..];
+        assert!(
+            stack.contains("for notice in root.notices:")
+                && stack.contains("if root.notices.length > 1:")
+                && !stack.contains("visible:"),
+            "the stack lists every notice it gets and no hidden ones"
+        );
+    }
+
+    /// Key events go to the focused item: the flyout and the equalizer focus
+    /// their Escape handler when they open.
+    #[test]
+    fn escape_works_as_soon_as_the_flyout_or_equalizer_opens() {
+        let flyout = include_str!("../ui/flyout.slint");
+        let equalizer = include_str!("../ui/equalizer.slint");
+        assert!(flyout.contains("forward-focus: focus;") && flyout.contains("focus := FocusScope"));
+        assert!(
+            equalizer.contains("forward-focus: keys;") && equalizer.contains("keys := FocusScope")
+        );
+        assert!(include_str!("tray.rs").contains("app.flyout.invoke_take_focus();"));
+        assert!(include_str!("view.rs").contains("self.equalizer.invoke_take_focus();"));
+    }
+
+    /// A click changes a switch or combo box before the engine answers; each
+    /// handler sets the control back to the state the engine reports.
+    #[test]
+    fn switches_and_combo_boxes_show_the_engine_state_after_a_click() {
+        for (file, source, pairs) in [
+            (
+                "main.slint",
+                include_str!("../ui/main.slint"),
+                [
+                    ("power := Switch", "self.checked = root.running;"),
+                    (
+                        "source := ComboBox",
+                        "self.current-index = root.source-index;",
+                    ),
+                ],
+            ),
+            (
+                "flyout.slint",
+                include_str!("../ui/flyout.slint"),
+                [
+                    ("power := Switch", "self.checked = root.running;"),
+                    (
+                        "source := ComboBox",
+                        "self.current-index = root.source-index;",
+                    ),
+                ],
+            ),
+            (
+                "equalizer.slint",
+                include_str!("../ui/equalizer.slint"),
+                [
+                    ("power := Switch", "self.checked = root.enabled;"),
+                    (
+                        "presets := ComboBox",
+                        "self.current-index = root.preset-index;",
+                    ),
+                ],
+            ),
+        ] {
+            for (element, reset) in pairs {
+                let handler = if element.ends_with("Switch") {
+                    "toggled"
+                } else {
+                    "selected"
+                };
+                let body = handler_body(source, element, handler);
+                assert!(
+                    body.contains(reset),
+                    "{file}: {element} resets after {handler}"
+                );
+            }
+        }
+    }
+
     /// The contrast pairs name colors and opacities that brand/tokens.json has.
     #[test]
     fn the_contrast_pairs_name_known_tokens() {

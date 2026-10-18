@@ -22,15 +22,19 @@ export component GroupNameDialog inherits Dialog {
     default-font-size: Tokens.font-size-body;
     preferred-width: 380px;
 
-    // Puts the cursor in the name field each time the dialog opens.
+    // Bumped each time the dialog opens, so the name field takes the cursor.
+    property <int> focus-request;
+
+    // Puts the cursor in the name field each time the dialog opens, or the
+    // keyboard focus on the dialog (for Escape) when it has no field.
     public function prepare() {
-        if root.show-field {
-            field.focus();
-            field.select-all();
+        root.focus-request += 1;
+        if !root.show-field {
+            keys.focus();
         }
     }
 
-    FocusScope {
+    keys := FocusScope {
         key-pressed(event) => {
             if event.text == Key.Escape {
                 root.cancelled();
@@ -49,11 +53,20 @@ export component GroupNameDialog inherits Dialog {
                 wrap: word-wrap;
             }
 
-            field := LineEdit {
-                visible: root.show-field;
+            // Left out (not just hidden) without a field, so it takes no row.
+            if root.show-field: LineEdit {
+                property <int> focus-request: root.focus-request;
                 text <=> root.name;
                 placeholder-text: root.placeholder;
                 accessible-label: Strings.new-group-field-label;
+                init => {
+                    self.focus();
+                    self.select-all();
+                }
+                changed focus-request => {
+                    self.focus();
+                    self.select-all();
+                }
                 accepted => {
                     root.confirmed(self.text);
                 }
@@ -67,7 +80,7 @@ export component GroupNameDialog inherits Dialog {
         dialog-button-role: accept;
         accessible-label: root.confirm-label;
         clicked => {
-            root.confirmed(field.text);
+            root.confirmed(root.name);
         }
     }
 

@@ -87,6 +87,27 @@ pub fn taskbar_is_light() -> bool {
     status.is_ok() && value != 0
 }
 
+/// The small icon size (`SM_CXSMICON` by `SM_CYSMICON`) at the system DPI,
+/// which the notification area uses: 16 px at 100% scaling, 20 at 125%, 24
+/// at 150%. `None` when it can't be read, to let Windows pick.
+#[cfg(windows)]
+pub fn small_icon_size() -> Option<(u32, u32)> {
+    use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetSystemMetricsForDpi};
+    use windows::Win32::UI::WindowsAndMessaging::{SM_CXSMICON, SM_CYSMICON};
+
+    // SAFETY: both calls only read system settings.
+    let (width, height) = unsafe {
+        let dpi = GetDpiForSystem();
+        (
+            GetSystemMetricsForDpi(SM_CXSMICON, dpi),
+            GetSystemMetricsForDpi(SM_CYSMICON, dpi),
+        )
+    };
+    let width = u32::try_from(width).ok().filter(|&w| w > 0)?;
+    let height = u32::try_from(height).ok().filter(|&h| h > 0)?;
+    Some((width, height))
+}
+
 /// The work area (the monitor minus the taskbar) of the monitor at a point,
 /// in physical pixels.
 #[cfg(windows)]
