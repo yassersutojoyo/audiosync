@@ -119,13 +119,14 @@ Where the spec left room, these readings satisfy every Observed clause:
 18. S164: the quit rule is read as a dependency. `AudioSource::depends_on_app` holds only for an app source and its own bundle ID; the whole system and input devices depend on no app. A quitting app with an empty bundle ID counts as having none.
 19. S26, S127: after each block, filter state below 1e-30 (600 dB below full scale) is set to 0. Without it, silence after a bass boost leaves the state decaying into subnormal numbers, where it can hold a rounding limit cycle and every biquad step is slow on x86. With it, the Bass Boost preset's state is all zero about 1.3 s after a loud 40 Hz tone stops; a unit test checks that twenty seconds of silence never end a block on subnormal state.
 20. S74: `volume::LatestValues` holds at most one waiting value per target and leaves all timing to the host. `put` reports whether the target had nothing waiting, which is the moment the host queues that target's one flush; any later value rides that flush. The flush takes the latest value with `pop`, and the next value queues a new one.
+21. S99: a player status needs `state` to be a JSON string equal to `play`, `pause` or `stop`, case and spacing included. The search expression is percent-encoded like an output ID (S101): everything but unreserved characters. Track ids are integers, as the engine's public JSON API documents them, so the add request needs no further encoding. `PipePlayback` takes the time of the trigger, the session start or the poll, for both kinds of request, so the 15 s are measured alike; "more than 15 s" is strict, and exactly 15 s later a poll doesn't ask. "Any speaker appears" counts every listed speaker, enabled or not, and "the poll selects any speaker" means that poll's reconcile result selects at least one speaker (S104). Step one reads "no AirPlay speaker enabled" as enabled, listed or not; only the poll rule asks for a listed one.
 
 ### What stays in the host
 
 Some clauses are covered here only in their pure part:
 
 - S100: decoding the engine's JSON (invalid JSON, a wrong shape or a top-level array give no speakers) stays in the host; `policy::reconcile::speakers` applies the rules to decoded records.
-- S99: the HTTP calls; `policy::engine` decides play, stop and when to ask again.
+- S99: the HTTP calls, the timers and decoding the JSON; `policy::engine` decides each step of the two-step request, what counts as a player status, the request paths and when a poll asks again.
 - S149: the JSON round trip of a group is the host's persistence format.
 - S152 and S153: SF Symbol icons and colors, and opening System Settings.
 - S7 and S34: `EqProcessor::equalize_and_deliver` fixes the order; the host wires the ring and the FIFO feed to it.
