@@ -498,7 +498,8 @@ pub unsafe extern "C" fn asc_reader_tolerance_frames(reader: *const AscReader) -
     unsafe { control_of(reader) }.map_or(0, ReaderControl::tolerance_frames)
 }
 
-/// Any thread: asks the next read to re-anchor at the target delay (S41).
+/// Any thread: asks the reader to re-anchor at the target delay, which its
+/// next read with unread frames does (S41, S46).
 ///
 /// # Safety
 ///
@@ -690,13 +691,21 @@ mod tests {
         unsafe { asc_ring_writer_reset(session.writer) };
         // SAFETY: the ring is live.
         assert_eq!(unsafe { asc_ring_frames_written(session.ring) }, 0);
-        // A reader created after the reset plays nothing from before it.
+        // A reader created after the reset plays nothing from before it: it
+        // waits in silence while no more than its delay (one block) is
+        // written, then starts that delay behind W.
         session.next = 5_000_000;
         session.write(BLOCK);
         let reader = session.reader(0);
         let (block, report) = read(reader, BLOCK);
-        assert_eq!(report.start, 0);
-        assert_eq!(index_of(&block[..2]), Some(5_000_000));
+        assert_eq!(report.correction, CORRECTION_NONE);
+        assert_eq!((report.copied, report.lag), (0, BLOCK as i64));
+        assert!(block.iter().all(|&x| x == 0.0));
+        session.write(BLOCK);
+        let (block, report) = read(reader, BLOCK);
+        assert_eq!(report.correction, CORRECTION_PRIME);
+        assert_eq!(report.start, BLOCK as i64);
+        assert_eq!(index_of(&block[..2]), Some(5_000_000 + BLOCK as u64));
         // SAFETY: `reader` is live and destroyed once.
         unsafe { asc_reader_destroy(reader) };
     }
@@ -715,24 +724,31 @@ mod tests {
             assert_eq!(report.frames, BLOCK);
             assert_eq!(report.written, w);
             assert_eq!(report.delay, delay);
+            if w <= delay {
+                // Silent, and counting nothing, until more than the delay is
+                // written; P is still 0.
+                assert_eq!(report.correction, CORRECTION_NONE, "round {round}");
+                assert_eq!((report.start, report.lag, report.copied), (0, w, 0));
+                assert!(block.iter().all(|&x| x == 0.0), "round {round}");
+                continue;
+            }
             assert_eq!(report.start, w - delay, "round {round}: exact delay");
             assert_eq!(report.lag, delay - BLOCK as i64);
-            let expected = if round == 0 {
+            let expected = if w - (BLOCK as i64) <= delay {
                 CORRECTION_PRIME
             } else {
                 CORRECTION_NONE
             };
-            assert_eq!(report.correction, expected);
+            assert_eq!(report.correction, expected, "round {round}");
             for (i, frame) in block.chunks_exact(2).enumerate() {
-                let k = report.start + i as i64;
-                match index_of(frame) {
-                    Some(index) => {
-                        assert_eq!(index as i64, k, "frame k plays frame k");
-                        assert!(last.is_none_or(|last| index > last), "a repeat");
-                        last = Some(index);
-                    }
-                    None => assert!(k < 0, "silence only before the stream"),
-                }
+                let index = index_of(frame).expect("no silence once primed");
+                assert_eq!(
+                    index as i64,
+                    report.start + i as i64,
+                    "frame k plays frame k"
+                );
+                assert!(last.is_none_or(|last| index > last), "a repeat");
+                last = Some(index);
             }
         }
         // SAFETY: `reader` is live, then destroyed once.
@@ -904,7 +920,8 @@ mod tests {
     fn a_reader_that_reaches_the_newest_frame_reports_starvation() {
         let mut session = Session::new();
         let reader = session.reader(0);
-        session.write(BLOCK);
+        // More than its delay of one block, so the first read primes.
+        session.write(2 * BLOCK);
         let (_, first) = read(reader, BLOCK);
         assert_eq!(first.copied, BLOCK);
         session.write(100);
@@ -917,6 +934,50 @@ mod tests {
             assert_eq!(
                 (counters.starved_renders, counters.starved_frames),
                 (1, 412)
+            );
+            asc_reader_destroy(reader);
+        }
+    }
+
+    // covers: S46, S41, S158
+    #[test]
+    fn a_delay_change_on_a_dry_reader_waits_for_the_writer() {
+        let mut session = Session::new();
+        let reader = session.reader(0);
+        session.write(48_000);
+        for _ in 0..10 {
+            session.write(BLOCK);
+            let (_, report) = read(reader, BLOCK);
+            assert_eq!((report.copied, report.lag), (BLOCK, 0));
+        }
+        // Capture stalls with the reader at W, and the delay changes.
+        // SAFETY: `reader` is live.
+        unsafe { asc_reader_set_delay_frames(reader, 1200) };
+        for _ in 0..5 {
+            let (block, report) = read(reader, BLOCK);
+            assert_eq!(report.correction, CORRECTION_NONE, "the change waits");
+            assert_eq!((report.starved, report.lag), (BLOCK, 0));
+            assert!(block.iter().all(|&x| x == 0.0));
+        }
+        // Capture writes again: the next read applies the change, exactly.
+        session.write(BLOCK);
+        let (_, report) = read(reader, BLOCK);
+        assert_eq!(report.correction, CORRECTION_RESYNC);
+        assert_eq!(report.start, session.next as i64 - 1200);
+        assert_eq!(report.lag, 1200 - BLOCK as i64);
+        for _ in 0..10 {
+            session.write(BLOCK);
+            let (_, report) = read(reader, BLOCK);
+            assert_eq!((report.correction, report.lag), (CORRECTION_NONE, 688));
+        }
+        // SAFETY: `reader` is live, then destroyed once.
+        unsafe {
+            let counters = asc_reader_counters(reader);
+            assert_eq!((counters.primes, counters.resyncs), (1, 1));
+            assert_eq!(counters.drift_skips + counters.drift_silences, 0);
+            assert_eq!(
+                (counters.starved_renders, counters.starved_frames),
+                (5, 5 * BLOCK as u64)
             );
             asc_reader_destroy(reader);
         }
@@ -958,10 +1019,18 @@ mod tests {
         let far = session.reader(12_000);
         for _ in 0..60 {
             session.write(BLOCK);
+            let w = session.next as i64;
             let (_, a) = read(near, BLOCK);
             let (_, b) = read(far, BLOCK);
-            assert_eq!(a.start, session.next as i64 - 4096);
-            assert_eq!(b.start, session.next as i64 - 12_000);
+            // Each waits for more than its own delay, then plays exactly
+            // that far behind W.
+            for (report, delay) in [(a, 4096), (b, 12_000)] {
+                if w <= delay {
+                    assert_eq!((report.start, report.copied), (0, 0));
+                } else {
+                    assert_eq!(report.start, w - delay);
+                }
+            }
         }
         // SAFETY: both readers are live and destroyed once.
         unsafe {
@@ -980,11 +1049,12 @@ mod tests {
             let writer = asc_ring_writer_create(ring);
             let reader = asc_reader_create(ring, RATE);
             asc_ring_destroy(ring);
-            let block = tagged(0, BLOCK);
-            asc_ring_write(writer, block.as_ptr(), BLOCK);
+            // Two blocks: more than the reader's delay of one block.
+            let block = tagged(0, 2 * BLOCK);
+            asc_ring_write(writer, block.as_ptr(), 2 * BLOCK);
             let mut dst = vec![0.0f32; BLOCK * 2];
             asc_reader_read(reader, dst.as_mut_ptr(), BLOCK, std::ptr::null_mut());
-            assert_eq!(index_of(&dst[..2]), Some(0));
+            assert_eq!(index_of(&dst[..2]), Some(BLOCK as u64));
             asc_ring_writer_destroy(writer);
             asc_reader_read(reader, dst.as_mut_ptr(), BLOCK, std::ptr::null_mut());
             asc_reader_destroy(reader);

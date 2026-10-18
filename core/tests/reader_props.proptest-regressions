@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d3ea3efb635892dce62f6530f647db7062a2beeda0e46c1fb18b068930f75329 # shrinks to schedule = [(1, 1, 1)], delay = 0, tolerance = 0
+cc accb147ad31b1a01dee341c6ee68c901198a766301bf588153589e2f6f86de51 # shrinks to ops = [Read { reader: 0, frames: 1 }], finals = [0, 0], block = 64
+cc 789933f12ef4fcd28ce6e3a98f2506a2bd1c0aac1a22bb21032fe82bc19f098b # shrinks to ops = [Pause { reader: 0, reads: 2, frames: 1681 }], delay = 512
