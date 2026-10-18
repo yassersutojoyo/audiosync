@@ -195,7 +195,8 @@ typedef struct AscReadReport {
     int64_t start;       /* ring index of the block's first frame */
     int64_t lag;         /* the published lag: W minus the next frame to read */
     int32_t correction;  /* an ASC_CORRECTION_* code */
-    size_t masked;       /* leading frames of silence: already played, gone, or before the stream */
+    size_t masked;       /* leading frames of silence: already played, gone, before the stream,
+                            or a whole block while the reader waits to anchor */
     size_t copied;       /* frames copied from the ring */
     size_t starved;      /* trailing frames of silence: the ring had nothing newer */
     bool rejected;       /* the writer overtook the copy, which became silence */
@@ -258,7 +259,8 @@ void asc_ring_writer_reset(AscRingWriter *writer);
 /*
  * Creates a reader of `ring` for a session captured at capture_rate (Hz). Its
  * delay starts at 0 (one block) and its drift tolerance at 35 ms; it anchors
- * on its first read. Returns NULL outside 8000...384000 Hz.
+ * on its first read that finds more than its delay written, and reads silence
+ * until then. Returns NULL outside 8000...384000 Hz.
  */
 AscReader *asc_reader_create(AscRing *ring, uint32_t capture_rate);
 
@@ -270,9 +272,11 @@ void asc_reader_destroy(AscReader *reader);
  * delay set by asc_reader_set_delay_frames. Steady state plays every frame
  * once, in order; a delay change is exact; drift is corrected outside the
  * tolerance; silence fills what the ring can't give, and no frame plays twice
- * (until a prime reset). A read of 0 frames does nothing: a pending resync or
- * prime reset waits for the next read, and the report is all zeros. report
- * may be NULL. Real-time safe.
+ * (until a prime reset). A reader that has played everything a stopped writer
+ * wrote makes no correction, and a delay change waits for the writer's next
+ * frames. A read of 0 frames does nothing: a pending resync or prime reset
+ * waits for the next read, and the report is all zeros. report may be NULL.
+ * Real-time safe.
  */
 void asc_reader_read(AscReader *reader, float *dst, size_t frames, AscReadReport *report);
 
@@ -295,12 +299,13 @@ void asc_reader_set_tolerance_frames(AscReader *reader, int64_t frames);
 /* Any thread: the drift tolerance in frames. */
 int64_t asc_reader_tolerance_frames(const AscReader *reader);
 
-/* Any thread: asks the next read to re-anchor at the target delay. */
+/* Any thread: asks the reader to re-anchor at the target delay, on its next read with unread frames. */
 void asc_reader_request_resync(AscReader *reader);
 
 /*
  * Any thread: asks the next read to start over like a new reader (it anchors
- * and counts a prime); the counters are kept.
+ * once more than its delay is written, and counts a prime); the counters are
+ * kept.
  */
 void asc_reader_reset_prime(AscReader *reader);
 
