@@ -2,14 +2,18 @@
 //!
 //! The Windows 11 check at startup, then the main window, the equalizer, the
 //! tray icon with its flyout, and the About dialog, laid out like the macOS
-//! app. The data comes through the `Backend` trait in `ui_model`; until the
-//! WASAPI backend lands, a mock with example speakers stands in, so nothing
-//! plays and no audio device is opened.
+//! app. The data comes through the `Backend` trait in `ui_model`. On Windows
+//! that is the adapter over the WASAPI audio backend, which captures and plays
+//! for real. On other hosts, where the UI is worked on, a mock with example
+//! speakers stands in: nothing plays and no audio device is opened.
 
 // No console window next to the app. Test builds keep the console so their
 // output stays visible.
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
+#[cfg(any(windows, test))]
+mod adapter;
+#[cfg(any(windows, test))]
 mod audio;
 #[cfg(test)]
 mod contrast;
@@ -28,6 +32,9 @@ mod view;
 
 use std::process::ExitCode;
 
+#[cfg(windows)]
+use slint::ComponentHandle;
+
 slint::include_modules!();
 
 fn main() -> ExitCode {
@@ -41,15 +48,64 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            platform::show_error(&format!("AudioSync could not start: {error}"));
+            platform::show_error(&error.message());
             ExitCode::FAILURE
         }
     }
 }
 
+/// Why AudioSync couldn't start.
+#[derive(Debug)]
+enum StartError {
+    Window(slint::PlatformError),
+    #[cfg(windows)]
+    Audio(audio::backend::BackendError),
+}
+
+impl StartError {
+    /// What the error box says.
+    fn message(&self) -> String {
+        match self {
+            // A window system that failed can't give the UI's strings.
+            StartError::Window(error) => format!("AudioSync could not start: {error}"),
+            // The UI's words, with the system's reason as the detail.
+            #[cfg(windows)]
+            StartError::Audio(error) => AboutDialog::new()
+                .map(|dialog| {
+                    let strings = dialog.global::<Strings>();
+                    strings.invoke_audio_failed(error.to_string().into()).into()
+                })
+                .unwrap_or_else(|_| format!("AudioSync could not start: {error}")),
+        }
+    }
+}
+
+impl From<slint::PlatformError> for StartError {
+    fn from(error: slint::PlatformError) -> Self {
+        StartError::Window(error)
+    }
+}
+
+/// What the windows show and drive: the Windows audio backend, through the
+/// adapter that keeps the UI's own state.
+#[cfg(windows)]
+fn backend() -> Result<Box<dyn ui_model::Backend>, StartError> {
+    let audio = audio::wasapi::open().map_err(StartError::Audio)?;
+    Ok(Box::new(adapter::AudioAdapter::new(
+        audio,
+        platform::notice_time,
+    )))
+}
+
+/// Off Windows, example speakers to work on the UI with.
+#[cfg(not(windows))]
+fn backend() -> Result<Box<dyn ui_model::Backend>, StartError> {
+    Ok(Box::new(ui_model::MockBackend::new()))
+}
+
 /// Shows the main window and runs the UI until the user exits.
-fn run() -> Result<(), slint::PlatformError> {
-    let app = view::App::new(Box::new(ui_model::MockBackend::new()))?;
+fn run() -> Result<(), StartError> {
+    let app = view::App::new(backend()?)?;
 
     // With a tray icon, closing the main window keeps AudioSync running in
     // the notification area; without one (or off Windows), it quits.
@@ -66,7 +122,8 @@ fn run() -> Result<(), slint::PlatformError> {
     };
 
     app.show_main();
-    slint::run_event_loop_until_quit()
+    slint::run_event_loop_until_quit()?;
+    Ok(())
 }
 
 #[cfg(test)]

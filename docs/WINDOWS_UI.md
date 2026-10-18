@@ -10,8 +10,14 @@ Colors, the wordmark typeface, spacing and corner radii come from the shared
 design tokens (`brand/tokens.json`, see `brand/README.md`).
 
 The windows read their data through the `Backend` trait in
-`windows/src/ui_model.rs`. Until the WASAPI backend is connected, a mock with
-example speakers stands in: nothing plays and no audio device is opened.
+`windows/src/ui_model.rs`. On Windows that is the adapter over the WASAPI audio
+backend (`windows/src/adapter.rs`), which captures and plays for real. On other
+hosts, where the UI is worked on, a mock with example speakers stands in:
+nothing plays and no audio device is opened there.
+
+Settings live in memory for now: the speakers you turned on, their delays and
+volumes, groups, auto-connect marks, the source and the equalizer start over
+at every launch.
 
 ## Mac main window to Windows
 
@@ -21,13 +27,13 @@ example speakers stands in: nothing plays and no audio device is opened.
 | Streaming switch | Switch in the header; Speakers > Turn Streaming On/Off; the tray menu | |
 | Options (gear) menu: New Group, Refresh Devices | Speakers menu: New Group from Active Speakers… (Ctrl+N), Refresh Devices (F5) | Windows keeps commands in the menu bar |
 | Options menu: Appearance | Not offered | The app follows the Windows light or dark mode |
-| Options menu: Show Virtual Devices, Launch at Login, Guide, Check for Updates | Later | They need the real backend, the Windows startup-apps setting, a Windows guide and an update channel |
-| Notices | Same, each with a dismiss button, plus Dismiss All | The tray flyout shows the newest one and "n more notices…" |
-| Audio Source | Same (a drop-down list) | |
+| Options menu: Show Virtual Devices, Launch at Login, Guide, Check for Updates | Later | Virtual devices are always listed for now; the rest need saved settings, the Windows startup-apps setting, a Windows guide and an update channel |
+| Notices | Same, each with a dismiss button, plus Dismiss All | The tray flyout shows the newest one and "n more notices…". Windows posts them for streaming turned on with no speaker, an app that quit or isn't running, capture that failed, a speaker that couldn't start, and a speaker that was disconnected (that one clears itself once the speaker is back; a speaker whose stream only restarts, after a format change, gets none) |
+| Audio Source | Same (a drop-down list) | All System Audio (everything but AudioSync), then each app that plays audio, by name. The list is read again every few seconds and with Refresh Devices; the chosen app stays chosen while it's paused or after it quits, and streaming finds it whenever it runs (restarted too), even before it plays again |
 | Now Playing | Later | Needs the Windows media session API |
 | Master Volume | Same | |
-| Equalizer card and window | Same: on/off, presets (Custom when none matches), preamp, ten bands, Reset | View > Equalizer (Ctrl+E); presets and band limits come from `audiosync-core` |
-| This Mac | This PC | The PC's own outputs (speakers, headphones) |
+| Equalizer card and window | Same: on/off, presets (Custom when none matches), preamp, ten bands, Reset | View > Equalizer (Ctrl+E); presets, band limits and the filters come from `audiosync-core`. It changes the captured audio once, so every speaker hears it |
+| This Mac | This PC | The PC's own outputs: its speakers or line out, and headphones on its jack. USB, Bluetooth, HDMI, DisplayPort and virtual outputs are under Connected Speakers, each with its kind |
 | Groups | Same: toggle, members, Rename Group… and Delete Group | In a context menu: right-click, the Menu key, or the "…" button |
 | Connected Speakers | Same: toggle, kind icon, availability note, auto-connect mark, volume | Kind icons come from Segoe Fluent Icons |
 | Per-speaker delay (sync controls) | Same: −100, −10, a field that applies as you type, +10, +100, and the hint | Local outputs only, as on the Mac |

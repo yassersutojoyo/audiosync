@@ -37,6 +37,12 @@ export global Strings {
     out property <string> sync-hint: @tr("Heard this speaker first? Raise the value. Heard it late? Lower it.");
     out property <string> milliseconds-unit: @tr("ms");
     out property <string> auto-connect: @tr("Auto-connect when available");
+    out property <string> source-system: @tr("All System Audio");
+
+    // Notices: what happened and what to do about it
+    out property <string> notice-no-speaker: @tr("Turn on at least one speaker first (under This PC or Connected Speakers).");
+    out property <string> notice-capture-failed: @tr("AudioSync couldn't capture audio from the selected source. Turn streaming off and on again, or pick another source. If it keeps happening, restart your PC.");
+    out property <string> notice-capture-lost: @tr("AudioSync lost the audio from the selected source, so streaming has stopped. Turn streaming on again, or pick another source.");
 
     // Groups
     out property <string> new-group: @tr("New Group from Active Speakers…");
@@ -93,6 +99,12 @@ export global Strings {
         return @tr("AudioSync couldn't open a window: {}", detail);
     }
 
+    // Windows audio couldn't be reached at startup, so AudioSync exits;
+    // `detail` is the system's reason.
+    public pure function audio-failed(detail: string) -> string {
+        return @tr("AudioSync couldn't reach Windows audio, so it can't start. Restart your PC, then open AudioSync again.\n\nDetails: {}", detail);
+    }
+
     // The status under the wordmark (and the tray icon's tooltip).
     public pure function status(running: bool, speakers: int) -> string {
         if !running {
@@ -111,6 +123,32 @@ export global Strings {
     // The link under the newest notice in the flyout to the window that lists the others.
     public pure function more-notices(count: int) -> string {
         return @tr("{n} more notice…" | "{n} more notices…" % count);
+    }
+
+    // The app being captured quit while streaming.
+    public pure function notice-source-quit(source: string) -> string {
+        return @tr("{} quit, so streaming has stopped.", source);
+    }
+
+    // Streaming was turned on while the chosen app wasn't running.
+    public pure function notice-source-not-running(source: string) -> string {
+        return @tr("{} is not running. Open it first, or pick another source.", source);
+    }
+
+    // The chosen app started AudioSync, or AudioSync started it, so capturing
+    // it would capture AudioSync's own output and echo.
+    public pure function notice-source-refused(source: string) -> string {
+        return @tr("AudioSync can't capture {} without capturing its own sound too. Pick another source.", source);
+    }
+
+    // A speaker that couldn't start was turned off.
+    public pure function notice-speaker-failed(speaker: string) -> string {
+        return @tr("Could not start output for this speaker, so it was turned off: {}\nAnother app may be using it exclusively, or the format may be incompatible.", speaker);
+    }
+
+    // A speaker was unplugged or switched off while it played; it stays on.
+    public pure function notice-speaker-lost(speaker: string) -> string {
+        return @tr("{} was disconnected. It plays again as soon as it's back.", speaker);
     }
 
     public pure function speaker-options(name: string) -> string {

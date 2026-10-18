@@ -14,6 +14,7 @@ mod processes;
 
 use std::sync::Arc;
 
+use audiosync_core::eq::EqProcessor;
 use audiosync_core::reader::Reader;
 use audiosync_core::ring::RingWriter;
 use audiosync_core::volume::SharedGain;
@@ -68,8 +69,9 @@ impl Driver for WasapiDriver {
         &mut self,
         activation: Activation,
         writer: RingWriter,
+        equalizer: EqProcessor,
     ) -> Result<loopback::LoopbackCapture, BackendError> {
-        loopback::start(activation, writer)
+        loopback::start(activation, writer, equalizer)
     }
 
     fn start_renderer(

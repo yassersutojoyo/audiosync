@@ -1,6 +1,6 @@
 # Windows audio routing
 
-Research notes for a future Windows 11 version of AudioSync. Nothing here is built yet. The question: how to hear a captured app only through AudioSync's delayed, synced outputs, and not also directly from the PC.
+Research notes for the Windows 11 version of AudioSync (`windows/`). Process loopback capture is built; the detect-and-warn, the guided setup and the hardware tests below aren't done yet. The question: how to hear a captured app only through AudioSync's delayed, synced outputs, and not also directly from the PC.
 
 ## The problem
 

@@ -1,6 +1,6 @@
 //! What process loopback captures, which sources to offer, the formats a
 //! capture asks Windows for, and the conversion of captured packets into the
-//! shared ring.
+//! shared ring, through the equalizer.
 //!
 //! Process loopback captures the render streams of a process tree: either
 //! only that tree (one app), or everything except it (the whole system,
@@ -13,6 +13,7 @@
 //! times: when unsure, AudioSync refuses rather than capture itself.
 
 use audiosync_core::channels::input_to_stereo;
+use audiosync_core::eq::EqProcessor;
 use audiosync_core::resample::Resampler;
 use audiosync_core::ring::{RingWriter, is_supported_rate};
 
@@ -164,6 +165,31 @@ pub fn source_list(
     sources
 }
 
+/// The app that runs `executable` now, found among all running processes,
+/// so it is found whether or not it has an audio session: the app of process
+/// `root_pid` while that process still runs `executable`, else the app of
+/// the first other process that does. `None` when no process runs it, so a
+/// process ID that another program got after the app quit never counts.
+///
+/// Whether the app may be captured is left to [`decide_activation`].
+pub fn running_app(
+    processes: &ProcessTable,
+    root_pid: u32,
+    executable: &str,
+) -> Option<SourceInfo> {
+    let pid = processes
+        .running(executable)
+        .find(|&pid| pid == root_pid)
+        .or_else(|| processes.running(executable).next())?;
+    let root_pid = processes.app_root(pid);
+    let executable = processes.get(root_pid)?.executable.clone();
+    Some(SourceInfo {
+        id: SourceId::App { root_pid },
+        name: display_name(&executable),
+        executable,
+    })
+}
+
 /// A sample type a capture can deliver.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SampleType {
@@ -253,13 +279,17 @@ pub const CAPTURE_ATTEMPTS: [CaptureAttempt; 4] = [
 const CONVERT_CHUNK: usize = 1024;
 
 /// Turns captured packets into interleaved stereo float at
-/// [`SESSION_RATE`] and writes them to the ring.
+/// [`SESSION_RATE`], equalizes them and writes them to the ring.
 ///
-/// All buffers are allocated by [`CaptureConverter::new`];
-/// [`CaptureConverter::push`] never allocates, locks or blocks.
+/// The equalizer runs at the session rate, after any resampling, so it is
+/// designed for [`SESSION_RATE`] whatever rate Windows captures at, and every
+/// output hears the same equalized audio. All buffers are allocated by
+/// [`CaptureConverter::new`]; [`CaptureConverter::push`] never allocates,
+/// locks or blocks, and neither does the equalizer.
 pub struct CaptureConverter {
     format: StreamFormat,
     writer: RingWriter,
+    equalizer: EqProcessor,
     /// From the capture rate to the session rate, when they differ.
     resampler: Option<Resampler>,
     /// One chunk of decoded samples, `channels` per frame.
@@ -271,8 +301,14 @@ pub struct CaptureConverter {
 }
 
 impl CaptureConverter {
-    /// A converter for packets in `format`, writing through `writer`.
-    pub fn new(format: StreamFormat, writer: RingWriter) -> Result<CaptureConverter, BackendError> {
+    /// A converter for packets in `format`, writing through `writer` after
+    /// `equalizer`, whose control half publishes settings designed for
+    /// [`SESSION_RATE`].
+    pub fn new(
+        format: StreamFormat,
+        writer: RingWriter,
+        equalizer: EqProcessor,
+    ) -> Result<CaptureConverter, BackendError> {
         if format.channels == 0 || !is_supported_rate(format.rate) {
             return Err(BackendError::UnsupportedFormat);
         }
@@ -290,6 +326,7 @@ impl CaptureConverter {
         Ok(CaptureConverter {
             format,
             writer,
+            equalizer,
             resampler,
             decoded: vec![0.0; CONVERT_CHUNK * usize::from(format.channels)].into_boxed_slice(),
             stereo: vec![0.0; CONVERT_CHUNK * 2].into_boxed_slice(),
@@ -297,21 +334,12 @@ impl CaptureConverter {
         })
     }
 
-    /// The format packets arrive in.
-    pub fn format(&self) -> StreamFormat {
-        self.format
-    }
-
-    /// The ring writer.
-    pub fn writer(&self) -> &RingWriter {
-        &self.writer
-    }
-
     /// Converts one captured packet of `frames` frames and writes it to the
-    /// ring. `data` holds the packet in [`CaptureConverter::format`]; only the
+    /// ring. `data` holds the packet in the converter's format; only the
     /// whole frames it holds are used. A silent packet (Windows'
     /// `AUDCLNT_BUFFERFLAGS_SILENT`) writes `frames` frames of silence,
-    /// whatever `data` holds.
+    /// whatever `data` holds; it still runs through the equalizer, so the
+    /// filters ring out as they would on any quiet passage.
     pub fn push(&mut self, data: &[u8], frames: usize, silent: bool) {
         let block = self.format.block_align();
         let frames = if silent {
@@ -339,23 +367,31 @@ impl CaptureConverter {
         }
     }
 
-    /// Writes the first `frames` frames of `stereo`, resampled if needed.
+    /// Writes the first `frames` frames of `stereo`, resampled if needed and
+    /// equalized.
     fn write_stereo(&mut self, frames: usize) {
         let CaptureConverter {
             writer,
+            equalizer,
             resampler,
             stereo,
             resampled,
             ..
         } = self;
-        let input = &stereo[..frames * 2];
         match resampler {
-            None => writer.write(input, frames),
+            None => {
+                let block = &mut stereo[..frames * 2];
+                equalizer.process(block);
+                writer.write(block, frames);
+            }
             Some(resampler) => {
+                let input = &stereo[..frames * 2];
                 let mut consumed = 0;
                 while consumed < frames {
                     let (used, produced) = resampler.process(&input[consumed * 2..], resampled);
-                    writer.write(&resampled[..produced * 2], produced);
+                    let block = &mut resampled[..produced * 2];
+                    equalizer.process(block);
+                    writer.write(block, produced);
                     consumed += used;
                     if used == 0 && produced == 0 {
                         break;
@@ -386,6 +422,7 @@ fn decode(sample: SampleType, bytes: &[u8], out: &mut [f32]) {
 mod tests {
     use std::sync::Arc;
 
+    use audiosync_core::eq::{EqSettings, equalizer};
     use audiosync_core::reader::Reader;
     use audiosync_core::ring::Ring;
 
@@ -591,6 +628,37 @@ mod tests {
     }
 
     #[test]
+    fn a_running_app_is_found_without_an_audio_session() {
+        let browser = SourceInfo {
+            id: app(200),
+            name: "Browser".to_owned(),
+            executable: "browser.exe".to_owned(),
+        };
+        let table = desktop();
+        assert_eq!(
+            running_app(&table, 200, "browser.exe"),
+            Some(browser.clone())
+        );
+        assert_eq!(
+            running_app(&table, 202, "browser.exe"),
+            Some(browser.clone()),
+            "a helper leads to the app's top process"
+        );
+        assert_eq!(
+            running_app(&table, 4242, "browser.exe"),
+            Some(browser),
+            "an app that started again has a new process ID"
+        );
+    }
+
+    #[test]
+    fn a_process_id_that_another_program_got_is_not_the_app() {
+        let table = desktop();
+        assert_eq!(running_app(&table, 300, "player.exe"), None);
+        assert_eq!(running_app(&table, 4242, "player.exe"), None);
+    }
+
+    #[test]
     fn the_first_capture_attempt_needs_no_conversion() {
         let first = CAPTURE_ATTEMPTS[0];
         assert_eq!(first.format.sample, SampleType::F32);
@@ -623,6 +691,25 @@ mod tests {
         (ring, writer)
     }
 
+    /// A converter whose equalizer is off, as it starts.
+    fn new_converter(
+        format: StreamFormat,
+        writer: RingWriter,
+    ) -> Result<CaptureConverter, BackendError> {
+        let (_control, processor) = equalizer();
+        CaptureConverter::new(format, writer, processor)
+    }
+
+    /// Settings that only raise the level, by `preamp_db`: flat bands pass
+    /// audio unchanged, so the preamp alone shows in the output.
+    fn preamp_only(preamp_db: f64) -> EqSettings {
+        EqSettings {
+            enabled: true,
+            preamp_db,
+            ..EqSettings::default()
+        }
+    }
+
     fn f32_bytes(samples: &[f32]) -> Vec<u8> {
         samples.iter().flat_map(|s| s.to_le_bytes()).collect()
     }
@@ -638,7 +725,7 @@ mod tests {
     #[test]
     fn float_stereo_at_the_session_rate_is_written_unchanged() {
         let (ring, writer) = session_ring();
-        let mut converter = CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer).unwrap();
+        let mut converter = new_converter(CAPTURE_ATTEMPTS[0].format, writer).unwrap();
         let samples: Vec<f32> = (0..3000).map(|i| (i as f32 / 3000.0) - 0.5).collect();
         converter.push(&f32_bytes(&samples), 1500, false);
         assert_eq!(ring.frames_written(), 1500);
@@ -653,7 +740,7 @@ mod tests {
             rate: SESSION_RATE,
             channels: 2,
         };
-        let mut converter = CaptureConverter::new(format, writer).unwrap();
+        let mut converter = new_converter(format, writer).unwrap();
         let samples: [i16; 4] = [i16::MIN, 16_384, 0, -16_384];
         let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
         converter.push(&bytes, 2, false);
@@ -663,7 +750,7 @@ mod tests {
     #[test]
     fn a_silent_packet_writes_silence_whatever_its_data() {
         let (ring, writer) = session_ring();
-        let mut converter = CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer).unwrap();
+        let mut converter = new_converter(CAPTURE_ATTEMPTS[0].format, writer).unwrap();
         converter.push(&f32_bytes(&[0.25; 8]), 4, false);
         converter.push(&f32_bytes(&[0.75; 8]), 4, true);
         assert_eq!(ring.frames_written(), 8);
@@ -680,7 +767,7 @@ mod tests {
             rate: SESSION_RATE,
             channels: 1,
         };
-        let mut converter = CaptureConverter::new(format, writer).unwrap();
+        let mut converter = new_converter(format, writer).unwrap();
         converter.push(&f32_bytes(&[0.1, 0.2, 0.3]), 3, false);
         assert_eq!(newest(&ring, 3), [0.1, 0.1, 0.2, 0.2, 0.3, 0.3]);
     }
@@ -688,7 +775,7 @@ mod tests {
     #[test]
     fn a_short_packet_writes_only_its_whole_frames() {
         let (ring, writer) = session_ring();
-        let mut converter = CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer).unwrap();
+        let mut converter = new_converter(CAPTURE_ATTEMPTS[0].format, writer).unwrap();
         let mut bytes = f32_bytes(&[0.5; 6]);
         bytes.truncate(bytes.len() - 1);
         converter.push(&bytes, 10, false);
@@ -698,7 +785,7 @@ mod tests {
     #[test]
     fn a_long_packet_is_converted_in_chunks() {
         let (ring, writer) = session_ring();
-        let mut converter = CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer).unwrap();
+        let mut converter = new_converter(CAPTURE_ATTEMPTS[0].format, writer).unwrap();
         let frames = CONVERT_CHUNK * 3 + 17;
         let samples: Vec<f32> = (0..frames * 2)
             .map(|i| (i % 1000) as f32 / 1000.0)
@@ -713,7 +800,7 @@ mod tests {
         let (ring, writer) = session_ring();
         let format = CAPTURE_ATTEMPTS[3].format;
         assert_eq!(format.rate, 44_100);
-        let mut converter = CaptureConverter::new(format, writer).unwrap();
+        let mut converter = new_converter(format, writer).unwrap();
         // One second of a 1 kHz tone at half scale, in 441-frame packets.
         let mut fed = 0usize;
         for _ in 0..100 {
@@ -748,7 +835,7 @@ mod tests {
             channels: 2,
         };
         assert!(matches!(
-            CaptureConverter::new(format, writer),
+            new_converter(format, writer),
             Err(BackendError::UnsupportedFormat)
         ));
     }
@@ -762,8 +849,47 @@ mod tests {
             channels: 0,
         };
         assert!(matches!(
-            CaptureConverter::new(format, writer),
+            new_converter(format, writer),
             Err(BackendError::UnsupportedFormat)
         ));
+    }
+
+    #[test]
+    fn the_equalizer_applies_from_the_next_packet() {
+        let (ring, writer) = session_ring();
+        let (mut control, processor) = equalizer();
+        let mut converter =
+            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor).unwrap();
+        converter.push(&f32_bytes(&[0.25; 8]), 4, false);
+        assert_eq!(newest(&ring, 4), [0.25; 8], "off, audio passes unchanged");
+
+        control.set_settings(preamp_only(6.0));
+        converter.push(&f32_bytes(&[0.25; 8]), 4, false);
+        let raised = 0.25 * 10f32.powf(6.0 / 20.0);
+        for sample in newest(&ring, 4) {
+            assert!((sample - raised).abs() < 1e-4, "{sample} is {raised}");
+        }
+    }
+
+    #[test]
+    fn a_resampled_capture_is_equalized_at_the_session_rate() {
+        let (ring, writer) = session_ring();
+        let (mut control, processor) = equalizer();
+        control.set_settings(preamp_only(-6.0));
+        let format = CAPTURE_ATTEMPTS[3].format;
+        let mut converter = CaptureConverter::new(format, writer, processor).unwrap();
+        // A tenth of a second of a 1 kHz tone at half scale.
+        let bytes: Vec<u8> = (0..4410)
+            .flat_map(|i| {
+                let phase = f64::from(i) * 1000.0 / 44_100.0;
+                let value = (0.5 * (phase * std::f64::consts::TAU).sin() * 32_767.0) as i16;
+                let [lo, hi] = value.to_le_bytes();
+                [lo, hi, lo, hi]
+            })
+            .collect();
+        converter.push(&bytes, 4410, false);
+        let out = newest(&ring, 2400);
+        let peak = out.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
+        assert!((0.22..0.28).contains(&peak), "peak {peak}");
     }
 }

@@ -434,6 +434,11 @@ fn finite_or_zero(value: f64) -> f64 {
     if value.is_finite() { value } else { 0.0 }
 }
 
+/// Filter state smaller than this is cleared at the end of every block. It is
+/// 600 dB below full scale, so clearing it can't change what any output plays
+/// audibly, and it is far above the subnormal range (below about 2.2e-308).
+const STATE_FLOOR: f64 = 1e-30;
+
 /// Transposed direct form II state of one band on one channel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct BandState {
@@ -443,6 +448,19 @@ struct BandState {
 
 impl BandState {
     const ZERO: BandState = BandState { z1: 0.0, z2: 0.0 };
+
+    /// Clears state below [`STATE_FLOOR`]. In silence a filter's state only
+    /// decays, never to 0 by itself: it sinks into subnormal numbers, which
+    /// many processors compute far more slowly, and a boosted bass band can
+    /// stay there in a rounding limit cycle, costing CPU for nothing.
+    fn clear_tiny(&mut self) {
+        if self.z1.abs() < STATE_FLOOR {
+            self.z1 = 0.0;
+        }
+        if self.z2.abs() < STATE_FLOOR {
+            self.z2 = 0.0;
+        }
+    }
 }
 
 /// The processing half, owned by the capture thread (S34).
@@ -464,7 +482,8 @@ impl EqProcessor {
     /// The block holds `interleaved.len() / 2` frames; an odd trailing sample is
     /// left untouched. Disabled, the block is left untouched (S27). Real-time
     /// safe: no allocation, lock, wait or system call (S126); 20 biquad steps
-    /// per frame (S127).
+    /// per frame (S127). State too small to hear is cleared after each block,
+    /// so silence never leaves the filters working on subnormal numbers.
     pub fn process(&mut self, interleaved: &mut [f32]) {
         self.pick_up();
         if !self.current.enabled {
@@ -500,6 +519,9 @@ impl EqProcessor {
                     resets += 1;
                     0.0
                 };
+            }
+            for band in &mut state {
+                band.clear_tiny();
             }
             *saved = state;
         }
@@ -693,5 +715,47 @@ mod tests {
             processor.biquad_steps, before,
             "disabled costs no biquad step"
         );
+    }
+
+    // covers: S26, S127
+    #[test]
+    fn silence_after_boosted_bass_settles_to_an_all_zero_state() {
+        let (mut control, mut processor) = equalizer();
+        let bass_boost = PRESETS[1];
+        assert_eq!(bass_boost.id, "bassBoost");
+        control.set_settings(EqSettings {
+            enabled: true,
+            preamp_db: 0.0,
+            gains_db: bass_boost.gains_db,
+        });
+        processor.process(&mut sine(48_000, 40.0, 48_000.0, 0.5));
+        let ringing = |processor: &EqProcessor| {
+            processor
+                .state
+                .iter()
+                .flatten()
+                .any(|band| *band != BandState::ZERO)
+        };
+        assert!(
+            ringing(&processor),
+            "the boosted bands ring after the music"
+        );
+
+        // A paused app: twenty seconds of digital silence in 512-frame blocks.
+        let mut block = vec![0.0f32; 2 * 512];
+        for _ in 0..20 * 48_000 / 512 {
+            block.fill(0.0);
+            processor.process(&mut block);
+            for band in processor.state.iter().flatten() {
+                assert!(
+                    !band.z1.is_subnormal() && !band.z2.is_subnormal(),
+                    "no block ends on subnormal state: {band:?}"
+                );
+            }
+        }
+        assert!(!ringing(&processor), "{:?}", processor.state);
+        block.fill(0.0);
+        processor.process(&mut block);
+        assert!(block.iter().all(|&s| s == 0.0), "silence stays exactly 0");
     }
 }

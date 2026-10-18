@@ -114,6 +114,7 @@ Where the spec left room, these readings satisfy every Observed clause:
 16. S162: `session::streaming_after` decides from the numbers of enabled local and AirPlay speakers after the event. A device that leaves or rejoins the lists is an event of its own, and it starts and stops nothing while anything is enabled.
 17. S163: two sources are the same when they have the same kind and identifier (bundle ID or device UID).
 18. S164: a quitting app with an empty bundle ID counts as having none.
+19. S26, S127: after each block, filter state below 1e-30 (600 dB below full scale) is set to 0. Without it, silence after a bass boost leaves the state decaying into subnormal numbers, where it can hold a rounding limit cycle and every biquad step is slow on x86. With it, the Bass Boost preset's state is all zero about 1.3 s after a loud 40 Hz tone stops; a unit test checks that twenty seconds of silence never end a block on subnormal state.
 
 ### What stays in the host
 
