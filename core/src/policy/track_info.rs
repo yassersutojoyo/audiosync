@@ -42,12 +42,8 @@ pub struct QueueItem {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TrackInfoWatch {
     sending: bool,
-    /// Counts the starts of sending, so an answer to a question asked before
-    /// sending last started decides nothing.
-    period: u64,
-    /// The unanswered question: the sending period it was asked in and the
-    /// engine run it went to.
-    asking: Option<(u64, u64)>,
+    /// The unanswered question: the engine run it went to.
+    asking: Option<u64>,
     sent_for: Option<QueueItem>,
 }
 
@@ -67,9 +63,6 @@ impl TrackInfoWatch {
     /// ends, the questions stop and the item is forgotten; the host forgets
     /// what it sent, so the next start of sending sends everything again.
     pub fn update(&mut self, sending: bool) {
-        if sending && !self.sending {
-            self.period += 1;
-        }
         if !sending {
             self.sent_for = None;
         }
@@ -83,7 +76,7 @@ impl TrackInfoWatch {
         if !self.sending || self.asking.is_some() {
             return false;
         }
-        self.asking = Some((self.period, run));
+        self.asking = Some(run);
         true
     }
 
@@ -94,13 +87,15 @@ impl TrackInfoWatch {
     /// seen since sending began: the host forgets what it sent and sends the
     /// current track info again from scratch, and the watcher remembers that
     /// item with the run it asked. A stopped player, the same item of the same
-    /// run or no answer changes nothing; so does an answer while not sending,
-    /// or to a question asked before sending last started.
+    /// run or no answer changes nothing; so does an answer while not sending.
+    /// An answer to a question asked before sending last started counts like
+    /// any other: it is the player's status now, and what was sent before is
+    /// already forgotten.
     pub fn answered(&mut self, status: Option<PlayerStatus>) -> bool {
-        let Some((period, run)) = self.asking.take() else {
+        let Some(run) = self.asking.take() else {
             return false;
         };
-        if !self.sending || period != self.period {
+        if !self.sending {
             return false;
         }
         let Some(item_id) = status.and_then(|status| status.item) else {
