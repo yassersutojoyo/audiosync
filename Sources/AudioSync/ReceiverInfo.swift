@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// What AirPlay receivers with a screen, such as a TV, show while AudioSync
 /// streams to them (sent through AudioSync's own sender, `NativeAirPlay`).
@@ -11,8 +11,11 @@ struct ReceiverInfo: Equatable {
         case neutral
         /// The player's artwork is on its way (Spotify's comes a moment after
         /// the track): send no artwork until it arrives, for at most
-        /// `artworkWait` (see `waited`). Meanwhile the receivers show no cover
-        /// (`NativeNowPlaying`).
+        /// `artworkWait` (see `waited`). Meanwhile the sender has no artwork
+        /// for the new track and sends none (`NativeNowPlaying`): a receiver
+        /// already playing may keep the last track's cover until this one's,
+        /// or AudioSync's icon, arrives; only one that starts during the wait
+        /// shows no cover.
         case wait
     }
 
@@ -67,5 +70,64 @@ struct ReceiverInfo: Equatable {
     /// first reading can hang on a player's Automation prompt.
     static func awaitsReading(hasReading: Bool, pollingFor: TimeInterval) -> Bool {
         !hasReading && pollingFor < readingWait
+    }
+}
+
+/// What AudioSync's own sender was last given for its receivers to show
+/// (`NativeAirPlay.setTrack`, `setArtwork`), so a repeat gives it nothing,
+/// and what to give it next (`update`).
+struct SentTrackInfo {
+    /// The fields given last.
+    private(set) var fields: TrackMetadata.Fields?
+    /// The track artwork given last for these fields.
+    private(set) var image: NSImage?
+    /// AudioSync's icon was given last for these fields, in place of artwork.
+    private(set) var neutral = false
+    /// When the sender was given `fields`.
+    private(set) var fieldsSince = Date.distantPast
+    /// When `sendTrackInfo` runs again by itself, as a wait ends.
+    var recheckAt: Date?
+
+    /// What to give the sender next; all nil when it has everything already.
+    struct Update {
+        /// The fields to set: another track, or the first one.
+        var fields: TrackMetadata.Fields?
+        /// The picture to set: the track's artwork, or AudioSync's icon.
+        var picture: NSImage?
+        /// The player's artwork is on its way: look again at this date, when
+        /// the wait for it ends (`ReceiverInfo.artworkWait`).
+        var waitUntil: Date?
+    }
+
+    /// Records and returns what changed: `info` is what receivers should show
+    /// at `now` (`ReceiverInfo.decide`), `artwork` the track's artwork and
+    /// `icon` AudioSync's icon. New fields drop the artwork the sender had
+    /// (`NativeNowPlaying`), so this track's artwork, or the icon, goes again,
+    /// even when it is the image the last track had. With no icon to give,
+    /// none counts as given.
+    mutating func update(_ info: ReceiverInfo, artwork: NSImage?, icon: NSImage?, now: Date) -> Update {
+        var update = Update()
+        if info.fields != fields {
+            update.fields = info.fields
+            fields = info.fields
+            fieldsSince = now
+            image = nil
+            neutral = false
+        }
+        switch info.waited(now.timeIntervalSince(fieldsSince)).artwork {
+        case .track:
+            guard let artwork, artwork !== image else { break }
+            update.picture = artwork
+            image = artwork
+            neutral = false
+        case .neutral:
+            guard !neutral, let icon else { break }
+            update.picture = icon
+            image = nil
+            neutral = true
+        case .wait:
+            update.waitUntil = fieldsSince.addingTimeInterval(ReceiverInfo.artworkWait)
+        }
+        return update
     }
 }
