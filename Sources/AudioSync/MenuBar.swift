@@ -9,8 +9,7 @@ import Combine
 final class AppModel: ObservableObject {
 
     struct Speaker: Identifiable, Equatable {
-        let id: String
-        let name: String
+        let id, name: String
         /// What kind of output it is: always `.airplay` for AirPlay speakers.
         let tag: SpeakerTag
         var enabled: Bool
@@ -30,16 +29,14 @@ final class AppModel: ObservableObject {
     }
 
     struct Group: Identifiable, Equatable {
-        let id: String
-        let name: String
+        let id, name: String
         let memberCount: Int
         let available: Int          // members currently present
         let allOn: Bool
     }
 
     struct Source: Identifiable, Equatable {
-        let id: String              // "" = whole system, else bundle ID
-        let name: String
+        let id, name: String        // id: "" for the whole system, else a bundle ID
         let icon: NSImage?
         let isInput: Bool
         static func == (a: Source, b: Source) -> Bool { a.id == b.id && a.name == b.name }
@@ -607,8 +604,7 @@ struct MenuBarView: View {
 
 /// One speaker or group in the panel: the whole row switches it on or off.
 private struct CompactRow: View {
-    let name: String
-    let symbol: String
+    let name, symbol: String
     let state: SpeakerState
     let text: AppText
     let height: CGFloat
