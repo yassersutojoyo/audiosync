@@ -1,0 +1,44 @@
+# SwiftPM output
+.build/
+Package.resolved
+
+# The built app (./build.sh makes it)
+*.app
+
+# Release files (./make-dmg.sh and the release steps make them)
+*.dmg
+*.zip
+SHA256SUMS.txt
+owntone-*-source.tar.xz
+dist/
+
+# Icon set folders (makeicon.sh builds its own in a temporary folder)
+*.iconset
+
+# Python bytecode (e.g. from CI's py_compile step run locally)
+__pycache__/
+
+# macOS
+.DS_Store
+
+# Editor and IDE folders
+*.xcodeproj
+.swiftpm/
+.vscode/
+
+# The debug log, when written inside the repository
+audiosync-debug.log
+
+# Credentials — this repository is public. With Sparkle auto-updates, the EdDSA
+# private key became the trust anchor of the release chain, and that one key signs
+# every app it releases. An accidental commit cannot be undone.
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.der
+*_priv*
+.env
+.env.*
+credentials*
