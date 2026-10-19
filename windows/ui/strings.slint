@@ -38,7 +38,7 @@ export global Strings {
     out property <string> this-pc-none: @tr("No built-in output");
     out property <string> sync-adjust: @tr("Adjust sync");
     // Beside the sync controls when no output is the reference.
-    out property <string> sync-hint-no-reference: @tr("The speaker with the lowest value plays first, and the others wait by the difference. Heard this speaker first? Raise the value.");
+    out property <string> sync-hint-no-reference: @tr("The speaker with the lowest value plays first, and the others wait by the difference. Heard this speaker first? Raise the value. Heard it late? Lower it.");
     out property <string> milliseconds-unit: @tr("ms");
     // The AirPlay delay (L): how long the local speakers wait for the
     // AirPlay speakers.
@@ -439,7 +439,7 @@ export global Strings {
         if reference == "" {
             return root.sync-hint-no-reference;
         }
-        return @tr("Relative to {}. Heard this speaker first? Raise the value. Heard it late, like a Bluetooth speaker? Go below 0.", reference);
+        return @tr("Relative to {}. Heard this speaker first? Raise the value. Heard it late? Lower the value; a Bluetooth speaker often needs less than 0.", reference);
     }
 
     // The label of a delay step button: "−100", "+10".
