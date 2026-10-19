@@ -3,6 +3,7 @@ import AppKit
 /// The app's menu bar menus. Items without a target go up the responder chain,
 /// which ends at the app delegate, so AppDelegate's actions and its
 /// `validateMenuItem` handle the AudioSync-specific ones.
+@MainActor
 enum MainMenu {
 
     static func make(text t: AppText, checksForUpdates: Bool) -> NSMenu {
