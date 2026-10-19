@@ -136,7 +136,7 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
 
 ### Fades at stream boundaries
 
-S182 to S191 take the click out of starts, stops, source changes and re-timings. A short click is heard on every source change and every start and stop on the Mac's local outputs, Bluetooth included: an output plays the first frame its reader copies at full level, whatever the source plays at that instant (S45); a stop halts every output in mid-waveform (S115); a source change does both (S141); and a delay change joins two unrelated points of the waveform or cuts to silence (S47, S48). Each of these boundaries gets a short fade. These clauses are design requirements: until the Rust core, the Mac app and the Windows app follow them, the code behaves as the clauses they supersede in part say (S66, S115). The Windows app already fades an output out before it stops it, but over whatever one device callback holds, which can be a few frames; S185 replaces that with a fixed length.
+S182 to S191 take the click out of starts, stops, source changes and re-timings. A short click is heard on every source change and every start and stop on the Mac's local outputs, Bluetooth included: an output plays the first frame its reader copies at full level, whatever the source plays at that instant (S45); a stop halts every output in mid-waveform (S115); a source change does both (S141); and a delay change joins two unrelated points of the waveform or cuts to silence (S47, S48). Each of these boundaries gets a short fade. These clauses are design requirements: the Rust core and the Windows app follow them; until the Mac app does, its code behaves as the clauses they supersede in part say (S66, S115). The Windows app used to fade an output out over whatever one device callback held, which could be a few frames; S185 replaced that with a fixed length.
 
 - **S182** *Required.* Fade shape and length. A fade is a gain w applied alike to every channel of a frame, over F = round(0.020 × R) frames at the rate R of the stream it is applied to (960 at 48 kHz, 882 at 44.1 kHz). For frame i = 0 … F − 1 of a fade, with x = (i + 1) / F: a fade-in has w = ½ − ½·cos(π·x), and w = 1 exactly at i = F − 1; a fade-out has w = ½ + ½·cos(π·x), and w = 0 exactly at i = F − 1. A stream is *open* (w = 1), *fading in*, *fading out* or *closed* (w = 0: exact zeros, whatever the input, NaN and ±infinity included). A fade-out requested while fading in, or a fade-in requested while fading out, continues from the frame of the other curve whose w is closest to the current one, so w never jumps; a request for the state a stream is already in or heading to changes nothing. Reasons: 20 ms is long enough that the ramp itself carries next to no energy above about 50 Hz (1 / 20 ms), so it isn't heard as a click even on bass-heavy material, and short enough to sound like a clean edge rather than a fade, while a stop waits only about that long (S186). A raised cosine has zero slope at both ends, so it has no corner where it meets silence or full level; its largest step between frames is π / (2F) of the signal (0.16 % at 48 kHz, against 0.10 % for a linear ramp of the same length, which has corners at both ends); and starting it a few frames early is inaudible: 16 frames early, the audio enters at 0.08 % (−62 dB) where a linear ramp would already be at 1.8 % (−35 dB), which S184 relies on.
 - **S183** *Required.* Where a local output fades. Each local output's renderer applies its fade at the device rate, after rate conversion and channel mapping (S62, S63), as a factor of its own after the volume gain (S64, S71): the device gets the sample × the gain × w, so the last frame of a fade-out and every frame after it are exact zeros whatever the gain or the converter left. F counts device frames (S182 with R the device's rate). The fade never changes the gain or a stored volume; a gain change during a fade changes only the gain factor, with its own ramp (S64) as before, and an output at gain 0 stays exact zeros. NaN and ±infinity are replaced by 0 before the fade multiplies (S65), so w = 0 never turns them into NaN.
@@ -1001,11 +1001,9 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 
 The Mac's checks for S172 to S181 were written first and failed against the Mac code of that day (the first one reproduced the reported bug); they pass now and are listed in the logic table, as "local delay", "AirPlay delay", "migration", "offset text" and "speaker row", with the settings check for the new keys.
 
-### fades (to be written first, failing)
+### fades: core (`cargo test` in `core/`)
 
-The checks for S182 to S191. None exists yet: each is written first and fails against today's code (the first row of each table reproduces the reported click), then the code follows the clauses. Once a check exists, its row moves to the table of the suite that runs it. Unless the name says otherwise, the ring holds a constant 0.5 or a 1 kHz sine of amplitude 0.5 at 48 kHz, the device runs at 48 kHz with 512-frame buffers, and a fade is 960 frames (S182).
-
-Core (`cargo test` in `core/`, test functions with `// covers:` markers):
+The checks for S182 to S191 in the Rust core, test functions with `// covers:` markers (`core/tests/fades.rs`, and the allocation check in `core/tests/realtime.rs`). Here and in the tables below, unless the name says otherwise, the ring holds a constant 0.5 or a 1 kHz sine of amplitude 0.5 at 48 kHz, the device runs at 48 kHz with 512-frame buffers, and a fade is 960 frames (S182).
 
 | Test | Clauses |
 |---|---|
@@ -1013,6 +1011,7 @@ Core (`cargo test` in `core/`, test functions with `// covers:` markers):
 | an_output_asked_to_stop_fades_out_and_stays_closed_until_it_stops | S184, S185, S191 |
 | with_a_device_that_plays_a_buffer_and_a_safety_offset_late_no_faded_frame_is_cut | S185, S191 |
 | the_published_output_time_is_that_of_the_fades_last_frame | S185, S190 |
+| an_endpoint_counts_as_faded_once_it_holds_only_zeros_for_its_latency | S185 |
 | fades_follow_the_raised_cosine_over_20_ms_at_the_streams_rate | S182 |
 | a_fade_reversed_midway_never_jumps | S182 |
 | the_fade_multiplies_after_the_gain_and_a_closed_output_is_exact_zeros_even_for_nan | S183 |
@@ -1033,6 +1032,23 @@ Core (`cargo test` in `core/`, test functions with `// covers:` markers):
 | the_native_input_fades_in_after_each_rate_set_and_out_on_a_stop_request | S189 |
 | fading_allocates_and_locks_nothing_on_the_audio_thread | S190 |
 | no_step_across_a_start_a_stop_or_a_delay_change_exceeds_the_ramps_slope | S191 |
+
+### fades: Windows (`cargo test` in `windows/`)
+
+| Test | Clauses |
+|---|---|
+| a_stop_fades_out_over_20_ms_whatever_the_callback_holds | S182, S185 |
+| the_first_audio_of_a_session_fades_in_over_20_ms | S184 |
+| a_speaker_switched_off_fades_out_before_its_stream_stops | S185 |
+| an_output_is_faded_only_when_the_endpoint_holds_nothing_but_zeros | S185 |
+| a_stop_waits_for_every_output_to_fade_and_never_more_than_500_ms | S186 |
+| removing_several_outputs_asks_all_to_fade_then_waits_once | S186 |
+| a_delay_change_fades_out_first_and_in_after | S187 |
+| the_fade_cap_and_the_quit_waits_fit_in_5_s | S110, S186 |
+
+### fades: Mac (to be written first, failing)
+
+The Mac's checks for S182 to S191. None exists yet: each is written first and fails against today's Mac code (the first row of each table reproduces the reported click), then the Mac app follows the clauses through the core's C interface. Once a check exists, its row moves to the table of the suite that runs it.
 
 Mac (`Tests/logictest.swift`):
 
@@ -1060,18 +1076,6 @@ Mac engine (`--hardware`):
 | \<device\>: stop fades out before the output stops | S185, S186, S191 |
 | \<device\>: first audio fades in | S184, S191 |
 | \<device\>: stop returns once the fade has played, within 500 ms | S185, S186 |
-
-Windows (`cargo test` in `windows/`):
-
-| Test | Clauses |
-|---|---|
-| a_stop_fades_out_over_20_ms_whatever_the_callback_holds | S182, S185 |
-| the_first_audio_of_a_session_fades_in_over_20_ms | S184 |
-| a_speaker_switched_off_fades_out_before_its_stream_stops | S185 |
-| an_output_is_faded_only_when_the_endpoint_holds_nothing_but_zeros | S185 |
-| a_stop_waits_for_every_output_to_fade_and_never_more_than_500_ms | S186 |
-| removing_several_outputs_asks_all_to_fade_then_waits_once | S186 |
-| a_delay_change_fades_out_first_and_in_after | S187 |
 
 By ear on real AirPlay receivers, outside these suites: with a speaker playing, a stop and a source change make no click on the speaker when the engine stops or the native sender flushes it, and the first sound after a start or a source change fades in (S189).
 

@@ -39,11 +39,13 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
 use audiosync_core::policy::delay::native_airplay_latency_ms;
-use audiosync_core::reader::{Reader, ReaderControl};
+use audiosync_core::reader::Reader;
+use audiosync_core::render::{RendererControl, STOP_FADE_CAP};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 
@@ -97,14 +99,20 @@ pub trait CaptureHandle {
     fn setup(&self) -> Option<CaptureAttempt>;
 }
 
-/// A running output. Dropping it stops the output and waits for its thread.
+/// A running output. Dropping it stops the output at once and waits for its
+/// thread.
 pub trait RendererHandle {
-    /// Asks the output to fade out and stop, without waiting for it, so that
-    /// several outputs can fade out together before they are dropped.
+    /// Asks the output to fade out and stop once its device has played the
+    /// fade (S185), without waiting for it, so that several outputs can fade
+    /// out together before they are dropped.
     fn request_stop(&mut self);
 
     /// Whether it stopped by itself, because its device went away or failed.
     fn has_ended(&self) -> bool;
+
+    /// Whether its device has played the fade-out a stop asked for, or it
+    /// can play nothing more because its stream ended (S185).
+    fn is_faded(&self) -> bool;
 
     /// How its stream is set up, for the debug log, when known.
     fn setup(&self) -> Option<StreamSetup>;
@@ -181,13 +189,15 @@ pub trait Driver {
         airplay: Option<FeedLease>,
     ) -> Result<Self::Capture, BackendError>;
 
-    /// Starts rendering to `endpoint` through `reader`, at the gain in
-    /// `gain`. Returns once it plays, or with why it couldn't start:
-    /// [`BackendError::DeviceGone`] when the device went away.
+    /// Starts rendering to `endpoint` through `reader`, controlled through
+    /// `control` (made for that reader), at the gain in `gain`. Returns once
+    /// it plays, or with why it couldn't start: [`BackendError::DeviceGone`]
+    /// when the device went away.
     fn start_renderer(
         &mut self,
         endpoint: &Endpoint,
         reader: Reader,
+        control: RendererControl,
         gain: Arc<SharedGain>,
     ) -> Result<Self::Renderer, BackendError>;
 }
@@ -207,9 +217,24 @@ struct Session<D: Driver> {
 
 /// A playing output and the handles its delay and gain are changed through.
 struct Playing<R> {
-    control: ReaderControl,
+    /// Its delay, faded out and in when it changes (S187), and its reader's
+    /// lag and counters.
+    control: RendererControl,
     gain: Arc<SharedGain>,
     handle: R,
+}
+
+/// Outputs asked to fade out, waiting for their devices to play the fade
+/// before they are dropped (S185, S186): those of a session that ended, with
+/// its capture and ring, which they still read until then, or those switched
+/// off during a session. Nothing waits for them on the UI thread: each poll
+/// drops what has faded, and what hasn't after [`STOP_FADE_CAP`].
+struct Retiring<D: Driver> {
+    outputs: Vec<Playing<D::Renderer>>,
+    /// The ended session's capture and ring.
+    session: Option<(D::Capture, Arc<Ring>)>,
+    /// When the fade-outs were asked for.
+    since: Instant,
 }
 
 /// The double-audio check of the running session.
@@ -264,6 +289,11 @@ pub struct Controller<D: Driver> {
     feed: Option<FeedSlot>,
     /// Starts a new sender when the user retries after the sender stopped.
     starter: Option<SenderStarter>,
+    /// Outputs fading out before they stop.
+    retiring: Vec<Retiring<D>>,
+    /// A start that waits for the last session's outputs to fade out: the
+    /// first poll after they have faded starts it (S186).
+    next_start: Option<SourceId>,
     /// The own volume and mute of each output that is on and connected
     /// (spec S192 to S202), followed through Windows' notifications.
     device_volumes: device_volume::Followed,
@@ -292,6 +322,8 @@ impl<D: Driver> Controller<D> {
             airplay: None,
             feed: None,
             starter: None,
+            retiring: Vec::new(),
+            next_start: None,
             device_volumes: device_volume::Followed::default(),
         }
     }
@@ -517,35 +549,43 @@ impl<D: Driver> Controller<D> {
         let active: Vec<&str> = session.outputs.keys().map(String::as_str).collect();
         let plan = self.policy.plan(true, &self.present, &active);
 
-        let mut removed: Vec<Playing<D::Renderer>> = plan
-            .detach
-            .iter()
-            .filter_map(|id| session.outputs.remove(id))
-            .collect();
-        for playing in &mut removed {
-            playing.handle.request_stop();
-        }
-        drop(removed);
+        // A switched-off output fades out first, together with any others
+        // switched off now; one whose device isn't listed has nothing to
+        // fade (S185, S186).
+        let mut switched_off = Vec::new();
         for id in &plan.detach {
+            let Some(mut playing) = session.outputs.remove(id) else {
+                continue;
+            };
             let why = if self.policy.settings(id).enabled {
+                drop(playing);
                 "its device isn't listed"
             } else {
+                playing.handle.request_stop();
+                switched_off.push(playing);
                 "switched off"
             };
             self.log
                 .log(|| format!("output {} stopped: {why}", label(&self.names, id)));
+        }
+        if !switched_off.is_empty() {
+            self.retiring.push(Retiring {
+                outputs: switched_off,
+                session: None,
+                since: Instant::now(),
+            });
         }
 
         let mut failures = Vec::new();
         for endpoint in plan.attach {
             let params = self.policy.params(&endpoint.id);
             let reader = Reader::new(Arc::clone(&session.ring), SESSION_RATE);
-            let control = reader.control();
-            control.set_delay_frames(params.delay_frames);
+            reader.control().set_delay_frames(params.delay_frames);
+            let control = RendererControl::new(&reader);
             let gain = Arc::new(SharedGain::new(params.gain));
             match self
                 .driver
-                .start_renderer(&endpoint, reader, Arc::clone(&gain))
+                .start_renderer(&endpoint, reader, control.clone(), Arc::clone(&gain))
             {
                 Ok(handle) => {
                     let setup = handle.setup();
@@ -600,7 +640,7 @@ impl<D: Driver> Controller<D> {
     /// Stops the playing outputs whose device the last successful listing
     /// doesn't show, and returns their IDs. A stream may not notice that its
     /// device went away (Windows can stop signalling it without a word), but
-    /// the device list does (S68).
+    /// the device list does (S68). There is nothing to fade (S185).
     fn stop_unlisted_outputs(&mut self) -> Vec<String> {
         let Some(session) = self.session.as_mut() else {
             return Vec::new();
@@ -612,13 +652,10 @@ impl<D: Driver> Controller<D> {
             .filter(|id| !present.iter().any(|endpoint| endpoint.id == **id))
             .cloned()
             .collect();
-        let mut stopped: Vec<Playing<D::Renderer>> = unlisted
+        let stopped: Vec<Playing<D::Renderer>> = unlisted
             .iter()
             .filter_map(|id| session.outputs.remove(id))
             .collect();
-        for playing in &mut stopped {
-            playing.handle.request_stop();
-        }
         drop(stopped);
         for id in &unlisted {
             self.log.log(|| {
@@ -639,36 +676,35 @@ impl<D: Driver> Controller<D> {
         );
     }
 
-    /// Stops every output, fading them out together, then the capture.
+    /// Ends the session (S186): every output and the AirPlay sender's input
+    /// fade out at once while the capture runs on, and once the outputs'
+    /// devices have played their fades (or [`STOP_FADE_CAP`] passed), the
+    /// outputs stop, then the capture. The UI thread doesn't wait: a poll, a
+    /// new start or the drop finishes it.
     fn end_session(&mut self) {
         let Some(session) = self.session.take() else {
             return;
         };
-        let started = Instant::now();
         let Session {
-            mut outputs,
+            outputs,
             capture,
             ring,
             ..
         } = session;
-        let stopped = outputs.len();
-        for playing in outputs.values_mut() {
+        let mut outputs: Vec<Playing<D::Renderer>> = outputs.into_values().collect();
+        for playing in &mut outputs {
             playing.handle.request_stop();
         }
-        // Each renderer waits for its thread, and the capture for its own,
-        // before the ring they use is freed (S134).
-        drop(outputs);
-        drop(capture);
-        let captured = ring.frames_written();
-        drop(ring);
-        self.last_status = None;
-        self.log.log(|| {
-            format!(
-                "session ended: the capture and {stopped} output(s) stopped in {} ms; \
-                 {captured} frames captured",
-                started.elapsed().as_millis()
-            )
+        if let Some(feed) = &self.feed {
+            feed.request_fade_out();
+        }
+        self.retiring.push(Retiring {
+            outputs,
+            session: Some((capture, ring)),
+            since: Instant::now(),
         });
+        self.last_status = None;
+        self.reap(false);
         // Without a session, nothing is heard twice.
         let routing = std::mem::take(&mut self.routing);
         if !routing.reported.is_empty() {
@@ -676,6 +712,67 @@ impl<D: Driver> Controller<D> {
                 .log(|| "double audio: none, streaming stopped".to_owned());
             self.pending
                 .push(BackendEvent::HeardTwice { paths: Vec::new() });
+        }
+    }
+
+    /// Stops the retiring outputs whose devices have played their fade-outs,
+    /// or that are still fading after [`STOP_FADE_CAP`], and then the capture
+    /// and ring of an ended session (S186). With `wait`, returns only once
+    /// none is left, which takes at most that cap.
+    fn reap(&mut self, wait: bool) {
+        while !self.retiring.is_empty() {
+            let now = Instant::now();
+            let mut index = 0;
+            while index < self.retiring.len() {
+                let entry = &self.retiring[index];
+                let faded = entry
+                    .outputs
+                    .iter()
+                    .all(|playing| playing.handle.is_faded() || playing.handle.has_ended());
+                let waited = now.saturating_duration_since(entry.since);
+                if faded || waited >= STOP_FADE_CAP {
+                    let entry = self.retiring.remove(index);
+                    self.retire(entry, faded, waited);
+                } else {
+                    index += 1;
+                }
+            }
+            if !wait || self.retiring.is_empty() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// Drops what `entry` holds: an ended session's capture first, then the
+    /// outputs (S115, S186), then the ring. The capture and each renderer
+    /// wait for their threads before the ring they use is freed (S134).
+    fn retire(&mut self, entry: Retiring<D>, faded: bool, waited: Duration) {
+        let Retiring {
+            outputs, session, ..
+        } = entry;
+        let stopped = outputs.len();
+        let (capture, ring) = session.unzip();
+        drop(capture);
+        drop(outputs);
+        if !faded {
+            self.log.log(|| {
+                format!(
+                    "{stopped} output(s) still fading after {} ms: stopped anyway",
+                    waited.as_millis()
+                )
+            });
+        }
+        if let Some(ring) = ring {
+            let captured = ring.frames_written();
+            drop(ring);
+            self.log.log(|| {
+                format!(
+                    "session ended: the capture and {stopped} output(s) stopped in {} ms; \
+                     {captured} frames captured",
+                    waited.as_millis()
+                )
+            });
         }
     }
 
@@ -782,7 +879,56 @@ impl<D: Driver> Controller<D> {
         }
     }
 
-    /// Starts a session capturing `source`, after the running one ended.
+    /// Starts a session capturing `source`, or, while the last session's
+    /// outputs still fade out (its capture holds the AirPlay feed and its
+    /// outputs their endpoints), leaves it to the first poll after they have
+    /// faded, at most [`STOP_FADE_CAP`] later (S186), so the UI thread never
+    /// waits for a fade. A source that can't be captured is refused at once
+    /// either way.
+    fn begin_session(&mut self, source: &SourceId) -> Result<(), BackendError> {
+        self.next_start = None;
+        self.reap(false);
+        if !self.last_session_fading() {
+            return self.start_session(source);
+        }
+        let processes = match source {
+            SourceId::WholeSystem => ProcessTable::default(),
+            SourceId::App { .. } => self.driver.processes()?,
+        };
+        decide_activation(source, self.driver.own_pid(), &processes)?;
+        self.log
+            .log(|| "the capture starts once the last session's outputs have faded out".to_owned());
+        self.next_start = Some(source.clone());
+        Ok(())
+    }
+
+    /// Whether an ended session's outputs are still fading out.
+    fn last_session_fading(&self) -> bool {
+        self.retiring.iter().any(|entry| entry.session.is_some())
+    }
+
+    /// Starts the session that waits for the last one's outputs to fade, once
+    /// they have; a capture that can't start then ends it with that reason.
+    fn start_when_faded(&mut self) {
+        if self.last_session_fading() {
+            return;
+        }
+        let Some(source) = self.next_start.take() else {
+            return;
+        };
+        match self.start_session(&source) {
+            Ok(()) => self.follow_device_volumes(),
+            Err(error) => {
+                self.log.log(|| format!("the start failed: {error}"));
+                self.airplay_streaming(false);
+                self.pending.push(BackendEvent::Stopped {
+                    reason: StopReason::CaptureFailed(error),
+                });
+            }
+        }
+    }
+
+    /// Starts a session capturing `source` now, after the running one ended.
     fn start_session(&mut self, source: &SourceId) -> Result<(), BackendError> {
         let processes = match source {
             SourceId::WholeSystem => ProcessTable::default(),
@@ -934,7 +1080,9 @@ impl<D: Driver> Controller<D> {
 
 impl<D: Driver> Drop for Controller<D> {
     fn drop(&mut self) {
+        self.next_start = None;
         self.end_session();
+        self.reap(true);
         self.stop_following_device_volumes();
     }
 }
@@ -1016,7 +1164,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.end_session();
         self.log
             .log(|| format!("starting: capturing {}", describe_source(source)));
-        let started = self.start_session(source).inspect_err(|error| {
+        let started = self.begin_session(source).inspect_err(|error| {
             self.log.log(|| format!("the start failed: {error}"));
         });
         // Outputs that couldn't start were turned off.
@@ -1025,15 +1173,19 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn stop(&mut self) {
-        if self.session.is_some() {
+        if self.session.is_some() || self.next_start.is_some() {
             self.log.log(|| "stopping".to_owned());
         }
+        self.next_start = None;
         self.end_session();
         self.airplay_streaming(false);
     }
 
     fn running_source(&self) -> Option<SourceId> {
-        self.session.as_ref().map(|session| session.source.clone())
+        self.session
+            .as_ref()
+            .map(|session| session.source.clone())
+            .or_else(|| self.next_start.clone())
     }
 
     fn set_output_enabled(&mut self, id: &str, enabled: bool) -> Result<(), BackendError> {
@@ -1262,7 +1414,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.feed = feed;
         self.sync_airplay_rule();
         if let Some(source) = source
-            && let Err(error) = self.start_session(&source)
+            && let Err(error) = self.begin_session(&source)
         {
             self.log
                 .log(|| format!("the capture couldn't start again after Retry: {error}"));
@@ -1275,6 +1427,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn poll(&mut self) -> Vec<BackendEvent> {
+        // Outputs that faded out stop, and then an ended session's capture;
+        // a start that waited for them goes ahead.
+        self.reap(false);
+        self.start_when_faded();
         // A session whose capture stopped ends first.
         let stop_reason = self
             .session
@@ -1634,6 +1790,7 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
+    use std::thread;
 
     use audiosync_airplay::clock::SenderClock;
     use audiosync_airplay::discovery::Device;
@@ -1641,6 +1798,7 @@ mod tests {
     use audiosync_airplay::sender::SpeakerState;
     use audiosync_airplay::stream::{Stream, StreamConfig};
     use audiosync_airplay::volume::Volume;
+    use audiosync_core::render::STOP_FADE_CAP;
 
     use super::*;
     use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, device, id_of};
@@ -1652,6 +1810,7 @@ mod tests {
 
     const SPEAKERS: &str = "speakers";
     const HEADPHONES: &str = "headphones";
+    const USB_OUTPUT: &str = "usb-dac";
     const PLAYER_PID: u32 = 2000;
 
     /// A stopped mock with two outputs, both on and listed once (as the UI
@@ -1768,6 +1927,181 @@ mod tests {
         assert_eq!(backend.driver().renderers_faded(), 2);
     }
 
+    /// How long a call on the UI thread may take without counting as a wait.
+    const NO_WAIT: Duration = Duration::from_millis(100);
+
+    #[test]
+    fn a_speaker_switched_off_fades_out_before_its_stream_stops() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.driver().hold_fades(true);
+        let asked = Instant::now();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        assert!(asked.elapsed() < NO_WAIT, "the UI thread doesn't wait");
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        assert_eq!(backend.driver().renderers_faded(), 1, "asked to fade out");
+        assert_eq!(
+            backend.driver().renderers_running(),
+            2,
+            "its stream runs while it fades"
+        );
+        backend.poll();
+        assert_eq!(backend.driver().renderers_running(), 2);
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert_eq!(
+            backend.driver().renderers_running(),
+            1,
+            "stopped once it faded"
+        );
+    }
+
+    #[test]
+    fn a_stop_waits_for_every_output_to_fade_and_never_more_than_500_ms() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.driver().hold_fades(true);
+        let asked = Instant::now();
+        backend.stop();
+        assert!(asked.elapsed() < NO_WAIT, "the UI thread doesn't wait");
+        assert_eq!(backend.running_source(), None);
+        assert_eq!(
+            backend.driver().renderers_faded(),
+            2,
+            "every output is asked at once"
+        );
+        assert!(
+            backend.driver().capture_running(),
+            "the capture runs while they fade"
+        );
+        assert_eq!(backend.driver().renderers_running(), 2);
+        backend.poll();
+        assert!(backend.driver().capture_running());
+        // Once every output has faded, the next poll stops them and then
+        // the capture.
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert!(!backend.driver().capture_running());
+        assert_eq!(backend.driver().renderers_running(), 0);
+
+        // Outputs that never fade are stopped anyway once 500 ms have passed.
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.driver().hold_fades(true);
+        backend.stop();
+        backend.poll();
+        assert!(backend.driver().capture_running());
+        thread::sleep(STOP_FADE_CAP + Duration::from_millis(20));
+        backend.poll();
+        assert!(!backend.driver().capture_running());
+        assert_eq!(backend.driver().renderers_running(), 0);
+
+        // A source change is a stop and a start: the new capture waits for
+        // the old outputs' fades, never more than 500 ms, and the UI thread
+        // doesn't wait for it.
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let asked = Instant::now();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert!(asked.elapsed() < NO_WAIT, "the UI thread doesn't wait");
+        assert_eq!(backend.driver().captures_started().len(), 3);
+        thread::sleep(STOP_FADE_CAP + Duration::from_millis(20));
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 4);
+        assert_eq!(
+            backend.driver().renderers_running(),
+            2,
+            "only the new outputs"
+        );
+        backend.driver().hold_fades(false);
+    }
+
+    #[test]
+    fn a_source_change_starts_the_new_capture_at_a_poll_once_the_old_outputs_faded() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.driver().hold_fades(true);
+        let app = SourceId::App {
+            root_pid: PLAYER_PID,
+        };
+        let asked = Instant::now();
+        backend.start(&app).unwrap();
+        assert!(asked.elapsed() < NO_WAIT, "the UI thread doesn't wait");
+        assert_eq!(backend.running_source(), Some(app.clone()));
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            1,
+            "the new capture waits"
+        );
+        assert!(
+            backend.driver().capture_running(),
+            "the old capture runs while its outputs fade"
+        );
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 1);
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert_eq!(backend.driver().renderers_running(), 2);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(backend.running_source(), Some(app.clone()));
+
+        // A source that can't be captured is refused at once; one whose
+        // capture fails when it starts at the poll stops with that reason.
+        backend.driver().hold_fades(true);
+        assert_eq!(
+            backend.start(&SourceId::App { root_pid: 4321 }),
+            Err(BackendError::SourceGone)
+        );
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        backend.driver().hold_fades(false);
+        let events = backend.poll();
+        assert!(events.contains(&BackendEvent::Stopped {
+            reason: StopReason::CaptureFailed(BackendError::DeviceGone),
+        }));
+        assert_eq!(backend.running_source(), None);
+
+        // A stop while the start waits forgets it.
+        backend.refuse_captures(None);
+        backend.start(&app).unwrap();
+        backend.driver().hold_fades(true);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.stop();
+        assert_eq!(backend.running_source(), None);
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert_eq!(backend.running_source(), None);
+        assert_eq!(backend.driver().renderers_running(), 0);
+    }
+
+    #[test]
+    fn removing_several_outputs_asks_all_to_fade_then_waits_once() {
+        let mut backend = backend();
+        backend.connect_output(USB_OUTPUT, "USB DAC");
+        backend.set_output_enabled(USB_OUTPUT, true).unwrap();
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(backend.driver().renderers_running(), 3);
+        backend.driver().hold_fades(true);
+        let asked = Instant::now();
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        assert!(asked.elapsed() < NO_WAIT, "the UI thread doesn't wait");
+        assert_eq!(
+            backend.driver().renderers_faded(),
+            2,
+            "both asked before either stopped"
+        );
+        assert_eq!(backend.driver().renderers_running(), 3);
+        assert_eq!(playing(&backend), [USB_OUTPUT]);
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert_eq!(backend.driver().renderers_running(), 1);
+    }
+
     #[test]
     fn each_output_plays_at_its_own_delay_and_volume() {
         let mut backend = backend();
@@ -1856,9 +2190,14 @@ mod tests {
         assert!(events.contains(&BackendEvent::OutputsChanged));
         assert_eq!(playing(&backend), [SPEAKERS]);
         assert_eq!(
-            backend.driver().renderers_faded(),
+            backend.driver().renderers_running(),
             1,
             "its renderer stopped"
+        );
+        assert_eq!(
+            backend.driver().renderers_faded(),
+            0,
+            "at once: a device that is gone has nothing to fade (S185)"
         );
         assert!(backend.policy().settings(HEADPHONES).enabled, "it stays on");
         assert!(backend.poll().is_empty(), "reported once");

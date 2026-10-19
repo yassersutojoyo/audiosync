@@ -234,6 +234,22 @@ impl GainStage {
     /// Applies the gain to an interleaved device buffer with `channels`
     /// channels, in place. Real-time safe (S126).
     pub fn apply(&mut self, buffer: &mut [f32], channels: usize, target: f32) {
+        let frames = buffer.len().checked_div(channels).unwrap_or(0);
+        let ramp = self.begin(target, frames);
+        if channels == 0 {
+            return;
+        }
+        ramp.apply(&mut buffer[..frames * channels], channels, 0);
+        // A trailing partial frame is never handed to a device; keep it silent.
+        let whole = frames * channels;
+        buffer[whole..].fill(0.0);
+    }
+
+    /// Starts a callback of `frames` frames at gain `target`: the ramp that
+    /// [`GainStage::apply`] runs over a whole buffer, for a renderer that
+    /// applies it piece by piece ([`GainRamp::apply`]) with other stages in
+    /// between, such as its fade (S183). Real-time safe (S126).
+    pub fn begin(&mut self, target: f32, frames: usize) -> GainRamp {
         let target = sanitize_gain(target);
         if !self.primed {
             self.current = target;
@@ -241,21 +257,50 @@ impl GainStage {
         }
         let start = self.current;
         self.current = target;
-        if channels == 0 {
-            return;
-        }
-        let frames = buffer.len() / channels;
         let step = if frames == 0 {
             0.0
         } else {
             (target - start) / frames as f32
         };
-        for (index, frame) in buffer.chunks_exact_mut(channels).enumerate() {
-            let gain = if start == target || index + 1 == frames {
-                target
-            } else {
-                start + step * (index + 1) as f32
-            };
+        GainRamp {
+            start,
+            target,
+            step,
+            frames,
+        }
+    }
+}
+
+/// One callback's gain, from [`GainStage::begin`]: the previous gain ramping
+/// linearly to the target across the callback, its last frame at the target.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GainRamp {
+    start: f32,
+    target: f32,
+    step: f32,
+    frames: usize,
+}
+
+impl GainRamp {
+    /// The gain of the callback's frame `index`.
+    pub fn gain_at(&self, index: usize) -> f32 {
+        if self.start == self.target || index + 1 >= self.frames {
+            self.target
+        } else {
+            self.start + self.step * (index + 1) as f32
+        }
+    }
+
+    /// Applies the gains of the callback's frames from `first_frame` on to
+    /// the whole frames of `chunk`, interleaved with `channels` channels: a
+    /// frame whose gain is 0 becomes exact zeros, and NaN or ±infinity
+    /// becomes 0 (S64, S65). Real-time safe (S126).
+    pub fn apply(&self, chunk: &mut [f32], channels: usize, first_frame: usize) {
+        if channels == 0 {
+            return;
+        }
+        for (index, frame) in chunk.chunks_exact_mut(channels).enumerate() {
+            let gain = self.gain_at(first_frame + index);
             for sample in frame {
                 *sample = if gain == 0.0 {
                     0.0
@@ -265,9 +310,6 @@ impl GainStage {
                 };
             }
         }
-        // A trailing partial frame is never handed to a device; keep it silent.
-        let whole = frames * channels;
-        buffer[whole..].fill(0.0);
     }
 }
 
