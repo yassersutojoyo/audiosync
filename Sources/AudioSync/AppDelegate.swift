@@ -412,7 +412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // Nothing needs to reach the views any more.
         localNetworkProbe.onChange = { _ in }
         stopEngine()
-        engine.finishStopping()   // the fades play before the sender's teardown
+        engine.finishStopping()   // local outputs finish their fades and capture halts before the sender's teardown
         nativeAirPlay?.shutdown()   // AudioSync's own sender: every speaker gets its TEARDOWN
         nowPlaying.stopWatching()
         localNetworkProbe.stopBrowsing()
