@@ -38,8 +38,11 @@ nothing plays and no audio device is opened there.
 Settings are kept across launches in `%LOCALAPPDATA%\AudioSync\settings.json`
 (`windows/src/settings.rs`): the source, each speaker's switch, delay and
 volume, the master volume, auto-connect marks, groups, the equalizer, View >
-Show Virtual Devices and the main window's size and place. As on the Mac, a
-launch starts streaming only through an auto-connect speaker that is there.
+Show Virtual Devices and the main window's size and place (fitted to the
+monitor it opens on) and whether it was maximized. A file from a newer
+AudioSync is ignored and kept as `settings.newer.json` before the first save
+over it. As on the Mac, a launch starts streaming only through an
+auto-connect speaker that is there.
 Apple TV pairings have their own file (see the pairing prompt below).
 
 ## Mac main window to Windows

@@ -59,8 +59,22 @@ pub fn flyout_origin(
 /// to lie wholly inside it; centered in it unless `keep_place` (a saved
 /// place on a monitor that is gone means nothing here).
 pub fn fit_window(frame: Bounds, work_area: Bounds, keep_place: bool) -> Bounds {
-    let _ = (work_area, keep_place);
-    frame
+    let width = frame.width.min(work_area.width);
+    let height = frame.height.min(work_area.height);
+    let (x, y) = if keep_place {
+        (frame.x, frame.y)
+    } else {
+        (
+            work_area.x + (work_area.width - width) / 2.0,
+            work_area.y + (work_area.height - height) / 2.0,
+        )
+    };
+    Bounds {
+        x: clamp(x, work_area.x, work_area.right() - width),
+        y: clamp(y, work_area.y, work_area.bottom() - height),
+        width,
+        height,
+    }
 }
 
 /// `value` within `low..=high`; `low` when the range is empty (a flyout larger
