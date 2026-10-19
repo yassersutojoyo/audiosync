@@ -74,6 +74,9 @@ pub struct Behavior {
     /// and from the second on fill origin and receive with the previous
     /// exchange's values, as some receivers do (P90).
     pub timing_quirks: Option<u16>,
+    /// The `Public` header of the OPTIONS answer, in place of the full
+    /// method list (P27).
+    pub public: Option<String>,
 }
 
 impl Default for Behavior {
@@ -90,6 +93,7 @@ impl Default for Behavior {
             close_after: None,
             close_after_verify: 0,
             timing_quirks: None,
+            public: None,
         }
     }
 }
@@ -243,17 +247,24 @@ impl NetReceiver {
         })
     }
 
-    /// A device whose RAOP service is this receiver, with these TXT strings.
-    pub fn device(&self, id: u8, txt: &[&str]) -> Device {
+    /// The RAOP record of this receiver as discovery would resolve it, with
+    /// these TXT strings.
+    pub fn record(&self, id: u8, txt: &[&str]) -> ServiceRecord {
         let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, id]);
-        let record = ServiceRecord {
+        ServiceRecord {
             kind: ServiceKind::Raop,
             instance: format!("{device_id}@Speaker {id}"),
             host: format!("speaker-{id}.local"),
             port: self.address.port(),
             txt: txt.iter().map(|s| s.as_bytes().to_vec()).collect(),
             addresses: vec![ScopedAddr::new(self.shared.ip)],
-        };
+        }
+    }
+
+    /// A device whose RAOP service is this receiver, with these TXT strings.
+    pub fn device(&self, id: u8, txt: &[&str]) -> Device {
+        let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, id]);
+        let record = self.record(id, txt);
         Device::from_records(DeviceKey::Id(device_id), Some(&record), None).expect("device")
     }
 
@@ -344,6 +355,9 @@ fn serve(shared: Arc<Shared>, mut stream: TcpStream, peer: SocketAddr) {
         fake.status = behavior.status.clone();
         fake.silent = behavior.silent.clone();
         fake.apple_tv = behavior.apple_tv.clone();
+        if let Some(public) = &behavior.public {
+            fake.public = Some(public.clone());
+        }
     }
     fake.transport = format!(
         "RTP/AVP/UDP;unicast;mode=record;server_port={};control_port={};timing_port={}",
