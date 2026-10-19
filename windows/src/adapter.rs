@@ -1,11 +1,14 @@
 //! The UI's [`Backend`] over the audio backend.
 //!
-//! The windows show what the audio backend lists, the sources to capture and
-//! the connected outputs with their settings, and every user action becomes
-//! audio backend calls, decided by the session rules of `audiosync-core`
-//! (`policy::session`): switching a speaker on starts streaming, switching the
-//! last one off stops it, an output that can't start is turned off, a source
-//! that quits ends the session. What happens on its own comes from
+//! The windows show what the audio backend lists, the sources to capture, the
+//! connected outputs and the AirPlay speakers with their settings, and every
+//! user action becomes audio backend calls, decided by the session rules of
+//! `audiosync-core` (`policy::session`): switching a speaker on starts
+//! streaming, switching the last one off stops it, an output that can't start
+//! is turned off, a source that quits ends the session. AirPlay speakers count
+//! like any other speaker; one that can't play from AudioSync (a password,
+//! pairing, AirPlay 2 only) is listed with that note and stays off, with a
+//! notice when the user tries it. What happens on its own comes from
 //! [`AudioBackend::poll`], which [`Backend::poll`] passes on, and the adapter
 //! turns it into notices. Notices carry a [`NoticeMessage`]; the UI words it.
 //!
@@ -18,9 +21,9 @@
 //! (or fewer of them) until that app quits. Like the speakers' settings they are kept in memory only
 //! for now: AudioSync for Windows doesn't save its settings yet.
 //!
-//! Speakers are named by the core's speaker keys (`lc:` and the endpoint ID),
-//! so groups and auto-connect marks can hold AirPlay speakers (`ap:`) once
-//! Windows has them. Sources are `system`, or `app:` with the app's process ID
+//! Speakers are named by the core's speaker keys: `lc:` and the endpoint ID
+//! for a local output, `ap:` and the speaker's ID for an AirPlay speaker, so
+//! groups and auto-connect marks hold both. Sources are `system`, or `app:` with the app's process ID
 //! and executable (`app:2000:spotify.exe`), so a process ID that Windows gives
 //! to another app later is never taken for the chosen one.
 //!
@@ -31,6 +34,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use audiosync_core::eq::EqSettings;
+use audiosync_core::policy::pairing::DropReason;
 use audiosync_core::policy::session::{
     AutoStartGate, Incident, SpeakerEvent, StartOrigin, StreamingAction, may_start, reaction,
     source_switch, streaming_after,
@@ -38,15 +42,15 @@ use audiosync_core::policy::session::{
 use audiosync_core::policy::speakers::{NoticeSubject, Notices, SpeakerKey, renamed_group};
 
 use crate::audio::backend::{
-    AudioBackend, BackendError, BackendEvent, OutputInfo, OutputKind, SourceId, SourceInfo,
-    StopReason,
+    AirPlayAvailability, AirPlayInfo, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
+    OutputInfo, OutputKind, SourceId, SourceInfo, StopReason,
 };
 use crate::audio::capture::WHOLE_SYSTEM_NAME;
 use crate::audio::routing::{DirectPath, DirectReason};
 use crate::debug_log::DebugLog;
 use crate::ui_model::{
-    AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, Source, SourceKind,
-    Speaker, SpeakerKind, clamp_delay_ms,
+    self, AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, Source,
+    SourceKind, Speaker, SpeakerKind, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -131,6 +135,10 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The last name of every output listed, for a notice about one that is
     /// gone.
     names: BTreeMap<String, String>,
+    /// The AirPlay speaker IDs of the last listing, to tell which appeared.
+    airplay_listed: BTreeSet<String>,
+    /// The last name of every AirPlay speaker listed.
+    airplay_names: BTreeMap<String, String>,
     /// The speaker keys marked auto-connect.
     auto_connect: BTreeSet<String>,
     groups: Vec<Group>,
@@ -167,6 +175,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             chosen: Chosen::WholeSystem,
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
+            airplay_listed: BTreeSet::new(),
+            airplay_names: BTreeMap::new(),
             auto_connect: BTreeSet::new(),
             groups: Vec::new(),
             next_group: 1,
@@ -197,9 +207,31 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.audio.running_source().is_some()
     }
 
-    /// Outputs turned on, connected or not.
+    /// Speakers turned on, local and AirPlay, connected or not.
     fn enabled_count(&self) -> usize {
-        self.audio.enabled_outputs().len()
+        self.audio.enabled_outputs().len() + self.audio.enabled_airplay().len()
+    }
+
+    /// The streaming policy after `event` (S162), from the speakers on.
+    fn streaming_after(&self, event: SpeakerEvent) -> StreamingAction {
+        streaming_after(
+            event,
+            self.running(),
+            self.audio.enabled_outputs().len(),
+            self.audio.enabled_airplay().len(),
+        )
+    }
+
+    fn is_airplay_enabled(&self, id: &str) -> bool {
+        self.audio.enabled_airplay().iter().any(|on| on == id)
+    }
+
+    /// The name of an AirPlay speaker as last listed.
+    fn airplay_name(&self, id: &str) -> String {
+        self.airplay_names
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| id.to_owned())
     }
 
     fn is_enabled(&self, endpoint_id: &str) -> bool {
@@ -248,6 +280,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let _ = self.audio.list_outputs();
         self.take_events();
         self.outputs_listed();
+        self.airplay_listed();
         self.refresh_sources();
     }
 
@@ -271,6 +304,42 @@ impl<A: AudioBackend> AudioAdapter<A> {
             });
         }
         self.auto_connect(&appeared);
+    }
+
+    /// Takes in the AirPlay speakers as last listed: remembers their names,
+    /// and switches on the auto-connect speakers that appeared.
+    fn airplay_listed(&mut self) {
+        let mut listed = BTreeSet::new();
+        let mut appeared = Vec::new();
+        for speaker in self.audio.airplay_speakers() {
+            if !self.airplay_listed.contains(&speaker.id) {
+                appeared.push(speaker.id.clone());
+            }
+            self.airplay_names.insert(speaker.id.clone(), speaker.name);
+            listed.insert(speaker.id);
+        }
+        self.airplay_listed = listed;
+        let hits: Vec<String> = appeared
+            .into_iter()
+            .filter(|id| self.auto_connect.contains(&airplay_key(id)))
+            .collect();
+        if hits.is_empty() {
+            return;
+        }
+        self.log.log(|| {
+            let names: Vec<String> = hits.iter().map(|id| self.airplay_name(id)).collect();
+            format!("auto-connect: switching on {}", names.join(", "))
+        });
+        for id in &hits {
+            if !self.is_airplay_enabled(id)
+                && let Err(problem) = self.audio.set_airplay_enabled(id, true)
+            {
+                self.airplay_cant_play(id, problem);
+            }
+        }
+        if !self.running() && self.enabled_count() > 0 {
+            self.start_session(StartOrigin::AutoConnect);
+        }
     }
 
     /// Switches on the auto-connect speakers among `appeared`, then starts
@@ -475,15 +544,78 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// An AirPlay speaker can't play from AudioSync, so it is off: tells the
+    /// user, and stops streaming when nothing else is on (S109, S136).
+    fn airplay_cant_play(&mut self, id: &str, problem: AirPlayProblem) {
+        let reason = match problem {
+            AirPlayProblem::PasswordNotYet => DropReason::PasswordUnsupported,
+            AirPlayProblem::PairingNotYet => DropReason::NeedsCode,
+            _ => DropReason::Unreachable,
+        };
+        let reaction = reaction(&Incident::SpeakerDropped {
+            id: id.to_owned(),
+            reason,
+            enabled_left: self.enabled_count(),
+        });
+        if let Some(subject) = reaction.notice {
+            let speaker = self.airplay_name(id);
+            self.post(
+                subject,
+                NoticeMessage::AirPlayCantPlay {
+                    speaker,
+                    problem: ui_problem(problem),
+                },
+            );
+        }
+        if reaction.stop_session && self.running() {
+            self.log.log(|| {
+                format!(
+                    "streaming stops: {} can't play and no other speaker is on",
+                    self.airplay_name(id)
+                )
+            });
+            self.audio.stop();
+        }
+    }
+
+    /// The user switched an AirPlay speaker on or off. One that can't play
+    /// stays off, with a notice saying why.
+    fn set_airplay_enabled(&mut self, id: &str, on: bool) {
+        if on
+            && !self
+                .audio
+                .airplay_speakers()
+                .iter()
+                .any(|speaker| speaker.id == id)
+        {
+            self.log
+                .log(|| format!("AirPlay speaker ({id}) isn't listed; nothing to switch on"));
+            return;
+        }
+        self.log.log(|| {
+            let state = if on { "on" } else { "off" };
+            format!("the user switched {} {state}", self.airplay_name(id))
+        });
+        if on {
+            // A new attempt.
+            self.notices.clear(&[airplay_subject(id)]);
+        }
+        if let Err(problem) = self.audio.set_airplay_enabled(id, on) {
+            self.airplay_cant_play(id, problem);
+            return;
+        }
+        if on {
+            self.start_if_switched_on();
+        } else {
+            self.stop_if_idle();
+        }
+        self.take_events();
+    }
+
     /// Stops streaming when a speaker was switched off and none is left on
     /// (S118, S162).
     fn stop_if_idle(&mut self) {
-        let action = streaming_after(
-            SpeakerEvent::SwitchedOff,
-            self.running(),
-            self.enabled_count(),
-            0,
-        );
+        let action = self.streaming_after(SpeakerEvent::SwitchedOff);
         if action == StreamingAction::Stop {
             self.log
                 .log(|| "streaming stops: no speaker is on anymore".to_owned());
@@ -494,12 +626,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Starts streaming when a speaker was switched on while nothing streams
     /// (S119, S162).
     fn start_if_switched_on(&mut self) {
-        let action = streaming_after(
-            SpeakerEvent::SwitchedOn,
-            self.running(),
-            self.enabled_count(),
-            0,
-        );
+        let action = self.streaming_after(SpeakerEvent::SwitchedOn);
         if action == StreamingAction::Start {
             self.start_session(StartOrigin::User);
         }
@@ -545,6 +672,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.refresh_sources();
             }
             BackendEvent::HeardTwice { paths } => self.heard_twice_changed(paths),
+            BackendEvent::AirPlayChanged => self.airplay_listed(),
+            BackendEvent::AirPlayPlaying { id } => {
+                self.clear_if(airplay_subject(&id), |message| {
+                    matches!(message, NoticeMessage::AirPlayRetrying { .. })
+                });
+            }
+            BackendEvent::AirPlayTrouble { id, problem } => {
+                let speaker = self.airplay_name(&id);
+                self.post(
+                    airplay_subject(&id),
+                    NoticeMessage::AirPlayRetrying {
+                        speaker,
+                        problem: ui_problem(problem),
+                    },
+                );
+            }
+            BackendEvent::AirPlayFailed { id, problem } => self.airplay_cant_play(&id, problem),
         }
     }
 
@@ -664,6 +808,20 @@ impl<A: AudioBackend> AudioAdapter<A> {
         rows
     }
 
+    fn airplay_speaker(&self, speaker: AirPlayInfo) -> Speaker {
+        let id = airplay_key(&speaker.id);
+        Speaker {
+            auto_connect: self.auto_connect.contains(&id),
+            id,
+            name: speaker.name,
+            kind: SpeakerKind::AirPlay,
+            enabled: speaker.enabled,
+            volume: speaker.volume,
+            delay_ms: None,
+            availability: availability(speaker.availability),
+        }
+    }
+
     fn speaker(&self, output: OutputInfo) -> Speaker {
         let id = speaker_key(&output.id);
         Speaker {
@@ -691,6 +849,12 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 .outputs()
                 .into_iter()
                 .map(|output| self.speaker(output))
+                .chain(
+                    self.audio
+                        .airplay_speakers()
+                        .into_iter()
+                        .map(|speaker| self.airplay_speaker(speaker)),
+                )
                 .collect(),
             groups: self.groups.clone(),
             equalizer: self.equalizer,
@@ -719,12 +883,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             }
             return;
         }
-        let action = streaming_after(
-            SpeakerEvent::StartRequested,
-            self.running(),
-            self.enabled_count(),
-            0,
-        );
+        let action = self.streaming_after(SpeakerEvent::StartRequested);
         match action {
             // Without a speaker on, the start asks for one.
             StreamingAction::Start | StreamingAction::AskForSpeaker => {
@@ -773,8 +932,13 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn set_speaker_enabled(&mut self, id: &str, on: bool) {
-        let Some(endpoint_id) = local_id(id) else {
-            return;
+        let endpoint_id = match SpeakerKey::parse(id) {
+            Some(SpeakerKey::Local(endpoint_id)) => endpoint_id,
+            Some(SpeakerKey::AirPlay(airplay_id)) => {
+                self.set_airplay_enabled(&airplay_id, on);
+                return;
+            }
+            None => return,
         };
         self.log.log(|| {
             let state = if on { "on" } else { "off" };
@@ -800,15 +964,29 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn set_speaker_volume(&mut self, id: &str, position: f64) {
-        if let Some(endpoint_id) = local_id(id) {
-            self.audio.set_output_volume(&endpoint_id, position);
+        match SpeakerKey::parse(id) {
+            Some(SpeakerKey::Local(endpoint_id)) => {
+                self.audio.set_output_volume(&endpoint_id, position);
+            }
+            Some(SpeakerKey::AirPlay(airplay_id)) => {
+                self.audio.set_airplay_volume(&airplay_id, position);
+            }
+            None => {}
         }
     }
 
+    /// A local output's delay, or an AirPlay speaker's own delay d_s.
     fn set_speaker_delay(&mut self, id: &str, ms: f64) {
-        if let Some(endpoint_id) = local_id(id) {
-            self.audio
-                .set_output_delay(&endpoint_id, clamp_delay_ms(ms));
+        match SpeakerKey::parse(id) {
+            Some(SpeakerKey::Local(endpoint_id)) => {
+                self.audio
+                    .set_output_delay(&endpoint_id, clamp_delay_ms(ms));
+            }
+            Some(SpeakerKey::AirPlay(airplay_id)) => {
+                self.audio
+                    .set_airplay_delay(&airplay_id, clamp_delay_ms(ms));
+            }
+            None => {}
         }
     }
 
@@ -830,9 +1008,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let Some(group) = state.groups.iter().find(|group| group.id == id) else {
             return;
         };
-        let members: Vec<String> = state
+        let members: Vec<SpeakerKey> = state
             .available_members(group)
-            .filter_map(|speaker| local_id(&speaker.id))
+            .filter_map(|speaker| SpeakerKey::parse(&speaker.id))
             .collect();
         if members.is_empty() {
             return;
@@ -848,16 +1026,31 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 members.len()
             )
         });
-        for endpoint_id in &members {
-            if turn_on {
-                if self.running() && self.is_enabled(endpoint_id) {
-                    continue;
+        for member in &members {
+            match member {
+                SpeakerKey::Local(endpoint_id) => {
+                    if turn_on {
+                        if self.running() && self.is_enabled(endpoint_id) {
+                            continue;
+                        }
+                        // A new attempt.
+                        self.notices.clear(&[speaker_subject(endpoint_id)]);
+                    }
+                    if self.audio.set_output_enabled(endpoint_id, turn_on).is_err() {
+                        self.output_failed(endpoint_id, true);
+                    }
                 }
-                // A new attempt.
-                self.notices.clear(&[speaker_subject(endpoint_id)]);
-            }
-            if self.audio.set_output_enabled(endpoint_id, turn_on).is_err() {
-                self.output_failed(endpoint_id, true);
+                SpeakerKey::AirPlay(id) => {
+                    if turn_on {
+                        if self.running() && self.is_airplay_enabled(id) {
+                            continue;
+                        }
+                        self.notices.clear(&[airplay_subject(id)]);
+                    }
+                    if let Err(problem) = self.audio.set_airplay_enabled(id, turn_on) {
+                        self.airplay_cant_play(id, problem);
+                    }
+                }
             }
         }
         if turn_on {
@@ -875,6 +1068,13 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             .into_iter()
             .filter(|output| output.enabled)
             .map(|output| speaker_key(&output.id))
+            .chain(
+                self.audio
+                    .airplay_speakers()
+                    .into_iter()
+                    .filter(|speaker| speaker.enabled)
+                    .map(|speaker| airplay_key(&speaker.id)),
+            )
             .collect();
         if members.is_empty() {
             return Err(GroupError::NoActiveSpeakers);
@@ -967,17 +1167,45 @@ fn speaker_key(endpoint_id: &str) -> String {
     SpeakerKey::Local(endpoint_id.to_owned()).to_string()
 }
 
-/// The endpoint ID of a local output's speaker key.
-fn local_id(key: &str) -> Option<String> {
-    match SpeakerKey::parse(key)? {
-        SpeakerKey::Local(endpoint_id) => Some(endpoint_id),
-        SpeakerKey::AirPlay(_) => None,
-    }
+/// The UI's ID of an AirPlay speaker.
+fn airplay_key(id: &str) -> String {
+    SpeakerKey::AirPlay(id.to_owned()).to_string()
 }
 
 /// What a notice about one local output is about.
 fn speaker_subject(endpoint_id: &str) -> NoticeSubject {
     NoticeSubject::Speaker(SpeakerKey::Local(endpoint_id.to_owned()))
+}
+
+/// What a notice about one AirPlay speaker is about.
+fn airplay_subject(id: &str) -> NoticeSubject {
+    NoticeSubject::Speaker(SpeakerKey::AirPlay(id.to_owned()))
+}
+
+/// How an AirPlay speaker's row shows whether it can play.
+fn availability(availability: AirPlayAvailability) -> Availability {
+    match availability {
+        AirPlayAvailability::Open => Availability::Open,
+        AirPlayAvailability::PasswordNotYet => Availability::PasswordNotYet,
+        AirPlayAvailability::PairingNotYet => Availability::PairingNotYet,
+        AirPlayAvailability::AirPlay2NotYet => Availability::AirPlay2NotYet,
+        AirPlayAvailability::Unsupported => Availability::Unsupported,
+    }
+}
+
+/// An AirPlay problem as a notice words it.
+fn ui_problem(problem: AirPlayProblem) -> ui_model::AirPlayProblem {
+    use ui_model::AirPlayProblem as P;
+    match problem {
+        AirPlayProblem::NotResponding => P::NotResponding,
+        AirPlayProblem::ConnectionLost => P::ConnectionLost,
+        AirPlayProblem::Busy => P::Busy,
+        AirPlayProblem::Refused => P::Refused,
+        AirPlayProblem::PasswordNotYet => P::PasswordNotYet,
+        AirPlayProblem::PairingNotYet => P::PairingNotYet,
+        AirPlayProblem::AirPlay2NotYet => P::AirPlay2NotYet,
+        AirPlayProblem::Unsupported => P::Unsupported,
+    }
 }
 
 /// A listed source as the debug log names it.
@@ -1008,7 +1236,12 @@ fn app_key(root_pid: u32, executable: &str) -> String {
 mod tests {
     use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, output_gain};
 
+    use audiosync_airplay::discovery::Device;
+    use audiosync_airplay::error::ErrorKind;
+    use audiosync_airplay::sender::SpeakerState as AirPlayState;
+
     use super::*;
+    use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, device, id_of};
     use crate::audio::capture::LoopbackMode;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
     use crate::audio::routing::HOLD_CHECKS;
@@ -1911,5 +2144,180 @@ mod tests {
         adapter.set_running(true);
         assert!(adapter.snapshot().running);
         assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &["TV"], &[])]);
+    }
+
+    const PASSWORD_TXT: &[&str] = &[
+        "txtvers=1",
+        "ch=2",
+        "cn=0,1",
+        "et=0",
+        "sr=44100",
+        "ss=16",
+        "tp=UDP",
+        "pw=true",
+    ];
+
+    /// [`adapter`] with an AirPlay sender that lists Kitchen, which can
+    /// play, and Study, which asks for a password.
+    fn airplay_adapter() -> (AudioAdapter<MockBackend>, FakeAirPlay, Device, Device) {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.connect_output(HEADPHONES, "Headphones");
+        audio.add_app(PLAYER_PID, "player.exe");
+        let fake = FakeAirPlay::new();
+        audio.set_airplay(fake.link(), None);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let study = device(2, "Study", PASSWORD_TXT);
+        fake.appear(&kitchen);
+        fake.appear(&study);
+        let adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        (adapter, fake, kitchen, study)
+    }
+
+    /// The UI's ID of an AirPlay speaker.
+    fn ap(device: &Device) -> String {
+        format!("ap:{}", id_of(device))
+    }
+
+    fn local_delay(adapter: &AudioAdapter<MockBackend>, endpoint_id: &str) -> i64 {
+        adapter
+            .audio
+            .playing_params(endpoint_id)
+            .expect("it plays")
+            .delay_frames
+    }
+
+    #[test]
+    fn an_airplay_receiver_that_appears_becomes_a_connected_speaker_row() {
+        let (mut adapter, fake, kitchen, study) = airplay_adapter();
+        let state = adapter.snapshot();
+        let row = state.speaker(&ap(&kitchen)).expect("Kitchen is listed");
+        assert_eq!(row.name, "Kitchen");
+        assert_eq!(row.kind, SpeakerKind::AirPlay);
+        assert_eq!(row.delay_ms, None, "AirPlay rows have no sync delay");
+        assert_eq!(row.availability, Availability::Open);
+        assert!(!row.enabled);
+        assert_eq!(
+            state.speaker(&ap(&study)).unwrap().availability,
+            Availability::PasswordNotYet
+        );
+        let (this_pc, connected) = state.layout();
+        assert!(this_pc.is_empty());
+        let names: Vec<&str> = connected.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Headphones", "Kitchen", "Speakers", "Study"]);
+
+        let bedroom = device(3, "Bedroom", OPEN_TXT);
+        fake.appear(&bedroom);
+        assert!(adapter.poll(), "the snapshot changed");
+        assert!(adapter.snapshot().speaker(&ap(&bedroom)).is_some());
+        fake.gone(&bedroom);
+        assert!(adapter.poll());
+        assert!(adapter.snapshot().speaker(&ap(&bedroom)).is_none());
+    }
+
+    #[test]
+    fn turning_an_airplay_speaker_on_and_off_lines_local_outputs_up_and_back() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_delay(&key(SPEAKERS), 150.0);
+        assert!(adapter.snapshot().running);
+        assert_eq!(local_delay(&adapter, SPEAKERS), 7_200);
+        fake.take_calls();
+
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
+        assert!(matches!(fake.take_calls()[..], [Call::Add { .. }]));
+        assert_eq!(local_delay(&adapter, SPEAKERS), 91_200, "L + 150 ms");
+
+        adapter.set_speaker_enabled(&ap(&kitchen), false);
+        assert_eq!(
+            local_delay(&adapter, SPEAKERS),
+            7_200,
+            "its own delay again"
+        );
+        assert!(adapter.snapshot().running, "Speakers is still on");
+    }
+
+    #[test]
+    fn an_airplay_speaker_alone_starts_and_stops_streaming() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        assert!(adapter.snapshot().running, "one AirPlay speaker is enough");
+        assert!(playing(&adapter).is_empty());
+        assert_eq!(fake.take_calls()[0], Call::RestartTimeline);
+        adapter.set_speaker_enabled(&ap(&kitchen), false);
+        assert!(!adapter.snapshot().running, "nothing is on anymore");
+    }
+
+    #[test]
+    fn an_airplay_speaker_that_cant_play_stays_off_with_a_notice() {
+        let (mut adapter, fake, _, study) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&study), true);
+        assert!(!adapter.snapshot().speaker(&ap(&study)).unwrap().enabled);
+        assert!(!adapter.snapshot().running);
+        assert!(fake.take_calls().is_empty(), "never connected");
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Study".to_owned(),
+                problem: ui_model::AirPlayProblem::PasswordNotYet,
+            }]
+        );
+    }
+
+    #[test]
+    fn airplay_errors_become_notices() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        assert!(adapter.poll());
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayRetrying {
+                speaker: "Kitchen".to_owned(),
+                problem: ui_model::AirPlayProblem::NotResponding,
+            }]
+        );
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
+        // It plays again: the notice goes.
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+        // One that needs the user is turned off, and streaming stops with it.
+        fake.fail(&kitchen, ErrorKind::PairingRequired);
+        adapter.poll();
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Kitchen".to_owned(),
+                problem: ui_model::AirPlayProblem::PairingNotYet,
+            }]
+        );
+        assert!(!adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
+        assert!(!adapter.snapshot().running);
+    }
+
+    #[test]
+    fn groups_and_auto_connect_hold_airplay_speakers() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.new_group("Downstairs").unwrap();
+        let group = adapter.snapshot().groups[0].clone();
+        assert_eq!(group.members, [key(SPEAKERS), ap(&kitchen)]);
+        adapter.toggle_group(&group.id);
+        assert!(!adapter.snapshot().running, "both switched off");
+        assert!(!adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
+
+        // Auto-connect: Kitchen switches on when it appears again.
+        adapter.set_auto_connect(&ap(&kitchen), true);
+        fake.gone(&kitchen);
+        adapter.poll();
+        fake.appear(&kitchen);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
+        assert!(adapter.snapshot().running);
     }
 }
