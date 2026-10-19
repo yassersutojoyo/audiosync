@@ -16,7 +16,7 @@
 #   --baseline-out FILE  where the baseline goes (default Tests/baseline/rust.json)
 #   --no-doc             leave docs/BENCHMARKS.md alone
 #   --doc-only           only rewrite the table from Tests/baseline/rust.json
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 export LC_ALL=C
 cd "$(dirname "$0")/.."
 

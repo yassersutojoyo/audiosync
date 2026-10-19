@@ -8,7 +8,7 @@
 #
 # macOS only (needs swiftc from Xcode or the Command Line Tools).
 # Usage: core/ffi/smoke.sh
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 
 ffi_dir="$(cd "$(dirname "$0")" && pwd)"
 core_dir="$(cd "$ffi_dir/.." && pwd)"
