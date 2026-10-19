@@ -3,8 +3,8 @@ import Foundation
 /// What AudioSync remembers between launches: the source, the speakers that
 /// are on, every volume and delay, the groups, auto-connect and the two view
 /// choices. The equalizer is kept under `Keys.equalizer` as JSON
-/// (`StoredEqualizer`), and the hidden engine option under
-/// `EngineImpl.defaultsKey`; both are read and written by their own code.
+/// (`StoredEqualizer`), and the hidden AirPlay sender option under
+/// `AirPlayImpl.defaultsKey`; both are read and written by their own code.
 ///
 /// Every value is checked as it is read, so a damaged or hand-edited setting
 /// never reaches the engine: a number that isn't finite is dropped, volumes
@@ -44,6 +44,10 @@ struct AppSettings: Equatable {
         /// Local volumes as linear gain in percent (0…150), from before the
         /// volume curve. Converted to `localVolumes` once, then removed (S75).
         static let legacyLocalGains = "localGainByUID"
+        /// "swift" or "rust", from builds that offered a choice of audio
+        /// engine. Never written now; a value left there has no effect
+        /// (`RetiredEngineChoice`).
+        static let retiredEngineChoice = "engineImpl"
     }
 
     /// Where a speaker without a volume of its own starts (S71, S105).
@@ -185,4 +189,25 @@ struct SettingsStore {
     func save(showVirtualDevices: Bool) { write(showVirtualDevices, Keys.showVirtualDevices) }
 
     func save(appearance: AppAppearance) { write(appearance.defaultsValue, Keys.appearance) }
+}
+
+/// The audio engine choice of older builds: the `engineImpl` setting and the
+/// `AUDIOSYNC_ENGINE` environment variable, "swift" or "rust". Every session
+/// runs on the Rust core now, so either one is only noted in the debug log,
+/// once per launch, and the stored value is left as it is.
+enum RetiredEngineChoice {
+    static let defaultsKey = AppSettings.Keys.retiredEngineChoice
+    static let environmentKey = "AUDIOSYNC_ENGINE"
+
+    /// The debug log line for a launch that finds either one set (an empty
+    /// value counts as unset), or nil when neither is.
+    static func launchNote(environment: String?, stored: String?) -> String? {
+        var found: [String] = []
+        if let value = environment, !value.isEmpty { found.append("\(environmentKey)=\(value)") }
+        if let value = stored, !value.isEmpty { found.append("the \(defaultsKey) setting \"\(value)\"") }
+        guard !found.isEmpty else { return nil }
+        return "[AudioSync] " + found.joined(separator: " and ")
+            + (found.count == 1 ? " no longer chooses" : " no longer choose")
+            + " the audio engine: every session runs on the Rust core"
+    }
 }
