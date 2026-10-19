@@ -44,8 +44,15 @@ const PRECISE_WAIT: Duration = Duration::from_millis(20);
 const IDLE_TURN: Duration = Duration::from_millis(100);
 /// How often discovery is polled.
 const DISCOVERY_POLL: Duration = Duration::from_millis(20);
-/// After the 2 s teardown limit, sessions still open are closed by force.
-const SHUTDOWN_GRACE: Duration = Duration::from_millis(50);
+/// How long the end of a shutdown waits for the I/O threads. They end
+/// within `transport::POLL_INTERVAL` of their close, except a writer blocked
+/// in a send that a socket shutdown doesn't wake (Windows), which ends at its
+/// own send timeout; nothing waits for that one.
+const THREAD_GRACE: Duration = Duration::from_millis(100);
+/// Room for the last turns and the thread wait, so a shutdown finishes
+/// within 2 s overall (P129): sessions still open 2 s minus this after the
+/// stop are closed.
+const SHUTDOWN_RESERVE: Duration = Duration::from_millis(250);
 /// Messages handled before the timers get their turn again, so a flood of
 /// datagrams can't hold back the audio.
 const INPUTS_PER_TURN: usize = 256;
@@ -175,9 +182,28 @@ impl Driver {
             self.wait(deadline);
         }
         self.close_all();
-        for handle in self.retired.drain(..) {
-            let _ = handle.join();
+        self.join_threads(Instant::now() + THREAD_GRACE);
+    }
+
+    /// Joins the I/O threads that end by `deadline`. A thread still running
+    /// then is blocked in a send that only its own timeout ends; it holds
+    /// nothing but its socket, and is left to end by itself (P129).
+    fn join_threads(&mut self, deadline: Instant) {
+        loop {
+            let (done, running): (Vec<_>, Vec<_>) = self
+                .retired
+                .drain(..)
+                .partition(|handle| handle.is_finished());
+            self.retired = running;
+            for handle in done {
+                let _ = handle.join();
+            }
+            if self.retired.is_empty() || Instant::now() >= deadline {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
         }
+        self.retired.clear();
     }
 
     fn emit(&self, event: SenderEvent) {
@@ -250,7 +276,7 @@ impl Driver {
             next = next.min(now + DISCOVERY_POLL);
         }
         if let Some(stopping) = self.stopping {
-            next = next.min(stopping + SHUTDOWN_GRACE);
+            next = next.min(stopping);
         }
         next
     }
@@ -263,7 +289,7 @@ impl Driver {
             .speakers
             .values()
             .any(|speaker| matches!(speaker.phase, Phase::Active(_)));
-        !open || now >= stopping + SHUTDOWN_GRACE
+        !open || now >= stopping
     }
 
     fn run_timers(&mut self, now: Instant) {
@@ -957,12 +983,13 @@ impl Driver {
     }
 
     /// Tears every speaker down in parallel; the loop ends once all are
-    /// closed, or 2 s from now (P129).
+    /// closed, or early enough that the whole shutdown, threads included,
+    /// stays within 2 s (P129).
     fn shutdown(&mut self, now: Instant) {
         if self.stopping.is_some() {
             return;
         }
-        self.stopping = Some(now + TEARDOWN_TIMEOUT);
+        self.stopping = Some(now + TEARDOWN_TIMEOUT - SHUTDOWN_RESERVE);
         self.browser = None;
         let keys: Vec<DeviceKey> = self.speakers.keys().cloned().collect();
         for key in keys {

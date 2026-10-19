@@ -34,7 +34,7 @@
 //! that fails never stops another one or the input (P141), and one that is
 //! lost is tried again with backoff and rejoins the running timeline
 //! (P142, P103). [`Sender::shutdown`] tears every speaker down in parallel
-//! and returns within about 2 s (P129).
+//! and returns within 2 s (P129).
 
 mod driver;
 
@@ -448,9 +448,10 @@ impl Sender {
     }
 
     /// Stops everything: every speaker is torn down in parallel (TEARDOWN,
-    /// then close after the answer or 2 s), discovery stops, and the
-    /// driver's threads end (P129). Returns when that is done, within about
-    /// 2 s.
+    /// then close after the answer, or by force 1.75 s after this call),
+    /// discovery stops, and the driver's threads end (P129). Returns within
+    /// 2 s. A writer blocked in a send to a receiver that stopped reading is
+    /// not waited for; it ends at its own send timeout.
     pub fn shutdown(mut self) {
         self.stop();
     }

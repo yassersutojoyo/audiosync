@@ -24,7 +24,16 @@
 //! timing socket (P83, P91); the driver sends them with
 //! [`SessionIo::send`]. Closing ([`SessionIo::close`]) shuts the
 //! connection down and tells the threads to stop; each ends within
-//! [`POLL_INTERVAL`].
+//! [`POLL_INTERVAL`], except a writer blocked in a send: Windows doesn't wake
+//! a blocked send when the socket is shut down, so that one ends at its send
+//! timeout, and nobody waits for it.
+//!
+//! Where an ICMP unreachable is reported matters for P141. Windows reports
+//! it as a reset on the next call on the socket, which is the control
+//! thread's receive, not the send that caused it; the control thread notes
+//! it, and the next send from that socket counts as unreachable. Linux and
+//! macOS report nothing on an unconnected UDP socket, so there only send
+//! errors count.
 
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, SocketAddrV6, TcpStream, UdpSocket};
@@ -51,6 +60,9 @@ const RTSP_WRITE_TIMEOUT: Duration = RESPONSE_TIMEOUT;
 const DATAGRAM_BYTES: usize = 2048;
 /// What an RTSP read takes at most.
 const READ_BYTES: usize = 16 * 1024;
+/// What one RTSP write call takes at most, so the writer looks at its stop
+/// flag between pieces of a large request.
+const WRITE_BYTES: usize = 16 * 1024;
 
 /// Names one session's I/O, so the driver can tell late messages from a
 /// closed session's threads apart from the next session's.
@@ -144,6 +156,9 @@ pub(crate) struct SessionIo {
     control: Arc<UdpSocket>,
     timing: Arc<UdpSocket>,
     stop: Arc<AtomicBool>,
+    /// Set by the control thread when a receive reports a reset: an ICMP
+    /// unreachable for an earlier send (Windows).
+    reset: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
 }
 
@@ -185,6 +200,7 @@ impl SessionIo {
             control: Arc::new(control),
             timing: Arc::new(timing),
             stop: Arc::new(AtomicBool::new(false)),
+            reset: Arc::new(AtomicBool::new(false)),
             threads: Vec::new(),
         };
         // On a failed spawn, dropping `io` stops the threads already
@@ -203,7 +219,13 @@ impl SessionIo {
         io.threads.push(thread);
         let thread = spawn(
             "airplay-control",
-            control_loop(session, io.control.clone(), io.stop.clone(), notify.clone()),
+            control_loop(
+                session,
+                io.control.clone(),
+                io.stop.clone(),
+                io.reset.clone(),
+                notify.clone(),
+            ),
         )?;
         io.threads.push(thread);
         let thread = spawn(
@@ -213,7 +235,7 @@ impl SessionIo {
         io.threads.push(thread);
         let thread = spawn(
             "airplay-rtsp-write",
-            write_loop(session, writer_stream, writes, notify),
+            write_loop(session, writer_stream, writes, io.stop.clone(), notify),
         )?;
         io.threads.push(thread);
         Ok((io, connection))
@@ -229,7 +251,9 @@ impl SessionIo {
 
     /// Sends one datagram from the session's control or timing socket. The
     /// result is `None` when the send failed for a reason other than an
-    /// unreachable destination (P141).
+    /// unreachable destination (P141). A send from the control socket after
+    /// the control thread saw a reset counts as unreachable, whatever the
+    /// call returned: the reset is the late report of an earlier send.
     pub(crate) fn send(
         &self,
         from: LocalSocket,
@@ -240,7 +264,10 @@ impl SessionIo {
             LocalSocket::Control => &self.control,
             LocalSocket::Timing => &self.timing,
         };
+        let reported =
+            matches!(from, LocalSocket::Control) && self.reset.swap(false, Ordering::AcqRel);
         match socket.send_to(bytes, to) {
+            Ok(_) if reported => Some(UdpSendResult::Unreachable),
             Ok(_) => Some(UdpSendResult::Sent),
             Err(error) if unreachable(&error) => Some(UdpSendResult::Unreachable),
             Err(_) => None,
@@ -308,11 +335,13 @@ fn timing_loop(
 }
 
 /// Hands retransmission requests to the driver (P86); other datagrams are
-/// ignored (P92).
+/// ignored (P92). A reset on a receive is an ICMP unreachable for an earlier
+/// send, which the next send reports (P141).
 fn control_loop(
     session: SessionKey,
     socket: Arc<UdpSocket>,
     stop: Arc<AtomicBool>,
+    reset: Arc<AtomicBool>,
     notify: impl Notify,
 ) -> impl FnOnce() + Send + 'static {
     move || {
@@ -328,7 +357,12 @@ fn control_loop(
                         break;
                     }
                 }
-                Err(error) => idle_after(&error),
+                Err(error) => {
+                    if error.kind() == io::ErrorKind::ConnectionReset {
+                        reset.store(true, Ordering::Release);
+                    }
+                    idle_after(&error);
+                }
             }
         }
     }
@@ -389,22 +423,25 @@ fn read_loop(
     }
 }
 
-/// Writes the session's requests in order until the session closes.
+/// Writes the session's requests in order until the session closes, in
+/// pieces, looking at the stop flag between them.
 fn write_loop(
     session: SessionKey,
     mut stream: TcpStream,
     writes: mpsc::Receiver<Vec<u8>>,
+    stop: Arc<AtomicBool>,
     notify: impl Notify,
 ) -> impl FnOnce() + Send + 'static {
     move || {
         for bytes in writes {
-            if stream
-                .write_all(&bytes)
-                .and_then(|()| stream.flush())
-                .is_err()
-            {
-                notify(IoEvent::RtspClosed { session });
-                break;
+            for piece in bytes.chunks(WRITE_BYTES) {
+                if stop.load(Ordering::Acquire) {
+                    return;
+                }
+                if stream.write_all(piece).is_err() {
+                    notify(IoEvent::RtspClosed { session });
+                    return;
+                }
             }
         }
     }
