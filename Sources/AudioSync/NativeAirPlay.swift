@@ -36,10 +36,8 @@ final class NativeAirPlay {
     private var input: OpaquePointer?
     /// The poll timer (queue only).
     private var timer: DispatchSourceTimer?
-    /// What the receivers that show it get as playing: the track and the
-    /// artwork set last, each sent along with the other (queue only).
-    private var nowPlayingFields: PipeMetadata.Fields?
-    private var nowPlayingArtwork: Data?
+    /// What the receivers that show it get as playing (queue only).
+    private var nowPlaying = NativeNowPlaying()
 
     /// `onChange` gets each discovery change, `onEvent` each speaker or
     /// timeline event with what the model made of it, on the main queue.
@@ -110,7 +108,7 @@ final class NativeAirPlay {
     func setTrack(_ fields: PipeMetadata.Fields) {
         queue.async { [weak self] in
             guard let self else { return }
-            self.nowPlayingFields = fields
+            self.nowPlaying.setTrack(fields)
             self.sendNowPlaying()
         }
     }
@@ -125,7 +123,7 @@ final class NativeAirPlay {
                 DispatchQueue.main.async { DBG.log("[AudioSync] native AirPlay: the artwork could not be made small enough") }
                 return
             }
-            self.nowPlayingArtwork = jpeg
+            self.nowPlaying.setArtwork(jpeg)
             self.sendNowPlaying()
         }
     }
@@ -272,8 +270,8 @@ final class NativeAirPlay {
     /// the sender runs or after it stopped.
     private func sendNowPlaying() {
         guard let handle else { return }
-        let fields = nowPlayingFields
-        let artwork = nowPlayingArtwork ?? Data()
+        let fields = nowPlaying.fields
+        let artwork = nowPlaying.artwork ?? Data()
         let taken = artwork.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Bool in
             asc_airplay_set_now_playing(handle, fields?.title, fields?.artist, fields?.album,
                                         raw.bindMemory(to: UInt8.self).baseAddress, raw.count)
