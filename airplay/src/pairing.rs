@@ -9,11 +9,13 @@
 //! `POST /pair-pin-start` (the Apple TV shows a PIN, P48), the first
 //! `POST /pair-setup-pin` with the client ID (P49), waits without a timeout
 //! for the host's PIN (P51), sends A and M1 (P50, P52), checks M2, sends
-//! the sealed public key (P53), and hands the host the [`Credentials`]
-//! (P54). The host stores them; the crate never writes them anywhere.
+//! the sealed public key (P53), opens the receiver's sealed key when its
+//! answer carries one, and hands the host the [`Credentials`] (P54). The
+//! host stores them; the crate never writes them anywhere.
 //!
 //! [`LegacyVerifier`] runs the pair-verify on every later connection
-//! (P55, P56), through the session's [`Verifier`] seam.
+//! (P55, P56), through the session's [`Verifier`] seam, and checks the
+//! receiver's signature when the credentials hold its key (a warning only).
 //!
 //! The arithmetic is in [`srp`] (SRP-6a, RFC 5054) and [`keys`] (the AES,
 //! Ed25519 and X25519 steps); both use established crates for every
@@ -32,7 +34,7 @@ use plist::{Dictionary, Value};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::error::{ErrorKind, SessionError};
+use crate::error::{ErrorKind, SessionError, Warning};
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
 use crate::rtsp::{Message, Method, ParseError, Parser, Request, Response};
 use crate::session::{CONNECT_TIMEOUT, RESPONSE_TIMEOUT, Verifier};
@@ -53,16 +55,20 @@ pub const STATUS_PAIRING_FAILED: u16 = 470;
 /// Bytes of the secret a (P50, P54).
 pub const SECRET_BYTES: usize = KEY_BYTES;
 /// How many times a is drawn before giving up: the redraw of P50 is needed
-/// about once in 256 pairings, so this only ends a broken random source.
+/// about once in 128 pairings, so this only ends a broken random source.
 const MAX_DRAWS: usize = 64;
-/// The version byte of the credential blob.
+/// The version byte of a credential blob without the receiver's key.
 const BLOB_VERSION: u8 = 1;
+/// The version byte of a credential blob with the receiver's key (P54).
+const BLOB_VERSION_WITH_KEY: u8 = 2;
 /// Characters of a client ID: 16 uppercase hex digits (P49).
 pub const CLIENT_ID_CHARS: usize = 16;
 
 /// The credentials of one paired Apple TV (P54): the client ID and the
 /// 32-byte secret a, which also seeds the Ed25519 key the Apple TV now
-/// knows. The host stores them securely per speaker and hands them back in
+/// knows, plus the receiver's own Ed25519 public key when its last
+/// pair-setup answer carried one that opened (P53). The host stores them
+/// securely per speaker and hands them back in
 /// [`SpeakerOptions::credentials`](crate::sender::SpeakerOptions::credentials);
 /// losing them means pairing again. `Debug` shows the client ID only, the
 /// secret is wiped from memory when the value is dropped, and equality is
@@ -71,6 +77,7 @@ pub const CLIENT_ID_CHARS: usize = 16;
 pub struct Credentials {
     client_id: [u8; CLIENT_ID_CHARS],
     secret: [u8; SECRET_BYTES],
+    receiver_key: Option<[u8; KEY_BYTES]>,
 }
 
 impl Credentials {
@@ -102,6 +109,7 @@ impl Credentials {
         let mut credentials = Credentials {
             client_id: [0; CLIENT_ID_CHARS],
             secret: [0; SECRET_BYTES],
+            receiver_key: None,
         };
         credentials.client_id.copy_from_slice(bytes);
         credentials.secret.copy_from_slice(secret);
@@ -125,35 +133,67 @@ impl Credentials {
         keys::public_key(&self.secret)
     }
 
-    /// The blob a host stores: a version byte (1), the 16 characters of the
-    /// client ID, then the 32 bytes of the secret; 49 bytes in all. It
-    /// holds the secret, so the host keeps it where secrets go (P54).
+    /// The receiver's Ed25519 public key, when its last pair-setup answer
+    /// carried one that opened (P53, P54). Pair-verify checks the
+    /// receiver's signature with it (P56).
+    pub fn receiver_key(&self) -> Option<[u8; KEY_BYTES]> {
+        self.receiver_key
+    }
+
+    /// The same credentials with the receiver's Ed25519 public key (P54).
+    pub fn with_receiver_key(mut self, key: [u8; KEY_BYTES]) -> Credentials {
+        self.receiver_key = Some(key);
+        self
+    }
+
+    /// The blob a host stores: a version byte, the 16 characters of the
+    /// client ID, then the 32 bytes of the secret; 49 bytes in all with
+    /// version 1. With the receiver's key (P54) the version is 2 and its 32
+    /// bytes follow, 81 bytes in all. It holds the secret, so the host keeps
+    /// it where secrets go (P54).
     pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
-        let mut blob = Vec::with_capacity(1 + CLIENT_ID_CHARS + SECRET_BYTES);
-        blob.push(BLOB_VERSION);
+        let mut blob = Vec::with_capacity(1 + CLIENT_ID_CHARS + SECRET_BYTES + KEY_BYTES);
+        match &self.receiver_key {
+            None => blob.push(BLOB_VERSION),
+            Some(_) => blob.push(BLOB_VERSION_WITH_KEY),
+        }
         blob.extend_from_slice(&self.client_id);
         blob.extend_from_slice(&self.secret);
+        if let Some(key) = &self.receiver_key {
+            blob.extend_from_slice(key);
+        }
         Zeroizing::new(blob)
     }
 
-    /// Reads a blob written by [`Credentials::to_bytes`].
+    /// Reads a blob written by [`Credentials::to_bytes`], of either version.
     pub fn from_bytes(blob: &[u8]) -> Result<Credentials, CredentialsError> {
         let [version, rest @ ..] = blob else {
             return Err(CredentialsError);
         };
-        if *version != BLOB_VERSION || rest.len() != CLIENT_ID_CHARS + SECRET_BYTES {
+        let key_bytes = match *version {
+            BLOB_VERSION => 0,
+            BLOB_VERSION_WITH_KEY => KEY_BYTES,
+            _ => return Err(CredentialsError),
+        };
+        if rest.len() != CLIENT_ID_CHARS + SECRET_BYTES + key_bytes {
             return Err(CredentialsError);
         }
-        let (id, secret) = rest.split_at(CLIENT_ID_CHARS);
+        let (id, rest) = rest.split_at(CLIENT_ID_CHARS);
+        let (secret, key) = rest.split_at(SECRET_BYTES);
         let id = std::str::from_utf8(id).map_err(|_| CredentialsError)?;
-        Credentials::with_secret(id, secret)
+        let credentials = Credentials::with_secret(id, secret)?;
+        match <[u8; KEY_BYTES]>::try_from(key) {
+            Ok(key) => Ok(credentials.with_receiver_key(key)),
+            Err(_) => Ok(credentials),
+        }
     }
 }
 
 impl PartialEq for Credentials {
     fn eq(&self, other: &Credentials) -> bool {
         let same = self.client_id.ct_eq(&other.client_id) & self.secret.ct_eq(&other.secret);
-        same.into()
+        // The receiver's key is public; only the secret needs constant time.
+        bool::from(same) && self.receiver_key == other.receiver_key
     }
 }
 
@@ -164,6 +204,7 @@ impl fmt::Debug for Credentials {
         f.debug_struct("Credentials")
             .field("client_id", &self.client_id())
             .field("secret", &"<hidden>")
+            .field("receiver_key", &self.receiver_key.is_some())
             .finish()
     }
 }
@@ -566,21 +607,14 @@ impl Pairing {
             );
             return Ok(());
         };
-        let Some(b_padded) = group.pad(&self.secrets.b_pub) else {
-            self.fail(
-                ErrorKind::ProtocolError,
-                Some(Method::Post),
-                Some("unusable SRP value B"),
-            );
-            return Ok(());
-        };
+        // K, M1 and M2 hash A, B and S in their shortest form (P50, P52).
         let key = Zeroizing::new(srp::session_key(&values.premaster));
         let m1 = srp::client_proof(
             &group,
             identity,
             &self.secrets.salt,
             &values.public,
-            &b_padded,
+            &self.secrets.b_pub,
             &key[..],
         );
         self.secrets.m2 = srp::server_proof(&values.public, &m1, &key[..]);
@@ -712,7 +746,7 @@ impl Pairing {
             }
             Step::Identify => self.on_identified(&response),
             Step::Prove => self.on_proved(&response, now),
-            Step::Seal => self.on_sealed(),
+            Step::Seal => self.on_sealed(&response),
         }
     }
 
@@ -804,15 +838,27 @@ impl Pairing {
         self.send_plist(Step::Seal, body, now);
     }
 
-    /// The last answer: paired. Its body is ignored (P53), and the host
-    /// gets the credentials (P54).
-    fn on_sealed(&mut self) {
+    /// The last answer: paired (P53). When its body is {`epk`, `authTag`}
+    /// and opens to an Ed25519 public key, the receiver's key goes into the
+    /// credentials; a missing body, or one that doesn't open, changes
+    /// nothing. The host gets the credentials (P54).
+    fn on_sealed(&mut self, response: &Response) {
+        let receiver_key = read_plist(&response.body).and_then(|body| {
+            let sealed = body.get("epk")?.as_data()?;
+            let tag = body.get("authTag")?.as_data()?;
+            keys::open_receiver_key(&self.secrets.key[..], sealed, tag)
+        });
         let credentials = Credentials::with_secret(&self.client_id, &self.secrets.a[..]);
         self.close();
         match credentials {
-            Ok(credentials) => self
-                .outputs
-                .push_back(Output::Event(PairingEvent::Paired(credentials))),
+            Ok(credentials) => {
+                let credentials = match receiver_key {
+                    Some(key) => credentials.with_receiver_key(key),
+                    None => credentials,
+                };
+                self.outputs
+                    .push_back(Output::Event(PairingEvent::Paired(credentials)));
+            }
             // The client ID is made by `client_id`, so this doesn't happen.
             Err(_) => self.outputs.push_back(Output::Event(PairingEvent::Failed {
                 error: SessionError::new(ErrorKind::PairingFailed),
@@ -834,8 +880,10 @@ fn read_plist(body: &[u8]) -> Option<Dictionary> {
 pub struct LegacyVerifier {
     secret: Zeroizing<[u8; SECRET_BYTES]>,
     public: [u8; KEY_BYTES],
+    receiver_key: Option<[u8; KEY_BYTES]>,
     verify_secret: Zeroizing<[u8; KEY_BYTES]>,
     verify_public: [u8; KEY_BYTES],
+    warning: Option<Warning>,
 }
 
 impl fmt::Debug for LegacyVerifier {
@@ -858,8 +906,10 @@ impl LegacyVerifier {
         Ok(LegacyVerifier {
             secret,
             public: credentials.public_key(),
+            receiver_key: credentials.receiver_key(),
             verify_public: keys::x25519_public(&verify_secret),
             verify_secret,
+            warning: None,
         })
     }
 
@@ -881,7 +931,10 @@ impl Verifier for LegacyVerifier {
 
     /// From atv_pub | atv_data (96 bytes): 00 00 00 00 | the encrypted
     /// signature, 68 bytes (P56). Another length, or an atv_pub that gives
-    /// an all-zero shared secret, is a malformed answer.
+    /// an all-zero shared secret, is a malformed answer. With the
+    /// receiver's key in the credentials, atv_data is decrypted and checked
+    /// as its signature over atv_pub | v_pub; a failed check is only a
+    /// warning (P56).
     fn second_request(&mut self, first_response: &[u8]) -> Option<Vec<u8>> {
         if first_response.len() != KEY_BYTES + RECEIVER_DATA_BYTES {
             return None;
@@ -891,11 +944,27 @@ impl Verifier for LegacyVerifier {
         let mut receiver_data = [0u8; RECEIVER_DATA_BYTES];
         receiver_data.copy_from_slice(&first_response[KEY_BYTES..]);
         let shared = Zeroizing::new(keys::shared_secret(&self.verify_secret, &receiver_public)?);
+        if let Some(receiver_key) = &self.receiver_key {
+            let receiver_signature = keys::decrypt_receiver_data(&shared, &receiver_data);
+            let valid = keys::check_receiver_signature(
+                receiver_key,
+                &receiver_public,
+                &self.verify_public,
+                &receiver_signature,
+            );
+            if !valid {
+                self.warning = Some(Warning::ReceiverSignatureInvalid);
+            }
+        }
         let signature = keys::verify_signature(&self.secret, &self.verify_public, &receiver_public);
         let encrypted = keys::encrypt_signature(&shared, &receiver_data, &signature);
         let mut body = Vec::with_capacity(4 + encrypted.len());
         body.extend_from_slice(&[0, 0, 0, 0]);
         body.extend_from_slice(&encrypted);
         Some(body)
+    }
+
+    fn take_warning(&mut self) -> Option<Warning> {
+        self.warning.take()
     }
 }

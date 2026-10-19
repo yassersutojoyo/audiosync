@@ -57,9 +57,19 @@ pub trait Verifier: Send {
     /// The body of the first request.
     fn first_request(&mut self) -> Vec<u8>;
     /// The body of the second request, computed from the first response's
-    /// body; `None` when that body is malformed.
+    /// body (96 bytes, P55); `None` when that body is malformed.
     fn second_request(&mut self, first_response: &[u8]) -> Option<Vec<u8>>;
+    /// Something the last [`Verifier::second_request`] found worth a
+    /// warning without failing the verification, such as a receiver
+    /// signature that didn't check out (P56).
+    fn take_warning(&mut self) -> Option<Warning> {
+        None
+    }
 }
+
+/// Bytes of the first pair-verify answer: atv_pub (32) and atv_data (64)
+/// (P55).
+pub const VERIFY_ANSWER_BYTES: usize = 96;
 
 /// What a session needs to know before it starts.
 pub struct SessionConfig {
@@ -1002,11 +1012,28 @@ impl Session {
                     self.fail(ErrorKind::PairingRequired, Some(method), Some(code), None);
                     return;
                 }
-                let second = self
-                    .config
-                    .verifier
-                    .as_mut()
-                    .and_then(|verifier| verifier.second_request(&response.body));
+                if response.body.len() != VERIFY_ANSWER_BYTES {
+                    // A 200 whose body isn't atv_pub | atv_data is a failed
+                    // verification, such as the empty 200 of a receiver
+                    // that doesn't know the client's key (P55, P58).
+                    self.fail(
+                        ErrorKind::PairingRequired,
+                        Some(method),
+                        Some(code),
+                        Some("pair-verify answer is not 96 bytes"),
+                    );
+                    return;
+                }
+                let (second, warning) = match self.config.verifier.as_mut() {
+                    Some(verifier) => {
+                        let second = verifier.second_request(&response.body);
+                        (second, verifier.take_warning())
+                    }
+                    None => (None, None),
+                };
+                if let Some(warning) = warning {
+                    self.event(SessionEvent::Warning(warning));
+                }
                 match second {
                     Some(body) => self.send(Kind::VerifySecond(body), now, false),
                     None => self.fail(

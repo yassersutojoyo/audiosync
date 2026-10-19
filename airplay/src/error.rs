@@ -188,4 +188,8 @@ pub enum Warning {
     /// A failure status to SET_PARAMETER, GET_PARAMETER or FLUSH (P138); a
     /// failed metadata request lands here too (P127).
     RequestFailed { method: Method, status: u16 },
+    /// The receiver's signature in its first pair-verify answer didn't
+    /// check out against the Ed25519 key it gave at pairing; the
+    /// verification goes on (P56).
+    ReceiverSignatureInvalid,
 }
