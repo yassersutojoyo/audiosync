@@ -282,8 +282,6 @@ pub fn speaker_id(key: &DeviceKey) -> String {
     }
 }
 
-/// Whether a receiver can play from this sender: AirPlay 1, without a
-/// password or pairing.
 /// A pairing event for the debug log. It never carries the PIN, the
 /// credentials' secret or a key: only the client ID, which the pairing sends
 /// in the clear anyway, and the error.
@@ -301,6 +299,8 @@ pub fn pairing_summary(event: &PairingEvent) -> String {
     }
 }
 
+/// Whether a receiver can play from this sender: AirPlay 1, without a
+/// password or pairing.
 pub fn availability(info: &ReceiverInfo) -> AirPlayAvailability {
     match info.plan {
         Err(ErrorKind::Unsupported(UnsupportedReason::AirPlay2Only)) => {
