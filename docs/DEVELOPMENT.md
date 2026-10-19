@@ -25,7 +25,7 @@ Everything is built with `MACOSX_DEPLOYMENT_TARGET=15.0`, the app's `LSMinimumSy
 A few environment variables change what the scripts do:
 
 - `AUDIOSYNC_INSTALL_DIR`: install somewhere other than `/Applications`
-- `AUDIOSYNC_ENGINE`: bundle a different engine binary
+- `AUDIOSYNC_ENGINE_BIN`: bundle a different engine binary (`AUDIOSYNC_ENGINE` with a path still works but is deprecated, since the app reads that name as its `rust` or `swift` engine switch)
 - `AUDIOSYNC_ADHOC=1`: sign ad-hoc instead of with the local identity
 - `AUDIOSYNC_SKIP_BREW=1`: `setup.sh` skips Homebrew (handy offline, once the Rust core has been built at least once)
 - `AUDIOSYNC_ENGINE_ONLY=1`: `setup.sh` stops after building the engine
@@ -39,7 +39,7 @@ A few environment variables change what the scripts do:
 
 On the first build, `build.sh` runs `make-local-cert.sh`, which creates a self-signed "AudioSync Local Code Signing" identity in its own keychain (`~/Library/Keychains/audiosync-signing.keychain-db`), with no password prompt and no trust settings. Every build is signed with it, so macOS sees each rebuild as the same app and the System Audio Recording permission sticks.
 
-With an ad-hoc signature the code hash changes on every build, and the permission quietly stops working: the toggle in System Settings stays on, but capture is silent. That's why ad-hoc is only a fallback.
+With an ad-hoc signature the code hash changes on every build, and the permission quietly stops working: the toggle in System Settings stays on, but capture is silent. That's why `build.sh` signs ad-hoc only with `AUDIOSYNC_ADHOC=1`, or when there's no local identity and `make-local-cert.sh` can't create one, and says so loudly. If the local identity exists but can't sign, the build stops before it quits or replaces the installed app.
 
 ## Running and testing
 
