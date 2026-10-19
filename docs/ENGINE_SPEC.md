@@ -20,16 +20,16 @@ Clause IDs are assigned in order of addition and never renumbered or reused, so 
 - **S7** *Observed* (`Equalizer.swift:4-5`, `README.md`). Each captured block is equalized once, in place; the same equalized samples are (a) written to the ring buffer and (b) fed to the FIFO feed. Every output, local and AirPlay, therefore hears identical audio. *Required:* (a) and (b) see bit-identical input; their order within one capture callback is free.
 - **S8** *Observed* (`README.md` intro and "Using it"; `SpeakerState.swift:45-48`). The AirPlay path gets no delay from AudioSync. AirPlay speakers play about two seconds late because of the AirPlay engine's buffer; local outputs are delayed to line up with them.
 - **S9** *Observed* (`README.md`; ring suite "F readers independent (different positions)"). Each local output reads the shared buffer through its own reader, at its own delay, with its own drift correction.
-- **S10** *Observed* (`AudioSource.swift:7-8`). The engine never captures its own output: the system source excludes AudioSync's own process, otherwise the delayed local copies would be captured again and echo.
+- **S10** *Observed* (`AudioSource.swift:16-18`, `:233-252`). The engine never captures its own output: the system source excludes AudioSync's own process, otherwise the delayed local copies would be captured again and echo.
 
 ## 2. Capture
 
-- **S11** *Observed* (`AudioSource.swift:6-14`, `:67-74`). Three source kinds. `system`: every process's audio except AudioSync's own. `app(bundleID)`: every Core Audio process object whose PID is the app's PID or whose responsible PID (the process macOS holds responsible, e.g. a WebKit GPU helper's app) is the app's PID. `input(uid)`: an input device, by Core Audio device UID. *Required:* the app's process list is resolved at session start and SHOULD be refreshed when the app starts new audio processes.
-- **S12** *Observed* (`AudioSource.swift:18-40`; tests "source: …"). Persisted form: `""` = system, `"input:<uid>"` = input device, anything else = an app bundle ID; a missing value means system. Only `app` has a bundle ID.
+- **S11** *Observed* (`AudioSource.swift:15-23`, `:206-285`; tests "processes: …"). Three source kinds. `system`: every process's audio except AudioSync's own. `app(bundleID)`: every Core Audio process object whose PID is the app's PID or whose responsible PID (the process macOS holds responsible, e.g. a WebKit GPU helper's app) is the app's PID, AudioSync's own process always excepted (S10). Without macOS's responsibility lookup only the app's own process matches, and the debug log says so once. `input(uid)`: an input device, by Core Audio device UID. *Required:* the app's process list is resolved at session start and SHOULD be refreshed when the app starts new audio processes.
+- **S12** *Observed* (`AudioSource.swift:25-30`, `:43-73`, `:97-192`; tests "source: …", "source apps: …"). Persisted form: `""` = system, `"input:<uid>"` = input device, anything else = an app bundle ID; a missing value means system. Only `app` has a bundle ID. The source picker offers the running regular apps that have a bundle ID, never AudioSync itself, one entry per bundle ID (the first instance's), sorted by name case-insensitively with the bundle ID breaking ties. An app shows the first non-blank, trimmed name of: the running app's name, the installed app's Finder name without a trailing ".app", the bundle ID.
 - **S13** *Observed* (`README.md` "How it works, briefly"). System and app sources are captured with a Core Audio process tap that also mutes the tapped processes' original output, so only AudioSync's synced copies are heard. Input devices are read directly.
 - **S14** *Observed* (`README.md` "Multi-room audio on macOS"). An input device contributes its first two channels as L and R. *Required:* a one-channel input is copied to both L and R; channels beyond the second are ignored.
 - **S15** *Observed* (`AppDelegate+Engine.swift:21-40`). An input source needs the microphone permission: authorized → start; not determined → request, then start or fail; denied or restricted → the start fails with a notice.
-- **S16** *Required.* The capture stage delivers interleaved stereo float32 at Rc in blocks of any size ≥ 1 frame. Rc is the tap's or input device's nominal rate at session start. Rates from 8 000 to 384 000 Hz MUST be accepted (the suites exercise 32 000, 44 100, 48 000, 96 000 and size a ring for 192 000).
+- **S16** *Required.* The capture stage delivers interleaved stereo float32 at Rc in blocks of any size ≥ 1 frame. Rc is read at session start: the nominal rate of the device the capture IOProc runs on (the input device, or the tap's private aggregate device), else the tap's own format rate when the device's can't be read, else 48 000 Hz when neither gives a rate above 0. Rates from 8 000 to 384 000 Hz MUST be accepted (the suites exercise 32 000, 44 100, 48 000, 96 000 and size a ring for 192 000).
 - **S17** *Observed* (`CaptureCheck.swift:5-9`; `AppDelegate+Engine.swift:120-121`). A process tap delivers no frames until its source actually plays; "no frames yet" is normal. `framesCaptured` is the number of frames written to the ring in the current session and restarts at 0 with each session.
 - **S18** *Observed* (`CaptureCheck.swift:18-30`; `AppDelegate+Engine.swift:125-150`; tests "capture: …"). Capture verdict: `framesCaptured > 0` → *flowing*; otherwise, if the source is known to have been playing for at least 6 s (`playingGrace`) → *notWorking*; otherwise → *waiting*. The host checks 3 s after a start, then every 2 s until audio flows or the session ends, posting a notice only when the verdict changes; a paused or unknown source never yields *notWorking*.
 - **S19** *Observed* (`AppDelegate+Engine.swift:155-165`). "Known playing" comes only from a live Now Playing reading (Spotify, Music): for the system source any playing player counts; for an app source only that app; for an input source never.
@@ -268,9 +268,9 @@ Clause IDs are assigned in order of addition and never renumbered or reused, so 
 - **S139** *Sleep and wake.* *Observed* (`AirPlayReconcile.swift:140-191`; `AppDelegate+AirPlay.swift:9-20`, `:234-262`; tests "EC3 sleep: …", "EC3 wake: …"). The host follows the system's sleep and wake notices; the displays waking also counts as a wake while the host still takes the Mac to be asleep, in case the wake notice is missed. From going to sleep until waking it sends no output poll, and an answer or a failure that comes back meanwhile decides nothing and doesn't count toward reachability (S102). A wake polls at once and opens a wake grace of 20 s, counted from the engine's first answer after the wake, however long that takes; failed polls don't start it. During the grace a wanted `open` speaker the engine reports off is selected again instead of being dropped, at most once per poll (S103, S104), and pipe playback is requested again with each such selection (S99). A speaker the user switched off stays off, one that isn't `open` follows S106–S107, and a new engine run is a restart (S102, S143). After the grace the usual rules apply (S104, S106–S109): an `open` speaker still reported off is dropped as unreachable with a notice (S148). *Required:* nothing else needs dedicated handling, and nothing may crash: a callback gap of any length is a stall (S51, S55: resume at the exact delay, no replay); a capture format change after wake goes through S20; a device that vanished goes through S68; capture that never resumes surfaces through S18; the FIFO backlog cap (S90) keeps stale audio from reaching AirPlay, and a pipe the engine kept open but stopped reading across the sleep resumes at the live edge (S172), so the writer's own backlog adds no lag after the wake; what sat in the kernel's pipe buffer still plays first.
 - **S140** *Sample-rate change.* *Observed* (S20, S30). A capture rate change restarts the session: new ring history at the new Rc, equalizer coefficients recomputed and state zeroed, FIFO resampler re-rated, renderers re-added. *Required:* an output device's rate change is absorbed by its renderer's converter (S62) with the reader position untouched; if the renderer can't reconfigure, it reports `outputLost` (S68).
 - **S141** *Source switch.* *Observed* (`AppDelegate+Outputs.swift:149-163`). Stop without deselecting AirPlay (deselecting would race the reselect), then start a user-origin session with the new source: the ring is reset and renderers are re-added; AirPlay speakers stay selected, while the engine's playback is stopped with the old session and requested again shortly after the new one starts (`AppDelegate+Engine.swift`).
-- **S163** *Source switch decision.* *Observed* (`AudioSource.swift:51-65`; `AppDelegate+Outputs.swift:149-162`; tests "EC5 source: …"). Choosing the source already in use changes nothing. Choosing another one while not streaming only stores it for the next start. Choosing another one while streaming, an input device included, rebuilds the capture as in S141, with the speakers kept on and the AirPlay speakers kept selected. Any real change clears the old source's "source" and "capture" notices.
+- **S163** *Source switch decision.* *Observed* (`AudioSource.swift:77-93`; `AppDelegate+Outputs.swift:149-162`; tests "EC5 source: …"). Choosing the source already in use changes nothing. Choosing another one while not streaming only stores it for the next start. Choosing another one while streaming, an input device included, rebuilds the capture as in S141, with the speakers kept on and the AirPlay speakers kept selected. Any real change clears the old source's "source" and "capture" notices.
 - **S142** *Source app quits.* *Observed* (`AppDelegate.swift:240-250`). When the app whose bundle ID is the source terminates during a session: stop, deselect every AirPlay speaker, post a "source" notice (no modal alert).
-- **S164** *Source app quit decision.* *Observed* (`AudioSource.swift:42-48`; `AppDelegate.swift:240-250`; tests "EC6 app quit: …"). Only an app source ends with a quit, and only when the quitting app's bundle ID equals the source's. Another app quitting, an app without a bundle ID, and any quit while the source is the whole system or an input device change nothing.
+- **S164** *Source app quit decision.* *Observed* (`AudioSource.swift:32-38`; `AppDelegate.swift:240-250`; tests "EC6 app quit: …"). Only an app source ends with a quit, and only when the quitting app's bundle ID equals the source's. Another app quitting, an app without a bundle ID, and any quit while the source is the whole system or an input device change nothing.
 - **S143** *AirPlay engine restart.* *Observed* (S98, S102, S105, S81, S169, "fifo: reader closing mid-stream does not kill the process", "EC7 engine restart: the reopened pipe starts as close to live as a fresh start"). The pipe reader disappears; the FIFO writer survives and reopens (S92) at the live edge, so AirPlay comes back with the latency it had before and the local delays still line up (S169); the host restarts the engine after 2 s within the crash-loop limits; while it is unreachable the AirPlay list and local delays stay as they were; when it answers again, wanted speakers are re-selected at their own volume, and each one the new engine plays by itself gets it back, at the first answer that lists it (S105); pipe playback is requested at once (S99). Local outputs keep playing throughout.
 - **S144** *All speakers off, then on.* *Observed* (S118, S119). Switching the last speaker off stops the session and deselects AirPlay; switching any on starts a new session (ring reset, S39) with the saved per-speaker delays and volumes.
 - **S145** *Default output change.* *Required; Observed* basis (S60; `README.md` "Using it": keep the macOS output on a local device). Renderers are bound to device UIDs, so changing the macOS default output never moves, stops or re-times them. System capture taps processes, not a device, and continues; if the change alters the capture format, S20 applies. macOS's own AirPlay output is hidden from the list by default (S151).
@@ -373,6 +373,26 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | source: missing value → system | S12 |
 | source: legacy bundle-ID value → app | S12 |
 | source: input has no bundle ID | S12 |
+| source: the whole system is stored as an empty string | S12 |
+| source: an input device is stored as its UID after an input: tag | S12 |
+| source: an input UID with colons in it comes back whole | S12 |
+| source: an app is stored as its plain bundle ID, as earlier versions stored it | S12 |
+| source: the whole system has no bundle ID | S12 |
+| source apps: a running app's name comes first | S12 |
+| source apps: an app that isn't running shows its installed name | S12 |
+| source apps: an app that is neither running nor installed shows its bundle ID | S12 |
+| source apps: a blank name doesn't count and names are trimmed | S12 |
+| source apps: Finder's .app extension is dropped from an installed app's name | S12 |
+| source apps: regular apps with a bundle ID, AudioSync left out, once each, sorted by name | S12 |
+| source apps: the first instance's name, a blank name replaced by the bundle ID | S12 |
+| source apps: names that sort alike are ordered by bundle ID | S12 |
+| processes: the app's own process and its helpers, in Core Audio's order | S11 |
+| processes: another app's helper belongs to that app only | S11 |
+| processes: without the responsibility lookup only the app's own process counts | S11 |
+| processes: AudioSync's own process never counts, even when the source app is responsible for it | S10, S11 |
+| processes: unknown objects and unreadable PIDs never count; an object counts once | S11 |
+| processes: no PID, no process objects | S11 |
+| processes: an app with no audio client yet has no process objects | S11 |
 | appearance: round-trip system | S155 |
 | appearance: round-trip light | S155 |
 | appearance: round-trip dark | S155 |
@@ -619,6 +639,39 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | capture: playing only briefly → still waiting | S18 |
 | capture: playing for the grace period with no frames → not working | S18 |
 | capture: a paused or unknown source never blames the permission | S18, S19 |
+| capture channels: the tap's interleaved stereo passes through unchanged | S2, S16 |
+| capture channels: a one-channel input plays on both sides | S14 |
+| capture channels: an input with four channels gives its first two as L and R | S14 |
+| capture channels: one buffer per channel gives L from the first and R from the second | S14 |
+| capture channels: channels are counted across buffers, in order | S14 |
+| capture channels: a buffer without channels is skipped | S14 |
+| capture channels: only frames both channels have are delivered | S16 |
+| capture channels: no buffer, no data or no frames delivers nothing | S16, S17 |
+| capture channels: NaN and infinity pass through untouched (the stages after capture handle them) | S123 |
+| capture channels: a long callback is delivered in order, in blocks of at most 4096 frames | S16, S40 |
+| capture channels: a block never exceeds the ring's write margin | S40 |
+| capture rate: a rate that reads 0 counts as 48 kHz | S16 |
+| capture rate: 8 kHz to 384 kHz are taken as they are | S16 |
+| capture rate: the rate of the device the IOProc runs on wins over the tap's | S16, S157 |
+| capture rate: the tap's rate when the device's can't be read | S16, S157 |
+| capture rate: nothing readable keeps the session playing | S157 |
+| input format: native 32-bit float is read as it is | S14, S16 |
+| input format: integer, big-endian or 64-bit samples aren't read | S16 |
+| input format: a device without input channels has nothing to capture | S14 |
+| input format: a stream without channels doesn't count | S14 |
+| app tap: the same processes in another order keep the tap | S11 |
+| app tap: a new audio process (a browser's audio helper) is tapped too | S11 |
+| app tap: a process that ends leaves the tap | S11 |
+| app tap: no audio process while the app runs: no tap, waiting for one | S11, S17 |
+| app tap: still nothing to tap keeps waiting | S11, S17 |
+| app tap: the first audio process while waiting gets a tap | S11 |
+| app tap: the app gone means the source is lost | S21, S142 |
+| app tap: AudioSync's own process is never tapped, even when the app launched it | S10, S11 |
+| app retap: the running tap is changed in place first, and nothing stops | S11, S13 |
+| app retap: a rebuilt tap exists before the old one closes, so the app stays muted | S11, S13 |
+| app retap: a new tap at another rate is discarded and the old one keeps running until the rebuild | S13, S157 |
+| app retap: a tap that can't be made leaves the old capture to the caller, which ends the session | S13, S21 |
+| app retap: a new tap that can't start reading is discarded | S21 |
 | delay: AirPlay chosen → configured delay | S78 |
 | delay: no AirPlay → plays at once | S78 |
 | delay: zero stays zero | S78 |
@@ -711,6 +764,9 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | fifo: counters see the vanished reader | S92, S160 |
 | fifo: NaN/±inf samples do not crash | S86, S123 |
 | fifo: stop closes the writer | S88 |
+| fifo: stop returns once the writer closed the pipe, with a reader that never reads (S88) | S88, S93 |
+| fifo: stop returns once the writer closed the pipe, with a reader that reads slowly (S88) | S88, S93 |
+| fifo: a stop inside a chunk's last frame finishes that frame, then the reader sees the end (S88, S93) | S88, S93 |
 | metadata pipe: an empty pipe takes a whole message in one write | S82, S168 |
 | metadata pipe: FIONREAD on a read end counts what waits | S82 |
 | metadata pipe: the writer opens it | S82 |
@@ -750,3 +806,15 @@ The parity suite runs the ring buffer, logic and FIFO suites' checks on the Rust
 | \<device\>: delay 500 ms | S46, S48, S56, S62, S66 |
 | \<device\>: delay 3000 ms | S46, S47, S56, S62, S66 |
 | \<device\>: delay 150 ms | S46, S48, S56, S62, S66 |
+
+### pipe start (`--hardware`, `Tests/pipestart.swift`)
+
+Run once per pipe feed, `swift` and `rust`, on a private engine whose only output is its fifo output.
+
+| Check | Clauses |
+|---|---|
+| pipestart \<feed\>: bursts come out of the fifo output | S83, S96 |
+| pipestart \<feed\>: still only the fifo output | S96 |
+| pipestart \<feed\>: after 2 s without audio and a resume, the pipe is no later than at the start | S99 |
+| pipestart \<feed\>: after a stop while audio flows and a new start, the pipe is no later than at the start | S96, S99 |
+| pipestart \<feed\>: after the writer closes, a stop and a new start, the pipe is no later than at the start | S88, S99 |

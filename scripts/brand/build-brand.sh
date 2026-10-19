@@ -15,5 +15,6 @@ swift scripts/brand/render-svg.swift brand/audiosync-icon.svg icon-source.png 10
 ./makeicon.sh icon-source.png
 ./make-web-icons.sh icon-source.png
 cp brand/audiosync-wordmark.svg site/wordmark.svg
+cp brand/audiosync-wordmark-dark.svg site/wordmark-dark.svg
 
 echo "✅ Brand files regenerated."

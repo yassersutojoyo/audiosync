@@ -400,6 +400,71 @@ pub trait Backend {
     fn poll(&mut self) -> bool {
         false
     }
+
+    /// The windows' own settings as last saved: what the UI shows them with
+    /// at launch.
+    fn view_settings(&self) -> ViewSettings {
+        ViewSettings::default()
+    }
+
+    /// The windows' own settings changed; they are saved with the rest.
+    fn set_view_settings(&mut self, _settings: ViewSettings) {}
+
+    /// Saves the settings now, without waiting for the next poll: the app
+    /// is about to quit.
+    fn save_settings(&mut self) {}
+}
+
+/// Where the main window was and how big: the position of its outer frame
+/// in physical pixels, its inner size in logical pixels, both as it last
+/// showed normally; and whether it was maximized (a file from before this
+/// flag reads as not maximized).
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct WindowFrame {
+    pub x: i32,
+    pub y: i32,
+    pub width: f64,
+    pub height: f64,
+    #[serde(default)]
+    pub maximized: bool,
+}
+
+/// How the main window shows when its frame is remembered.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MainWindowShows {
+    /// Hidden or minimized: nothing to learn from it.
+    Not,
+    /// Shown normally, with this frame.
+    Normal(WindowFrame),
+    /// Maximized; the frame it covers now.
+    Maximized(WindowFrame),
+}
+
+/// The main window frame to keep, given how the window `shows` and the frame
+/// kept so far (`saved`): a normal window's own frame; for a maximized one,
+/// the last normal frame marked maximized (or, with none yet, the maximized
+/// frame itself); for a hidden or minimized one, what was kept.
+pub fn frame_to_keep(shows: MainWindowShows, saved: Option<WindowFrame>) -> Option<WindowFrame> {
+    match shows {
+        MainWindowShows::Not => saved,
+        MainWindowShows::Normal(frame) => Some(WindowFrame {
+            maximized: false,
+            ..frame
+        }),
+        MainWindowShows::Maximized(frame) => Some(WindowFrame {
+            maximized: true,
+            ..saved.unwrap_or(frame)
+        }),
+    }
+}
+
+/// What the windows themselves keep across restarts.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ViewSettings {
+    /// View > Show Virtual Devices.
+    pub show_virtual_devices: bool,
+    /// The main window's place and size, once it has been shown.
+    pub window: Option<WindowFrame>,
 }
 
 /// Clamps a typed or stepped delay to what the sync controls accept.
@@ -674,6 +739,40 @@ pub fn matching_preset_index(settings: &EqSettings) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn frame(x: i32, width: f64, maximized: bool) -> WindowFrame {
+        WindowFrame {
+            x,
+            y: 40,
+            width,
+            height: 700.0,
+            maximized,
+        }
+    }
+
+    #[test]
+    fn a_maximized_window_keeps_its_last_normal_frame_marked_maximized() {
+        let normal = frame(100, 1000.0, false);
+        let maximized = MainWindowShows::Maximized(frame(-8, 1920.0, false));
+        assert_eq!(
+            frame_to_keep(maximized, Some(normal)),
+            Some(frame(100, 1000.0, true))
+        );
+        // Maximized before any normal frame was kept: its own frame.
+        assert_eq!(
+            frame_to_keep(maximized, None),
+            Some(frame(-8, 1920.0, true))
+        );
+        // Back to normal, the flag goes.
+        let shows = MainWindowShows::Normal(frame(120, 1100.0, false));
+        assert_eq!(
+            frame_to_keep(shows, Some(frame(100, 1000.0, true))),
+            Some(frame(120, 1100.0, false))
+        );
+        // Hidden or minimized: what was kept stays.
+        let kept = Some(frame(100, 1000.0, true));
+        assert_eq!(frame_to_keep(MainWindowShows::Not, kept), kept);
+    }
 
     #[test]
     fn a_speaker_plays_only_while_streaming() {

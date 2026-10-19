@@ -490,6 +490,9 @@ dependencies = [
 [[package]]
 name = "audiosync-core"
 version = "0.1.0"
+dependencies = [
+ "audiosync-airplay",
+]
 
 [[package]]
 name = "audiosync-windows"
@@ -498,6 +501,8 @@ dependencies = [
  "audiosync-airplay",
  "audiosync-core",
  "embed-resource",
+ "serde",
+ "serde_json",
  "slint",
  "slint-build",
  "tray-icon",

@@ -6,6 +6,8 @@
  * interleaved stereo float32 frames (L, R) plus a frame count, never one
  * sample per call. The core owns no thread, device, file or pipe: the host
  * captures, plays, opens the pipe and runs every thread, and calls in here.
+ * The one exception is AudioSync's own AirPlay sender (asc_airplay_*), which
+ * runs its own threads and network sockets.
  *
  * Real-time calls (marked "Real-time safe") never allocate, free, lock, wait,
  * log or make a system call, and never panic: bad arguments make them do
@@ -88,6 +90,63 @@ extern "C" {
 #define ASC_PIPE_WOULD_BLOCK 3 /* write: the pipe is full (EAGAIN) */
 #define ASC_PIPE_BROKEN 4      /* write: the reader went away (EPIPE) */
 #define ASC_PIPE_FAILED 5      /* open or write: any other error */
+
+/* What an AirPlay receiver event reports (AscAirPlayReceiver.event). */
+#define ASC_AIRPLAY_APPEARED 1 /* discovery found a receiver */
+#define ASC_AIRPLAY_CHANGED 2  /* its records or its verdict changed */
+#define ASC_AIRPLAY_GONE 3     /* it left the network, or discovery stopped */
+
+/* Whether a receiver can play from this sender (AscAirPlayReceiver.availability). */
+#define ASC_AIRPLAY_AVAILABLE 0      /* it can */
+#define ASC_AIRPLAY_NEEDS_PIN 1      /* an Apple TV that asks for a PIN once */
+#define ASC_AIRPLAY_NEEDS_PASSWORD 2 /* it asks for a password */
+#define ASC_AIRPLAY_NEEDS_PAIRING 3  /* it likely needs another kind of pairing */
+#define ASC_AIRPLAY_AIRPLAY2_ONLY 4  /* only AirPlay 2 could serve it, and that path is off */
+#define ASC_AIRPLAY_UNSUPPORTED 5    /* the sender can't drive it; .unsupported says why */
+
+/* Why a receiver can't play (AscAirPlayReceiver.unsupported). */
+#define ASC_AIRPLAY_REASON_NONE 0          /* none: it can, or another reason */
+#define ASC_AIRPLAY_REASON_ENCRYPTION 1    /* no encryption mode the sender supports */
+#define ASC_AIRPLAY_REASON_CODEC 2         /* no codec the sender may use */
+#define ASC_AIRPLAY_REASON_TRANSPORT 3     /* no UDP transport */
+#define ASC_AIRPLAY_REASON_METHODS 4       /* no ANNOUNCE, SETUP or RECORD */
+#define ASC_AIRPLAY_REASON_FORMAT 5        /* not 44 100 Hz, 16-bit stereo */
+#define ASC_AIRPLAY_REASON_AIRPLAY2_ONLY 6 /* only AirPlay 2 could serve it */
+
+/* What discovery saw (AscAirPlayReceiver.flags), bit by bit. */
+#define ASC_AIRPLAY_FLAG_RAOP 1            /* announces _raop._tcp (AirPlay 1 audio) */
+#define ASC_AIRPLAY_FLAG_AIRPLAY 2         /* announces _airplay._tcp */
+#define ASC_AIRPLAY_FLAG_APPLE_TV 4        /* its model is an Apple TV */
+#define ASC_AIRPLAY_FLAG_PASSWORD 8        /* its records say it needs a password */
+#define ASC_AIRPLAY_FLAG_PAIRING 16        /* its flags hint that it needs pairing */
+#define ASC_AIRPLAY_FLAG_LEGACY_PAIRING 32 /* an Apple TV that needs the PIN pairing */
+#define ASC_AIRPLAY_FLAG_BUSY 64           /* its flags hint that another sender plays */
+#define ASC_AIRPLAY_FLAG_AIRPLAY2 128      /* it lists AirPlay 2 features */
+
+/* What a sender event reports (AscAirPlayEvent.kind). */
+#define ASC_AIRPLAY_EVENT_STATE 1    /* a speaker's state changed: .state */
+#define ASC_AIRPLAY_EVENT_ERROR 2    /* an error ended a speaker's session: .error */
+#define ASC_AIRPLAY_EVENT_LATENCY 3  /* a speaker's latencies: .latency_ms, .receiver_latency_frames */
+#define ASC_AIRPLAY_EVENT_TIMELINE 4 /* the base latency L or the timeline changed: .latency_ms */
+#define ASC_AIRPLAY_EVENT_FAILED 5   /* the sender or its discovery stopped working (a bug); destroy it, create a new one */
+
+/* A speaker's state (AscAirPlayEvent.state). */
+#define ASC_AIRPLAY_STATE_CONNECTING 1 /* a session is starting */
+#define ASC_AIRPLAY_STATE_PLAYING 2    /* it plays the shared timeline */
+#define ASC_AIRPLAY_STATE_RETRYING 3   /* its session failed; the next starts in .retry_ms */
+#define ASC_AIRPLAY_STATE_FAILED 4     /* its session failed and needs the user; no retry */
+#define ASC_AIRPLAY_STATE_STOPPED 5    /* removed, or the sender shut down */
+
+/* What to tell the user about an error that ended a session (AscAirPlayEvent.error). */
+#define ASC_AIRPLAY_ERROR_NOT_RESPONDING 1    /* the speaker didn't answer */
+#define ASC_AIRPLAY_ERROR_CONNECTION_LOST 2   /* the connection died while playing */
+#define ASC_AIRPLAY_ERROR_BUSY 3              /* another sender seems to play to it */
+#define ASC_AIRPLAY_ERROR_REFUSED 4           /* it turned the session down */
+#define ASC_AIRPLAY_ERROR_INCOMPATIBLE 5      /* it answered in a way the sender doesn't understand */
+#define ASC_AIRPLAY_ERROR_PASSWORD_REQUIRED 6 /* it needs a password and none was given */
+#define ASC_AIRPLAY_ERROR_WRONG_PASSWORD 7    /* it rejected the password */
+#define ASC_AIRPLAY_ERROR_PAIRING_REQUIRED 8  /* it needs pairing, or rejected or cancelled it */
+#define ASC_AIRPLAY_ERROR_UNSUPPORTED 9       /* the sender can't drive it; .unsupported says why */
 
 /* ---- Version and volume ------------------------------------------------- */
 
@@ -574,6 +633,199 @@ bool asc_delay_sanitize_ms(double delay_ms, double *sanitized_ms);
  * delay or a NULL frames.
  */
 bool asc_delay_ms_to_frames(double delay_ms, uint32_t rate, int64_t *frames);
+
+/* ---- AirPlay sender (AudioSync's own, airplay/) ----------------------------- */
+
+/*
+ * AudioSync's own AirPlay sender: discovery, speakers added by the IDs
+ * discovery reports, their volume and the master, their events, and the
+ * capture's audio through an input handle. Nothing secret crosses this
+ * interface (no password, PIN, key or credential); PIN pairing comes later.
+ * Every asc_airplay_* call on a sender handle runs on one control thread at
+ * a time, never an audio thread; the sender runs its own threads and
+ * sockets. An input handle (AscAirPlayInput) has its own rules, below.
+ *
+ * A bug in the sender never ends the host: a panic inside a call returns
+ * that call's failure value (NULL, false or 0) and makes its handle dead,
+ * as does a panic that ends the sender's own driver thread or discovery's
+ * mDNS daemon. A dead handle's calls do nothing and return their failure
+ * values, except that
+ * asc_airplay_next_event reports ASC_AIRPLAY_EVENT_FAILED once; the host
+ * then destroys it (which still frees it) and may create a new sender. A
+ * panic in an input write makes the input and its sender dead.
+ */
+typedef struct AscAirPlay AscAirPlay;
+
+/*
+ * The capture's way into a sender (asc_airplay_take_input). Its write runs
+ * on one capture thread at a time, its rate request on any thread, and its
+ * destroy once no write can run. It may outlive its sender, whose audio
+ * then goes nowhere.
+ */
+typedef struct AscAirPlayInput AscAirPlayInput;
+
+/*
+ * One change discovery saw. The strings are NUL-terminated UTF-8 that the
+ * handle owns, valid until the next asc_airplay_next_receiver call on it or
+ * its destroy. A gone receiver has only its id; its name and model are "",
+ * its availability ASC_AIRPLAY_AVAILABLE, its reason and flags 0.
+ */
+typedef struct AscAirPlayReceiver {
+    int32_t event;        /* ASC_AIRPLAY_APPEARED, _CHANGED or _GONE */
+    const char *id;       /* its 12-hex-digit device ID, or "raop:<instance>" / "airplay:<instance>" */
+    const char *name;     /* the name it announces */
+    const char *model;    /* its model, "" when it announces none */
+    int32_t availability; /* ASC_AIRPLAY_AVAILABLE ... ASC_AIRPLAY_UNSUPPORTED */
+    int32_t unsupported;  /* ASC_AIRPLAY_REASON_*: why it can't play */
+    uint32_t flags;       /* ASC_AIRPLAY_FLAG_* bits */
+} AscAirPlayReceiver;
+
+/*
+ * One thing that happened to a speaker, or to the stream. The strings are
+ * NUL-terminated UTF-8 that the handle owns, valid until the next
+ * asc_airplay_next_event call on it or its destroy. Fields a kind doesn't
+ * use are 0, except retry_ms and receiver_latency_frames, which are then -1,
+ * and the strings, which are then "".
+ */
+typedef struct AscAirPlayEvent {
+    int32_t kind;                    /* ASC_AIRPLAY_EVENT_* */
+    const char *id;                  /* the speaker's receiver id; "" for a timeline event */
+    int32_t state;                   /* a state event's ASC_AIRPLAY_STATE_* */
+    int32_t error;                   /* an error event's ASC_AIRPLAY_ERROR_* */
+    int32_t unsupported;             /* with ASC_AIRPLAY_ERROR_UNSUPPORTED, its ASC_AIRPLAY_REASON_* */
+    int64_t retry_ms;                /* ms until the next session; -1 when the user must act */
+    double latency_ms;               /* a latency event's L + d_s, a timeline event's L */
+    int64_t receiver_latency_frames; /* a latency event's Audio-Latency; -1 when it sent none */
+    bool restarted;                  /* a timeline event after a restart */
+    const char *detail;              /* an error event's error, for a debug log (no secrets) */
+} AscAirPlayEvent;
+
+/*
+ * Starts an AirPlay sender: its stream, silent until audio comes through its
+ * input (asc_airplay_take_input), and its driver thread; discovery waits for
+ * asc_airplay_start_discovery. The master starts at 100. Returns NULL when
+ * the thread can't start.
+ */
+AscAirPlay *asc_airplay_create(void);
+
+/*
+ * Stops the sender and frees it: every speaker is torn down and its threads
+ * end within about 2 s, which this call waits for, so call it off the main
+ * thread. Takes the address of the host's pointer and sets that pointer to
+ * NULL, so destroying through it again does nothing; a NULL address or
+ * pointer does nothing. An input taken from it stays valid until its own
+ * destroy.
+ */
+void asc_airplay_destroy(AscAirPlay **airplay);
+
+/*
+ * Starts browsing the local network for AirPlay receivers over multicast DNS;
+ * they arrive through asc_airplay_next_receiver. Returns false when the handle
+ * is NULL or multicast DNS can't start.
+ */
+bool asc_airplay_start_discovery(AscAirPlay *airplay);
+
+/*
+ * Stops browsing; every receiver discovery listed is then reported gone.
+ * Speakers keep playing.
+ */
+void asc_airplay_stop_discovery(AscAirPlay *airplay);
+
+/*
+ * Takes the next change discovery saw, if one is waiting, into *receiver and
+ * returns true. Returns false, leaving *receiver as it was, when none is
+ * waiting or either pointer is NULL. Never waits. Speaker and timeline
+ * events wait for asc_airplay_next_event.
+ */
+bool asc_airplay_next_receiver(AscAirPlay *airplay, AscAirPlayReceiver *receiver);
+
+/*
+ * Takes the next speaker or timeline event, if one is waiting, into *event
+ * and returns true. Returns false, leaving *event as it was, when none is
+ * waiting or either pointer is NULL. Never waits. Receiver changes wait for
+ * asc_airplay_next_receiver. A dead sender reports ASC_AIRPLAY_EVENT_FAILED
+ * once, in place of whatever still waited, and nothing after it.
+ */
+bool asc_airplay_next_event(AscAirPlay *airplay, AscAirPlayEvent *event);
+
+/*
+ * Adds the receiver discovery lists under `id` as a speaker, at slider
+ * position `volume` (0 to 100) times the master, with no delay of its own: a
+ * session starts at once, and its state, errors and latency come as events.
+ * Adding one already added applies the volume and, if it failed or waits for
+ * a retry, starts a new session now. Returns false, adding nothing, when the
+ * handle or id is NULL, id isn't a listed receiver, or volume isn't finite.
+ */
+bool asc_airplay_add_speaker(AscAirPlay *airplay, const char *id, double volume);
+
+/*
+ * Removes the speaker added under `id`: TEARDOWN goes out and its connection
+ * closes after the answer or 2 s; a stopped state event follows. Returns
+ * false when the handle or id is NULL or no speaker was added under id.
+ */
+bool asc_airplay_remove_speaker(AscAirPlay *airplay, const char *id);
+
+/*
+ * Sets the slider position (0 to 100) of the speaker added under `id`; it
+ * plays at that position times the master, live. Returns false, changing
+ * nothing, when the handle or id is NULL, no speaker was added under id, or
+ * volume isn't finite.
+ */
+bool asc_airplay_set_volume(AscAirPlay *airplay, const char *id, double volume);
+
+/*
+ * Sets the master position (0 to 100), which scales every speaker's volume,
+ * live, and that of every speaker added later; a master that isn't finite is
+ * ignored. A speaker plays at the product of both positions, spread evenly
+ * over -30 to 0 dB, and muted at 0.
+ */
+void asc_airplay_set_master(AscAirPlay *airplay, double master);
+
+/*
+ * The base latency L in milliseconds: a local output lines up with the
+ * speakers at L plus its own delay. 0 for a NULL handle.
+ */
+double asc_airplay_latency_ms(const AscAirPlay *airplay);
+
+/*
+ * The host restarted its capture: every speaker is flushed and the timeline
+ * starts over; a timeline event follows.
+ */
+void asc_airplay_restart_timeline(AscAirPlay *airplay);
+
+/*
+ * The sender's audio input, for the capture thread: the first call hands it
+ * over, every later one returns NULL, as does a NULL handle. It starts
+ * without a rate, so its writes are dropped until asc_airplay_input_set_rate
+ * gives it one.
+ */
+AscAirPlayInput *asc_airplay_take_input(AscAirPlay *airplay);
+
+/*
+ * Any thread: the rate in Hz of the audio the capture writes from now on,
+ * rounded to whole hertz. The next write takes it in and starts the
+ * resampler afresh, so call it at each capture start, even at an unchanged
+ * rate. Returns false, changing nothing, for a NULL handle or a rate outside
+ * 8000 to 384 000 Hz. Real-time safe.
+ */
+bool asc_airplay_input_set_rate(AscAirPlayInput *input, double rate);
+
+/*
+ * Capture thread: hands `frames` interleaved stereo frames at the rate last
+ * set to the sender, resampled to 44.1 kHz, as audio that arrived now.
+ * Returns the 44.1 kHz frames handed over, 0 before a rate is set; the
+ * sender drops those that come too late or don't fit. Reads the monotonic
+ * clock once. Real-time safe. Returns 0 once a write panicked (only a panic
+ * itself would allocate).
+ */
+size_t asc_airplay_input_write(AscAirPlayInput *input, const float *samples, size_t frames);
+
+/*
+ * Frees an input handle. Takes the address of the host's pointer and sets
+ * that pointer to NULL, so destroying through it again does nothing; a NULL
+ * address or pointer does nothing.
+ */
+void asc_airplay_input_destroy(AscAirPlayInput **input);
 
 #ifdef __cplusplus
 }

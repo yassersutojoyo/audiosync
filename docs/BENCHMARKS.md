@@ -77,22 +77,26 @@ Swift: 60 min per configuration, 2026-10-17, on 3f7069d.
 
 Machine: MacBook Air (Mac16,12), Apple M4, 16 GB, macOS 26.6.2 (25G83). Outputs: Microsoft Teams Audio, MacBook Air Speakers; local + FIFO used Microsoft Teams Audio.
 
+Rust: 60 min per configuration, 2026-10-19, on cdc11c1.
+
+Machine: MacBook Air (Mac16,12), Apple M4, 16 GB, macOS 26.6.2 (25G83). Outputs: Microsoft Teams Audio, MacBook Air Speakers; local + FIFO used Microsoft Teams Audio.
+
 | Metric | Swift | Rust |
 |---|---|---|
-| Delay error at 150 / 500 / 2000 / 3000 ms (ms, per output) | (-2.7, -5.9) / (-1.1, -4.8) / (-1.6, -4.8) / (-2.7, -4.3) | |
-| Two local: dropouts per hour (worst output) | 0 | |
-| Two local: starved renders per hour (worst output) | 0 | |
-| Two local: drift corrections per hour (worst output) | 0 | |
-| Two local: worst lag error, 10 s mean (ms) | 10.208 | |
-| Two local: inter-output drift, mean / worst (ms) | 5.84 / 8.511 | |
-| Two local: inter-output drift change, first to last window (ms) | 4.085 | |
-| Two local: CPU % mean (harness / ps) | 0.73 / 0.27 | |
-| Two local: memory footprint max / RSS max (MB) | 42.454 / 52.6 | |
-| Local + FIFO: FIFO underruns per hour | 0 | |
-| Local + FIFO: FIFO gaps per hour | 0 | |
-| Local + FIFO: FIFO latency mean / max (ms) | 17.207 / 53.333 | |
-| Local + FIFO: pipe-full waits, short writes, backlog skips | 6, 1, 0 | |
-| Local + FIFO: local dropouts per hour | 0 | |
-| Local + FIFO: CPU % mean (harness / ps) | 1.405 / 0.87 | |
-| Real AirPlay | not available | |
+| Delay error at 150 / 500 / 2000 / 3000 ms (ms, per output) | (-2.7, -5.9) / (-1.1, -4.8) / (-1.6, -4.8) / (-2.7, -4.3) | (-10.7, -4.3) / (-11.2, -4.3) / (-10.7, -4.8) / (+0.5, -1.6) |
+| Two local: dropouts per hour (worst output) | 0 | 0 |
+| Two local: starved renders per hour (worst output) | 0 | 0 |
+| Two local: drift corrections per hour (worst output) | 0 | 6 |
+| Two local: worst lag error, 10 s mean (ms) | 10.208 | 9.319 |
+| Two local: inter-output drift, mean / worst (ms) | 5.84 / 8.511 | 6.605 / 9.432 |
+| Two local: inter-output drift change, first to last window (ms) | 4.085 | 3.758 |
+| Two local: CPU % mean (harness / ps) | 0.73 / 0.27 | 0.822 / 0.31 |
+| Two local: memory footprint max / RSS max (MB) | 42.454 / 52.6 | 42.516 / 53.2 |
+| Local + FIFO: FIFO underruns per hour | 0 | 0 |
+| Local + FIFO: FIFO gaps per hour | 0 | 0 |
+| Local + FIFO: FIFO latency mean / max (ms) | 17.207 / 53.333 | 14.968 / 25.521 |
+| Local + FIFO: pipe-full waits, short writes, backlog skips | 6, 1, 0 | 0, 0, 0 |
+| Local + FIFO: local dropouts per hour | 0 | 0 |
+| Local + FIFO: CPU % mean (harness / ps) | 1.405 / 0.87 | 1.486 / 1 |
+| Real AirPlay | not available | not available |
 <!-- bench:results:end -->

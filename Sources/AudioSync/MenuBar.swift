@@ -156,6 +156,7 @@ final class AppModel: ObservableObject {
         switch airplayEngine {
         case .gaveUp: return text.airPlayEngineGaveUp
         case .failed(.unsupportedOS(let minimum)): return text.airPlayNeedsNewerMacOS(minimum)
+        case .failed(.nativeSender): return text.nativeAirPlayFailed
         case .failed: return text.airPlayEngineFailed
         default: return nil
         }

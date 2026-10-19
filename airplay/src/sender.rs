@@ -296,6 +296,12 @@ pub enum SenderEvent {
         origin: i64,
         restarted: bool,
     },
+    /// Discovery stopped for good: its browser can never report anything
+    /// again ([`Browser::is_dead`]), which only a bug in the browser causes.
+    /// Every receiver it listed was reported gone just before. Speakers keep
+    /// playing; a host that wants discovery back starts it again, or
+    /// replaces the sender.
+    DiscoveryFailed,
 }
 
 /// The sender: one stream, any number of speakers, optional discovery.
@@ -538,6 +544,16 @@ impl Sender {
     /// The next event, waiting at most `timeout` for one.
     pub fn wait_event(&self, timeout: Duration) -> Option<SenderEvent> {
         self.events.recv_timeout(timeout).ok()
+    }
+
+    /// False once the driver thread has ended while this sender still
+    /// exists, which only a bug does (a panic, in a build that unwinds):
+    /// the sender then no longer lists, plays or reports anything, and a
+    /// host drops it and starts a new one. Read without locks or waiting.
+    pub fn is_running(&self) -> bool {
+        self.driver
+            .as_ref()
+            .is_some_and(|driver| !driver.is_finished())
     }
 
     /// Stops everything: every speaker is torn down in parallel (TEARDOWN,

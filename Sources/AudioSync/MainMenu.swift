@@ -30,6 +30,9 @@ enum MainMenu {
         let engine = item(t.menuSwiftEngine, #selector(AppDelegate.toggleEngineImpl(_:)))
         engine.isHidden = true   // a debug option: shown while Option is held
         app.addItem(engine)
+        let airplay = item(t.menuNativeAirPlay, #selector(AppDelegate.toggleAirPlayImpl(_:)))
+        airplay.isHidden = true  // a debug option too
+        app.addItem(airplay)
         app.addItem(.separator())
         let services = NSMenu(title: t.menuServices)
         app.addItem(withTitle: t.menuServices, action: nil, keyEquivalent: "").submenu = services

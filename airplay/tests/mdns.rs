@@ -187,6 +187,31 @@ fn instance_names_are_unescaped() {
     assert_eq!(record.instance, "Living Room.2");
 }
 
+// A browser whose daemon is gone (its thread ended, so the channel's
+// sending side was dropped) still hands over what was queued, then says it
+// is dead instead of looking like a quiet network forever.
+#[test]
+fn a_browser_whose_daemon_is_gone_is_dead() {
+    let (events, browser_events) = mpsc::channel();
+    let mut browser = MdnsBrowser::from_events(browser_events);
+    assert_eq!(browser.poll_event(), None);
+    assert!(!browser.is_dead(), "an empty channel is a quiet network");
+    let removed =
+        ServiceEvent::ServiceRemoved(RAOP_TYPE.to_owned(), format!("{ID}@Den.{RAOP_TYPE}"));
+    events.send(removed).expect("send");
+    drop(events);
+    assert_eq!(
+        browser.poll_event(),
+        Some(BrowseEvent::Removed {
+            kind: ServiceKind::Raop,
+            instance: format!("{ID}@Den"),
+        })
+    );
+    assert!(!browser.is_dead(), "not before everything queued was read");
+    assert_eq!(browser.poll_event(), None);
+    assert!(browser.is_dead());
+}
+
 /// Browses the real network for a few seconds and prints what it finds.
 /// Run by hand with `cargo test --test mdns -- --ignored`; never in CI.
 #[test]
