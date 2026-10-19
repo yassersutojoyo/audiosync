@@ -54,12 +54,14 @@ pub enum ErrorKind {
     /// The receiver needs a legacy pairing, or rejected the stored one
     /// (P46, P58).
     PairingRequired,
-    /// A pairing step was answered with 470 (P58, P136).
+    /// A pairing step was answered with 470 or another non-200 status, except
+    /// a Busy answer (P58, P136).
     PairingFailed,
     /// The receiver closed the connection while the sender waited for the PIN
     /// (P51, P136).
     PairingCancelled,
-    /// 453 to ANNOUNCE, SETUP or RECORD (P137).
+    /// 453 to ANNOUNCE, SETUP or RECORD, or 409 to any request before RECORD
+    /// is answered, pairing and verification included (P137).
     Busy,
     /// Any other failure status to OPTIONS, ANNOUNCE, SETUP or RECORD (P138).
     Refused,
