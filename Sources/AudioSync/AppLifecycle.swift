@@ -43,8 +43,11 @@ enum AppLifecycle {
     static func answersSecondLaunch(exiting: Bool) -> Bool { !exiting }
 
     /// The signals that end AudioSync the clean way (S111): the entry point
-    /// marks the app as quitting, stops the bundled engine and exits.
-    static let exitSignals: [Int32] = [SIGTERM]
+    /// marks the app as quitting, stops the bundled engine and exits. SIGTERM
+    /// comes from `kill` or a logout, SIGINT from Ctrl-C in the terminal that
+    /// launched it; left to their default action, either would end the
+    /// process with the engine still running.
+    static let exitSignals: [Int32] = [SIGTERM, SIGINT]
 
     /// A capture format change rebuilds the session at the new rate (S20).
     /// The engine stops the session before it reports the change, so the

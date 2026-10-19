@@ -300,7 +300,7 @@ S172 to S181 replace the rule that local outputs play at once unless an AirPlay 
 - **S108** *Observed* (`AirPlayPairing.swift:130-152`; tests "pairing queue: …"). Prompts wait in a FIFO queue, at most one per speaker, and only for a speaker currently asking; prompts are shown one at a time. When the engine stops listing a speaker, its pairing stage and queued prompt are dropped, but the time of the user's click is kept, so a speaker that returns within the prompt window still gets its prompt; a speaker that vanished mid-pairing and returns gets a notice, not a second prompt.
 - **S109** *Observed* (`AppDelegate+AirPlay.swift:112-122`). A dropped speaker is removed from the enabled set, gets a notice with its reason (an alert only for a rejected code) and, if nothing else is enabled, streaming stops.
 - **S110** *Observed* (`EngineLifecycle.swift:111-126`; `AppDelegate.swift:390-408`; `AirPlayEngine.swift:148-151`; tests "shutdown: …"). Quit: stop the session and deselect every AirPlay speaker; wait for already queued API writes for at most 1.5 s (a stuck write costs only the timeout; an idle queue returns at once); then `SIGTERM` the engine, wait up to 3 s, then `SIGKILL`. Quitting waits at most 5 s on the engine in total (`drainTimeout + gracefulStop ≤ 5`).
-- **S111** *Observed* (`main.swift:36-48`). On `SIGTERM` the app stops the engine process and exits, without the graceful deselect.
+- **S111** *Observed* (`main.swift`, signals; `AppLifecycle.exitSignals`; test "quit: …"). On `SIGTERM`, or `SIGINT` (Ctrl-C in the terminal that launched it), the app stops the engine process and exits, without the graceful deselect.
 
 ## 11. Engine control interface and session lifecycle
 
