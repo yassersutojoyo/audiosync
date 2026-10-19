@@ -524,6 +524,189 @@ fn a_401_to_the_pairing_options_is_a_password_challenge_not_a_pairing_answer() {
     assert_ne!(params["nonce"], nonce, "the new nonce");
 }
 
+/// The request keys of a whole pairing on one connection: OPTIONS,
+/// pin-start and the three pair-setup steps.
+const PAIRING_KEYS: [&str; 5] = [
+    "OPTIONS",
+    "POST /pair-pin-start",
+    "POST /pair-setup-pin",
+    "POST /pair-setup-pin",
+    "POST /pair-setup-pin",
+];
+
+/// The pairing's request keys with the one at `index` sent `times` times,
+/// cut after it when `stop` is set.
+fn keys_with_repeat(index: usize, times: usize, stop: bool) -> Vec<String> {
+    let mut keys: Vec<String> = PAIRING_KEYS[..index]
+        .iter()
+        .map(|key| (*key).to_owned())
+        .collect();
+    keys.extend(std::iter::repeat_n(PAIRING_KEYS[index].to_owned(), times));
+    if !stop {
+        keys.extend(
+            PAIRING_KEYS[index + 1..]
+                .iter()
+                .map(|key| (*key).to_owned()),
+        );
+    }
+    keys
+}
+
+/// A fake Apple TV behind a password that it first asks for at the
+/// request with this index on the connection, with nothing challenged
+/// before it.
+fn challenging_from(atv: &FakeAppleTv, index: usize) -> FakeReceiver {
+    let mut receiver = apple_tv_receiver(atv);
+    let mut gate = PasswordGate::new("secret");
+    gate.from_request = index;
+    receiver.gate = Some(gate);
+    receiver
+}
+
+/// Runs a pairing as far as it goes, typing the right PIN when asked.
+fn run_pairing(link: &mut PairLink) {
+    link.connect();
+    if link.pairing.state() == PairingState::WaitingForPin {
+        link.submit(PIN, &mut TestEntropy::new());
+    }
+}
+
+// covers: P36, P58, P136
+#[test]
+fn a_401_to_pin_start_or_a_pair_setup_step_is_a_password_challenge() {
+    // pin-start, then the client ID, the proof and the sealed key.
+    for (index, step) in [
+        (1, "pin-start"),
+        (2, "setup 1"),
+        (3, "setup 2"),
+        (4, "setup 3"),
+    ] {
+        // Without the speaker's password: PasswordRequired, not
+        // PairingFailed, with no resend and the PIN not counted as wrong.
+        let atv = FakeAppleTv::new(PIN);
+        let mut link = PairLink::new(challenging_from(&atv, index));
+        run_pairing(&mut link);
+        let (error, wrong_pin) = link.failure().unwrap_or_else(|| panic!("{step}"));
+        assert_eq!(error.kind, ErrorKind::PasswordRequired, "{step}");
+        assert_eq!(error.method, Some(Method::Post), "{step}");
+        assert_eq!(error.status, Some(401), "{step}");
+        assert!(!wrong_pin, "{step}");
+        assert_eq!(
+            link.receiver.keys(),
+            keys_with_repeat(index, 1, true),
+            "{step}"
+        );
+        assert!(link.closed, "{step}");
+        assert_eq!(
+            atv.paths().len(),
+            index,
+            "{step}: the 401 is no pairing answer"
+        );
+        assert!(link.paired().is_none(), "{step}");
+
+        // With it: the same request again, same body, with `Authorization`,
+        // and the pairing goes on to the credentials; every later request
+        // carries it too (P38). For the proof this is not the resend after
+        // a verdict that P52 rules out: the Apple TV judged it once.
+        let atv = FakeAppleTv::new(PIN);
+        let mut link = PairLink::with_password(challenging_from(&atv, index), Some("secret"));
+        run_pairing(&mut link);
+        let credentials = link
+            .paired()
+            .unwrap_or_else(|| panic!("{step}: {:?}", link.events));
+        assert_eq!(atv.paired(), [credentials.public_key()], "{step}");
+        assert_eq!(
+            link.receiver.keys(),
+            keys_with_repeat(index, 2, false),
+            "{step}"
+        );
+        let requests = &link.receiver.requests;
+        assert_eq!(requests[index].body, requests[index + 1].body, "{step}");
+        for request in &requests[..=index] {
+            assert!(request.headers.get("Authorization").is_none(), "{step}");
+        }
+        let nonce = PasswordGate::new("secret").nonce;
+        for request in &requests[index + 1..] {
+            let authorization = request
+                .headers
+                .get("Authorization")
+                .unwrap_or_else(|| panic!("{step}: {} without Authorization", request.uri));
+            let params = digest_params(authorization);
+            assert_eq!(params["uri"], request.uri, "{step}");
+            assert_eq!(params["nonce"], nonce, "{step}");
+        }
+        assert_eq!(atv.bodies("/pair-setup-pin").len(), 3, "{step}");
+        assert!(
+            !link
+                .events
+                .iter()
+                .any(|event| matches!(event, PairingEvent::Failed { .. })),
+            "{step}"
+        );
+
+        // A second 401 to the answered request: WrongPassword (P135), no
+        // third send, and the PIN not counted as wrong.
+        let atv = FakeAppleTv::new(PIN);
+        let mut link = PairLink::with_password(challenging_from(&atv, index), Some("wrong"));
+        run_pairing(&mut link);
+        let (error, wrong_pin) = link.failure().unwrap_or_else(|| panic!("{step}"));
+        assert_eq!(error.kind, ErrorKind::WrongPassword, "{step}");
+        assert_eq!(error.status, Some(401), "{step}");
+        assert!(!wrong_pin, "{step}");
+        assert_eq!(
+            link.receiver.keys(),
+            keys_with_repeat(index, 2, true),
+            "{step}"
+        );
+        assert!(link.closed, "{step}");
+
+        // A `stale=true` answer to the resend: exactly one more resend with
+        // the new nonce, and the pairing goes on (P38).
+        let atv = FakeAppleTv::new(PIN);
+        let mut receiver = challenging_from(&atv, index);
+        receiver.gate.as_mut().expect("gate").stale_on = Some(1);
+        let mut link = PairLink::with_password(receiver, Some("secret"));
+        run_pairing(&mut link);
+        assert!(link.paired().is_some(), "{step}: {:?}", link.events);
+        assert_eq!(
+            link.receiver.keys(),
+            keys_with_repeat(index, 3, false),
+            "{step}"
+        );
+        let requests = &link.receiver.requests;
+        assert_eq!(requests[index + 1].body, requests[index + 2].body, "{step}");
+        let new_nonce = link.receiver.gate.as_ref().expect("gate").nonce.clone();
+        assert_ne!(new_nonce, nonce, "{step}");
+        let params = digest_params(
+            requests[index + 2]
+                .headers
+                .get("Authorization")
+                .expect("Authorization"),
+        );
+        assert_eq!(params["nonce"], new_nonce, "{step}");
+
+        // A second `stale=true` answer to the same request: WrongPassword,
+        // with no fourth send.
+        let atv = FakeAppleTv::new(PIN);
+        let mut receiver = challenging_from(&atv, index);
+        let gate = receiver.gate.as_mut().expect("gate");
+        gate.stale_on = Some(1);
+        gate.stale_times = 2;
+        let mut link = PairLink::with_password(receiver, Some("secret"));
+        run_pairing(&mut link);
+        let (error, wrong_pin) = link.failure().unwrap_or_else(|| panic!("{step}"));
+        assert_eq!(error.kind, ErrorKind::WrongPassword, "{step}");
+        assert!(!wrong_pin, "{step}");
+        assert_eq!(
+            link.receiver.keys(),
+            keys_with_repeat(index, 3, true),
+            "{step}"
+        );
+    }
+}
+
+// The 409 and other non-200 parts of P58 and P136; their 401 part, a
+// password challenge, is in the 401 tests above and below.
 // covers: P58, P136, P137
 #[test]
 fn a_409_at_a_pairing_step_is_busy_and_other_failures_are_pairing_failed() {
@@ -551,7 +734,8 @@ fn a_409_at_a_pairing_step_is_busy_and_other_failures_are_pairing_failed() {
         assert_eq!(error.status, Some(409));
         assert!(!wrong_pin);
     }
-    // Any other non-200 to a pairing request: PairingFailed (P58).
+    // Any other non-200 to a pairing request but a 401: PairingFailed
+    // (P58).
     for status in [400, 403, 500, 503] {
         let atv = FakeAppleTv::new(PIN);
         let mut receiver = apple_tv_receiver(&atv);
@@ -569,8 +753,21 @@ fn a_409_at_a_pairing_step_is_busy_and_other_failures_are_pairing_failed() {
         let (error, _) = link.failure().expect("failed");
         assert_eq!(error.kind, ErrorKind::PairingFailed, "{status}");
     }
+    // A 401 to pin-start or to a pair-setup step, with no challenge before
+    // it, is a password challenge instead: PasswordRequired without the
+    // speaker's password, never PairingFailed (P36, P58).
+    for index in 1..PAIRING_KEYS.len() {
+        let atv = FakeAppleTv::new(PIN);
+        let mut link = PairLink::new(challenging_from(&atv, index));
+        run_pairing(&mut link);
+        let (error, wrong_pin) = link.failure().expect("failed");
+        assert_eq!(error.kind, ErrorKind::PasswordRequired, "{index}");
+        assert!(!wrong_pin, "{index}");
+    }
 }
 
+// The 470 and PIN-wait parts of P58 and P136; a 401 at any step is a
+// password challenge, tested in the 401 tests.
 // covers: P58, P136
 #[test]
 fn a_wrong_pin_or_a_470_at_any_step_ends_with_pairing_failed() {
@@ -805,6 +1002,125 @@ fn a_credential_the_apple_tv_no_longer_accepts_means_pairing_required() {
     let mut link = Link::new(config, apple_tv_receiver(&atv));
     link.connect();
     assert_eq!(session_kinds(&link), [ErrorKind::PairingRequired]);
+}
+
+/// A session that verifies `credentials` with the fake Apple TV, which
+/// first asks for its password at the request with this index on the
+/// connection (0: the first pair-verify step, 1: the second).
+fn verify_link(
+    atv: &FakeAppleTv,
+    credentials: &Credentials,
+    index: usize,
+    password: Option<&str>,
+    stale: Option<usize>,
+) -> Link {
+    let mut config = common::config();
+    let verifier = LegacyVerifier::new(credentials, &mut TestEntropy::new()).expect("verifier");
+    config.verifier = Some(Box::new(verifier));
+    config.password = password.map(str::to_owned);
+    let mut receiver = apple_tv_receiver(atv);
+    let mut gate = PasswordGate::new("secret");
+    gate.from_request = index;
+    if let Some(times) = stale {
+        gate.stale_on = Some(1);
+        gate.stale_times = times;
+    }
+    receiver.gate = Some(gate);
+    let mut link = Link::new(config, receiver);
+    link.connect();
+    link
+}
+
+/// The session's request keys: `verifies` pair-verify requests, then the
+/// rest of the start (P26).
+fn verified_start(verifies: usize) -> Vec<String> {
+    let mut keys = vec!["POST /pair-verify".to_owned(); verifies];
+    keys.extend(
+        ["OPTIONS", "ANNOUNCE", "SETUP", "RECORD", "SET_PARAMETER"]
+            .iter()
+            .map(|key| (*key).to_owned()),
+    );
+    keys
+}
+
+// covers: P36, P58, P136
+#[test]
+fn a_401_to_either_pair_verify_step_is_a_password_challenge_and_the_credentials_stay() {
+    let atv = FakeAppleTv::new(PIN);
+    let credentials = pair(&atv);
+    let verify = "POST /pair-verify".to_owned();
+    for (index, step) in [(0, "first step"), (1, "second step")] {
+        // Without the speaker's password: PasswordRequired, not
+        // PairingRequired, so the host keeps the credentials, and the
+        // Apple TV still knows them.
+        let link = verify_link(&atv, &credentials, index, None, None);
+        assert_eq!(
+            session_kinds(&link),
+            [ErrorKind::PasswordRequired],
+            "{step}"
+        );
+        let error = link.failure().expect("failed");
+        assert_eq!(error.method, Some(Method::Post), "{step}");
+        assert_eq!(error.status, Some(401), "{step}");
+        assert_eq!(link.keys(), vec![verify.clone(); index + 1], "{step}");
+        assert!(link.closed, "{step}");
+        assert_eq!(atv.paired(), [credentials.public_key()], "{step}");
+
+        // With it: the same step again, same body, with `Authorization`;
+        // the verification and the session go on, every later request
+        // carrying `Authorization` (P38).
+        let link = verify_link(&atv, &credentials, index, Some("secret"), None);
+        assert_eq!(
+            link.session.state(),
+            State::Playing,
+            "{step}: {:?}",
+            link.events
+        );
+        assert_eq!(link.keys(), verified_start(3), "{step}");
+        let requests = &link.receiver.requests;
+        assert_eq!(requests[index].body, requests[index + 1].body, "{step}");
+        assert!(requests[index].headers.get("Authorization").is_none());
+        for request in &requests[index + 1..] {
+            let authorization = request
+                .headers
+                .get("Authorization")
+                .unwrap_or_else(|| panic!("{step}: {} without Authorization", request.uri));
+            assert_eq!(digest_params(authorization)["uri"], request.uri, "{step}");
+        }
+
+        // A second 401 to the answered step: WrongPassword, not
+        // PairingRequired, and no third send.
+        let link = verify_link(&atv, &credentials, index, Some("wrong"), None);
+        assert_eq!(session_kinds(&link), [ErrorKind::WrongPassword], "{step}");
+        assert_eq!(link.keys(), vec![verify.clone(); index + 2], "{step}");
+        assert!(link.closed, "{step}");
+
+        // A `stale=true` answer to the resend: exactly one more resend, and
+        // the session goes on (P38).
+        let link = verify_link(&atv, &credentials, index, Some("secret"), Some(1));
+        assert_eq!(
+            link.session.state(),
+            State::Playing,
+            "{step}: {:?}",
+            link.events
+        );
+        assert_eq!(link.keys(), verified_start(4), "{step}");
+        let requests = &link.receiver.requests;
+        assert_eq!(requests[index + 1].body, requests[index + 2].body, "{step}");
+
+        // A second `stale=true` answer to the same step: WrongPassword,
+        // with no fourth send.
+        let link = verify_link(&atv, &credentials, index, Some("secret"), Some(2));
+        assert_eq!(session_kinds(&link), [ErrorKind::WrongPassword], "{step}");
+        assert_eq!(link.keys(), vec![verify.clone(); index + 3], "{step}");
+    }
+    // The credentials still verify where no password is asked for.
+    let mut config = common::config();
+    let verifier = LegacyVerifier::new(&credentials, &mut TestEntropy::new()).expect("verifier");
+    config.verifier = Some(Box::new(verifier));
+    let mut link = Link::new(config, apple_tv_receiver(&atv));
+    link.connect();
+    assert_eq!(link.session.state(), State::Playing, "{:?}", link.events);
 }
 
 // covers: P60

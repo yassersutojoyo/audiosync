@@ -70,6 +70,13 @@ pub struct PasswordGate {
     /// The n-th request that carries a valid `Authorization` (1-based) is
     /// answered with a `stale=true` challenge and a new nonce.
     pub stale_on: Option<usize>,
+    /// How many valid requests in a row, from `stale_on` on, get such a
+    /// stale challenge (1: only the `stale_on`-th).
+    pub stale_times: usize,
+    /// Requests received before this one (0-based, in order) pass without
+    /// a challenge, as on a receiver that first challenges a later request
+    /// on the connection; 0 challenges from the first request on.
+    pub from_request: usize,
 }
 
 impl PasswordGate {
@@ -81,6 +88,8 @@ impl PasswordGate {
             qop: false,
             qop_options: "auth".to_owned(),
             stale_on: None,
+            stale_times: 1,
+            from_request: 0,
         }
     }
 }
@@ -225,6 +234,9 @@ impl FakeReceiver {
     /// `Some(challenge)` when the request must be answered with 401.
     fn check_password(&mut self, request: &Request) -> Option<String> {
         let gate = self.gate.clone()?;
+        if self.requests.len() <= gate.from_request {
+            return None;
+        }
         let challenge = |nonce: &str, stale: bool| {
             let mut value = format!("Digest realm=\"{}\", nonce=\"{nonce}\"", gate.realm);
             if gate.qop {
@@ -242,7 +254,10 @@ impl FakeReceiver {
             return Some(challenge(&gate.nonce, false));
         }
         self.authorized += 1;
-        if gate.stale_on == Some(self.authorized) {
+        if gate
+            .stale_on
+            .is_some_and(|first| (first..first + gate.stale_times).contains(&self.authorized))
+        {
             self.nonce_generation += 1;
             let nonce = format!("{}{:02}", &gate.nonce[..30], self.nonce_generation);
             self.gate.as_mut().expect("gate").nonce = nonce.clone();

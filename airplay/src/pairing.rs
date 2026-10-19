@@ -19,7 +19,10 @@
 //! for the host's PIN (P51), sends A and M1 (P50, P52), checks M2, sends
 //! the sealed public key (P53), opens the receiver's sealed key when its
 //! answer carries one, and hands the host the [`Credentials`] (P54). The
-//! host stores them; the crate never writes them anywhere.
+//! host stores them; the crate never writes them anywhere. A 401 to any of
+//! these pairing requests, also with no challenge before it, is the same
+//! password challenge: the request goes again with `Authorization`, or the
+//! pairing ends with PasswordRequired (P58).
 //!
 //! [`LegacyVerifier`] runs the pair-verify on every later connection
 //! (P55, P56), through the session's [`Verifier`] seam, and checks the
@@ -474,10 +477,11 @@ impl Pairing {
     }
 
     /// The same pairing with the speaker's password, if the host has one
-    /// (P39): a 401 to OPTIONS is then answered with digest authentication
-    /// and every later request carries `Authorization`, pairing requests
-    /// included (P36, P38, P46). Without one, that 401 ends the pairing
-    /// with PasswordRequired before `/pair-pin-start`. Call it right after
+    /// (P39): a 401 to OPTIONS or to any pairing request is then answered
+    /// with digest authentication and every later request carries
+    /// `Authorization`, pairing requests included (P36, P38, P46, P58).
+    /// Without one, such a 401 ends the pairing with PasswordRequired, a
+    /// 401 to OPTIONS before `/pair-pin-start`. Call it right after
     /// [`Pairing::new`], before the connect completes.
     pub fn with_password(mut self, password: Option<String>) -> Pairing {
         self.password = password;
@@ -816,8 +820,10 @@ impl Pairing {
             self.fail_status(ErrorKind::Busy, method, response.code, None, false);
             return;
         }
-        if response.code == 401 && (in_flight.step == Step::Options || in_flight.nonce.is_some()) {
-            // A password answer, not a pairing answer (P36, P38, P46).
+        if response.code == 401 {
+            // A password challenge, never a pairing answer, to OPTIONS and
+            // to every pairing request alike, also when nothing earlier on
+            // the connection was challenged (P36, P38, P46, P58).
             self.on_unauthorized(in_flight, &response, now);
             return;
         }
@@ -826,10 +832,10 @@ impl Pairing {
             return;
         }
         if response.code != 200 {
-            // A 470, or any other non-200 answer to a pairing request, ends
-            // the pairing (P58), a 401 to one that carried no
-            // `Authorization` included. A 470 to the proof is the Apple TV
-            // turning the PIN down (P52); the proof is never sent again.
+            // A 470, or any other non-200 answer to a pairing request but
+            // the 409 and 401 above, ends the pairing (P58). A 470 to the
+            // proof is the Apple TV turning the PIN down (P52); the proof is
+            // never sent again.
             let wrong_pin = in_flight.step == Step::Prove && response.code == STATUS_PAIRING_FAILED;
             self.fail_status(
                 ErrorKind::PairingFailed,
@@ -854,13 +860,16 @@ impl Pairing {
         }
     }
 
-    /// A 401 to OPTIONS, or to a request that carried `Authorization`
-    /// (P36, P38, P39, P46, P135). The first challenge leads to one resend
-    /// with `Authorization` when the host gave the speaker's password, and
-    /// to PasswordRequired before `/pair-pin-start` when it didn't; a
+    /// A 401 to any request of the pairing, OPTIONS or a pairing step
+    /// (P36, P38, P39, P46, P58, P135). The first challenge leads to one
+    /// resend of the same request, body included, with `Authorization` when
+    /// the host gave the speaker's password, and to PasswordRequired when
+    /// it didn't (before `/pair-pin-start` when OPTIONS was challenged); a
     /// `stale=true` challenge to a request that carried it leads to one
     /// more resend; any other 401 to such a request means the password is
-    /// wrong. Neither error is retried.
+    /// wrong. Neither error is retried. Resending the proof here is not the
+    /// resend P52 rules out, as the receiver hasn't judged it, and a 401 is
+    /// never `wrong_pin`.
     fn on_unauthorized(&mut self, in_flight: InFlight, response: &Response, now: Instant) {
         let method = in_flight.step.method();
         let Some(challenge) = Challenge::from_headers(&response.headers) else {

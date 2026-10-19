@@ -1068,6 +1068,9 @@ impl Session {
             return;
         }
         if response.code == 401 && in_flight.kind != Kind::AuthSetup {
+            // A password challenge, both pair-verify steps included, also
+            // with no challenge before it: never a verification answer, so
+            // the stored credentials stay (P36, P58).
             self.on_unauthorized(in_flight, &response, now);
             return;
         }
