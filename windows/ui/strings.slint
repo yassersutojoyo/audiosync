@@ -206,7 +206,7 @@ export global Strings {
             return @tr("{} needs pairing with a code. Switch it on to pair.", speaker);
         }
         if problem == AirPlayProblem.pairing-failed {
-            return @tr("{} couldn't be paired, so it's off. Make sure the TV is on, then switch it on to try again.", speaker);
+            return @tr("{} couldn't be paired, so it's off. Make sure the TV is on, then switch {} on in AudioSync to try again.", speaker, speaker);
         }
         if problem == AirPlayProblem.pairing-not-yet {
             return @tr("{} needs pairing with a code, which AudioSync for Windows can't do yet, so it's off.", speaker);

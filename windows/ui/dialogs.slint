@@ -199,6 +199,8 @@ export component PinDialog inherits Dialog {
                         text <=> root.pin;
                         placeholder-text: Strings.pin-field-placeholder;
                         input-type: number;
+                        // Typing only while the Apple TV waits for a code.
+                        read-only: root.phase != PinPhase.ready;
                         font-size: 20px;
                         horizontal-alignment: center;
                         accessible-label: Strings.pin-field-label;

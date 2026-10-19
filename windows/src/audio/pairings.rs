@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use audiosync_airplay::pairing::Credentials;
@@ -202,9 +202,20 @@ impl PairingStore {
         if let Some(folder) = path.parent() {
             fs::create_dir_all(folder)?;
         }
+        // Flushed to disk before it replaces the old file, so a power cut
+        // leaves the old file or the new one, never an empty one; a temporary
+        // file left by a failed write is removed.
         let temporary = path.with_extension("tmp");
-        fs::write(&temporary, &sealed)?;
-        fs::rename(&temporary, path)
+        let replaced = fs::File::create(&temporary)
+            .and_then(|mut file| {
+                file.write_all(&sealed)?;
+                file.sync_all()
+            })
+            .and_then(|()| fs::rename(&temporary, path));
+        if replaced.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        replaced
     }
 }
 

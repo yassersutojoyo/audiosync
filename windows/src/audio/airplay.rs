@@ -448,6 +448,9 @@ struct PairingRun {
     /// The Apple TV showed a PIN, so the UI prompts for it until the pairing
     /// ends.
     shown: bool,
+    /// When its PIN first showed (counts up), so the prompt stays with the
+    /// Apple TV that asked first while another one asks too.
+    shown_order: u64,
 }
 
 /// A speaker in the sender.
@@ -473,6 +476,8 @@ pub struct AirPlaySpeakers {
     store: PairingStore,
     /// The pairings running, by speaker ID.
     pairings: BTreeMap<String, PairingRun>,
+    /// The next `PairingRun::shown_order`.
+    next_shown_order: u64,
     streaming: bool,
     master: f64,
     latency: Duration,
@@ -497,6 +502,7 @@ impl AirPlaySpeakers {
             names: BTreeMap::new(),
             store,
             pairings: BTreeMap::new(),
+            next_shown_order: 0,
             streaming: false,
             master,
             latency,
@@ -673,6 +679,7 @@ impl AirPlaySpeakers {
                 phase: PairingPhase::Starting,
                 wrong_pin: false,
                 shown: false,
+                shown_order: 0,
             },
         );
         Ok(())
@@ -748,9 +755,12 @@ impl AirPlaySpeakers {
 
     /// The PIN prompt to show: the first pairing whose Apple TV showed a PIN.
     pub fn pin_prompt(&self) -> Option<AirPlayPinPrompt> {
+        // The Apple TV that asked first keeps the prompt until its pairing
+        // ends, so a second one asking meanwhile never takes over the field.
         self.pairings
             .iter()
-            .find(|(_, run)| run.shown)
+            .filter(|(_, run)| run.shown)
+            .min_by_key(|(_, run)| run.shown_order)
             .map(|(id, run)| AirPlayPinPrompt {
                 id: id.clone(),
                 name: self.names.get(id).cloned().unwrap_or_else(|| id.clone()),
@@ -963,7 +973,11 @@ impl AirPlaySpeakers {
                     return false;
                 };
                 run.phase = PairingPhase::WaitingForPin;
-                run.shown = true;
+                if !run.shown {
+                    run.shown = true;
+                    run.shown_order = self.next_shown_order;
+                    self.next_shown_order += 1;
+                }
                 self.log
                     .log(|| format!("AirPlay pairing {}: PIN prompt shown", self.label(id)));
                 true
@@ -1714,6 +1728,40 @@ pub mod tests {
         assert!(airplay.submit_pin(&id, "2222"));
         assert!(!airplay.pin_prompt().unwrap().wrong_pin);
         assert!(airplay.enabled_ids().is_empty(), "off until paired");
+    }
+
+    #[test]
+    fn the_prompt_stays_with_the_apple_tv_that_asked_first() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        // The first to ask sorts after the second, so ID order alone would
+        // move the prompt.
+        let first = device(7, "Living Room TV", APPLE_TV_TXT);
+        let second = device(6, "Den TV", APPLE_TV_TXT);
+        pin_shown(&fake, &mut airplay, &first);
+        fake.appear(&second);
+        airplay.poll();
+        let second_id = id_of(&second);
+        assert_eq!(
+            airplay.set_enabled(&second_id, true),
+            Err(AirPlayProblem::NeedsPin)
+        );
+        airplay
+            .start_pairing(&second_id)
+            .expect("the second pairing starts");
+        fake.pairing(&second, PairingEvent::PinRequested);
+        airplay.poll();
+        assert_eq!(
+            airplay.pin_prompt().map(|prompt| prompt.id),
+            Some(id_of(&first)),
+            "the field keeps belonging to the first Apple TV"
+        );
+        airplay.cancel_pairing(&id_of(&first));
+        assert_eq!(
+            airplay.pin_prompt().map(|prompt| prompt.id),
+            Some(second_id),
+            "then the second one gets the prompt"
+        );
     }
 
     #[test]
