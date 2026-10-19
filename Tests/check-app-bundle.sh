@@ -66,8 +66,9 @@ minos_at_most() {
   [ "$found" = 1 ]
 }
 has_rpath() { otool -l "$1" | grep "path $2 " >/dev/null; }
-# The signer codesign reports: the leaf certificate's name, or "adhoc".
-signer() { codesign -dv "$1" 2>&1 | awk -F= '/^(Authority|Signature)=/ && !found { print $2; found = 1 }'; }
+# The signer codesign reports: the leaf certificate's name, or "adhoc"
+# (codesign lists the certificates from verbosity 2 on).
+signer() { codesign -dvv "$1" 2>&1 | awk -F= '/^(Authority|Signature)=/ && !found { print $2; found = 1 }'; }
 
 exe=$(plist CFBundleExecutable) || exe=AudioSync
 min=$(plist LSMinimumSystemVersion) || min=15.0
