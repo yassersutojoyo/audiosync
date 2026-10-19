@@ -30,9 +30,6 @@
 	<array>
 		<string>_airplay._tcp</string>
 		<string>_raop._tcp</string>
-		<string>_dacp._tcp</string>
-		<string>_touch-able._tcp</string>
-		<string>_touch-remote._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>AudioSync finds and streams to the AirPlay speakers (HomePod, Apple TV, AirPlay receivers) on your network.</string>

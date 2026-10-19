@@ -39,7 +39,7 @@ There's a Windows 11 version on the way too, written in Rust. It's built to play
 
 The source can be all system audio, a single app (with its helper processes, like a browser's audio service), or an input device such as a microphone, line-in or audio interface (first two channels). It plays to one or more HomePods, Apple TVs and other AirPlay receivers, plus anything macOS can play to: built-in speakers, the headphone jack, HDMI/DisplayPort, USB DACs and Bluetooth.
 
-Each local speaker gets its own delay relative to the Mac's built-in speakers (−2 to +20 s), there's one AirPlay delay for lining the Mac up with the AirPlay speakers, and the AirPlay engine keeps the AirPlay speakers in step with each other. On top of that there's per-speaker and master volume, a 10-band equalizer with a preamp and presets, Now Playing for Spotify and Music (also shown on AirPlay TVs and other speakers with a screen), speaker groups, auto-connect, and launch at login. AirPlay goes out through AudioSync's own sender, built into the app (the older bundled engine is still there as a fallback), so there's nothing else to install or configure.
+Each local speaker gets its own delay relative to the Mac's built-in speakers (−2 to +20 s), there's one AirPlay delay for lining the Mac up with the AirPlay speakers, and AudioSync's AirPlay sender keeps the AirPlay speakers in step with each other. On top of that there's per-speaker and master volume, a 10-band equalizer with a preamp and presets, Now Playing for Spotify and Music (also shown on AirPlay TVs and other speakers with a screen), speaker groups, auto-connect, and launch at login. AirPlay goes out through AudioSync's own sender, built into the app, so there's nothing else to install or configure.
 
 macOS also keeps its own volume for every output, and only the default one is in the Sound menu. If a speaker you switched on sits very low or muted there, its row tells you and offers a one-click fix.
 
@@ -57,7 +57,7 @@ I don't have a paid Apple developer account, so releases aren't notarized and ma
 
 Auto-update is off for now. To update, quit AudioSync and replace the app with the one from [Releases](https://github.com/yassersutojoyo/audiosync/releases). [`CHANGELOG.md`](CHANGELOG.md) has what changed.
 
-You can also build it yourself. You need Homebrew, the Xcode 16 command line tools and a Rust toolchain ([rustup](https://rustup.rs)), then:
+You can also build it yourself. You need the Xcode 16 command line tools and a Rust toolchain ([rustup](https://rustup.rs)), then:
 
 ```bash
 git clone https://github.com/yassersutojoyo/audiosync
@@ -65,7 +65,7 @@ cd audiosync
 ./setup.sh
 ```
 
-The first run takes a while (around ten minutes): it builds the AirPlay engine and its libraries, then installs the app. [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) has the details, plus how to uninstall.
+The first run takes a few minutes: it builds the Rust audio core and the app, then installs it. [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) has the details, plus how to uninstall.
 
 On first use macOS asks for Screen & System Audio Recording (choose System Audio Recording Only) to capture audio, and Local Network to find AirPlay speakers. Microphone access is only needed for an input source, and Automation (Spotify, Music) only for Now Playing.
 
@@ -111,22 +111,21 @@ A few other things worth knowing:
 
 ## How it works, briefly
 
-System or app audio comes in through a Core Audio process tap (which also mutes the original output, so you only hear the synced copies); input devices are read directly. The audio goes through the equalizer into a shared buffer. Each local speaker has its own output unit reading that buffer at its own delay and correcting clock drift. The same audio goes to AudioSync's own AirPlay sender (the one the Windows app uses), which streams it to the speakers over AirPlay. For now the app still carries the [OwnTone](https://github.com/owntone/owntone-server) engine as a fallback (hold Option while you open the AudioSync menu to switch); it gets the audio through a named pipe and speaks AirPlay and AirPlay 2.
+System or app audio comes in through a Core Audio process tap (which also mutes the original output, so you only hear the synced copies); input devices are read directly. The audio goes through the equalizer into a shared buffer. Each local speaker has its own output unit reading that buffer at its own delay and correcting clock drift. The same audio goes to AudioSync's own AirPlay sender (the one the Windows app uses), which streams it to the speakers over AirPlay.
 
-HomePods can't show a PIN, so AudioSync builds OwnTone with a small patch that tries PIN-less (transient) pairing first, which is why the Allow Speaker & TV Access setting above matters for the fallback engine. The engine's API listens on 127.0.0.1 only and needs a password that changes on every start. [`SECURITY.md`](SECURITY.md) goes into the details.
+An Apple TV that asks for a PIN pairs once, with the PIN it shows, and a speaker with a password asks for it when you turn it on. [`SECURITY.md`](SECURITY.md) goes into the details.
 
 ## Known limitations
 
 - Everything is about two seconds late because of the AirPlay buffer. Fine for music, not for video or games.
-- AudioSync's own sender streams over classic AirPlay (AirPlay 1), which most AirPlay 2 speakers still take; a speaker that only speaks AirPlay 2 isn't listed yet. With the fallback engine, AirPlay 2 support is reverse-engineered, so a HomePod or macOS update can break it until OwnTone catches up.
+- AudioSync's own sender streams over classic AirPlay (AirPlay 1), which most AirPlay 2 speakers still take; a speaker that only speaks AirPlay 2 isn't listed yet.
 - Now Playing only works with Spotify and Music; macOS doesn't let other apps read the system-wide Now Playing info.
 
 ## License and credits
 
-AudioSync's own code is under the [MIT License](LICENSE). The bundled AirPlay engine and its libraries keep their own licenses; as distributed, the engine is under OwnTone's GPL-2.0-or-later. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists everything, including the engine patches and where to get the source.
+AudioSync's own code is under the [MIT License](LICENSE). What the app bundles from others keeps its own license; [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists everything.
 
 - AudioSync started as a fork of [HomeSounds Sync](https://github.com/techjuicelab/homesounds-sync) by TechJuicelab. The original copyright notice is kept in `LICENSE`.
-- [OwnTone](https://github.com/owntone/owntone-server) (GPL-2.0-or-later) is the AirPlay engine, bundled and run as a separate process.
 - [Sparkle](https://sparkle-project.org) (MIT) is the update framework, embedded but currently disabled.
 - [Poppins](https://github.com/itfoundry/Poppins) (SIL Open Font License 1.1) is the wordmark typeface, bundled in the app.
 

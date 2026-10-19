@@ -1,25 +1,20 @@
 import AppKit
 
-// AudioSync's own AirPlay sender as this run's AirPlay sender
-// (`AirPlayImpl.forThisRun`): the bundled engine stays stopped, the AirPlay
-// rows come from the native sender's discovery under `NativeAirPlayID`s
-// (what was saved under a receiver's bundled-engine ID, switched on, its
-// volume, its groups and auto-connect, moves to its native ID when discovery
-// first reports it, S204), the switches, volumes and master reach its
-// speakers, the user's click pairs an Apple TV or asks for a password, and
-// their errors become notices. The OwnTone code paths check
-// `usesNativeAirPlay` and hand over to these.
+// The AirPlay sender, AudioSync's own: the AirPlay rows come from its
+// discovery under `NativeAirPlayID`s (what an older version saved under a
+// receiver's bundled-engine ID, switched on, its volume, its groups and
+// auto-connect, moves to its native ID when discovery first reports it,
+// S204), the switches, volumes and master reach its speakers, the user's
+// click pairs an Apple TV or asks for a password, and their errors become
+// notices.
 
 extension AppDelegate {
 
-    /// AudioSync's own sender is this run's AirPlay sender.
-    var usesNativeAirPlay: Bool { AirPlayImpl.forThisRun.impl == .native }
-
-    /// The switched-on AirPlay speakers this run's sender can play to: a
-    /// speaker saved as on under the other sender doesn't start or hold up
-    /// streaming (`NativeAirPlayID.ofSender`).
-    var enabledAirPlayThisRun: Set<String> {
-        NativeAirPlayID.ofSender(enabledAirPlay, native: usesNativeAirPlay)
+    /// The switched-on AirPlay speakers the sender can play to: one saved as
+    /// on under an older version's ID that discovery hasn't moved yet doesn't
+    /// start or hold up streaming (`NativeAirPlayID.playable`).
+    var playableAirPlay: Set<String> {
+        NativeAirPlayID.playable(enabledAirPlay)
     }
 
     /// From every AirPlay reconcile (at launch, every 3 s, after a wake): the
@@ -37,13 +32,12 @@ extension AppDelegate {
     }
 
     private func startNativeAirPlay() {
-        let choice = AirPlayImpl.forThisRun
         let native = NativeAirPlay(
             onChange: { [weak self] change in self?.nativeReceiverChanged(change) },
             onEvent: { [weak self] event, outcome in self?.nativeSpeakerEvent(event, outcome) })
         nativeAirPlay = native   // reconciles meanwhile don't start a second one
         native.start(master: masterVolume) { [weak self] started in
-            DBG.log("[AudioSync] native AirPlay (\(choice.origin.rawValue)): "
+            DBG.log("[AudioSync] native AirPlay: "
                 + (started ? "the sender and its discovery started" : "the sender or its discovery could not start"))
             self?.nativeStartFinished(native, started: started)
         }
@@ -60,7 +54,7 @@ extension AppDelegate {
             // Its discovery raised the Local Network prompt, if any: the
             // probe may ask now, and an empty list counts from here.
             airplayEmptySince = native.model.rows.isEmpty ? Date() : nil
-            updateLocalNetworkProbe(engine: .running)
+            updateLocalNetworkProbe(senderRunning: true)
         } else if nativeAirPlay === native {
             nativeAirPlay = nil
             if news { notify(text.nativeAirPlayCouldNotStart, origin: .automatic, subject: Notice.airplaySender) }
@@ -170,9 +164,8 @@ extension AppDelegate {
         }
     }
 
-    /// Shows the next queued PIN or password prompt, one at a time (the
-    /// bundled engine's prompts share `codePromptBusy`), and acts on the
-    /// answer. The PIN or password goes to the sender only, never to a log.
+    /// Shows the next queued PIN or password prompt, one at a time
+    /// (`codePromptBusy`), and acts on the answer. The PIN or password goes to the sender only, never to a log.
     private func showNextNativePrompt() {
         guard !codePromptBusy, let native = nativeAirPlay, let prompt = native.model.nextPrompt() else { return }
         let id = NativeAirPlayID.app(prompt.id)
@@ -187,7 +180,7 @@ extension AppDelegate {
         DBG.log("[AudioSync] native AirPlay: asking for the \(prompt.password ? "password" : "PIN") of \(nativeLabel(prompt.id))"
             + (prompt.wrong ? " again" : ""))
         codePromptBusy = true
-        let code = runCodePrompt(name: name, password: prompt.password, message: message, pinOnly: !prompt.password)
+        let code = runCodePrompt(name: name, password: prompt.password, message: message)
         codePromptBusy = false
         // A sender that stopped meanwhile took its pairings and prompts with it.
         if nativeAirPlay === native { nativeAnswered(native, prompt, code: code) }
@@ -244,7 +237,7 @@ extension AppDelegate {
     /// No sender runs: the Local Network probe stops, and no empty list counts.
     private func stopNativeLocalNetworkProbe() {
         airplayEmptySince = nil
-        updateLocalNetworkProbe(engine: .stopped)
+        updateLocalNetworkProbe(senderRunning: false)
     }
 
     /// Retry after the sender stopped: a new one starts now.

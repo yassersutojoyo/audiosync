@@ -9,7 +9,6 @@ Package.resolved
 *.dmg
 *.zip
 SHA256SUMS.txt
-owntone-*-source.tar.xz
 dist/
 
 # Icon set folders (makeicon.sh builds its own in a temporary folder)

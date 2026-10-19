@@ -1,24 +1,22 @@
 import Foundation
 
 /// What AirPlay receivers with a screen, such as a TV, show while AudioSync
-/// streams to them (sent through `PipeMetadata`).
+/// streams to them (sent through AudioSync's own sender, `NativeAirPlay`).
 struct ReceiverInfo: Equatable {
 
     enum Artwork: Equatable {
         /// The player's artwork.
         case track
         /// AudioSync's icon: no track is known, or the track has no artwork.
-        /// The engine can't clear artwork, so this replaces the last track's.
         case neutral
         /// The player's artwork is on its way (Spotify's comes a moment after
         /// the track): send no artwork until it arrives, for at most
-        /// `artworkWait` (see `waited`). Meanwhile the bundled engine's
-        /// receivers keep the last cover, AudioSync's own sender's show none
+        /// `artworkWait` (see `waited`). Meanwhile the receivers show no cover
         /// (`NativeNowPlaying`).
         case wait
     }
 
-    let fields: PipeMetadata.Fields
+    let fields: TrackMetadata.Fields
     let artwork: Artwork
 
     /// `track`: Now Playing's current reading, nil while there is none (not
@@ -35,7 +33,7 @@ struct ReceiverInfo: Equatable {
     /// show no text at all when the artist is blank. The source's name, when
     /// there is one to show, takes the artist's place.
     static func decide(track: NowPlayingMonitor.Track?, source: AudioSource,
-                       sourceName: String?, untitled: PipeMetadata.Fields) -> ReceiverInfo {
+                       sourceName: String?, untitled: TrackMetadata.Fields) -> ReceiverInfo {
         if let track, track.isPlaying || source.bundleID == track.bundleID {
             let artwork: Artwork = track.artwork != nil ? .track
                 : track.bundleID == NowPlayingMonitor.spotify ? .wait : .neutral
