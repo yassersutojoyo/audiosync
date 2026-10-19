@@ -25,3 +25,4 @@ P106 SETPEERS: AirPlay 2 stage (G2).
 P107 Time announce packets: AirPlay 2 stage (G1).
 P108 Asking for NTP timing on the AirPlay 2 path: AirPlay 2 stage.
 P132 POST /feedback keep-alive: AirPlay 2 stage.
+P145 The published pairing test vector as data: pairing stage.
