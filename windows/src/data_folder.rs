@@ -73,4 +73,36 @@ mod tests {
         assert!(write_atomically(&path, b"new").is_err());
         assert_eq!(fs::read(&path).expect("still there"), b"old contents");
     }
+
+    #[test]
+    fn a_link_planted_at_the_temporary_path_is_not_written_through() {
+        let folder = test_dir("data-folder-link");
+        let path = folder.join("file.json");
+        let victim = folder.join("victim.txt");
+        fs::write(&victim, b"not yours").expect("written");
+        // A hard link needs no privileges, unlike a symbolic one.
+        fs::hard_link(&victim, temporary_path(&path)).expect("linked");
+        write_atomically(&path, b"settings").expect("written");
+        assert_eq!(fs::read(&victim).expect("still there"), b"not yours");
+        assert_eq!(fs::read(&path).expect("the file is there"), b"settings");
+        assert!(!temporary_path(&path).exists());
+    }
+
+    #[test]
+    fn each_process_writes_through_its_own_temporary_file() {
+        let path = Path::new("folder").join("file.json");
+        let temporary = temporary_path(&path);
+        let name = temporary.file_name().and_then(|name| name.to_str());
+        let expected = format!("file.{}.tmp", std::process::id());
+        assert_eq!(name, Some(expected.as_str()));
+    }
+
+    #[test]
+    fn a_leftover_temporary_file_from_a_crash_does_not_block_the_write() {
+        let path = test_dir("data-folder-leftover").join("file.json");
+        fs::write(temporary_path(&path), b"half a fi").expect("written");
+        write_atomically(&path, b"whole").expect("written");
+        assert_eq!(fs::read(&path).expect("the file is there"), b"whole");
+        assert!(!temporary_path(&path).exists());
+    }
 }

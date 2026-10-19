@@ -723,4 +723,51 @@ mod tests {
         assert!(file.save(&Settings::default()).is_err());
         assert_eq!(file.load().0, sample());
     }
+
+    #[test]
+    fn a_maximized_window_is_kept_with_its_last_normal_frame() {
+        let window = r#""window": {"x": 10, "y": 20, "width": 1000.0, "height": 700.0"#;
+        let text = format!(r#"{{"version": 1, {window}, "maximized": true}}}}"#);
+        let (read, _) = Settings::from_json(&text).expect("read");
+        let written = read.to_json();
+        assert!(written.contains(r#""maximized": true"#), "{written}");
+        assert!(written.contains(r#""width": 1000.0"#), "{written}");
+        // A file from before the flag reads as not maximized.
+        let text = format!(r#"{{"version": 1, {window}}}}}"#);
+        let (read, _) = Settings::from_json(&text).expect("read");
+        assert!(read.to_json().contains(r#""maximized": false"#));
+    }
+
+    #[test]
+    fn a_newer_file_is_kept_aside_before_the_first_save_over_it() {
+        let folder = test_dir("settings-newer-kept");
+        let path = folder.join(FILE_NAME);
+        let kept = folder.join("settings.newer.json");
+        let mut newer = sample();
+        newer.version = VERSION + 1;
+        let newer_text = newer.to_json();
+        fs::write(&path, &newer_text).expect("written");
+        // An older copy kept earlier is replaced.
+        fs::write(&kept, b"an older copy").expect("written");
+        let file = SettingsFile::at(path.clone());
+        assert!(matches!(file.load().1, Loaded::Ignored(_)));
+
+        file.save(&Settings::default()).expect("saved");
+        assert_eq!(fs::read_to_string(&kept).expect("kept"), newer_text);
+        assert_eq!(file.load().0, Settings::default());
+
+        // The file is this build's now: the next save leaves the copy alone.
+        file.save(&sample()).expect("saved again");
+        assert_eq!(fs::read_to_string(&kept).expect("kept"), newer_text);
+    }
+
+    #[test]
+    fn a_file_this_build_reads_is_not_kept_aside() {
+        let folder = test_dir("settings-not-newer");
+        let path = folder.join(FILE_NAME);
+        let file = SettingsFile::at(path.clone());
+        file.save(&sample()).expect("saved");
+        file.save(&Settings::default()).expect("saved again");
+        assert!(!folder.join("settings.newer.json").exists());
+    }
 }
