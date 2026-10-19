@@ -400,6 +400,38 @@ pub trait Backend {
     fn poll(&mut self) -> bool {
         false
     }
+
+    /// The windows' own settings as last saved: what the UI shows them with
+    /// at launch.
+    fn view_settings(&self) -> ViewSettings {
+        ViewSettings::default()
+    }
+
+    /// The windows' own settings changed; they are saved with the rest.
+    fn set_view_settings(&mut self, _settings: ViewSettings) {}
+
+    /// Saves the settings now, without waiting for the next poll: the app
+    /// is about to quit.
+    fn save_settings(&mut self) {}
+}
+
+/// Where the main window was and how big: the position of its outer frame
+/// in physical pixels, its inner size in logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct WindowFrame {
+    pub x: i32,
+    pub y: i32,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// What the windows themselves keep across restarts.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ViewSettings {
+    /// View > Show Virtual Devices.
+    pub show_virtual_devices: bool,
+    /// The main window's place and size, once it has been shown.
+    pub window: Option<WindowFrame>,
 }
 
 /// Clamps a typed or stepped delay to what the sync controls accept.

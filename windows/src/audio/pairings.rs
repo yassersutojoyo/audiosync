@@ -19,17 +19,16 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use audiosync_airplay::pairing::Credentials;
 use zeroize::Zeroizing;
 
+use crate::data_folder;
+
 /// The file's name in the app's data folder.
 pub const FILE_NAME: &str = "airplay-pairings.dat";
-
-/// The app's data folder under `%LOCALAPPDATA%`.
-pub const FOLDER_NAME: &str = "AudioSync";
 
 /// The first bytes of the decrypted file, with its format version.
 const MAGIC: &[u8] = b"AudioSync pairings 1\n";
@@ -133,11 +132,7 @@ impl PairingStore {
     /// Where the app keeps the file: in `%LOCALAPPDATA%\AudioSync`, or
     /// `None` when Windows names no such folder.
     pub fn default_path() -> Option<PathBuf> {
-        let folder = std::env::var_os("LOCALAPPDATA")?;
-        let folder = PathBuf::from(folder);
-        folder
-            .is_absolute()
-            .then(|| folder.join(FOLDER_NAME).join(FILE_NAME))
+        data_folder::folder().map(|folder| folder.join(FILE_NAME))
     }
 
     /// The store kept in `path`, with what it holds now.
@@ -199,23 +194,9 @@ impl PairingStore {
         }
         let plain = encode(&self.entries)?;
         let sealed = (self.sealer.seal)(&plain)?;
-        if let Some(folder) = path.parent() {
-            fs::create_dir_all(folder)?;
-        }
         // Flushed to disk before it replaces the old file, so a power cut
-        // leaves the old file or the new one, never an empty one; a temporary
-        // file left by a failed write is removed.
-        let temporary = path.with_extension("tmp");
-        let replaced = fs::File::create(&temporary)
-            .and_then(|mut file| {
-                file.write_all(&sealed)?;
-                file.sync_all()
-            })
-            .and_then(|()| fs::rename(&temporary, path));
-        if replaced.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        replaced
+        // leaves the old file or the new one, never an empty one.
+        data_folder::write_atomically(path, &sealed)
     }
 }
 

@@ -21,7 +21,8 @@ use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::ui_model::{
-    self, AppState, Backend, NoticeMessage, PinPrompt, SourceKind, SpeakerState,
+    self, AppState, Backend, NoticeMessage, PinPrompt, SourceKind, SpeakerState, ViewSettings,
+    WindowFrame,
 };
 use crate::{
     AboutDialog, AirPlayProblem, Availability, EqualizerWindow, GroupItem, GroupNameDialog,
@@ -72,6 +73,10 @@ const FLYOUT_NOTICE_LIMIT: usize = 1;
 
 /// How often the backend is polled for what happened on its own.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How often, 20 ms apart, the saved main window size waits for the native
+/// window before it gives up (about two seconds).
+const NATIVE_WINDOW_TRIES: u8 = 100;
 
 /// The parts of the tray flyout that a refresh can remove, with the controls
 /// in them: the listed notice, the button for more notices, the group rows
@@ -171,6 +176,24 @@ fn with_app(app: &Weak<App>, action: impl FnOnce(&App)) {
     }
 }
 
+/// Sets the main window's size as soon as its native window exists, checking
+/// every 20 ms up to `tries` times.
+fn set_size_once_native(main: slint::Weak<MainWindow>, size: slint::LogicalSize, tries: u8) {
+    use slint::winit_030::WinitWindowAccessor;
+
+    Timer::single_shot(Duration::from_millis(20), move || {
+        let Some(window_owner) = main.upgrade() else {
+            return;
+        };
+        let window = window_owner.window();
+        if window.with_winit_window(|_| ()).is_some() {
+            window.set_size(size);
+        } else if tries > 1 {
+            set_size_once_native(main, size, tries - 1);
+        }
+    });
+}
+
 impl App {
     /// The windows over `backend`; what they do themselves goes to `log`.
     pub fn new(backend: Box<dyn Backend>, log: DebugLog) -> Result<Rc<App>, slint::PlatformError> {
@@ -214,6 +237,7 @@ impl App {
         app.connect_equalizer();
         app.connect_dialogs();
         app.connect_guide();
+        app.restore_view();
         app.refresh();
         let weak = Rc::downgrade(&app);
         app.poll_timer
@@ -935,7 +959,75 @@ impl App {
 
     fn show_virtual_devices(&self, on: bool) {
         self.ui.borrow_mut().show_virtual = on;
+        self.remember_view();
         self.refresh();
+    }
+
+    /// The main window's place and size while it shows normally (not
+    /// maximized or minimized).
+    fn main_frame(&self) -> Option<WindowFrame> {
+        let window = self.main.window();
+        if !window.is_visible() || window.is_maximized() || window.is_minimized() {
+            return None;
+        }
+        let position = window.position();
+        let size = window.size().to_logical(window.scale_factor());
+        Some(WindowFrame {
+            x: position.x,
+            y: position.y,
+            width: f64::from(size.width),
+            height: f64::from(size.height),
+        })
+    }
+
+    /// Hands the windows' own settings to the backend, which saves them with
+    /// the rest: View > Show Virtual Devices, and the main window's frame
+    /// when it shows (else the last one).
+    fn remember_view(&self) {
+        let mut backend = self.backend.borrow_mut();
+        let saved = backend.view_settings();
+        let settings = ViewSettings {
+            show_virtual_devices: self.ui.borrow().show_virtual,
+            window: self.main_frame().or(saved.window),
+        };
+        if settings != saved {
+            backend.set_view_settings(settings);
+        }
+    }
+
+    /// Shows the windows with the settings saved last time: View > Show
+    /// Virtual Devices, and the main window's size and, when it is still on
+    /// a monitor, its place.
+    fn restore_view(&self) {
+        let saved = self.backend.borrow().view_settings();
+        self.ui.borrow_mut().show_virtual = saved.show_virtual_devices;
+        let Some(frame) = saved.window else {
+            return;
+        };
+        let window = self.main.window();
+        let size = slint::LogicalSize::new(frame.width as f32, frame.height as f32);
+        window.set_size(size);
+        // The native menu bar is attached when the native window is created
+        // and takes its height out of a size set before that, so the window
+        // would shrink by the menu bar at every restart: set the size again
+        // once the native window exists.
+        set_size_once_native(self.main.as_weak(), size, NATIVE_WINDOW_TRIES);
+        if crate::platform::is_on_a_monitor(frame.x, frame.y) {
+            window.set_position(slint::PhysicalPosition::new(frame.x, frame.y));
+        }
+        self.log.log(|| {
+            format!(
+                "main window: {} x {} as last time",
+                frame.width, frame.height
+            )
+        });
+    }
+
+    /// Saves the settings now, with the main window's frame: the app is
+    /// about to quit.
+    pub fn save_settings(&self) {
+        self.remember_view();
+        self.backend.borrow_mut().save_settings();
     }
 
     fn step_delay(&self, id: &str, delta: i32) {
@@ -1058,6 +1150,7 @@ impl App {
     /// Closing the main window keeps AudioSync running in the tray, like the
     /// Mac app in the menu bar. Without a tray icon, it quits.
     fn close_main(&self) {
+        self.remember_view();
         let _ = self.main.hide();
         if !self.tray_available.get() {
             let _ = slint::quit_event_loop();

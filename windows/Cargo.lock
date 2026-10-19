@@ -501,6 +501,8 @@ dependencies = [
  "audiosync-airplay",
  "audiosync-core",
  "embed-resource",
+ "serde",
+ "serde_json",
  "slint",
  "slint-build",
  "tray-icon",

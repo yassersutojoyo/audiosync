@@ -23,6 +23,10 @@ audiosync-airplay = { path = "../airplay" }
 # to close the tray flyout when it loses focus. Pinned to the 1.18 line, like
 # Slint itself.
 slint = { version = "~1.18.1", features = ["unstable-winit-030"] }
+# The settings file in the app's data folder, as JSON (both MIT OR
+# Apache-2.0); Slint's crates already bring serde into the app.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 # Wipes the decrypted Apple TV pairing store from memory (Apache-2.0 OR MIT);
 # the AirPlay sender already depends on it.
 zeroize = "1.8.1"
