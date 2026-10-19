@@ -9,8 +9,8 @@
 #               leaves the pipe after streaming pauses, stops and starts again.
 # Also runs shellcheck on the scripts in scripts/shellcheck-files.txt (it fails
 # if shellcheck isn't installed: brew install shellcheck) and the private-reference
-# check, scripts/privacy_check.py. The FIFO suite, the soak harness and the
-# engine test link the Rust core, so this builds it first with
+# check, scripts/privacy_check.py. The logic and FIFO suites, the soak harness
+# and the engine test link the Rust core, so this builds it first with
 # scripts/build_core.sh (which needs a Rust toolchain).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -131,21 +131,24 @@ else
   echo "PASSED"
 fi
 
-echo "▶ logic"
-build logic Tests/logictest.swift PipeMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
-  Equalizer.swift Diagnostics.swift AirPlayPairing.swift AirPlayReconcile.swift EngineLifecycle.swift Notices.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \
-  AudioDevices.swift OwnToneOutputs.swift OwnTonePlayer.swift AirPlayEngineConfig.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift \
-  AirPlayImpl.swift NativeAirPlayModel.swift WindowRules.swift AppSettings.swift AppLifecycle.swift
-"$OUT/logic/run" || status=1
-
 echo "▶ Rust core (scripts/build_core.sh)"
 if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
+  echo "▶ logic"
+  # The local delay model (LocalDelay.swift) asks the core, and the texts
+  # (Localization.swift) name the capture's errors, which bring the engine's
+  # parts along: the logic suite links the core too.
+  build logic Tests/logictest.swift PipeMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
+    AirPlayPairing.swift AirPlayReconcile.swift EngineLifecycle.swift Notices.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \
+    AudioDevices.swift OwnToneOutputs.swift OwnTonePlayer.swift AirPlayEngineConfig.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift \
+    AirPlayImpl.swift NativeAirPlayModel.swift WindowRules.swift AppSettings.swift AppLifecycle.swift LocalDelay.swift \
+    Localization.swift ProcessTapCapture.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
+  "$OUT/logic/run" || status=1
   echo "▶ fifo and the core's app-side parts"
   build fifo Tests/fifotest.swift "${ENGINE_PARTS[@]}" PipeMetadata.swift -- "${CORE[@]}"
   "$OUT/fifo/run" || status=1
 else
   tail -n 20 "$OUT/core.log"
-  echo "❌ the Rust core did not build, so the suites that link it can't run"
+  echo "❌ the Rust core did not build, so the suites that link it (logic, fifo) can't run"
   status=1
 fi
 

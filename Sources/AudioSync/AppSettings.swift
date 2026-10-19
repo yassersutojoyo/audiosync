@@ -48,6 +48,14 @@ struct AppSettings: Equatable {
         /// engine. Never written now; a value left there has no effect
         /// (`RetiredEngineChoice`).
         static let retiredEngineChoice = "engineImpl"
+        /// Each local speaker's offset in ms relative to the reference, by device UID (S175).
+        static let localOffsets = "localOffsetMsByUID"
+        /// The bundled AirPlay engine's AirPlay delay in ms (S178).
+        static let airPlayDelay = "airPlayDelayMs"
+        /// AudioSync's own sender's AirPlay delay adjustment in ms (S178).
+        static let nativeAirPlayAdjustment = "nativeAirPlayAdjustmentMs"
+        /// True once the delays were migrated to offsets (S179).
+        static let localDelaysMigrated = "localDelayModelMigrated"
     }
 
     /// Where a speaker without a volume of its own starts (S71, S105).
@@ -71,6 +79,9 @@ struct AppSettings: Equatable {
     var appearance = AppAppearance.system
     /// The delay a local speaker plays with until it gets one of its own.
     var defaultDelayMs = AppSettings.standardDelayMs
+    var localOffsets: [String: Double] = [:]
+    var airPlayDelay = AirPlayDelay()
+    var localDelaysMigrated = false
 
     /// Reads every setting through `read`, which returns what is stored for a
     /// key (UserDefaults' `object(forKey:)`), or nil.
@@ -189,6 +200,8 @@ struct SettingsStore {
     func save(showVirtualDevices: Bool) { write(showVirtualDevices, Keys.showVirtualDevices) }
 
     func save(appearance: AppAppearance) { write(appearance.defaultsValue, Keys.appearance) }
+
+    func migrateLocalDelays(listed: [String], reference: String?) -> LocalDelay.Migration? { nil }
 }
 
 /// The audio engine choice of older builds: the `engineImpl` setting and the
