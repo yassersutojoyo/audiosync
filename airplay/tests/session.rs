@@ -4,6 +4,7 @@
 
 mod common;
 
+use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::time::Duration;
 
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, Warning};
@@ -12,12 +13,13 @@ use audiosync_airplay::metadata::{Metadata, MetadataError, MetadataSupport, Trac
 use audiosync_airplay::rtsp::{JackKind, JackStatus};
 use audiosync_airplay::sdp::{self, Codec};
 use audiosync_airplay::session::{
-    Output, ReceiverPorts, SessionEvent, State, UdpSendResult, Verifier,
+    MediaDestinations, Output, ReceiverPorts, SessionConfig, SessionEvent, State, UdpSendResult,
+    Verifier,
 };
 use audiosync_airplay::volume::Volume;
 use common::{
-    CONTROL_PORT, FakeReceiver, Link, PasswordGate, RECEIVER, SENDER, START, TIMING_PORT, config,
-    digest_params,
+    CONTROL_PORT, FakeReceiver, Link, PasswordGate, RAOP_PORT, RECEIVER, RECEIVER_V6, SENDER,
+    SENDER_V6, START, TIMING_PORT, config, connection, digest_params,
 };
 
 const URI: &str = "rtsp://192.0.2.10/3141592653";
@@ -84,6 +86,10 @@ fn rtsp_happy_path_runs_options_to_record_then_the_initial_volume() {
             server_port: 50_000,
             control_port: 50_001,
             timing_port: 50_002,
+        },
+        destinations: MediaDestinations {
+            audio: SocketAddr::new(RECEIVER, 50_000),
+            control: SocketAddr::new(RECEIVER, 50_001),
         },
     }));
 
@@ -702,6 +708,22 @@ fn digest_wrong_or_missing_password() {
     // Neither is retried by the host on its own (P142's stop list).
     assert!(ErrorKind::PasswordRequired.needs_user());
     assert!(ErrorKind::WrongPassword.needs_user());
+
+    // A challenge that offers only qop=auth-int can't be answered: a
+    // protocol error that says so, not a wrong password after a futile
+    // retry.
+    let mut receiver = FakeReceiver::new();
+    let mut gate = PasswordGate::new("hunter2");
+    gate.qop = true;
+    gate.qop_options = "auth-int".to_owned();
+    receiver.gate = Some(gate);
+    let mut link = Link::new(password_config("hunter2"), receiver);
+    link.connect();
+    let error = link.failure().expect("failed");
+    assert_eq!(error.kind, ErrorKind::ProtocolError);
+    assert_eq!(error.status, Some(401));
+    assert!(error.detail.expect("detail").contains("auth-int"));
+    assert_eq!(link.keys(), ["OPTIONS"], "no retry");
 }
 
 // covers: P39
@@ -818,6 +840,108 @@ fn errors_connect_and_response_timeouts() {
     assert_eq!(error.method.map(|m| m.as_str()), Some("SETUP"));
     assert!(link.closed);
     assert_eq!(link.session.poll_timeout(), None);
+}
+
+// covers: P17
+#[test]
+fn a_failed_connect_moves_to_the_next_address_and_the_session_follows_it() {
+    // The connect order of P17 comes from discovery; the session takes the
+    // addresses in that order, one attempt at a time.
+    let v4 = SocketAddr::new(RECEIVER, RAOP_PORT);
+    let v6 = SocketAddr::new(RECEIVER_V6, RAOP_PORT);
+    let link_local = SocketAddr::V6(SocketAddrV6::new(
+        Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0x20),
+        RAOP_PORT,
+        0,
+        3,
+    ));
+    let mut link = Link::new(
+        SessionConfig::new(vec![v4, v6, link_local], Volume::Db(-15.0)),
+        FakeReceiver::new(),
+    );
+    link.pump();
+    assert_eq!(link.connects, [v4]);
+
+    // IPv4 is refused: the global IPv6 address is next.
+    link.session.handle_connect_failed(link.now);
+    link.pump();
+    assert_eq!(link.connects, [v4, v6]);
+    assert!(kinds(&link).is_empty());
+
+    // That attempt hangs for 5 s: the link-local address is next, with its
+    // own 5 s.
+    link.advance(Duration::from_secs(5));
+    assert_eq!(link.connects, [v4, v6, link_local]);
+    assert_eq!(
+        link.session.poll_timeout(),
+        Some(link.now + Duration::from_secs(5))
+    );
+    assert!(kinds(&link).is_empty());
+
+    // It connects; the URI, the SDP and the UDP traffic follow the
+    // connection: its local address, its family, and the remote address
+    // with its scope.
+    let local = IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0x10));
+    link.session.handle_connected(connection(local), link.now);
+    link.pump();
+    assert_eq!(link.session.state(), State::Playing, "{:?}", link.events);
+    assert_eq!(link.session.remote_addr(), Some(link_local));
+    assert_eq!(link.last("ANNOUNCE").uri, "rtsp://fe80::10/3141592653");
+    let sdp = String::from_utf8(link.last("ANNOUNCE").body.clone()).expect("UTF-8");
+    assert!(sdp.contains("\r\no=AudioSync 3141592653 0 IN IP6 fe80::10\r\n"));
+    assert!(sdp.contains("\r\nc=IN IP6 fe80::20\r\n"));
+    let destinations = link.session.media_destinations().expect("set up");
+    let scoped = |port| {
+        SocketAddr::V6(SocketAddrV6::new(
+            Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0x20),
+            port,
+            0,
+            3,
+        ))
+    };
+    assert_eq!(destinations.audio, scoped(50_000));
+    assert_eq!(destinations.control, scoped(50_001));
+    assert!(link.events.iter().any(|event| matches!(
+        event,
+        SessionEvent::Recording { destinations: d, .. } if *d == destinations
+    )));
+
+    // A global IPv6 connection gives an IPv6 URI and SDP without a scope.
+    let mut link = Link::new(
+        SessionConfig::new(vec![v4, v6], Volume::Db(-15.0)),
+        FakeReceiver::new(),
+    );
+    link.pump();
+    link.session.handle_connect_failed(link.now);
+    link.connect();
+    assert_eq!(link.session.state(), State::Playing);
+    assert_eq!(link.last("SETUP").uri, "rtsp://2001:db8::10/3141592653");
+    assert_eq!(link.session.connection().map(|c| c.local), Some(SENDER_V6));
+    assert_eq!(
+        link.session.media_destinations().map(|d| d.audio),
+        Some(SocketAddr::new(RECEIVER_V6, 50_000))
+    );
+
+    // After the last address, a failed or hanging connect is Unreachable.
+    let mut link = Link::new(
+        SessionConfig::new(vec![v4, v6], Volume::Db(-15.0)),
+        FakeReceiver::new(),
+    );
+    link.session.handle_connect_failed(link.now);
+    link.advance(Duration::from_secs(5));
+    let error = link.failure().expect("unreachable");
+    assert_eq!(error.kind, ErrorKind::Unreachable);
+    assert_eq!(error.detail, Some("connect timed out"));
+    assert_eq!(link.connects, [v4, v6]);
+
+    // Without any address the session fails at once.
+    let mut link = Link::new(
+        SessionConfig::new(Vec::new(), Volume::Db(-15.0)),
+        FakeReceiver::new(),
+    );
+    link.pump();
+    assert_eq!(kinds(&link), [ErrorKind::Unreachable]);
+    assert!(link.connects.is_empty());
 }
 
 // covers: P20

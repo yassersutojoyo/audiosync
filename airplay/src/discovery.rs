@@ -13,7 +13,7 @@ pub mod txt;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr, SocketAddrV6};
 
 pub use resolve::{DnsRecord, Resolver};
 pub use txt::{AirPlayTxt, RaopTxt, Txt};
@@ -193,6 +193,14 @@ impl ScopedAddr {
 
     pub fn with_scope(ip: IpAddr, scope_id: u32) -> ScopedAddr {
         ScopedAddr { ip, scope_id }
+    }
+
+    /// The socket address with this port; an IPv6 address keeps its scope.
+    pub fn socket_addr(self, port: u16) -> SocketAddr {
+        match self.ip {
+            IpAddr::V4(ip) => SocketAddr::new(IpAddr::V4(ip), port),
+            IpAddr::V6(ip) => SocketAddr::V6(SocketAddrV6::new(ip, port, 0, self.scope_id)),
+        }
     }
 }
 
@@ -597,6 +605,17 @@ impl Device {
             .map(|endpoint| connect_order(&endpoint.addresses))
             .unwrap_or_default()
     }
+
+    /// The RAOP service's addresses in connect order with its SRV port, as a
+    /// session's [`SessionConfig::addresses`](crate::session::SessionConfig)
+    /// takes them (P17, P20).
+    pub fn connect_socket_addrs(&self) -> Vec<SocketAddr> {
+        let port = self.raop.as_ref().map_or(0, |endpoint| endpoint.port);
+        self.connect_addresses()
+            .into_iter()
+            .map(|address| address.socket_addr(port))
+            .collect()
+    }
 }
 
 /// The connect order of P17: IPv4, then IPv6 global, then IPv6 link-local
@@ -691,8 +710,9 @@ impl Directory {
                 DirectoryEvent::Updated(Box::new(device))
             }
             None => {
+                // The PCM refusal stays remembered: the device may come back
+                // (P74).
                 self.devices.remove(&key);
-                self.pcm_refused.remove(&key);
                 DirectoryEvent::Removed(key)
             }
         }
@@ -707,7 +727,9 @@ impl Directory {
     }
 
     /// Remembers that the device refused a PCM ANNOUNCE, so later sessions
-    /// use ALAC (P74).
+    /// use ALAC (P74). The choice is kept for as long as the directory
+    /// lives, also while the device is gone from the network, and also for a
+    /// device that isn't listed yet.
     pub fn remember_pcm_refused(&mut self, key: &DeviceKey) {
         self.pcm_refused.insert(key.clone());
     }

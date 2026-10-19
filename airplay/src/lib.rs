@@ -16,19 +16,33 @@
 //!   RFC 2617 digest authentication.
 //! - [`session`]: the AirPlay 1 session from OPTIONS to TEARDOWN, with volume,
 //!   metadata and the error classification of section 10.
+//! - [`stream`]: one audio stream to many speakers: the host's real-time
+//!   input ([`input`]), the format and payloads ([`audio`], [`alac`]), RTP,
+//!   sync, resend and timing packets ([`rtp`]) on the sender clock
+//!   ([`clock`]), the arrival model and send margin ([`rate`]) and the shared
+//!   payload stores ([`store`]), with per-speaker delay.
 //!
-//! Audio encoding, RTP, timing, retransmission, pairing crypto, AirPlay 2 and
-//! real sockets come later; the seams they plug into are named where they
-//! sit (for example [`session::Verifier`] and [`discovery::Browser`]).
+//! Pairing crypto, AirPlay 2, real sockets and threads come later; the seams
+//! they plug into are named where they sit (for example
+//! [`session::Verifier`], [`session::Output::Connect`] and
+//! [`discovery::Browser`]).
 
+pub mod alac;
+pub mod audio;
+pub mod clock;
 pub mod digest;
 pub mod discovery;
 pub mod error;
 pub mod ids;
+pub mod input;
 pub mod metadata;
+pub mod rate;
+pub mod rtp;
 pub mod rtsp;
 pub mod sdp;
 pub mod session;
+pub mod store;
+pub mod stream;
 pub mod volume;
 
 /// The crate version, which the sender names itself with (P5).

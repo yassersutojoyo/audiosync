@@ -1,4 +1,4 @@
-//! Random identifiers of one session (P5, P22, P23, P32, P37).
+//! Random identifiers of one session (P5, P22, P23, P32, P37, P78).
 //!
 //! Every identifier the sender puts on the wire is random and fresh for each
 //! session; none is derived from a hardware address, serial number or user
@@ -53,12 +53,15 @@ pub struct SessionIds {
     pub first_rtptime: u32,
     /// Client nonce for digest authentication with `qop=auth` (P37).
     pub cnonce: u64,
+    /// The SSRC of the session's RTP packets, fixed within the session
+    /// (P78).
+    pub ssrc: u32,
 }
 
 impl SessionIds {
     /// Draws a fresh set of identifiers.
     pub fn generate(entropy: &mut impl Entropy) -> Result<SessionIds, EntropyUnavailable> {
-        let mut bytes = [0u8; 30];
+        let mut bytes = [0u8; 34];
         entropy.fill(&mut bytes)?;
         let u32_at = |at: usize| {
             u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
@@ -71,6 +74,7 @@ impl SessionIds {
             first_seq: u16::from_be_bytes([bytes[16], bytes[17]]),
             first_rtptime: u32_at(18),
             cnonce: u64_at(22),
+            ssrc: u32_at(30),
         })
     }
 

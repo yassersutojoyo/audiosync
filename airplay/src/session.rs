@@ -1,10 +1,13 @@
 //! The AirPlay 1 session with one receiver, from OPTIONS to TEARDOWN.
 //!
-//! [`Session`] is sans-I/O. The driver opens the TCP connection to the
-//! receiver's RAOP port, opens the session's control and timing sockets, and
-//! then feeds the session what happens: the connect result, bytes read,
-//! timer expiries, timing requests seen on the timing socket and UDP send
-//! results. The session answers through [`Session::poll_output`] with bytes
+//! [`Session`] is sans-I/O. It names the receiver address to connect to
+//! ([`Output::Connect`], in the order of P17, the next one after a failed or
+//! timed-out attempt); the driver opens that TCP connection, then opens the
+//! session's control and timing sockets in the connection's address family
+//! (P82), and hands the session the connection's local address and the two
+//! ports ([`Session::handle_connected`]). From then on it feeds the session
+//! what happens: bytes read, timer expiries, timing requests seen on the
+//! timing socket and UDP send results. The session answers through [`Session::poll_output`] with bytes
 //! to write, events for the host and the order to close, and through
 //! [`Session::poll_timeout`] with the next time it wants to be woken.
 //!
@@ -18,7 +21,7 @@
 
 use std::collections::VecDeque;
 use std::fmt;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV6};
 use std::time::{Duration, Instant};
 
 use crate::digest::{self, Challenge};
@@ -60,16 +63,11 @@ pub trait Verifier: Send {
 
 /// What a session needs to know before it starts.
 pub struct SessionConfig {
-    /// The sender's own address on the connection: request URIs and the SDP
-    /// `o=` line (P23, P28).
-    pub local_addr: IpAddr,
-    /// The receiver address the connection goes to (P17): the SDP `c=` line.
-    pub remote_addr: IpAddr,
-    /// The session's local control port. The socket must be open and
-    /// answering before the session starts, since SETUP announces it (P31).
-    pub control_port: u16,
-    /// The session's local timing port, open before the session starts (P31).
-    pub timing_port: u16,
+    /// The receiver's RAOP addresses with their port, in the connect order
+    /// of P17 ([`Device::connect_socket_addrs`](crate::discovery::Device::connect_socket_addrs)).
+    /// The session asks for one at a time and moves to the next after a
+    /// failed or timed-out attempt (P17, P134).
+    pub addresses: Vec<SocketAddr>,
     /// From [`Device::choose_codec`](crate::discovery::Device::choose_codec)
     /// (P74).
     pub codec: Codec,
@@ -92,24 +90,18 @@ pub struct SessionConfig {
     /// RAOP `sv=true`: the sender scales the samples and sends no volume
     /// requests (P121).
     pub software_volume: bool,
+    /// RAOP `sm=true`: the sender applies mute to the samples, so mute is
+    /// never sent as −144; levels still go as volume requests (P121).
+    pub software_mute: bool,
     /// The metadata types the receiver lists (P123).
     pub metadata: MetadataSupport,
 }
 
 impl SessionConfig {
     /// A configuration for an open receiver with ALAC and no metadata.
-    pub fn new(
-        local_addr: IpAddr,
-        remote_addr: IpAddr,
-        control_port: u16,
-        timing_port: u16,
-        initial_volume: Volume,
-    ) -> SessionConfig {
+    pub fn new(addresses: Vec<SocketAddr>, initial_volume: Volume) -> SessionConfig {
         SessionConfig {
-            local_addr,
-            remote_addr,
-            control_port,
-            timing_port,
+            addresses,
             codec: Codec::Alac,
             alac_fallback: false,
             apple_tv_without_credentials: false,
@@ -118,6 +110,7 @@ impl SessionConfig {
             verifier: None,
             initial_volume,
             software_volume: false,
+            software_mute: false,
             metadata: MetadataSupport::default(),
         }
     }
@@ -126,10 +119,7 @@ impl SessionConfig {
 impl fmt::Debug for SessionConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SessionConfig")
-            .field("local_addr", &self.local_addr)
-            .field("remote_addr", &self.remote_addr)
-            .field("control_port", &self.control_port)
-            .field("timing_port", &self.timing_port)
+            .field("addresses", &self.addresses)
             .field("codec", &self.codec)
             .field("alac_fallback", &self.alac_fallback)
             .field(
@@ -141,6 +131,7 @@ impl fmt::Debug for SessionConfig {
             .field("verifier", &self.verifier.is_some())
             .field("initial_volume", &self.initial_volume)
             .field("software_volume", &self.software_volume)
+            .field("software_mute", &self.software_mute)
             .field("metadata", &self.metadata)
             .finish()
     }
@@ -164,6 +155,49 @@ pub enum State {
     Closed,
 }
 
+/// The connection the driver opened at the address [`Output::Connect`] named.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Connection {
+    /// The sender's own address on the TCP connection (the socket's local
+    /// address): the request URI and the SDP `o=` line (P23, P28).
+    pub local: IpAddr,
+    /// The session's local control port: a UDP socket the driver opened
+    /// after the connect, in the connection's address family, and that is
+    /// answering before SETUP announces it (P31, P82).
+    pub control_port: u16,
+    /// The session's local timing port, opened the same way (P31, P82).
+    pub timing_port: u16,
+}
+
+/// Where the session's UDP traffic goes: the address the session connected
+/// to, with its scope, and the receiver's ports from SETUP (P17, P83).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MediaDestinations {
+    /// Audio packets go to the receiver's `server_port`.
+    pub audio: SocketAddr,
+    /// Sync packets and retransmission replies go to its `control_port`.
+    pub control: SocketAddr,
+}
+
+impl MediaDestinations {
+    /// The destinations on the connected address `remote` (P17).
+    pub fn new(remote: SocketAddr, ports: ReceiverPorts) -> MediaDestinations {
+        let at = |port: u16| match remote {
+            SocketAddr::V4(address) => SocketAddr::new(IpAddr::V4(*address.ip()), port),
+            SocketAddr::V6(address) => SocketAddr::V6(SocketAddrV6::new(
+                *address.ip(),
+                port,
+                0,
+                address.scope_id(),
+            )),
+        };
+        MediaDestinations {
+            audio: at(ports.server_port),
+            control: at(ports.control_port),
+        }
+    }
+}
+
 /// The receiver's ports from the SETUP answer (P31).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReceiverPorts {
@@ -185,12 +219,14 @@ pub enum SessionEvent {
     /// `Audio-Jack-Status`, when first seen or changed (P24).
     AudioJack(JackStatus),
     /// RECORD succeeded: the first packet's sequence number and timestamp,
-    /// the receiver's `Audio-Latency` if it sent one (P32), and its ports.
+    /// the receiver's `Audio-Latency` if it sent one (P32), its ports, and
+    /// where the UDP traffic goes (P17, P83).
     Recording {
         first_seq: u16,
         first_rtptime: u32,
         audio_latency: Option<u32>,
         receiver_ports: ReceiverPorts,
+        destinations: MediaDestinations,
     },
     /// A FLUSH was answered with success (P34).
     Flushed { seq: u16, rtptime: u32 },
@@ -208,6 +244,10 @@ pub enum SessionEvent {
 /// What the driver does next.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Output {
+    /// Open a TCP connection to this address, giving up any attempt still in
+    /// progress, and report the result with [`Session::handle_connected`] or
+    /// [`Session::handle_connect_failed`] (P17, P20).
+    Connect(SocketAddr),
     /// Write these bytes to the RTSP connection.
     Send(Vec<u8>),
     /// Tell the host.
@@ -274,13 +314,24 @@ struct Auth {
     count: u32,
 }
 
+/// The connection a session runs on.
+#[derive(Debug, Clone, Copy)]
+struct Connected {
+    remote: SocketAddr,
+    connection: Connection,
+}
+
 /// One AirPlay 1 session.
 #[derive(Debug)]
 pub struct Session {
     config: SessionConfig,
     ids: SessionIds,
     state: State,
-    created_at: Instant,
+    /// The index in `config.addresses` of the connect attempt in progress or
+    /// done, and when that attempt started.
+    attempt: usize,
+    attempt_started: Instant,
+    connected: Option<Connected>,
     parser: Parser,
     next_cseq: u32,
     in_flight: Option<InFlight>,
@@ -303,13 +354,16 @@ pub struct Session {
 }
 
 impl Session {
-    /// A session that waits for its TCP connect, started at `now`.
+    /// A session that asks for its first connect at `now`. Without any
+    /// address it fails at once as Unreachable.
     pub fn new(config: SessionConfig, ids: SessionIds, now: Instant) -> Session {
-        Session {
+        let mut session = Session {
             config,
             ids,
             state: State::Connecting,
-            created_at: now,
+            attempt: 0,
+            attempt_started: now,
+            connected: None,
             parser: Parser::new(),
             next_cseq: 0,
             in_flight: None,
@@ -329,7 +383,17 @@ impl Session {
             server: None,
             jack: None,
             methods: None,
+        };
+        match session.config.addresses.first() {
+            Some(&address) => session.outputs.push_back(Output::Connect(address)),
+            None => session.fail(
+                ErrorKind::Unreachable,
+                None,
+                None,
+                Some("no address to connect to"),
+            ),
         }
+        session
     }
 
     pub fn state(&self) -> State {
@@ -340,10 +404,33 @@ impl Session {
         &self.ids
     }
 
-    /// The request URI, `rtsp://<sender address>/<session-id>` (P23). An IPv6
-    /// address is written as is, without brackets or scope (G16).
+    /// The request URI, `rtsp://<sender address>/<session-id>` (P23), with
+    /// the local address of the connection. An IPv6 address is written as
+    /// is, without brackets or scope (G16). Before the connect the address is
+    /// unknown and written as `0.0.0.0`.
     pub fn uri(&self) -> String {
-        format!("rtsp://{}/{}", self.config.local_addr, self.ids.session_id)
+        let local = self
+            .connected
+            .map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |c| c.connection.local);
+        format!("rtsp://{local}/{}", self.ids.session_id)
+    }
+
+    /// The receiver address the session connected to, with its scope; all
+    /// of the session's UDP traffic goes there (P17).
+    pub fn remote_addr(&self) -> Option<SocketAddr> {
+        self.connected.map(|c| c.remote)
+    }
+
+    /// The connection's local address and UDP ports, once connected.
+    pub fn connection(&self) -> Option<Connection> {
+        self.connected.map(|c| c.connection)
+    }
+
+    /// Where audio, sync and retransmission packets go, once SETUP
+    /// succeeded (P17, P83).
+    pub fn media_destinations(&self) -> Option<MediaDestinations> {
+        let remote = self.connected?.remote;
+        Some(MediaDestinations::new(remote, self.receiver_ports?))
     }
 
     /// The receiver's ports, once SETUP succeeded.
@@ -385,7 +472,7 @@ impl Session {
         }
         let mut times = Vec::new();
         if self.state == State::Connecting {
-            times.push(self.created_at + CONNECT_TIMEOUT);
+            times.push(self.attempt_started + CONNECT_TIMEOUT);
         }
         if let Some(in_flight) = &self.in_flight {
             times.push(in_flight.sent_at + RESPONSE_TIMEOUT);
@@ -401,17 +488,38 @@ impl Session {
         times.into_iter().min()
     }
 
-    /// The TCP connect succeeded: OPTIONS goes out.
-    pub fn handle_connected(&mut self, now: Instant) {
+    /// The TCP connect to the address of the last [`Output::Connect`]
+    /// succeeded, and the session's UDP sockets are open: OPTIONS goes out.
+    /// The URI, the SDP and the UDP destinations follow this connection
+    /// (P17, P23, P28).
+    pub fn handle_connected(&mut self, connection: Connection, now: Instant) {
+        if self.state != State::Connecting {
+            return;
+        }
+        let Some(&remote) = self.config.addresses.get(self.attempt) else {
+            return;
+        };
+        self.connected = Some(Connected { remote, connection });
+        self.send(Kind::Options { keepalive: false }, now, false);
+    }
+
+    /// The TCP connect was refused or found no route: the next address is
+    /// tried, and after the last one the session is Unreachable (P17, P134).
+    pub fn handle_connect_failed(&mut self, now: Instant) {
         if self.state == State::Connecting {
-            self.send(Kind::Options { keepalive: false }, now, false);
+            self.next_attempt(now, None);
         }
     }
 
-    /// The TCP connect was refused or found no route (P134).
-    pub fn handle_connect_failed(&mut self, _now: Instant) {
-        if self.state == State::Connecting {
-            self.fail(ErrorKind::Unreachable, None, None, None);
+    /// Moves to the next address, or fails as Unreachable after the last.
+    fn next_attempt(&mut self, now: Instant, detail: Option<&'static str>) {
+        self.attempt += 1;
+        match self.config.addresses.get(self.attempt) {
+            Some(&address) => {
+                self.attempt_started = now;
+                self.outputs.push_back(Output::Connect(address));
+            }
+            None => self.fail(ErrorKind::Unreachable, None, None, detail),
         }
     }
 
@@ -456,13 +564,10 @@ impl Session {
         if self.state == State::Closed {
             return;
         }
-        if self.state == State::Connecting && now >= self.created_at + CONNECT_TIMEOUT {
-            self.fail(
-                ErrorKind::Unreachable,
-                None,
-                None,
-                Some("connect timed out"),
-            );
+        if self.state == State::Connecting {
+            if now >= self.attempt_started + CONNECT_TIMEOUT {
+                self.next_attempt(now, Some("connect timed out"));
+            }
             return;
         }
         if self
@@ -531,20 +636,27 @@ impl Session {
 
     /// Sets the speaker volume (P118, P120). Before RECORD it replaces the
     /// initial volume; while playing, a newer value replaces one still
-    /// queued. NaN is ignored. With software volume no request is sent
-    /// (P121).
+    /// queued. NaN is ignored. With software volume no request is sent,
+    /// and with software mute no mute request (P121): the stream applies
+    /// them to the samples.
     pub fn set_volume(&mut self, volume: Volume, now: Instant) {
         if matches!(volume, Volume::Db(db) if db.is_nan()) {
             return;
         }
         match self.state {
             State::Closed | State::TearingDown => {}
-            State::Playing if !self.config.software_volume => {
+            State::Playing if self.sends_volume(volume) => {
                 self.pending_volume = Some(volume);
                 self.drive(now);
             }
+            State::Playing => {}
             _ => self.config.initial_volume = volume,
         }
+    }
+
+    /// Whether a volume goes to the receiver as a request (P121).
+    fn sends_volume(&self, volume: Volume) -> bool {
+        !self.config.software_volume && !(self.config.software_mute && volume == Volume::Muted)
     }
 
     /// Asks the receiver for its volume with GET_PARAMETER (P122). Only while
@@ -709,6 +821,7 @@ impl Session {
         let cseq = self.next_cseq;
         self.next_cseq = self.next_cseq.wrapping_add(1);
         let method = kind.method();
+        let connection = self.connected.map(|c| c.connection);
         let uri = match &kind {
             Kind::Options { .. } => "*".to_owned(),
             Kind::AuthSetup => "/auth-setup".to_owned(),
@@ -731,19 +844,20 @@ impl Session {
             }
             Kind::Announce => {
                 headers.push("Content-Type", "application/sdp");
-                request.body = sdp::announce_body(
-                    self.ids.session_id,
-                    self.config.local_addr,
-                    self.config.remote_addr,
-                    self.config.codec,
-                )
-                .into_bytes();
+                let (local, remote) = match self.connected {
+                    Some(c) => (c.connection.local, c.remote.ip()),
+                    None => (Ipv4Addr::UNSPECIFIED.into(), Ipv4Addr::UNSPECIFIED.into()),
+                };
+                request.body =
+                    sdp::announce_body(self.ids.session_id, local, remote, self.config.codec)
+                        .into_bytes();
             }
             Kind::Setup => headers.push(
                 "Transport",
                 format!(
                     "RTP/AVP/UDP;unicast;interleaved=0-1;mode=record;control_port={};timing_port={}",
-                    self.config.control_port, self.config.timing_port
+                    connection.map_or(0, |c| c.control_port),
+                    connection.map_or(0, |c| c.timing_port)
                 ),
             ),
             Kind::Record => {
@@ -989,6 +1103,15 @@ impl Session {
             );
             return;
         };
+        if challenge.needs_unsupported_qop() {
+            self.fail(
+                ErrorKind::ProtocolError,
+                Some(method),
+                Some(401),
+                Some("digest challenge offers only qop=auth-int or other unsupported options"),
+            );
+            return;
+        }
         if self.config.password.is_none() {
             self.fail(ErrorKind::PasswordRequired, Some(method), Some(401), None);
             return;
@@ -1111,8 +1234,11 @@ impl Session {
     /// The RECORD answer (P26, P32, P119): media may flow, and the initial
     /// volume is queued first.
     fn on_record(&mut self, response: &Response) {
-        let Some(receiver_ports) = self.receiver_ports else {
-            // RECORD is sent only after a SETUP answer with ports.
+        let (Some(receiver_ports), Some(destinations)) =
+            (self.receiver_ports, self.media_destinations())
+        else {
+            // RECORD is sent only after a connect and a SETUP answer with
+            // ports.
             self.fail(ErrorKind::ProtocolError, Some(Method::Record), None, None);
             return;
         };
@@ -1126,8 +1252,10 @@ impl Session {
             first_rtptime: self.ids.first_rtptime,
             audio_latency,
             receiver_ports,
+            destinations,
         });
-        if !self.config.software_volume {
+
+        if self.sends_volume(self.config.initial_volume) {
             self.pending_volume = Some(self.config.initial_volume);
         }
     }
