@@ -1,7 +1,8 @@
 // Calls audiosync-core through its C header, the way the macOS app will: the
 // version, the volume curve, the presets, one equalizer pass, a ring with a
 // delay reader, the FIFO feed with its writer stepped through a C pipe sink,
-// the AirPlay sync rule and the AirPlay sender's handle, audio always a whole
+// the AirPlay sync rule, the local delay model and the AirPlay sender's
+// handle, audio always a whole
 // buffer at a time. Prints one line per check; exits 1 on a failure. Touches
 // no audio device, pipe or network; nothing plays.
 
@@ -278,6 +279,35 @@ func syncRule() {
     check(asc_delay_ms_to_frames(1820, 48_000, &frames) && frames == 87_360, "1820 ms is \(frames) frames at 48 kHz")
 }
 
+/// The local delay model: the hold-backs of the built-in speakers (the
+/// reference), a USB speaker at +150 ms and a Bluetooth speaker at -250 ms,
+/// the native sender's L, and the one-time migration of stored delays.
+func localDelayModel() {
+    let outputs = [
+        AscLocalOutput(offset_ms: 0, is_reference: true),
+        AscLocalOutput(offset_ms: 150, is_reference: false),
+        AscLocalOutput(offset_ms: -250, is_reference: false),
+    ]
+    var held = [Double](repeating: -1, count: 3)
+    check(asc_local_hold_backs_ms(outputs, 3, false, 2000, &held) && held == [250, 400, 0],
+          "only local outputs: hold-backs \(held) ms")
+    check(asc_local_hold_backs_ms(outputs, 3, true, 2000, &held) && held == [2000, 2150, 1750],
+          "an AirPlay speaker chosen adds L: \(held) ms")
+    check(asc_local_native_latency_ms(1750, 250) == 2000, "the native sender's L is its latency plus the adjustment")
+    var offset: Double = 0
+    check(asc_local_offset_sanitize_ms(-2500, &offset) && offset == -2000, "offsets stop at \(offset) ms")
+    let stored = [
+        AscStoredDelay(is_reference: true, has_stored_delay: true, stored_delay_ms: 2300),
+        AscStoredDelay(is_reference: false, has_stored_delay: false, stored_delay_ms: 0),
+    ]
+    var offsets = [AscMigratedOffset](repeating: AscMigratedOffset(), count: 2)
+    var migration = AscDelayMigration()
+    check(asc_local_delay_migrate(stored, 2, false, 0, &offsets, &migration)
+              && migration.airplay_delay_ms == 2300 && !offsets[0].store
+              && offsets[1].store && offsets[1].offset_ms == -300,
+          "migration: AirPlay delay \(migration.airplay_delay_ms) ms, an untuned output at \(offsets[1].offset_ms) ms")
+}
+
 // AudioSync's own AirPlay sender: created, asked for receivers before any
 // discovery (none), its first event and its input, and destroyed twice
 // through the same pointer, the second time doing nothing. No discovery
@@ -327,5 +357,6 @@ versionVolumeAndEqualizer()
 ringAndReader()
 fifoFeed()
 syncRule()
+localDelayModel()
 airPlaySender()
 exit(failures == 0 ? 0 : 1)

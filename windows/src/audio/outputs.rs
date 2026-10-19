@@ -4,29 +4,29 @@
 //! The user's settings are kept per endpoint ID, whether the device is
 //! connected or not. The output policy of the core decides which renderers to
 //! add and remove (spec S117, S161); this module turns each output's settings
-//! into the delay and gain its renderer applies (S3, S71, S78) and picks the
+//! into the delay and gain its renderer applies (S3, S71, S176) and picks the
 //! format its stream uses.
 //!
-//! Each output's delay is its own trim, used to line outputs up with each
-//! other (a Bluetooth speaker with wired ones, say), and a new output starts
-//! at 0 ms. While an AirPlay speaker is chosen (S79), local outputs line up
-//! with the AirPlay sender instead: each plays at exactly L + d_local, the
-//! sender's base latency plus its own delay as d_local on the sender's 0 to
-//! 3000 ms scale (AirPlay spec P114, which replaces S78's rule under this
-//! sender). Otherwise each plays at its own delay.
-//!
-//! P114 also migrates a stored delay once, to clamp(configured − L, 0,
-//! 3000), for a delay stored with S77's meaning (the whole delay to the
-//! speakers, 2000 ms by default). The Windows app has no such delay: its
-//! settings aren't saved yet, and its delay was always a trim starting at 0,
-//! so it is used as d_local as it is; migrating it would turn every trim
-//! under L into 0.
+//! Delays follow the local delay model (S172 to S178). The reference is the
+//! listed output of kind BuiltIn with the smallest endpoint ID (S174,
+//! [`reference_output`]): it defines time 0 and has no delay setting. Every
+//! other output has an offset relative to it, −2000 to +20 000 ms, 0 until
+//! the user sets one: negative for a speaker that sounds late, such as a
+//! Bluetooth speaker. The outputs taking part (switched on, with their
+//! devices listed) play at hold-backs the core computes from their offsets
+//! ([`hold_backs`], S176): the earliest plays at once and the others wait for
+//! it by the difference. While an AirPlay speaker is chosen (S79), the
+//! AirPlay latency L comes on top: the sender's base latency L_s plus the
+//! user's adjustment A (S178), so the reference sounds with the AirPlay
+//! speakers and every other output by its offset.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use audiosync_airplay::stream::MAX_DELAY;
-use audiosync_core::policy::delay::sanitize_delay_ms;
+use audiosync_core::policy::delay::{
+    Participant, hold_backs, native_airplay_latency_ms, sanitize_airplay_adjustment_ms,
+    sanitize_offset_ms,
+};
 use audiosync_core::policy::session::sync_outputs;
 use audiosync_core::reader::delay_ms_to_frames;
 use audiosync_core::ring::is_supported_rate;
@@ -254,24 +254,35 @@ pub fn list_endpoints(readings: Vec<EndpointReading>, default_id: Option<&str>) 
     listing
 }
 
+/// The reference output among the listed ones (S174): the one of kind
+/// BuiltIn, the PC's own audio hardware, with the smallest endpoint ID in
+/// byte order, so it stays the same across launches; `None` without one.
+/// Windows' default output plays no part, since the user changes it freely.
+pub fn reference_output(listed: &[Endpoint]) -> Option<&str> {
+    listed
+        .iter()
+        .filter(|endpoint| endpoint.kind == OutputKind::BuiltIn)
+        .map(|endpoint| endpoint.id.as_str())
+        .min()
+}
+
 /// Whether AirPlay speakers exist to line local outputs up with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AirPlay {
-    /// No AirPlay sender runs: outputs play at their own delay.
+    /// No AirPlay sender runs: outputs line up with each other only.
     Unavailable,
     /// The AirPlay sender runs; `chosen` says whether an AirPlay speaker is
     /// chosen (S79).
     Available {
         /// Whether an AirPlay speaker is chosen.
         chosen: bool,
-        /// The sender's base latency L (P98, P113).
+        /// The sender's base latency L_s (P98, P113).
         latency: Duration,
     },
 }
 
 impl AirPlay {
-    /// What local outputs line up with: L while an AirPlay speaker is
-    /// chosen, nothing otherwise.
+    /// L_s while an AirPlay speaker is chosen, nothing otherwise.
     fn anchor(self) -> Option<Duration> {
         match self {
             AirPlay::Available {
@@ -282,17 +293,11 @@ impl AirPlay {
         }
     }
 
-    /// The delay an output with this configured delay plays at, in ms: L +
-    /// d_local while an AirPlay speaker is chosen, the configured delay
-    /// standing for d_local up to the sender's 3000 ms (P114, the sender's
-    /// `local_output_delay`), and the configured delay otherwise.
-    pub fn effective_delay_ms(self, configured_ms: f64) -> f64 {
-        match self.anchor() {
-            Some(latency) => {
-                let trim_ms = configured_ms.clamp(0.0, MAX_DELAY.as_secs_f64() * 1000.0);
-                latency.as_secs_f64() * 1000.0 + trim_ms
-            }
-            None => configured_ms,
+    /// The sender's base latency L_s in ms while a sender runs.
+    pub fn sender_latency_ms(self) -> Option<f64> {
+        match self {
+            AirPlay::Available { latency, .. } => Some(latency.as_secs_f64() * 1000.0),
+            AirPlay::Unavailable => None,
         }
     }
 }
@@ -302,7 +307,8 @@ impl AirPlay {
 pub struct OutputSettings {
     /// Whether the user turned it on.
     pub enabled: bool,
-    /// The configured delay in ms, 0 to 20 000.
+    /// Its offset relative to the reference in ms, −2000 to +20 000 (S175);
+    /// kept, but not used, while it is the reference.
     pub delay_ms: f64,
     /// The volume slider position, 0 to 100.
     pub volume: f64,
@@ -341,16 +347,91 @@ pub struct OutputPolicy {
     settings: BTreeMap<String, OutputSettings>,
     master: f64,
     airplay: AirPlay,
+    /// The native sender's adjustment A in ms, −2000 to +20 000 (S178).
+    airplay_adjustment_ms: f64,
+    /// The endpoint IDs listed now.
+    listed: BTreeSet<String>,
+    /// The reference among them (S174).
+    reference: Option<String>,
 }
 
 impl OutputPolicy {
-    /// No output set yet, the master at its default.
+    /// No output set or listed yet, the master at its default.
     pub fn new(airplay: AirPlay) -> OutputPolicy {
         OutputPolicy {
             settings: BTreeMap::new(),
             master: DEFAULT_MASTER_POSITION,
             airplay,
+            airplay_adjustment_ms: 0.0,
+            listed: BTreeSet::new(),
+            reference: None,
         }
+    }
+
+    /// Takes in the endpoints listed now: which outputs can take part, and
+    /// which one is the reference (S174).
+    pub fn set_listed(&mut self, listed: &[Endpoint]) {
+        self.listed = listed.iter().map(|endpoint| endpoint.id.clone()).collect();
+        self.reference = reference_output(listed).map(str::to_owned);
+    }
+
+    /// The reference output's endpoint ID, if one is listed (S174).
+    pub fn reference(&self) -> Option<&str> {
+        self.reference.as_deref()
+    }
+
+    /// The native sender's adjustment A in ms (S178).
+    pub fn airplay_adjustment_ms(&self) -> f64 {
+        self.airplay_adjustment_ms
+    }
+
+    /// Sets the native sender's adjustment A. Returns false when the value
+    /// was ignored because it isn't finite; others are clamped to −2000 to
+    /// +20 000 ms (S178).
+    pub fn set_airplay_adjustment_ms(&mut self, adjustment_ms: f64) -> bool {
+        match sanitize_airplay_adjustment_ms(adjustment_ms) {
+            Some(adjustment_ms) => {
+                self.airplay_adjustment_ms = adjustment_ms;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The sender's base latency L_s in ms, while a sender runs.
+    pub fn sender_latency_ms(&self) -> Option<f64> {
+        self.airplay.sender_latency_ms()
+    }
+
+    /// L while an AirPlay speaker is chosen: L_s + A, clamped to 0 to
+    /// 20 000 ms (S178); `None` otherwise.
+    fn airplay_latency_ms(&self) -> Option<f64> {
+        self.airplay.anchor().map(|latency| {
+            native_airplay_latency_ms(latency.as_secs_f64() * 1000.0, self.airplay_adjustment_ms)
+        })
+    }
+
+    /// The hold-back of output `id` in ms (S176): among the outputs taking
+    /// part (switched on and listed), with `id` counted among them, so an
+    /// output about to start gets the hold-back it will play at.
+    pub fn hold_back_ms(&self, id: &str) -> f64 {
+        let participant = |id: &str| Participant {
+            id: "",
+            offset_ms: self.settings(id).delay_ms,
+            is_reference: self.reference.as_deref() == Some(id),
+        };
+        let others = self
+            .settings
+            .iter()
+            .filter(|(other, settings)| {
+                settings.enabled && other.as_str() != id && self.listed.contains(other.as_str())
+            })
+            .map(|(other, _)| participant(other));
+        let mut taking_part = vec![participant(id)];
+        taking_part.extend(others);
+        hold_backs(&taking_part, self.airplay_latency_ms())
+            .first()
+            .map_or(0.0, |(_, held)| *held)
     }
 
     /// The settings of output `id`: what the user set, or the defaults (off,
@@ -373,10 +454,11 @@ impl OutputPolicy {
         self.entry(id).enabled = enabled;
     }
 
-    /// Sets the configured delay of output `id`. Returns false when the value
-    /// was ignored because it isn't finite; others are clamped to 0 to 20 000.
+    /// Sets the offset of output `id` relative to the reference. Returns
+    /// false when the value was ignored because it isn't finite; others are
+    /// clamped to −2000 to +20 000 ms (S175).
     pub fn set_delay_ms(&mut self, id: &str, delay_ms: f64) -> bool {
-        match sanitize_delay_ms(delay_ms) {
+        match sanitize_offset_ms(delay_ms) {
             Some(delay_ms) => {
                 self.entry(id).delay_ms = delay_ms;
                 true
@@ -414,10 +496,9 @@ impl OutputPolicy {
         self.master
     }
 
-    /// Changes the AirPlay state. Returns true when the delay of outputs
-    /// changes because of it, so running renderers need new delays (S80,
-    /// P114): an AirPlay speaker is chosen or no longer is, or L changed
-    /// while one is.
+    /// Changes the AirPlay state. Returns true when the hold-backs may change
+    /// because of it, so running renderers need re-timing (S177): an AirPlay
+    /// speaker is chosen or no longer is, or L_s changed while one is.
     pub fn set_airplay(&mut self, airplay: AirPlay) -> bool {
         let changed = airplay.anchor() != self.airplay.anchor();
         self.airplay = airplay;
@@ -433,12 +514,12 @@ impl OutputPolicy {
             .collect()
     }
 
-    /// The delay and gain a renderer for output `id` applies: its effective
-    /// delay in frames at the session rate (S3, S78) and the product of its
+    /// The delay and gain a renderer for output `id` applies: its hold-back
+    /// in frames at the session rate (S3, S176) and the product of its
     /// volume and the master volume on the cubic curve (S70, S71).
     pub fn params(&self, id: &str) -> OutputParams {
         let settings = self.settings(id);
-        let delay_ms = self.airplay.effective_delay_ms(settings.delay_ms);
+        let delay_ms = self.hold_back_ms(id);
         OutputParams {
             delay_frames: delay_ms_to_frames(delay_ms, SESSION_RATE).unwrap_or(0),
             gain: output_gain(settings.volume, self.master) as f32,
@@ -754,6 +835,122 @@ mod tests {
         assert!(listing.notes.is_empty());
     }
 
+    fn endpoint_of(id: &str, kind: OutputKind) -> Endpoint {
+        Endpoint {
+            id: id.to_owned(),
+            name: format!("Output {id}"),
+            is_default: false,
+            kind,
+        }
+    }
+
+    #[test]
+    fn the_built_in_output_with_the_smallest_endpoint_id_is_the_reference() {
+        let mut listed = vec![
+            endpoint_of("{0.0.0.00000000}.{b2}", OutputKind::BuiltIn),
+            endpoint_of("{0.0.0.00000000}.{0f}", OutputKind::Usb),
+            endpoint_of("{0.0.0.00000000}.{a7}", OutputKind::BuiltIn),
+        ];
+        assert_eq!(reference_output(&listed), Some("{0.0.0.00000000}.{a7}"));
+        // Windows' default output plays no part: the user changes it freely.
+        listed[0].is_default = true;
+        listed[1].is_default = true;
+        assert_eq!(reference_output(&listed), Some("{0.0.0.00000000}.{a7}"));
+        // Byte order: an uppercase letter sorts before a lowercase one.
+        listed.push(endpoint_of("{0.0.0.00000000}.{B9}", OutputKind::BuiltIn));
+        assert_eq!(reference_output(&listed), Some("{0.0.0.00000000}.{B9}"));
+    }
+
+    #[test]
+    fn headphones_on_the_pc_jack_are_not_the_reference() {
+        let listed = [
+            endpoint_of("a", OutputKind::Headphones),
+            endpoint_of("b", OutputKind::BuiltIn),
+        ];
+        assert_eq!(reference_output(&listed), Some("b"));
+        assert_eq!(
+            reference_output(&[endpoint_of("a", OutputKind::Headphones)]),
+            None
+        );
+    }
+
+    #[test]
+    fn no_built_in_output_means_no_reference() {
+        let listed: Vec<Endpoint> = [
+            OutputKind::Bluetooth,
+            OutputKind::Usb,
+            OutputKind::Hdmi,
+            OutputKind::DisplayPort,
+            OutputKind::Virtual,
+            OutputKind::Other,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, kind)| endpoint_of(&index.to_string(), kind))
+        .collect();
+        assert_eq!(reference_output(&listed), None);
+        assert_eq!(reference_output(&[]), None);
+    }
+
+    /// The PC's own speakers (the reference), a USB speaker at +150 ms and a
+    /// Bluetooth speaker at −250 ms, all listed; `enabled` are on.
+    fn local_delay_policy(airplay: AirPlay, enabled: &[&str]) -> OutputPolicy {
+        let mut policy = OutputPolicy::new(airplay);
+        policy.set_listed(&[
+            endpoint_of("builtin", OutputKind::BuiltIn),
+            endpoint_of("usb", OutputKind::Usb),
+            endpoint_of("bluetooth", OutputKind::Bluetooth),
+        ]);
+        policy.set_delay_ms("usb", 150.0);
+        policy.set_delay_ms("bluetooth", -250.0);
+        for id in enabled {
+            policy.set_enabled(id, true);
+        }
+        policy
+    }
+
+    /// The hold-back of output `id` in whole ms.
+    fn held_ms(policy: &OutputPolicy, id: &str) -> i64 {
+        policy.params(id).delay_frames / 48
+    }
+
+    #[test]
+    fn hold_backs_follow_the_offsets_of_the_outputs_taking_part() {
+        let all = ["builtin", "usb", "bluetooth"];
+        let policy = local_delay_policy(AirPlay::Unavailable, &all);
+        assert_eq!(policy.reference(), Some("builtin"));
+        let held: Vec<i64> = all.iter().map(|id| held_ms(&policy, id)).collect();
+        assert_eq!(held, [250, 400, 0]);
+        let policy = local_delay_policy(AirPlay::Unavailable, &["usb", "bluetooth"]);
+        assert_eq!(held_ms(&policy, "usb"), 400, "a switched-off reference");
+        let policy = local_delay_policy(sender(true, L), &all);
+        let held: Vec<i64> = all.iter().map(|id| held_ms(&policy, id)).collect();
+        assert_eq!(held, [1750, 1900, 1500], "L + o′");
+        let policy = local_delay_policy(sender(false, L), &all);
+        assert_eq!(
+            held_ms(&policy, "builtin"),
+            250,
+            "no AirPlay speaker chosen"
+        );
+    }
+
+    #[test]
+    fn the_airplay_adjustment_moves_l() {
+        let all = ["builtin", "usb", "bluetooth"];
+        let mut policy = local_delay_policy(sender(true, L), &all);
+        assert!(policy.set_airplay_adjustment_ms(250.0));
+        assert_eq!(policy.airplay_adjustment_ms(), 250.0);
+        assert_eq!(held_ms(&policy, "builtin"), 2000);
+        assert!(!policy.set_airplay_adjustment_ms(f64::NAN));
+        assert!(policy.set_airplay_adjustment_ms(-9000.0));
+        assert_eq!(policy.airplay_adjustment_ms(), -2000.0);
+        assert_eq!(
+            held_ms(&policy, "builtin"),
+            250,
+            "L = 0: the Bluetooth speaker sets the base"
+        );
+    }
+
     fn ids(endpoints: &[Endpoint]) -> Vec<&str> {
         endpoints
             .iter()
@@ -761,8 +958,12 @@ mod tests {
             .collect()
     }
 
+    /// A policy with `enabled` listed and switched on; none is the
+    /// reference.
     fn policy_with(enabled: &[&str]) -> OutputPolicy {
         let mut policy = OutputPolicy::new(AirPlay::Unavailable);
+        let listed: Vec<Endpoint> = enabled.iter().map(|id| endpoint(id)).collect();
+        policy.set_listed(&listed);
         for id in enabled {
             policy.set_enabled(id, true);
         }
@@ -855,7 +1056,7 @@ mod tests {
 
     #[test]
     fn a_delay_becomes_frames_at_the_session_rate() {
-        let mut policy = policy_with(&["a"]);
+        let mut policy = policy_with(&["a", "b"]);
         policy.set_delay_ms("a", 2000.0);
         assert_eq!(policy.params("a").delay_frames, 96_000);
         policy.set_delay_ms("a", 1820.0);
@@ -866,7 +1067,7 @@ mod tests {
 
     #[test]
     fn delays_are_clamped_and_non_finite_ones_ignored() {
-        let mut policy = policy_with(&["a"]);
+        let mut policy = policy_with(&["a", "b"]);
         assert!(policy.set_delay_ms("a", 500.0));
         assert!(!policy.set_delay_ms("a", f64::NAN));
         assert!(!policy.set_delay_ms("a", f64::INFINITY));
@@ -875,7 +1076,20 @@ mod tests {
         assert_eq!(policy.settings("a").delay_ms, 20_000.0);
         assert_eq!(policy.params("a").delay_frames, 960_000);
         assert!(policy.set_delay_ms("a", -5.0));
-        assert_eq!(policy.settings("a").delay_ms, 0.0);
+        assert_eq!(policy.settings("a").delay_ms, -5.0);
+        assert!(policy.set_delay_ms("a", -2500.0));
+        assert_eq!(policy.settings("a").delay_ms, -2000.0);
+        assert_eq!(policy.params("a").delay_frames, 0);
+        assert_eq!(policy.params("b").delay_frames, 96_000, "b waits for a");
+    }
+
+    #[test]
+    fn a_lone_output_plays_at_once_whatever_its_offset() {
+        let mut policy = policy_with(&["a"]);
+        policy.set_delay_ms("a", 2000.0);
+        assert_eq!(policy.params("a").delay_frames, 0);
+        policy.set_delay_ms("a", -250.0);
+        assert_eq!(policy.params("a").delay_frames, 0);
     }
 
     #[test]
@@ -885,17 +1099,18 @@ mod tests {
         policy.set_delay_ms("b", 40.0);
         policy.set_volume("a", 50.0);
         policy.set_volume("b", 100.0);
+        // b plays first, a 110 ms after it.
         assert_eq!(
             policy.params("a"),
             OutputParams {
-                delay_frames: 7_200,
+                delay_frames: 5_280,
                 gain: 0.125,
             }
         );
         assert_eq!(
             policy.params("b"),
             OutputParams {
-                delay_frames: 1_920,
+                delay_frames: 0,
                 gain: 1.0,
             }
         );
@@ -938,7 +1153,7 @@ mod tests {
 
     #[test]
     fn with_no_airplay_speaker_chosen_outputs_play_at_their_own_delay() {
-        let mut policy = policy_with(&["a"]);
+        let mut policy = policy_with(&["a", "b"]);
         policy.set_delay_ms("a", 150.0);
         assert!(
             !policy.set_airplay(sender(false, L)),
@@ -948,8 +1163,8 @@ mod tests {
     }
 
     #[test]
-    fn with_an_airplay_speaker_chosen_outputs_play_at_l_plus_their_trim() {
-        // P114: L + d_local, d_local being the output's own delay.
+    fn with_an_airplay_speaker_chosen_outputs_play_at_l_plus_their_offset() {
+        // S176: m = −L, so h = L + o.
         let mut policy = policy_with(&["a", "b"]);
         policy.set_delay_ms("a", 150.0);
         assert!(policy.set_airplay(sender(true, L)));
@@ -964,13 +1179,18 @@ mod tests {
     }
 
     #[test]
-    fn the_trim_counts_up_to_3000_ms_while_an_airplay_speaker_is_chosen() {
-        let mut policy = policy_with(&["a"]);
+    fn an_offset_is_not_held_to_3000_ms_with_an_airplay_speaker_chosen() {
+        // S178 replaces P114's 0 to 3000 ms trim: only the hold-back is
+        // capped, at 20 000 ms (S176).
+        let mut policy = policy_with(&["a", "b"]);
         policy.set_delay_ms("a", 5000.0);
         policy.set_airplay(sender(true, L));
-        assert_eq!(policy.params("a").delay_frames, 228_000, "1750 + 3000 ms");
+        assert_eq!(policy.params("a").delay_frames, 324_000, "1750 + 5000 ms");
         policy.set_airplay(sender(false, L));
         assert_eq!(policy.params("a").delay_frames, 240_000, "5000 ms");
+        policy.set_delay_ms("a", 19_000.0);
+        policy.set_airplay(sender(true, L));
+        assert_eq!(policy.params("a").delay_frames, 960_000, "capped");
     }
 
     #[test]
@@ -983,17 +1203,6 @@ mod tests {
         // A new L while no speaker is chosen changes no delay.
         policy.set_airplay(sender(false, L));
         assert!(!policy.set_airplay(sender(false, Duration::from_secs(1))));
-    }
-
-    #[test]
-    fn the_effective_delay_is_the_senders_local_output_delay() {
-        // The sender's own rule (P114), so the policy and the crate agree.
-        for (trim_ms, latency) in [(0, L), (150, L), (4000, Duration::from_millis(500))] {
-            let trim = Duration::from_millis(trim_ms);
-            let expected = latency + trim.min(audiosync_airplay::stream::MAX_DELAY);
-            let effective = sender(true, latency).effective_delay_ms(trim_ms as f64);
-            assert!((effective - expected.as_secs_f64() * 1000.0).abs() < 1e-9);
-        }
     }
 
     fn mix(float32: bool, rate: u32, channels: u16, channel_mask: u32) -> MixFormat {

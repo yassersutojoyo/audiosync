@@ -28,8 +28,10 @@
 //! moment before it is gone (EC12). Such a speaker stays on, its session
 //! goes on, and it only stays out of new joins until it is listed as able to
 //! play again. Only a session error that needs the user, or the user, turns
-//! a speaker off. While one is chosen, local outputs play at L + d_local
-//! (P114, see [`super::outputs`]).
+//! a speaker off. While one is chosen, local outputs wait for the AirPlay
+//! speakers: L, the sender's latency plus the user's AirPlay delay
+//! adjustment, comes on top of their hold-backs (spec S176, S178, see
+//! [`super::outputs`]).
 //!
 //! The capture feeds the sender through an [`AirPlayFeed`]: after the
 //! equalizer, at the session rate, each block is resampled to 44.1 kHz and

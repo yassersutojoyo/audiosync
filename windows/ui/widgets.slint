@@ -402,11 +402,13 @@ export component VolumeSlider inherits HorizontalLayout {
     }
 }
 
-// The per-speaker sync offset: coarse and fine steps, and a field that
-// applies as you type.
+// The per-speaker sync offset relative to the reference output: coarse and
+// fine steps, and a field that applies as you type ("+150", "−250").
 export component SyncControls inherits VerticalLayout {
     in property <string> name;
     in property <string> delay-text;
+    // The reference output's name; empty without one.
+    in property <string> reference-name;
     callback stepped(int);
     callback edited(string);
 
@@ -430,11 +432,11 @@ export component SyncControls inherits VerticalLayout {
             }
         }
 
+        // Text input, so a leading "+" or "−" can be typed.
         field := LineEdit {
             width: 72px;
             text: root.delay-text;
             horizontal-alignment: center;
-            input-type: number;
             accessible-label: Strings.delay-of(root.name);
             edited(text) => {
                 root.edited(text);
@@ -458,7 +460,79 @@ export component SyncControls inherits VerticalLayout {
     }
 
     SecondaryText {
-        text: Strings.sync-hint;
+        text: Strings.sync-hint(root.reference-name);
+    }
+}
+
+// The AirPlay delay: how long the local speakers wait for the AirPlay
+// speakers. Steps and a field that applies as you type, like a speaker's
+// sync controls, under its own title.
+export component AirPlayDelayControls inherits VerticalLayout {
+    in property <string> delay-text;
+    callback stepped(int);
+    callback edited(string);
+
+    spacing: 8px;
+    accessible-role: groupbox;
+    accessible-label: Strings.airplay-delay-title;
+    // Typing replaces the field's binding; show the applied value after a step.
+    changed delay-text => {
+        if field.text != root.delay-text {
+            field.text = root.delay-text;
+        }
+    }
+
+    SectionTitle {
+        text: Strings.airplay-delay-title;
+    }
+
+    Card {
+        VerticalLayout {
+            spacing: 6px;
+
+            HorizontalLayout {
+                spacing: 4px;
+                alignment: start;
+
+                for delta in [-100, -10]: Button {
+                    text: Strings.delay-step(delta);
+                    accessible-label: Strings.delay-step-accessibility(delta);
+                    clicked => {
+                        root.stepped(delta);
+                    }
+                }
+
+                field := LineEdit {
+                    width: 72px;
+                    text: root.delay-text;
+                    horizontal-alignment: center;
+                    accessible-label: Strings.airplay-delay-title;
+                    accessible-description: Strings.airplay-delay-hint;
+                    edited(text) => {
+                        root.edited(text);
+                    }
+                }
+
+                Text {
+                    text: Strings.milliseconds-unit;
+                    color: Tokens.secondary-text;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+
+                for delta in [10, 100]: Button {
+                    text: Strings.delay-step(delta);
+                    accessible-label: Strings.delay-step-accessibility(delta);
+                    clicked => {
+                        root.stepped(delta);
+                    }
+                }
+            }
+
+            SecondaryText {
+                text: Strings.airplay-delay-hint;
+            }
+        }
     }
 }
 
@@ -673,6 +747,7 @@ export component SpeakerRow inherits Rectangle {
                     SyncControls {
                         name: root.item.name;
                         delay-text: root.item.delay-text;
+                        reference-name: root.item.reference-name;
                         stepped(delta) => {
                             root.delay-stepped(delta);
                         }

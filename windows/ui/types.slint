@@ -24,12 +24,15 @@ export struct SpeakerItem {
     show-kind: bool,
     state: RowState,
     volume: float,
-    // Local outputs have a sync delay; AirPlay speakers don't (local outputs
-    // line up with them instead).
+    // Local outputs have a sync delay, an offset relative to the reference
+    // output; the reference has none, and neither do AirPlay speakers (local
+    // outputs line up with them instead).
     has-delay: bool,
     delay-ms: int,
     // What the delay field shows: the applied value, or what is being typed.
     delay-text: string,
+    // The reference output's name for the sync hint; empty without one.
+    reference-name: string,
     sync-open: bool,
     auto-connect: bool,
     availability: Availability,

@@ -73,9 +73,13 @@ pub struct OutputInfo {
     /// Whether it is Windows' default output. AudioSync plays to each output
     /// by ID, so this is for display only.
     pub is_default: bool,
+    /// Whether it is the reference output, which defines time 0 and has no
+    /// delay setting (spec S174).
+    pub is_reference: bool,
     /// Whether the user turned it on.
     pub enabled: bool,
-    /// The configured delay in milliseconds, 0 to 20 000.
+    /// Its offset relative to the reference in milliseconds, −2000 to
+    /// +20 000 (S175); kept, but not used, while it is the reference.
     pub delay_ms: f64,
     /// The volume slider position, 0 to 100.
     pub volume: f64,
@@ -386,8 +390,10 @@ pub trait AudioBackend {
     /// and the error returned.
     fn set_output_enabled(&mut self, id: &str, enabled: bool) -> Result<(), BackendError>;
 
-    /// Sets an output's delay in milliseconds, live. A value that isn't finite
-    /// is ignored; others are clamped to 0 to 20 000.
+    /// Sets an output's offset relative to the reference in milliseconds,
+    /// live: every playing output whose hold-back changes is re-timed. A
+    /// value that isn't finite is ignored; others are clamped to −2000 to
+    /// +20 000.
     fn set_output_delay(&mut self, id: &str, delay_ms: f64);
 
     /// Sets an output's volume slider position (0 to 100, on a cubic curve),
@@ -448,6 +454,19 @@ pub trait AudioBackend {
     /// Sets an AirPlay speaker's own delay d_s in milliseconds, live. A value
     /// that isn't finite is ignored; others are clamped to 0 to 3000.
     fn set_airplay_delay(&mut self, id: &str, delay_ms: f64);
+
+    /// The AirPlay sender's base latency L_s in milliseconds, or `None`
+    /// while there is no sender.
+    fn airplay_sender_latency_ms(&self) -> Option<f64>;
+
+    /// The user's AirPlay delay adjustment A in milliseconds: L = L_s + A
+    /// while an AirPlay speaker is chosen (spec S178).
+    fn airplay_adjustment(&self) -> f64;
+
+    /// Sets the AirPlay delay adjustment A, live: local outputs are re-timed
+    /// while an AirPlay speaker is chosen. A value that isn't finite is
+    /// ignored; others are clamped to −2000 to +20 000.
+    fn set_airplay_adjustment(&mut self, adjustment_ms: f64);
 
     /// Replaces an AirPlay sender that stopped (see
     /// [`BackendEvent::AirPlayStopped`]) with a new one. The speakers that

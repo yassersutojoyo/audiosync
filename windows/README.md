@@ -65,11 +65,17 @@ and lists the tests worth running on a real PC.
 
 AirPlay speakers that the sender can play are listed like any other speaker:
 turn one on and it joins the stream. While an AirPlay speaker is on, the local
-outputs wait for it: each plays at the sender's latency (1.75 s) plus its own
-delay, counted up to 3000 ms, so they stay in step with the AirPlay speakers.
-Turn the last AirPlay speaker off and each local output goes back to its own
-delay. A speaker that stops answering stays on while AudioSync keeps trying
-to reach it, with a notice.
+outputs wait for it: the PC's own speakers play after the AirPlay delay (the
+sender's latency, 1.75 s, plus whatever you set under AirPlay Delay), and
+every other output by its own delay on top of that, so they stay in step with
+the AirPlay speakers. Turn the last AirPlay speaker off and the local outputs
+only line up with each other again. A speaker that stops answering stays on
+while AudioSync keeps trying to reach it, with a notice.
+
+Delays are relative to the PC's own speakers (or line out), which have no
+delay field: give a speaker that sounds late, like a Bluetooth one, a
+negative delay (around −150 to −300 ms), and the others wait for it. Settings
+saved by an older version are converted once, so everything sounds as it did.
 
 Not supported yet: speakers that ask for a password, speakers that need
 pairing with a PIN (such as an Apple TV that asks for one), and speakers that

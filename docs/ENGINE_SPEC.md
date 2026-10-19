@@ -908,11 +908,9 @@ Run once per pipe feed, `swift` and `rust`, on a private engine whose only outpu
 | pipestart \<feed\>: after a stop while audio flows and a new start, the pipe is no later than at the start | S96, S99 |
 | pipestart \<feed\>: after the writer closes, a stop and a new start, the pipe is no later than at the start | S88, S99 |
 
-### local delay model (to be written first, failing)
+### local delay model: core (`cargo test` in `core/`)
 
-The checks for S172 to S181. None exists yet: each is written first and fails against today's code (the first row of each table reproduces the reported bug), then the code follows the clauses. Once a check exists, its row moves to the table of the suite that runs it. Every example uses the built-in speakers or the BuiltIn output as the reference R, a USB speaker at +150 ms, a Bluetooth speaker at −250 ms and, with AirPlay chosen, L = 2000 ms, as in S176, unless the name says otherwise.
-
-Core (`cargo test` in `core/`, test functions with `// covers:` markers):
+The checks for S172 to S179 in the Rust core, test functions with `// covers:` markers (`core/tests/policy_local_delay.rs`, and the C interface's in `core/src/ffi/sync.rs`). Here and in the two tables below, every example uses the built-in speakers or the BuiltIn output as the reference R, a USB speaker at +150 ms, a Bluetooth speaker at −250 ms and, with AirPlay chosen, L = 2000 ms, as in S176, unless the name says otherwise; the first row of each table reproduces the reported bug.
 
 | Test | Clauses |
 |---|---|
@@ -931,6 +929,53 @@ Core (`cargo test` in `core/`, test functions with `// covers:` markers):
 | only_outputs_whose_hold_back_changed_are_retimed | S177 |
 | an_airplay_flip_or_a_new_l_retimes_every_output_taking_part | S177 |
 | an_unreachable_engine_retimes_nothing | S81, S177 |
+| sanitized_offsets_are_finite_and_in_range | S175 |
+| hold_backs_are_in_range_and_keep_the_offsets_apart | S176 |
+| the_native_senders_l_is_its_latency_plus_the_adjustment_clamped | S178 |
+| an_entered_airplay_delay_stores_the_difference_to_the_senders_latency | S178 |
+| the_bundled_engines_airplay_delay_is_0_to_20000_ms_and_defaults_to_2000 | S178 |
+| migration_a_setup_tuned_for_airplay_sounds_the_same_with_airplay | S179 |
+| migration_the_references_old_delay_becomes_the_airplay_delay | S179 |
+| migration_r_without_a_stored_delay_uses_d0 | S179 |
+| migration_an_untuned_output_that_played_at_d0_sounds_the_same_with_airplay | S179 |
+| migration_with_a_legacy_delay_below_1000_ms_untuned_outputs_keep_playing_together | S179 |
+| migration_the_native_senders_adjustment_starts_at_0 | S179 |
+| migration_small_values_keep_their_alignment_and_take_the_default_airplay_delay | S179 |
+| migration_an_offset_below_minus_2000_ms_is_clamped | S179 |
+| migration_reads_stored_delays_as_s77_kept_them | S179 |
+| hold_backs_through_the_c_interface_match_the_rust_ones | S172, S176 |
+| offsets_and_airplay_settings_are_sanitized | S175, S178 |
+| the_mac_migration_through_the_c_interface_matches_the_rust_one | S179 |
+
+### local delay model: Windows (`cargo test` in `windows/`)
+
+| Test | Clauses |
+|---|---|
+| only_local_outputs_a_speakers_offset_is_applied | S176 |
+| the_built_in_output_with_the_smallest_endpoint_id_is_the_reference | S174 |
+| headphones_on_the_pc_jack_are_not_the_reference | S174 |
+| no_built_in_output_means_no_reference | S174 |
+| hold_backs_follow_the_offsets_of_the_outputs_taking_part | S174, S176 |
+| an_airplay_speaker_chosen_adds_the_sender_latency_on_top | S176, S178 |
+| the_airplay_delay_is_an_adjustment_on_top_of_the_sender_latency | S178 |
+| the_airplay_adjustment_moves_l | S178 |
+| the_airplay_delay_field_shows_l_plus_a_and_follows_a_new_l | S178, S181 |
+| a_late_speaker_switched_on_or_off_retimes_the_running_others | S177 |
+| editing_the_lowest_offset_retimes_the_others | S177 |
+| a_late_speaker_that_cant_start_doesnt_hold_the_others_back | S177 |
+| old_trims_become_offsets_relative_to_the_reference | S180 |
+| the_references_old_trim_becomes_the_airplay_adjustment_and_airplay_delays_stay | S180 |
+| a_late_airplay_speaker_lined_up_by_the_references_trim_stays_lined_up | S180 |
+| an_older_settings_file_is_migrated_once_and_saved_in_the_new_version | S180 |
+| an_older_file_waits_for_an_output_list_before_it_is_migrated | S180 |
+| auto_connect_at_the_first_launch_after_the_upgrade_starts_at_the_migrated_delays | S180 |
+| offsets_and_the_airplay_adjustment_are_kept_in_their_ranges | S175, S178 |
+| the_reference_row_has_no_delay_and_the_others_show_a_signed_offset | S181 |
+| an_offset_takes_a_leading_plus_or_minus_and_other_text_is_ignored | S175, S181 |
+
+### local delay model: Mac (to be written first, failing)
+
+The Mac's checks for S172 to S181. None exists yet: each is written first and fails against today's Mac code (the first row reproduces the reported bug), then the Mac app follows the clauses through the core's C interface. Once a check exists, its row moves to the logic table.
 
 Mac (`Tests/logictest.swift`):
 
@@ -961,25 +1006,6 @@ Mac (`Tests/logictest.swift`):
 | offset text: +150 ms, −250 ms and 0 ms | S181 |
 | offset text: a leading + or − (a hyphen too) is read and other text is ignored | S175, S181 |
 | speaker row: the reference has no delay field | S181 |
-
-Windows (`cargo test` in `windows/`):
-
-| Test | Clauses |
-|---|---|
-| only_local_outputs_a_speakers_offset_is_applied | S176 |
-| the_built_in_output_with_the_smallest_endpoint_id_is_the_reference | S174 |
-| headphones_on_the_pc_jack_are_not_the_reference | S174 |
-| no_built_in_output_means_no_reference | S174 |
-| an_airplay_speaker_chosen_adds_the_sender_latency_on_top | S176, S178 |
-| the_airplay_delay_is_an_adjustment_on_top_of_the_sender_latency | S178 |
-| the_airplay_delay_field_shows_l_plus_a_and_follows_a_new_l | S178, S181 |
-| a_late_speaker_switched_on_or_off_retimes_the_running_others | S177 |
-| editing_the_lowest_offset_retimes_the_others | S177 |
-| old_trims_become_offsets_relative_to_the_reference | S180 |
-| the_references_old_trim_becomes_the_airplay_adjustment_and_airplay_delays_stay | S180 |
-| a_late_airplay_speaker_lined_up_by_the_references_trim_stays_lined_up | S180 |
-| an_older_settings_file_is_migrated_once_and_saved_in_the_new_version | S180 |
-| the_reference_row_has_no_delay_and_the_others_show_a_signed_offset | S181 |
 
 ### fades (to be written first, failing)
 
