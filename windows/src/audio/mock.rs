@@ -21,6 +21,7 @@ use audiosync_core::reader::Reader;
 use audiosync_core::ring::RingWriter;
 use audiosync_core::volume::SharedGain;
 
+use super::airplay::FeedLease;
 use super::backend::{BackendError, OutputKind};
 use super::capture::{Activation, CAPTURE_ATTEMPTS, CaptureAttempt, LoopbackMode};
 use super::controller::{CaptureHandle, CaptureState, Controller, Driver, RendererHandle};
@@ -62,6 +63,8 @@ struct CaptureLink {
     writer: Option<RingWriter>,
     /// The processing half of the capture's equalizer.
     equalizer: EqProcessor,
+    /// The AirPlay sender's feed, until the capture stops.
+    airplay: Option<FeedLease>,
 }
 
 fn lock(link: &Mutex<CaptureLink>) -> std::sync::MutexGuard<'_, CaptureLink> {
@@ -86,7 +89,9 @@ impl CaptureHandle for MockCapture {
 
 impl Drop for MockCapture {
     fn drop(&mut self) {
-        lock(&self.link).writer = None;
+        let mut link = lock(&self.link);
+        link.writer = None;
+        link.airplay = None;
     }
 }
 
@@ -211,6 +216,13 @@ impl MockDriver {
         &self.captures_started
     }
 
+    /// Whether the running capture feeds the AirPlay sender.
+    pub fn capture_feeds_airplay(&self) -> bool {
+        self.capture
+            .as_ref()
+            .is_some_and(|link| lock(link).airplay.is_some())
+    }
+
     /// The endpoint ID of every output started, in order.
     pub fn renderers_started(&self) -> &[String] {
         &self.renderers_started
@@ -301,6 +313,7 @@ impl Driver for MockDriver {
         activation: Activation,
         writer: RingWriter,
         equalizer: EqProcessor,
+        airplay: Option<FeedLease>,
     ) -> Result<MockCapture, BackendError> {
         if let Some(error) = &self.capture_error {
             return Err(error.clone());
@@ -311,6 +324,7 @@ impl Driver for MockDriver {
             state: CaptureState::Running,
             writer: Some(writer),
             equalizer,
+            airplay,
         }));
         self.capture = Some(Arc::clone(&link));
         Ok(MockCapture { link })

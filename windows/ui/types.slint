@@ -7,7 +7,10 @@ export enum RowState { off, will-play, playing }
 export enum SpeakerKind { airplay, built-in, headphones, bluetooth, usb, hdmi, display-port, virtual, other }
 
 // Whether an AirPlay speaker can simply play.
-export enum Availability { open, needs-code, password-unsupported }
+export enum Availability { open, needs-code, password-not-yet, pairing-not-yet, airplay2-not-yet, unsupported }
+
+// What went wrong with an AirPlay speaker, for its notice.
+export enum AirPlayProblem { not-responding, connection-lost, busy, refused, password-not-yet, pairing-not-yet, airplay2-not-yet, unsupported }
 
 export struct SpeakerItem {
     id: string,
@@ -17,7 +20,8 @@ export struct SpeakerItem {
     show-kind: bool,
     state: RowState,
     volume: float,
-    // Local outputs have a sync delay; AirPlay speakers don't.
+    // Local outputs have a sync delay; AirPlay speakers don't (local outputs
+    // line up with them instead).
     has-delay: bool,
     delay-ms: int,
     // What the delay field shows: the applied value, or what is being typed.

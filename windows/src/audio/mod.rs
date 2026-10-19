@@ -8,6 +8,8 @@
 //! resampler, volume curve, channel mapping); this module decides what to
 //! capture and which outputs play, and talks to Windows.
 //!
+//! - [`airplay`]: AirPlay speakers through AudioSync's own sender
+//!   (`audiosync-airplay`), and the capture's feed into it.
 //! - [`backend`]: the [`backend::AudioBackend`] trait the UI's adapter
 //!   (`crate::adapter`) uses, and its types.
 //! - [`controller`]: the backend logic, over a [`controller::Driver`] that owns
@@ -26,8 +28,10 @@
 //!
 //! Everything except `wasapi` is plain Rust and tested on any host. The
 //! real-time paths (the capture and render loops, [`capture::CaptureConverter`]
-//! and [`render::RenderPipeline`]) never allocate, lock, block or log.
+//! with the AirPlay feed, and [`render::RenderPipeline`]) never allocate,
+//! lock, block or log.
 
+pub mod airplay;
 pub mod backend;
 pub mod capture;
 pub mod controller;

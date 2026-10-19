@@ -43,8 +43,7 @@ pub struct Source {
 }
 
 /// The kind of output a speaker is, shown as a small icon and read by Narrator.
-// The WASAPI backend reports every kind but AirPlay (Windows has no AirPlay
-// engine yet); the mock lists only a few.
+// The mock lists only a few kinds.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpeakerKind {
@@ -68,19 +67,63 @@ impl SpeakerKind {
 
 /// Whether an AirPlay speaker can simply play.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    all(windows, not(test)),
-    expect(
-        dead_code,
-        reason = "only AirPlay speakers need a code; Windows has none yet"
-    )
-)]
 pub enum Availability {
     Open,
-    /// It asks for a PIN or password.
+    /// It asks for a PIN or password, which the user can type.
+    #[cfg_attr(
+        all(windows, not(test)),
+        expect(
+            dead_code,
+            reason = "the Windows sender can't pair or send a password yet"
+        )
+    )]
     NeedsCode,
-    /// An older receiver with a password AudioSync can't send.
-    PasswordUnsupported,
+    /// It asks for a password, which AudioSync for Windows can't send yet.
+    PasswordNotYet,
+    /// It needs pairing with a PIN, which AudioSync for Windows can't do yet.
+    #[cfg_attr(
+        all(not(windows), not(test)),
+        expect(dead_code, reason = "only the Windows backend lists real receivers")
+    )]
+    PairingNotYet,
+    /// Only AirPlay 2 can play it, which AudioSync for Windows doesn't speak
+    /// yet.
+    #[cfg_attr(
+        all(not(windows), not(test)),
+        expect(dead_code, reason = "only the Windows backend lists real receivers")
+    )]
+    AirPlay2NotYet,
+    /// It wants an encryption, codec or format AudioSync can't send.
+    #[cfg_attr(
+        all(not(windows), not(test)),
+        expect(dead_code, reason = "only the Windows backend lists real receivers")
+    )]
+    Unsupported,
+}
+
+/// What went wrong with an AirPlay speaker, as a notice words it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(dead_code, reason = "only the Windows backend posts notices")
+)]
+pub enum AirPlayProblem {
+    /// It doesn't answer; AudioSync keeps trying.
+    NotResponding,
+    /// The connection was lost while it played; AudioSync keeps trying.
+    ConnectionLost,
+    /// Another device seems to play to it; AudioSync keeps trying.
+    Busy,
+    /// It turned the stream down; AudioSync tries again.
+    Refused,
+    /// It asks for a password, which AudioSync for Windows can't send yet.
+    PasswordNotYet,
+    /// It needs pairing, which AudioSync for Windows can't do yet.
+    PairingNotYet,
+    /// Only AirPlay 2 can play it.
+    AirPlay2NotYet,
+    /// AudioSync can't play to it.
+    Unsupported,
 }
 
 /// One output: a local device or an AirPlay speaker.
@@ -94,7 +137,7 @@ pub struct Speaker {
     /// 0 to 100.
     pub volume: f64,
     /// The sync delay of a local output; AirPlay speakers have none (the
-    /// AirPlay engine keeps them in sync).
+    /// AirPlay sender keeps them in sync, and local outputs follow it).
     pub delay_ms: Option<f64>,
     pub auto_connect: bool,
     pub availability: Availability,
@@ -157,6 +200,17 @@ pub enum NoticeMessage {
     /// A speaker's device went away while it played. It stays on and plays
     /// again once the device is back.
     SpeakerLost { speaker: String },
+    /// An AirPlay speaker stopped playing; it stays on while AudioSync keeps
+    /// trying to reach it.
+    AirPlayRetrying {
+        speaker: String,
+        problem: AirPlayProblem,
+    },
+    /// An AirPlay speaker can't play from AudioSync, so it is off.
+    AirPlayCantPlay {
+        speaker: String,
+        problem: AirPlayProblem,
+    },
     /// The source also plays straight from these outputs, undelayed, so it
     /// is heard twice. `source` is the app's name, or `None` for the whole
     /// system. `mute` names the outputs AudioSync doesn't play to, which the
@@ -401,7 +455,7 @@ impl MockBackend {
             ),
         ];
         speakers[3].availability = Availability::NeedsCode;
-        speakers[6].availability = Availability::PasswordUnsupported;
+        speakers[6].availability = Availability::PasswordNotYet;
         speakers[2].auto_connect = true;
         let state = AppState {
             running: false,

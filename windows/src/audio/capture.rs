@@ -1,6 +1,6 @@
 //! What process loopback captures, which sources to offer, the formats a
 //! capture asks Windows for, and the conversion of captured packets into the
-//! shared ring, through the equalizer.
+//! shared ring, through the equalizer, and into the AirPlay sender.
 //!
 //! Process loopback captures the render streams of a process tree: either
 //! only that tree (one app), or everything except it (the whole system,
@@ -13,12 +13,15 @@
 //! ancestry can be captured. Where they can't be read, or AudioSync is
 //! missing from the snapshot, AudioSync refuses rather than capture itself.
 
+use std::time::Instant;
+
 use audiosync_core::channels::input_to_stereo;
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::resample::Resampler;
 use audiosync_core::ring::{RingWriter, is_supported_rate};
 
 use super::SESSION_RATE;
+use super::airplay::FeedLease;
 use super::backend::{BackendError, SourceId, SourceInfo};
 use super::process::{IDLE_PID, ProcessTable, SYSTEM_PID};
 
@@ -285,17 +288,21 @@ pub const CAPTURE_ATTEMPTS: [CaptureAttempt; 4] = [
 const CONVERT_CHUNK: usize = 1024;
 
 /// Turns captured packets into interleaved stereo float at
-/// [`SESSION_RATE`], equalizes them and writes them to the ring.
+/// [`SESSION_RATE`], equalizes them and writes them to the ring, and to the
+/// AirPlay sender when it has its feed.
 ///
 /// The equalizer runs at the session rate, after any resampling, so it is
 /// designed for [`SESSION_RATE`] whatever rate Windows captures at, and every
-/// output hears the same equalized audio. All buffers are allocated by
-/// [`CaptureConverter::new`]; [`CaptureConverter::push`] never allocates,
-/// locks or blocks, and neither does the equalizer.
+/// output and AirPlay speaker hears the same equalized audio. All buffers are
+/// allocated by [`CaptureConverter::new`]; [`CaptureConverter::push`] never
+/// allocates, locks or blocks, and neither do the equalizer and the AirPlay
+/// feed.
 pub struct CaptureConverter {
     format: StreamFormat,
     writer: RingWriter,
     equalizer: EqProcessor,
+    /// The AirPlay sender's feed, lent for this capture.
+    airplay: Option<FeedLease>,
     /// From the capture rate to the session rate, when they differ.
     resampler: Option<Resampler>,
     /// One chunk of decoded samples, `channels` per frame.
@@ -309,11 +316,12 @@ pub struct CaptureConverter {
 impl CaptureConverter {
     /// A converter for packets in `format`, writing through `writer` after
     /// `equalizer`, whose control half publishes settings designed for
-    /// [`SESSION_RATE`].
+    /// [`SESSION_RATE`], and handing the same audio to `airplay`.
     pub fn new(
         format: StreamFormat,
         writer: RingWriter,
         equalizer: EqProcessor,
+        airplay: Option<FeedLease>,
     ) -> Result<CaptureConverter, BackendError> {
         if format.channels == 0 || !is_supported_rate(format.rate) {
             return Err(BackendError::UnsupportedFormat);
@@ -333,6 +341,7 @@ impl CaptureConverter {
             format,
             writer,
             equalizer,
+            airplay,
             resampler,
             decoded: vec![0.0; CONVERT_CHUNK * usize::from(format.channels)].into_boxed_slice(),
             stereo: vec![0.0; CONVERT_CHUNK * 2].into_boxed_slice(),
@@ -345,8 +354,10 @@ impl CaptureConverter {
     /// whole frames it holds are used. A silent packet (Windows'
     /// `AUDCLNT_BUFFERFLAGS_SILENT`) writes `frames` frames of silence,
     /// whatever `data` holds; it still runs through the equalizer, so the
-    /// filters ring out as they would on any quiet passage.
+    /// filters ring out as they would on any quiet passage. The AirPlay
+    /// sender gets the packet as audio that arrived now.
     pub fn push(&mut self, data: &[u8], frames: usize, silent: bool) {
+        let arrived = Instant::now();
         let block = self.format.block_align();
         let frames = if silent {
             frames
@@ -368,17 +379,19 @@ impl CaptureConverter {
                     &mut self.stereo[..n * 2],
                 );
             }
-            self.write_stereo(n);
+            self.write_stereo(n, arrived);
             done += n;
         }
     }
 
     /// Writes the first `frames` frames of `stereo`, resampled if needed and
-    /// equalized.
-    fn write_stereo(&mut self, frames: usize) {
+    /// equalized, and hands them to the AirPlay sender as audio that arrived
+    /// at `arrived`.
+    fn write_stereo(&mut self, frames: usize, arrived: Instant) {
         let CaptureConverter {
             writer,
             equalizer,
+            airplay,
             resampler,
             stereo,
             resampled,
@@ -389,6 +402,9 @@ impl CaptureConverter {
                 let block = &mut stereo[..frames * 2];
                 equalizer.process(block);
                 writer.write(block, frames);
+                if let Some(airplay) = airplay {
+                    airplay.push(block, frames, arrived);
+                }
             }
             Some(resampler) => {
                 let input = &stereo[..frames * 2];
@@ -398,6 +414,9 @@ impl CaptureConverter {
                     let block = &mut resampled[..produced * 2];
                     equalizer.process(block);
                     writer.write(block, produced);
+                    if let Some(airplay) = airplay.as_mut() {
+                        airplay.push(block, produced, arrived);
+                    }
                     consumed += used;
                     if used == 0 && produced == 0 {
                         break;
@@ -405,6 +424,161 @@ impl CaptureConverter {
                 }
             }
         }
+    }
+}
+
+/// 100 ns units per second: the unit of packet positions.
+const HNS_PER_SECOND: u64 = 10_000_000;
+
+/// Packets whose positions are further apart than this, 5 ms, have a gap
+/// between them; closer, it is the positions' own jitter.
+const GAP_JUMP_HNS: u64 = 50_000;
+
+/// With no packet for this long after the last frame's end, 25 ms (more than
+/// a late packet but inside the readers' 35 ms dead band, S50), the capture
+/// is in a gap.
+const IDLE_AFTER_HNS: u64 = 250_000;
+
+/// In a gap, silence is written up to this long before now, 10 ms, so a
+/// packet that starts the audio again rarely finds its first frames filled
+/// already.
+const IDLE_LAG_HNS: u64 = 100_000;
+
+/// The most silence one gap writes, 21 s: more than the longest delay (S77),
+/// so after a longer stall (a PC that slept) every reader finds silence.
+const MAX_FILL_SECONDS: u64 = 21;
+
+/// Keeps the ring in real time across a loopback gap.
+///
+/// Process loopback delivers nothing while the captured audio is silent.
+/// Without this the ring would stop while the outputs read on: an output
+/// lined up with AirPlay speakers, 1.75 s behind, would go quiet a few
+/// milliseconds into the pause (S53) and replay those 1.75 s when the audio
+/// came back. So a packet whose position jumps past the end of the last one
+/// (or that Windows marks as a discontinuity) gets silence for the time
+/// between them, and while nothing comes, each wake of the capture loop
+/// writes silence up to shortly before now. A packet that starts inside
+/// silence written that way skips the frames already filled. Times are in
+/// 100 ns units of the performance counter, as
+/// `IAudioCaptureClient::GetBuffer` gives a packet's position. Never
+/// allocates, locks or blocks.
+pub struct GapFill {
+    rate: u32,
+    /// When the last packet that set the pace started; `None` before the
+    /// first packet. The frames written count from here, so filling a long
+    /// gap in many small steps never adds up rounding.
+    anchor: Option<u64>,
+    /// Frames written from `anchor` on.
+    written: u64,
+    /// Whether the frames written so far end with silence written while
+    /// nothing came, and no packet has reached past it yet.
+    filled: bool,
+}
+
+impl GapFill {
+    /// A tracker for a capture at `rate`, before its first packet.
+    pub fn new(rate: u32) -> GapFill {
+        GapFill {
+            rate,
+            anchor: None,
+            written: 0,
+            filled: false,
+        }
+    }
+
+    /// When the frame after the last one written is due.
+    fn end(&self) -> Option<u64> {
+        self.anchor
+            .map(|anchor| anchor.saturating_add(self.length(self.written)))
+    }
+
+    /// The pace starts again from a packet of `frames` frames at `start`.
+    fn rebase(&mut self, start: u64, frames: usize) {
+        self.anchor = Some(start);
+        self.written = frames as u64;
+    }
+
+    /// The frames in `hns` at the capture rate, rounded down.
+    fn frames_in(&self, hns: u64) -> u64 {
+        (u128::from(hns) * u128::from(self.rate) / u128::from(HNS_PER_SECOND)) as u64
+    }
+
+    /// How long `frames` frames last, rounded down.
+    fn length(&self, frames: u64) -> u64 {
+        (u128::from(frames) * u128::from(HNS_PER_SECOND) / u128::from(self.rate.max(1))) as u64
+    }
+
+    fn max_fill(&self) -> u64 {
+        MAX_FILL_SECONDS * u64::from(self.rate)
+    }
+
+    /// A packet of `frames` frames whose first frame was captured at
+    /// `start`. Returns the silent frames to write before it, and how many
+    /// of its first frames to skip. Each packet's own position counts, so
+    /// the device clock's drift never adds up to a gap.
+    pub fn packet(&mut self, start: u64, frames: usize, discontinuity: bool) -> (usize, usize) {
+        let packet_end = start.saturating_add(self.length(frames as u64));
+        let filled = std::mem::take(&mut self.filled);
+        let Some(end) = self.end() else {
+            self.rebase(start, frames);
+            return (0, 0);
+        };
+        if start >= end {
+            let gap = start - end;
+            let fill = if filled || discontinuity || gap > GAP_JUMP_HNS {
+                self.frames_in(gap).min(self.max_fill())
+            } else {
+                0
+            };
+            self.rebase(start, frames);
+            return (fill as usize, 0);
+        }
+        if filled {
+            // It starts inside the silence written while nothing came: its
+            // frames up to the fill's end are there already. One that ends
+            // inside the fill too is skipped whole, and the next late packet
+            // still finds the fill.
+            let skip = (self.frames_in(end - start) as usize).min(frames);
+            if packet_end > end {
+                self.rebase(start, frames);
+            } else {
+                self.filled = true;
+            }
+            return (0, skip);
+        }
+        self.rebase(start, frames);
+        (0, 0)
+    }
+
+    /// No packet came, and it is `now`. Returns the silent frames to write:
+    /// none until the capture is in a gap, then enough to reach shortly
+    /// before now.
+    pub fn idle(&mut self, now: u64) -> usize {
+        let (Some(anchor), Some(end)) = (self.anchor, self.end()) else {
+            return 0;
+        };
+        if !self.filled && now < end.saturating_add(IDLE_AFTER_HNS) {
+            return 0;
+        }
+        let target = now.saturating_sub(IDLE_LAG_HNS);
+        if target <= end {
+            return 0;
+        }
+        // Counted from the anchor, so no step's rounding is ever lost.
+        let wanted = self.frames_in(target - anchor).saturating_sub(self.written);
+        if wanted == 0 {
+            return 0;
+        }
+        let frames = wanted.min(self.max_fill());
+        if frames < wanted {
+            // A longer stall: the pace starts again from now.
+            self.anchor = Some(target);
+            self.written = 0;
+        } else {
+            self.written += frames;
+        }
+        self.filled = true;
+        frames as usize
     }
 }
 
@@ -428,11 +602,14 @@ fn decode(sample: SampleType, bytes: &[u8], out: &mut [f32]) {
 mod tests {
     use std::sync::Arc;
 
+    use audiosync_airplay::clock::SenderClock;
+    use audiosync_airplay::stream::{Stream, StreamConfig};
     use audiosync_core::eq::{EqSettings, equalizer};
-    use audiosync_core::reader::{Correction, Reader};
+    use audiosync_core::reader::{Correction, Reader, tolerance_frames};
     use audiosync_core::ring::Ring;
 
     use super::*;
+    use crate::audio::airplay::FeedSlot;
     use crate::audio::process::tests::{desktop, entry};
 
     /// AudioSync's process ID in [`desktop`].
@@ -781,7 +958,7 @@ mod tests {
         writer: RingWriter,
     ) -> Result<CaptureConverter, BackendError> {
         let (_control, processor) = equalizer();
-        CaptureConverter::new(format, writer, processor)
+        CaptureConverter::new(format, writer, processor, None)
     }
 
     /// Settings that only raise the level, by `preamp_db`: flat bands pass
@@ -955,7 +1132,7 @@ mod tests {
         let (ring, writer) = session_ring_after_lead_in();
         let (mut control, processor) = equalizer();
         let mut converter =
-            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor).unwrap();
+            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor, None).unwrap();
         converter.push(&f32_bytes(&[0.25; 8]), 4, false);
         assert_eq!(newest(&ring, 4), [0.25; 8], "off, audio passes unchanged");
 
@@ -973,7 +1150,7 @@ mod tests {
         let (mut control, processor) = equalizer();
         control.set_settings(preamp_only(-6.0));
         let format = CAPTURE_ATTEMPTS[3].format;
-        let mut converter = CaptureConverter::new(format, writer, processor).unwrap();
+        let mut converter = CaptureConverter::new(format, writer, processor, None).unwrap();
         // A tenth of a second of a 1 kHz tone at half scale.
         let bytes: Vec<u8> = (0..4410)
             .flat_map(|i| {
@@ -987,5 +1164,164 @@ mod tests {
         let out = newest(&ring, 2400);
         let peak = out.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
         assert!((0.22..0.28).contains(&peak), "peak {peak}");
+    }
+
+    /// 100 ns units per millisecond, as packet positions count.
+    const HNS_PER_MS: u64 = 10_000;
+
+    #[test]
+    fn a_loopback_gap_keeps_the_ring_in_real_time_so_nothing_from_before_it_plays_after_it() {
+        let (ring, writer) = session_ring();
+        let (_control, processor) = equalizer();
+        let mut converter =
+            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor, None).unwrap();
+        let mut gaps = GapFill::new(SESSION_RATE);
+        // An output lined up with an AirPlay speaker: L = 1750 ms.
+        let mut reader = Reader::new(Arc::clone(&ring), SESSION_RATE);
+        let (delay, tolerance) = (84_000, tolerance_frames(SESSION_RATE));
+        let mut out = vec![0.0_f32; 480 * 2];
+        let mut played = Vec::new();
+        // 10 ms steps: 3 s of audio, a 2 s gap in which Windows delivers
+        // nothing and the loop wakes once a period, then 3 s of other audio.
+        for step in 0..800_u64 {
+            let start = step * 10 * HNS_PER_MS;
+            let level = match step {
+                0..300 => Some(0.5),
+                300..500 => None,
+                _ => Some(0.25),
+            };
+            match level {
+                Some(level) => {
+                    let (fill, skip) = gaps.packet(start, 480, false);
+                    if fill > 0 {
+                        converter.push(&[], fill, true);
+                    }
+                    let frames = 480 - skip;
+                    converter.push(&f32_bytes(&vec![level; frames * 2]), frames, false);
+                }
+                None => {
+                    let fill = gaps.idle(start + 10 * HNS_PER_MS);
+                    if fill > 0 {
+                        converter.push(&[], fill, true);
+                    }
+                }
+            }
+            reader.read(&mut out, 480, delay, tolerance);
+            played.push(out.clone());
+        }
+        for (step, block) in played.iter().enumerate().take(470).skip(300) {
+            assert!(
+                block.iter().all(|s| *s == 0.5),
+                "step {step}: the output plays on until the gap reaches it"
+            );
+        }
+        for (step, block) in played.iter().enumerate().skip(480) {
+            assert!(
+                !block.contains(&0.5),
+                "step {step}: audio from before the gap plays again"
+            );
+        }
+        assert!(
+            played[700].iter().all(|s| *s == 0.25),
+            "the audio after the gap plays 1.75 s after it came"
+        );
+    }
+
+    #[test]
+    fn contiguous_packets_need_no_silence_whatever_their_jitter() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        let mut start = 0;
+        for jitter in [0_i64, 3_000, -2_000, 20_000, -40_000, 0] {
+            let at = (start as i64 + jitter) as u64;
+            assert_eq!(gaps.packet(at, 480, false), (0, 0), "{jitter}");
+            start += 10 * HNS_PER_MS;
+        }
+        // A late packet's wake isn't a gap yet.
+        assert_eq!(gaps.idle(start + 20 * HNS_PER_MS), 0);
+    }
+
+    #[test]
+    fn a_jump_or_a_discontinuity_gets_silence_for_the_time_between() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        gaps.packet(0, 480, false);
+        // 10 ms later than the last packet's end: 480 frames of silence.
+        assert_eq!(gaps.packet(20 * HNS_PER_MS, 480, false), (480, 0));
+        // 2 ms, marked as a discontinuity: 96 frames.
+        assert_eq!(gaps.packet(32 * HNS_PER_MS, 480, true), (96, 0));
+        // A PC that slept: at most 21 s.
+        assert_eq!(
+            gaps.packet(3_600_000 * HNS_PER_MS, 480, false),
+            (21 * 48_000, 0)
+        );
+    }
+
+    #[test]
+    fn a_packet_inside_the_silence_written_skips_the_frames_filled() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        gaps.packet(0, 480, false);
+        // Nothing for 50 ms: silence up to 40 ms.
+        assert_eq!(gaps.idle(50 * HNS_PER_MS), 1_440);
+        // The audio comes back with a packet that started at 35 ms.
+        assert_eq!(gaps.packet(35 * HNS_PER_MS, 480, false), (0, 240));
+        // The next one follows on.
+        assert_eq!(gaps.packet(45 * HNS_PER_MS, 480, false), (0, 0));
+    }
+
+    #[test]
+    fn late_packets_inside_one_fill_are_never_written_twice() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        gaps.packet(0, 480, false);
+        // Silence up to 30 ms.
+        assert_eq!(gaps.idle(40 * HNS_PER_MS), 960);
+        // Two late packets that both lie inside it: neither is written.
+        assert_eq!(gaps.packet(10 * HNS_PER_MS, 480, false), (0, 480));
+        assert_eq!(gaps.packet(20 * HNS_PER_MS, 480, false), (0, 480));
+        // One that reaches past it is written from its end on.
+        assert_eq!(gaps.packet(25 * HNS_PER_MS, 480, false), (0, 240));
+        assert_eq!(gaps.packet(35 * HNS_PER_MS, 480, false), (0, 0));
+    }
+
+    #[test]
+    fn an_hour_of_gap_fills_exactly_the_frames_of_an_hour() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        gaps.packet(0, 480, false);
+        // Wakes about every 10 ms, at uneven times, for an hour.
+        let mut written = 0_u64;
+        let mut now = 0_u64;
+        while now < 3_600_000 * HNS_PER_MS {
+            now += 100_003;
+            written += gaps.idle(now) as u64;
+        }
+        // Silence from the packet's end (10 ms) to 10 ms before the last
+        // wake, at 48 kHz, to the frame.
+        let expected = (now - 20 * HNS_PER_MS) * 48_000 / 10_000_000;
+        assert!(
+            written.abs_diff(expected) <= 1,
+            "{written} frames written, {expected} due"
+        );
+    }
+
+    #[test]
+    fn the_airplay_sender_gets_the_equalized_audio_at_44_1_khz() {
+        let clock = SenderClock::new(std::time::Instant::now());
+        let (_stream, input) =
+            Stream::new(StreamConfig::default(), clock, std::time::Instant::now());
+        let slot = FeedSlot::new(input);
+        let (ring, writer) = session_ring();
+        let (_control, processor) = equalizer();
+        let lease = slot.lease().expect("the feed is free");
+        let mut converter =
+            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor, Some(lease))
+                .unwrap();
+        // One second at the session rate, in 10 ms packets.
+        let packet = f32_bytes(&[0.25; 480 * 2]);
+        for _ in 0..100 {
+            converter.push(&packet, 480, false);
+        }
+        assert_eq!(ring.frames_written(), 48_000, "the ring gets it all");
+        drop(converter);
+        let lease = slot.lease().expect("the capture gave the feed back");
+        let position = lease.position();
+        assert!((44_000..=44_100).contains(&position), "{position} frames");
     }
 }

@@ -446,15 +446,19 @@ fn keyboard_shortcuts_are_declared() {
     }
 }
 
-/// Windows has no AirPlay yet, so no text the user reads promises it: the
-/// only translatable string naming AirPlay is the speaker kind itself, and
-/// an empty Connected Speakers list says just that it's empty.
+/// AirPlay on Windows is new and not yet checked against a real receiver,
+/// so no text promises it: the translatable strings naming AirPlay are the
+/// speaker kind and what a listed speaker can't do yet, and an empty
+/// Connected Speakers list says just that it's empty.
 #[test]
 fn no_text_promises_airplay() {
     let strings = include_str!("../ui/strings.slint");
     for line in strings.lines().filter(|line| line.contains("@tr(")) {
         assert!(
-            !line.contains("AirPlay") || line.contains("@tr(\"AirPlay\")"),
+            !line.contains("AirPlay")
+                || line.contains("@tr(\"AirPlay\")")
+                || line.contains("not supported yet")
+                || line.contains("doesn't support yet"),
             "strings.slint: {}",
             line.trim()
         );
