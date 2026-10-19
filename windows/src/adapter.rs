@@ -2905,6 +2905,23 @@ mod tests {
     }
 
     #[test]
+    fn a_late_retry_leaves_a_working_sender_alone() {
+        let (mut adapter, _fake, _, _) = airplay_adapter();
+        let starts = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = starts.clone();
+        adapter.audio.set_airplay_starter(Box::new(move || {
+            counted.set(counted.get() + 1);
+            None
+        }));
+        adapter.retry_airplay();
+        assert_eq!(
+            starts.get(),
+            0,
+            "a Retry while the sender runs doesn't replace it"
+        );
+    }
+
+    #[test]
     fn a_retry_whose_sender_cant_start_keeps_the_notice() {
         let (mut adapter, fake, _, _) = airplay_adapter();
         adapter.audio.set_airplay_starter(Box::new(|| None));
