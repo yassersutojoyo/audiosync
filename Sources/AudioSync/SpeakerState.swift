@@ -1,3 +1,4 @@
+import CoreAudio
 import Foundation
 
 /// How a speaker row shows a speaker, and what a click on it does.
@@ -23,21 +24,18 @@ enum SpeakerState: Equatable {
     var clickTurnsOn: Bool { self != .playing }
 }
 
-/// Whether an AirPlay speaker can be played to as it is, from the engine's
-/// last report. Shown next to the speaker so a code request isn't a surprise.
+/// Whether an AirPlay speaker can be played to as it is, from what discovery
+/// reports. Shown next to the speaker so a code request isn't a surprise.
 enum SpeakerAvailability: Equatable {
     /// Plays without asking for anything (local speakers are always open).
     case open
     /// Asks for a PIN or password, which AudioSync asks for when it's turned on.
     case needsCode
-    /// An older AirPlay receiver with a password AudioSync can't send.
-    case passwordUnsupported
 
     init(_ access: AirPlayPairing.Access) {
         switch access {
         case .open: self = .open
         case .code: self = .needsCode
-        case .legacyPassword: self = .passwordUnsupported
         }
     }
 }
@@ -82,5 +80,86 @@ enum LocalOutputSync {
         let running = Set(active)
         return Plan(attach: enabled.filter { !running.contains($0) && available.contains($0) }.sorted(),
                     detach: running.filter { !enabled.contains($0) }.sorted())
+    }
+}
+
+/// The calls the local-output sync makes on the running engine. `SyncEngine`
+/// conforms; the logic tests drive the sync with a double whose attach throws.
+protocol LocalOutputEngine: AnyObject {
+    /// The UIDs with a running renderer.
+    var activeOutputUIDs: [String] { get }
+    /// Starts a renderer for `uid` on the device `deviceID`; throws when it won't start.
+    func addOutput(uid: String, deviceID: AudioObjectID, delayMs: Double, gain: Double) throws
+    /// Stops the renderer of `uid`.
+    func removeOutput(uid: String)
+}
+
+extension LocalOutputSync {
+    /// A local speaker whose renderer wouldn't start.
+    struct Failure: Equatable {
+        var uid: String
+        /// The name macOS shows for its device.
+        var deviceName: String
+    }
+
+    /// What one sync did to the engine.
+    struct Applied: Equatable {
+        /// The speakers attached, each with the hold-back (ms) it started at.
+        var attached: [String: Double] = [:]
+        /// The speakers detached (sorted by UID).
+        var detached: [String] = []
+        /// The speakers whose renderer wouldn't start, in attach order.
+        var failures: [Failure] = []
+    }
+
+    /// Attaches and detaches on `engine` what `plan` asks for, given the
+    /// devices listed now (a UID listed twice: the first device counts). Each
+    /// attach starts at its target hold-back (0 without one) and its gain; one
+    /// that throws is logged and comes back as a failure.
+    static func apply(enabled: Set<String>, listing: [AudioDevices.Device], to engine: LocalOutputEngine,
+                      holdBacks: [String: Double], gain: (String) -> Double) -> Applied {
+        var deviceByUID: [String: AudioDevices.Device] = [:]
+        for device in listing where deviceByUID[device.uid] == nil {
+            deviceByUID[device.uid] = device
+        }
+        let steps = plan(enabled: enabled, active: engine.activeOutputUIDs, available: Set(deviceByUID.keys))
+        var applied = Applied()
+        for uid in steps.attach {
+            guard let device = deviceByUID[uid] else { continue }   // not listed yet: a later call attaches it
+            let holdBack = holdBacks[uid] ?? 0
+            do {
+                try engine.addOutput(uid: uid, deviceID: device.id, delayMs: holdBack, gain: gain(uid))
+                applied.attached[uid] = holdBack
+            } catch let startError {
+                DBG.log("[AudioSync] local output \(uid) failed to start: \(startError)")
+                applied.failures.append(Failure(uid: uid, deviceName: device.name))
+            }
+        }
+        for detachedUID in steps.detach {
+            engine.removeOutput(uid: detachedUID)
+            applied.detached.append(detachedUID)
+        }
+        return applied
+    }
+
+    /// What the app does about the speakers that wouldn't start (S69).
+    struct FailureReport: Equatable {
+        /// The local speakers left on. Each failed one is switched off, so it
+        /// no longer holds the others back and the next poll doesn't try it again.
+        var enabled: Set<String>
+        /// The device names for one alert, only when the user made the change.
+        var alertNames: [String]?
+        /// One notice per failed speaker, so each one clears by itself.
+        var notices: [Failure]
+    }
+
+    /// nil when every attach started: nothing to report. Otherwise the app
+    /// applies the report, then stops streaming if no speaker is left on
+    /// (`StreamingPolicy.isIdle`): the failed one may have been the only one.
+    static func report(_ failures: [Failure], enabled: Set<String>, origin: StartOrigin) -> FailureReport? {
+        guard !failures.isEmpty else { return nil }
+        return FailureReport(enabled: enabled.subtracting(failures.map(\.uid)),
+                             alertNames: origin == .user ? failures.map(\.deviceName) : nil,
+                             notices: failures)
     }
 }

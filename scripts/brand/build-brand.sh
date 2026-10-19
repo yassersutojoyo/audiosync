@@ -6,7 +6,7 @@
 #
 # Usage: scripts/brand/build-brand.sh
 #
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")/../.."
 
 python3 -I scripts/brand/compose.py

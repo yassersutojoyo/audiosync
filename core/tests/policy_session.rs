@@ -2,12 +2,11 @@
 //! (S20, S21, S68, S69, S116 to S122, S136 to S138, S141, S142, S144 to S146,
 //! S161 to S163, S165).
 
-use audiosync_core::policy::pairing::DropReason;
 use audiosync_core::policy::session::{
-    AFTER_START, AfterStart, AutoStartGate, Click, Incident, OutputSync, Reaction, SourcePick,
-    SpeakerEvent, SpeakerKind, SpeakerState, StartOrigin, StreamingAction, TurnOff, TurnOn, click,
-    may_start, reaction, source_pick, source_switch, speaker_state, streaming_after, sync_outputs,
-    turn_off, turn_on,
+    AFTER_START, AfterStart, AutoStartGate, Click, DropReason, Incident, OutputSync, Reaction,
+    SourcePick, SpeakerEvent, SpeakerKind, SpeakerState, StartOrigin, StreamingAction, TurnOff,
+    TurnOn, click, may_start, reaction, source_pick, source_switch, speaker_state, streaming_after,
+    sync_outputs, turn_off, turn_on,
 };
 use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::speakers::{NoticeSubject, SpeakerKey};
@@ -108,7 +107,6 @@ fn a_session_starts_only_with_a_speaker_enabled_then_runs_its_steps_in_order() {
             AfterStart::ApplyAirPlaySelection,
             AfterStart::SendMasterVolume,
             AfterStart::AddLocalOutputs,
-            AfterStart::EnsurePipePlayback,
             AfterStart::StartCaptureCheck,
         ]
     );
@@ -284,8 +282,6 @@ fn every_error_state_has_its_reaction() {
             false,
             None,
         ),
-        (Incident::PipeWithoutReader, false, false, None),
-        (Incident::EngineTrouble, false, false, None),
     ];
     for (incident, stops, deselects, notice) in table {
         let reaction = reaction(&incident);
@@ -309,6 +305,14 @@ fn every_error_state_has_its_reaction() {
         enabled_left: 0,
     });
     assert!(!unreachable.alert && unreachable.stop_session);
+    for reason in [
+        DropReason::Unreachable,
+        DropReason::PasswordUnsupported,
+        DropReason::NeedsCode,
+    ] {
+        assert!(!reason.alerts(), "only a rejected code alerts: {reason:?}");
+    }
+    assert!(DropReason::CodeRejected.alerts());
 }
 
 // covers: S141

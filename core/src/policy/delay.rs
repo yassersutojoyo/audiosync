@@ -243,9 +243,9 @@ impl Retimer {
     /// increase inserts that much silence, a decrease skips forward (S66,
     /// S47, S48). An output that just joined isn't listed: it starts at its
     /// hold-back ([`Retimer::hold_back_ms`]) when it is attached. One that
-    /// left is forgotten. Unchanged inputs give an empty list, so an
-    /// unreachable AirPlay engine, which leaves the listed set as it was
-    /// (S81), re-times nothing.
+    /// left is forgotten. Unchanged inputs give an empty list, so a poll
+    /// that can't read the AirPlay speakers, which leaves the listed set as
+    /// it was (S81), re-times nothing.
     pub fn update(
         &mut self,
         taking_part: &[Participant],

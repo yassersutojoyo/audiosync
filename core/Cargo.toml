@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "GPL-3.0-or-later"
-description = "Platform-independent audio core of AudioSync: delay ring buffer, drift correction, resampling, equalizer, volume, sync policy and PCM16 conversion, plus the C interface of AudioSync's own AirPlay sender."
+description = "Platform-independent audio core of AudioSync: delay ring buffer, drift correction, resampling, equalizer, volume and sync policy, plus the C interface of AudioSync's own AirPlay sender."
 repository = "https://github.com/yassersutojoyo/audiosync"
 publish = false
 
@@ -50,10 +50,9 @@ manual_is_multiple_of = "allow"
 #   Rust 1.81 unwinding out of an extern "C" function aborts the process, so
 #   it never unwinds into the host (rust-version is above that);
 # - a thread the core spawns runs its body under catch_unwind and aborts the
-#   process on a panic (FifoControl's writer in src/fifo.rs), unless the
-#   thread reports its own death to the host the way the sender's threads
-#   do. Unwinding would otherwise end only that thread, silently: a new
-#   thread follows the same rule.
+#   process on a panic, unless the thread reports its own death to the host
+#   the way the sender's threads do. Unwinding would otherwise end only that
+#   thread, silently: a new thread follows the same rule.
 [profile.release]
 panic = "unwind"
 

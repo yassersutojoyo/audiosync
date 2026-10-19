@@ -9,7 +9,7 @@
 #   scripts/shellcheck.sh                 check the listed scripts
 #   scripts/shellcheck.sh --install DIR   download the pinned release into DIR
 #                                         (checksum-verified; used by CI)
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")/.."
 LIST=scripts/shellcheck-files.txt
 VERSION=0.11.0

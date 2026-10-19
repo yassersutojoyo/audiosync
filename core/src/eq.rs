@@ -535,17 +535,17 @@ impl EqProcessor {
     }
 
     /// Equalizes `block` once, in place, then hands the same samples to the
-    /// ring buffer and to the FIFO feed, so every output hears identical audio
-    /// (S7, S34). Real-time safe when both consumers are.
+    /// ring buffer and to the AirPlay leg, so every output hears identical
+    /// audio (S7, S34). Real-time safe when both consumers are.
     pub fn equalize_and_deliver(
         &mut self,
         block: &mut [f32],
         to_ring: impl FnOnce(&[f32]),
-        to_fifo: impl FnOnce(&[f32]),
+        to_airplay: impl FnOnce(&[f32]),
     ) {
         self.process(block);
         to_ring(block);
-        to_fifo(block);
+        to_airplay(block);
     }
 
     /// Copies the active coefficient set if a new one was published (S31).

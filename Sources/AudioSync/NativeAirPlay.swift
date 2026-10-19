@@ -3,9 +3,8 @@ import CAudioSyncCore
 import SystemConfiguration
 
 /// AudioSync's own AirPlay sender (`airplay/`), reached through the Rust
-/// core's C interface (`asc_airplay_*` in `core/include/audiosync_core.h`),
-/// while it is this run's AirPlay sender (`AirPlayImpl.forThisRun`). `start`
-/// creates the sender, installs its audio input in the capture path
+/// core's C interface (`asc_airplay_*` in `core/include/audiosync_core.h`).
+/// `start` creates the sender, installs its audio input in the capture path
 /// (`NativeAirPlayTap`) and starts discovery; the app adds and removes
 /// speakers by receiver ID, sets their volumes and the master, and gets
 /// discovery's changes and the speakers' events, which also keep `model` up
@@ -106,7 +105,7 @@ final class NativeAirPlay {
     /// The track's title, artist and album for the receivers that show it,
     /// sent with the artwork set last, which a new track drops
     /// (`NativeNowPlaying`, P123 to P127). Main queue.
-    func setTrack(_ fields: PipeMetadata.Fields) {
+    func setTrack(_ fields: TrackMetadata.Fields) {
         queue.async { [weak self] in
             guard let self else { return }
             self.nowPlaying.setTrack(fields)
@@ -114,13 +113,13 @@ final class NativeAirPlay {
         }
     }
 
-    /// The artwork for the receivers that show it, scaled and encoded on the
-    /// queue as for the bundled engine's metadata pipe (`PipeMetadata.jpeg`),
-    /// and sent with the track set last. Main queue.
+    /// The artwork for the receivers that show it, scaled and encoded as a
+    /// small JPEG on the queue (`TrackMetadata.jpeg`), and sent with the
+    /// track set last. Main queue.
     func setArtwork(_ image: NSImage) {
         queue.async { [weak self] in
             guard let self else { return }
-            guard let jpeg = PipeMetadata.jpeg(image) else {
+            guard let jpeg = TrackMetadata.jpeg(image) else {
                 DispatchQueue.main.async { DBG.log("[AudioSync] native AirPlay: the artwork could not be made small enough") }
                 return
             }
