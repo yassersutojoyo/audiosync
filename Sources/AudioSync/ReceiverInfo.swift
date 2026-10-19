@@ -11,8 +11,11 @@ struct ReceiverInfo: Equatable {
         case neutral
         /// The player's artwork is on its way (Spotify's comes a moment after
         /// the track): send no artwork until it arrives, for at most
-        /// `artworkWait` (see `waited`). Meanwhile the receivers show no cover
-        /// (`NativeNowPlaying`).
+        /// `artworkWait` (see `waited`). Meanwhile the sender has no artwork
+        /// for the new track and sends none (`NativeNowPlaying`): a receiver
+        /// already playing may keep the last track's cover until this one's,
+        /// or AudioSync's icon, arrives; only one that starts during the wait
+        /// shows no cover.
         case wait
     }
 
