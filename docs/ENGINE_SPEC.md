@@ -584,7 +584,6 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | device volume: a write the device ignores leaves the hint and the fix as they were and logs it | S197, S201 |
 | device volume: dragging the system volume across 25% logs one line | S201 |
 | device volume: a device that answers nothing for a moment keeps its listeners, and a refused listener is logged | S195, S201, S202 |
-| outputs: expected speakers parsed (printed only on failure) | S100 |
 | capture: frames → flowing | S18 |
 | capture: no frames, unknown source → waiting | S17, S18 |
 | capture: playing only briefly → still waiting | S18 |
