@@ -3,8 +3,7 @@ import Foundation
 /// What AudioSync remembers between launches: the source, the speakers that
 /// are on, every volume and delay, the groups, auto-connect and the two view
 /// choices. The equalizer is kept under `Keys.equalizer` as JSON
-/// (`StoredEqualizer`), and the hidden AirPlay sender option under
-/// `AirPlayImpl.defaultsKey`; both are read and written by their own code.
+/// (`StoredEqualizer`), read and written by its own code.
 ///
 /// Every value is checked as it is read, so a damaged or hand-edited setting
 /// never reaches the engine: a number that isn't finite is dropped, volumes
@@ -18,7 +17,7 @@ struct AppSettings: Equatable {
     enum Keys {
         /// `AudioSource.defaultsValue` (S12): "" or missing is the whole system.
         static let source = "audioSourceBundleID"
-        /// Engine output IDs of the AirPlay speakers that are on, as an array.
+        /// App IDs (`NativeAirPlayID`) of the AirPlay speakers that are on, as an array.
         static let enabledAirPlay = "enabledAirPlayIds"
         /// Device UIDs of the local speakers that are on, as an array.
         static let enabledLocal = "enabledLocalUIDs"
@@ -52,6 +51,10 @@ struct AppSettings: Equatable {
         /// engine. Never written now; a value left there has no effect
         /// (`RetiredEngineChoice`).
         static let retiredEngineChoice = "engineImpl"
+        /// "native" or "owntone", from builds that offered a choice of AirPlay
+        /// sender. Never written now; a value left there has no effect
+        /// (`RetiredAirPlayChoice`).
+        static let retiredAirPlayChoice = "airplayImpl"
         /// Each local speaker's offset in ms relative to the reference
         /// (−2000…20 000), by device UID (S175). Missing is 0.
         static let localOffsets = "localOffsetMsByUID"
@@ -268,5 +271,26 @@ enum RetiredEngineChoice {
         return "[AudioSync] " + found.joined(separator: " and ")
             + (found.count == 1 ? " no longer chooses" : " no longer choose")
             + " the audio engine: every session runs on the Rust core"
+    }
+}
+
+/// The AirPlay sender choice of older builds: the `airplayImpl` setting and
+/// the `AUDIOSYNC_AIRPLAY` environment variable, "native" or "owntone".
+/// AudioSync's own sender is the only one now, so either one is only noted in
+/// the debug log, once per launch, and the stored value is left as it is.
+enum RetiredAirPlayChoice {
+    static let defaultsKey = AppSettings.Keys.retiredAirPlayChoice
+    static let environmentKey = "AUDIOSYNC_AIRPLAY"
+
+    /// The debug log line for a launch that finds either one set (an empty
+    /// value counts as unset), or nil when neither is.
+    static func launchNote(environment: String?, stored: String?) -> String? {
+        var found: [String] = []
+        if let value = environment, !value.isEmpty { found.append("\(environmentKey)=\(value)") }
+        if let value = stored, !value.isEmpty { found.append("the \(defaultsKey) setting \"\(value)\"") }
+        guard !found.isEmpty else { return nil }
+        return "[AudioSync] " + found.joined(separator: " and ")
+            + (found.count == 1 ? " no longer chooses" : " no longer choose")
+            + " the AirPlay sender: AudioSync's own sender is the only one"
     }
 }

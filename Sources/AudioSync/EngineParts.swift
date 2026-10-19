@@ -1,17 +1,17 @@
 import Foundation
 
 // One session's audio parts, all on the Rust core (CoreEngine.swift): the
-// equalizer, the delay ring and the pipe feed. The capture IOProc (`deliver`)
+// equalizer, the delay ring and, for the soak harness only, a pipe feed. The
+// capture IOProc (`deliver`)
 // and the render callbacks call these final classes directly, so no audio
 // callback dispatches through a protocol. Clause numbers (S…) refer to
 // docs/ENGINE_SPEC.md.
 
 /// Whether an AirPlay speaker is chosen (S79), which adds the AirPlay delay
-/// on top of every local output's hold-back (S176, `LocalDelay`). The core's
-/// rule (`CoreSyncRule`) serves the bundled AirPlay engine; AudioSync's own
-/// sender has its own (`NativeSyncRule`).
+/// on top of every local output's hold-back (S176, `LocalDelay`): AudioSync's
+/// own sender decides it (`NativeSyncRule`).
 protocol SyncRule {
-    /// Some AirPlay speaker the user enabled is in the engine's latest list.
+    /// Some AirPlay speaker the user enabled is in the sender's latest list.
     func airPlayChosen(enabled: Set<String>, listed: [String]) -> Bool
 }
 
@@ -20,16 +20,20 @@ protocol SyncRule {
 struct EngineParts {
     let equalizer: CoreEqualizer
     let ring: CoreDelayRing
-    /// The bundled AirPlay engine's pipe feed; nil when no pipe is fed.
+    /// A PCM pipe feed, which only the soak harness asks for (Tests/soaktest.swift
+    /// measures the core's FIFO writer with it); nil in the app, whose AirPlay
+    /// audio goes to `NativeAirPlayTap`.
     let fifo: CoreFifoFeed?
 
     /// 24 s at 192 kHz, the highest capture rate the ring is sized for (S36):
     /// the 20 s maximum delay plus headroom, whatever the session's rate.
     static let ringCapacityFrames = 192_000 * 24
 
-    /// New parts with a pipe feed for `fifoPath` (none when nil) and the
-    /// equalizer set to `settings`. Nil when the core can't make one of them.
-    static func make(fifoPath: String?, equalizer settings: Equalizer.Settings = Equalizer.Settings()) -> EngineParts? {
+    /// New parts with a pipe feed for `fifoPath` (none when nil, as in the
+    /// app) and the equalizer set to `settings`. Nil when the core can't make
+    /// one of them.
+    static func make(fifoPath: String? = nil,
+                     equalizer settings: Equalizer.Settings = Equalizer.Settings()) -> EngineParts? {
         guard let equalizer = CoreEqualizer(), let ring = CoreDelayRing(capacityFrames: ringCapacityFrames)
         else { return nil }
         var fifo: CoreFifoFeed?
@@ -42,7 +46,7 @@ struct EngineParts {
     }
 
     /// Control thread, while capture is stopped (each tap build): the
-    /// capture rate the equalizer, the pipe feed and AudioSync's own AirPlay
+    /// capture rate the equalizer, a pipe feed and AudioSync's own AirPlay
     /// sender (when it runs) convert from.
     func prepare(captureRate: Double) {
         fifo?.setInputRate(captureRate)
@@ -51,8 +55,8 @@ struct EngineParts {
     }
 
     /// Capture thread: one captured block, equalized once in place, then into
-    /// the ring, the pipe feed (S7) and AudioSync's own AirPlay sender when it
-    /// runs (`NativeAirPlayTap`). Real-time safe.
+    /// the ring, a pipe feed when there is one (S7) and AudioSync's own AirPlay
+    /// sender when it runs (`NativeAirPlayTap`). Real-time safe.
     @inline(__always)
     func deliver(_ block: UnsafeMutablePointer<Float>, frames: Int) {
         equalizer.process(block, frames: frames)

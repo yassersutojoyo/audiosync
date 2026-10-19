@@ -1,64 +1,5 @@
 import Foundation
 
-/// Which AirPlay sender the app uses: AudioSync's own sender (`airplay/`,
-/// reached through the Rust core's C interface, `NativeAirPlay`), the
-/// default, or the bundled engine (OwnTone), kept as a fallback until it is
-/// removed. With `native` AudioSync doesn't start the bundled engine: the
-/// AirPlay speakers listed are the ones the native sender's discovery finds,
-/// and AirPlay audio and track info go through that sender. An Apple TV
-/// that asks for a PIN pairs once, when the user turns it on, and its
-/// credentials are kept (`asc_airplay_open_pairings`); a password is asked
-/// for once per run. Speakers saved under the bundled engine's IDs move to
-/// the native ones as discovery finds them (`SpeakerIDMigration`). The
-/// bundled engine starts with the app, so the choice is read once per launch
-/// (`forThisRun`), and a change applies from the next launch.
-enum AirPlayImpl: String, CaseIterable {
-    case owntone, native
-
-    /// The sender this run of AudioSync uses, read once, when the app starts
-    /// the bundled engine (or doesn't) at launch.
-    static let forThisRun: (impl: AirPlayImpl, origin: Origin) = current()
-
-    /// UserDefaults key of the setting, "owntone" or "native". Only an
-    /// explicit choice writes it (the hidden debug option in the AudioSync
-    /// menu, or `defaults write`); an absent key means the user never chose.
-    static let defaultsKey = "airplayImpl"
-    /// Environment override, "owntone" or "native", for tests and harnesses.
-    static let environmentKey = "AUDIOSYNC_AIRPLAY"
-
-    /// Where a choice came from, for the debug log and the debug option.
-    enum Origin: String {
-        case environment, setting, `default`
-    }
-
-    /// The sender for someone who never chose one: AudioSync's own. "owntone"
-    /// in the setting or the environment still picks the bundled engine.
-    static let defaultImpl: AirPlayImpl = .native
-
-    /// The environment override wins over the stored setting. A value that
-    /// names neither sender counts as absent, so an unknown or missing setting
-    /// means `defaultImpl`.
-    static func resolve(environment: String?, stored: String?) -> (impl: AirPlayImpl, origin: Origin) {
-        if let value = environment, let impl = AirPlayImpl(rawValue: value) { return (impl, .environment) }
-        if let value = stored, let impl = AirPlayImpl(rawValue: value) { return (impl, .setting) }
-        return (defaultImpl, .default)
-    }
-
-    /// Whether a session feeds the bundled engine's PCM pipe
-    /// (`AirPlayEngine.fifoPath`): only the bundled engine reads it.
-    /// AudioSync's own sender takes the audio from the capture path
-    /// (`NativeAirPlayTap`), so with it no pipe feed runs, none keeps trying
-    /// to open the pipe, and a leftover engine process gets no audio.
-    var feedsPipe: Bool { self == .owntone }
-
-    /// The choice for a session starting now (main thread).
-    static func current(defaults: UserDefaults = .standard,
-                        environment: [String: String] = ProcessInfo.processInfo.environment)
-        -> (impl: AirPlayImpl, origin: Origin) {
-        resolve(environment: environment[environmentKey], stored: defaults.string(forKey: defaultsKey))
-    }
-}
-
 /// A receiver as the native sender's discovery reports it. Nothing secret:
 /// a PIN or password the user types crosses the C interface only inward,
 /// and pairing credentials never leave the core.
@@ -97,6 +38,15 @@ struct NativeReceiver: Equatable {
         case .needsPassword: return .code(password: true)
         case .needsPairing, .airPlay2Only, .unsupported: return nil
         }
+    }
+
+    /// Whether a receiver named `name` is this Mac's own AirPlay Receiver,
+    /// which is never listed (S100): its name equals the computer name,
+    /// ignoring case. An unknown or empty computer name matches nothing, so
+    /// nothing is hidden by mistake.
+    static func isThisMac(_ name: String, computerName: String?) -> Bool {
+        guard let computerName, !computerName.isEmpty else { return false }
+        return name.lowercased() == computerName.lowercased()
     }
 
     /// The receiver for the debug log, on one line.

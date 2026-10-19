@@ -1,7 +1,7 @@
 import Foundation
 
 /// One namespace for AirPlay and local speakers, so a group or the
-/// auto-connect list can hold both: "ap:<OwnTone output id>" / "lc:<device UID>".
+/// auto-connect list can hold both: "ap:<AirPlay app ID>" / "lc:<device UID>" (`NativeAirPlayID`).
 enum SpeakerKey {
     static func make(id: String, airplay: Bool) -> String { (airplay ? "ap:" : "lc:") + id }
 

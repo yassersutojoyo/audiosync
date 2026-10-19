@@ -11,7 +11,7 @@ final class AppModel: ObservableObject {
     struct Speaker: Identifiable, Equatable {
         let id: String
         let name: String
-        /// What kind of output it is: always `.airplay` for engine speakers.
+        /// What kind of output it is: always `.airplay` for AirPlay speakers.
         let tag: SpeakerTag
         var enabled: Bool
         var volume: Double          // slider position 0…100
@@ -20,7 +20,7 @@ final class AppModel: ObservableObject {
         /// nothing, and the reference itself (S181).
         var offsetMs: Double?
         var autoConnect = false
-        /// From the AirPlay engine's last report; always `.open` for local speakers.
+        /// From the AirPlay sender's discovery; always `.open` for local speakers.
         var availability: SpeakerAvailability = .open
 
         /// A speaker AudioSync streams to through AirPlay, not a local output.
@@ -95,11 +95,11 @@ final class AppModel: ObservableObject {
     @Published var hasLocalReference = true
     /// What the AirPlay delay field shows, L in whole ms (S178, S181).
     @Published var airPlayDelayMs: Double = LocalDelay.defaultAirPlayDelayMs
-    @Published var airplayReachable = true
-    @Published var airplayEngineBundled = true
-    @Published var airplayEngine: AirPlayEngineState = .stopped
+    /// AudioSync's own AirPlay sender stopped after an internal error
+    /// (`NativeSenderStarts`): the AirPlay section says so, with Retry.
+    @Published var airplaySenderFailed = false
     /// Whether AudioSync is (or may be) kept off the local network, where
-    /// the engine can't see any AirPlay speaker.
+    /// the sender can't see any AirPlay speaker.
     @Published var localNetworkHint: LocalNetworkHint = .none
     @Published var nowPlaying: NowPlayingMonitor.Track?
     @Published var equalizerOn = false
@@ -155,7 +155,7 @@ final class AppModel: ObservableObject {
 
     var statusText: String { running ? text.statusStreaming(speakers: activeSpeakers) : text.statusOff }
 
-    /// AirPlay speakers left over from before the engine stopped can't be
+    /// AirPlay speakers left over from before the sender stopped can't be
     /// switched, so they're hidden while `airPlayProblem` is shown.
     var shownAirPlay: [Speaker] { airPlayProblem == nil ? airplay : [] }
 
@@ -165,23 +165,12 @@ final class AppModel: ObservableObject {
         SpeakerLayout.split(local: local, airplay: shownAirPlay, tag: \.tag, name: \.name)
     }
 
-    var airPlayEmptyText: String {
-        if !airplayEngineBundled { return text.airPlayEngineMissing }
-        if airplayEngine == .starting || airplayEngine == .restarting { return text.airPlayStarting }
-        return airplayReachable ? text.airPlayNoneFound : text.airPlayEmpty
-    }
+    var airPlayEmptyText: String { text.airPlayNoneFound }
 
     /// Why AirPlay can't work right now, shown in place of its speakers; nil
-    /// while the engine runs or is (re)starting.
+    /// while the sender runs or is starting.
     var airPlayProblem: String? {
-        guard airplayEngineBundled else { return nil }
-        switch airplayEngine {
-        case .gaveUp: return text.airPlayEngineGaveUp
-        case .failed(.unsupportedOS(let minimum)): return text.airPlayNeedsNewerMacOS(minimum)
-        case .failed(.nativeSender): return text.nativeAirPlayFailed
-        case .failed: return text.airPlayEngineFailed
-        default: return nil
-        }
+        airplaySenderFailed ? text.nativeAirPlayFailed : nil
     }
 }
 
@@ -464,7 +453,7 @@ struct MenuBarView: View {
             // AirPlay comes last in the list, so what's wrong with AirPlay goes
             // right after it.
             if let problem = model.airPlayProblem {
-                AirPlayProblemView(message: problem, canRetry: model.airplayEngine.canRetry,
+                AirPlayProblemView(message: problem, canRetry: true,
                                    text: t, compact: true) { model.actions.retryAirPlay() }
             } else if let hint = t.localNetworkHint(model.localNetworkHint, short: true) {
                 localNetworkHint(t, caption: hint,
@@ -535,9 +524,7 @@ struct MenuBarView: View {
         if count == 0 && model.airPlayProblem != nil {
             EmptyView()   // the problem below says why
         } else if count == 0 {
-            Text(!model.airplayEngineBundled ? t.airPlayEngineMissing
-                 : model.airplayEngine == .starting || model.airplayEngine == .restarting ? t.airPlayStarting
-                 : model.layout.thisMac.isEmpty ? t.noSpeakers : t.airPlayNoneFound)
+            Text(model.layout.thisMac.isEmpty ? t.noSpeakers : t.airPlayNoneFound)
                 .font(.caption)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -552,7 +539,7 @@ struct MenuBarView: View {
     }
 
     /// The main window's Local Network hint, cut to a caption and a link:
-    /// without that access the engine sees no AirPlay speaker, silently.
+    /// without that access the sender sees no AirPlay speaker, silently.
     private func localNetworkHint(_ t: AppText, caption: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(caption)
