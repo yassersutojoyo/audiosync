@@ -57,6 +57,11 @@ const PREVIEW_GUIDE_VAR: &str = "AUDIOSYNC_PREVIEW_GUIDE";
 /// appearance, whatever Windows uses (`view::App::preview_theme`).
 const PREVIEW_THEME_VAR: &str = "AUDIOSYNC_PREVIEW_THEME";
 
+/// With the debug log on, `code` or `wrong` here opens the PIN dialog of an
+/// Apple TV pairing at launch for a made-up Apple TV, as when it shows a PIN
+/// or after a wrong one (`view::App::preview_pin`). Nothing is paired.
+const PREVIEW_PIN_VAR: &str = "AUDIOSYNC_PREVIEW_PIN";
+
 fn main() -> ExitCode {
     let log = DebugLog::from_env();
     log.log(|| {
@@ -157,11 +162,31 @@ fn start_airplay(audio: &mut audio::wasapi::WasapiBackend, log: &DebugLog) {
         }
     };
     let discovery = link.start_discovery();
-    audio.set_airplay(Box::new(link), Some(FeedSlot::new(input)));
+    audio.set_airplay_with_pairings(
+        Box::new(link),
+        Some(FeedSlot::new(input)),
+        open_pairings(log),
+    );
     match discovery {
         Ok(()) => log.log(|| "AirPlay: browsing for receivers".to_owned()),
         Err(error) => log.log(|| format!("AirPlay: discovery couldn't start: {error}")),
     }
+}
+
+/// The paired Apple TVs' credentials, from the file in the app's data
+/// folder; kept for this run only when Windows names no such folder.
+#[cfg(windows)]
+fn open_pairings(log: &DebugLog) -> audio::pairings::PairingStore {
+    use audio::pairings::{PairingStore, Sealer};
+    let Some(path) = PairingStore::default_path() else {
+        log.log(|| {
+            "AirPlay pairings: no app data folder; pairings last until AudioSync quits".to_owned()
+        });
+        return PairingStore::in_memory();
+    };
+    let (store, loaded) = PairingStore::open(path, Sealer::current_user());
+    log.log(|| format!("AirPlay pairings: {loaded}"));
+    store
 }
 
 /// Off Windows, example speakers to work on the UI with.
@@ -222,6 +247,21 @@ fn run(log: &DebugLog) -> Result<(), StartError> {
     {
         log.log(|| format!("guide: opened for a made-up notice ({PREVIEW_GUIDE_VAR})"));
         app.show_guide_for(&message);
+    }
+    // To look at the PIN dialog without an Apple TV: a made-up pairing, only
+    // while the debug log is on.
+    if log.enabled()
+        && let Some(wrong) =
+            std::env::var(PREVIEW_PIN_VAR)
+                .ok()
+                .and_then(|pin| match pin.as_str() {
+                    "code" => Some(false),
+                    "wrong" => Some(true),
+                    _ => None,
+                })
+    {
+        log.log(|| format!("PIN dialog: opened for a made-up Apple TV ({PREVIEW_PIN_VAR})"));
+        app.preview_pin(wrong);
     }
     slint::run_event_loop_until_quit()?;
     log.log(|| "the event loop ended".to_owned());

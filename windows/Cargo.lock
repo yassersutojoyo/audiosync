@@ -503,6 +503,7 @@ dependencies = [
  "tray-icon",
  "windows",
  "windows-core",
+ "zeroize",
 ]
 
 [[package]]
