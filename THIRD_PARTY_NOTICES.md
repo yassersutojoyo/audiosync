@@ -159,6 +159,16 @@ icon font Windows 11 ships; the app uses the installed font and doesn't bundle
 it. The app and tray icons in `windows/res/` are generated from AudioSync's own
 brand mark (`scripts/brand/windows-icons.sh`).
 
+The Windows app also contains AudioSync's own AirPlay sender (`airplay/`,
+MIT), which brings its dependencies into the executable: `mdns-sd` (Apache-2.0
+OR MIT) to find receivers on the network, with the crates it builds on
+(`flume`, `spin`, `lock_api`, `scopeguard`, `mio`, `socket2`,
+`socket-pktinfo`, `if-addrs` under MIT OR BSD-3-Clause, `fastrand`, `log`,
+`windows-sys`, `windows-link`), `md-5` (MIT OR Apache-2.0) with `digest`,
+`block-buffer`, `crypto-common`, `hybrid-array` and `typenum` for password
+digests, and `getrandom` with `cfg-if` for random session identifiers.
+`airplay/NOTES.md` lists each with its version and license.
+
 The Windows app's other Rust dependencies are under permissive licenses. CI
 checks them with `cargo deny check licenses` against the list in
 `windows/deny.toml`. Each Windows test build CI uploads comes with a
