@@ -934,3 +934,51 @@ fn rtp_header_of_received_audio_carries_the_marker_first() {
     drop(log);
     sender.shutdown();
 }
+
+// Timing requests that fill origin and receive, keep the sequence field at
+// 0x0007 and put junk in bytes 4 to 7, every 5 ms while audio streams: each
+// reply copies transmit and the sequence field and nothing else, and comes
+// back well within 100 ms (P90, P91).
+// covers: P90, P91
+#[test]
+fn timing_replies_read_only_seq_and_transmit_and_leave_within_100_ms_under_load() {
+    let _serial = serial();
+    let receiver = NetReceiver::start(Behavior {
+        timing_interval: Some(Duration::from_millis(5)),
+        timing_quirks: Some(0x0007),
+        ..Behavior::default()
+    });
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let device = receiver.device(31, PCM_TXT);
+    let key = device.key.clone();
+    sender.add_speaker(device, options(-20.0));
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?}",
+        events.of(&key)
+    );
+    assert!(
+        wait_until(LONG, || receiver.log().timing.len() >= 200),
+        "timing exchanges: {}",
+        receiver.log().timing.len()
+    );
+    {
+        let log = receiver.log();
+        assert!(log.audio.len() >= 50, "audio flows meanwhile");
+        let mut slowest = Duration::ZERO;
+        for exchange in &log.timing {
+            assert_eq!(exchange.reply.seq, 0x0007);
+            assert_eq!(exchange.reply.origin, exchange.request_transmit);
+            assert!(exchange.reply.receive <= exchange.reply.transmit);
+            slowest = slowest.max(exchange.replied_at - exchange.sent_at);
+        }
+        assert!(
+            slowest < Duration::from_millis(100),
+            "slowest round trip {slowest:?}"
+        );
+    }
+    sender.shutdown();
+}

@@ -84,10 +84,17 @@ pub(crate) enum IoEvent {
     /// Connect attempt `attempt` was refused, found no route or ran out of
     /// time (P134).
     ConnectFailed { session: SessionKey, attempt: u32 },
-    /// Bytes the receiver wrote on the RTSP connection.
-    Rtsp { session: SessionKey, bytes: Vec<u8> },
-    /// The RTSP connection closed or failed (P141).
-    RtspClosed { session: SessionKey },
+    /// Bytes the receiver wrote on the RTSP connection of connect attempt
+    /// `attempt`.
+    Rtsp {
+        session: SessionKey,
+        attempt: u32,
+        bytes: Vec<u8>,
+    },
+    /// The RTSP connection of connect attempt `attempt` closed or failed
+    /// (P141). A session that connected again since (P58) drops a late one
+    /// from the earlier connection.
+    RtspClosed { session: SessionKey, attempt: u32 },
     /// A retransmission request on the control socket (P86).
     Control { session: SessionKey, bytes: Vec<u8> },
     /// A timing request arrived at `at` and was answered (P91, P131).
@@ -172,6 +179,7 @@ impl SessionIo {
     /// ([`Session::handle_connected`](crate::session::Session::handle_connected)).
     pub(crate) fn open(
         session: SessionKey,
+        attempt: u32,
         tcp: TcpStream,
         clock: SenderClock,
         counters: Arc<SpeakerCounters>,
@@ -233,12 +241,19 @@ impl SessionIo {
         io.threads.push(thread);
         let thread = spawn(
             "airplay-rtsp-read",
-            read_loop(session, reader, io.stop.clone(), notify.clone()),
+            read_loop(session, attempt, reader, io.stop.clone(), notify.clone()),
         )?;
         io.threads.push(thread);
         let thread = spawn(
             "airplay-rtsp-write",
-            write_loop(session, writer_stream, writes, io.stop.clone(), notify),
+            write_loop(
+                session,
+                attempt,
+                writer_stream,
+                writes,
+                io.stop.clone(),
+                notify,
+            ),
         )?;
         io.threads.push(thread);
         Ok((io, connection))
@@ -308,9 +323,11 @@ pub(crate) struct RtspIo {
 }
 
 impl RtspIo {
-    /// Starts the reader and writer threads on the connected `tcp`.
+    /// Starts the reader and writer threads on the connected `tcp`, the
+    /// connection of connect attempt `attempt`.
     pub(crate) fn open(
         session: SessionKey,
+        attempt: u32,
         tcp: TcpStream,
         notify: impl Notify,
     ) -> io::Result<RtspIo> {
@@ -329,12 +346,19 @@ impl RtspIo {
         // On a failed spawn, dropping `io` stops the thread already running.
         let thread = spawn(
             "airplay-pair-read",
-            read_loop(session, reader, io.stop.clone(), notify.clone()),
+            read_loop(session, attempt, reader, io.stop.clone(), notify.clone()),
         )?;
         io.threads.push(thread);
         let thread = spawn(
             "airplay-pair-write",
-            write_loop(session, writer_stream, writes, io.stop.clone(), notify),
+            write_loop(
+                session,
+                attempt,
+                writer_stream,
+                writes,
+                io.stop.clone(),
+                notify,
+            ),
         )?;
         io.threads.push(thread);
         Ok(io)
@@ -458,6 +482,7 @@ fn idle_after(error: &io::Error) {
 /// Reads the RTSP connection until it closes (P141).
 fn read_loop(
     session: SessionKey,
+    attempt: u32,
     mut stream: TcpStream,
     stop: Arc<AtomicBool>,
     notify: impl Notify,
@@ -467,12 +492,16 @@ fn read_loop(
         loop {
             match stream.read(&mut buf) {
                 Ok(0) => {
-                    notify(IoEvent::RtspClosed { session });
+                    notify(IoEvent::RtspClosed { session, attempt });
                     break;
                 }
                 Ok(len) => {
                     let bytes = buf[..len].to_vec();
-                    if !notify(IoEvent::Rtsp { session, bytes }) {
+                    if !notify(IoEvent::Rtsp {
+                        session,
+                        attempt,
+                        bytes,
+                    }) {
                         break;
                     }
                 }
@@ -489,7 +518,7 @@ fn read_loop(
                     }
                 }
                 Err(_) => {
-                    notify(IoEvent::RtspClosed { session });
+                    notify(IoEvent::RtspClosed { session, attempt });
                     break;
                 }
             }
@@ -501,6 +530,7 @@ fn read_loop(
 /// pieces, looking at the stop flag between them.
 fn write_loop(
     session: SessionKey,
+    attempt: u32,
     mut stream: TcpStream,
     writes: mpsc::Receiver<Vec<u8>>,
     stop: Arc<AtomicBool>,
@@ -513,7 +543,7 @@ fn write_loop(
                     return;
                 }
                 if stream.write_all(piece).is_err() {
-                    notify(IoEvent::RtspClosed { session });
+                    notify(IoEvent::RtspClosed { session, attempt });
                     return;
                 }
             }

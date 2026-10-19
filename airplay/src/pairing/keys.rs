@@ -1,6 +1,7 @@
 //! The key schedule of the Apple TV legacy pairing: sealing the client's
-//! public key in the last pair-setup step (P53), the pair-verify answer
-//! (P55, P56) and the throwaway key of `POST /auth-setup` (P60).
+//! public key in the last pair-setup step and opening the receiver's sealed
+//! answer (P53), the pair-verify answer and the receiver's signature in it
+//! (P55, P56), and the throwaway key of `POST /auth-setup` (P60).
 //!
 //! Every primitive comes from an established crate: SHA-512 (`sha2`),
 //! AES-128 in GCM and CTR mode (`aes`, `aes-gcm`, `ctr`), Ed25519
@@ -11,7 +12,7 @@ use aes::Aes128;
 use aes_gcm::aead::consts::U16;
 use aes_gcm::{AeadInOut, AesGcm, KeyInit};
 use ctr::cipher::{KeyIvInit, StreamCipher};
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use sha2::{Digest, Sha512};
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
@@ -80,6 +81,38 @@ pub fn seal_public_key(
     (sealed, tag)
 }
 
+/// The GCM nonce of the receiver's sealed answer to the last pair-setup
+/// step (P53): the sender's nonce with 1 more added to its last byte, so 2
+/// more than the hash's, modulo 256 and without a carry into the other
+/// bytes.
+pub fn answer_nonce(session_key: &[u8]) -> [u8; 16] {
+    let mut nonce = setup_nonce(session_key);
+    nonce[15] = nonce[15].wrapping_add(1);
+    nonce
+}
+
+/// Opens the receiver's sealed answer to the last pair-setup step (P53):
+/// `epk` (32 bytes) and `authTag` (16 bytes), AES-128-GCM under the key of
+/// P53 and [`answer_nonce`], without additional data. `None` when a length
+/// is wrong, the tag doesn't match, or the 32 bytes aren't an Ed25519
+/// public key.
+pub fn open_receiver_key(session_key: &[u8], sealed: &[u8], tag: &[u8]) -> Option<[u8; KEY_BYTES]> {
+    let mut opened: [u8; KEY_BYTES] = sealed.try_into().ok()?;
+    let tag: [u8; 16] = tag.try_into().ok()?;
+    let key = Zeroizing::new(setup_key(session_key));
+    let cipher = SetupCipher::new(&(*key).into());
+    cipher
+        .decrypt_inout_detached(
+            &answer_nonce(session_key).into(),
+            b"",
+            opened.as_mut_slice().into(),
+            &tag.into(),
+        )
+        .ok()?;
+    VerifyingKey::from_bytes(&opened).ok()?;
+    Some(opened)
+}
+
 /// The AES key of pair-verify: the first 16 bytes of
 /// SHA-512("Pair-Verify-AES-Key" | shared) (P56).
 pub fn verify_key(shared: &[u8; KEY_BYTES]) -> [u8; 16] {
@@ -120,6 +153,38 @@ pub fn encrypt_signature(
     let mut encrypted = *signature;
     cipher.apply_keystream(&mut encrypted);
     encrypted
+}
+
+/// atv_data decrypted (P56): the first 64 bytes of the pair-verify
+/// keystream applied to it, which gives the receiver's Ed25519 signature
+/// over atv_pub | v_pub.
+pub fn decrypt_receiver_data(
+    shared: &[u8; KEY_BYTES],
+    receiver_data: &[u8; RECEIVER_DATA_BYTES],
+) -> [u8; SIGNATURE_BYTES] {
+    let key = Zeroizing::new(verify_key(shared));
+    let mut cipher = VerifyCipher::new(&(*key).into(), &verify_iv(shared).into());
+    let mut decrypted = *receiver_data;
+    cipher.apply_keystream(&mut decrypted);
+    decrypted
+}
+
+/// Whether `signature` is the receiver's Ed25519 signature, by
+/// `receiver_key`, over atv_pub | v_pub, its own key first (P56).
+pub fn check_receiver_signature(
+    receiver_key: &[u8; KEY_BYTES],
+    receiver_public: &[u8; KEY_BYTES],
+    verify_public: &[u8; KEY_BYTES],
+    signature: &[u8; SIGNATURE_BYTES],
+) -> bool {
+    let Ok(key) = VerifyingKey::from_bytes(receiver_key) else {
+        return false;
+    };
+    let mut message = [0u8; 2 * KEY_BYTES];
+    message[..KEY_BYTES].copy_from_slice(receiver_public);
+    message[KEY_BYTES..].copy_from_slice(verify_public);
+    key.verify(&message, &Signature::from_bytes(signature))
+        .is_ok()
 }
 
 /// X25519(secret, their public key), or `None` when the result is all
