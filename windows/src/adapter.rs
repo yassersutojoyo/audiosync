@@ -950,6 +950,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.notices.clear(&[airplay_subject(&id)]);
                 self.start_if_switched_on();
             }
+            // Its Retry starts a new sender (`retry_airplay`).
+            BackendEvent::AirPlayStopped => {
+                self.post(NoticeSubject::AirPlay, NoticeMessage::AirPlayStopped);
+            }
         }
     }
 
@@ -1423,6 +1427,17 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.log
             .log(|| "the user asked to list the devices again".to_owned());
         self.list_devices();
+    }
+
+    /// The speakers that were on come back as they do after a launch: the
+    /// backend kept their settings, and the auto-connect ones switch on as
+    /// the new sender lists them.
+    fn retry_airplay(&mut self) {
+        self.log
+            .log(|| "the user asked to start AirPlay again (Retry)".to_owned());
+        self.notices.clear(&[NoticeSubject::AirPlay]);
+        self.audio.retry_airplay();
+        self.take_events();
     }
 
     /// The PIN itself is never logged.
@@ -2827,10 +2842,16 @@ mod tests {
         assert!(messages(&adapter).is_empty());
         fake.stop_running();
         adapter.poll();
-        assert!(
-            !messages(&adapter).is_empty(),
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayStopped],
             "AirPlay must not go silent without a hint"
         );
+        // Nothing it listed is there anymore, and the notice comes once.
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_none());
+        adapter.dismiss_all_notices();
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
     }
 
     #[test]
@@ -2841,10 +2862,56 @@ mod tests {
         fake.gone(&study);
         fake.push(SenderEvent::DiscoveryFailed);
         adapter.poll();
-        assert!(
-            !messages(&adapter).is_empty(),
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayStopped],
             "a speaker list that empties for good needs a hint"
         );
+    }
+
+    #[test]
+    fn retry_starts_a_new_sender_and_the_speakers_that_were_on_come_back() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let next = FakeAirPlay::new();
+        let started = next.clone();
+        adapter
+            .audio
+            .set_airplay_starter(Box::new(move || Some((started.link(), None))));
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.set_speaker_volume(&ap(&kitchen), 30.0);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        fake.stop_running();
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+
+        adapter.retry_airplay();
+        assert!(messages(&adapter).is_empty(), "Retry clears the notice");
+        assert!(adapter.snapshot().running, "streaming goes on");
+        assert_eq!(
+            next.take_calls(),
+            [Call::RestartTimeline],
+            "the capture feeds the new sender"
+        );
+        next.appear(&kitchen);
+        adapter.poll();
+        let speaker = speaker_of(&adapter, &ap(&kitchen));
+        assert!(speaker.enabled, "on again, as after a launch");
+        assert_eq!(speaker.volume, 30.0);
+        assert!(matches!(
+            next.take_calls().as_slice(),
+            [Call::Add { id, .. }] if *id == id_of(&kitchen)
+        ));
+    }
+
+    #[test]
+    fn a_retry_whose_sender_cant_start_keeps_the_notice() {
+        let (mut adapter, fake, _, _) = airplay_adapter();
+        adapter.audio.set_airplay_starter(Box::new(|| None));
+        fake.stop_running();
+        adapter.poll();
+        adapter.retry_airplay();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
     }
 
     #[test]

@@ -41,7 +41,7 @@ use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 
 use super::SESSION_RATE;
-use super::airplay::{AirPlayLink, AirPlaySpeakers, FeedLease, FeedSlot};
+use super::airplay::{AirPlayLink, AirPlaySpeakers, FeedLease, FeedSlot, SenderStarter};
 use super::backend::{
     AirPlayInfo, AirPlayPinPrompt, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
     OutputInfo, SourceId, SourceInfo, StopReason,
@@ -226,6 +226,8 @@ pub struct Controller<D: Driver> {
     airplay: Option<AirPlaySpeakers>,
     /// The sender's feed, which each capture borrows.
     feed: Option<FeedSlot>,
+    /// Starts a new sender when the user retries after the sender stopped.
+    starter: Option<SenderStarter>,
 }
 
 impl<D: Driver> Controller<D> {
@@ -250,7 +252,14 @@ impl<D: Driver> Controller<D> {
             routing: RoutingState::default(),
             airplay: None,
             feed: None,
+            starter: None,
         }
+    }
+
+    /// Starts a new AirPlay sender through `starter` when the user retries
+    /// after the one running stopped.
+    pub fn set_airplay_starter(&mut self, starter: SenderStarter) {
+        self.starter = Some(starter);
     }
 
     /// Sends what the backend does to `log`.
@@ -1113,6 +1122,43 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn retry_airplay(&mut self) {
+        let starter = match (&self.airplay, self.starter.as_mut()) {
+            (Some(_), Some(starter)) => starter,
+            _ => {
+                self.log
+                    .log(|| "AirPlay: Retry, but no sender ran to replace".to_owned());
+                return;
+            }
+        };
+        self.log
+            .log(|| "AirPlay: Retry: starting a new sender".to_owned());
+        let Some((link, feed)) = starter() else {
+            self.pending.push(BackendEvent::AirPlayStopped);
+            return;
+        };
+        // A running capture feeds the old sender: it starts again with the
+        // new sender's feed (the capture can't swap it while it runs).
+        let source = self.session.as_ref().map(|session| session.source.clone());
+        self.end_session();
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.replace_link(link);
+        }
+        self.feed = feed;
+        self.sync_airplay_rule();
+        if let Some(source) = source
+            && let Err(error) = self.start_session(&source)
+        {
+            self.log
+                .log(|| format!("the capture couldn't start again after Retry: {error}"));
+            self.airplay_streaming(false);
+            self.pending.push(BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(error),
+            });
+        }
+        self.pending.push(BackendEvent::AirPlayChanged);
+    }
+
     fn poll(&mut self) -> Vec<BackendEvent> {
         // A session whose capture stopped ends first.
         let stop_reason = self
@@ -1450,6 +1496,9 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
             format!("AirPlay speaker ({id}) can't play ({problem:?}); it is turned off")
         }
         BackendEvent::AirPlayPaired { id } => format!("AirPlay speaker ({id}) paired and on"),
+        BackendEvent::AirPlayStopped => {
+            "the AirPlay sender stopped; it waits for the user's Retry".to_owned()
+        }
     }
 }
 

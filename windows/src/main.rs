@@ -158,28 +158,41 @@ fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
 }
 
 /// Starts the AirPlay sender and its discovery, and hands both to the audio
-/// backend. Without a sender the app runs on with local outputs only;
+/// backend, with the way to start a new one when the user retries after it
+/// stopped. Without a sender the app runs on with local outputs only;
 /// without discovery no AirPlay speaker is listed.
 #[cfg(windows)]
 fn start_airplay(audio: &mut audio::wasapi::WasapiBackend, log: &DebugLog) {
+    let Some((link, feed)) = start_sender(log) else {
+        return;
+    };
+    audio.set_airplay_with_pairings(link, feed, open_pairings(log));
+    let log = log.clone();
+    audio.set_airplay_starter(Box::new(move || start_sender(&log)));
+}
+
+/// A new AirPlay sender browsing for receivers, and the feed for its input;
+/// `None` when it couldn't start.
+#[cfg(windows)]
+fn start_sender(
+    log: &DebugLog,
+) -> Option<(
+    Box<dyn audio::airplay::AirPlayLink>,
+    Option<audio::airplay::FeedSlot>,
+)> {
     use audio::airplay::{FeedSlot, SenderLink};
     let (link, input) = match SenderLink::start() {
         Ok(started) => started,
         Err(error) => {
             log.log(|| format!("AirPlay: the sender couldn't start: {error}"));
-            return;
+            return None;
         }
     };
-    let discovery = link.start_discovery();
-    audio.set_airplay_with_pairings(
-        Box::new(link),
-        Some(FeedSlot::new(input)),
-        open_pairings(log),
-    );
-    match discovery {
+    match link.start_discovery() {
         Ok(()) => log.log(|| "AirPlay: browsing for receivers".to_owned()),
         Err(error) => log.log(|| format!("AirPlay: discovery couldn't start: {error}")),
     }
+    Some((Box::new(link), Some(FeedSlot::new(input))))
 }
 
 /// The paired Apple TVs' credentials, from the file in the app's data

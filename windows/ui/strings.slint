@@ -29,6 +29,9 @@ export global Strings {
     // The button on the double-audio notice that opens its guide.
     out property <string> notice-show-how: @tr("Show How");
     out property <string> notice-show-how-label: @tr("Show how to hear it only once");
+    // The button on the notice that AirPlay stopped: starts it again.
+    out property <string> notice-retry: @tr("Retry");
+    out property <string> notice-retry-label: @tr("Start AirPlay again");
     out property <string> delay-field-label: @tr("Delay in milliseconds");
     out property <string> source-label: @tr("Audio Source");
     out property <string> equalizer: @tr("Equalizer");
@@ -46,6 +49,7 @@ export global Strings {
     out property <string> notice-no-speaker: @tr("Turn on at least one speaker first (under This PC or Connected Speakers).");
     out property <string> notice-capture-failed: @tr("AudioSync couldn't capture audio from the selected source. Turn streaming off and on again, or pick another source. If it keeps happening, restart your PC.");
     out property <string> notice-capture-lost: @tr("AudioSync lost the audio from the selected source, so streaming has stopped. Turn streaming on again, or pick another source.");
+    out property <string> notice-airplay-stopped: @tr("AirPlay stopped after an internal error, so AirPlay speakers aren't playing. Select Retry to start it again.");
 
     // Pairing with an Apple TV that asks for a code: the dialog and the
     // speaker menu.

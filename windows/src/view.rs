@@ -625,6 +625,10 @@ impl App {
         let w = weak.clone();
         main.on_notice_guide_requested(move |id| with_app(&w, |app| app.show_guide(id)));
         let w = weak.clone();
+        main.on_notice_retry_requested(move |_| {
+            with_app(&w, |app| app.update(|b| b.retry_airplay()))
+        });
+        let w = weak.clone();
         main.on_close_requested(move || with_app(&w, App::close_main));
         main.on_exit_requested(|| {
             let _ = slint::quit_event_loop();
@@ -682,6 +686,10 @@ impl App {
                 app.hide_flyout();
                 app.show_guide(id);
             })
+        });
+        let w = weak.clone();
+        flyout.on_notice_retry_requested(move |_| {
+            with_app(&w, |app| app.update(|b| b.retry_airplay()))
         });
         let w = weak.clone();
         flyout.on_open_app(move || {
@@ -1407,6 +1415,7 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
         message: notice_text(strings, &notice.message),
         time: notice.time.as_str().into(),
         has_guide: guide::guide(&notice.message).is_some(),
+        has_retry: notice.message == NoticeMessage::AirPlayStopped,
     }
 }
 
@@ -1505,6 +1514,7 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         | NoticeMessage::AirPlayCantPlay { speaker, problem } => {
             strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
         }
+        NoticeMessage::AirPlayStopped => strings.get_notice_airplay_stopped(),
         NoticeMessage::HeardTwice {
             source,
             mute,

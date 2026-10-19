@@ -216,6 +216,8 @@ export component MainWindow inherits Window {
     callback notices-dismissed-all();
     // Show How on a notice: open its guide.
     callback notice-guide-requested(int);
+    // Retry on a notice: start AirPlay again.
+    callback notice-retry-requested(int);
     callback close-requested();
     callback exit-requested();
     callback about-requested();
@@ -394,6 +396,9 @@ export component MainWindow inherits Window {
             }
             guide-requested(id) => {
                 root.notice-guide-requested(id);
+            }
+            retry-requested(id) => {
+                root.notice-retry-requested(id);
             }
         }
 
