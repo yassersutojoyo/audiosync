@@ -67,6 +67,13 @@ pub struct Behavior {
     /// Close the connection right after answering the first request with
     /// this key.
     pub close_after: Option<String>,
+    /// Close the connection right after answering the second pair-verify
+    /// step, on this many connections (P58).
+    pub close_after_verify: usize,
+    /// Timing requests carry this sequence number instead of counting up,
+    /// and from the second on fill origin and receive with the previous
+    /// exchange's values, as some receivers do (P90).
+    pub timing_quirks: Option<u16>,
 }
 
 impl Default for Behavior {
@@ -81,6 +88,8 @@ impl Default for Behavior {
             deaf_after: None,
             apple_tv: None,
             close_after: None,
+            close_after_verify: 0,
+            timing_quirks: None,
         }
     }
 }
@@ -109,6 +118,9 @@ pub struct TimingSeen {
     pub request_transmit: NtpTime,
     pub reply: TimingPacket,
     pub from: SocketAddr,
+    /// When the request left and when the reply arrived (P91).
+    pub sent_at: Instant,
+    pub replied_at: Instant,
 }
 
 #[derive(Debug, Default)]
@@ -376,6 +388,17 @@ fn serve(shared: Arc<Shared>, mut stream: TcpStream, peer: SocketAddr) {
                         let _ = stream.shutdown(std::net::Shutdown::Both);
                         return closed(&shared);
                     }
+                    let second_verify =
+                        request.uri == "/pair-verify" && request.body.starts_with(&[0, 0, 0, 0]);
+                    if second_verify {
+                        let mut behavior = lock(&shared.behavior);
+                        if behavior.close_after_verify > 0 {
+                            behavior.close_after_verify -= 1;
+                            drop(behavior);
+                            let _ = stream.shutdown(std::net::Shutdown::Both);
+                            return closed(&shared);
+                        }
+                    }
                     if deaf_after.as_deref() == Some(key(&request).as_str()) {
                         deaf = true;
                         break;
@@ -492,39 +515,72 @@ fn timing_loop(shared: Arc<Shared>, socket: UdpSocket) {
     let mut buf = [0u8; 64];
     let mut seq: u16 = 0;
     let mut last_sent: Option<Instant> = None;
-    let mut pending: BTreeMap<u16, NtpTime> = BTreeMap::new();
+    // (sequence number, transmit time, when it left) of each request.
+    let mut pending: Vec<(u16, NtpTime, Instant)> = Vec::new();
+    let mut previous: Option<(NtpTime, NtpTime)> = None;
     while !shared.stop.load(Ordering::SeqCst) {
-        let interval = lock(&shared.behavior).timing_interval;
+        let (interval, quirks) = {
+            let behavior = lock(&shared.behavior);
+            (behavior.timing_interval, behavior.timing_quirks)
+        };
         let ports = *lock(&shared.sender);
         if let (Some(interval), Some(ports)) = (interval, ports) {
             let due = last_sent.is_none_or(|at| at.elapsed() >= interval);
             if ports.recording && due {
                 seq = seq.wrapping_add(1);
                 let transmit = NtpTime(0x0102_0304_0000_0000 + u64::from(seq));
+                // Some receivers fill origin and receive with the previous
+                // exchange and keep the sequence field fixed (P90).
+                let (origin, receive) = match (quirks, previous) {
+                    (Some(_), Some(previous)) => previous,
+                    _ => (NtpTime(0), NtpTime(0)),
+                };
                 let request = TimingPacket {
                     reply: false,
-                    seq,
-                    origin: NtpTime(0),
-                    receive: NtpTime(0),
+                    seq: quirks.unwrap_or(seq),
+                    origin,
+                    receive,
                     transmit,
                 };
-                if socket.send_to(&request.encode(), ports.timing).is_ok() {
-                    pending.insert(seq, transmit);
+                let mut bytes = request.encode();
+                if quirks.is_some() {
+                    bytes[4..8].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
                 }
-                last_sent = Some(Instant::now());
+                let sent_at = Instant::now();
+                if socket.send_to(&bytes, ports.timing).is_ok() {
+                    pending.push((request.seq, transmit, sent_at));
+                }
+                last_sent = Some(sent_at);
             }
         }
         let Ok((len, from)) = socket.recv_from(&mut buf) else {
             continue;
         };
+        let replied_at = Instant::now();
         let Some(reply) = TimingPacket::parse(&buf[..len]) else {
             continue;
         };
-        if let Some(request_transmit) = pending.remove(&reply.seq) {
+        // A fixed sequence field can't tell requests apart; the copied
+        // origin can.
+        let found = pending.iter().position(|&(seq, transmit, _)| {
+            if quirks.is_some() {
+                reply.origin == transmit
+            } else {
+                reply.seq == seq
+            }
+        });
+        if let Some(index) = found {
+            let (_, request_transmit, sent_at) = pending.remove(index);
+            previous = Some((
+                reply.transmit,
+                NtpTime(0x0A0B_0C0D_0000_0000 + u64::from(seq)),
+            ));
             lock(&shared.log).timing.push(TimingSeen {
                 request_transmit,
                 reply,
                 from,
+                sent_at,
+                replied_at,
             });
         }
     }

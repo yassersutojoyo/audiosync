@@ -151,8 +151,12 @@ fn media_waits_for_the_record_answer_and_stops_at_teardown() {
     assert!(!link.session.media_allowed());
 }
 
+#[derive(Default)]
 struct FakeVerifier {
     seen: Vec<Vec<u8>>,
+    /// Reported after each second request.
+    warn: bool,
+    renewals: usize,
 }
 
 impl Verifier for FakeVerifier {
@@ -164,23 +168,38 @@ impl Verifier for FakeVerifier {
         self.seen.push(first_response.to_vec());
         (first_response.len() == 96).then(|| vec![0, 0, 0, 0])
     }
+
+    fn take_warning(&mut self) -> Option<Warning> {
+        self.warn.then_some(Warning::ReceiverSignatureInvalid)
+    }
+
+    fn renew(&mut self) -> bool {
+        self.renewals += 1;
+        true
+    }
+}
+
+fn verifying_config() -> SessionConfig {
+    let mut config = config();
+    config.verifier = Some(Box::new(FakeVerifier::default()));
+    config
 }
 
 // covers: P26
 #[test]
-fn auth_setup_and_pair_verify_sit_between_options_and_announce() {
-    let mut config = config();
+fn pair_verify_comes_first_then_options_and_auth_setup() {
+    let mut config = common::config();
     config.auth_setup_key = Some([7; 32]);
-    config.verifier = Some(Box::new(FakeVerifier { seen: Vec::new() }));
+    config.verifier = Some(Box::new(FakeVerifier::default()));
     let mut link = Link::new(config, FakeReceiver::new());
     link.connect();
     assert_eq!(
         link.keys(),
         [
+            "POST /pair-verify",
+            "POST /pair-verify",
             "OPTIONS",
             "POST /auth-setup",
-            "POST /pair-verify",
-            "POST /pair-verify",
             "ANNOUNCE",
             "SETUP",
             "RECORD",
@@ -195,13 +214,224 @@ fn auth_setup_and_pair_verify_sit_between_options_and_announce() {
     assert_eq!(auth_setup.body.len(), 33);
     assert_eq!(auth_setup.body[0], 0x01);
     assert_eq!(&auth_setup.body[1..], &[7; 32]);
-    let verify = &link.receiver.requests[2];
+    let verify = &link.receiver.requests[0];
     assert_eq!(
         verify.headers.get("Content-Type"),
         Some("application/octet-stream")
     );
     assert_eq!(verify.body, [1, 0, 0, 0]);
-    assert_eq!(link.receiver.requests[3].body, [0, 0, 0, 0]);
+    assert_eq!(verify.headers.get("CSeq"), Some("0"));
+    assert_eq!(link.receiver.requests[1].body, [0, 0, 0, 0]);
+}
+
+// covers: P55
+#[test]
+fn a_verify_answer_that_is_not_96_bytes_is_a_failed_verification() {
+    for length in [0, 32, 95, 97] {
+        let mut receiver = FakeReceiver::new();
+        receiver.verify_body = vec![0x5A; length];
+        let mut link = Link::new(verifying_config(), receiver);
+        link.connect();
+        let error = link.failure().expect("failed");
+        assert_eq!(error.kind, ErrorKind::PairingRequired, "{length} bytes");
+        assert_eq!(error.status, Some(200));
+        assert_eq!(link.keys(), ["POST /pair-verify"], "{length} bytes");
+        assert!(link.closed);
+        assert!(error.kind.needs_user());
+    }
+}
+
+// covers: P56
+#[test]
+fn a_receiver_signature_that_fails_its_check_is_only_a_warning() {
+    let mut config = common::config();
+    config.verifier = Some(Box::new(FakeVerifier {
+        warn: true,
+        ..FakeVerifier::default()
+    }));
+    let mut link = Link::new(config, FakeReceiver::new());
+    link.connect();
+    assert_eq!(link.session.state(), State::Playing);
+    assert_eq!(warnings(&link), [Warning::ReceiverSignatureInvalid]);
+}
+
+// covers: P58
+#[test]
+fn a_close_right_after_a_verify_200_reconnects_and_verifies_once_more() {
+    // The retry verifies: the session goes on, on a new connection whose
+    // CSeq starts at 0 again.
+    let mut receiver = FakeReceiver::new();
+    receiver.silent = Some("OPTIONS".to_owned());
+    let mut link = Link::new(verifying_config(), receiver);
+    link.connect();
+    assert_eq!(
+        link.keys(),
+        ["POST /pair-verify", "POST /pair-verify", "OPTIONS"]
+    );
+    let now = link.now;
+    link.session.handle_connection_closed(now);
+    link.pump();
+    assert!(link.failure().is_none(), "{:?}", link.events);
+    assert!(link.closed, "the old connection is let go");
+    assert_eq!(link.connects.len(), 2, "one new connection at once");
+    assert_eq!(link.connects[1], link.connects[0], "to the same address");
+    assert_eq!(link.session.state(), State::Connecting);
+    link.receiver.silent = None;
+    link.connect();
+    assert_eq!(link.session.state(), State::Playing, "{:?}", link.events);
+    let after: Vec<String> = link.keys()[3..].to_vec();
+    assert_eq!(
+        after,
+        [
+            "POST /pair-verify",
+            "POST /pair-verify",
+            "OPTIONS",
+            "ANNOUNCE",
+            "SETUP",
+            "RECORD",
+            "SET_PARAMETER"
+        ]
+    );
+    assert_eq!(link.receiver.requests[3].headers.get("CSeq"), Some("0"));
+
+    // The same close again: PairingRequired.
+    let mut receiver = FakeReceiver::new();
+    receiver.silent = Some("OPTIONS".to_owned());
+    let mut link = Link::new(verifying_config(), receiver);
+    link.connect();
+    let now = link.now;
+    link.session.handle_connection_closed(now);
+    link.pump();
+    link.connect();
+    assert_eq!(link.keys().len(), 6);
+    let now = link.now;
+    link.session.handle_connection_closed(now);
+    link.pump();
+    assert_eq!(kinds(&link), [ErrorKind::PairingRequired]);
+    assert_eq!(link.connects.len(), 2, "only one reconnect");
+
+    // The retry's verification refused: PairingRequired.
+    let mut receiver = FakeReceiver::new();
+    receiver.silent = Some("OPTIONS".to_owned());
+    let mut link = Link::new(verifying_config(), receiver);
+    link.connect();
+    let now = link.now;
+    link.session.handle_connection_closed(now);
+    link.pump();
+    link.receiver
+        .status
+        .insert("POST /pair-verify".to_owned(), 470);
+    link.connect();
+    assert_eq!(kinds(&link), [ErrorKind::PairingRequired]);
+
+    // The new connection can't be made: Unreachable, as usual.
+    let mut receiver = FakeReceiver::new();
+    receiver.silent = Some("OPTIONS".to_owned());
+    let mut link = Link::new(verifying_config(), receiver);
+    link.connect();
+    let now = link.now;
+    link.session.handle_connection_closed(now);
+    link.pump();
+    link.session.handle_connect_failed(now);
+    link.pump();
+    assert_eq!(kinds(&link), [ErrorKind::Unreachable]);
+
+    // A close once OPTIONS was answered, or before any verification was
+    // answered 200, is Lost as before.
+    let mut receiver = FakeReceiver::new();
+    receiver.silent = Some("ANNOUNCE".to_owned());
+    let mut link = Link::new(verifying_config(), receiver);
+    link.connect();
+    let now = link.now;
+    link.session.handle_connection_closed(now);
+    link.pump();
+    assert_eq!(kinds(&link), [ErrorKind::Lost]);
+    let mut receiver = FakeReceiver::new();
+    receiver.silent = Some("POST /pair-verify".to_owned());
+    let mut link = Link::new(verifying_config(), receiver);
+    link.connect();
+    let now = link.now;
+    link.session.handle_connection_closed(now);
+    link.pump();
+    assert_eq!(kinds(&link), [ErrorKind::Lost]);
+}
+
+// covers: P46
+#[test]
+fn a_speaker_that_needs_pairing_is_asked_options_before_pairing_required() {
+    // A 200 listing ANNOUNCE, or without `Public`, or a 501: PairingRequired.
+    for public in [Some("OPTIONS, ANNOUNCE, SETUP, RECORD, TEARDOWN"), None] {
+        let mut config = common::config();
+        config.needs_pairing = true;
+        let mut receiver = FakeReceiver::new();
+        receiver.public = public.map(str::to_owned);
+        let mut link = Link::new(config, receiver);
+        link.connect();
+        assert_eq!(kinds(&link), [ErrorKind::PairingRequired], "{public:?}");
+        assert_eq!(link.keys(), ["OPTIONS"]);
+        assert!(link.closed);
+    }
+    let mut config = common::config();
+    config.needs_pairing = true;
+    let mut receiver = FakeReceiver::new();
+    receiver.status.insert("OPTIONS".to_owned(), 501);
+    let mut link = Link::new(config, receiver);
+    link.connect();
+    assert_eq!(kinds(&link), [ErrorKind::PairingRequired]);
+
+    // A 200 whose `Public` lacks ANNOUNCE: Unsupported, so no PIN is asked
+    // for a receiver that can't take AirPlay 1 audio.
+    let mut config = common::config();
+    config.needs_pairing = true;
+    let mut receiver = FakeReceiver::new();
+    receiver.public = Some("OPTIONS, SETUP, RECORD, GET_PARAMETER, POST, GET".to_owned());
+    let mut link = Link::new(config, receiver);
+    link.connect();
+    assert_eq!(
+        kinds(&link),
+        [ErrorKind::Unsupported(UnsupportedReason::Methods)]
+    );
+
+    // A 403 to OPTIONS from any receiver: PairingRequired, not Refused.
+    for needs_pairing in [true, false] {
+        let mut config = common::config();
+        config.needs_pairing = needs_pairing;
+        let mut receiver = FakeReceiver::new();
+        receiver.status.insert("OPTIONS".to_owned(), 403);
+        let mut link = Link::new(config, receiver);
+        link.connect();
+        let error = link.failure().expect("failed");
+        assert_eq!(error.kind, ErrorKind::PairingRequired, "{needs_pairing}");
+        assert_eq!(error.status, Some(403));
+    }
+
+    // Without the flags calling for pairing, OPTIONS goes on to ANNOUNCE.
+    let mut link = Link::new(common::config(), FakeReceiver::new());
+    link.connect();
+    assert_eq!(link.keys(), START);
+}
+
+// covers: P110
+#[test]
+fn an_audio_latency_that_is_not_a_non_negative_number_is_unknown() {
+    let latency = |text: Option<&str>| {
+        let mut receiver = FakeReceiver::new();
+        receiver.audio_latency_text = text.map(str::to_owned);
+        let mut link = Link::new(config(), receiver);
+        link.connect();
+        link.events
+            .iter()
+            .find_map(|event| match event {
+                SessionEvent::Recording { audio_latency, .. } => Some(*audio_latency),
+                _ => None,
+            })
+            .expect("recording")
+    };
+    assert_eq!(latency(Some("3035")), Some(3035));
+    assert_eq!(latency(Some(" 11025 ")), Some(11025));
+    for text in ["-1", "abc", "", "1.5e3", "true", "99999999999"] {
+        assert_eq!(latency(Some(text)), None, "{text:?}");
+    }
 }
 
 #[test]
@@ -219,7 +449,7 @@ fn a_failed_auth_setup_is_a_warning_and_the_session_goes_on() {
 #[test]
 fn a_rejected_verification_reports_pairing_required() {
     let mut config = config();
-    config.verifier = Some(Box::new(FakeVerifier { seen: Vec::new() }));
+    config.verifier = Some(Box::new(FakeVerifier::default()));
     let mut receiver = FakeReceiver::new();
     receiver.status.insert("POST /pair-verify".to_owned(), 470);
     let mut link = Link::new(config, receiver);
@@ -980,9 +1210,13 @@ fn errors_refused_per_method_and_warnings_after_record() {
         ("RECORD", "RECORD"),
     ] {
         for status in [400, 403, 404, 500, 503] {
+            if key == "OPTIONS" && status == 403 {
+                // A pairing answer, not Refused (P46).
+                continue;
+            }
             let mut receiver = FakeReceiver::new();
             receiver.status.insert(key.to_owned(), status);
-            let mut link = Link::new(config(), receiver);
+            let mut link = Link::new(common::config(), receiver);
             link.connect();
             let error = link.failure().expect("failed");
             assert_eq!(error.kind, ErrorKind::Refused, "{key} {status}");
@@ -991,6 +1225,33 @@ fn errors_refused_per_method_and_warnings_after_record() {
             assert!(link.closed);
             assert!(!error.kind.needs_user());
         }
+    }
+
+    // Not Refused: a 501 to OPTIONS reads as an answer without `Public`, a
+    // 403 to OPTIONS is a pairing answer (P46), a 401 is digest (P36), and
+    // the Busy answers are Busy (P137).
+    let mut receiver = FakeReceiver::new();
+    receiver.status.insert("OPTIONS".to_owned(), 501);
+    let mut link = Link::new(common::config(), receiver);
+    link.connect();
+    assert_eq!(link.session.state(), State::Playing);
+    assert_eq!(link.keys(), START);
+    for (key, status, kind) in [
+        ("OPTIONS", 403, ErrorKind::PairingRequired),
+        ("OPTIONS", 401, ErrorKind::PasswordRequired),
+        ("ANNOUNCE", 401, ErrorKind::PasswordRequired),
+        ("OPTIONS", 409, ErrorKind::Busy),
+        ("ANNOUNCE", 453, ErrorKind::Busy),
+    ] {
+        let mut receiver = FakeReceiver::new();
+        if status == 401 {
+            receiver.gate = Some(PasswordGate::new("secret"));
+        } else {
+            receiver.status.insert(key.to_owned(), status);
+        }
+        let mut link = Link::new(common::config(), receiver);
+        link.connect();
+        assert_eq!(kinds(&link), [kind], "{key} {status}");
     }
 
     // After RECORD, a failure status is only a warning.
@@ -1031,6 +1292,52 @@ fn errors_busy_on_453_to_announce_setup_or_record() {
     let mut link = Link::new(config(), receiver);
     link.connect();
     assert_eq!(kinds(&link), [ErrorKind::Refused]);
+}
+
+// covers: P137
+#[test]
+fn errors_busy_on_409_to_any_request_before_record_is_answered() {
+    for key in ["OPTIONS", "POST /auth-setup", "ANNOUNCE", "SETUP", "RECORD"] {
+        let mut config = common::config();
+        config.auth_setup_key = Some([7; 32]);
+        let mut receiver = FakeReceiver::new();
+        receiver.status.insert(key.to_owned(), 409);
+        let mut link = Link::new(config, receiver);
+        link.connect();
+        let error = link.failure().expect("failed");
+        assert_eq!(error.kind, ErrorKind::Busy, "{key}");
+        assert_eq!(error.status, Some(409), "{key}");
+        assert!(!error.kind.needs_user(), "retried, no user action");
+    }
+    // The first pair-verify: Busy, not PairingRequired (P58, P136).
+    let mut receiver = FakeReceiver::new();
+    receiver.status.insert("POST /pair-verify".to_owned(), 409);
+    let mut link = Link::new(verifying_config(), receiver);
+    link.connect();
+    assert_eq!(kinds(&link), [ErrorKind::Busy]);
+    // An uncredentialed Apple TV's 409 to ANNOUNCE: Busy, not pairing (P46).
+    let mut config = common::config();
+    config.apple_tv_without_credentials = true;
+    let mut receiver = FakeReceiver::new();
+    receiver.status.insert("ANNOUNCE".to_owned(), 409);
+    let mut link = Link::new(config, receiver);
+    link.connect();
+    assert_eq!(kinds(&link), [ErrorKind::Busy]);
+
+    // After RECORD, a 409 to SET_PARAMETER follows P138: a warning.
+    let mut link = playing();
+    link.receiver.status.insert("SET_PARAMETER".to_owned(), 409);
+    link.advance(Duration::from_millis(200));
+    link.session.set_volume(Volume::Db(-6.0), link.now);
+    link.pump();
+    assert_eq!(link.session.state(), State::Playing);
+    assert_eq!(
+        warnings(&link),
+        [Warning::RequestFailed {
+            method: audiosync_airplay::rtsp::Method::SetParameter,
+            status: 409
+        }]
+    );
 }
 
 // covers: P116, P118

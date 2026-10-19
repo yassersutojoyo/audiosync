@@ -5,8 +5,10 @@
 //! [`Session`](crate::session::Session): it names the address to connect
 //! to ([`Output::Connect`]), takes the connect result, the bytes read, the
 //! PIN and the time, and gives back bytes to write, events and the order to
-//! close. On one connection to the RAOP port (P47) it sends
-//! `POST /pair-pin-start` (the Apple TV shows a PIN, P48), the first
+//! close. On one connection to the RAOP port (P47) it asks OPTIONS first,
+//! so a receiver that can't take AirPlay 1 audio is Unsupported before any
+//! PIN is asked for (P27, P46), then sends `POST /pair-pin-start` (the
+//! Apple TV shows a PIN, P48), the first
 //! `POST /pair-setup-pin` with the client ID (P49), waits without a timeout
 //! for the host's PIN (P51), sends A and M1 (P50, P52), checks M2, sends
 //! the sealed public key (P53), opens the receiver's sealed key when its
@@ -34,10 +36,11 @@ use plist::{Dictionary, Value};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::error::UnsupportedReason;
 use crate::error::{ErrorKind, SessionError, Warning};
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
-use crate::rtsp::{Message, Method, ParseError, Parser, Request, Response};
-use crate::session::{CONNECT_TIMEOUT, RESPONSE_TIMEOUT, Verifier};
+use crate::rtsp::{self, Message, Method, ParseError, Parser, Request, Response};
+use crate::session::{CONNECT_TIMEOUT, RESPONSE_TIMEOUT, STATUS_CONFLICT, Verifier};
 
 use keys::{KEY_BYTES, RECEIVER_DATA_BYTES};
 use srp::{HASH_BYTES, SrpError, SrpGroup};
@@ -280,11 +283,13 @@ pub enum PairingEvent {
     /// Pairing succeeded: store these credentials for the receiver (P54).
     Paired(Credentials),
     /// Pairing ended with an error (P58, P136): PairingFailed for a 470 or
-    /// another failure status at a pairing step, PairingCancelled when the
-    /// Apple TV closed the connection while the PIN was awaited, or the
-    /// connection errors of P134 and P140. `wrong_pin` says the Apple TV
-    /// turned the PIN down (470 to the proof, P52); a new pairing shows a
-    /// new PIN.
+    /// another failure status at a pairing step, Busy for a 409 (P137),
+    /// Unsupported when the OPTIONS answer shows a receiver that can't take
+    /// AirPlay 1 audio (P27, P46), PairingCancelled when the Apple TV
+    /// closed the connection while the PIN was awaited, or the connection
+    /// errors of P134 and P140. `wrong_pin` says the Apple TV turned the
+    /// PIN down (470 to the proof, P52); a new pairing starts again from
+    /// `/pair-pin-start` and shows a new PIN.
     Failed {
         error: SessionError,
         wrong_pin: bool,
@@ -313,7 +318,7 @@ pub enum Output {
 pub enum PairingState {
     /// Waiting for the TCP connect.
     Connecting,
-    /// `POST /pair-pin-start` is out (P48).
+    /// OPTIONS (P46) or `POST /pair-pin-start` (P48) is out.
     Starting,
     /// The first `POST /pair-setup-pin` is out (P49).
     Requesting,
@@ -329,6 +334,7 @@ pub enum PairingState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
+    Options,
     PinStart,
     Identify,
     Prove,
@@ -338,8 +344,16 @@ enum Step {
 impl Step {
     fn path(self) -> &'static str {
         match self {
+            Step::Options => "*",
             Step::PinStart => PIN_START_PATH,
             Step::Identify | Step::Prove | Step::Seal => SETUP_PATH,
+        }
+    }
+
+    fn method(self) -> Method {
+        match self {
+            Step::Options => Method::Options,
+            _ => Method::Post,
         }
     }
 }
@@ -458,13 +472,13 @@ impl Pairing {
     }
 
     /// The TCP connect to the last [`Output::Connect`] address succeeded:
-    /// `POST /pair-pin-start` goes out (P48).
+    /// OPTIONS goes out (P46), then `POST /pair-pin-start` (P48).
     pub fn handle_connected(&mut self, now: Instant) {
         if self.state != PairingState::Connecting {
             return;
         }
         self.connected = true;
-        self.send(Step::PinStart, Vec::new(), now);
+        self.send(Step::Options, Vec::new(), now);
     }
 
     /// The TCP connect failed: the next address is tried, and after the last
@@ -508,12 +522,13 @@ impl Pairing {
                 }
             }
             _ => {
-                if self
+                let late = self
                     .in_flight
                     .as_ref()
-                    .is_some_and(|in_flight| now >= in_flight.sent_at + RESPONSE_TIMEOUT)
-                {
-                    self.fail(ErrorKind::Timeout, Some(Method::Post), None);
+                    .filter(|in_flight| now >= in_flight.sent_at + RESPONSE_TIMEOUT)
+                    .map(|in_flight| in_flight.step.method());
+                if let Some(method) = late {
+                    self.fail(ErrorKind::Timeout, Some(method), None);
                 }
             }
         }
@@ -681,12 +696,13 @@ impl Pairing {
         self.send(step, bytes, now);
     }
 
-    /// Encodes and queues one request: `POST <path> RTSP/1.0` with the next
-    /// CSeq and the common headers (P21, P22, P47).
+    /// Encodes and queues one request: `OPTIONS * RTSP/1.0` or
+    /// `POST <path> RTSP/1.0`, with the next CSeq and the common headers
+    /// (P21, P22, P27, P47).
     fn send(&mut self, step: Step, body: Vec<u8>, now: Instant) {
         let cseq = self.next_cseq;
         self.next_cseq = self.next_cseq.wrapping_add(1);
-        let mut request = Request::new(Method::Post, step.path());
+        let mut request = Request::new(step.method(), step.path());
         let headers = &mut request.headers;
         headers.push("CSeq", cseq.to_string());
         if !body.is_empty() {
@@ -699,7 +715,7 @@ impl Pairing {
         request.body = body;
         self.outputs.push_back(Output::Send(request.encode()));
         self.state = match step {
-            Step::PinStart => PairingState::Starting,
+            Step::Options | Step::PinStart => PairingState::Starting,
             Step::Identify => PairingState::Requesting,
             Step::Prove => PairingState::Proving,
             Step::Seal => PairingState::Sealing,
@@ -720,24 +736,42 @@ impl Pairing {
             );
             return;
         };
+        let method = in_flight.step.method();
         if response.cseq() != Some(in_flight.cseq) {
             self.fail_status(
                 ErrorKind::ProtocolError,
+                method,
                 response.code,
                 Some("response CSeq does not match the request"),
                 false,
             );
             return;
         }
+        if response.code == STATUS_CONFLICT {
+            // Busy, ahead of PairingFailed (P137, P58).
+            self.fail_status(ErrorKind::Busy, method, response.code, None, false);
+            return;
+        }
+        if in_flight.step == Step::Options {
+            self.on_options(&response, now);
+            return;
+        }
         if response.code != 200 {
-            // A 470 at any step ends the pairing (P58); so does any other
-            // failure status, which the spec doesn't list. A 470 to the
-            // proof is the Apple TV turning the PIN down (P52).
+            // A 470, or any other non-200 answer to a pairing request, ends
+            // the pairing (P58). A 470 to the proof is the Apple TV turning
+            // the PIN down (P52); the proof is never sent again.
             let wrong_pin = in_flight.step == Step::Prove && response.code == STATUS_PAIRING_FAILED;
-            self.fail_status(ErrorKind::PairingFailed, response.code, None, wrong_pin);
+            self.fail_status(
+                ErrorKind::PairingFailed,
+                method,
+                response.code,
+                None,
+                wrong_pin,
+            );
             return;
         }
         match in_flight.step {
+            Step::Options => {}
             Step::PinStart => {
                 let mut body = Dictionary::new();
                 body.insert("method".to_owned(), Value::String("pin".to_owned()));
@@ -750,16 +784,44 @@ impl Pairing {
         }
     }
 
+    /// The OPTIONS answer (P27, P46): a success whose `Public` lacks
+    /// ANNOUNCE, SETUP or RECORD is a receiver that can't take AirPlay 1
+    /// audio, Unsupported before any PIN is asked for. Any other answer
+    /// (a 403 from an Apple TV that wants verification, a 501, no `Public`)
+    /// goes on to `/pair-pin-start`, whose answer decides (P58).
+    fn on_options(&mut self, response: &Response, now: Instant) {
+        if response.is_success()
+            && let Some(public) = response.headers.get("Public")
+        {
+            let methods = rtsp::public_methods(public);
+            let complete = ["ANNOUNCE", "SETUP", "RECORD"]
+                .iter()
+                .all(|needed| methods.iter().any(|m| m == needed));
+            if !complete {
+                self.fail_status(
+                    ErrorKind::Unsupported(UnsupportedReason::Methods),
+                    Method::Options,
+                    response.code,
+                    None,
+                    false,
+                );
+                return;
+            }
+        }
+        self.send(Step::PinStart, Vec::new(), now);
+    }
+
     fn fail_status(
         &mut self,
         kind: ErrorKind,
+        method: Method,
         status: u16,
         detail: Option<&'static str>,
         wrong_pin: bool,
     ) {
         let error = SessionError {
             kind,
-            method: Some(Method::Post),
+            method: Some(method),
             status: Some(status),
             fallback: None,
             detail,
@@ -778,6 +840,7 @@ impl Pairing {
         let Some((b_pub, salt)) = fields else {
             self.fail_status(
                 ErrorKind::ProtocolError,
+                Method::Post,
                 response.code,
                 Some("pair-setup answer without pk and salt"),
                 false,
@@ -787,6 +850,7 @@ impl Pairing {
         if salt.is_empty() || srp::check_server_value(&SrpGroup::RFC5054_2048, &b_pub).is_err() {
             self.fail_status(
                 ErrorKind::ProtocolError,
+                Method::Post,
                 response.code,
                 Some("unusable SRP value B or salt"),
                 false,
@@ -811,6 +875,7 @@ impl Pairing {
         let Some(proof) = proof else {
             self.fail_status(
                 ErrorKind::ProtocolError,
+                Method::Post,
                 response.code,
                 Some("pair-setup answer without proof"),
                 false,
@@ -824,6 +889,7 @@ impl Pairing {
             // the Apple TV answers with 470 before any M2 is sent.
             self.fail_status(
                 ErrorKind::PairingFailed,
+                Method::Post,
                 response.code,
                 Some("M2 check failed: the receiver's SRP proof differs from the one computed from K"),
                 false,
@@ -883,6 +949,8 @@ pub struct LegacyVerifier {
     receiver_key: Option<[u8; KEY_BYTES]>,
     verify_secret: Zeroizing<[u8; KEY_BYTES]>,
     verify_public: [u8; KEY_BYTES],
+    /// A second X25519 secret for the one reconnect of P58.
+    spare_secret: Option<Zeroizing<[u8; KEY_BYTES]>>,
     warning: Option<Warning>,
 }
 
@@ -893,14 +961,18 @@ impl fmt::Debug for LegacyVerifier {
 }
 
 impl LegacyVerifier {
-    /// A verifier for one connection: (v_priv, v_pub) is drawn fresh from
-    /// `entropy` (P55).
+    /// A verifier for one session: (v_priv, v_pub) is drawn fresh from
+    /// `entropy` (P55), and a second secret for the one reconnect a close
+    /// right after verification gets (P58), so every connection has its own
+    /// key pair.
     pub fn new(
         credentials: &Credentials,
         entropy: &mut impl Entropy,
     ) -> Result<LegacyVerifier, EntropyUnavailable> {
         let mut verify_secret = Zeroizing::new([0u8; KEY_BYTES]);
         entropy.fill(&mut verify_secret[..])?;
+        let mut spare_secret = Zeroizing::new([0u8; KEY_BYTES]);
+        entropy.fill(&mut spare_secret[..])?;
         let mut secret = Zeroizing::new([0u8; SECRET_BYTES]);
         secret.copy_from_slice(credentials.secret());
         Ok(LegacyVerifier {
@@ -909,6 +981,7 @@ impl LegacyVerifier {
             receiver_key: credentials.receiver_key(),
             verify_public: keys::x25519_public(&verify_secret),
             verify_secret,
+            spare_secret: Some(spare_secret),
             warning: None,
         })
     }
@@ -966,5 +1039,17 @@ impl Verifier for LegacyVerifier {
 
     fn take_warning(&mut self) -> Option<Warning> {
         self.warning.take()
+    }
+
+    /// Switches to the spare key pair for the reconnect of P58; there is
+    /// one, so a second renewal fails.
+    fn renew(&mut self) -> bool {
+        let Some(spare) = self.spare_secret.take() else {
+            return false;
+        };
+        self.verify_public = keys::x25519_public(&spare);
+        self.verify_secret = spare;
+        self.warning = None;
+        true
     }
 }

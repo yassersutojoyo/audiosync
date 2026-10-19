@@ -971,7 +971,10 @@ impl Driver {
     }
 
     /// Starts a new session for a speaker: fresh identifiers, the device's
-    /// current addresses and codec (P17, P74, P142).
+    /// current addresses and codec (P17, P74, P142). A speaker that needs
+    /// the legacy pairing without credentials still connects: it is asked
+    /// OPTIONS before PairingRequired is reported, so a receiver that can't
+    /// take AirPlay 1 audio is Unsupported instead (P46).
     fn start_session(&mut self, key: &DeviceKey, now: Instant) {
         let planned = {
             let Some(speaker) = self.speakers.get_mut(key) else {
@@ -982,11 +985,16 @@ impl Driver {
             }
             let pcm = speaker.options.pcm && !self.directory.pcm_refused(key);
             let device = &speaker.device;
-            super::plan_with(device, speaker.options.credentials.is_some())
-                .and_then(|()| device.choose_codec(pcm).map_err(ErrorKind::Unsupported))
+            let (needs_pairing, plan) =
+                match super::plan_with(device, speaker.options.credentials.is_some()) {
+                    Err(ErrorKind::PairingRequired) => (true, Ok(())),
+                    plan => (false, plan),
+                };
+            plan.and_then(|()| device.choose_codec(pcm).map_err(ErrorKind::Unsupported))
+                .map(|codec| (codec, needs_pairing))
         };
-        let codec = match planned {
-            Ok(codec) => codec,
+        let (codec, needs_pairing) = match planned {
+            Ok(planned) => planned,
             Err(kind) => return self.refuse(key, SessionError::new(kind), now),
         };
         let mut entropy = OsEntropy;
@@ -1025,6 +1033,7 @@ impl Driver {
         config.codec = codec;
         config.alac_fallback = device.alac_fallback();
         config.apple_tv_without_credentials = device.is_apple_tv() && options.credentials.is_none();
+        config.needs_pairing = needs_pairing;
         config.verifier = verifier.map(|verifier| Box::new(verifier) as _);
         config.password = options.password.clone();
         config.software_volume = software_volume;
