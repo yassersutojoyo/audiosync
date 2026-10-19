@@ -21,7 +21,7 @@ trap 'rm -rf "$OUT"' EXIT
 # The core's C interface and the static library scripts/build_core.sh makes.
 CORE=(-I Sources/CAudioSyncCore -L core/target/universal-apple-darwin/release -laudiosync_core)
 # The engine's parts on the core, with what they need to compile.
-ENGINE_PARTS=(EngineParts.swift CoreEngine.swift OutputRenderer.swift Equalizer.swift Diagnostics.swift
+ENGINE_PARTS=(EngineParts.swift CoreEngine.swift OutputRenderer.swift OutputFades.swift Equalizer.swift Diagnostics.swift
   NativeAirPlayTap.swift)
 
 build() {   # build <name> <test file> <source files…> [-- <more swiftc arguments…>]

@@ -17,7 +17,7 @@ trap 'rm -rf "$work"' EXIT
 cp Tests/soaktest.swift "$work/main.swift"
 SRC=Sources/AudioSync
 swiftc -O -swift-version 5 "$work/main.swift" \
-  "$SRC/EngineParts.swift" "$SRC/CoreEngine.swift" "$SRC/OutputRenderer.swift" \
+  "$SRC/EngineParts.swift" "$SRC/CoreEngine.swift" "$SRC/OutputRenderer.swift" "$SRC/OutputFades.swift" \
   "$SRC/AudioDevices.swift" "$SRC/Diagnostics.swift" "$SRC/Equalizer.swift" \
   "$SRC/NativeAirPlayTap.swift" \
   -I Sources/CAudioSyncCore -L "$core_lib" -laudiosync_core \
