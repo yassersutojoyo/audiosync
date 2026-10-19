@@ -453,7 +453,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Starts streaming the chosen source to the enabled outputs (S116, S119,
     /// S120). A user's start clears the notices about the last attempt.
-    fn start_session(&mut self, origin: StartOrigin) {
+    /// Returns whether streaming started.
+    fn start_session(&mut self, origin: StartOrigin) -> bool {
         if origin == StartOrigin::User {
             self.gate.user_acted();
             self.notices.clear(&[
@@ -468,13 +469,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
                      or an automatic start failed"
                 )
             });
-            return;
+            return false;
         }
         if !may_start(self.enabled_count()) {
             self.log
                 .log(|| format!("start ({origin:?}) refused: no speaker is on"));
             self.post(NoticeSubject::Start, NoticeMessage::NoSpeaker);
-            return;
+            return false;
         }
         self.log.log(|| {
             format!(
@@ -493,6 +494,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 // Outputs that couldn't start are reported at the next poll;
                 // take them now.
                 self.take_events();
+                true
             }
             Err(error) => {
                 self.log
@@ -501,6 +503,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.audio.stop();
                 let message = self.start_problem(&error);
                 self.post(NoticeSubject::Start, message);
+                false
             }
         }
     }
@@ -918,12 +921,15 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.chosen = picked;
         self.notices
             .clear(&[NoticeSubject::Source, NoticeSubject::Capture]);
+        // A start ends the running session by itself and keeps the AirPlay
+        // speakers in the stream, restarting only their timeline (S141); a
+        // stop would tear them down and connect them again.
         let switch = source_switch(self.running());
-        if switch.stop_keeping_airplay {
+        let started = switch
+            .start
+            .is_some_and(|origin| self.start_session(origin));
+        if switch.stop_keeping_airplay && !started && self.running() {
             self.audio.stop();
-        }
-        if let Some(origin) = switch.start {
-            self.start_session(origin);
         }
     }
 

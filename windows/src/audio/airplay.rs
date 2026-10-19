@@ -13,9 +13,16 @@
 //! the sender keeps trying (spec P142).
 //!
 //! An AirPlay speaker counts as chosen (S79) while it is on and either listed
-//! by discovery or playing: a receiver whose announcement lapses while it
-//! plays still plays, and one that is gone and not playing doesn't hold the
-//! local outputs back. While one is chosen, local outputs play at L + d_local
+//! by discovery as able to play, or playing: a receiver whose announcement
+//! lapses while it plays still plays, and one that is gone, or listed as
+//! unable to play, and not playing doesn't hold the local outputs back.
+//!
+//! What discovery reports never turns a speaker off: a speaker with two
+//! services whose RAOP record lapses first reads "AirPlay 2 only" for a
+//! moment before it is gone (EC12). Such a speaker stays on, its session
+//! goes on, and it only stays out of new joins until it is listed as able to
+//! play again. Only a session error that needs the user, or the user, turns
+//! a speaker off. While one is chosen, local outputs play at L + d_local
 //! (P114, see [`super::outputs`]).
 //!
 //! The capture feeds the sender through an [`AirPlayFeed`]: after the
@@ -439,11 +446,15 @@ impl AirPlaySpeakers {
             .is_some_and(|added| added.state == SpeakerState::Playing)
     }
 
-    /// Whether an AirPlay speaker is chosen: on, and listed or playing (S79,
-    /// see the module documentation).
+    /// Whether an AirPlay speaker is chosen: on, and listed as able to play
+    /// or playing (S79, see the module documentation).
     pub fn chosen(&self) -> bool {
         self.settings.iter().any(|(id, settings)| {
-            settings.enabled && (self.listed.contains_key(id) || self.is_playing(id))
+            let open = self
+                .listed
+                .get(id)
+                .is_some_and(|listed| listed.availability == AirPlayAvailability::Open);
+            settings.enabled && (open || self.is_playing(id))
         })
     }
 
@@ -668,7 +679,7 @@ impl AirPlaySpeakers {
             match event {
                 SenderEvent::Receiver(event) => {
                     changed = true;
-                    self.receiver_event(event, &mut events);
+                    self.receiver_event(event);
                 }
                 SenderEvent::Speaker { key, event } => {
                     let id = speaker_id(&key);
@@ -696,7 +707,7 @@ impl AirPlaySpeakers {
         events
     }
 
-    fn receiver_event(&mut self, event: ReceiverEvent, events: &mut Vec<BackendEvent>) {
+    fn receiver_event(&mut self, event: ReceiverEvent) {
         match event {
             ReceiverEvent::Appeared(info) | ReceiverEvent::Changed(info) => {
                 let id = speaker_id(&info.device.key);
@@ -728,10 +739,10 @@ impl AirPlaySpeakers {
                         availability,
                     },
                 );
-                match availability.problem() {
-                    Some(problem) => self.turn_off(&id, problem, events),
-                    None => self.reconcile(),
-                }
+                // A speaker that is on stays on whatever discovery says
+                // (see the module documentation); one listed as unable to
+                // play just doesn't join.
+                self.reconcile();
             }
             ReceiverEvent::Gone(key) => {
                 let id = speaker_id(&key);

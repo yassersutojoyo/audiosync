@@ -427,33 +427,132 @@ impl CaptureConverter {
     }
 }
 
-/// Keeps the ring in real time across a loopback gap. Process loopback
-/// delivers nothing while the captured audio is silent, so without it the
-/// ring would stop while the outputs read on (see [`GapFill::packet`] and
-/// [`GapFill::idle`]). Times are in 100 ns units of the performance
-/// counter, as `IAudioCaptureClient::GetBuffer` gives a packet's position.
+/// 100 ns units per second: the unit of packet positions.
+const HNS_PER_SECOND: u64 = 10_000_000;
+
+/// Packets whose positions are further apart than this, 5 ms, have a gap
+/// between them; closer, it is the positions' own jitter.
+const GAP_JUMP_HNS: u64 = 50_000;
+
+/// With no packet for this long after the last frame's end, 25 ms (more than
+/// a late packet but inside the readers' 35 ms dead band, S50), the capture
+/// is in a gap.
+const IDLE_AFTER_HNS: u64 = 250_000;
+
+/// In a gap, silence is written up to this long before now, 10 ms, so a
+/// packet that starts the audio again rarely finds its first frames filled
+/// already.
+const IDLE_LAG_HNS: u64 = 100_000;
+
+/// The most silence one gap writes, 21 s: more than the longest delay (S77),
+/// so after a longer stall (a PC that slept) every reader finds silence.
+const MAX_FILL_SECONDS: u64 = 21;
+
+/// Keeps the ring in real time across a loopback gap.
+///
+/// Process loopback delivers nothing while the captured audio is silent.
+/// Without this the ring would stop while the outputs read on: an output
+/// lined up with AirPlay speakers, 1.75 s behind, would go quiet a few
+/// milliseconds into the pause (S53) and replay those 1.75 s when the audio
+/// came back. So a packet whose position jumps past the end of the last one
+/// (or that Windows marks as a discontinuity) gets silence for the time
+/// between them, and while nothing comes, each wake of the capture loop
+/// writes silence up to shortly before now. A packet that starts inside
+/// silence written that way skips the frames already filled. Times are in
+/// 100 ns units of the performance counter, as
+/// `IAudioCaptureClient::GetBuffer` gives a packet's position. Never
+/// allocates, locks or blocks.
 pub struct GapFill {
     rate: u32,
+    /// When the frame after the last one written is due; `None` before the
+    /// first packet.
+    end: Option<u64>,
+    /// Whether the frames written up to `end` end with silence written while
+    /// nothing came.
+    filled: bool,
 }
 
 impl GapFill {
     /// A tracker for a capture at `rate`, before its first packet.
     pub fn new(rate: u32) -> GapFill {
-        GapFill { rate }
+        GapFill {
+            rate,
+            end: None,
+            filled: false,
+        }
+    }
+
+    /// The frames in `hns` at the capture rate, rounded down.
+    fn frames_in(&self, hns: u64) -> u64 {
+        (u128::from(hns) * u128::from(self.rate) / u128::from(HNS_PER_SECOND)) as u64
+    }
+
+    /// How long `frames` frames last, rounded down.
+    fn length(&self, frames: u64) -> u64 {
+        (u128::from(frames) * u128::from(HNS_PER_SECOND) / u128::from(self.rate.max(1))) as u64
+    }
+
+    fn max_fill(&self) -> u64 {
+        MAX_FILL_SECONDS * u64::from(self.rate)
     }
 
     /// A packet of `frames` frames whose first frame was captured at
     /// `start`. Returns the silent frames to write before it, and how many
-    /// of its first frames to skip.
+    /// of its first frames to skip. Each packet's own position counts, so
+    /// the device clock's drift never adds up to a gap.
     pub fn packet(&mut self, start: u64, frames: usize, discontinuity: bool) -> (usize, usize) {
-        let _ = (start, frames, discontinuity, self.rate);
+        let length = self.length(frames as u64);
+        let filled = std::mem::take(&mut self.filled);
+        let Some(end) = self.end else {
+            self.end = Some(start.saturating_add(length));
+            return (0, 0);
+        };
+        if start >= end {
+            let gap = start - end;
+            let fill = if filled || discontinuity || gap > GAP_JUMP_HNS {
+                self.frames_in(gap).min(self.max_fill())
+            } else {
+                0
+            };
+            self.end = Some(start.saturating_add(length));
+            return (fill as usize, 0);
+        }
+        if filled {
+            // It starts inside the silence written while nothing came.
+            let skip = (self.frames_in(end - start) as usize).min(frames);
+            self.end = Some(end.max(start.saturating_add(length)));
+            return (0, skip);
+        }
+        self.end = Some(start.saturating_add(length));
         (0, 0)
     }
 
-    /// No packet came, and it is `now`. Returns the silent frames to write.
+    /// No packet came, and it is `now`. Returns the silent frames to write:
+    /// none until the capture is in a gap, then enough to reach shortly
+    /// before now.
     pub fn idle(&mut self, now: u64) -> usize {
-        let _ = now;
-        0
+        let Some(end) = self.end else {
+            return 0;
+        };
+        if !self.filled && now < end.saturating_add(IDLE_AFTER_HNS) {
+            return 0;
+        }
+        let target = now.saturating_sub(IDLE_LAG_HNS);
+        if target <= end {
+            return 0;
+        }
+        let wanted = self.frames_in(target - end);
+        if wanted == 0 {
+            return 0;
+        }
+        let frames = wanted.min(self.max_fill());
+        self.end = Some(if frames < wanted {
+            target
+        } else {
+            end + self.length(frames)
+        });
+        self.filled = true;
+        frames as usize
     }
 }
 
@@ -1100,6 +1199,46 @@ mod tests {
             played[700].iter().all(|s| *s == 0.25),
             "the audio after the gap plays 1.75 s after it came"
         );
+    }
+
+    #[test]
+    fn contiguous_packets_need_no_silence_whatever_their_jitter() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        let mut start = 0;
+        for jitter in [0_i64, 3_000, -2_000, 20_000, -40_000, 0] {
+            let at = (start as i64 + jitter) as u64;
+            assert_eq!(gaps.packet(at, 480, false), (0, 0), "{jitter}");
+            start += 10 * HNS_PER_MS;
+        }
+        // A late packet's wake isn't a gap yet.
+        assert_eq!(gaps.idle(start + 20 * HNS_PER_MS), 0);
+    }
+
+    #[test]
+    fn a_jump_or_a_discontinuity_gets_silence_for_the_time_between() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        gaps.packet(0, 480, false);
+        // 10 ms later than the last packet's end: 480 frames of silence.
+        assert_eq!(gaps.packet(20 * HNS_PER_MS, 480, false), (480, 0));
+        // 2 ms, marked as a discontinuity: 96 frames.
+        assert_eq!(gaps.packet(32 * HNS_PER_MS, 480, true), (96, 0));
+        // A PC that slept: at most 21 s.
+        assert_eq!(
+            gaps.packet(3_600_000 * HNS_PER_MS, 480, false),
+            (21 * 48_000, 0)
+        );
+    }
+
+    #[test]
+    fn a_packet_inside_the_silence_written_skips_the_frames_filled() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        gaps.packet(0, 480, false);
+        // Nothing for 50 ms: silence up to 40 ms.
+        assert_eq!(gaps.idle(50 * HNS_PER_MS), 1_440);
+        // The audio comes back with a packet that started at 35 ms.
+        assert_eq!(gaps.packet(35 * HNS_PER_MS, 480, false), (0, 240));
+        // The next one follows on.
+        assert_eq!(gaps.packet(45 * HNS_PER_MS, 480, false), (0, 0));
     }
 
     #[test]

@@ -62,11 +62,13 @@ const CAPTURE_BUFFER_HNS: i64 = 100 * HNS_PER_MS;
 const ACTIVATION_TIMEOUT_MS: u32 = 5_000;
 
 /// How long the capture loop waits for a packet before it checks that the
-/// stream still works, in ms. A process tree that plays nothing may deliver
-/// nothing, and a stream that Windows invalidated (when Windows audio
-/// restarts, say) may stop signalling without a word; only a call on the
-/// stream then tells.
-const WAIT_MS: u32 = 500;
+/// stream still works and keeps the ring in real time, in ms. A process tree
+/// that plays nothing delivers nothing, so the loop writes silence for the
+/// time that passed ([`GapFill`]), often enough that no reader runs out of
+/// its 35 ms dead band (S50); and a stream that Windows invalidated (when
+/// Windows audio restarts, say) may stop signalling without a word; only a
+/// call on the stream then tells.
+const WAIT_MS: u32 = 10;
 
 /// A running process loopback capture.
 pub struct LoopbackCapture {
