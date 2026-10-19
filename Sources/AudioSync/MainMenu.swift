@@ -9,7 +9,7 @@ enum MainMenu {
         let main = NSMenu()
 
         let app = submenu(of: main, title: t.appName)
-        app.addItem(item(t.menuAbout, #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
+        app.addItem(AboutPanel.menuItem(text: t))
         #if canImport(Sparkle)
         if checksForUpdates {
             app.addItem(item(t.checkForUpdates, #selector(AppDelegate.checkForUpdates(_:))))

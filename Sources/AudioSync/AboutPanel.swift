@@ -1,0 +1,40 @@
+import AppKit
+
+/// The standard About panel, with AudioSync's copyright holder and license
+/// (GPL-3.0-or-later, no warranty) shown under the version.
+@MainActor
+final class AboutPanel: NSObject {
+
+    /// Menu items hold their target weakly, so the panel's target lives here.
+    private static var shared: AboutPanel?
+
+    private let text: AppText
+
+    private init(text: AppText) {
+        self.text = text
+    }
+
+    /// The About menu item, targeting the panel built from `text`.
+    static func menuItem(text: AppText) -> NSMenuItem {
+        let panel = AboutPanel(text: text)
+        shared = panel
+        let item = NSMenuItem(title: text.menuAbout, action: #selector(show(_:)), keyEquivalent: "")
+        item.target = panel
+        return item
+    }
+
+    @objc func show(_ sender: Any?) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let credits = NSAttributedString(string: text.aboutLicense, attributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+            .foregroundColor: NSColor.secondaryLabelColor,
+            .paragraphStyle: paragraph,
+        ])
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .credits: credits,
+            NSApplication.AboutPanelOptionKey(rawValue: "Copyright"): text.aboutCopyright,
+        ])
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
