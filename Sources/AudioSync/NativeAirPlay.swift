@@ -274,7 +274,7 @@ final class NativeAirPlay {
         guard let handle else { return }
         let fields = nowPlayingFields
         let artwork = nowPlayingArtwork ?? Data()
-        let taken = artwork.withUnsafeBytes { raw in
+        let taken = artwork.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Bool in
             asc_airplay_set_now_playing(handle, fields?.title, fields?.artist, fields?.album,
                                         raw.bindMemory(to: UInt8.self).baseAddress, raw.count)
         }
