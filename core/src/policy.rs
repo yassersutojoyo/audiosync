@@ -12,6 +12,7 @@
 //! - [`capture`]: whether captured audio flows, and capture rate changes (S17 to S19, S157).
 //! - [`session`]: starting, stopping, output sync and source switches (S20, S21, S68, S69, S116 to S122, S136, S161 to S163).
 //! - [`engine`]: the AirPlay engine process lifecycle and pipe playback (S98, S99).
+//! - [`track_info`]: when to send track info again after a start of the pipe (S168).
 //! - [`reconcile`]: the engine's speaker list, reachability and selection (S100, S102 to S105).
 //! - [`pairing`]: speakers that need a PIN or password (S106 to S109).
 //! - [`speakers`]: speaker keys, groups, device lists, layout and notices (S149 to S153).
@@ -29,3 +30,4 @@ pub mod reconcile;
 pub mod session;
 pub mod source;
 pub mod speakers;
+pub mod track_info;
