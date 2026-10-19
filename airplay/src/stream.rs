@@ -850,12 +850,12 @@ impl Stream {
         let context = context!(self);
         let silence = (&*self.silence_pcm, &*self.silence_alac);
         for speaker in &mut self.speakers {
-            if let Some((delay, at)) = speaker.pending_delay {
-                if at <= t + DUE_TOLERANCE {
-                    speaker.pending_delay = None;
-                    speaker.delay = delay;
-                    flush(speaker, &context, t, &mut self.events);
-                }
+            if let Some((delay, at)) = speaker.pending_delay
+                && at <= t + DUE_TOLERANCE
+            {
+                speaker.pending_delay = None;
+                speaker.delay = delay;
+                flush(speaker, &context, t, &mut self.events);
             }
             while speaker.next_packet < context.next_cut {
                 let due = context.cut_due(speaker.next_packet) + speaker.delay;

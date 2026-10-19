@@ -676,10 +676,10 @@ impl Directory {
                 let key = record.device_key();
                 let id = (record.kind, record.instance.clone());
                 let mut affected = vec![key.clone()];
-                if let Some((old_key, _)) = self.services.remove(&id) {
-                    if old_key != key {
-                        affected.push(old_key);
-                    }
+                if let Some((old_key, _)) = self.services.remove(&id)
+                    && old_key != key
+                {
+                    affected.push(old_key);
                 }
                 self.services
                     .retain(|(kind, _), (owner, _)| !(*kind == record.kind && *owner == key));
