@@ -7,9 +7,13 @@ import SwiftUI
 /// slider: a decorative glyph, the hint text (one VoiceOver element whose
 /// label names the output, with a tooltip that explains it) and the fix as a
 /// borderless link after it. It comes and goes with the decision without
-/// moving focus or being announced.
+/// taking focus or being announced; the row moves keyboard focus from the
+/// fix to its slider before a fix.
 struct DeviceVolumeLine: View {
     let shown: DeviceVolumePresentation
+    /// Keyboard focus on the fix, so the row can move it to the slider
+    /// before the fix (and with it the button) goes away.
+    let fixFocused: FocusState<Bool>.Binding
     let fix: () -> Void
 
     var body: some View {
@@ -30,6 +34,7 @@ struct DeviceVolumeLine: View {
             }
             .buttonStyle(.plain)
             .fixedSize()
+            .focused(fixFocused)
             .accessibilityLabel(shown.fixLabel)
         }
         .font(.caption)

@@ -373,13 +373,19 @@ final class DeviceVolumes {
 
     /// Reads followed output `uid` again, both parts and from the controls it
     /// has now (S202), following those instead if they changed; logs a
-    /// change of its decision (S201).
+    /// change of its decision (S201). A device that answers nothing for a
+    /// moment shows nothing but keeps its listeners, so its next change still
+    /// arrives and is read afresh.
     private func readAgain(_ uid: String) {
         guard var entry = followed[uid] else { return }
         let controls = DeviceVolumeControls.find(on: entry.device, access)
-        if controls != entry.controls {
+        if controls != entry.controls, !controls.all.isEmpty {
             for control in entry.controls.all { access.stopListening(entry.device, control) }
-            _ = listen(uid, entry.device, controls)
+            let refused = listen(uid, entry.device, controls)
+            if refused > 0 {
+                log { "[AudioSync] output \(uid) device volume: its controls changed; \(controls.logText); "
+                    + "\(refused) of its controls not followed" }
+            }
             entry.controls = controls
         }
         let reading = controls.read(entry.device, access)
