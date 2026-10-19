@@ -27,7 +27,7 @@ enum MainMenu {
         }
         app.addItem(withTitle: t.appearance, action: nil, keyEquivalent: "").submenu = appearance
         app.addItem(item(t.launchAtLogin, #selector(AppDelegate.toggleLaunchAtLogin(_:))))
-        let engine = item(t.menuRustEngine, #selector(AppDelegate.toggleEngineImpl(_:)))
+        let engine = item(t.menuSwiftEngine, #selector(AppDelegate.toggleEngineImpl(_:)))
         engine.isHidden = true   // a debug option: shown while Option is held
         app.addItem(engine)
         app.addItem(.separator())
