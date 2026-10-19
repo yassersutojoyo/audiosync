@@ -3,16 +3,6 @@
 # tests/spec_coverage.rs fails if a clause listed here gains a `// covers:`
 # test, so this list only shrinks. "Partly done" names what already exists.
 
-# Stream and transport: several sessions, threads, sockets.
-P7 Partly done: record parsing and merging (discovery.rs); live mDNS browsing behind the Browser trait comes with the transport stage.
-P31 Partly done: the SETUP Transport header with the ports the driver hands in after the connect (session.rs); sockets open and answering before SETUP need P82.
-P82 Opening the control and timing sockets in the connection's family: transport stage (sessions take their ports with handle_connected).
-P141 Partly done: one session's loss handling (session.rs); other speakers keep playing is stream-stage work.
-P3 Partly done: every speaker has its own RTP numbering, SSRC and resend history on the shared timeline (stream.rs); its own UDP sockets need P82, and failure isolation between sessions the stream stage.
-P6 Partly done: the input call is a preallocated single-producer, single-consumer ring that never allocates, locks or blocks (input.rs, tests/realtime.rs); the crate's own network threads come with the transport stage.
-P129 Partly done: one session's TEARDOWN with its 2 s limit (session.rs); stopping every speaker in parallel within 2 s needs the stream stage.
-P142 Reconnect backoff needs the stream stage; ErrorKind::needs_user marks the stop list, and Stream::add_speaker already joins a playing timeline (P103).
-
 # Pairing and crypto.
 P47 Legacy pairing connection and requests: pairing stage.
 P48 POST /pair-pin-start: pairing stage.
@@ -26,7 +16,7 @@ P55 Partly done: pair-verify runs before ANNOUNCE on every connection through th
 P56 Pair-verify signature and AES-CTR: pairing stage.
 P57 The published pairing test vector: pairing stage.
 P58 Partly done: a non-200 verification gives PairingRequired (session.rs); 470 during pairing comes with the pairing stage.
-P60 Partly done: /auth-setup goes right after OPTIONS and any answer lets the session go on (session.rs); generating the fresh X25519 key comes with the pairing stage.
+P60 Partly done: /auth-setup goes right after OPTIONS and any answer lets the session go on (session.rs); until the pairing stage generates a real X25519 key, the sender puts 32 fresh random bytes in its place (sender/driver.rs).
 P136 PairingFailed and PairingCancelled during pairing: pairing stage.
 
 # AirPlay 2 (behind its flag, blocked by the gaps of section 11).

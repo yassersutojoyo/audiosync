@@ -221,6 +221,20 @@ pub struct SpeakerCounters {
 }
 
 impl SpeakerCounters {
+    /// Counters at zero that report `stream`'s input drops.
+    pub(crate) fn for_stream(stream: Arc<StreamCounters>) -> SpeakerCounters {
+        SpeakerCounters {
+            stream,
+            ..SpeakerCounters::default()
+        }
+    }
+
+    /// One more timing request answered, by whichever thread answered it
+    /// (P91, P144).
+    pub(crate) fn count_timing_reply(&self) {
+        self.timing_replies.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Audio packets sent (resends not included).
     pub fn packets_sent(&self) -> u64 {
         self.packets_sent.load(Ordering::Relaxed)
@@ -761,6 +775,18 @@ impl Stream {
         self.latency() + local.min(MAX_DELAY)
     }
 
+    /// The RTP timestamp, in a speaker's numbering, of the frame the host
+    /// delivers now: the first frame of the next packet to be cut. Metadata
+    /// that describes the audio arriving now applies from it (P33, P124).
+    pub fn rtptime_now(&self, id: SpeakerId) -> Option<u32> {
+        let speaker = self.speakers.iter().find(|s| s.id == id)?;
+        Some(
+            speaker
+                .rtp_offset
+                .wrapping_add((self.next_cut * PACKET_FRAMES) as u32),
+        )
+    }
+
     /// A speaker's latencies (P110, P113, P115).
     pub fn speaker_latency(&self, id: SpeakerId) -> Option<SpeakerLatency> {
         let speaker = self.speakers.iter().find(|s| s.id == id)?;
@@ -846,6 +872,26 @@ impl Stream {
     /// next packet in its regular schedule, preceded by a first-flagged
     /// sync, and its first sound time is reported (P115).
     pub fn add_speaker(&mut self, config: SpeakerConfig, now: Instant) -> SpeakerId {
+        let counters = Arc::new(self.new_speaker_counters());
+        self.add_speaker_with_counters(config, counters, now)
+    }
+
+    /// Counters for a speaker of this stream, all at zero, to pass to
+    /// [`Stream::add_speaker_with_counters`].
+    pub fn new_speaker_counters(&self) -> SpeakerCounters {
+        SpeakerCounters::for_stream(self.counters.clone())
+    }
+
+    /// Adds a speaker like [`Stream::add_speaker`], counting into
+    /// `counters`. A host that reconnects a speaker passes the same counters
+    /// to every session, so its handle stays valid and the counts run on
+    /// (P144).
+    pub fn add_speaker_with_counters(
+        &mut self,
+        config: SpeakerConfig,
+        counters: Arc<SpeakerCounters>,
+        now: Instant,
+    ) -> SpeakerId {
         self.handle_timeout(now);
         let t = self.clock.seconds(now);
         let id = SpeakerId(self.next_speaker);
@@ -882,10 +928,7 @@ impl Stream {
             own,
             receiver_latency: config.audio_latency,
             first_sound: t,
-            counters: Arc::new(SpeakerCounters {
-                stream: self.counters.clone(),
-                ..SpeakerCounters::default()
-            }),
+            counters,
         };
         let context = context!(self);
         let first = context.first_due(speaker.delay, t);

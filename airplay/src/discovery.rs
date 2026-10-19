@@ -3,11 +3,12 @@
 //! on it: protocol path (P2), security modes (P45, P46), codec (P74) and
 //! connect order (P17).
 //!
-//! No mDNS traffic happens here. A browser (a later stage, behind
-//! [`Browser`]) produces [`BrowseEvent`]s, either itself or by feeding raw
-//! records to a [`Resolver`]; the [`Directory`] merges them into [`Device`]s
-//! and reports every change.
+//! A browser behind [`Browser`] produces [`BrowseEvent`]s, either itself or
+//! by feeding raw records to a [`Resolver`]; the [`Directory`] merges them
+//! into [`Device`]s and reports every change. [`mdns::MdnsBrowser`] is the
+//! live browser; everything else here is sans-I/O.
 
+pub mod mdns;
 pub mod resolve;
 pub mod txt;
 
@@ -246,8 +247,9 @@ pub enum BrowseEvent {
     Removed { kind: ServiceKind, instance: String },
 }
 
-/// The seam for a live mDNS browser (a later stage): it browses both service
-/// types in `local.` (P7) and hands over what it found.
+/// The seam for a live mDNS browser ([`mdns::MdnsBrowser`], or one a host
+/// or a test supplies): it browses both service types in `local.` (P7) and
+/// hands over what it found.
 pub trait Browser {
     /// The next event, if one is ready; never blocks.
     fn poll_event(&mut self) -> Option<BrowseEvent>;
@@ -732,6 +734,11 @@ impl Directory {
     /// device that isn't listed yet.
     pub fn remember_pcm_refused(&mut self, key: &DeviceKey) {
         self.pcm_refused.insert(key.clone());
+    }
+
+    /// Whether the device refused a PCM ANNOUNCE before (P74).
+    pub fn pcm_refused(&self, key: &DeviceKey) -> bool {
+        self.pcm_refused.contains(key)
     }
 
     /// The codec for a new session with the device (P74), given whether the

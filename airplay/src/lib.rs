@@ -1,11 +1,11 @@
 //! AudioSync's own AirPlay sender.
 //!
 //! Written from `docs/AIRPLAY_SPEC.md`; clause IDs (P1, P2, ...) in comments
-//! and test names refer to that document. The design is sans-I/O: every
-//! protocol part is a plain state machine that takes bytes, events and the
-//! time in and gives bytes, actions and events out. Sockets, threads, the
-//! mDNS browser and the audio clock belong to the layer that drives it, so
-//! every step can be tested in-process without a network.
+//! and test names refer to that document. Every protocol part is a plain
+//! state machine that takes bytes, events and the time in and gives bytes,
+//! actions and events out, so every step can be tested in-process without a
+//! network. Sockets, threads and the mDNS browser live in a thin layer on
+//! top ([`sender`]), which a host app drives.
 //!
 //! What is here so far:
 //!
@@ -21,11 +21,15 @@
 //!   sync, resend and timing packets ([`rtp`]) on the sender clock
 //!   ([`clock`]), the arrival model and send margin ([`rate`]) and the shared
 //!   payload stores ([`store`]), with per-speaker delay.
+//! - [`sender`]: what a host app drives. It runs the state machines on the
+//!   crate's own threads with real sockets (TCP for RTSP, UDP for audio,
+//!   control and timing), browses the network with
+//!   [`discovery::mdns::MdnsBrowser`], reconnects lost speakers
+//!   ([`reconnect`]) and reports events and counters.
 //!
-//! Pairing crypto, AirPlay 2, real sockets and threads come later; the seams
-//! they plug into are named where they sit (for example
-//! [`session::Verifier`], [`session::Output::Connect`] and
-//! [`discovery::Browser`]).
+//! Pairing crypto and AirPlay 2 come later; the seams they plug into are
+//! named where they sit (for example [`session::Verifier`] and
+//! [`session::SessionConfig::auth_setup_key`]).
 
 pub mod alac;
 pub mod audio;
@@ -37,12 +41,15 @@ pub mod ids;
 pub mod input;
 pub mod metadata;
 pub mod rate;
+pub mod reconnect;
 pub mod rtp;
 pub mod rtsp;
 pub mod sdp;
+pub mod sender;
 pub mod session;
 pub mod store;
 pub mod stream;
+mod transport;
 pub mod volume;
 
 /// The crate version, which the sender names itself with (P5).
