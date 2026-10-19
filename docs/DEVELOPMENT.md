@@ -75,6 +75,8 @@ The log lands in `%TEMP%\audiosync-debug.log` and starts over at every launch; i
 
 The double-audio notice only shows up while streaming. To look at its guide without playing anything, also set `$env:AUDIOSYNC_PREVIEW_GUIDE="app"` (one app captured) or `"system"` (the whole system) before starting it: with the debug log on, the guide opens at launch for a made-up notice.
 
+To check the windows in the other appearance without changing the Windows setting, set `$env:AUDIOSYNC_PREVIEW_THEME="light"` or `"dark"` as well: with the debug log on, every window uses that color scheme. The menu bar keeps following Windows. The log also says whether each window got its Windows 11 frame (Mica in the title bar, the flyout's rounded corners).
+
 ## Where things are
 
 Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) describes the engine's behavior clause by clause, and [`EDGE_CASES.md`](EDGE_CASES.md) what happens when devices, sleep or the engine change under a session. [`WINDOWS_AUDIO_ROUTING.md`](WINDOWS_AUDIO_ROUTING.md) weighs how a future Windows version could avoid double audio when capturing an app. The audio path, roughly in order:

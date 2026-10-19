@@ -356,6 +356,18 @@ export global Strings {
         return @tr("{}, {}", name, root.speaker-kind(kind));
     }
 
+    // The line under a speaker's name: its kind, its note, or both
+    // ("AirPlay · Asks for a code"); either may be empty.
+    public pure function speaker-caption(kind: string, note: string) -> string {
+        if kind == "" {
+            return note;
+        }
+        if note == "" {
+            return kind;
+        }
+        return @tr("{} · {}", kind, note);
+    }
+
     public pure function volume-of(name: string) -> string {
         return @tr("{} volume", name);
     }

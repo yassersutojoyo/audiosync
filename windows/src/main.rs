@@ -18,6 +18,7 @@
 mod adapter;
 #[cfg(any(windows, test))]
 mod audio;
+mod backdrop;
 #[cfg(test)]
 mod contrast;
 mod debug_log;
@@ -51,6 +52,10 @@ const LOG_FLUSH_AT_EXIT: Duration = Duration::from_secs(1);
 /// With the debug log on, `app` or `system` here opens the double-audio
 /// guide at launch for a made-up notice (`guide::preview`).
 const PREVIEW_GUIDE_VAR: &str = "AUDIOSYNC_PREVIEW_GUIDE";
+
+/// With the debug log on, `light` or `dark` here shows every window in that
+/// appearance, whatever Windows uses (`view::App::preview_theme`).
+const PREVIEW_THEME_VAR: &str = "AUDIOSYNC_PREVIEW_THEME";
 
 fn main() -> ExitCode {
     let log = DebugLog::from_env();
@@ -185,6 +190,26 @@ fn run(log: &DebugLog) -> Result<(), StartError> {
         }
     };
 
+    // To look at both appearances without changing the Windows setting, only
+    // while the debug log is on.
+    if log.enabled()
+        && let Some(dark) =
+            std::env::var(PREVIEW_THEME_VAR)
+                .ok()
+                .and_then(|theme| match theme.as_str() {
+                    "light" => Some(false),
+                    "dark" => Some(true),
+                    _ => None,
+                })
+    {
+        log.log(|| {
+            format!(
+                "theme: {} for every window ({PREVIEW_THEME_VAR})",
+                if dark { "dark" } else { "light" }
+            )
+        });
+        app.preview_theme(dark);
+    }
     app.show_main();
     log.log(|| "main window: shown".to_owned());
     // To look at the double-audio guide without streaming: a made-up notice,

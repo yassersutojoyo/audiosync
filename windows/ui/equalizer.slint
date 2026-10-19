@@ -5,7 +5,7 @@
 import { Button, ComboBox, Slider } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { QuietText, SecondaryText, ToggleSwitch } from "widgets.slint";
+import { Card, Fluent, QuietText, SecondaryText, ToggleSwitch } from "widgets.slint";
 
 // One vertical gain slider with its value above and its label below.
 component Band inherits VerticalLayout {
@@ -15,8 +15,7 @@ component Band inherits VerticalLayout {
     in property <float> max-gain;
     callback changed(float);
 
-    spacing: 6px;
-    alignment: center;
+    spacing: 8px;
     // A drag replaces the slider's binding; keep it in step with the model.
     changed gain => {
         slider.value = root.gain;
@@ -29,10 +28,12 @@ component Band inherits VerticalLayout {
     }
 
     HorizontalLayout {
+        vertical-stretch: 1;
         alignment: center;
         slider := Slider {
             orientation: vertical;
-            height: 140px;
+            min-height: 140px;
+            vertical-stretch: 1;
             minimum: -root.max-gain;
             maximum: root.max-gain;
             step: 0.5;
@@ -72,8 +73,10 @@ export component EqualizerWindow inherits Window {
     title: Strings.equalizer-title;
     icon: @image-url("../res/audiosync-256.png");
     background: Tokens.background;
-    min-width: 560px;
-    preferred-width: 600px;
+    min-width: 600px;
+    preferred-width: 660px;
+    min-height: 360px;
+    default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
     // Key events go to the focused item, so Escape needs the scope focused.
     forward-focus: keys;
@@ -101,19 +104,22 @@ export component EqualizerWindow inherits Window {
         }
 
         VerticalLayout {
-            padding: 18px;
-            spacing: 14px;
+            padding: Tokens.spacing-window-margin;
+            spacing: 16px;
 
             HorizontalLayout {
                 spacing: 12px;
 
-                power := ToggleSwitch {
-                    text: Strings.equalizer-title;
-                    checked: root.enabled;
-                    accessible-label: Strings.equalizer-title;
-                    toggled => {
-                        root.enabled-toggled(self.checked);
-                        self.checked = root.enabled;
+                VerticalLayout {
+                    alignment: center;
+                    power := ToggleSwitch {
+                        text: Strings.equalizer-title;
+                        checked: root.enabled;
+                        accessible-label: Strings.equalizer-title;
+                        toggled => {
+                            root.enabled-toggled(self.checked);
+                            self.checked = root.enabled;
+                        }
                     }
                 }
 
@@ -122,7 +128,7 @@ export component EqualizerWindow inherits Window {
                 }
 
                 presets := ComboBox {
-                    width: 170px;
+                    width: 180px;
                     model: root.preset-names;
                     current-index: root.preset-index;
                     accessible-label: Strings.equalizer-presets;
@@ -133,32 +139,47 @@ export component EqualizerWindow inherits Window {
                 }
             }
 
-            HorizontalLayout {
-                spacing: 4px;
-                opacity: root.enabled ? 1 : Tokens.disabled-opacity;
+            // The bands on a card, evenly spread; the preamp apart on the left.
+            Card {
+                vertical-stretch: 1;
+                inner-padding: 12px;
 
-                Band {
-                    gain: root.preamp;
-                    short-label: Strings.equalizer-preamp;
-                    name: Strings.equalizer-preamp-accessibility;
-                    max-gain: root.max-gain;
-                    changed(value) => {
-                        root.preamp-changed(value);
+                HorizontalLayout {
+                    spacing: 2px;
+                    opacity: root.enabled ? 1 : Tokens.disabled-opacity;
+                    animate opacity { duration: Fluent.normal; }
+
+                    Band {
+                        horizontal-stretch: 1;
+                        gain: root.preamp;
+                        short-label: Strings.equalizer-preamp;
+                        name: Strings.equalizer-preamp-accessibility;
+                        max-gain: root.max-gain;
+                        changed(value) => {
+                            root.preamp-changed(value);
+                        }
                     }
-                }
 
-                Rectangle {
-                    width: 1px;
-                    background: Tokens.separator;
-                }
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        padding-top: 8px;
+                        padding-bottom: 8px;
+                        Rectangle {
+                            width: 1px;
+                            background: Fluent.stroke;
+                        }
+                    }
 
-                for gain[index] in root.gains: Band {
-                    gain: gain;
-                    short-label: Strings.equalizer-band-short(root.band-hz[index]);
-                    name: Strings.equalizer-band-name(root.band-hz[index]);
-                    max-gain: root.max-gain;
-                    changed(value) => {
-                        root.gain-changed(index, value);
+                    for gain[index] in root.gains: Band {
+                        horizontal-stretch: 1;
+                        gain: gain;
+                        short-label: Strings.equalizer-band-short(root.band-hz[index]);
+                        name: Strings.equalizer-band-name(root.band-hz[index]);
+                        max-gain: root.max-gain;
+                        changed(value) => {
+                            root.gain-changed(index, value);
+                        }
                     }
                 }
             }
