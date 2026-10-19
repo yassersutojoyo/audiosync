@@ -710,6 +710,9 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | fifo: counters see the vanished reader | S92, S160 |
 | fifo: NaN/±inf samples do not crash | S86, S123 |
 | fifo: stop closes the writer | S88 |
+| fifo: stop returns once the writer closed the pipe, with a reader that never reads (S88) | S88, S93 |
+| fifo: stop returns once the writer closed the pipe, with a reader that reads slowly (S88) | S88, S93 |
+| fifo: a stop inside a chunk's last frame finishes that frame, then the reader sees the end (S88, S93) | S88, S93 |
 | metadata pipe: an empty pipe takes a whole message in one write | S82, S168 |
 | metadata pipe: FIONREAD on a read end counts what waits | S82 |
 | metadata pipe: the writer opens it | S82 |
@@ -747,3 +750,15 @@ The parity suite runs the ring buffer, logic and FIFO suites' checks on the Rust
 | \<device\>: delay 500 ms | S46, S48, S56, S62, S66 |
 | \<device\>: delay 3000 ms | S46, S47, S56, S62, S66 |
 | \<device\>: delay 150 ms | S46, S48, S56, S62, S66 |
+
+### pipe start (`--hardware`, `Tests/pipestart.swift`)
+
+Run once per pipe feed, `swift` and `rust`, on a private engine whose only output is its fifo output.
+
+| Check | Clauses |
+|---|---|
+| pipestart \<feed\>: bursts come out of the fifo output | S83, S96 |
+| pipestart \<feed\>: still only the fifo output | S96 |
+| pipestart \<feed\>: after 2 s without audio and a resume, the pipe is no later than at the start | S99 |
+| pipestart \<feed\>: after a stop while audio flows and a new start, the pipe is no later than at the start | S96, S99 |
+| pipestart \<feed\>: after the writer closes, a stop and a new start, the pipe is no later than at the start | S88, S99 |
