@@ -61,6 +61,12 @@ pub struct Behavior {
     /// After answering the first request with this key, stop reading the
     /// connection (but keep it open), as a receiver that hangs.
     pub deaf_after: Option<String>,
+    /// An Apple TV that answers pairing and pair-verify (shared across
+    /// connections).
+    pub apple_tv: Option<super::atv::FakeAppleTv>,
+    /// Close the connection right after answering the first request with
+    /// this key.
+    pub close_after: Option<String>,
 }
 
 impl Default for Behavior {
@@ -73,6 +79,8 @@ impl Default for Behavior {
             timing_interval: Some(Duration::from_millis(500)),
             reject: 0,
             deaf_after: None,
+            apple_tv: None,
+            close_after: None,
         }
     }
 }
@@ -323,12 +331,14 @@ fn serve(shared: Arc<Shared>, mut stream: TcpStream, peer: SocketAddr) {
         fake.gate = behavior.gate.clone();
         fake.status = behavior.status.clone();
         fake.silent = behavior.silent.clone();
+        fake.apple_tv = behavior.apple_tv.clone();
     }
     fake.transport = format!(
         "RTP/AVP/UDP;unicast;mode=record;server_port={};control_port={};timing_port={}",
         shared.audio_port, shared.control_port, shared.timing_port
     );
     let deaf_after = lock(&shared.behavior).deaf_after.clone();
+    let close_after = lock(&shared.behavior).close_after.clone();
     let mut deaf = false;
     let mut parser = Parser::new();
     let mut buf = [0u8; 8192];
@@ -360,6 +370,10 @@ fn serve(shared: Arc<Shared>, mut stream: TcpStream, peer: SocketAddr) {
                     }
                     let answer = fake.feed(&request.encode());
                     if !answer.is_empty() && stream.write_all(&answer).is_err() {
+                        return closed(&shared);
+                    }
+                    if close_after.as_deref() == Some(key(&request).as_str()) {
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
                         return closed(&shared);
                     }
                     if deaf_after.as_deref() == Some(key(&request).as_str()) {

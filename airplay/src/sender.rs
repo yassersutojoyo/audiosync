@@ -35,6 +35,15 @@
 //! lost is tried again with backoff and rejoins the running timeline
 //! (P142, P103). [`Sender::shutdown`] tears every speaker down in parallel
 //! and returns within 2 s (P129).
+//!
+//! An Apple TV that needs the legacy pairing (P46) is paired once:
+//! [`Sender::start_pairing`] makes it show a PIN and reports
+//! [`PairingEvent::PinRequested`]; the host asks the user and calls
+//! [`Sender::submit_pin`]; [`PairingEvent::Paired`] then carries the
+//! [`Credentials`], which the host stores (for example with
+//! [`Credentials::to_bytes`]) and passes in
+//! [`SpeakerOptions::credentials`] whenever it adds that speaker. Every
+//! session to it then verifies with them before ANNOUNCE (P55).
 
 mod driver;
 
@@ -54,6 +63,7 @@ use crate::discovery::{Browser, Device, DeviceKey};
 use crate::error::{ErrorKind, SessionError, UserReason, Warning};
 use crate::input::InputWriter;
 use crate::metadata::{Metadata, MetadataError, TrackInfo};
+use crate::pairing::{self, Credentials, PairingEvent, PinError};
 use crate::rate::NOMINAL_RATE;
 use crate::rtsp::JackStatus;
 use crate::stream::{
@@ -97,6 +107,9 @@ pub struct SpeakerOptions {
     pub password: Option<String>,
     /// The host enabled PCM for this speaker (P74).
     pub pcm: bool,
+    /// The credentials of an earlier pairing with this Apple TV (P54): each
+    /// session verifies with them before ANNOUNCE (P55). Never logged.
+    pub credentials: Option<Credentials>,
 }
 
 impl SpeakerOptions {
@@ -107,6 +120,7 @@ impl SpeakerOptions {
             volume,
             password: None,
             pcm: false,
+            credentials: None,
         }
     }
 }
@@ -118,6 +132,10 @@ impl fmt::Debug for SpeakerOptions {
             .field("volume", &self.volume)
             .field("password", &self.password.as_ref().map(|_| "<hidden>"))
             .field("pcm", &self.pcm)
+            .field(
+                "credentials",
+                &self.credentials.as_ref().map(Credentials::client_id),
+            )
             .finish()
     }
 }
@@ -145,10 +163,11 @@ pub struct NowPlaying {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReceiverInfo {
     pub device: Device,
-    /// Whether a session can start: `Ok`, or the error it would end with
-    /// before connecting: Unsupported with its reason (P139, P2), or
-    /// PairingRequired for an Apple TV that needs the legacy pairing (P46),
-    /// which this sender doesn't do yet.
+    /// Whether a session can start without credentials: `Ok`, or the
+    /// error it would end with before connecting: Unsupported with its
+    /// reason (P139, P2), or PairingRequired for an Apple TV that needs the
+    /// legacy pairing (P46). Such an Apple TV plays once the host pairs it
+    /// ([`Sender::start_pairing`]) and adds it with the credentials.
     pub plan: Result<(), ErrorKind>,
 }
 
@@ -160,12 +179,17 @@ impl ReceiverInfo {
 }
 
 /// The AirPlay 1 path with the AirPlay 2 path off (P2), then the start
-/// conditions (P46, P139).
+/// conditions without credentials (P46, P139).
 pub(crate) fn plan(device: &Device) -> Result<(), ErrorKind> {
+    plan_with(device, false)
+}
+
+/// The same, for a speaker the host has (or hasn't) credentials for.
+pub(crate) fn plan_with(device: &Device, has_credentials: bool) -> Result<(), ErrorKind> {
     device
         .choose_path(false, None)
         .map_err(ErrorKind::Unsupported)?;
-    device.airplay1_plan(false)
+    device.airplay1_plan(has_credentials)
 }
 
 /// A change discovery saw (P7, P18, P19).
@@ -236,6 +260,11 @@ pub enum SenderEvent {
     Speaker {
         key: DeviceKey,
         event: SpeakerEvent,
+    },
+    /// Something about the pairing with a receiver (P48 to P54, P136).
+    Pairing {
+        key: DeviceKey,
+        event: PairingEvent,
     },
     /// L and the timeline's mapping: frame n of the timeline is the host's
     /// frame at input position n + `origin`, and it sounds on every speaker
@@ -393,6 +422,31 @@ impl Sender {
         self.command(Command::RemoveSpeaker(key.clone()));
     }
 
+    /// Pairs with an Apple TV that needs the legacy pairing (P46 to P54): on
+    /// its own connection to the receiver's RAOP port, the Apple TV is asked
+    /// to show a PIN, and [`PairingEvent::PinRequested`] follows. The
+    /// pairing then waits, without a timeout, for [`Sender::submit_pin`]
+    /// (P51), and ends with [`PairingEvent::Paired`] and the credentials, or
+    /// [`PairingEvent::Failed`]. A pairing already running for the device is
+    /// replaced. Playing speakers are not touched.
+    pub fn start_pairing(&self, device: Device) {
+        self.command(Command::StartPairing(Box::new(device)));
+    }
+
+    /// The PIN the user read off the Apple TV (P50, P51). Digits only;
+    /// anything else is refused here. A PIN for a receiver whose pairing
+    /// isn't waiting for one is ignored.
+    pub fn submit_pin(&self, key: &DeviceKey, pin: &str) -> Result<(), PinError> {
+        pairing::check_pin(pin)?;
+        self.command(Command::SubmitPin(key.clone(), pin.to_owned()));
+        Ok(())
+    }
+
+    /// Stops a pairing; [`PairingEvent::Stopped`] follows.
+    pub fn cancel_pairing(&self, key: &DeviceKey) {
+        self.command(Command::CancelPairing(key.clone()));
+    }
+
     /// Sets a speaker's delay d_s, 0 to 3000 ms (P99, P100).
     pub fn set_delay(&self, key: &DeviceKey, delay: Duration) {
         self.command(Command::SetDelay(key.clone(), delay));
@@ -449,7 +503,8 @@ impl Sender {
 
     /// Stops everything: every speaker is torn down in parallel (TEARDOWN,
     /// then close after the answer, or by force 1.75 s after this call),
-    /// discovery stops, and the driver's threads end (P129). Returns within
+    /// pairings stop, discovery stops, and the driver's threads end (P129).
+    /// Returns within
     /// 2 s. A writer blocked in a send to a receiver that stopped reading is
     /// not waited for; it ends at its own send timeout.
     pub fn shutdown(mut self) {
