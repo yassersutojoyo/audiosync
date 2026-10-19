@@ -396,7 +396,9 @@ impl AscAirPlay {
                 }
                 SenderEvent::Timeline {
                     latency, restarted, ..
-                } => self.events.push_back(Pending::Timeline { latency, restarted }),
+                } => self
+                    .events
+                    .push_back(Pending::Timeline { latency, restarted }),
                 SenderEvent::Pairing { .. } => {}
             }
         }
@@ -546,8 +548,7 @@ impl Feed {
             if produced > 0 {
                 // Frames that come too late or don't fit are dropped there
                 // and counted (P112, P144).
-                self.writer
-                    .write_f32(&self.resampled[..produced * 2], at);
+                self.writer.write_f32(&self.resampled[..produced * 2], at);
                 handed += produced;
             }
             consumed += used;
@@ -923,7 +924,10 @@ pub unsafe extern "C" fn asc_airplay_take_input(airplay: *mut AscAirPlay) -> *mu
 ///
 /// `input` is null or a live input handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn asc_airplay_input_set_rate(input: *mut AscAirPlayInput, rate: f64) -> bool {
+pub unsafe extern "C" fn asc_airplay_input_set_rate(
+    input: *mut AscAirPlayInput,
+    rate: f64,
+) -> bool {
     if input.is_null() || !rate.is_finite() {
         return false;
     }
@@ -934,10 +938,14 @@ pub unsafe extern "C" fn asc_airplay_input_set_rate(input: *mut AscAirPlayInput,
     // SAFETY: the handle is live; this call borrows only the atomic, which
     // writes read but never borrow mutably.
     let requested = unsafe { &(*input).requested };
-    let _ = requested.fetch_update(Ordering::Release, Ordering::Relaxed, |old| {
-        Some(((old >> 32).wrapping_add(1) << 32) | u64::from(rate as u32))
-    });
-    true
+    let mut old = requested.load(Ordering::Relaxed);
+    loop {
+        let new = ((old >> 32).wrapping_add(1) << 32) | u64::from(rate as u32);
+        match requested.compare_exchange_weak(old, new, Ordering::Release, Ordering::Relaxed) {
+            Ok(_) => return true,
+            Err(current) => old = current,
+        }
+    }
 }
 
 /// Capture thread: hands `frames` interleaved stereo frames at the rate
@@ -1570,11 +1578,7 @@ mod tests {
         // SAFETY: null handles and pointers are part of the contract.
         unsafe {
             assert!(!asc_airplay_next_event(ptr::null_mut(), &mut event));
-            assert!(!asc_airplay_add_speaker(
-                ptr::null_mut(),
-                id.as_ptr(),
-                50.0
-            ));
+            assert!(!asc_airplay_add_speaker(ptr::null_mut(), id.as_ptr(), 50.0));
             assert!(!asc_airplay_remove_speaker(ptr::null_mut(), id.as_ptr()));
             assert!(!asc_airplay_set_volume(ptr::null_mut(), id.as_ptr(), 50.0));
             asc_airplay_set_master(ptr::null_mut(), 50.0);
@@ -1665,10 +1669,11 @@ mod tests {
         let c_id = c_string(id);
         // SAFETY: a live handle, used by this thread only; a C string.
         assert!(unsafe { asc_airplay_add_speaker(handle, c_id.as_ptr(), 40.0) });
-        let events = events_until(handle, |seen| {
-            has_state(seen, id, AIRPLAY_STATE_RETRYING)
-        });
-        assert!(has_state(&events, id, AIRPLAY_STATE_CONNECTING), "{events:?}");
+        let events = events_until(handle, |seen| has_state(seen, id, AIRPLAY_STATE_RETRYING));
+        assert!(
+            has_state(&events, id, AIRPLAY_STATE_CONNECTING),
+            "{events:?}"
+        );
         let error = events
             .iter()
             .find(|e| e.kind == AIRPLAY_EVENT_ERROR)
@@ -1694,7 +1699,10 @@ mod tests {
         // SAFETY: a live handle, used by this thread only; a C string.
         assert!(unsafe { asc_airplay_remove_speaker(handle, c_id.as_ptr()) });
         let stopped = events_until(handle, |seen| has_state(seen, id, AIRPLAY_STATE_STOPPED));
-        assert!(has_state(&stopped, id, AIRPLAY_STATE_STOPPED), "{stopped:?}");
+        assert!(
+            has_state(&stopped, id, AIRPLAY_STATE_STOPPED),
+            "{stopped:?}"
+        );
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -1759,7 +1767,10 @@ mod tests {
             );
         }
         let stopped = events_until(handle, |seen| has_state(seen, id, AIRPLAY_STATE_STOPPED));
-        assert!(has_state(&stopped, id, AIRPLAY_STATE_STOPPED), "{stopped:?}");
+        assert!(
+            has_state(&stopped, id, AIRPLAY_STATE_STOPPED),
+            "{stopped:?}"
+        );
         assert!(receiver.methods().contains(&Method::Teardown));
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
@@ -1787,7 +1798,10 @@ mod tests {
         }
         // Taking a receiver leaves the last event's strings alone.
         assert_eq!(event.kind, AIRPLAY_EVENT_TIMELINE);
-        assert_eq!((text(event.id), text(event.detail)), (String::new(), String::new()));
+        assert_eq!(
+            (text(event.id), text(event.detail)),
+            (String::new(), String::new())
+        );
         assert_eq!(text(receiver.name), "Hall");
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
