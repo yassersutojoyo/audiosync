@@ -79,7 +79,7 @@ scripts/brand/windows-icons.sh # the Windows app and tray icons in windows/res/
 
 `build-brand.sh` writes `audiosync-icon*.svg`, `audiosync-wordmark*.svg`,
 `Sources/AudioSync/BrandMark.swift`, `icon-source.png`, `AppIcon.icns`, the icons in
-`site/` and `site/wordmark.svg`. Edit the sources and scripts, not the generated
+`site/`, `site/wordmark.svg` and `site/wordmark-dark.svg`. Edit the sources and scripts, not the generated
 files. It calls `makeicon.sh` (`AppIcon.icns`, from `icon-source.png` with `sips`
 and `iconutil`) and `make-web-icons.sh` (the `site/` icons, with `sips`); both take
 an optional source PNG and output path. `scripts/brand/check-icons.sh`, run by CI,

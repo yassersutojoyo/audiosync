@@ -254,7 +254,8 @@ def main():
             continue
         stale.append(path)
         if not check:
-            with open(path, 'w', encoding='utf-8') as f:
+            # Always LF, so a run on Windows writes the same bytes as CI.
+            with open(path, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(text)
     if check and stale:
         sys.exit('out of date: ' + ', '.join(stale))
