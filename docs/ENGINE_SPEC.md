@@ -589,6 +589,34 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | capture: playing only briefly → still waiting | S18 |
 | capture: playing for the grace period with no frames → not working | S18 |
 | capture: a paused or unknown source never blames the permission | S18, S19 |
+| capture channels: the tap's interleaved stereo passes through unchanged | S2, S16 |
+| capture channels: a one-channel input plays on both sides | S14 |
+| capture channels: an input with four channels gives its first two as L and R | S14 |
+| capture channels: one buffer per channel gives L from the first and R from the second | S14 |
+| capture channels: channels are counted across buffers, in order | S14 |
+| capture channels: a buffer without channels is skipped | S14 |
+| capture channels: only frames both channels have are delivered | S16 |
+| capture channels: no buffer, no data or no frames delivers nothing | S16, S17 |
+| capture channels: NaN and infinity pass through untouched (the stages after capture handle them) | S123 |
+| capture channels: a long callback is delivered in order, in blocks of at most 4096 frames | S16, S40 |
+| capture channels: a block never exceeds the ring's write margin | S40 |
+| capture rate: a rate that reads 0 counts as 48 kHz | S16 |
+| capture rate: 8 kHz to 384 kHz are taken as they are | S16 |
+| capture rate: the rate of the device the IOProc runs on wins over the tap's | S16, S157 |
+| capture rate: the tap's rate when the device's can't be read | S16, S157 |
+| capture rate: nothing readable keeps the session playing | S157 |
+| input format: native 32-bit float is read as it is | S14, S16 |
+| input format: integer, big-endian or 64-bit samples aren't read | S16 |
+| input format: a device without input channels has nothing to capture | S14 |
+| input format: a stream without channels doesn't count | S14 |
+| app tap: the same processes in another order keep the tap | S11 |
+| app tap: a new audio process (a browser's audio helper) is tapped too | S11 |
+| app tap: a process that ends leaves the tap | S11 |
+| app tap: no audio process while the app runs: no tap, waiting for one | S11, S17 |
+| app tap: still nothing to tap keeps waiting | S11, S17 |
+| app tap: the first audio process while waiting gets a tap | S11 |
+| app tap: the app gone means the source is lost | S21, S142 |
+| app tap: AudioSync's own process is never tapped, even when the app launched it | S10, S11 |
 | delay: AirPlay chosen → configured delay | S78 |
 | delay: no AirPlay → plays at once | S78 |
 | delay: zero stays zero | S78 |
