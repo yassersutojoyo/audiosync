@@ -6,8 +6,28 @@ order, with Windows manners: a menu bar with Ctrl shortcuts, a notification-area
 window controls, and light or dark following Windows. The wording follows the
 Mac app's `AppText`; all of it lives in `windows/ui/strings.slint`.
 
-Colors, the wordmark typeface, spacing and corner radii come from the shared
-design tokens (`brand/tokens.json`, see `brand/README.md`).
+Colors, the wordmark typeface, font sizes and the window margins come from the
+shared design tokens (`brand/tokens.json`, see `brand/README.md`). The rest
+follows Windows 11 and lives only in the Windows app (the `Fluent` values in
+`windows/ui/widgets.slint`): text in Segoe UI Variable, 8 px corners on cards,
+notices and the flyout and 4 px on buttons and rows, 1 px card edges, hover and
+pressed fills, and short state changes (83 ms). The main window and the
+equalizer ask Windows for Mica in their title bars (Windows 11 22H2 and
+later), on content in the token background, which is close to Mica's own
+tint; the tray flyout gets the system's rounded frame, border and shadow.
+Where Windows doesn't offer one, the window keeps the plain frame (and the
+flyout its own drawn edge). The standard controls (switches, sliders,
+drop-downs, the primary button) use the Windows accent color, as other
+Windows 11 apps do; AudioSync's own pieces use the brand teal.
+
+The main window has a header (mark, wordmark, status and the Streaming switch),
+then a left column of cards (Audio Source, Master Volume, Equalizer) and the
+speaker list. Every speaker row is one line in shared columns, so they line up
+across the sections: the toggle, the name with the kind below it (and the
+availability note, when there is one), the delay, the volume slider with its
+value, and the "…" options button. Below 960 px of width the volume sliders get
+shorter, leaving the names more room; the window can't be made narrower than
+860 px.
 
 The windows read their data through the `Backend` trait in
 `windows/src/ui_model.rs`. On Windows that is the adapter over the WASAPI audio
@@ -36,7 +56,7 @@ at every launch.
 | Equalizer card and window | Same: on/off, presets (Custom when none matches), preamp, ten bands, Reset | View > Equalizer (Ctrl+E); presets, band limits and the filters come from `audiosync-core`. It changes the captured audio once, so every speaker hears it |
 | This Mac | This PC | The PC's own outputs: its speakers or line out, and headphones on its jack. USB, Bluetooth, HDMI, DisplayPort and virtual outputs are under Connected Speakers, each with its kind. A Bluetooth hands-free endpoint ("Hands-Free", the call profile) is left out on purpose: it carries mono, low-bandwidth call audio, and opening it puts the device in call mode. A headset's stereo endpoint, when it has one, is listed |
 | Groups | Same: toggle, members, Rename Group… and Delete Group | In a context menu: right-click, the Menu key, or the "…" button |
-| Connected Speakers | Same: toggle, kind icon, availability note, auto-connect mark, volume | Kind icons come from Segoe Fluent Icons. With none listed it says "No connected speakers"; the Mac's note about the AirPlay engine isn't shown, since Windows has no AirPlay yet |
+| Connected Speakers | Same: toggle, kind icon, availability note, auto-connect mark, volume | Kind icons come from Segoe Fluent Icons; the kind is also written under the name. With none listed it says "No connected speakers"; the Mac's note about the AirPlay engine isn't shown, since Windows has no AirPlay yet |
 | Per-speaker delay (sync controls) | Same: −100, −10, a field that applies as you type, +10, +100, and the hint | Local outputs only, as on the Mac |
 | AirPlay problem with Retry | Later | Comes with the Windows AirPlay engine; until then nothing in the Windows app mentions AirPlay |
 | Local Network hint | Not needed | Windows has no Local Network permission (the firewall may ask once the AirPlay engine runs) |

@@ -142,6 +142,8 @@ pub struct App {
     /// Dark (true) or light for every window instead of the Windows setting:
     /// the theme preview, `None` normally.
     theme_override: Cell<Option<bool>>,
+    /// Whether each window got its Windows 11 frame, as last logged.
+    frames: RefCell<HashMap<&'static str, bool>>,
     /// Called after every refresh, e.g. to update the tray icon and tooltip.
     on_refresh: RefCell<Option<RefreshHook>>,
     /// Polls the backend; it stops when the app is dropped.
@@ -185,6 +187,7 @@ impl App {
             models,
             tray_available: Cell::new(false),
             theme_override: Cell::new(None),
+            frames: RefCell::default(),
             on_refresh: RefCell::new(None),
             poll_timer: Timer::default(),
         });
@@ -267,23 +270,46 @@ impl App {
 
     /// Gives a window that is showing its Windows 11 frame (`backdrop`), and
     /// logs whether DWM took it. `true` when it did.
-    pub fn apply_frame(&self, window: &slint::Window, name: &str, frame: Frame) -> bool {
+    pub fn apply_frame(&self, window: &slint::Window, name: &'static str, frame: Frame) -> bool {
         if let Some(dark) = self.theme_override.get() {
             use slint::winit_030::WinitWindowAccessor;
             use slint::winit_030::winit::window::Theme;
             let theme = if dark { Theme::Dark } else { Theme::Light };
             window.with_winit_window(|window| window.set_theme(Some(theme)));
         }
-        let applied = crate::backdrop::apply(window, frame);
-        self.log.log(|| {
-            let what = match frame {
-                Frame::Titled => "Mica title bar",
-                Frame::Flyout => "rounded corners",
-            };
-            let result = if applied { "on" } else { "not available" };
-            format!("{name}: {what} {result}")
-        });
+        // Before the event loop runs there is no native window yet; the
+        // window's first focus (see `follow_frame`) tries again.
+        let Some(applied) = crate::backdrop::apply(window, frame) else {
+            return false;
+        };
+        if self.frames.borrow_mut().insert(name, applied) != Some(applied) {
+            self.log.log(|| {
+                let what = match frame {
+                    Frame::Titled => "Mica title bar",
+                    Frame::Flyout => "rounded corners",
+                };
+                let result = if applied { "on" } else { "not available" };
+                format!("{name}: {what} {result}")
+            });
+        }
         applied
+    }
+
+    /// Gives a titled window its frame each time it gains the focus, which
+    /// covers a native window created after `show` returned.
+    fn follow_frame(self: &Rc<Self>, window: fn(&App) -> &slint::Window, name: &'static str) {
+        use slint::winit_030::winit::event::WindowEvent;
+        use slint::winit_030::{EventResult, WinitWindowAccessor};
+
+        let weak = Rc::downgrade(self);
+        window(self).on_winit_window_event(move |_, event| {
+            if let WindowEvent::Focused(true) = event {
+                with_app(&weak, |app| {
+                    app.apply_frame(window(app), name, Frame::Titled);
+                });
+            }
+            EventResult::Propagate
+        });
     }
 
     fn attach_models(&self) {
@@ -441,6 +467,7 @@ impl App {
     }
 
     fn connect_main(self: &Rc<Self>) {
+        self.follow_frame(|app| app.main.window(), "main window");
         let main = &self.main;
         let weak = Rc::downgrade(self);
 
@@ -570,6 +597,7 @@ impl App {
     }
 
     fn connect_equalizer(self: &Rc<Self>) {
+        self.follow_frame(|app| app.equalizer.window(), "equalizer");
         let eq_window = &self.equalizer;
         let weak = Rc::downgrade(self);
 

@@ -48,41 +48,38 @@ pub fn supports_corners(version: OsVersion) -> bool {
     version >= windows_build(FIRST_WINDOWS_11_BUILD)
 }
 
-/// Gives `window` its Windows 11 frame. `true` when DWM took it: for the
-/// flyout, the window may then leave out its own edge. Call it after the
-/// window is shown (the HWND exists from then on); repeating it is harmless.
+/// Gives `window` its Windows 11 frame. `Some(true)` when DWM took it: for
+/// the flyout, the window may then leave out its own edge. `None` while the
+/// native window doesn't exist yet (Slint creates it once the event loop
+/// runs), so the caller tries again later; repeating it is harmless.
 #[cfg(windows)]
-pub fn apply(window: &slint::Window, frame: Frame) -> bool {
+pub fn apply(window: &slint::Window, frame: Frame) -> Option<bool> {
     use slint::winit_030::WinitWindowAccessor;
     use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::HWND;
 
-    let Some(version) = crate::platform::windows_version() else {
-        return false;
-    };
-    let supported = match frame {
+    let supported = crate::platform::windows_version().is_some_and(|version| match frame {
         Frame::Titled => supports_backdrop(version),
         Frame::Flyout => supports_corners(version),
-    };
-    if !supported {
-        return false;
-    }
-    window
-        .with_winit_window(|window| {
-            let handle = window.window_handle().ok()?;
-            let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-                return None;
-            };
-            let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
-            Some(set_frame(hwnd, frame))
-        })
-        .flatten()
-        .unwrap_or(false)
+    });
+    window.with_winit_window(|window| {
+        if !supported {
+            return false;
+        }
+        let Ok(handle) = window.window_handle() else {
+            return false;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return false;
+        };
+        let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
+        set_frame(hwnd, frame)
+    })
 }
 
 #[cfg(not(windows))]
-pub fn apply(_window: &slint::Window, _frame: Frame) -> bool {
-    false
+pub fn apply(_window: &slint::Window, _frame: Frame) -> Option<bool> {
+    Some(false)
 }
 
 #[cfg(windows)]

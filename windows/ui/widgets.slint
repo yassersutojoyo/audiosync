@@ -33,6 +33,7 @@ export global Fluent {
     // The columns every speaker row lines up on.
     out property <length> delay-column: 76px;
     out property <length> volume-column: 196px;
+    out property <length> volume-column-compact: 148px;
     // Subtle fills under the pointer, over any card or row.
     out property <brush> hover: Tokens.text.with-alpha(0.06);
     out property <brush> pressed: Tokens.text.with-alpha(0.035);
@@ -464,6 +465,8 @@ export component SyncControls inherits VerticalLayout {
 // The sync controls open underneath.
 export component SpeakerRow inherits Rectangle {
     in property <SpeakerItem> item;
+    // A narrow window: a shorter volume slider leaves the name more room.
+    in property <bool> compact;
     callback toggled();
     callback volume-changed(float);
     callback sync-toggled();
@@ -619,7 +622,7 @@ export component SpeakerRow inherits Rectangle {
 
                 // Volume column
                 HorizontalLayout {
-                    width: Fluent.volume-column;
+                    width: root.compact ? Fluent.volume-column-compact : Fluent.volume-column;
                     padding-left: 8px;
 
                     VolumeSlider {

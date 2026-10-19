@@ -25,6 +25,7 @@ component SpeakerSection inherits VerticalLayout {
     in property <string> title;
     in property <[SpeakerItem]> speakers;
     in property <string> note;
+    in property <bool> compact;
     callback toggled(string);
     callback volume-changed(string, float);
     callback sync-toggled(string);
@@ -52,6 +53,7 @@ component SpeakerSection inherits VerticalLayout {
 
             SpeakerRow {
                 item: speaker;
+                compact: root.compact;
                 toggled => {
                     root.toggled(speaker.id);
                 }
@@ -220,6 +222,8 @@ export component MainWindow inherits Window {
     min-height: 520px;
     preferred-width: 980px;
     preferred-height: 680px;
+    // Below this width the volume sliders in the speaker rows are shorter.
+    property <bool> compact: root.width < 960px;
     background: Tokens.background;
     default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
@@ -479,6 +483,7 @@ export component MainWindow inherits Window {
                     SpeakerSection {
                         title: Strings.this-pc-section;
                         speakers: root.this-pc;
+                        compact: root.compact;
                         note: root.this-pc.length == 0 ? Strings.this-pc-none : "";
                         toggled(id) => {
                             root.speaker-toggled(id);
@@ -538,6 +543,7 @@ export component MainWindow inherits Window {
                     SpeakerSection {
                         title: Strings.connected-section;
                         speakers: root.connected;
+                        compact: root.compact;
                         note: root.connected.length == 0 ? Strings.connected-none : "";
                         toggled(id) => {
                             root.speaker-toggled(id);
