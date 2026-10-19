@@ -1242,6 +1242,40 @@ mod tests {
     }
 
     #[test]
+    fn late_packets_inside_one_fill_are_never_written_twice() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        gaps.packet(0, 480, false);
+        // Silence up to 30 ms.
+        assert_eq!(gaps.idle(40 * HNS_PER_MS), 960);
+        // Two late packets that both lie inside it: neither is written.
+        assert_eq!(gaps.packet(10 * HNS_PER_MS, 480, false), (0, 480));
+        assert_eq!(gaps.packet(20 * HNS_PER_MS, 480, false), (0, 480));
+        // One that reaches past it is written from its end on.
+        assert_eq!(gaps.packet(25 * HNS_PER_MS, 480, false), (0, 240));
+        assert_eq!(gaps.packet(35 * HNS_PER_MS, 480, false), (0, 0));
+    }
+
+    #[test]
+    fn an_hour_of_gap_fills_exactly_the_frames_of_an_hour() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        gaps.packet(0, 480, false);
+        // Wakes about every 10 ms, at uneven times, for an hour.
+        let mut written = 0_u64;
+        let mut now = 0_u64;
+        while now < 3_600_000 * HNS_PER_MS {
+            now += 100_003;
+            written += gaps.idle(now) as u64;
+        }
+        // Silence from the packet's end (10 ms) to 10 ms before the last
+        // wake, at 48 kHz, to the frame.
+        let expected = (now - 20 * HNS_PER_MS) * 48_000 / 10_000_000;
+        assert!(
+            written.abs_diff(expected) <= 1,
+            "{written} frames written, {expected} due"
+        );
+    }
+
+    #[test]
     fn the_airplay_sender_gets_the_equalized_audio_at_44_1_khz() {
         let clock = SenderClock::new(std::time::Instant::now());
         let (_stream, input) =
