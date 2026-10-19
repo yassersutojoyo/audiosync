@@ -14,7 +14,7 @@
 #   source.png    defaults to icon-source.png (square, at least 512 px)
 #   output-dir    defaults to site/ in the repository root
 #
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 root="$(cd "$(dirname "$0")" && pwd)"
 src="${1:-$root/icon-source.png}"
 dest="${2:-$root/site}"

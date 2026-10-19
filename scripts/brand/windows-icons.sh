@@ -11,7 +11,7 @@
 #
 # Usage: scripts/brand/windows-icons.sh
 #
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")/../.."
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/audiosync-windows-icons-XXXXXX")

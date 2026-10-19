@@ -9,7 +9,7 @@
 #
 # Usage: scripts/brand/check-icons.sh
 #
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")/../.."
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/audiosync-check-icons-XXXXXX")

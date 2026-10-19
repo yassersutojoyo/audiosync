@@ -19,7 +19,7 @@
 #               go to a new temporary directory unless output-dir is given, which
 #               must be outside the repository. It skips the social preview.
 #
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 
 usage() {
   echo "usage: scripts/screenshots/render.sh [--review] [output-dir]" >&2
