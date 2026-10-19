@@ -409,10 +409,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
             return;
         }
         match self.settings_file.save(&current) {
-            Ok(()) if self.settings_file.path().is_some() => {
+            Ok(kept) if self.settings_file.path().is_some() => {
+                if kept.is_some() {
+                    self.log.log(|| {
+                        format!(
+                            "settings: a newer AudioSync's file was kept as {} before saving over it",
+                            crate::settings::NEWER_FILE_NAME
+                        )
+                    });
+                }
                 self.log.log(|| "settings: saved".to_owned());
             }
-            Ok(()) => {}
+            Ok(_) => {}
             Err(error) => self.log.log(|| {
                 format!("settings: couldn't be saved ({error}); they last until AudioSync quits")
             }),
@@ -3081,6 +3089,41 @@ mod tests {
                 "settings: read (format version 1)",
             ],
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_newer_settings_file_is_kept_aside_once_and_logged() {
+        let dir = test_dir("adapter-settings-newer");
+        let path = dir.join(settings::FILE_NAME);
+        let newer = format!("{{\"version\": {}}}", settings::VERSION + 1);
+        std::fs::write(&path, &newer).expect("written");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let file = SettingsFile::at(path.clone());
+        let mut adapter =
+            AudioAdapter::with_settings(launch_audio(), || "09.41".to_owned(), log.clone(), file);
+        adapter.set_master_volume(64.0);
+        adapter.poll();
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        let kept = dir.join(settings::NEWER_FILE_NAME);
+        assert_eq!(std::fs::read_to_string(kept).expect("kept"), newer);
+        assert!(log.flush(TEST_FLUSH));
+        let messages = read_messages(&dir.join(FILE_NAME));
+        assert_in_order(
+            &messages,
+            &[
+                "settings: ignored: a newer AudioSync wrote it",
+                "settings: a newer AudioSync's file was kept as settings.newer.json",
+                "settings: saved",
+                "settings: saved",
+            ],
+        );
+        let kept_lines = messages
+            .iter()
+            .filter(|message| message.contains("was kept as"))
+            .count();
+        assert_eq!(kept_lines, 1);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
