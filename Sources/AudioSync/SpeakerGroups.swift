@@ -48,6 +48,17 @@ enum GroupName {
 
 /// Speakers saved under the bundled engine's output IDs move to the IDs of
 /// AudioSync's own sender (docs/ENGINE_SPEC.md S204).
+///
+/// Nothing but the ID is saved for an AirPlay speaker: no name, no address.
+/// The ID is enough, because both senders name a receiver by its device ID,
+/// the MAC-style address in its announcement (`<id>@<name>` of
+/// `_raop._tcp`, `deviceid` of `_airplay._tcp`): the bundled engine as that
+/// 48-bit number written in decimal, AudioSync's own sender as 12 uppercase
+/// hex digits (docs/AIRPLAY_SPEC.md P8 to P10). A saved ID moves only once
+/// discovery lists a receiver whose device ID it is, so an ID that stands
+/// for something else, or for a receiver that never shows up again, stays
+/// as it was, and so does every other ID and key. Once moved, an ID is gone,
+/// so running the migration again changes nothing.
 enum SpeakerIDMigration {
     /// What is saved by AirPlay speaker ID: the speakers switched on, their
     /// volumes, the groups and the auto-connect list.
@@ -58,15 +69,80 @@ enum SpeakerIDMigration {
         var autoConnect: Set<String>
     }
 
-    /// The new app ID for each saved bundled-engine ID that stands for one
-    /// of `receivers` (the native sender's receiver IDs).
-    static func renames(_ saved: Saved, receivers: [String]) -> [String: String] {
-        [:]
+    /// The largest device ID: six bytes.
+    static let maxDeviceID: UInt64 = 0xFFFF_FFFF_FFFF
+
+    /// The device ID a bundled-engine output ID stands for: decimal digits
+    /// exactly as the engine writes the number (no sign, space or leading
+    /// zero), from 1 to `maxDeviceID`; nil for anything else.
+    static func deviceID(engineID: String) -> UInt64? {
+        guard let number = UInt64(engineID), (1...maxDeviceID).contains(number),
+              String(number) == engineID else { return nil }
+        return number
     }
 
-    /// `saved` with every ID in `renames` replaced.
+    /// The device ID of a native receiver ID: 12 hex digits; nil for a
+    /// receiver without one ("raop:<instance>", "airplay:<instance>").
+    static func deviceID(receiverID: String) -> UInt64? {
+        guard receiverID.count == 12, receiverID.allSatisfy(\.isHexDigit),
+              let number = UInt64(receiverID, radix: 16), number >= 1 else { return nil }
+        return number
+    }
+
+    /// The new app ID (`NativeAirPlayID.app`) for each saved bundled-engine
+    /// ID that is the device ID of one of `receivers` (the native sender's
+    /// receiver IDs).
+    static func renames(_ saved: Saved, receivers: [String]) -> [String: String] {
+        var byDevice: [UInt64: String] = [:]
+        for receiver in receivers {
+            if let device = deviceID(receiverID: receiver) { byDevice[device] = receiver }
+        }
+        guard !byDevice.isEmpty else { return [:] }
+        var ids = saved.enabledAirPlay.union(saved.airplayVolumes.keys)
+        let keys = saved.autoConnect.union(saved.groups.flatMap(\.members))
+        for key in keys {
+            if let (id, airplay) = SpeakerKey.parse(key), airplay { ids.insert(id) }
+        }
+        var renames: [String: String] = [:]
+        for id in ids {
+            if let device = deviceID(engineID: id), let receiver = byDevice[device] {
+                renames[id] = NativeAirPlayID.app(receiver)
+            }
+        }
+        return renames
+    }
+
+    /// `saved` with every ID in `renames` replaced, as an ID and inside
+    /// AirPlay speaker keys. A volume already saved under the new ID wins
+    /// over the old one, and a group that already lists the new key drops
+    /// the old one; the groups keep their order.
     static func apply(_ renames: [String: String], to saved: Saved) -> Saved {
-        saved
+        guard !renames.isEmpty else { return saved }
+        func renamed(_ id: String) -> String { renames[id] ?? id }
+        func renamedKey(_ key: String) -> String {
+            guard let (id, airplay) = SpeakerKey.parse(key), airplay, let new = renames[id] else { return key }
+            return SpeakerKey.make(id: new, airplay: true)
+        }
+        var out = saved
+        out.enabledAirPlay = Set(saved.enabledAirPlay.map(renamed))
+        out.autoConnect = Set(saved.autoConnect.map(renamedKey))
+        var volumes = saved.airplayVolumes.filter { renames[$0.key] == nil }
+        for (old, new) in renames {
+            if volumes[new] == nil, let volume = saved.airplayVolumes[old] { volumes[new] = volume }
+        }
+        out.airplayVolumes = volumes
+        out.groups = saved.groups.map { group in
+            var copy = group
+            copy.members = []
+            for member in group.members {
+                let key = renamedKey(member)
+                // Already listed under the new key: the old one goes.
+                if key != member, group.members.contains(key) || copy.members.contains(key) { continue }
+                copy.members.append(key)
+            }
+            return copy
+        }
+        return out
     }
 
     /// `apply(renames(saved, receivers:), to: saved)`.

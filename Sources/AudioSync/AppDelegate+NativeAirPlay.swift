@@ -65,7 +65,30 @@ extension AppDelegate {
 
     private func nativeReceiverChanged(_ change: NativeReceiverChange) {
         DBG.log(change.logLine)
+        switch change {
+        case .appeared(let receiver), .changed(let receiver): migrateSavedSpeakerIDs(to: receiver)
+        case .gone: break
+        }
         refreshNativeRows()
+    }
+
+    /// What was saved under the bundled engine's output ID of `receiver`
+    /// (switched on, its volume, its groups, auto-connect) moves to its
+    /// native ID, before its row appears (S204). Nothing is left to move
+    /// afterwards, so this runs for every receiver discovery reports.
+    private func migrateSavedSpeakerIDs(to receiver: NativeReceiver) {
+        let saved = SpeakerIDMigration.Saved(enabledAirPlay: enabledAirPlay, airplayVolumes: airplayVolume,
+                                             groups: groups, autoConnect: autoConnect)
+        let renames = SpeakerIDMigration.renames(saved, receivers: [receiver.id])
+        guard !renames.isEmpty else { return }
+        for old in renames.keys.sorted() {
+            DBG.log("[AudioSync] native AirPlay: settings saved under the bundled engine's ID \(old) now belong to \(receiver.name) (\(receiver.id))")
+        }
+        let migrated = SpeakerIDMigration.apply(renames, to: saved)
+        airplayVolume = migrated.airplayVolumes
+        groups = migrated.groups
+        autoConnect = migrated.autoConnect
+        enabledAirPlay = migrated.enabledAirPlay
     }
 
     private func nativeSpeakerEvent(_ event: NativeSpeakerEvent, _ outcome: NativeAirPlayOutcome?) {
