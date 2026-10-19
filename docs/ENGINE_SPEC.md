@@ -14,22 +14,24 @@ It describes AudioSync 0.4.1 plus the unreleased changes on `main` as of 2026-10
 
 Clause IDs are assigned in order of addition and never renumbered or reused, so a clause added later sits in the section it belongs to and IDs can appear out of numeric order.
 
+A clause that a later one replaces keeps its ID and its text and starts with *Superseded by Sn*, or *Superseded in part by Sn* followed by the part, so the history stays readable. An implementation follows the newer clause; until it does, the superseded clause still describes the code. Once nothing in the code follows a superseded clause any more, its tests move to the clause that replaced it, and a superseded clause that no test covers is listed in `core/tests/spec_exempt.txt` as superseded.
+
 ## 1. Data flow
 
 - **S6** *Observed* (`README.md` "How it works, briefly"; `docs/DEVELOPMENT.md` "Where things are"). Components: one capture stage, one 10-band equalizer, one shared delay ring buffer, one delay reader plus one output renderer per enabled local output, and one FIFO feed that writes 48 kHz PCM16 into a named pipe read by the bundled AirPlay engine (OwnTone), which speaks AirPlay and AirPlay 2 to the speakers.
 - **S7** *Observed* (`Equalizer.swift:4-5`, `README.md`). Each captured block is equalized once, in place; the same equalized samples are (a) written to the ring buffer and (b) fed to the FIFO feed. Every output, local and AirPlay, therefore hears identical audio. *Required:* (a) and (b) see bit-identical input; their order within one capture callback is free.
 - **S8** *Observed* (`README.md` intro and "Using it"; `SpeakerState.swift:45-48`). The AirPlay path gets no delay from AudioSync. AirPlay speakers play about two seconds late because of the AirPlay engine's buffer; local outputs are delayed to line up with them.
 - **S9** *Observed* (`README.md`; ring suite "F readers independent (different positions)"). Each local output reads the shared buffer through its own reader, at its own delay, with its own drift correction.
-- **S10** *Observed* (`AudioSource.swift:7-8`). The engine never captures its own output: the system source excludes AudioSync's own process, otherwise the delayed local copies would be captured again and echo.
+- **S10** *Observed* (`AudioSource.swift:16-18`, `:233-252`). The engine never captures its own output: the system source excludes AudioSync's own process, otherwise the delayed local copies would be captured again and echo.
 
 ## 2. Capture
 
-- **S11** *Observed* (`AudioSource.swift:6-14`, `:67-74`). Three source kinds. `system`: every process's audio except AudioSync's own. `app(bundleID)`: every Core Audio process object whose PID is the app's PID or whose responsible PID (the process macOS holds responsible, e.g. a WebKit GPU helper's app) is the app's PID. `input(uid)`: an input device, by Core Audio device UID. *Required:* the app's process list is resolved at session start and SHOULD be refreshed when the app starts new audio processes.
-- **S12** *Observed* (`AudioSource.swift:18-40`; tests "source: …"). Persisted form: `""` = system, `"input:<uid>"` = input device, anything else = an app bundle ID; a missing value means system. Only `app` has a bundle ID.
+- **S11** *Observed* (`AudioSource.swift:15-23`, `:206-285`; tests "processes: …"). Three source kinds. `system`: every process's audio except AudioSync's own. `app(bundleID)`: every Core Audio process object whose PID is the app's PID or whose responsible PID (the process macOS holds responsible, e.g. a WebKit GPU helper's app) is the app's PID, AudioSync's own process always excepted (S10). Without macOS's responsibility lookup only the app's own process matches, and the debug log says so once. `input(uid)`: an input device, by Core Audio device UID. *Required:* the app's process list is resolved at session start and SHOULD be refreshed when the app starts new audio processes.
+- **S12** *Observed* (`AudioSource.swift:25-30`, `:43-73`, `:97-192`; tests "source: …", "source apps: …"). Persisted form: `""` = system, `"input:<uid>"` = input device, anything else = an app bundle ID; a missing value means system. Only `app` has a bundle ID. The source picker offers the running regular apps that have a bundle ID, never AudioSync itself, one entry per bundle ID (the first instance's), sorted by name case-insensitively with the bundle ID breaking ties. An app shows the first non-blank, trimmed name of: the running app's name, the installed app's Finder name without a trailing ".app", the bundle ID.
 - **S13** *Observed* (`README.md` "How it works, briefly"). System and app sources are captured with a Core Audio process tap that also mutes the tapped processes' original output, so only AudioSync's synced copies are heard. Input devices are read directly.
 - **S14** *Observed* (`README.md` "Multi-room audio on macOS"). An input device contributes its first two channels as L and R. *Required:* a one-channel input is copied to both L and R; channels beyond the second are ignored.
 - **S15** *Observed* (`AppDelegate+Engine.swift:21-40`). An input source needs the microphone permission: authorized → start; not determined → request, then start or fail; denied or restricted → the start fails with a notice.
-- **S16** *Required.* The capture stage delivers interleaved stereo float32 at Rc in blocks of any size ≥ 1 frame. Rc is the tap's or input device's nominal rate at session start. Rates from 8 000 to 384 000 Hz MUST be accepted (the suites exercise 32 000, 44 100, 48 000, 96 000 and size a ring for 192 000).
+- **S16** *Required.* The capture stage delivers interleaved stereo float32 at Rc in blocks of any size ≥ 1 frame. Rc is read at session start: the nominal rate of the device the capture IOProc runs on (the input device, or the tap's private aggregate device), else the tap's own format rate when the device's can't be read, else 48 000 Hz when neither gives a rate above 0. Rates from 8 000 to 384 000 Hz MUST be accepted (the suites exercise 32 000, 44 100, 48 000, 96 000 and size a ring for 192 000).
 - **S17** *Observed* (`CaptureCheck.swift:5-9`; `AppDelegate+Engine.swift:120-121`). A process tap delivers no frames until its source actually plays; "no frames yet" is normal. `framesCaptured` is the number of frames written to the ring in the current session and restarts at 0 with each session.
 - **S18** *Observed* (`CaptureCheck.swift:18-30`; `AppDelegate+Engine.swift:125-150`; tests "capture: …"). Capture verdict: `framesCaptured > 0` → *flowing*; otherwise, if the source is known to have been playing for at least 6 s (`playingGrace`) → *notWorking*; otherwise → *waiting*. The host checks 3 s after a start, then every 2 s until audio flows or the session ends, posting a notice only when the verdict changes; a paused or unknown source never yields *notWorking*.
 - **S19** *Observed* (`AppDelegate+Engine.swift:155-165`). "Known playing" comes only from a live Now Playing reading (Spotify, Music): for the system source any playing player counts; for an app source only that app; for an input source never.
@@ -125,10 +127,25 @@ Clause IDs are assigned in order of addition and never renumbered or reused, so 
 - **S63** *Required.* Channel mapping: L to the device's first output channel, R to the second, any further channels zero; on a one-channel device, (L + R) / 2.
 - **S64** *Observed* (`enginetest.swift:2-3`, `:43-46`, every output at gain 0 is silent). Every output frame is multiplied by the renderer's linear gain. *Required:* gain 0 yields exact zeros; a gain set before `start` applies from the first callback; a gain change applies from the next callback (a ramp of at most one callback is allowed).
 - **S65** *Required.* Any NaN or ±infinity reaching the renderer's output stage is replaced by 0 before it is handed to the device.
-- **S66** *Observed* (`enginetest.swift:56-60`, "<device>: delay 2000 / 500 / 3000 / 150 ms"). `setDelayMs` stores the new delay (converted per S3 at Rc) and requests a resync (S46); it applies on the next device callback, or, while capture is stalled and the reader has reached W, on the first callback after capture writes again (S46). On real hardware, 0.4 s after each live change the measured lag (`lagFrames / 48000` s) is within 60 ms of the target (the lag is the delay minus one device buffer, ± one 10 ms producer chunk).
+- **S66** *Superseded in part by S187*: a running output hands a new delay to its reader after a fade-out, up to 20 ms plus one device buffer later than its next callback. *Observed* (`enginetest.swift:56-60`, "<device>: delay 2000 / 500 / 3000 / 150 ms"). `setDelayMs` stores the new delay (converted per S3 at Rc) and requests a resync (S46); it applies on the next device callback, or, while capture is stalled and the reader has reached W, on the first callback after capture writes again (S46). On real hardware, 0.4 s after each live change the measured lag (`lagFrames / 48000` s) is within 60 ms of the target (the lag is the delay minus one device buffer, ± one 10 ms producer chunk).
 - **S67** *Observed* (`enginetest.swift:51-53`, "<device>: renders audio"). A started renderer renders more than 24 000 frames in its first second (the device's IO cycle runs continuously, even at gain 0 and even while the reader outputs silence).
 - **S68** *Observed* (`AppDelegate.swift:220-225`, `:326-330`; `AppDelegate+Outputs.swift:200-223`). When a device disappears or its IO stops for good, its renderer stops and the engine reports `outputLost(uid)` on the main thread. The UID stays enabled; the host's 3 s reconcile adds the output again, with its current delay and gain, once the device is listed again.
 - **S69** *Observed* (`AppDelegate+Outputs.swift:216-236`). If adding an output fails, the host removes the UID from the enabled set (so it is not retried every poll), posts one notice per failed speaker (plus an alert when the user caused it), and stops the session if nothing else is enabled.
+
+### Fades at stream boundaries
+
+S182 to S191 take the click out of starts, stops, source changes and re-timings. A short click is heard on every source change and every start and stop on the Mac's local outputs, Bluetooth included: an output plays the first frame its reader copies at full level, whatever the source plays at that instant (S45); a stop halts every output in mid-waveform (S115); a source change does both (S141); and a delay change joins two unrelated points of the waveform or cuts to silence (S47, S48). Each of these boundaries gets a short fade. These clauses are design requirements: until the Rust core, the Mac app and the Windows app follow them, the code behaves as the clauses they supersede in part say (S66, S115). The Windows app already fades an output out before it stops it, but over whatever one device callback holds, which can be a few frames; S185 replaces that with a fixed length.
+
+- **S182** *Required.* Fade shape and length. A fade is a gain w applied alike to every channel of a frame, over F = round(0.020 × R) frames at the rate R of the stream it is applied to (960 at 48 kHz, 882 at 44.1 kHz). For frame i = 0 … F − 1 of a fade, with x = (i + 1) / F: a fade-in has w = ½ − ½·cos(π·x), and w = 1 exactly at i = F − 1; a fade-out has w = ½ + ½·cos(π·x), and w = 0 exactly at i = F − 1. A stream is *open* (w = 1), *fading in*, *fading out* or *closed* (w = 0: exact zeros, whatever the input, NaN and ±infinity included). A fade-out requested while fading in, or a fade-in requested while fading out, continues from the frame of the other curve whose w is closest to the current one, so w never jumps; a request for the state a stream is already in or heading to changes nothing. Reasons: 20 ms is long enough that the ramp itself carries next to no energy above about 50 Hz (1 / 20 ms), so it isn't heard as a click even on bass-heavy material, and short enough to sound like a clean edge rather than a fade, while a stop waits only about that long (S186). A raised cosine has zero slope at both ends, so it has no corner where it meets silence or full level; its largest step between frames is π / (2F) of the signal (0.16 % at 48 kHz, against 0.10 % for a linear ramp of the same length, which has corners at both ends); and starting it a few frames early is inaudible: 16 frames early, the audio enters at 0.08 % (−62 dB) where a linear ramp would already be at 1.8 % (−35 dB), which S184 relies on.
+- **S183** *Required.* Where a local output fades. Each local output's renderer applies its fade at the device rate, after rate conversion and channel mapping (S62, S63), as a factor of its own after the volume gain (S64, S71): the device gets the sample × the gain × w, so the last frame of a fade-out and every frame after it are exact zeros whatever the gain or the converter left. F counts device frames (S182 with R the device's rate). The fade never changes the gain or a stored volume; a gain change during a fade changes only the gain factor, with its own ramp (S64) as before, and an output at gain 0 stays exact zeros. NaN and ±infinity are replaced by 0 before the fade multiplies (S65), so w = 0 never turns them into NaN.
+- **S184** *Required.* Fade-in when audio starts. A renderer starts closed. A frame its reader fills with silence closes the stream at once (the frame is zero either way, so w may jump there; a fade-out under way ends there as if its last frame had been rendered), and the first frame the reader copies while the stream is closed starts a fade-in, with one exception. While a stop, a delay change or a held correction waits (S185, S187, S188), the stream stays closed after its fade-out until the read that applies the change: every frame is rendered as an exact zero, copied frames included (also those after the fade-out's last frame in the same block), and none of them starts a fade-in. For a delay change or a correction, the first frame copied by the read that applies it (or by the next read, should no correction be due by then) starts the fade-in; after a stop the stream stays closed until the output stops. Without the exception the stream would fade in on the old timeline and jump when the change lands, mid-fade-in: about 1 % of the signal with 512-frame buffers, up to the full level with 4096-frame buffers, against the 0.16 % S191 allows. So an output fades in on the first audio of a session (S45), on the first audio of an output switched on or plugged in during a session (S117, S137, S161), whether its first read primes at once or after silent reads, after the masked silence of a delay increase or a step back (S44 step 3, S47, S52), and after a dry or starved read (S53, S54). For this, each read reports, besides filling its block, how many frames at the block's start it filled with silence and how many it then copied (S44 step 3 orders a block as silence, then copies, then silence; a copy the post-copy check discards, S40, counts as silence). Without rate conversion the fade starts exactly at the first copied frame; with conversion it starts at the device frame that the first copied frame's position converts to, ignoring the converter's own delay, which may start it a few frames early (inaudible, S182). Reason: at each of these moments the output jumps from silence to whatever the source plays at that instant, up to full scale; this is the click heard on every start and source change, and on a speaker switched on mid-session. A source that starts from silence by itself loses nothing audible, and a note that begins exactly then loses only 20 ms of its attack.
+- **S185** *Required.* Fade-out before an output stops. When the host stops an output whose device still runs (a speaker switched off, S117, S161; every output at a session stop, S186), the renderer fades out over its next F device frames, starting with the first callback that begins after the request, and renders exact zeros after them. It keeps rendering exact zeros after the fade-out and counts as *faded* only once the fade-out's last frame has been played; only then is its device's IO stopped (`stop`, S61). A device plays a frame well after the callback that rendered it: Core Audio renders about one buffer plus the device's safety offset ahead of the output, and WASAPI keeps up to a whole endpoint buffer queued, so stopping the IO as soon as the fade has been rendered, or one buffer later, drops the end of the fade and cuts the sound mid-waveform after all. On the Mac, the renderer publishes the host time at which the fade's last frame is output: its callback's timestamp (the output time of the buffer's first frame) plus that frame's offset in the buffer at the device rate, plain arithmetic on the audio thread. The control thread adds the device's and its output stream's reported latency (`kAudioDevicePropertyLatency`, `kAudioStreamPropertyLatency`, Apple's Core Audio documentation) and counts the output as faded once the host clock passes that time. On Windows, the render thread, whose loop reads the endpoint's padding (`GetCurrentPadding`) anyway, counts the frames it wrote after the fade's last frame; the output is faded once the padding is no larger than that count (only zeros are still queued) and the stream latency the endpoint reports (`IAudioClient::GetStreamLatency`) has passed since. An output whose gain has been 0 for longer than that latency MAY count as faded at once, since nothing it still has queued is audible. An output whose device is gone or whose IO stopped by itself (S68) is stopped without a fade, since nothing can be rendered to it. This replaces the Windows app's fade over one device callback, whose length depended on how many frames that callback held.
+- **S186** *Required.* Session stop and source change. `stop()` (S115) first asks every running renderer to fade out (S185) and the AirPlay inputs to fade out (S189), all at once, so any number of outputs costs one fade. It then waits until every renderer is faded, with capture still running: an output at a short hold-back fades out on frames that are still being captured (S42), and with capture stopped first its reader would run dry and cut (S53). Then it goes on as S115 says: capture stops, every renderer is stopped and removed, and the FIFO feed stops. Each renderer is faded within up to one device buffer (until its first faded callback begins), then F, then its output latency (S185: on the Mac about one buffer plus the safety offset plus the device's and stream's latency; on Windows the queued endpoint buffer plus the stream latency) of the request: about 45 ms for built-in speakers with 512-frame buffers at 48 kHz (10.7 ms until the first faded callback, 20 ms of fade, then 10.7 ms of buffer and a few ms of safety offset and latency), and up to about 350 ms for a Bluetooth speaker, which sounds some 150 to 300 ms late (S172). The host waits for the slowest renderer but never more than 500 ms in all, which covers that Bluetooth range with room for larger buffers; an output that isn't faded by then (its IO stalled, or its latency is beyond the cap) is stopped anyway. A stop on a Bluetooth speaker thus takes about as long as the speaker's own lag, during which it is still playing the end of the audio anyway. The wait happens on the control thread, never on an audio thread or the FIFO writer (S190). Removing outputs while the session goes on (S117, S161) asks every output being removed to fade out at once and then waits once, the same way, for those outputs. A source change (S141, S163) is a stop followed by a start, so every output fades out on the old source and fades in on the new one at its first audio (S184), with silence between them for as long as the rebuild and each output's hold-back take. There is no crossfade: the two sources are unrelated audio, and a crossfade would need both captures running at once, possibly at different rates. A stop after an interruption (S20, S21) and the stop at quit (S110, within its 5 s budget) run the same way; when capture has already stopped delivering, readers at a short hold-back are dry and their fades run over silence. This supersedes S115 in part: the outputs and the AirPlay inputs fade out before capture stops.
+- **S187** *Required.* Delay and hold-back changes. A new delay for a running output (S66, and every re-timing of S177, which happens whenever an output joins or leaves, an offset or the reference changes, the AirPlay condition flips or L changes, S178) is applied between a fade-out and a fade-in. The renderer fades out at its current delay, keeping its device running, and only after the fade-out's last frame stores the new delay and asks its reader to resync (S46), so the reader still lands exactly on the new delay (`lagFrames = De − N`, S46, S56). The audio after the resync fades in (S184): after an increase once the masked silence of S47 has passed (still exactly Δ frames), after a decrease (S48) right after the skip. A change therefore applies up to F plus one device buffer later than S66 says, and a newer change that arrives during the fade-out replaces the waiting one without restarting the fade. A change that arrives while the renderer is closed (no audio yet, or between a fade-out and the next fade-in) goes to the reader at once, with no fade. This supersedes S66 in part: the change reaches the reader after the fade-out, not on the next callback. Reason: a skip forward joins two unrelated points of the waveform and an increase cuts to silence, both a click on every re-timing; under S177 that includes the other outputs whenever a speaker that sets the base is switched on or off.
+- **S188** *Required.* Corrections the reader makes by itself. A renderer reads with drift corrections *held*: a read that would make a drift correction (the *Drift* case of S44 step 2: a skip forward, S51, or a step back, S52, S53) leaves P alone, emits its block contiguously as if the error were inside the dead band, and reports that a correction is due. The renderer then fades out from the start of this block, over it and the next ones, still holding, and its first read after the fade-out's last frame is made without the hold, so the correction is made then, against that read's W and exactly as S51 and S52 say; the audio after it fades in (S184). Holding changes only the Drift case: prime, resync and dry reads (S44 step 2) and the masking of step 3 stay as they are, and the counters (S158) count a correction when it is made. A held correction comes up to F plus one block later, during which the error can grow by as much again (a step back while the writer has stopped moves e by N per read). So for a renderer, with F_c = round(0.020 × Rc), the worst deviation of S57 grows from T + N to T + 2N + F_c (3664 frames with 512-frame blocks at 48 kHz), and in a writer stall its reader never reaches W (S53) only when De > T + 2N + F_c, where S53 says T + N. The ring buffer suite's reader checks read without holding and are unchanged. Two edges stay unfaded: an overrun (S55; the frames a fade-out would play are already overwritten) and the start of an underrun (S53; the reader can't know that the writer stopped before it reaches W, and predicting it would cost every output a block of latency). Both are rare in normal play (a source that pauses usually fades out by itself), and the audio after them fades in (S184).
+- **S189** *Required.* The AirPlay leg. Both AirPlay senders' inputs fade too: the FIFO feed (S84) for the bundled engine, and the native sender's input, which takes the same blocks after the equalizer (AirPlay spec P111, P143). Each applies the fade itself to the frames it is given, after the split of S7, so the ring and the AirPlay leg still get bit-identical input. Fade-in: in the FIFO writer over the first F frames it writes after each open of the pipe (S89, S169), which covers every session start (the writer opens the pipe after each `start()`) and every engine restart (a new stream that would otherwise begin mid-waveform); in the native input over the first F frames after each rate set at a capture build (P143). Fade-out: in `feed` and in the native input, over the F frames given after a stop request (S186), then zeros until capture stops. A stop request closes `feed` only until the next session: its `setInputRate` and `start()` (S94, S88) open it again, so the new session's audio passes, faded in by the writer after its open; the native input likewise opens again at its next rate set (P143) and fades in from there. F counts frames at the rate where the fade is applied: 48 000 Hz in the FIFO writer (S83, rounding as S86), Rc in `feed` and in the native input. Nothing in the bundled engine's documented interface or in the AirPlay specification promises a ramp at the start of a stream, so AudioSync doesn't rely on one; a fade costs one multiply per sample. What the speakers do when the stream is cut is not AudioSync's to shape: a session stop stops the engine's player at once (S99) and the native sender flushes or tears down (P100, P129, P143), which drops the audio the receivers hold (about L), so the faded end of the stream is heard only when the engine plays the tail, for example while a switch-on holds the write queue (S101). Whether a receiver clicks when it is stopped or flushed mid-stream is a check on real receivers (test map). Holding a stop back by L so that the faded tail plays would make every stop and source change about two seconds slower, and is not done. A backlog skip (S90) is not faded either: the frames before it are already in the pipe, and a fade-in after it alone would not remove the step.
+- **S190** *Required.* Real time. A fade's state (per renderer, per AirPlay input, and in the FIFO writer) is allocated before the audio threads start (S128); w is computed per frame, or read from a table filled before the audio thread starts, with no allocation, lock, system call or logging (S126, S129), in O(N) per callback (S127). The control thread's requests are atomics that the audio thread takes at the start of a callback (a fade-out requested; a delay change waiting for its fade-out, its value stored before its flag as S133 says for a resync); a renderer publishes the output time of its fade's last frame (Mac) or that it is faded (Windows, S185) with a release store that the control thread reads with acquire. The only wait is the control thread's in S186, bounded at 500 ms.
+- **S191** *Required.* What "no click" means, as the tests check it. With a constant input of amplitude A (|A| ≤ 1) at gain g on a stream whose fade length is F: (a) frame i of a fade is A × g × w(i) with S182's w, within 1e−6 (within one 16-bit step on the pipe); (b) across every boundary of S184 to S189 other than the unfaded edges they name (a lost device, an output stopped at the 500 ms cap, an overrun, the start of an underrun, a backlog skip, a receiver stopped or flushed), from the last frame before a fade-out to the first frame after the next fade-in, silence between them included, no two consecutive frames differ by more than A × g × π / (2F) plus that tolerance, where a hard edge differs by up to A × g; (c) every frame after a fade-out's last one is exactly 0 until the next fade-in starts; (d) with a sine of amplitude A instead, at any frequency, no step between consecutive frames across those boundaries exceeds the sine's own largest step plus A × g × π / (2F). For timing: (e) `stop()` returns within S186's bound (up to one buffer, F and the output latency of the slowest output, never more than 500 ms), and no output's IO stops before its fade-out's last frame has played unless the cap passed, which a simulated device that plays each buffer one buffer plus a safety offset after its callback must show (a check that only looks at rendered frames can't); (f) a delay change lands exactly on the new delay (S46) once its fade-out is done.
 
 ## 7. Volume
 
@@ -148,11 +165,76 @@ Clause IDs are assigned in order of addition and never renumbered or reused, so 
 
 ## 8. AirPlay sync rule (local delay policy)
 
-- **S77** *Observed* (`AppDelegate.swift:121-122`, `:200-203`; `AppDelegate+Outputs.swift:100-106`; `README.md` "Using it"). Each local output has a configured delay in ms, range 0…20 000, default 2000 (seeded from a legacy single delay when present, clamped to the range). Non-finite input is ignored; other input is clamped.
-- **S78** *Observed* (`SpeakerState.swift:49-52`; tests "delay: AirPlay chosen → configured delay", "delay: no AirPlay → plays at once", "delay: zero stays zero"). Effective delay = the configured delay while an AirPlay speaker is chosen, otherwise 0. The configured value is kept either way.
+- **S77** *Superseded by S175 and S178* (local delay model, below). *Observed* (`AppDelegate.swift:121-122`, `:200-203`; `AppDelegate+Outputs.swift:100-106`; `README.md` "Using it"). Each local output has a configured delay in ms, range 0…20 000, default 2000 (seeded from a legacy single delay when present, clamped to the range). Non-finite input is ignored; other input is clamped.
+- **S78** *Superseded by S176.* *Observed* (`SpeakerState.swift:49-52`; tests "delay: AirPlay chosen → configured delay", "delay: no AirPlay → plays at once", "delay: zero stays zero"). Effective delay = the configured delay while an AirPlay speaker is chosen, otherwise 0. The configured value is kept either way.
 - **S79** *Observed* (`SpeakerState.swift:54-58`; tests "delay: a chosen speaker not listed today doesn't count", "delay: chosen and listed counts", "delay: listed but not chosen doesn't count"). "An AirPlay speaker is chosen" means at least one AirPlay output ID is both enabled by the user and present in the AirPlay engine's latest output list (this Mac's own receiver is never in that list, S100).
-- **S80** *Observed* (`AppDelegate+Outputs.swift:110-136`; `AppDelegate.swift:112-114`, `:126-130`). Whenever that condition flips (the enabled set or the listed set changed), every running local output gets its new effective delay live through S66: a flip to 0 skips forward (S48), a flip back inserts silence (S47).
+- **S80** *Superseded by S177.* *Observed* (`AppDelegate+Outputs.swift:110-136`; `AppDelegate.swift:112-114`, `:126-130`). Whenever that condition flips (the enabled set or the listed set changed), every running local output gets its new effective delay live through S66: a flip to 0 skips forward (S48), a flip back inserts silence (S47).
 - **S81** *Observed* (`AppDelegate+AirPlay.swift:24-29`). A poll that finds the AirPlay engine unreachable leaves the listed set unchanged, so an engine restart doesn't flap local delays.
+
+### Local delay model (offsets relative to a reference output)
+
+S172 to S181 replace the rule that local outputs play at once unless an AirPlay speaker is chosen (S77, S78, S80). Under that rule the delay fields did nothing with only local outputs, although a Bluetooth speaker sounds some 150 to 300 ms behind a wired one, and every row, the built-in speakers included, carried an absolute delay of about two seconds that only meant something next to AirPlay. In this model the built-in speakers are the reference and have no delay setting; every other local output has an offset relative to them that always applies; the host turns the offsets of the outputs taking part into hold-backs and adds the AirPlay latency while an AirPlay speaker is chosen. These clauses are design requirements: until the Rust core, the Mac app and the Windows app follow them, the code behaves as the superseded clauses say. S79 (what "an AirPlay speaker is chosen" means) and S81 still apply.
+
+- **S172** *Required.* Terms used by S173 to S181:
+  - A *local output* is an output the host renders to itself (S60), keyed by device UID on the Mac and by endpoint ID on Windows.
+  - The *reference* R is at most one local output, chosen by S173 on the Mac and by S174 on Windows. It defines time 0 and has no delay setting of its own.
+  - The *offset* o(x) of every other local output x is how much longer, in ms, x is held back than the reference: positive for an output that sounds early next to the reference (or that the user wants later), negative for one that sounds late (a Bluetooth speaker is typically 150 to 300 ms late, so about −150 to −300). The reference's offset is 0 by definition, whatever value may be stored for that output.
+  - The outputs *taking part*, T, are the local outputs the user switched on whose devices are listed now (enabled ∩ available, S161), the reference included when it is one of them. An enabled output whose device is missing (unplugged, a Bluetooth device out of range) takes part again once its device is listed.
+  - The *hold-back* h(x) is the delay in ms the host gives the renderer of x (`addOutput` and `setDelay`, S61, S112), what S78, S117, S137 and S144 call the effective or configured delay a renderer gets. Hold-backs are computed by S176; they are never stored or shown.
+- **S173** *Required.* Mac reference. The candidates are the listed output devices (S171) whose transport type is built-in (`kAudioDeviceTransportTypeBuiltIn`, Apple's Core Audio documentation). The reference is the first candidate in Core Audio order whose first output stream reports the speaker terminal type (`kAudioStreamTerminalTypeSpeaker` for `kAudioStreamPropertyTerminalType`); when no candidate reports it (the property can't be read, or reports another type, as an Intel Mac's single built-in device may while its headphone jack is in use), the first candidate in Core Audio order; with no candidate, there is no reference. So on an Apple silicon MacBook the built-in speakers stay the reference while the built-in headphone output, also of transport type built-in, is listed beside them, and a Mac mini, iMac, Mac Studio or Mac Pro uses its own built-in speaker. A built-in output that isn't the reference (that headphone output) has an offset like any other output. The choice is made afresh from every device list and doesn't depend on whether the reference is switched on: switched off, it is still the reference (its row still has no delay field, S181, and the other offsets keep their meaning), it just doesn't take part (S176). With no reference, every local output has an offset, and the offsets are relative to each other only (S176 needs nothing more).
+- **S174** *Required.* Windows reference. The reference is the listed output of kind BuiltIn, the PC's own audio hardware (an endpoint whose form factor is Speakers or LineLevel and whose device enumerator is not USB, Bluetooth or ROOT, as `output_kind` in `windows/src/audio/outputs.rs` decides), with the smallest endpoint ID in byte order (endpoint IDs are ASCII); with no BuiltIn output listed, there is no reference, as in S173. Reasons: BuiltIn is the Windows counterpart of the Mac's built-in speakers, the onboard codec with the shortest and steadiest output latency (a laptop's speakers, a desktop's line out); headphones on the PC's own jack are of kind Headphones and have an offset like any other output, usually 0; endpoint IDs stay the same across restarts and reboots, so on a PC with more than one BuiltIn endpoint the reference doesn't move between launches; Windows' default output is not used, because the user changes it freely and every offset would change meaning with it. Switched off, the reference stays the reference, as in S173.
+- **S175** *Required.* Offsets. An offset is a finite number of ms from −2000 to +20 000; an output that never had one set has offset 0. Input that isn't finite is ignored and other input is clamped to that range (for local outputs this replaces the 0 to 20 000 ms of S77 and S124). Offsets are stored per output (device UID or endpoint ID) and kept across launches whether the output is connected, switched on or the reference at the moment; a stored offset of the reference is kept but not used while it is the reference (S172). The window edits whole ms (S181). The lower bound covers Bluetooth and other wireless outputs that sound up to two seconds late; the upper bound is S77's maximum.
+- **S176** *Required.* Hold-backs. With o′(x) = 0 for the reference and o(x) for every other output, the base is
+  `m = min({ o′(y) : y ∈ T } ∪ { −L, only while an AirPlay speaker is chosen (S79) })`,
+  and every x in T gets `h(x) = min(o′(x) − m, 20 000)` ms, with L from S178. No hold-back is negative. Without AirPlay, the output with the smallest offset among those taking part plays at once (one device buffer late, S42) and the others wait for it by the difference, so adding the same number to every offset changes nothing, and a lone output plays at once whatever its offset, since there is nothing to line it up with. With an AirPlay speaker chosen, in the usual case where no offset in T is below −L (L is about two seconds, a Bluetooth offset a few hundred ms), m = −L and h(x) = L + o′(x): the reference sounds when the AirPlay speakers are taken to sound (S178) and every other output by its offset. An output taking part whose offset is below −L sounds later than the AirPlay speakers themselves; it then sets m, the local outputs still line up with each other, and the AirPlay speakers lead them by −m − L ms, because AudioSync never holds the AirPlay path back (S8); under the native sender, raising every AirPlay speaker's d_s by that much, where the window offers d_s, makes up for it. The cap at 20 000 ms (S77's maximum, which the ring covers, S36) only bites when a large offset meets a large L or a negative base; that output then plays early by the excess. Examples with the built-in speakers R, a USB speaker at +150, a Bluetooth speaker at −250 and L = 2000 (hold-backs in ms):
+
+  | Taking part | AirPlay chosen | m | h(R) | h(USB) | h(Bluetooth) |
+  |---|---|---|---|---|---|
+  | R, USB | no | 0 | 0 | 150 | – |
+  | R, Bluetooth | no | −250 | 250 | – | 0 |
+  | R, USB, Bluetooth | no | −250 | 250 | 400 | 0 |
+  | USB, Bluetooth (R switched off) | no | −250 | – | 400 | 0 |
+  | Bluetooth alone | no | −250 | – | – | 0 |
+  | R, USB, Bluetooth | yes | −2000 | 2000 | 2150 | 1750 |
+  | Bluetooth alone | yes | −2000 | – | – | 1750 |
+
+  The first row is the reported bug: under S78, with no AirPlay speaker chosen, the USB speaker plays at 0 like the built-in speakers and its delay does nothing.
+- **S177** *Required.* Re-timing. The host recomputes every hold-back whenever T changes (a speaker switched on or off, a device listed again or lost, S161, S68), the offset of an output taking part changes, the reference changes (S173, S174), the AirPlay condition flips (S79), or L changes (S178). Each running renderer whose hold-back changed gets the new one through `setDelay` (S66): an increase inserts exactly that much silence (S47), a decrease skips forward (S48), and nothing is ever played twice (S49). A renderer whose hold-back is unchanged gets no call, so it gets no resync. An output being attached starts at its current hold-back (S117, S45). When m changes, the hold-back of every output already taking part whose own offset didn't change moves by that same change: a Bluetooth speaker at −250 switched on next to the built-in speakers and a USB speaker at +150 makes those two wait 250 ms longer (250 ms of silence each, then in step with it), and switched off again, they skip 250 ms forward; editing that Bluetooth speaker's offset to −300 leaves its own hold-back at 0 and moves the other two 50 ms later. A poll that finds the AirPlay engine unreachable leaves the listed set as it was (S81), so it re-times nothing. This replaces S80, where only the AirPlay flip re-timed outputs and every hold-back went to 0 or came back from it.
+- **S178** *Required.* The AirPlay latency L of S176, the time from a frame's arrival to the moment the AirPlay speakers are taken to sound it, depends on the AirPlay sender and only counts while an AirPlay speaker is chosen. Each sender has one stored host setting for it, kept across launches, which the window shows as the *AirPlay delay* (S181); the user tunes it to line the reference up with the AirPlay speakers. Input that isn't finite is ignored and other input is clamped.
+  - *Bundled engine (OwnTone, the Mac's default).* The engine reports no latency, so the setting is absolute: L is the stored AirPlay delay, 0 to 20 000 ms, 2000 by default (S77's default; `README.md`: AirPlay speakers play about two seconds late). It takes over the role the reference's own delay had under S77 (S179). In the usual case h(x) = L + o′(x), which is S78's "configured delay" with configured = L + offset.
+  - *Native sender* (AirPlay spec P98, P113, P114). The sender reports its base latency L_s, counted on the sender clock from c(n) as P114 says (before its first report, the configured Lf, P98, 1750 ms by default), and the setting is an adjustment A on top of it: −2000 to +20 000 ms, 0 by default, with `L = clamp(L_s + A, 0, 20 000)`. A is relative, so it stays right when L_s changes; no absolute latency is ever stored for this sender, since it would go stale with the next Lf change or timeline restart. A covers receivers that sound later (or earlier) than L_s says. This replaces P114's L + d_local with d_local = clamp(configured − L, 0, 3000): the trim is now the offset, which may be negative down to −L and isn't capped at 3000 ms (only h is capped, S176), and P114's one-time migration is replaced by S179 and S180. An AirPlay speaker's own delay d_s (P99) is unaffected and still moves that speaker alone.
+  - The two settings are separate. The Mac, which can use either sender, keeps both, and switching senders switches settings; neither is ever converted into the other.
+  - A change of L (the user edits the AirPlay delay; the native sender reports a new L_s after an Lf change or a timeline restart, P98, P143; the user switches between the senders) re-times every output taking part (S177).
+- **S179** *Required.* Mac migration, once. Before this model the Mac stored an absolute delay per device UID (S77, the `localDelayMsByUID` defaults key) that applied only while an AirPlay speaker was chosen, and played outputs without one at D0: the legacy single delay (the `delayMs` key) clamped to 0 to 20 000, else 2000. The first time a build with this model has both its stored values and a device list, it takes R from S173 and D_R, the reference's stored delay, or D0 when it has none or there is no reference, and stores:
+  - the bundled engine's AirPlay delay (S178), L_new = D_R when D_R ≥ 1000 ms, a value tuned against AirPlay; else 2000 ms, since a smaller value can only have been meant to line local outputs up with each other;
+  - for every other UID x with a stored delay D_x: o(x) = clamp(D_x − D_R, −2000, 20 000);
+  - for every other UID without a stored delay that is switched on (the `enabledLocalUIDs` key) or in the device list of that moment (S171): o(x) = clamp(D0 − L_new, −2000, 20 000) when D0 ≥ 1000 ms, which keeps its D0 sound with AirPlay (with D_R ≥ 1000 that is D0 − D_R), and o(x) = clamp(D0 − D_R, −2000, 20 000) when D0 is below 1000 ms, which keeps its place relative to the reference (so untuned outputs that all played at D0 keep playing together, also when the reference is one of them); nothing for any other UID (offset 0);
+  - the native sender's adjustment A (S178) = 0: L_s isn't known at this moment, and no stored delay was ever read for that sender except through P114's clamp;
+  - nothing for R: its old delay became the AirPlay delay, or is dropped when below 1000 ms.
+
+  The new values go under new keys, whose presence also marks the migration as done; the old keys are left as they are, so an older build still finds its own values and a newer one never reads them again. Effect, with the bundled engine: with an AirPlay speaker chosen and D_R ≥ 1000, every output with a stored delay, and every switched-on or listed output that played at D0, plays exactly as before as long as its offset needed no clamping (h = D_R + D_x − D_R = D_x, with D_x = D0 for one without a stored delay, S176); without AirPlay, outputs now line up by their offsets where they all used to play at once. Under the native sender (the Mac's hidden option) the offsets apply with the reported L_s (S178) instead of P114's clamp. Worked examples, in ms, hold-backs listed in the order of the first column:
+
+  | Stored before | D0 | Stored after | h with AirPlay chosen | h without AirPlay, all on |
+  |---|---|---|---|---|
+  | R 2000, USB 2100, Bluetooth 1800 | 2000 | AirPlay delay 2000; USB +100, Bluetooth −200 | 2000, 2100, 1800 (as before) | 200, 300, 0 (before: 0, 0, 0) |
+  | R none, HDMI TV 2400 | 2000 | AirPlay delay 2000; TV +400 | 2000, 2400 (as before) | 0, 400 |
+  | R 2300, USB none (listed) | 2000 | AirPlay delay 2300; USB −300 | 2300, 2000 (as before) | 300, 0 |
+  | R none, USB none (listed) | 0 (legacy `delayMs` 0) | AirPlay delay 2000; USB 0 | 2000, 2000 (before: 0, 0, about two seconds ahead of AirPlay) | 0, 0 |
+  | R 2500, Bluetooth 2250 | 2000 | AirPlay delay 2500; Bluetooth −250 | 2500, 2250 (as before) | 250, 0 |
+  | R 250, Bluetooth 0, USB 400 | 2000 | AirPlay delay 2000; Bluetooth −250, USB +150 | 2000, 1750, 2150 (before: 250, 0, 400, about two seconds ahead of AirPlay) | 250, 0, 400 |
+  | R 2500, USB 0 | 2000 | AirPlay delay 2500; USB −2000 (clamped from −2500) | 2500, 500 (before: 2500, 0) | 2000, 0 |
+- **S180** *Required.* Windows migration, once. Before this model the Windows app stored per output a trim from 0 to 20 000 ms (`delay_ms` in its settings file, 0 by default) that applied with or without AirPlay, as L_s + min(trim, 3000) while an AirPlay speaker was chosen (L_s as in S178), and per AirPlay speaker its own delay d_s from 0 to 3000 ms (P99). When it loads a settings file of an older format version, the first time it has both that file and an output list, it takes R from S174 and t_R, the reference's stored trim (0 when it has none or there is no reference), and stores:
+  - for every other output x with a stored trim t_x: o(x) = clamp(t_x − t_R, −2000, 20 000);
+  - the native sender's adjustment A (S178) = t_R, so the reference keeps sounding t_R after L_s;
+  - nothing for R; every AirPlay speaker's own delay d_s stays as it is.
+
+  It then writes the file in the new format version (an older build keeps a newer file aside, as it does today). Without AirPlay the outputs keep their alignment (S176 subtracts the smallest offset taking part, so only a delay common to all of them goes). With AirPlay every local output plays exactly as before, h = L_s + t_R + t_x − t_R = L_s + t_x, as long as its old trim was at most 3000 ms (the old cap) and its offset needed no clamping, and the AirPlay speakers keep L_s + d_s, so a user who lined a late AirPlay speaker up by giving R a trim keeps that alignment, now in the AirPlay delay. Where t_R is 0, the default, every offset equals the old trim and A is 0. Example: R 250, Bluetooth 0, TV 120 and an AirPlay speaker with d_s 0 become Bluetooth −250, TV −130 and A = 250; without AirPlay, all on, the hold-backs stay 250, 0 and 120; with AirPlay and L_s = 1750, L = 2000 and they are 2000, 1750 and 1870 with the AirPlay speaker at L_s + 0 = 1750, all as before, and the window shows an AirPlay delay of 2000 (S181).
+- **S181** *Required.* What the windows show (UI facts; the wording goes through `AppText` on the Mac and the Windows app's own strings):
+  - The reference's row has no delay field, whether the reference is on or off.
+  - Every other local output's row shows its offset with its sign: "+150 ms", "−250 ms", and "0 ms" for zero. The field takes whole ms with an optional leading "+" or "−" (a hyphen-minus counts as "−"), clamped to S175's range; other input is ignored and the field shows the stored value again.
+  - One short hint beside the delay fields says what they are relative to, naming the reference (the built-in speakers on the Mac, the reference's name on Windows), and that a negative value is for a speaker that sounds late, such as Bluetooth. With no reference, it says that the speaker with the lowest value plays first and the others wait by the difference.
+  - The AirPlay delay (S178) is one field in the AirPlay part of the window, not on any local row, with a hint that the local speakers wait that long for the AirPlay speakers. With the bundled engine it shows and edits the stored value. With the native sender it shows L = clamp(L_s + A, 0, 20 000) in whole ms and follows L_s when that changes; entering v stores A = clamp(v − L_s, −2000, 20 000) with the L_s of that moment, so the field then shows v (unless clamped). An AirPlay speaker's own delay d_s (P99), where a window offers it (the Windows app doesn't today), stays a plain 0 to 3000 ms value.
+  - Hold-backs (S176) are not shown.
 
 ## 9. FIFO feed (PCM into the AirPlay engine)
 
@@ -198,7 +280,7 @@ Clause IDs are assigned in order of addition and never renumbered or reused, so 
 - **S112** *Observed* (calls in `AppDelegate+Engine.swift`, `AppDelegate+Outputs.swift`, `AppDelegate.swift`). Engine interface: `start(source)` (throws), `stop()`, `running`, `framesCaptured`, `addOutput(uid, deviceID, delayMs, gain)` (throws), `removeOutput(uid)`, `hasOutput(uid)`, `activeOutputUIDs`, `setGain(uid, g)`, `setDelay(uid, ms)`, equalizer settings update, and two callbacks: `outputLost(uid)` and `interrupted(formatChanged | sourceLost(error))`.
 - **S113** *Required; Observed* usage. Every control call is made on the main thread, and both callbacks are delivered on the main thread.
 - **S114** *Required.* `start(source)`, called only while stopped (the host stops a running engine first, `AppDelegate+Engine.swift:41`): reset the ring (S39), determine Rc, set the equalizer rate (S30), set the FIFO input rate and start it (S94, S88), then start capture. On any failure it throws and leaves everything stopped and released.
-- **S115** *Required; Observed* in part (`AppDelegate+Engine.swift:55`, outputs are added again after every start). `stop()` stops capture (no capture callback runs after it returns), stops and removes every renderer, stops the FIFO feed, and sets `running` false. It is idempotent.
+- **S115** *Superseded in part by S186*: before capture stops, every running output and the AirPlay inputs fade out, and the outputs' IO stops only once their fades have played. *Required; Observed* in part (`AppDelegate+Engine.swift:55`, outputs are added again after every start). `stop()` stops capture (no capture callback runs after it returns), stops and removes every renderer, stops the FIFO feed, and sets `running` false. It is idempotent.
 - **S116** *Observed* (`AppDelegate+Engine.swift:16-20`, `:42-57`; `AirPlayReconcile.swift:387-393`, `:474-483`). The host starts a session only with at least one speaker enabled; after a successful start it applies the AirPlay selection (each enabled, listed speaker switched on at its own volume times the master, S105; never the engine's master volume), adds the local outputs, ensures pipe playback (S99) and starts the capture check (S18).
 - **S117** *Observed* (`AppDelegate+Outputs.swift:197-237`). Outputs are added only while running. Output sync is idempotent: add every enabled, present UID that has no renderer (with its effective delay and gain); remove every renderer whose UID is no longer enabled; an enabled UID that isn't present waits for a later sync.
 - **S161** *Observed* (`SpeakerState.swift:81-101`; `AppDelegate+Outputs.swift:200-223`; tests "EC1 unplug: …", "EC1 replug: …", "EC1 switch off: …", "EC2 Bluetooth: …", "EC10 many speakers: eight local speakers are attached together"). The output sync of S117 is a plan computed from three sets of device UIDs, *enabled*, *active* (has a renderer) and *available* (listed now): attach `enabled ∩ available − active` and detach `active − enabled`, each sorted by UID, with no limit on how many. A renderer whose UID is still enabled is never detached by a sync, whether or not its device is listed (a lost device's renderer is gone already, S68). An enabled speaker whose device is missing (unplugged, or a Bluetooth headset out of range) stays enabled and is attached by the first sync that finds its device listed again, while the other speakers keep playing.
@@ -212,7 +294,7 @@ Clause IDs are assigned in order of addition and never renumbered or reused, so 
 ## 12. Non-finite values
 
 - **S123** *Observed* ("eq: recovers from a NaN sample (silence stays silent)", "fifo: NaN/±inf samples do not crash"). NaN and ±infinity can arrive from capture. No stage may trap, crash or abort on them: the enabled equalizer zeroes them (S29); a disabled equalizer passes them into the ring unchanged; the renderer zeroes them at its output (S65); the FIFO conversion maps them (S86).
-- **S124** *Observed* (`AppDelegate+Outputs.swift:51-106`). Host-side numeric inputs are sanitized before reaching the engine: non-finite delays are ignored, delays are clamped to 0…20 000 ms, volumes to 0…100.
+- **S124** *Superseded in part by S175 and S178*: a local output's offset ranges from −2000 to +20 000 ms, the bundled engine's AirPlay delay from 0 to 20 000 ms and the native sender's adjustment from −2000 to +20 000 ms. *Observed* (`AppDelegate+Outputs.swift:51-106`). Host-side numeric inputs are sanitized before reaching the engine: non-finite delays are ignored, delays are clamped to 0…20 000 ms, volumes to 0…100.
 - **S125** *Required.* A non-finite value never persists in any stateful stage: once finite input resumes, every output is finite within one block (the resampler of S85 resets its history if it sees a non-finite sample).
 
 ## 13. Real-time constraints
@@ -263,13 +345,13 @@ Clause IDs are assigned in order of addition and never renumbered or reused, so 
 ## 16. Edge cases
 
 - **S137** *Device unplug and replug.* *Observed* (S68). The renderer stops, `outputLost` fires, the UID stays enabled; on replug the next 3 s poll re-adds it with its configured delay and gain. *Required:* the new reader anchors at `W − De` (S45), so it is in sync on its first callback, and nothing from before the unplug is replayed.
-- **S138** *Bluetooth drop.* *Observed* (S68; `README.md`: Bluetooth adds its own lag, so users set a little less delay). Handled like an unplug. *Required:* a device that returns at a different nominal rate (e.g. a headset profile) is rendered through S62; its extra latency is not compensated automatically.
+- **S138** *Bluetooth drop.* *Superseded in part by S175*: a Bluetooth device that sounds late gets a negative offset instead of "a little less delay". *Observed* (S68; `README.md`: Bluetooth adds its own lag, so users set a little less delay). Handled like an unplug. *Required:* a device that returns at a different nominal rate (e.g. a headset profile) is rendered through S62; its extra latency is not compensated automatically.
 - **S139** *Sleep and wake.* *Observed* (`AirPlayReconcile.swift:140-191`; `AppDelegate+AirPlay.swift:9-20`, `:234-262`; tests "EC3 sleep: …", "EC3 wake: …"). The host follows the system's sleep and wake notices; the displays waking also counts as a wake while the host still takes the Mac to be asleep, in case the wake notice is missed. From going to sleep until waking it sends no output poll, and an answer or a failure that comes back meanwhile decides nothing and doesn't count toward reachability (S102). A wake polls at once and opens a wake grace of 20 s, counted from the engine's first answer after the wake, however long that takes; failed polls don't start it. During the grace a wanted `open` speaker the engine reports off is selected again instead of being dropped, at most once per poll (S103, S104), and pipe playback is requested again with each such selection (S99). A speaker the user switched off stays off, one that isn't `open` follows S106–S107, and a new engine run is a restart (S102, S143). After the grace the usual rules apply (S104, S106–S109): an `open` speaker still reported off is dropped as unreachable with a notice (S148). *Required:* nothing else needs dedicated handling, and nothing may crash: a callback gap of any length is a stall (S51, S55: resume at the exact delay, no replay); a capture format change after wake goes through S20; a device that vanished goes through S68; capture that never resumes surfaces through S18; the FIFO backlog cap (S90) keeps stale audio from reaching AirPlay.
 - **S140** *Sample-rate change.* *Observed* (S20, S30). A capture rate change restarts the session: new ring history at the new Rc, equalizer coefficients recomputed and state zeroed, FIFO resampler re-rated, renderers re-added. *Required:* an output device's rate change is absorbed by its renderer's converter (S62) with the reader position untouched; if the renderer can't reconfigure, it reports `outputLost` (S68).
 - **S141** *Source switch.* *Observed* (`AppDelegate+Outputs.swift:149-163`). Stop without deselecting AirPlay (deselecting would race the reselect), then start a user-origin session with the new source: the ring is reset and renderers are re-added; AirPlay speakers stay selected, while the engine's playback is stopped with the old session and requested again shortly after the new one starts (`AppDelegate+Engine.swift`).
-- **S163** *Source switch decision.* *Observed* (`AudioSource.swift:51-65`; `AppDelegate+Outputs.swift:149-162`; tests "EC5 source: …"). Choosing the source already in use changes nothing. Choosing another one while not streaming only stores it for the next start. Choosing another one while streaming, an input device included, rebuilds the capture as in S141, with the speakers kept on and the AirPlay speakers kept selected. Any real change clears the old source's "source" and "capture" notices.
+- **S163** *Source switch decision.* *Observed* (`AudioSource.swift:77-93`; `AppDelegate+Outputs.swift:149-162`; tests "EC5 source: …"). Choosing the source already in use changes nothing. Choosing another one while not streaming only stores it for the next start. Choosing another one while streaming, an input device included, rebuilds the capture as in S141, with the speakers kept on and the AirPlay speakers kept selected. Any real change clears the old source's "source" and "capture" notices.
 - **S142** *Source app quits.* *Observed* (`AppDelegate.swift:240-250`). When the app whose bundle ID is the source terminates during a session: stop, deselect every AirPlay speaker, post a "source" notice (no modal alert).
-- **S164** *Source app quit decision.* *Observed* (`AudioSource.swift:42-48`; `AppDelegate.swift:240-250`; tests "EC6 app quit: …"). Only an app source ends with a quit, and only when the quitting app's bundle ID equals the source's. Another app quitting, an app without a bundle ID, and any quit while the source is the whole system or an input device change nothing.
+- **S164** *Source app quit decision.* *Observed* (`AudioSource.swift:32-38`; `AppDelegate.swift:240-250`; tests "EC6 app quit: …"). Only an app source ends with a quit, and only when the quitting app's bundle ID equals the source's. Another app quitting, an app without a bundle ID, and any quit while the source is the whole system or an input device change nothing.
 - **S143** *AirPlay engine restart.* *Observed* (S98, S102, S105, S81, S169, "fifo: reader closing mid-stream does not kill the process", "EC7 engine restart: the reopened pipe starts as close to live as a fresh start"). The pipe reader disappears; the FIFO writer survives and reopens (S92) at the live edge, so AirPlay comes back with the latency it had before and the local delays still line up (S169); the host restarts the engine after 2 s within the crash-loop limits; while it is unreachable the AirPlay list and local delays stay as they were; when it answers again, wanted speakers are re-selected at their own volume, and each one the new engine plays by itself gets it back, at the first answer that lists it (S105); pipe playback is requested at once (S99). Local outputs keep playing throughout.
 - **S144** *All speakers off, then on.* *Observed* (S118, S119). Switching the last speaker off stops the session and deselects AirPlay; switching any on starts a new session (ring reset, S39) with the saved per-speaker delays and volumes.
 - **S145** *Default output change.* *Required; Observed* basis (S60; `README.md` "Using it": keep the macOS output on a local device). Renderers are bound to device UIDs, so changing the macOS default output never moves, stops or re-times them. System capture taps processes, not a device, and continues; if the change alters the capture format, S20 applies. macOS's own AirPlay output is hidden from the list by default (S151).
@@ -277,7 +359,7 @@ Clause IDs are assigned in order of addition and never renumbered or reused, so 
 - **S165** *Many speakers, as tested.* *Observed* (tests "EC10 many speakers: …"; `AirPlayReconcile.swift:257-273`; `SpeakerLayout.swift:67-85`). No host decision caps the number of speakers. One built-in output plus eight USB and eight AirPlay speakers are all listed: the built-in one under This Mac, the sixteen others in one connected list in name order, numbers in numeric order (S152). Eight wanted AirPlay speakers that appear in the same poll are all selected by that poll's reconcile, which returns one action per reported speaker in the engine's order (S104). Eight enabled local speakers whose devices are present are all attached by one output sync (S161).
 - **S147** *Long names.* *Required; Observed* basis (S101, S149). The engine keys everything by device UID or engine output ID, never by display name; names are display-only, may be arbitrarily long Unicode, and never pass through fixed-size buffers or the audio path. IDs are percent-encoded in API paths.
 - **S166** *Long names, as tested.* *Observed* (tests "EC11 long names: …"). Names are compared whole and never shortened: two 257-character AirPlay names that differ only in their last character sort correctly after a short one and come out unchanged (S152), and a 263-character engine output name with an emoji and non-ASCII letters is parsed unchanged (S100).
-- **S148** *AirPlay network loss.* *Observed* (S102–S109, S78–S80). Speakers that lose the network are reported off; after the settle rules they are dropped as unreachable, removed from the enabled set, and noticed; if no enabled, listed AirPlay speaker remains, local delays switch to 0 live (S80); if nothing at all remains enabled, streaming stops (S118). Speakers that stop advertising leave the engine's list (`CHANGELOG.md` 0.4.0). An engine that doesn't answer polls is not a network loss (S81, S102). A pipe nobody reads is bounded by S90.
+- **S148** *AirPlay network loss.* *Superseded in part by S177*: when no chosen AirPlay speaker remains, the local hold-backs lose the AirPlay latency L instead of switching to 0. *Observed* (S102–S109, S78–S80). Speakers that lose the network are reported off; after the settle rules they are dropped as unreachable, removed from the enabled set, and noticed; if no enabled, listed AirPlay speaker remains, local delays switch to 0 live (S80); if nothing at all remains enabled, streaming stops (S118). Speakers that stop advertising leave the engine's list (`CHANGELOG.md` 0.4.0). An engine that doesn't answer polls is not a network loss (S81, S102). A pipe nobody reads is bounded by S90.
 - **S167** *AirPlay network loss, as tested.* *Observed* (tests "EC12 network loss: …"; `AirPlayReconcile.swift:257-273`; `AppDelegate+AirPlay.swift:33-46`). A wanted speaker missing from the engine's list gets no reconcile action and stays enabled, while the speakers the engine still reports get theirs (S104). While it is missing it isn't a chosen AirPlay speaker, so local outputs stop waiting for it (S79, S80). When the engine lists it again it counts as appeared, since appearance is judged against the previous poll's list, and is selected again (S104). A listed, wanted, open speaker (S106) that the engine reports off with nothing pending is dropped as unreachable with a notice (S106, S109). An empty list while Local Network access is allowed never shows the permission hint, however long it stays empty (S154).
 
 ## 17. Host-side policies checked by the same suites
@@ -372,6 +454,26 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | source: missing value → system | S12 |
 | source: legacy bundle-ID value → app | S12 |
 | source: input has no bundle ID | S12 |
+| source: the whole system is stored as an empty string | S12 |
+| source: an input device is stored as its UID after an input: tag | S12 |
+| source: an input UID with colons in it comes back whole | S12 |
+| source: an app is stored as its plain bundle ID, as earlier versions stored it | S12 |
+| source: the whole system has no bundle ID | S12 |
+| source apps: a running app's name comes first | S12 |
+| source apps: an app that isn't running shows its installed name | S12 |
+| source apps: an app that is neither running nor installed shows its bundle ID | S12 |
+| source apps: a blank name doesn't count and names are trimmed | S12 |
+| source apps: Finder's .app extension is dropped from an installed app's name | S12 |
+| source apps: regular apps with a bundle ID, AudioSync left out, once each, sorted by name | S12 |
+| source apps: the first instance's name, a blank name replaced by the bundle ID | S12 |
+| source apps: names that sort alike are ordered by bundle ID | S12 |
+| processes: the app's own process and its helpers, in Core Audio's order | S11 |
+| processes: another app's helper belongs to that app only | S11 |
+| processes: without the responsibility lookup only the app's own process counts | S11 |
+| processes: AudioSync's own process never counts, even when the source app is responsible for it | S10, S11 |
+| processes: unknown objects and unreadable PIDs never count; an object counts once | S11 |
+| processes: no PID, no process objects | S11 |
+| processes: an app with no audio client yet has no process objects | S11 |
 | appearance: round-trip system | S155 |
 | appearance: round-trip light | S155 |
 | appearance: round-trip dark | S155 |
@@ -618,6 +720,39 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | capture: playing only briefly → still waiting | S18 |
 | capture: playing for the grace period with no frames → not working | S18 |
 | capture: a paused or unknown source never blames the permission | S18, S19 |
+| capture channels: the tap's interleaved stereo passes through unchanged | S2, S16 |
+| capture channels: a one-channel input plays on both sides | S14 |
+| capture channels: an input with four channels gives its first two as L and R | S14 |
+| capture channels: one buffer per channel gives L from the first and R from the second | S14 |
+| capture channels: channels are counted across buffers, in order | S14 |
+| capture channels: a buffer without channels is skipped | S14 |
+| capture channels: only frames both channels have are delivered | S16 |
+| capture channels: no buffer, no data or no frames delivers nothing | S16, S17 |
+| capture channels: NaN and infinity pass through untouched (the stages after capture handle them) | S123 |
+| capture channels: a long callback is delivered in order, in blocks of at most 4096 frames | S16, S40 |
+| capture channels: a block never exceeds the ring's write margin | S40 |
+| capture rate: a rate that reads 0 counts as 48 kHz | S16 |
+| capture rate: 8 kHz to 384 kHz are taken as they are | S16 |
+| capture rate: the rate of the device the IOProc runs on wins over the tap's | S16, S157 |
+| capture rate: the tap's rate when the device's can't be read | S16, S157 |
+| capture rate: nothing readable keeps the session playing | S157 |
+| input format: native 32-bit float is read as it is | S14, S16 |
+| input format: integer, big-endian or 64-bit samples aren't read | S16 |
+| input format: a device without input channels has nothing to capture | S14 |
+| input format: a stream without channels doesn't count | S14 |
+| app tap: the same processes in another order keep the tap | S11 |
+| app tap: a new audio process (a browser's audio helper) is tapped too | S11 |
+| app tap: a process that ends leaves the tap | S11 |
+| app tap: no audio process while the app runs: no tap, waiting for one | S11, S17 |
+| app tap: still nothing to tap keeps waiting | S11, S17 |
+| app tap: the first audio process while waiting gets a tap | S11 |
+| app tap: the app gone means the source is lost | S21, S142 |
+| app tap: AudioSync's own process is never tapped, even when the app launched it | S10, S11 |
+| app retap: the running tap is changed in place first, and nothing stops | S11, S13 |
+| app retap: a rebuilt tap exists before the old one closes, so the app stays muted | S11, S13 |
+| app retap: a new tap at another rate is discarded and the old one keeps running until the rebuild | S13, S157 |
+| app retap: a tap that can't be made leaves the old capture to the caller, which ends the session | S13, S21 |
+| app retap: a new tap that can't start reading is discarded | S21 |
 | delay: AirPlay chosen → configured delay | S78 |
 | delay: no AirPlay → plays at once | S78 |
 | delay: zero stays zero | S78 |
@@ -762,3 +897,150 @@ Run once per pipe feed, `swift` and `rust`, on a private engine whose only outpu
 | pipestart \<feed\>: after 2 s without audio and a resume, the pipe is no later than at the start | S99 |
 | pipestart \<feed\>: after a stop while audio flows and a new start, the pipe is no later than at the start | S96, S99 |
 | pipestart \<feed\>: after the writer closes, a stop and a new start, the pipe is no later than at the start | S88, S99 |
+
+### local delay model (to be written first, failing)
+
+The checks for S172 to S181. None exists yet: each is written first and fails against today's code (the first row of each table reproduces the reported bug), then the code follows the clauses. Once a check exists, its row moves to the table of the suite that runs it. Every example uses the built-in speakers or the BuiltIn output as the reference R, a USB speaker at +150 ms, a Bluetooth speaker at −250 ms and, with AirPlay chosen, L = 2000 ms, as in S176, unless the name says otherwise.
+
+Core (`cargo test` in `core/`, test functions with `// covers:` markers):
+
+| Test | Clauses |
+|---|---|
+| only_local_outputs_a_speakers_offset_is_applied | S176 |
+| a_late_bluetooth_speaker_makes_the_reference_wait | S172, S176 |
+| the_smallest_offset_taking_part_plays_at_once_and_no_hold_back_is_negative | S176 |
+| a_switched_off_reference_doesnt_take_part | S172, S176 |
+| a_lone_output_plays_at_once_whatever_its_offset | S176 |
+| an_airplay_speaker_chosen_adds_l_on_top | S176 |
+| an_output_later_than_airplay_sets_the_base | S176 |
+| hold_backs_are_capped_at_20000_ms | S176 |
+| offsets_are_clamped_to_minus_2000_to_20000_and_non_finite_input_is_ignored | S175 |
+| an_output_never_set_has_offset_0 | S175 |
+| a_joining_output_with_a_lower_offset_retimes_the_others | S177 |
+| a_leaving_output_retimes_the_others_back | S177 |
+| only_outputs_whose_hold_back_changed_are_retimed | S177 |
+| an_airplay_flip_or_a_new_l_retimes_every_output_taking_part | S177 |
+| an_unreachable_engine_retimes_nothing | S81, S177 |
+
+Mac (`Tests/logictest.swift`):
+
+| Check | Clauses |
+|---|---|
+| local delay: with only local outputs, a speaker's delay is applied | S176 |
+| local delay: a Bluetooth speaker at −250 ms makes the built-in speakers wait 250 ms | S176 |
+| local delay: the built-in speakers are the reference | S173 |
+| local delay: the built-in headphone output doesn't take the reference from the built-in speakers | S173 |
+| local delay: a lone built-in output that reports no speaker terminal is the reference | S173 |
+| local delay: no built-in output, no reference | S173 |
+| local delay: a switched-off reference is still the reference | S173 |
+| local delay: AirPlay chosen adds the AirPlay delay on top | S176, S178 |
+| local delay: the native sender adds the latency it reports plus the AirPlay adjustment | S176, S178 |
+| local delay: a new AirPlay delay re-times the local speakers | S177, S178 |
+| local delay: a late speaker switched on or off re-times the running others | S177 |
+| local delay: editing the lowest offset re-times the others | S177 |
+| AirPlay delay: the native sender's field shows L + A, follows a new L and an edit stores the difference | S178, S181 |
+| migration: a setup tuned for AirPlay sounds the same with AirPlay | S179 |
+| migration: the reference's old delay becomes the AirPlay delay | S179 |
+| migration: R without a stored delay uses D0 | S179 |
+| migration: an untuned output that played at D0 sounds the same with AirPlay | S179 |
+| migration: with a legacy delay below 1000 ms, untuned outputs keep playing together | S179 |
+| migration: the native sender's adjustment starts at 0 | S179 |
+| migration: small values keep their alignment and take the default AirPlay delay | S179 |
+| migration: an offset below −2000 ms is clamped | S179 |
+| migration: runs once and leaves the old values in place | S179 |
+| offset text: +150 ms, −250 ms and 0 ms | S181 |
+| offset text: a leading + or − (a hyphen too) is read and other text is ignored | S175, S181 |
+| speaker row: the reference has no delay field | S181 |
+
+Windows (`cargo test` in `windows/`):
+
+| Test | Clauses |
+|---|---|
+| only_local_outputs_a_speakers_offset_is_applied | S176 |
+| the_built_in_output_with_the_smallest_endpoint_id_is_the_reference | S174 |
+| headphones_on_the_pc_jack_are_not_the_reference | S174 |
+| no_built_in_output_means_no_reference | S174 |
+| an_airplay_speaker_chosen_adds_the_sender_latency_on_top | S176, S178 |
+| the_airplay_delay_is_an_adjustment_on_top_of_the_sender_latency | S178 |
+| the_airplay_delay_field_shows_l_plus_a_and_follows_a_new_l | S178, S181 |
+| a_late_speaker_switched_on_or_off_retimes_the_running_others | S177 |
+| editing_the_lowest_offset_retimes_the_others | S177 |
+| old_trims_become_offsets_relative_to_the_reference | S180 |
+| the_references_old_trim_becomes_the_airplay_adjustment_and_airplay_delays_stay | S180 |
+| a_late_airplay_speaker_lined_up_by_the_references_trim_stays_lined_up | S180 |
+| an_older_settings_file_is_migrated_once_and_saved_in_the_new_version | S180 |
+| the_reference_row_has_no_delay_and_the_others_show_a_signed_offset | S181 |
+
+### fades (to be written first, failing)
+
+The checks for S182 to S191. None exists yet: each is written first and fails against today's code (the first row of each table reproduces the reported click), then the code follows the clauses. Once a check exists, its row moves to the table of the suite that runs it. Unless the name says otherwise, the ring holds a constant 0.5 or a 1 kHz sine of amplitude 0.5 at 48 kHz, the device runs at 48 kHz with 512-frame buffers, and a fade is 960 frames (S182).
+
+Core (`cargo test` in `core/`, test functions with `// covers:` markers):
+
+| Test | Clauses |
+|---|---|
+| the_first_audio_an_output_plays_fades_in | S184, S191 |
+| an_output_asked_to_stop_fades_out_and_stays_closed_until_it_stops | S184, S185, S191 |
+| with_a_device_that_plays_a_buffer_and_a_safety_offset_late_no_faded_frame_is_cut | S185, S191 |
+| the_published_output_time_is_that_of_the_fades_last_frame | S185, S190 |
+| fades_follow_the_raised_cosine_over_20_ms_at_the_streams_rate | S182 |
+| a_fade_reversed_midway_never_jumps | S182 |
+| the_fade_multiplies_after_the_gain_and_a_closed_output_is_exact_zeros_even_for_nan | S183 |
+| a_read_reports_its_leading_silence_and_its_copied_frames | S184 |
+| audio_after_a_masked_range_or_a_dry_read_fades_in | S184 |
+| with_conversion_the_fade_in_starts_at_the_first_copied_frame_or_a_few_frames_before | S184 |
+| a_delay_change_waits_for_the_fade_out_and_lands_exactly | S187, S191 |
+| a_delay_increase_after_the_fade_out_still_inserts_exactly_the_difference | S187 |
+| a_newer_delay_change_during_the_fade_out_replaces_the_waiting_one | S187 |
+| after_a_fade_out_for_a_delay_change_frames_stay_zero_until_the_resync_read | S184, S187, S191 |
+| a_held_drift_correction_is_made_after_the_fade_out_and_counted_then | S188 |
+| after_a_fade_out_for_a_held_correction_frames_stay_zero_until_the_correcting_read | S184, S188, S191 |
+| a_held_correction_stays_within_t_plus_2n_plus_the_fade | S188 |
+| holding_corrections_leaves_prime_resync_and_dry_reads_as_they_were | S188 |
+| the_pipe_writer_fades_in_after_each_open | S189 |
+| a_stop_request_fades_the_pipe_feed_out_then_feeds_zeros | S189 |
+| the_next_start_opens_the_pipe_feed_again | S189 |
+| the_native_input_fades_in_after_each_rate_set_and_out_on_a_stop_request | S189 |
+| fading_allocates_and_locks_nothing_on_the_audio_thread | S190 |
+| no_step_across_a_start_a_stop_or_a_delay_change_exceeds_the_ramps_slope | S191 |
+
+Mac (`Tests/logictest.swift`):
+
+| Check | Clauses |
+|---|---|
+| fade: a stop asks every output and the AirPlay input to fade out before capture stops | S186 |
+| fade: a stop waits for the slowest output, never more than 500 ms | S186 |
+| fade: an output is faded once the host clock passes its last faded frame's output time plus its latency | S185 |
+| fade: a source change fades out on the old source before the new one starts | S186 |
+| fade: a speaker switched off is stopped only after it faded | S185, S186 |
+| fade: switching several speakers off asks all of them to fade, then waits once | S186 |
+| fade: a lost device is stopped at once, without a fade | S185 |
+
+Mac FIFO (`Tests/fifotest.swift`):
+
+| Check | Clauses |
+|---|---|
+| fifo: the first 20 ms after the pipe opens fade in | S189, S191 |
+| fifo: a stop request fades the pipe stream out | S189, S191 |
+
+Mac engine (`--hardware`):
+
+| Check | Clauses |
+|---|---|
+| \<device\>: stop fades out before the output stops | S185, S186, S191 |
+| \<device\>: first audio fades in | S184, S191 |
+| \<device\>: stop returns once the fade has played, within 500 ms | S185, S186 |
+
+Windows (`cargo test` in `windows/`):
+
+| Test | Clauses |
+|---|---|
+| a_stop_fades_out_over_20_ms_whatever_the_callback_holds | S182, S185 |
+| the_first_audio_of_a_session_fades_in_over_20_ms | S184 |
+| a_speaker_switched_off_fades_out_before_its_stream_stops | S185 |
+| an_output_is_faded_only_when_the_endpoint_holds_nothing_but_zeros | S185 |
+| a_stop_waits_for_every_output_to_fade_and_never_more_than_500_ms | S186 |
+| removing_several_outputs_asks_all_to_fade_then_waits_once | S186 |
+| a_delay_change_fades_out_first_and_in_after | S187 |
+
+By ear on real AirPlay receivers, outside these suites: with a speaker playing, a stop and a source change make no click on the speaker when the engine stops or the native sender flushes it, and the first sound after a start or a source change fades in (S189).
