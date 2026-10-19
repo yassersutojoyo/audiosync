@@ -14,6 +14,7 @@
 use crypto_bigint::modular::{FixedMontyForm, FixedMontyParams};
 use crypto_bigint::{Odd, U2048};
 use sha1::{Digest, Sha1};
+use zeroize::{Zeroize, Zeroizing};
 
 /// Bytes of a SHA-1 output.
 pub const HASH_BYTES: usize = 20;
@@ -126,7 +127,10 @@ impl SrpGroup {
         if value.len() > width {
             return None;
         }
-        let mut out = vec![0u8; width - value.len()];
+        // Sized once, so a secret value is never left behind in a buffer a
+        // reallocation gave up.
+        let mut out = Vec::with_capacity(width);
+        out.resize(width - value.len(), 0);
         out.extend_from_slice(value);
         Some(out)
     }
@@ -175,7 +179,6 @@ impl std::fmt::Debug for ClientValues {
 
 impl Drop for ClientValues {
     fn drop(&mut self) {
-        use zeroize::Zeroize;
         self.x.zeroize();
         self.premaster.zeroize();
     }
@@ -194,7 +197,10 @@ fn widen(value: &[u8]) -> U2048 {
     let value = trim_leading_zeros(value);
     let mut bytes = [0u8; MAX_BYTES];
     bytes[MAX_BYTES - value.len()..].copy_from_slice(value);
-    U2048::from_be_slice(&bytes)
+    let wide = U2048::from_be_slice(&bytes);
+    // The private value passes through here too.
+    bytes.zeroize();
+    wide
 }
 
 fn sha1(parts: &[&[u8]]) -> [u8; HASH_BYTES] {
@@ -239,32 +245,43 @@ pub fn client_values(
     let pad = |value: &[u8]| group.pad(value).ok_or(SrpError::InvalidServerValue);
     let generator = FixedMontyForm::new(&U2048::from_u8(group.generator), &params);
 
+    // Every value derived from the password or a is wiped when dropped.
     let k = sha1(&[group.prime, &pad(&[group.generator])?]);
-    let inner = sha1(&[identity, b":", password]);
-    let x = sha1(&[salt, &inner]);
+    let inner = Zeroizing::new(sha1(&[identity, b":", password]));
+    let mut x = sha1(&[salt, &inner[..]]);
 
-    let a = widen(private);
+    let a = Zeroizing::new(widen(private));
     let private_bits = 8 * private.len() as u32;
     let public_int = generator.pow_bounded_exp(&a, private_bits).retrieve();
     let public = pad(public_int.to_be_bytes().as_ref())?;
     let b_padded = pad(b_pub)?;
     let u = sha1(&[&public, &b_padded]);
     if u.iter().all(|&byte| byte == 0) {
+        x.zeroize();
         return Err(SrpError::ZeroScrambler);
     }
 
-    let x_int = widen(&x);
+    let x_int = Zeroizing::new(widen(&x));
     let u_int = widen(&u);
     let k_form = FixedMontyForm::new(&widen(&k), &params);
     let b_form = FixedMontyForm::new(&widen(b_pub), &params);
-    let g_x = generator.pow_bounded_exp(&x_int, 8 * HASH_BYTES as u32);
-    let base = b_form.sub(&k_form.mul(&g_x));
+    let g_x = Zeroizing::new(generator.pow_bounded_exp(&x_int, 8 * HASH_BYTES as u32));
+    let base = Zeroizing::new(b_form.sub(&k_form.mul(&g_x)));
     // a + u·x: u and x have 160 bits each, so the sum has at most
     // max(8·|a|, 320) + 1 bits, far below 2048.
-    let exponent = a.wrapping_add(&u_int.wrapping_mul(&x_int));
+    let exponent = Zeroizing::new(a.wrapping_add(&u_int.wrapping_mul(&x_int)));
     let exponent_bits = private_bits.max(2 * 8 * HASH_BYTES as u32) + 1;
-    let premaster_int = base.pow_bounded_exp(&exponent, exponent_bits).retrieve();
-    let premaster = pad(premaster_int.to_be_bytes().as_ref())?;
+    let premaster_int = Zeroizing::new(base.pow_bounded_exp(&exponent, exponent_bits).retrieve());
+    let mut encoded = premaster_int.to_be_bytes();
+    let premaster = pad(encoded.as_ref());
+    encoded.as_mut().zeroize();
+    let premaster = match premaster {
+        Ok(premaster) => premaster,
+        Err(error) => {
+            x.zeroize();
+            return Err(error);
+        }
+    };
     Ok(ClientValues {
         k,
         x,

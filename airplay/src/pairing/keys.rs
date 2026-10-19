@@ -14,6 +14,7 @@ use ctr::cipher::{KeyIvInit, StreamCipher};
 use ed25519_dalek::{Signer, SigningKey};
 use sha2::{Digest, Sha512};
 use x25519_dalek::{PublicKey, StaticSecret};
+use zeroize::Zeroizing;
 
 /// AES-128-GCM with the 16-byte nonce of P53 and a 16-byte tag.
 type SetupCipher = AesGcm<Aes128, U16>;
@@ -66,7 +67,8 @@ pub fn seal_public_key(
     session_key: &[u8],
     public: &[u8; KEY_BYTES],
 ) -> ([u8; KEY_BYTES], [u8; 16]) {
-    let cipher = SetupCipher::new(&setup_key(session_key).into());
+    let key = Zeroizing::new(setup_key(session_key));
+    let cipher = SetupCipher::new(&(*key).into());
     let nonce = setup_nonce(session_key).into();
     let mut sealed = *public;
     // GCM refuses only plaintexts or additional data beyond its limits,
@@ -111,7 +113,8 @@ pub fn encrypt_signature(
     receiver_data: &[u8; RECEIVER_DATA_BYTES],
     signature: &[u8; SIGNATURE_BYTES],
 ) -> [u8; SIGNATURE_BYTES] {
-    let mut cipher = VerifyCipher::new(&verify_key(shared).into(), &verify_iv(shared).into());
+    let key = Zeroizing::new(verify_key(shared));
+    let mut cipher = VerifyCipher::new(&(*key).into(), &verify_iv(shared).into());
     let mut discarded = *receiver_data;
     cipher.apply_keystream(&mut discarded);
     let mut encrypted = *signature;

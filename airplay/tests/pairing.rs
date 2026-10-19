@@ -133,6 +133,12 @@ fn pairing_runs_on_one_connection_waits_for_the_pin_and_hands_over_credentials()
     assert_eq!(blob.len(), 49);
     assert_eq!(Credentials::from_bytes(&blob), Ok(credentials.clone()));
     assert!(Credentials::from_bytes(&blob[..48]).is_err());
+    let mut other = *credentials.secret();
+    other[31] ^= 1;
+    assert_ne!(
+        Credentials::new(&client_id, other).expect("credentials"),
+        credentials
+    );
     let shown = format!("{credentials:?}");
     let secret_hex: String = credentials.secret()[..4]
         .iter()
@@ -185,6 +191,14 @@ fn the_exchange_carries_a_padded_a_m1_and_the_sealed_key_and_checks_m2() {
     let (error, wrong_pin) = link.failure().expect("failed");
     assert_eq!(error.kind, ErrorKind::PairingFailed);
     assert!(!wrong_pin);
+    // The detail names the check, so a log tells it apart from a wrong PIN.
+    assert!(
+        error
+            .detail
+            .is_some_and(|detail| detail.starts_with("M2 check failed")),
+        "{error}"
+    );
+    assert_eq!(error.status, Some(200));
     assert_eq!(atv.bodies("/pair-setup-pin").len(), 2);
     assert!(atv.paired().is_empty());
     assert!(link.closed);

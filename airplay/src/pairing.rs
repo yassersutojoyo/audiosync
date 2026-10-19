@@ -29,6 +29,7 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use plist::{Dictionary, Value};
+use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::{ErrorKind, SessionError};
@@ -63,9 +64,10 @@ pub const CLIENT_ID_CHARS: usize = 16;
 /// 32-byte secret a, which also seeds the Ed25519 key the Apple TV now
 /// knows. The host stores them securely per speaker and hands them back in
 /// [`SpeakerOptions::credentials`](crate::sender::SpeakerOptions::credentials);
-/// losing them means pairing again. `Debug` shows the client ID only, and
-/// the secret is wiped from memory when the value is dropped.
-#[derive(Clone, PartialEq, Eq)]
+/// losing them means pairing again. `Debug` shows the client ID only, the
+/// secret is wiped from memory when the value is dropped, and equality is
+/// compared in constant time.
+#[derive(Clone)]
 pub struct Credentials {
     client_id: [u8; CLIENT_ID_CHARS],
     secret: [u8; SECRET_BYTES],
@@ -73,10 +75,22 @@ pub struct Credentials {
 
 impl Credentials {
     /// Credentials from a client ID (16 uppercase hex digits) and a secret.
+    /// The secret passed in is wiped once copied.
     pub fn new(
         client_id: &str,
-        secret: [u8; SECRET_BYTES],
+        mut secret: [u8; SECRET_BYTES],
     ) -> Result<Credentials, CredentialsError> {
+        let credentials = Credentials::with_secret(client_id, &secret);
+        secret.zeroize();
+        credentials
+    }
+
+    /// Credentials whose secret is copied straight from `secret`, leaving no
+    /// other copy behind.
+    fn with_secret(client_id: &str, secret: &[u8]) -> Result<Credentials, CredentialsError> {
+        if secret.len() != SECRET_BYTES {
+            return Err(CredentialsError);
+        }
         let bytes = client_id.as_bytes();
         let valid = bytes.len() == CLIENT_ID_CHARS
             && bytes
@@ -85,12 +99,13 @@ impl Credentials {
         if !valid {
             return Err(CredentialsError);
         }
-        let mut id = [0u8; CLIENT_ID_CHARS];
-        id.copy_from_slice(bytes);
-        Ok(Credentials {
-            client_id: id,
-            secret,
-        })
+        let mut credentials = Credentials {
+            client_id: [0; CLIENT_ID_CHARS],
+            secret: [0; SECRET_BYTES],
+        };
+        credentials.client_id.copy_from_slice(bytes);
+        credentials.secret.copy_from_slice(secret);
+        Ok(credentials)
     }
 
     /// The client ID, the SRP user name of the pairing (P49, P50).
@@ -131,13 +146,18 @@ impl Credentials {
         }
         let (id, secret) = rest.split_at(CLIENT_ID_CHARS);
         let id = std::str::from_utf8(id).map_err(|_| CredentialsError)?;
-        let mut key = [0u8; SECRET_BYTES];
-        key.copy_from_slice(secret);
-        let credentials = Credentials::new(id, key);
-        key.zeroize();
-        credentials
+        Credentials::with_secret(id, secret)
     }
 }
+
+impl PartialEq for Credentials {
+    fn eq(&self, other: &Credentials) -> bool {
+        let same = self.client_id.ct_eq(&other.client_id) & self.secret.ct_eq(&other.secret);
+        same.into()
+    }
+}
+
+impl Eq for Credentials {}
 
 impl fmt::Debug for Credentials {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -763,11 +783,15 @@ impl Pairing {
             );
             return;
         };
-        if proof != self.secrets.m2 {
+        // Constant time; a length mismatch compares unequal.
+        let matches: bool = proof.as_slice().ct_eq(&self.secrets.m2[..]).into();
+        if !matches {
+            // Named so a host's log tells this apart from a wrong PIN, which
+            // the Apple TV answers with 470 before any M2 is sent.
             self.fail_status(
                 ErrorKind::PairingFailed,
                 response.code,
-                Some("the receiver's SRP proof does not match"),
+                Some("M2 check failed: the receiver's SRP proof differs from the one computed from K"),
                 false,
             );
             return;
@@ -783,7 +807,7 @@ impl Pairing {
     /// The last answer: paired. Its body is ignored (P53), and the host
     /// gets the credentials (P54).
     fn on_sealed(&mut self) {
-        let credentials = Credentials::new(&self.client_id, *self.secrets.a);
+        let credentials = Credentials::with_secret(&self.client_id, &self.secrets.a[..]);
         self.close();
         match credentials {
             Ok(credentials) => self
@@ -829,8 +853,10 @@ impl LegacyVerifier {
     ) -> Result<LegacyVerifier, EntropyUnavailable> {
         let mut verify_secret = Zeroizing::new([0u8; KEY_BYTES]);
         entropy.fill(&mut verify_secret[..])?;
+        let mut secret = Zeroizing::new([0u8; SECRET_BYTES]);
+        secret.copy_from_slice(credentials.secret());
         Ok(LegacyVerifier {
-            secret: Zeroizing::new(*credentials.secret()),
+            secret,
             public: credentials.public_key(),
             verify_public: keys::x25519_public(&verify_secret),
             verify_secret,
