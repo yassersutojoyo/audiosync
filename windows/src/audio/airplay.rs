@@ -116,6 +116,11 @@ pub trait AirPlayLink {
 
     /// Stops a pairing.
     fn cancel_pairing(&mut self, key: &DeviceKey);
+
+    /// False once the sender stopped by itself after an internal error (its
+    /// driver thread ended): it lists, plays and reports nothing anymore,
+    /// and only a new sender brings AirPlay back.
+    fn is_running(&self) -> bool;
 }
 
 /// The real sender.
@@ -185,6 +190,10 @@ impl AirPlayLink for SenderLink {
 
     fn cancel_pairing(&mut self, key: &DeviceKey) {
         self.sender.cancel_pairing(key);
+    }
+
+    fn is_running(&self) -> bool {
+        self.sender.is_running()
     }
 }
 
@@ -1387,6 +1396,8 @@ pub mod tests {
         calls: Vec<Call>,
         events: VecDeque<SenderEvent>,
         latency: Duration,
+        /// The sender stopped after an internal error.
+        stopped: bool,
     }
 
     /// A fake sender: records every call, and hands out the events a test
@@ -1472,6 +1483,11 @@ pub mod tests {
                 key: device.key.clone(),
                 event,
             });
+        }
+
+        /// The sender stops by itself, as after a panic in its driver.
+        pub fn stop_running(&self) {
+            self.0.borrow_mut().stopped = true;
         }
 
         /// The calls so far, and forgets them.
@@ -1560,6 +1576,10 @@ pub mod tests {
                 .borrow_mut()
                 .calls
                 .push(Call::CancelPairing(speaker_id(key)));
+        }
+
+        fn is_running(&self) -> bool {
+            !self.0.borrow().stopped
         }
     }
 

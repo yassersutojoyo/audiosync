@@ -1590,7 +1590,7 @@ mod tests {
     use audiosync_airplay::discovery::Device;
     use audiosync_airplay::error::{ErrorKind, SessionError};
     use audiosync_airplay::pairing::PairingEvent;
-    use audiosync_airplay::sender::SpeakerState as AirPlayState;
+    use audiosync_airplay::sender::{SenderEvent, SpeakerState as AirPlayState};
 
     use super::*;
     use crate::audio::airplay::tests::{APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, device, id_of};
@@ -2816,6 +2816,35 @@ mod tests {
         );
         assert!(!adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
         assert!(!adapter.snapshot().running);
+    }
+
+    #[test]
+    fn a_sender_that_stops_running_leaves_a_notice() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+        fake.stop_running();
+        adapter.poll();
+        assert!(
+            !messages(&adapter).is_empty(),
+            "AirPlay must not go silent without a hint"
+        );
+    }
+
+    #[test]
+    fn a_discovery_failure_leaves_a_notice() {
+        let (mut adapter, fake, kitchen, study) = airplay_adapter();
+        // The sender reports every receiver gone just before.
+        fake.gone(&kitchen);
+        fake.gone(&study);
+        fake.push(SenderEvent::DiscoveryFailed);
+        adapter.poll();
+        assert!(
+            !messages(&adapter).is_empty(),
+            "a speaker list that empties for good needs a hint"
+        );
     }
 
     #[test]
