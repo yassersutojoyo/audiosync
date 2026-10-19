@@ -34,8 +34,8 @@ pub fn track_info_sending(
 pub struct QueueItem {
     /// The engine run the question went to ([`EngineLifecycle::run`](super::engine::EngineLifecycle::run)).
     pub run: u64,
-    /// The `item_id` the player named.
-    pub item_id: u64,
+    /// The `item_id` the player named: any non-zero integer.
+    pub item_id: i64,
 }
 
 /// The track info watcher (S168).
