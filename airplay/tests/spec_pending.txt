@@ -3,9 +3,6 @@
 # tests/spec_coverage.rs fails if a clause listed here gains a `// covers:`
 # test, so this list only shrinks. "Partly done" names what already exists.
 
-# Pairing and crypto.
-P57 Partly done: the pairing and verification steps are checked against RFC 5054, RFC 8032, RFC 7748 and a fake Apple TV with its own arithmetic (tests/pairing_vectors.rs, tests/pairing.rs); the write-up's own vector comes next.
-
 # AirPlay 2 (behind its flag, blocked by the gaps of section 11).
 P41 GET /info and binary-plist bodies: AirPlay 2 stage.
 P42 AirPlay 2 request order: AirPlay 2 stage.
