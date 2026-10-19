@@ -42,6 +42,10 @@ enum AppLifecycle {
     /// it is quitting: the new copy then waits for it to go and carries on.
     static func answersSecondLaunch(exiting: Bool) -> Bool { !exiting }
 
+    /// The signals that end AudioSync the clean way (S111): the entry point
+    /// marks the app as quitting, stops the bundled engine and exits.
+    static let exitSignals: [Int32] = [SIGTERM]
+
     /// A capture format change rebuilds the session at the new rate (S20).
     /// The engine stops the session before it reports the change, so the
     /// restart doesn't ask whether it still runs; only the user switching
