@@ -8,6 +8,7 @@
 //! the UI. Nothing here makes a sound or opens an audio device.
 
 use audiosync_core::eq::{self, EqSettings};
+use audiosync_core::policy::device_volume::Hint;
 #[cfg(any(not(windows), test))]
 use audiosync_core::volume;
 
@@ -153,6 +154,9 @@ pub struct Speaker {
     /// An Apple TV AudioSync keeps pairing credentials for, which the user
     /// can forget.
     pub paired: bool,
+    /// A local output that is on, whose own volume in Windows is low or
+    /// muted (spec S196): the hint under its volume slider, with the fix.
+    pub device_volume: Option<Hint>,
 }
 
 /// Where a pairing's PIN prompt is.
@@ -401,6 +405,11 @@ pub trait Backend {
     fn dismiss_all_notices(&mut self);
     fn refresh_devices(&mut self);
 
+    /// The fix under speaker `id`'s device-volume hint: raises its own
+    /// volume in Windows to 75 % when low and unmutes it when muted
+    /// (spec S197).
+    fn fix_device_volume(&mut self, _id: &str) {}
+
     /// The PIN the user typed for the pairing with speaker `id`.
     fn submit_pin(&mut self, _id: &str, _pin: &str) {}
 
@@ -549,6 +558,7 @@ impl MockBackend {
             auto_connect: false,
             availability: Availability::Open,
             paired: false,
+            device_volume: None,
         };
         let mut speakers = vec![
             // The reference: no delay of its own.
@@ -605,6 +615,8 @@ impl MockBackend {
         speakers[3].availability = Availability::NeedsCode;
         speakers[6].availability = Availability::PasswordNotYet;
         speakers[2].auto_connect = true;
+        // The PC's speakers left at 13 % in Windows.
+        speakers[0].device_volume = Some(Hint::Low { percent: 13 });
         let state = AppState {
             running: false,
             sources: vec![
@@ -770,6 +782,13 @@ impl Backend for MockBackend {
     }
 
     fn refresh_devices(&mut self) {}
+
+    /// As Windows would report it once the fix is written.
+    fn fix_device_volume(&mut self, id: &str) {
+        if let Some(speaker) = self.speaker_mut(id) {
+            speaker.device_volume = None;
+        }
+    }
 }
 
 /// The preset whose gains these settings have, if any (else the UI says "Custom").
@@ -856,6 +875,7 @@ mod tests {
             auto_connect: false,
             availability: Availability::Open,
             paired: false,
+            device_volume: None,
         };
         assert!(!speaker(SpeakerKind::Virtual, false).is_listed(false));
         assert!(speaker(SpeakerKind::Virtual, false).is_listed(true));

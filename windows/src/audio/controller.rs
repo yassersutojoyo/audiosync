@@ -69,6 +69,8 @@ use super::routing::{
 };
 use crate::debug_log::DebugLog;
 
+mod device_volume;
+
 /// How often the debug log gets a status line while a session runs.
 const STATUS_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -146,6 +148,33 @@ pub trait Driver {
     /// active audio session on it. It only reads: no mute, volume or default
     /// output changes.
     fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError>;
+
+    /// Starts following the endpoint `id`'s own mute and master volume
+    /// (spec S195): a change notification from Windows marks it for
+    /// [`Driver::endpoint_volume_changes`]. The notification runs on a system
+    /// thread and only marks; nothing is read there.
+    fn watch_endpoint_volume(&mut self, id: &str) -> Result<(), BackendError>;
+
+    /// Stops following the endpoint `id`'s volume. Does nothing when it isn't
+    /// followed.
+    fn unwatch_endpoint_volume(&mut self, id: &str);
+
+    /// The endpoints followed whose mute or volume Windows reported changed
+    /// since the last call, each once however many notifications came.
+    fn endpoint_volume_changes(&mut self) -> Vec<String>;
+
+    /// The endpoint `id`'s mute and master volume, read now
+    /// (`IAudioEndpointVolume::GetMute` and `GetMasterVolumeLevelScalar`),
+    /// or `None` when its volume control can't be activated or read (S194).
+    fn endpoint_volume(&mut self, id: &str) -> Option<EndpointVolume>;
+
+    /// Sets the endpoint `id`'s master volume, 0 to 1
+    /// (`SetMasterVolumeLevelScalar`): only the fix the user clicks (S197).
+    fn set_endpoint_level(&mut self, id: &str, level: f32) -> Result<(), BackendError>;
+
+    /// Unmutes the endpoint `id` (`SetMute(false)`): only the fix the user
+    /// clicks (S197).
+    fn unmute_endpoint(&mut self, id: &str) -> Result<(), BackendError>;
 
     /// Starts capturing as `activation` says, writing to the ring through
     /// `equalizer` and `writer`, and handing the same audio to the AirPlay
@@ -262,6 +291,9 @@ pub struct Controller<D: Driver> {
     starter: Option<SenderStarter>,
     /// Outputs fading out before they stop.
     retiring: Vec<Retiring<D>>,
+    /// The own volume and mute of each output that is on and connected
+    /// (spec S192 to S202), followed through Windows' notifications.
+    device_volumes: device_volume::Followed,
 }
 
 impl<D: Driver> Controller<D> {
@@ -288,6 +320,7 @@ impl<D: Driver> Controller<D> {
             feed: None,
             starter: None,
             retiring: Vec::new(),
+            device_volumes: device_volume::Followed::default(),
         }
     }
 
@@ -475,6 +508,8 @@ impl<D: Driver> Controller<D> {
         self.present = listed;
         self.policy.set_listed(&self.present);
         self.listing_ok = true;
+        // A device that came back is read afresh; one gone is let go.
+        self.follow_device_volumes();
         (changed, Ok(()))
     }
 
@@ -488,9 +523,14 @@ impl<D: Driver> Controller<D> {
                 .log(|| "Windows reported a change of the outputs".to_owned());
         }
         if force || notified || !self.listing_ok {
-            let (changed, _) = self.refresh_outputs();
+            let (changed, listed) = self.refresh_outputs();
             if changed && !self.pending.contains(&BackendEvent::OutputsChanged) {
                 self.pending.push(BackendEvent::OutputsChanged);
+            }
+            // A device unplugged and plugged in again (or whose stream
+            // ended) may be listed as before, without its volume listener.
+            if (force || notified) && listed.is_ok() {
+                self.renew_device_volumes();
             }
         }
     }
@@ -992,6 +1032,7 @@ impl<D: Driver> Drop for Controller<D> {
     fn drop(&mut self) {
         self.end_session();
         self.reap(true);
+        self.stop_following_device_volumes();
     }
 }
 
@@ -1047,6 +1088,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
                     delay_ms: settings.delay_ms,
                     volume: settings.volume,
                     playing: self.is_playing(&endpoint.id),
+                    device_volume: self.device_volumes.reading(&endpoint.id),
                 }
             })
             .collect();
@@ -1071,9 +1113,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.end_session();
         self.log
             .log(|| format!("starting: capturing {}", describe_source(source)));
-        self.start_session(source).inspect_err(|error| {
+        let started = self.start_session(source).inspect_err(|error| {
             self.log.log(|| format!("the start failed: {error}"));
-        })
+        });
+        // Outputs that couldn't start were turned off.
+        self.follow_device_volumes();
+        started
     }
 
     fn stop(&mut self) {
@@ -1095,6 +1140,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         });
         self.policy.set_enabled(id, enabled);
         if self.session.is_none() {
+            self.follow_device_volumes();
             return Ok(());
         }
         if enabled {
@@ -1110,6 +1156,8 @@ impl<D: Driver> AudioBackend for Controller<D> {
             }
         }
         self.retime();
+        // An output that couldn't start was turned off again.
+        self.follow_device_volumes();
         result
     }
 
@@ -1149,6 +1197,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 });
             }
         }
+    }
+
+    fn fix_device_volume(&mut self, id: &str) {
+        self.fix_followed_device_volume(id);
     }
 
     fn set_master_volume(&mut self, position: f64) {
@@ -1384,11 +1436,20 @@ impl<D: Driver> AudioBackend for Controller<D> {
             }
         }
         self.report_failures(failures);
+        // Outputs that couldn't start were turned off; then what Windows
+        // reported of the followed outputs' own volumes.
+        self.follow_device_volumes();
+        self.read_device_volume_changes();
         let now = Instant::now();
         self.check_routing_if_due(now);
         self.log_status_if_due(now);
         let events = std::mem::take(&mut self.pending);
-        for event in &events {
+        // A device volume that changed is logged when its decision changes
+        // (S201), so its event isn't.
+        for event in events
+            .iter()
+            .filter(|event| !matches!(event, BackendEvent::DeviceVolumeChanged { .. }))
+        {
             self.log
                 .log(|| format!("event: {}", describe_event(event, &self.names)));
         }
@@ -1662,6 +1723,9 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::AirPlayPaired { id } => format!("AirPlay speaker ({id}) paired and on"),
         BackendEvent::AirPlayStopped => {
             "the AirPlay sender stopped; it waits for the user's Retry".to_owned()
+        }
+        BackendEvent::DeviceVolumeChanged { id } => {
+            format!("output {}: its own volume changed", label(names, id))
         }
     }
 }

@@ -236,7 +236,7 @@ fn every_control_has_an_accessible_label() {
         "CheckBox",
         "SpinBox",
     ];
-    let own = ["IconButton", "SpeakerBadge", "VolumeSlider"];
+    let own = ["IconButton", "SpeakerBadge", "VolumeSlider", "LinkButton"];
     let mut checked = 0;
     for (file, source) in UI_FILES {
         for element in standard {
@@ -270,6 +270,7 @@ fn custom_controls_are_accessible_and_show_focus() {
     for (source, component) in [
         (widgets, "IconButton"),
         (widgets, "SpeakerBadge"),
+        (widgets, "LinkButton"),
         (main, "EqualizerCard"),
     ] {
         let start = source
@@ -630,4 +631,233 @@ fn the_double_audio_guide_is_wired_and_worded_in_strings() {
         let body = &body[..body.find("\n    }").expect("the function ends")];
         assert!(body.contains("@tr(\""), "{function} is translatable");
     }
+}
+
+/// The body of `function` in strings.slint, up to its closing brace.
+fn strings_function(function: &str) -> &'static str {
+    let strings = include_str!("../ui/strings.slint");
+    let start = strings
+        .find(&format!("public pure function {function}("))
+        .unwrap_or_else(|| panic!("strings.slint has {function}"));
+    let body = &strings[start..];
+    &body[..body.find("\n    }").expect("the function ends")]
+}
+
+/// The Windows columns of the device-volume wording table in the spec
+/// (S199): each case with its hint and its button, "n" standing for the
+/// percent.
+fn spec_device_volume_wording() -> Vec<(String, String, String)> {
+    let spec = include_str!("../../docs/ENGINE_SPEC.md");
+    let header = spec
+        .find("| Case | Mac hint | Mac button | Windows hint | Windows button |")
+        .expect("the spec has the wording table");
+    spec[header..]
+        .lines()
+        .skip(2)
+        .take_while(|line| line.trim_start().starts_with('|'))
+        .map(|line| {
+            let cells: Vec<&str> = line
+                .trim()
+                .trim_matches('|')
+                .split('|')
+                .map(str::trim)
+                .collect();
+            (
+                cells[0].to_owned(),
+                cells[3].to_owned(),
+                cells[4].to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// The device-volume hint under a speaker's volume slider (S198 to S200):
+/// worded as the spec says, in strings.slint; one text element whose label
+/// names the output; the fix a link-style button whose label starts with its
+/// visible text and then names the output; both right after the slider in
+/// reading order; the glyph decorative.
+#[test]
+fn the_hint_and_the_fix_name_the_output_for_narrator() {
+    let wording = spec_device_volume_wording();
+    let cases: Vec<&str> = wording.iter().map(|(case, _, _)| case.as_str()).collect();
+    assert_eq!(cases, ["low", "muted", "muted and low"]);
+    let hint = strings_function("device-volume-hint");
+    let fix = strings_function("device-volume-fix");
+    for (case, hint_text, fix_text) in &wording {
+        // "n%" is the percent and "75%" the fix's percent: both come in as {}.
+        let hint_text = hint_text.replace("n%", "{}%");
+        let fix_text = fix_text.replace("75%", "{}%");
+        assert!(
+            hint.contains(&format!("@tr(\"{hint_text}\"")),
+            "{case}: the hint reads {hint_text:?}"
+        );
+        assert!(
+            fix.contains(&format!("@tr(\"{fix_text}\"")),
+            "{case}: the button reads {fix_text:?}"
+        );
+    }
+    let strings = include_str!("../ui/strings.slint");
+    let fix_percent = (audiosync_core::policy::device_volume::FIX_VOLUME * 100.0).round();
+    assert!(
+        strings.contains(&format!(
+            "out property <int> device-volume-fix-percent: {fix_percent};"
+        )),
+        "the buttons name the volume the fix sets"
+    );
+    assert!(fix.contains("root.device-volume-fix-percent"));
+
+    // Narrator: the output's name, then the hint (S200).
+    let hint_label = strings_function("device-volume-hint-label");
+    for label in [
+        "@tr(\"{0}: Windows volume is {1}%\", name, percent)",
+        "@tr(\"{}: muted in Windows\", name)",
+        "@tr(\"{0}: muted in Windows, volume {1}%\", name, percent)",
+    ] {
+        assert!(hint_label.contains(label), "the hint's label has {label}");
+    }
+    // The fix's label starts with what the button shows.
+    let fix_label = strings_function("device-volume-fix-label");
+    assert!(fix_label.contains("@tr(\"{0}, {1}\", root.device-volume-fix(hint), name)"));
+
+    let widgets = include_str!("../ui/widgets.slint");
+    let row = component_body(widgets, "SpeakerRow");
+    let slider = row.find("VolumeSlider {").expect("the row's slider");
+    let hint_at = row
+        .find(
+            "accessible-label: Strings.device-volume-hint-label(root.item.name, \
+             root.item.device-volume, root.item.device-volume-percent);",
+        )
+        .expect("the hint names the output");
+    let fix_at = row
+        .find("label: Strings.device-volume-fix-label(root.item.name, root.item.device-volume);")
+        .expect("the fix names the output");
+    let options = row
+        .find("options := IconButton {")
+        .expect("the options button");
+    assert!(
+        slider < hint_at && hint_at < fix_at && fix_at < options,
+        "the hint and the fix come right after the slider"
+    );
+    let shown = row
+        .find("if root.item.device-volume != DeviceVolumeHint.none:")
+        .expect("the hint shows only with a hint to show");
+    assert!(slider < shown && shown < hint_at);
+    let part = &row[shown..options];
+    assert!(part.contains("accessible-role: text;"));
+    assert!(part.contains(
+        "text: Strings.device-volume-hint(root.item.device-volume, \
+         root.item.device-volume-percent);"
+    ));
+    assert!(part.contains("text: Strings.device-volume-fix(root.item.device-volume);"));
+    assert!(part.contains("root.device-volume-fix();"));
+    assert!(part.contains("color: Tokens.secondary-text;"));
+    assert!(
+        part.contains("Glyph {")
+            && part.contains("glyph: Glyphs.device-volume(root.item.device-volume);"),
+        "the glyph is a decorative Glyph"
+    );
+    assert!(
+        part.contains("LinkButton {"),
+        "the fix is a link-style button"
+    );
+    let link = component_body(widgets, "LinkButton");
+    for needle in [
+        "accessible-role: button;",
+        "accessible-label: root.label;",
+        "accessible-action-default",
+        "FocusScope",
+        "FocusRing",
+        "color: Tokens.teal-text;",
+    ] {
+        assert!(link.contains(needle), "LinkButton has {needle}");
+    }
+    assert!(
+        !link.contains("border-width: 1"),
+        "a link-style button is borderless"
+    );
+    // The click reaches the backend.
+    assert!(include_str!("../ui/main.slint").contains("root.device-volume-fix(speaker.id);"));
+    assert!(include_str!("view.rs").contains("b.fix_device_volume(&id)"));
+}
+
+/// The fix goes away with its hint once Windows reports the change, so a
+/// fix pressed from the keyboard first hands the focus to the row's volume
+/// slider, right before it in reading order; the focus stays in the row
+/// rather than being lost (S198). A mouse click leaves the focus alone.
+#[test]
+fn the_fix_keeps_the_keyboard_focus_in_the_row() {
+    let widgets = include_str!("../ui/widgets.slint");
+    let slider = component_body(widgets, "VolumeSlider");
+    let function = slider
+        .find("public function focus-slider() {")
+        .expect("VolumeSlider can take the focus");
+    assert!(slider[function..].contains("slider.focus();"));
+
+    let row = component_body(widgets, "SpeakerRow");
+    assert!(row.contains("volume-slider := VolumeSlider {"));
+    let button = row
+        .find("fix-button := LinkButton {")
+        .expect("the fix button is named");
+    let handler = &row[button..];
+    let handler = &handler[handler.find("clicked => {").expect("its click")..];
+    let focus = handler
+        .find("if fix-button.keyboard-focused {")
+        .expect("only a keyboard focus moves");
+    let moved = handler
+        .find("volume-slider.focus-slider();")
+        .expect("the focus moves to the slider");
+    let fixed = handler
+        .find("root.device-volume-fix();")
+        .expect("then the fix");
+    assert!(
+        focus < moved && moved < fixed,
+        "the focus moves before the fix"
+    );
+    let link = component_body(widgets, "LinkButton");
+    assert!(link.contains("out property <bool> keyboard-focused: focus.has-focus;"));
+    assert!(link.contains("focus-on-click: false;"));
+}
+
+/// The tray flyout's row of a switched-on local output shows the state as a
+/// small glyph in the secondary text color, with no button, and Narrator
+/// hears the hint in the row's description (S198, S199).
+#[test]
+fn the_flyout_row_shows_the_glyph_and_the_hint_in_its_description() {
+    let flyout = include_str!("../ui/flyout.slint");
+    let row = component_body(flyout, "FlyoutRow");
+    assert!(row.contains("in property <DeviceVolumeHint> device-volume;"));
+    let name = row.find("text: root.name;").expect("the row's name");
+    let glyph = row
+        .find("if root.device-volume != DeviceVolumeHint.none: Glyph {")
+        .expect("the glyph shows only with a hint");
+    assert!(name < glyph, "the glyph sits at the row's right");
+    let glyph_part = &row[glyph..];
+    assert!(glyph_part.contains("glyph: Glyphs.device-volume(root.device-volume);"));
+    assert!(glyph_part.contains("color: Tokens.secondary-text;"));
+    assert!(
+        !row.contains("Button {"),
+        "no button in the flyout row; the fix is in the main window"
+    );
+    assert!(flyout.contains("device-volume: speaker.device-volume;"));
+    assert!(flyout.contains(
+        "description: Strings.flyout-speaker-description(Strings.help(speaker.state), \
+         Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));"
+    ));
+    let description = strings_function("flyout-speaker-description");
+    assert!(description.contains("if hint == \"\" {"));
+    assert!(description.contains("@tr(\"{0}. {1}\", hint, help)"));
+
+    // Windows' own Mute glyph (a speaker with a cross: Segoe Fluent Icons
+    // has no speaker with a slash) while muted, a speaker with one wave while
+    // low.
+    let widgets = include_str!("../ui/widgets.slint");
+    assert!(widgets.contains("out property <string> volume-muted: \"\\u{E74F}\";"));
+    assert!(widgets.contains("out property <string> volume-low: \"\\u{E993}\";"));
+    let start = widgets
+        .find("public pure function device-volume(hint: DeviceVolumeHint) -> string {")
+        .expect("Glyphs.device-volume");
+    let function = &widgets[start..];
+    let function = &function[..function.find("\n    }").expect("it ends")];
+    assert!(function.contains("return root.volume-muted;"));
+    assert!(function.contains("return root.volume-low;"));
 }

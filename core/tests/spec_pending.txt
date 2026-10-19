@@ -3,6 +3,3 @@
 # space, what is missing. tests/spec_coverage.rs fails once a clause listed here
 # gains a `// covers:` test, so the line goes when the core implements it. A
 # clause only the host can implement belongs in tests/spec_exempt.txt instead.
-S196 The device-volume decision: whole percent, muted, low below 25 %, fine, unknown for missing or non-finite parts.
-S197 The fix's target values: 0.75 only when low, unmute only when muted, never lower.
-S201 The rule that a device-volume reading logs only when its decision changes.
