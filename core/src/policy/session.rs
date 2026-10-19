@@ -4,9 +4,15 @@
 
 use std::collections::BTreeSet;
 
+use super::Seconds;
 use super::pairing::DropReason;
 use super::source::AudioSource;
 use super::speakers::{NoticeSubject, SpeakerKey};
+
+/// The most a quit waits in all (S186): the outputs' fade-outs, at most
+/// `render::STOP_FADE_CAP`, then whatever the host waits for before it
+/// exits, such as the AirPlay sender's teardown.
+pub const QUIT_BUDGET: Seconds = 5.0;
 
 /// Who started a session (S120).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

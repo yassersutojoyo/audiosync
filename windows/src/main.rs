@@ -295,19 +295,17 @@ fn run(log: &DebugLog) -> Result<(), StartError> {
 #[cfg(test)]
 mod tests {
     /// A quit first waits for the outputs' fade-outs, at most the cap of
-    /// S186, and then for what it waited for before (S110): on the Mac the
-    /// bundled engine's write drain and graceful stop, here the AirPlay
-    /// sender's teardown and the debug log's flush. Both stay within the 5 s
-    /// budget.
+    /// S186, and then for the AirPlay sender's teardown and the debug log's
+    /// flush. Together they stay within the 5 s budget.
     #[test]
     fn the_fade_cap_and_the_quit_waits_fit_in_5_s() {
         use audiosync_airplay::session::TEARDOWN_TIMEOUT;
-        use audiosync_core::policy::engine::{QUIT_BUDGET, QUIT_DRAIN_TIMEOUT, QUIT_GRACEFUL_STOP};
+        use audiosync_core::policy::session::QUIT_BUDGET;
         use audiosync_core::render::STOP_FADE_CAP;
 
         let fade = STOP_FADE_CAP.as_secs_f64();
         assert_eq!(fade, 0.5);
-        assert!(fade + QUIT_DRAIN_TIMEOUT + QUIT_GRACEFUL_STOP <= QUIT_BUDGET);
+        assert_eq!(QUIT_BUDGET, 5.0);
         assert!(
             fade + TEARDOWN_TIMEOUT.as_secs_f64() + super::LOG_FLUSH_AT_EXIT.as_secs_f64()
                 <= QUIT_BUDGET

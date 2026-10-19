@@ -1,6 +1,6 @@
 //! Streaming sample-rate converter with the phase carried across blocks
-//! (S85, S94, S125), for the pipe feed (capture rate to 48 kHz) and, with any
-//! other output rate, for a renderer whose device rate differs from the
+//! (S85, S94, S125), for the input of AudioSync's own AirPlay sender (capture
+//! rate to 44.1 kHz) and for a renderer whose device rate differs from the
 //! capture rate (S62).
 //!
 //! The converter is band-limited: each output frame is a windowed-sinc

@@ -4,8 +4,8 @@
  *
  * Audio crosses this interface one whole buffer at a time: a pointer to
  * interleaved stereo float32 frames (L, R) plus a frame count, never one
- * sample per call. The core owns no thread, device, file or pipe: the host
- * captures, plays, opens the pipe and runs every thread, and calls in here.
+ * sample per call. The core owns no thread, device or file: the host
+ * captures, plays and runs every thread, and calls in here.
  * The one exception is AudioSync's own AirPlay sender (asc_airplay_*), which
  * runs its own threads and network sockets.
  *
@@ -14,16 +14,16 @@
  * nothing or saturate.
  *
  * Threads. Each handle lists which thread runs which call:
- * - an audio call (capture thread, output thread or FIFO writer thread) runs
- *   on one thread at a time per handle;
+ * - an audio call (capture thread or output thread) runs on one thread at a
+ *   time per handle;
  * - a control call runs on one control thread at a time per handle, and may
  *   run while that handle's audio call runs;
  * - an "any thread" call is a lock-free atomic operation and may run anywhere,
  *   at any time, while the handle lives;
  * - a destroy call runs once no other call on that handle can run.
- * Handles that share audio (a ring and its writer and readers, a FIFO feed
- * and its writer) are reference-counted inside, so they may be destroyed in
- * any order. Functions without a handle are thread-safe.
+ * Handles that share audio (a ring and its writer and readers) are
+ * reference-counted inside, so they may be destroyed in any order. Functions
+ * without a handle are thread-safe.
  *
  * Pointers. A handle argument may be NULL, which makes the call do nothing
  * and return false, 0, NULL or an all-zero struct, unless its comment says
@@ -72,24 +72,6 @@ extern "C" {
 #define ASC_CORRECTION_SKIP_FORWARD 3 /* behind by more than the tolerance */
 #define ASC_CORRECTION_OVERRUN 4      /* the frames it needed were overwritten */
 #define ASC_CORRECTION_STEP_BACK 5    /* ahead by more than the tolerance */
-
-/* The pipe's format: 48 kHz, signed 16-bit little-endian stereo, 4 bytes a frame. */
-#define ASC_PIPE_RATE 48000
-#define ASC_PIPE_FRAME_BYTES 4
-
-/* The most bytes one write callback is offered: the smallest PIPE_BUF POSIX allows. */
-#define ASC_PIPE_WRITE_MAX_BYTES 512
-
-/* The usual FIFO queue length in seconds. */
-#define ASC_FIFO_DEFAULT_QUEUE_SECONDS 4
-
-/* What a pipe callback reports (AscPipeOpenFn, AscPipeWriteFn). */
-#define ASC_PIPE_OK 0          /* opened, or wrote *written bytes */
-#define ASC_PIPE_NO_READER 1   /* open: no process reads the FIFO yet (ENXIO) */
-#define ASC_PIPE_INTERRUPTED 2 /* open or write: interrupted by a signal (EINTR) */
-#define ASC_PIPE_WOULD_BLOCK 3 /* write: the pipe is full (EAGAIN) */
-#define ASC_PIPE_BROKEN 4      /* write: the reader went away (EPIPE) */
-#define ASC_PIPE_FAILED 5      /* open or write: any other error */
 
 /* What an AirPlay receiver event reports (AscAirPlayReceiver.event). */
 #define ASC_AIRPLAY_APPEARED 1 /* discovery found a receiver */
@@ -480,175 +462,7 @@ void asc_gain_stage_apply(AscGainStage *stage, float *interleaved, size_t frames
 size_t asc_gain_stage_render(AscGainStage *stage, const float *stereo, size_t frames, float *device,
                              size_t channels);
 
-/* ---- FIFO feed: PCM16 for the AirPlay engine's pipe --------------------- */
-
-/*
- * Converts `samples` floats to signed 16-bit: NaN gives 0, anything else
- * round(clamp(x, -1, 1) x 32767), ties away from zero. Returns the count
- * converted. Real-time safe.
- */
-size_t asc_convert_to_pcm16(const float *input, int16_t *output, size_t samples);
-
-/*
- * The pipe as the host's FIFO writer thread implements it with POSIX calls.
- * Every callback gets the sink's context. The core calls them only from
- * asc_fifo_writer_step and asc_fifo_writer_close_step, on the calling thread.
- */
-
-/* Opens the pipe write-only and non-blocking: ASC_PIPE_OK, NO_READER, INTERRUPTED or FAILED. */
-typedef int32_t (*AscPipeOpenFn)(void *context);
-
-/*
- * Writes up to `length` bytes (1...ASC_PIPE_WRITE_MAX_BYTES, whole frames)
- * from `bytes`: ASC_PIPE_OK with the count in *written (a short write is
- * fine), or WOULD_BLOCK, INTERRUPTED, BROKEN or FAILED.
- */
-typedef int32_t (*AscPipeWriteFn)(void *context, const uint8_t *bytes, size_t length, size_t *written);
-
-/* Closes the descriptor the open callback opened. */
-typedef void (*AscPipeCloseFn)(void *context);
-
-/* The host's pipe: a context pointer and three callbacks (a NULL callback fails). */
-typedef struct AscPipeSink {
-    void *context;
-    AscPipeOpenFn open;
-    AscPipeWriteFn write;
-    AscPipeCloseFn close;
-} AscPipeSink;
-
-/*
- * The FIFO feed's counters: monotonic over the feed's life, read without
- * blocking anyone; starting and stopping a writer resets nothing.
- */
-typedef struct AscFifoCounters {
-    uint64_t opens;                 /* successful opens of the pipe */
-    uint64_t write_errors;          /* failed writes other than a full pipe */
-    uint64_t backlog_skips;         /* times the 250 ms backlog cap or an open dropped audio; one per stall */
-    uint64_t backlog_skip_samples;  /* 16-bit samples those drops removed */
-    uint64_t pipe_full_waits;       /* waits on a full pipe */
-    uint64_t short_writes;          /* writes that took only part of the bytes */
-    uint64_t bytes_written;         /* bytes the pipe accepted */
-    uint64_t open_failures;         /* failed opens, mostly while no reader exists */
-    uint64_t bytes_abandoned;       /* bytes of a partly written frame given up */
-    uint64_t samples_queued;        /* 16-bit samples asc_fifo_feed queued (frames x 2) */
-    uint64_t frames_dropped;        /* 48 kHz frames asc_fifo_feed dropped on a full queue */
-} AscFifoCounters;
-
-/*
- * The FIFO feed: converts captured audio to 48 kHz PCM16 into a lock-free
- * queue. asc_fifo_set_input_rate and asc_fifo_feed run on the capture
- * thread, or on the control thread while capture is stopped; the other
- * calls run on any thread.
- */
-typedef struct AscFifoFeed AscFifoFeed;
-
-/*
- * The feed's single writer, driven by the host's writer thread: each step
- * does one bounded piece of work through the host's AscPipeSink.
- */
-typedef struct AscFifoWriter AscFifoWriter;
-
-/*
- * Creates a feed whose queue holds queue_seconds x 48 000 frames, converting
- * from 48 kHz until asc_fifo_set_input_rate. NULL outside 1...3600 seconds.
- */
-AscFifoFeed *asc_fifo_create(uint32_t queue_seconds);
-
-/* Destroys a feed handle; a writer still alive keeps the queue alive. */
-void asc_fifo_destroy(AscFifoFeed *feed);
-
-/*
- * At each session start, before the first asc_fifo_feed: sets the capture
- * rate and resets the converter. False outside 8000...384000 Hz. Never
- * allocates.
- */
-bool asc_fifo_set_input_rate(AscFifoFeed *feed, uint32_t rate);
-
-/*
- * Capture thread: converts `frames` stereo frames to 48 kHz PCM16 and queues
- * them, dropping what doesn't fit. Never touches the pipe; works whether or
- * not a writer runs. Returns the 48 kHz frames queued. Real-time safe.
- */
-size_t asc_fifo_feed(AscFifoFeed *feed, const float *interleaved, size_t frames);
-
-/* Any thread: a snapshot of the counters; fields may come from different moments. */
-AscFifoCounters asc_fifo_counters(const AscFifoFeed *feed);
-
-/*
- * Any thread, at a session stop: asks asc_fifo_feed to fade out over the
- * next 20 ms of capture-rate frames it is given and to queue zeros after
- * them. The next asc_fifo_set_input_rate or asc_fifo_writer_create opens
- * the feed again.
- */
-void asc_fifo_request_fade_out(AscFifoFeed *feed);
-
-/*
- * Control thread, at a writer start: takes the queue's only consumer and
- * empties the queue, so writing starts with what is fed next, and opens the
- * feed again after a stop's fade-out. NULL while another writer exists. The
- * writer starts without the fade-in after each open until
- * asc_fifo_writer_set_fade_in turns it on.
- */
-AscFifoWriter *asc_fifo_writer_create(AscFifoFeed *feed);
-
-/*
- * Control thread, before the writer's first step: whether each open of the
- * pipe starts with a 20 ms fade-in over the first 960 frames written.
- */
-void asc_fifo_writer_set_fade_in(AscFifoWriter *writer, bool on);
-
-/*
- * Destroys a writer, so the feed can hand out a new one. Close the pipe with
- * asc_fifo_writer_close_step first; this calls no callback.
- */
-void asc_fifo_writer_destroy(AscFifoWriter *writer);
-
-/*
- * Writer thread: one bounded piece of work. It keeps the unwritten audio at
- * or under 250 ms (dropping the oldest whole frames), opens the pipe while it
- * is closed (each open, the first or a reopen, drops whatever queued before
- * it, so writing starts at the live edge), otherwise makes one write of at
- * most ASC_PIPE_WRITE_MAX_BYTES that ends on a frame boundary, resumes a
- * short write at the next byte and reopens after a broken pipe on a frame
- * boundary. Returns the microseconds to sleep before the next step (or until
- * the host wakes the thread to stop); 0 means step again at once. A NULL
- * writer or sink does nothing and returns the open retry pause.
- */
-uint32_t asc_fifo_writer_step(AscFifoWriter *writer, const AscPipeSink *sink);
-
-/*
- * Writer thread, once stopping: one step of closing the pipe on a frame
- * boundary. Returns true while a frame the reader got only part of is still
- * being completed: sleep *pause_us microseconds (pause_us may be NULL) and
- * call again. Returns false once the pipe is closed; after about 100 ms of
- * pauses the rest of that frame is given up, so a stop stays well under
- * 300 ms. The writer may step again afterwards.
- */
-bool asc_fifo_writer_close_step(AscFifoWriter *writer, const AscPipeSink *sink, uint32_t *pause_us);
-
 /* ---- AirPlay sync rule (local output delays) ----------------------------- */
-
-/*
- * Inputs of the AirPlay sync rule. IDs are AirPlay output IDs as
- * NUL-terminated UTF-8, compared whole; a NULL array (with any count), a NULL
- * entry or an entry that isn't valid UTF-8 counts as no ID.
- */
-typedef struct AscSyncInput {
-    const char *const *enabled_ids;  /* AirPlay outputs the user enabled */
-    size_t enabled_count;
-    const char *const *listed_ids;   /* the AirPlay engine's latest output list */
-    size_t listed_count;
-    bool was_chosen;                 /* airplay_chosen of the previous decision */
-} AscSyncInput;
-
-/* The sync rule's decision. */
-typedef struct AscSyncDecision {
-    bool airplay_chosen;  /* some enabled AirPlay output is listed now */
-    bool flipped;         /* airplay_chosen changed: give every running local output its new effective delay */
-} AscSyncDecision;
-
-/* Decides whether an AirPlay speaker is chosen, and whether that flipped. A NULL input gives all false. */
-AscSyncDecision asc_sync_decide(const AscSyncInput *input);
 
 /* A local output's effective delay: its configured delay while an AirPlay speaker is chosen, otherwise 0. */
 double asc_sync_effective_delay_ms(double configured_ms, bool airplay_chosen);

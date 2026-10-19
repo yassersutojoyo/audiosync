@@ -1,10 +1,8 @@
 //! What the rates of a session are (S4), what belongs to one session (S5), and
-//! the teardown order that ownership enforces around the ring (S134; the FIFO
-//! writer's part is tested in `src/fifo.rs`).
+//! the teardown order that ownership enforces around the ring (S134).
 
 use std::sync::Arc;
 
-use audiosync_core::fifo::{FifoFeed, PIPE_RATE};
 use audiosync_core::reader::{Correction, Reader, delay_ms_to_frames, tolerance_frames};
 use audiosync_core::resample::Resampler;
 use audiosync_core::ring::Ring;
@@ -30,7 +28,7 @@ fn block(session: u32, first: u64, frames: usize) -> Vec<f32> {
 // covers: S4, S62, S45
 #[test]
 fn delays_ring_indices_and_lag_count_capture_rate_frames() {
-    // Captured at 44.1 kHz, played on a 48 kHz device, fed to the 48 kHz pipe.
+    // Captured at 44.1 kHz, played on a 48 kHz device.
     let rc = 44_100;
     let ring = Ring::for_rate(rc).unwrap();
     let mut capture = ring.writer().unwrap();
@@ -75,17 +73,6 @@ fn delays_ring_indices_and_lag_count_capture_rate_frames() {
     }
     assert_eq!(ring.frames_written(), 600 * 441, "W counts Rc frames");
     assert_eq!(device_frames, 600 * 480, "the device counts its own frames");
-    // The pipe runs at 48 kHz whatever Rc is (S83).
-    assert_eq!(PIPE_RATE, 48_000);
-    let feed = FifoFeed::new(1).unwrap();
-    let mut producer = feed.producer().unwrap();
-    producer.set_input_rate(rc).unwrap();
-    producer.feed(&vec![0.25f32; 2 * 44_100], 44_100);
-    let pipe_frames = feed.samples_queued() / 2;
-    assert!(
-        pipe_frames.abs_diff(48_000) <= 2,
-        "a second at Rc is a second at the pipe rate: {pipe_frames}"
-    );
 }
 
 // covers: S5, S17, S39, S45

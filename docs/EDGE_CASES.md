@@ -9,8 +9,8 @@ What AudioSync does when the world changes under a running session, where the co
 | EC1 | Device unplugged and replugged during playback | Automated (logic) and manual |
 | EC2 | Bluetooth disconnect and reconnect | Automated (logic) and manual |
 | EC3 | Sleep and wake | Automated (core) and manual |
-| EC4 | Sample-rate change on an output | Automated (logic, FIFO, core) and manual |
-| EC5 | Switching the source during playback | Automated (logic, FIFO, core) and manual |
+| EC4 | Sample-rate change on an output | Automated (logic, core) and manual |
+| EC5 | Switching the source during playback | Automated (logic, core) and manual |
 | EC6 | The source app quits | Automated (logic) and manual |
 | EC7 | The AirPlay sender stops after an internal error | Automated (logic) and manual |
 | EC8 | Every speaker off, then on | Automated (logic) and manual |
@@ -69,7 +69,7 @@ Code path:
 - `ProcessTapCapture` listens to `kAudioTapPropertyFormat` and the aggregate device's `kAudioDevicePropertyNominalSampleRate` (tap), or the input device's `kAudioDevicePropertyNominalSampleRate`; `CaptureRate.running` takes the rate of the device the IOProc runs on (the tap's own rate only when that can't be read) and `CaptureRate.needsRestart` (`CaptureCheck.swift`) decides; an app tap built again for new processes goes through the same rule; `.formatChanged` goes through `SyncEngine.handleInterruption` to the `engine.onInterrupted` handler in `AppDelegate.swift`, which calls `startEngine(origin: .automatic)`.
 - Delays are kept in milliseconds and converted at the new rate (`OutputRenderer.setDelayMs`); AudioSync's AirPlay sender gets the new rate at the rebuild and resamples to 44.1 kHz itself (`NativeAirPlayTap.prepare`).
 
-Automated: "EC4 rate: a new capture rate rebuilds the session", "EC4 rate: a higher capture rate rebuilds the session", "EC4 rate: the same rate keeps playing", "EC4 rate: an unreadable rate keeps playing", "EC4 rate: a format change rebuilds the session the engine stopped, unless the user switched streaming off"; logic "capture rate: …"; FIFO "fifo: <rate> Hz → 48 kHz frame count"; core `core/tests/drift.rs` (drift both ways stays within the tolerance).
+Automated: "EC4 rate: a new capture rate rebuilds the session", "EC4 rate: a higher capture rate rebuilds the session", "EC4 rate: the same rate keeps playing", "EC4 rate: an unreadable rate keeps playing", "EC4 rate: a format change rebuilds the session the engine stopped, unless the user switched streaming off"; logic "capture rate: …"; core `core/tests/drift.rs` (drift both ways stays within the tolerance).
 
 Manual: stream to a USB output and an AirPlay speaker. In Audio MIDI Setup, change the USB output's format from 48,000 Hz to 44,100 Hz and back. Expected: at most a short glitch, then in sync with AirPlay, no notice. Do the same on the Mac's default output device: a short dropout everywhere, then playback resumes in sync; the debug log shows "capture rate changed".
 
@@ -79,7 +79,7 @@ Expected: choosing another source while streaming gives a short gap, then only t
 
 Code path: `AppDelegate.setSource` (`AppDelegate+Outputs.swift`) asks `SourceSwitch.decide` (`AudioSource.swift`); `.restart` calls `stopEngine()` and `startEngine(origin: .user)` (`AppDelegate+Engine.swift`). `SyncEngine.stop` resets the ring; `ProcessTapCapture.stop` stops and destroys the capture IOProc at once, and `ProcessTapCapture.start` builds a tap for the new source. The old tap and its aggregate device are destroyed on the main queue's next turn, after the new tap exists (`CaptureClose`, `CaptureSupport.swift`): a tap made right after the old one was destroyed failed, and the old tap keeps the old source muted until the new one takes over.
 
-Automated: "EC5 source: switching while streaming rebuilds the capture", "EC5 source: switching to an input device while streaming rebuilds the capture", "EC5 source: switching while stopped only remembers the choice", "EC5 source: choosing the same source changes nothing"; logic "capture close: a source switch makes the new tap before the old tap is destroyed"; every session gets a new core ring (`EngineParts.make`); FIFO "fifo: stop/start leaves one writer thread".
+Automated: "EC5 source: switching while streaming rebuilds the capture", "EC5 source: switching to an input device while streaming rebuilds the capture", "EC5 source: switching while stopped only remembers the choice", "EC5 source: choosing the same source changes nothing"; logic "capture close: a source switch makes the new tap before the old tap is destroyed"; every session gets a new core ring (`EngineParts.make`).
 
 Manual: stream the whole system with music in one app and a video in a browser. Switch the source to the music app: after a short gap only the music plays, AirPlay speakers stay on. To see the failure path, turn off AudioSync under System Settings → Privacy & Security → Microphone, then switch the source to an input device: an alert says so, a notice stays, and streaming stops. (The source list only offers running apps, so a not-running app can't be picked by hand.)
 
