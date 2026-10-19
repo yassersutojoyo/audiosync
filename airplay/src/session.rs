@@ -50,9 +50,9 @@ pub const TIMING_SILENCE: Duration = Duration::from_secs(10);
 pub const VOLUME_INTERVAL: Duration = Duration::from_millis(100);
 
 /// The legacy pair-verify of a paired Apple TV (P55, P56), run on every new
-/// connection before ANNOUNCE. The pairing stage implements it; the session
-/// only carries its two `POST /pair-verify` exchanges, both with
-/// `Content-Type: application/octet-stream`.
+/// connection before ANNOUNCE. [`LegacyVerifier`](crate::pairing::LegacyVerifier)
+/// implements it; the session only carries its two `POST /pair-verify`
+/// exchanges, both with `Content-Type: application/octet-stream`.
 pub trait Verifier: Send {
     /// The body of the first request.
     fn first_request(&mut self) -> Vec<u8>;
@@ -81,7 +81,9 @@ pub struct SessionConfig {
     /// `Debug` output hides it.
     pub password: Option<String>,
     /// The public key for `POST /auth-setup`, when the receiver needs it
-    /// (P60, [`Device::needs_auth_setup`](crate::discovery::Device::needs_auth_setup)).
+    /// (P60, [`Device::needs_auth_setup`](crate::discovery::Device::needs_auth_setup)):
+    /// a fresh one per connection from
+    /// [`pairing::auth_setup_key`](crate::pairing::auth_setup_key).
     pub auth_setup_key: Option<[u8; 32]>,
     /// The pair-verify of a paired Apple TV (P55).
     pub verifier: Option<Box<dyn Verifier>>,
