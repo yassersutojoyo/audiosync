@@ -53,7 +53,7 @@ Both take `--minutes N` and `--out DIR` (by default the logs go to a new folder 
 
 `summary.txt` in the output folder has the verdict. `soak.sh` exits 0 on PASS, 1 on FAIL, 2 when it can't start (the harness doesn't compile, fewer than two usable outputs, or a baseline that lacks a metric the run is judged on) and 3 when there's no baseline file. It warns, on stderr and in the summary, when the baseline came from another Mac model, another macOS version or other outputs. Ctrl-C stops the harness too.
 
-`Tests/run-tests.sh` only compiles the harness; it never runs these.
+`Tests/run-tests.sh` only compiles the harness and checks its memory rule on made-up series (`Tests/soakrulestest.swift`); it never runs these.
 
 ## Thresholds
 
@@ -62,7 +62,8 @@ Both take `--minutes N` and `--out DIR` (by default the logs go to a new folder 
 - Event rates (local dropouts, local starved renders, local drift corrections, FIFO underruns, FIFO gaps): the allowed rate is max(2 × baseline, baseline + 5) per hour. The run passes when its count is at most that rate times the hours it ran, rounded up, so a short run still gets room for one event.
 - Inter-output drift and local lag error (the worst 10-second mean, as an absolute value): at most the baseline plus 35 ms. That's one drift-correction dead band: each output is held within it of its target, so going past baseline plus 35 ms means correction isn't keeping up.
 - FIFO latency: the maximum at most the baseline plus 50 ms, and the change from the first to the last window at most the baseline's change plus 20 ms. Latency that keeps growing is the leak the writer's 250 ms backlog cap exists to stop.
-- Memory growth (first to last window) and mean CPU: at most max(2 × baseline, baseline + 5), in MB and percentage points.
+- Memory growth and mean CPU: at most max(2 × baseline, baseline + 5), in MB and percentage points.
+- Memory growth leaves out a warm-up. The first window is logged while the session's buffers are still getting their pages, so a healthy run climbs once in its first minute or two (about 30 MB in a 10-minute soak) and then stays flat. Growth is the last window's footprint minus the highest footprint of the first 2 minutes (the first half of a run shorter than 4 minutes). A climb that's over by then counts as nothing; a leak keeps climbing and still fails. `result.json` records the warm-up and the level it settled at as `footprint_warmup_s` and `footprint_mb_settled`.
 
 ## Results
 

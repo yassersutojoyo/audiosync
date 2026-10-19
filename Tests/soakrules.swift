@@ -22,13 +22,32 @@ struct MemoryGrowth {
 }
 
 enum SoakRules {
-    /// Memory growth over a run: the last window's footprint minus the first
-    /// window's.
+    /// How long the footprint may climb before growth counts. The first window
+    /// is logged while the session's buffers are still getting their pages, so
+    /// a healthy run climbs once in its first minute or two (by some 30 MB in
+    /// a 10-minute soak) and then stays flat.
+    static let memoryWarmUpSeconds = 120.0
+
+    /// The warm-up of a run lasting `runSeconds`: the first 2 minutes, or the
+    /// first half of a run shorter than 4 minutes, so a short run still has a
+    /// measured part.
+    static func memoryWarmUp(runSeconds: Double) -> Double {
+        min(memoryWarmUpSeconds, max(runSeconds, 0) / 2)
+    }
+
+    /// Memory growth over a run: the last window's footprint minus the
+    /// highest footprint logged in the warm-up, the level the run settled at.
+    /// A climb that ends within the warm-up counts as nothing; a leak keeps
+    /// climbing after it and shows up in full from the warm-up's end. The run
+    /// lasts until its last window. With no window in the warm-up (windows
+    /// longer than it), growth is measured from the first window.
     static func memoryGrowth(_ samples: [MemorySample]) -> MemoryGrowth {
         guard let first = samples.first, let last = samples.last else {
             return MemoryGrowth(growth: 0, settledMB: 0, warmUpSeconds: 0)
         }
-        return MemoryGrowth(growth: last.mb - first.mb, settledMB: first.mb, warmUpSeconds: 0)
+        let warmUp = memoryWarmUp(runSeconds: last.t)
+        let settled = samples.lazy.filter { $0.t <= warmUp }.map(\.mb).max() ?? first.mb
+        return MemoryGrowth(growth: last.mb - settled, settledMB: settled, warmUpSeconds: warmUp)
     }
 
     /// The most a run's memory may grow, from the baseline run's growth:
