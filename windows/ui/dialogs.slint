@@ -1,10 +1,12 @@
-// The dialog that names a group: New Speaker Group and Rename Group. Enter
-// confirms, Escape cancels.
+// The app's small dialogs: the one that names a group (New Speaker Group and
+// Rename Group) and the code prompt of an Apple TV pairing. Enter confirms,
+// Escape cancels.
 
 import { Button, LineEdit } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Fluent } from "widgets.slint";
+import { PinPhase } from "types.slint";
+import { Card, Fluent, Glyph, Glyphs } from "widgets.slint";
 
 export component GroupNameDialog inherits Dialog {
     in property <string> heading;

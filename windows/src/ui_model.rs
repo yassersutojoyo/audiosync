@@ -449,6 +449,7 @@ impl MockBackend {
             delay_ms,
             auto_connect: false,
             availability: Availability::Open,
+            paired: false,
         };
         let mut speakers = vec![
             speaker(
@@ -712,6 +713,7 @@ mod tests {
             delay_ms: Some(0.0),
             auto_connect: false,
             availability: Availability::Open,
+            paired: false,
         };
         assert!(!speaker(SpeakerKind::Virtual, false).is_listed(false));
         assert!(speaker(SpeakerKind::Virtual, false).is_listed(true));

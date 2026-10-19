@@ -13,12 +13,12 @@ import { BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, NoticeStack,
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
 export { TrayFlyout } from "flyout.slint";
-export { GroupNameDialog } from "dialogs.slint";
+export { GroupNameDialog, PinDialog } from "dialogs.slint";
 export { GuideWindow } from "guide.slint";
 export { Strings } from "strings.slint";
 // The style's palette, for the theme preview (src/view.rs).
 export { Palette } from "std-widgets.slint";
-export { AirPlayProblem, Availability, GroupItem, GuidePage, GuideStepItem, NoticeItem, RowState, SpeakerItem, SpeakerKind } from "types.slint";
+export { AirPlayProblem, Availability, GroupItem, GuidePage, GuideStepItem, NoticeItem, PinPhase, RowState, SpeakerItem, SpeakerKind } from "types.slint";
 
 // A titled card of speaker rows, with a note when it has none.
 component SpeakerSection inherits VerticalLayout {
@@ -32,6 +32,7 @@ component SpeakerSection inherits VerticalLayout {
     callback delay-stepped(string, int);
     callback delay-edited(string, string);
     callback auto-connect-toggled(string, bool);
+    callback forget-pairing(string);
 
     spacing: 8px;
     accessible-role: groupbox;
@@ -71,6 +72,9 @@ component SpeakerSection inherits VerticalLayout {
                 }
                 auto-connect-toggled(on) => {
                     root.auto-connect-toggled(speaker.id, on);
+                }
+                forget-pairing => {
+                    root.forget-pairing(speaker.id);
                 }
             }
         }
@@ -201,6 +205,7 @@ export component MainWindow inherits Window {
     callback delay-stepped(string, int);
     callback delay-edited(string, string);
     callback auto-connect-toggled(string, bool);
+    callback forget-pairing-requested(string);
     callback group-toggled(string);
     callback group-rename-requested(string);
     callback group-deleted(string);
@@ -483,6 +488,9 @@ export component MainWindow inherits Window {
                     SpeakerSection {
                         title: Strings.this-pc-section;
                         speakers: root.this-pc;
+                        forget-pairing(id) => {
+                            root.forget-pairing-requested(id);
+                        }
                         compact: root.compact;
                         note: root.this-pc.length == 0 ? Strings.this-pc-none : "";
                         toggled(id) => {
@@ -543,6 +551,9 @@ export component MainWindow inherits Window {
                     SpeakerSection {
                         title: Strings.connected-section;
                         speakers: root.connected;
+                        forget-pairing(id) => {
+                            root.forget-pairing-requested(id);
+                        }
                         compact: root.compact;
                         note: root.connected.length == 0 ? Strings.connected-none : "";
                         toggled(id) => {

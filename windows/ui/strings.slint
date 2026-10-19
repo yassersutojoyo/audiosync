@@ -6,7 +6,7 @@
 // English only for now. @tr marks each string for Slint's gettext translation
 // when a second language is added.
 
-import { SpeakerKind, Availability, AirPlayProblem, GuidePage, RowState } from "types.slint";
+import { SpeakerKind, Availability, AirPlayProblem, GuidePage, PinPhase, RowState } from "types.slint";
 
 export global Strings {
     // Main window
@@ -46,6 +46,32 @@ export global Strings {
     out property <string> notice-no-speaker: @tr("Turn on at least one speaker first (under This PC or Connected Speakers).");
     out property <string> notice-capture-failed: @tr("AudioSync couldn't capture audio from the selected source. Turn streaming off and on again, or pick another source. If it keeps happening, restart your PC.");
     out property <string> notice-capture-lost: @tr("AudioSync lost the audio from the selected source, so streaming has stopped. Turn streaming on again, or pick another source.");
+
+    // Pairing with an Apple TV that asks for a code: the dialog and the
+    // speaker menu.
+    out property <string> pin-dialog-title: @tr("Pair with Apple TV");
+    out property <string> pin-field-label: @tr("Code");
+    out property <string> pin-field-placeholder: @tr("4 digits");
+    out property <string> pair: @tr("Pair");
+    out property <string> forget-pairing: @tr("Forget Pairing");
+
+    // What the dialog says while the TV is asked for a code, shows one, or
+    // checks the one typed; after a wrong code the TV shows a new one.
+    public pure function pin-message(speaker: string, phase: PinPhase, wrong-pin: bool) -> string {
+        if phase == PinPhase.checking {
+            return @tr("Checking the code with {}…", speaker);
+        }
+        if phase == PinPhase.starting {
+            if wrong-pin {
+                return @tr("That code didn't work. Asking {} for a new one…", speaker);
+            }
+            return @tr("Asking {} to show a code…", speaker);
+        }
+        if wrong-pin {
+            return @tr("That code didn't work. Type the new code {} shows.", speaker);
+        }
+        return @tr("Type the 4-digit code {} shows on the screen.", speaker);
+    }
 
     // Groups
     out property <string> new-group: @tr("New Group from Active Speakers…");
@@ -173,6 +199,12 @@ export global Strings {
         }
         if problem == AirPlayProblem.password-not-yet {
             return @tr("{} asks for a password, which AudioSync for Windows can't send yet, so it's off.", speaker);
+        }
+        if problem == AirPlayProblem.needs-pin {
+            return @tr("{} needs pairing with a code. Switch it on to pair.", speaker);
+        }
+        if problem == AirPlayProblem.pairing-failed {
+            return @tr("{} couldn't be paired, so it's off. Make sure the TV is on, then switch it on to try again.", speaker);
         }
         if problem == AirPlayProblem.pairing-not-yet {
             return @tr("{} needs pairing with a code, which AudioSync for Windows can't do yet, so it's off.", speaker);
@@ -304,6 +336,9 @@ export global Strings {
     public pure function availability(a: Availability) -> string {
         if a == Availability.needs-code {
             return @tr("Asks for a code");
+        }
+        if a == Availability.pairing {
+            return @tr("Pairing…");
         }
         if a == Availability.password-not-yet {
             return @tr("Password not supported yet");

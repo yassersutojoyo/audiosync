@@ -7,8 +7,12 @@
 //! streaming, switching the last one off stops it, an output that can't start
 //! is turned off, a source that quits ends the session. AirPlay speakers count
 //! like any other speaker; one that can't play from AudioSync (a password,
-//! pairing, AirPlay 2 only) is listed with that note and stays off, with a
-//! notice when the user tries it. What happens on its own comes from
+//! AirPlay 2 only) is listed with that note and stays off, with a notice when
+//! the user tries it. An Apple TV that asks for a PIN is paired when the user
+//! switches it on (never by auto-connect, which only posts a notice): the
+//! snapshot's [`PinPrompt`] asks the UI for the PIN, and once paired the
+//! speaker is on and streaming starts like for any speaker switched on. What
+//! happens on its own comes from
 //! [`AudioBackend::poll`], which [`Backend::poll`] passes on, and the adapter
 //! turns it into notices. Notices carry a [`NoticeMessage`]; the UI words it.
 //!
@@ -48,9 +52,10 @@ use crate::audio::backend::{
 use crate::audio::capture::WHOLE_SYSTEM_NAME;
 use crate::audio::routing::{DirectPath, DirectReason};
 use crate::debug_log::DebugLog;
+use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
 use crate::ui_model::{
-    self, AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, Source,
-    SourceKind, Speaker, SpeakerKind, clamp_delay_ms,
+    self, AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, PinPhase,
+    PinPrompt, Source, SourceKind, Speaker, SpeakerKind, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -552,7 +557,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn airplay_cant_play(&mut self, id: &str, problem: AirPlayProblem) {
         let reason = match problem {
             AirPlayProblem::PasswordNotYet => DropReason::PasswordUnsupported,
-            AirPlayProblem::PairingNotYet => DropReason::NeedsCode,
+            AirPlayProblem::PairingNotYet
+            | AirPlayProblem::NeedsPin
+            | AirPlayProblem::PairingFailed => DropReason::NeedsCode,
             _ => DropReason::Unreachable,
         };
         let reaction = reaction(&Incident::SpeakerDropped {
@@ -604,7 +611,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.notices.clear(&[airplay_subject(id)]);
         }
         if let Err(problem) = self.audio.set_airplay_enabled(id, on) {
-            self.airplay_cant_play(id, problem);
+            self.airplay_switch_failed(id, problem);
             return;
         }
         if on {
@@ -613,6 +620,25 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.stop_if_idle();
         }
         self.take_events();
+    }
+
+    /// An AirPlay speaker the user switched on didn't turn on: an Apple TV
+    /// that asks for a PIN is paired (it turns on once paired); any other
+    /// stays off with a notice.
+    fn airplay_switch_failed(&mut self, id: &str, problem: AirPlayProblem) {
+        if problem == AirPlayProblem::NeedsPin {
+            self.log.log(|| {
+                format!(
+                    "{} needs pairing with a PIN: the pairing starts",
+                    self.airplay_name(id)
+                )
+            });
+            if let Err(problem) = self.audio.start_airplay_pairing(id) {
+                self.airplay_cant_play(id, problem);
+            }
+            return;
+        }
+        self.airplay_cant_play(id, problem);
     }
 
     /// Stops streaming when a speaker was switched off and none is left on
@@ -692,6 +718,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 );
             }
             BackendEvent::AirPlayFailed { id, problem } => self.airplay_cant_play(&id, problem),
+            BackendEvent::AirPlayPaired { id } => {
+                self.log
+                    .log(|| format!("{} is paired and on", self.airplay_name(&id)));
+                self.notices.clear(&[airplay_subject(&id)]);
+                self.start_if_switched_on();
+            }
         }
     }
 
@@ -821,7 +853,26 @@ impl<A: AudioBackend> AudioAdapter<A> {
             enabled: speaker.enabled,
             volume: speaker.volume,
             delay_ms: None,
-            availability: availability(speaker.availability),
+            availability: if speaker.pairing {
+                Availability::Pairing
+            } else {
+                availability(speaker.availability)
+            },
+            paired: speaker.paired,
+        }
+    }
+
+    /// A pairing's PIN prompt as the UI shows it.
+    fn pin_prompt(&self, prompt: AirPlayPinPrompt) -> PinPrompt {
+        PinPrompt {
+            speaker_id: airplay_key(&prompt.id),
+            name: prompt.name,
+            phase: match prompt.phase {
+                PairingPhase::Starting => PinPhase::Starting,
+                PairingPhase::WaitingForPin => PinPhase::Ready,
+                PairingPhase::Checking => PinPhase::Checking,
+            },
+            wrong_pin: prompt.wrong_pin,
         }
     }
 
@@ -836,6 +887,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             volume: output.volume,
             delay_ms: Some(output.delay_ms),
             availability: Availability::Open,
+            paired: false,
         }
     }
 }
@@ -871,6 +923,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                     time: posted.time.clone(),
                 })
                 .collect(),
+            pin_prompt: self
+                .audio
+                .airplay_pin_prompt()
+                .map(|prompt| self.pin_prompt(prompt)),
         }
     }
 
@@ -1054,7 +1110,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                         self.notices.clear(&[airplay_subject(id)]);
                     }
                     if let Err(problem) = self.audio.set_airplay_enabled(id, turn_on) {
-                        self.airplay_cant_play(id, problem);
+                        self.airplay_switch_failed(id, problem);
                     }
                 }
             }
@@ -1143,6 +1199,51 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.list_devices();
     }
 
+    /// The PIN itself is never logged.
+    fn submit_pin(&mut self, id: &str, pin: &str) {
+        let Some(SpeakerKey::AirPlay(airplay_id)) = SpeakerKey::parse(id) else {
+            return;
+        };
+        let sent = self.audio.submit_airplay_pin(&airplay_id, pin);
+        self.log.log(|| {
+            let what = if sent { "sent" } else { "not taken" };
+            format!(
+                "the user typed the PIN for {}: {what}",
+                self.airplay_name(&airplay_id)
+            )
+        });
+    }
+
+    fn cancel_pairing(&mut self, id: &str) {
+        let Some(SpeakerKey::AirPlay(airplay_id)) = SpeakerKey::parse(id) else {
+            return;
+        };
+        self.log.log(|| {
+            format!(
+                "the user cancelled the pairing with {}",
+                self.airplay_name(&airplay_id)
+            )
+        });
+        self.audio.cancel_airplay_pairing(&airplay_id);
+        self.take_events();
+    }
+
+    fn forget_pairing(&mut self, id: &str) {
+        let Some(SpeakerKey::AirPlay(airplay_id)) = SpeakerKey::parse(id) else {
+            return;
+        };
+        self.log.log(|| {
+            format!(
+                "the user forgot the pairing with {}",
+                self.airplay_name(&airplay_id)
+            )
+        });
+        self.audio.forget_airplay_pairing(&airplay_id);
+        self.notices.clear(&[airplay_subject(&airplay_id)]);
+        self.stop_if_idle();
+        self.take_events();
+    }
+
     fn poll(&mut self) -> bool {
         let mut changed = self.take_events();
         self.polls += 1;
@@ -1193,6 +1294,7 @@ fn availability(availability: AirPlayAvailability) -> Availability {
     match availability {
         AirPlayAvailability::Open => Availability::Open,
         AirPlayAvailability::PasswordNotYet => Availability::PasswordNotYet,
+        AirPlayAvailability::NeedsPin => Availability::NeedsCode,
         AirPlayAvailability::PairingNotYet => Availability::PairingNotYet,
         AirPlayAvailability::AirPlay2NotYet => Availability::AirPlay2NotYet,
         AirPlayAvailability::Unsupported => Availability::Unsupported,
@@ -1208,6 +1310,8 @@ fn ui_problem(problem: AirPlayProblem) -> ui_model::AirPlayProblem {
         AirPlayProblem::Busy => P::Busy,
         AirPlayProblem::Refused => P::Refused,
         AirPlayProblem::PasswordNotYet => P::PasswordNotYet,
+        AirPlayProblem::NeedsPin => P::NeedsPin,
+        AirPlayProblem::PairingFailed => P::PairingFailed,
         AirPlayProblem::PairingNotYet => P::PairingNotYet,
         AirPlayProblem::AirPlay2NotYet => P::AirPlay2NotYet,
         AirPlayProblem::Unsupported => P::Unsupported,

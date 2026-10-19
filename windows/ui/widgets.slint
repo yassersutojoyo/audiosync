@@ -475,6 +475,7 @@ export component SpeakerRow inherits Rectangle {
     callback delay-stepped(int);
     callback delay-edited(string);
     callback auto-connect-toggled(bool);
+    callback forget-pairing();
 
     // The line under the name: the kind of a connected speaker, and the note
     // of one that can't simply play.
@@ -495,6 +496,13 @@ export component SpeakerRow inherits Rectangle {
                     checked: root.item.auto-connect;
                     activated => {
                         root.auto-connect-toggled(!root.item.auto-connect);
+                    }
+                }
+
+                if root.item.paired: MenuItem {
+                    title: Strings.forget-pairing;
+                    activated => {
+                        root.forget-pairing();
                     }
                 }
             }

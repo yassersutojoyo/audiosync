@@ -8,10 +8,13 @@ export enum RowState { off, will-play, playing }
 export enum SpeakerKind { airplay, built-in, headphones, bluetooth, usb, hdmi, display-port, virtual, other }
 
 // Whether an AirPlay speaker can simply play.
-export enum Availability { open, needs-code, password-not-yet, pairing-not-yet, airplay2-not-yet, unsupported }
+export enum Availability { open, needs-code, pairing, password-not-yet, pairing-not-yet, airplay2-not-yet, unsupported }
 
 // What went wrong with an AirPlay speaker, for its notice.
-export enum AirPlayProblem { not-responding, connection-lost, busy, refused, password-not-yet, pairing-not-yet, airplay2-not-yet, unsupported }
+export enum AirPlayProblem { not-responding, connection-lost, busy, refused, password-not-yet, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, unsupported }
+
+// Where the PIN dialog of an Apple TV pairing is.
+export enum PinPhase { starting, ready, checking }
 
 export struct SpeakerItem {
     id: string,
@@ -30,6 +33,9 @@ export struct SpeakerItem {
     sync-open: bool,
     auto-connect: bool,
     availability: Availability,
+    // An Apple TV AudioSync keeps pairing credentials for: its menu offers
+    // Forget Pairing.
+    paired: bool,
 }
 
 export struct GroupItem {
