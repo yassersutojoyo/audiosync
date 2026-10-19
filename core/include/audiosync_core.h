@@ -575,11 +575,27 @@ size_t asc_fifo_feed(AscFifoFeed *feed, const float *interleaved, size_t frames)
 AscFifoCounters asc_fifo_counters(const AscFifoFeed *feed);
 
 /*
+ * Any thread, at a session stop: asks asc_fifo_feed to fade out over the
+ * next 20 ms of capture-rate frames it is given and to queue zeros after
+ * them. The next asc_fifo_set_input_rate or asc_fifo_writer_create opens
+ * the feed again.
+ */
+void asc_fifo_request_fade_out(AscFifoFeed *feed);
+
+/*
  * Control thread, at a writer start: takes the queue's only consumer and
- * empties the queue, so writing starts with what is fed next. NULL while
- * another writer exists.
+ * empties the queue, so writing starts with what is fed next, and opens the
+ * feed again after a stop's fade-out. NULL while another writer exists. The
+ * writer starts without the fade-in after each open until
+ * asc_fifo_writer_set_fade_in turns it on.
  */
 AscFifoWriter *asc_fifo_writer_create(AscFifoFeed *feed);
+
+/*
+ * Control thread, before the writer's first step: whether each open of the
+ * pipe starts with a 20 ms fade-in over the first 960 frames written.
+ */
+void asc_fifo_writer_set_fade_in(AscFifoWriter *writer, bool on);
 
 /*
  * Destroys a writer, so the feed can hand out a new one. Close the pipe with
@@ -1033,11 +1049,19 @@ AscAirPlayInput *asc_airplay_take_input(AscAirPlay *airplay);
 /*
  * Any thread: the rate in Hz of the audio the capture writes from now on,
  * rounded to whole hertz. The next write takes it in and starts the
- * resampler afresh, so call it at each capture start, even at an unchanged
- * rate. Returns false, changing nothing, for a NULL handle or a rate outside
- * 8000 to 384 000 Hz. Real-time safe.
+ * resampler afresh, with a 20 ms fade-in from silence, so call it at each
+ * capture start, even at an unchanged rate. Returns false, changing nothing,
+ * for a NULL handle or a rate outside 8000 to 384 000 Hz. Real-time safe.
  */
 bool asc_airplay_input_set_rate(AscAirPlayInput *input, double rate);
+
+/*
+ * Any thread, at a session stop: the input fades out over the next 20 ms of
+ * frames written and hands zeros after them, until the next
+ * asc_airplay_input_set_rate fades it in again. Does nothing for a NULL
+ * handle. Real-time safe.
+ */
+void asc_airplay_input_request_fade_out(AscAirPlayInput *input);
 
 /*
  * Capture thread: hands `frames` interleaved stereo frames at the rate last

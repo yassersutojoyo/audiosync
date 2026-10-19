@@ -106,6 +106,27 @@ pub struct ReadReport {
     /// The post-copy check failed and the copied frames were replaced by
     /// silence (S40); the next read skips forward (S55).
     pub rejected: bool,
+    /// A drift correction this read would have made but held, because the
+    /// read was made with corrections held ([`Reader::read_target_held`]):
+    /// [`Correction::SkipForward`] or [`Correction::StepBack`], whose
+    /// renderer fades out before an unheld read makes it (S188).
+    /// [`Correction::None`] otherwise.
+    pub due: Correction,
+}
+
+impl ReadReport {
+    /// The frames at the block's start that the read filled with silence:
+    /// the masked frames, or, when the post-copy check discarded the copy,
+    /// those and the discarded ones (S184, S40). A block is this silence,
+    /// then [`ReadReport::copied`] frames, then [`ReadReport::starved`]
+    /// frames of silence (S44 step 3).
+    pub fn leading_silence(&self) -> usize {
+        if self.rejected {
+            self.frames - self.starved
+        } else {
+            self.masked
+        }
+    }
 }
 
 /// A reader's diagnostic counters (S158), plus one for rejected copies.
@@ -218,6 +239,11 @@ impl ReaderControl {
         self.shared.lag.load(Ordering::Relaxed)
     }
 
+    /// Whether this is `reader`'s control.
+    pub(crate) fn controls(&self, reader: &Reader) -> bool {
+        Arc::ptr_eq(&self.shared, &reader.shared)
+    }
+
     /// The reader's counters (S158).
     pub fn counters(&self) -> ReaderCounters {
         let s = &*self.shared;
@@ -323,7 +349,7 @@ impl Reader {
         delay_frames: i64,
         tolerance_frames: i64,
     ) -> ReadReport {
-        self.read_at(dst, frames, Some(delay_frames), tolerance_frames)
+        self.read_at(dst, frames, Some(delay_frames), tolerance_frames, false)
     }
 
     /// Reads at the delay and tolerance set through [`ReaderControl`].
@@ -339,7 +365,19 @@ impl Reader {
     /// flagged target is never stale (S133).
     pub fn read_target(&mut self, dst: &mut [f32], frames: usize) -> ReadReport {
         let tolerance = self.shared.tolerance.load(Ordering::Relaxed);
-        self.read_at(dst, frames, None, tolerance)
+        self.read_at(dst, frames, None, tolerance, false)
+    }
+
+    /// [`Reader::read_target`] with drift corrections held (S188): a read
+    /// that would skip forward (S51) or step back (S52, S53) leaves P alone,
+    /// emits its block contiguously as if the error were inside the dead
+    /// band, counts nothing, and reports the correction in
+    /// [`ReadReport::due`]. Prime, resync, dry and overrun reads, and the
+    /// masking of step 3, are as in an unheld read; the next unheld read
+    /// makes a correction that is still due, against its own W.
+    pub fn read_target_held(&mut self, dst: &mut [f32], frames: usize) -> ReadReport {
+        let tolerance = self.shared.tolerance.load(Ordering::Relaxed);
+        self.read_at(dst, frames, None, tolerance, true)
     }
 
     /// D for this read: the caller's (`given`), or else the control's
@@ -356,13 +394,15 @@ impl Reader {
         self.applied_delay
     }
 
-    /// One read, S44 steps 1-4, at the caller's delay or at the target.
+    /// One read, S44 steps 1-4, at the caller's delay or at the target, with
+    /// drift corrections held when `hold` is set (S188).
     fn read_at(
         &mut self,
         dst: &mut [f32],
         frames: usize,
         given: Option<i64>,
         tolerance: i64,
+        hold: bool,
     ) -> ReadReport {
         if take(&self.shared.prime) {
             // S159: the initial state again, except for the counters and P,
@@ -385,6 +425,7 @@ impl Reader {
 
         // Step 2: the first case that applies decides. The resync flag is
         // taken before a target is loaded.
+        let mut due = Correction::None;
         let (de, correction) = if !self.anchored {
             // Prime, once more than De frames are written (S45, S159).
             let flagged = take(&self.shared.resync);
@@ -421,7 +462,14 @@ impl Reader {
             } else {
                 Correction::None
             };
-            (de, correction)
+            if hold && matches!(correction, Correction::SkipForward | Correction::StepBack) {
+                // S188: the block follows the previous one; the renderer
+                // fades out before an unheld read makes the correction.
+                due = correction;
+                (de, Correction::None)
+            } else {
+                (de, correction)
+            }
         };
         let e = if correction == Correction::Prime {
             0
@@ -483,6 +531,7 @@ impl Reader {
             copied: if rejected { 0 } else { copied },
             starved,
             rejected,
+            due,
         }
     }
 
@@ -511,6 +560,7 @@ impl Reader {
             copied: 0,
             starved,
             rejected: false,
+            due: Correction::None,
         }
     }
 
@@ -1814,7 +1864,7 @@ mod tests {
         assert_eq!(out.reader.control().counters().drift_skips, 0);
     }
 
-    // covers: S40, S55
+    // covers: S40, S55, S184
     #[test]
     fn a_copy_overtaken_by_the_writer_becomes_silence_and_skips_forward() {
         let ring = ring(1 << 16);
@@ -1842,6 +1892,11 @@ mod tests {
         );
         assert!(block.report.rejected);
         assert_eq!(block.silent(), N, "the stale copy is replaced by silence");
+        assert_eq!(
+            (block.report.leading_silence(), block.report.copied),
+            (N, 0),
+            "a discarded copy counts as silence at the block's start (S184)"
+        );
         out.reader.before_check = None;
         let w_now = ring.frames_written() as i64;
         let block = out.read(N, delay);

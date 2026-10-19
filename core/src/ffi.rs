@@ -1324,6 +1324,11 @@ mod realtime {
                         let rate = [48_000.0, 44_100.0, 96_000.0, 22_050.0][round / 250 % 4];
                         assert!(asc_airplay_input_set_rate(input, rate));
                     }
+                    // A stop's fade-out, then zeros until the next rate
+                    // request fades in again (S189).
+                    if round % 250 == 125 {
+                        asc_airplay_input_request_fade_out(input);
+                    }
                     handed += asc_airplay_input_write(input, block.as_ptr(), 512);
                 }
             }
