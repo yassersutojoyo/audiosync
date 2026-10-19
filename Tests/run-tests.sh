@@ -70,11 +70,14 @@ fi
 # order: a loop over all but the last (the volume), then the last one (the
 # selection), whose answer it waits for. Without the loop the speaker is
 # switched on without its volume first, at the engine's own idea of it.
+# Line and block comments are dropped first, and the loop must come before the
+# first use of the last request.
 select_body=$(awk '/static func select\(/ { f = 1 } f { sub(/\/\/.*/, ""); print } f && /^    }$/ { exit }' \
-  "$SRC/OwnToneClient.swift" | tr '\n' ' ')
+  "$SRC/OwnToneClient.swift" | tr '\n' ' ' | sed -E 's:/\*([^*]|\*+[^*/])*\*+/::g')
 select_var=$(sed -nE 's/.*let +([A-Za-z_][A-Za-z0-9_]*) *= *AirPlayVolume\.selectRequests\(.*/\1/p' <<< "$select_body")
+select_head=${select_body%%"$select_var".last*}
 if [ -z "$select_var" ] \
-  || ! grep -qE "for +[A-Za-z_][A-Za-z0-9_]* +in +$select_var\.dropLast\(\) *\{[^}]*[^A-Za-z0-9_.](enqueue|perform)\(" <<< "$select_body" \
+  || ! grep -qE "for +[A-Za-z_][A-Za-z0-9_]* +in +$select_var\.dropLast\(\) *\{[^}]*[^A-Za-z0-9_.](enqueue|perform)\(" <<< "$select_head" \
   || ! grep -qE "[^A-Za-z0-9_.]$select_var\.last([^A-Za-z0-9_]|\$)" <<< "$select_body"; then
   echo "FAIL: OwnToneClient.select no longer sends every request of AirPlayVolume.selectRequests"
   requests_ok=0
