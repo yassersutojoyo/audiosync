@@ -5,9 +5,10 @@ import Foundation
 /// core's C interface, `NativeAirPlay`). The move happens in stages; in this
 /// second one, with `native` chosen AudioSync doesn't start the bundled
 /// engine: the AirPlay speakers listed are the ones the native sender's
-/// discovery finds, and AirPlay audio goes through that sender. PIN pairing
-/// and stored credentials come later, so a receiver that asks for a PIN or a
-/// password is listed but stays off. The bundled engine starts with the app,
+/// discovery finds, and AirPlay audio goes through that sender. An Apple TV
+/// that asks for a PIN pairs once, when the user turns it on, and its
+/// credentials are kept (`asc_airplay_open_pairings`); a password is asked
+/// for once per run. The bundled engine starts with the app,
 /// so the choice is read once per launch (`forThisRun`), and a change applies
 /// from the next launch.
 enum AirPlayImpl: String, CaseIterable {
@@ -57,7 +58,8 @@ enum AirPlayImpl: String, CaseIterable {
 }
 
 /// A receiver as the native sender's discovery reports it. Nothing secret:
-/// no password, PIN, key or credential ever crosses the C interface.
+/// a PIN or password the user types crosses the C interface only inward,
+/// and pairing credentials never leave the core.
 struct NativeReceiver: Equatable {
     /// Whether it can play from the native sender, and if not, what it needs.
     enum Availability: String {
@@ -82,15 +84,15 @@ struct NativeReceiver: Equatable {
     let hints: [String]
 
     /// How the speaker list shows it, if at all: one that can play is open;
-    /// one that asks for a PIN needs a code (it stays off until pairing comes
-    /// to this sender); one that asks for a password has one AudioSync can't
-    /// send yet. A receiver that needs another kind of pairing, or that only
-    /// AirPlay 2 or nothing here can play, isn't listed.
+    /// one that asks for a PIN or a password needs a code, which AudioSync
+    /// asks for when the user turns it on (`NativeAirPlayModel`). A receiver
+    /// that needs another kind of pairing, or that only AirPlay 2 or nothing
+    /// here can play, isn't listed.
     var access: AirPlayPairing.Access? {
         switch availability {
         case .available: return .open
         case .needsPin: return .code(password: false)
-        case .needsPassword: return .legacyPassword
+        case .needsPassword: return .code(password: true)
         case .needsPairing, .airPlay2Only, .unsupported: return nil
         }
     }
