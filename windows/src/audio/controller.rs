@@ -1124,6 +1124,13 @@ impl<D: Driver> AudioBackend for Controller<D> {
 
     fn retry_airplay(&mut self) {
         let starter = match (&self.airplay, self.starter.as_mut()) {
+            (Some(airplay), _) if !airplay.is_stopped() => {
+                // A late click (the other window hadn't refreshed yet): the
+                // sender runs, so there is nothing to replace.
+                self.log
+                    .log(|| "AirPlay: Retry, but the sender runs".to_owned());
+                return;
+            }
             (Some(_), Some(starter)) => starter,
             _ => {
                 self.log

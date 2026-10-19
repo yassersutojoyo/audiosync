@@ -535,6 +535,12 @@ impl AirPlaySpeakers {
     /// Replaces the sender with `link`, a new one: what the old one listed,
     /// played and paired is gone with it, while the user's settings stay, so
     /// the speakers that were on join again once the new one lists them.
+    /// Whether the sender stopped by itself (see `sender_stopped`); only
+    /// then does a Retry replace it.
+    pub fn is_stopped(&self) -> bool {
+        self.stopped
+    }
+
     pub fn replace_link(&mut self, link: Box<dyn AirPlayLink>) {
         // The old sender stops as it is dropped.
         self.link = link;
