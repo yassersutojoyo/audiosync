@@ -193,7 +193,7 @@ S172 to S181 replace the rule that local outputs play at once unless an AirPlay 
 - **S179** *Required.* Mac migration, once. Before this model the Mac stored an absolute delay per device UID (S77, the `localDelayMsByUID` defaults key) that applied only while an AirPlay speaker was chosen, and played outputs without one at D0: the legacy single delay (the `delayMs` key) clamped to 0 to 20 000, else 2000. The first time a build with this model has both its stored values and a device list, it takes R from S173 and D_R, the reference's stored delay, or D0 when it has none or there is no reference, and stores:
   - the bundled engine's AirPlay delay (S178), L_new = D_R when D_R ≥ 1000 ms, a value tuned against AirPlay; else 2000 ms, since a smaller value can only have been meant to line local outputs up with each other;
   - for every other UID x with a stored delay D_x: o(x) = clamp(D_x − D_R, −2000, 20 000);
-  - for every other UID without a stored delay that is switched on (the `enabledLocalUIDs` key) or in the device list of that moment (S171): o(x) = clamp(D0 − L_new, −2000, 20 000), since it played at D0 (with D_R ≥ 1000 that is D0 − D_R); nothing for any other UID (offset 0);
+  - for every other UID without a stored delay that is switched on (the `enabledLocalUIDs` key) or in the device list of that moment (S171): o(x) = clamp(D0 − L_new, −2000, 20 000) when D0 ≥ 1000 ms, which keeps its D0 sound with AirPlay (with D_R ≥ 1000 that is D0 − D_R), and o(x) = clamp(D0 − D_R, −2000, 20 000) when D0 is below 1000 ms, which keeps its place relative to the reference (so untuned outputs that all played at D0 keep playing together, also when the reference is one of them); nothing for any other UID (offset 0);
   - the native sender's adjustment A (S178) = 0: L_s isn't known at this moment, and no stored delay was ever read for that sender except through P114's clamp;
   - nothing for R: its old delay became the AirPlay delay, or is dropped when below 1000 ms.
 
@@ -204,6 +204,7 @@ S172 to S181 replace the rule that local outputs play at once unless an AirPlay 
   | R 2000, USB 2100, Bluetooth 1800 | 2000 | AirPlay delay 2000; USB +100, Bluetooth −200 | 2000, 2100, 1800 (as before) | 200, 300, 0 (before: 0, 0, 0) |
   | R none, HDMI TV 2400 | 2000 | AirPlay delay 2000; TV +400 | 2000, 2400 (as before) | 0, 400 |
   | R 2300, USB none (listed) | 2000 | AirPlay delay 2300; USB −300 | 2300, 2000 (as before) | 300, 0 |
+  | R none, USB none (listed) | 0 (legacy `delayMs` 0) | AirPlay delay 2000; USB 0 | 2000, 2000 (before: 0, 0, about two seconds ahead of AirPlay) | 0, 0 |
   | R 2500, Bluetooth 2250 | 2000 | AirPlay delay 2500; Bluetooth −250 | 2500, 2250 (as before) | 250, 0 |
   | R 250, Bluetooth 0, USB 400 | 2000 | AirPlay delay 2000; Bluetooth −250, USB +150 | 2000, 1750, 2150 (before: 250, 0, 400, about two seconds ahead of AirPlay) | 250, 0, 400 |
   | R 2500, USB 0 | 2000 | AirPlay delay 2500; USB −2000 (clamped from −2500) | 2500, 500 (before: 2500, 0) | 2000, 0 |
@@ -874,6 +875,7 @@ Mac (`Tests/logictest.swift`):
 | migration: the reference's old delay becomes the AirPlay delay | S179 |
 | migration: R without a stored delay uses D0 | S179 |
 | migration: an untuned output that played at D0 sounds the same with AirPlay | S179 |
+| migration: with a legacy delay below 1000 ms, untuned outputs keep playing together | S179 |
 | migration: the native sender's adjustment starts at 0 | S179 |
 | migration: small values keep their alignment and take the default AirPlay delay | S179 |
 | migration: an offset below −2000 ms is clamped | S179 |
