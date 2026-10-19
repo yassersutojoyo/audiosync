@@ -292,6 +292,8 @@ These run in the host application, not the audio engine core, but the logic suit
 - **S154** *Observed* (`AirPlayReconcile.swift:230-256`; tests "local network: …", "local network probe: …"). Local Network hint: none while the engine isn't up; denied access → hint at once; allowed → never; unknown → a soft hint only once the running engine has listed no AirPlay speaker for 20 s. A Bonjour browser waiting or failing on PolicyDenied means denied; ready means allowed; other waits mean unknown; setup and cancel keep the last answer.
 - **S155** *Observed* (tests "appearance: …"). Appearance choice: system, light or dark, round-tripped through its stored value; missing or unknown → system, which leaves the app appearance unset; light → aqua, dark → darkAqua.
 - **S156** *Observed* (`docs/DEVELOPMENT.md` "Running and testing"; run-tests output "shellcheck 0.11.0 passed (N scripts)", N being the number of listed scripts). Every listed shell script passes the pinned shellcheck version; a missing shellcheck fails the run.
+- **S170** *Required* (tests "debug log: …"; `docs/DEVELOPMENT.md`). The debug log is off unless `AUDIOSYNC_DEBUG` is exactly `1`; while it is off no message is built and nothing touches the file system for it. When on, the host empties `/tmp/audiosync-debug.log` at launch, writes a first line with the app and macOS versions and the local time, then one line per message, each starting with the UTC time to the millisecond, rounded down (`2026-10-18T17:52:13.456Z`, the Windows app's format). The file grows to at most 50 MB; the line that would pass that is replaced by one saying the log stopped, and later messages are dropped. The path is opened without following a symbolic link and without blocking (a FIFO there can't stall it), and is used only when it is a regular file owned by the user with a single hard link; only then is it emptied and made readable by its owner only. Logging never does file work on the caller's thread: the caller builds the message and stamps the time, and one serial queue writes each whole line unbuffered, in the order the lines were handed over; lines still queued are written when the app exits normally. Building a message still allocates, so audio callbacks must not log (S126, S131).
+- **S171** *Required* (tests "devices: …"; S60, S68). The device lists are read afresh from Core Audio on every call, in Core Audio's order: outputs are the devices with at least one output channel, inputs those with at least one input channel. Both leave out a device that reports it is no longer alive (a vanishing device can linger in the list for a moment, and listing it would make its speaker fail to start and be switched off under S69 instead of waiting under S68; a device that doesn't answer stays listed) and any private aggregate device (only the process that made it sees it, so it is the capture's own and never a speaker or a source); an aggregate the user made stays. A device whose name can't be read stays listed with an empty name, which the window shows as an unknown device; an unreadable UID stays empty (callers skip such devices) and an unreadable transport is unknown (0). The default output can be read, but nothing in a session follows it (S145).
 
 ## 18. Test map
 
@@ -393,6 +395,33 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | devices: a chosen virtual device stays listed, in order | S151 |
 | devices: Show Virtual Devices lists everything | S151 |
 | devices: hardware and unknown transports are never hidden | S151 |
+| devices: every hardware transport is listed by default | S151 |
+| devices: macOS's own AirPlay output stays listed, in order, once chosen | S151 |
+| devices: a chosen device that isn't present adds nothing | S151 |
+| devices: only a private aggregate (the capture's own) is left out of the lists | S171 |
+| devices: a device that reports it is going away is left out | S68, S171 |
+| devices: a device that doesn't say whether it is alive stays listed | S171 |
+| devices: a device with no channels in the listed direction is left out | S171 |
+| devices: a private aggregate is left out, an aggregate the user made stays | S171 |
+| devices: a device whose name can't be read keeps an empty name, never its UID | S171 |
+| devices: an unreadable UID or transport stays empty or unknown | S171 |
+| debug log: on with AUDIOSYNC_DEBUG=1 | S170 |
+| debug log: off unless the variable is exactly 1 | S170 |
+| debug log: a message is never built while the log is off | S170 |
+| debug log: each line starts with the UTC time to the millisecond | S170 |
+| debug log: times round down, never into the next second | S170 |
+| debug log: a launch starts empty, then lines append in order | S170 |
+| debug log: past the limit one line says it stopped, and nothing more is written | S170 |
+| debug log: emptying starts the limit over | S170 |
+| debug log: without a reset, lines are appended to what is there | S170 |
+| debug log: a new log is readable by its owner only | S170 |
+| debug log: a symbolic link at the log's path is never followed | S170 |
+| debug log: a hard link at the log's path is never emptied or written | S170 |
+| debug log: a FIFO at the log's path never blocks it | S170 |
+| debug log: an older log readable by everyone is emptied and made owner-only | S170 |
+| debug log: the thread that logs never touches the file | S131, S170 |
+| debug log: queued lines land in order, stamped when they were logged | S170 |
+| debug log: lines from many threads never interleave | S170 |
 | layout: transport types map to their tag | S152 |
 | layout: an unknown transport is Other | S152 |
 | layout: only built-in outputs are This Mac | S152 |

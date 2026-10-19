@@ -69,15 +69,14 @@ impl SpeakerKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Availability {
     Open,
-    /// It asks for a PIN or password, which the user can type.
-    #[cfg_attr(
-        all(windows, not(test)),
-        expect(
-            dead_code,
-            reason = "the Windows sender can't pair or send a password yet"
-        )
-    )]
+    /// It asks for a PIN, which the user types once when switching it on.
     NeedsCode,
+    /// A pairing with it runs: the PIN prompt is open or about to open.
+    #[cfg_attr(
+        all(not(windows), not(test)),
+        expect(dead_code, reason = "only the Windows backend pairs")
+    )]
+    Pairing,
     /// It asks for a password, which AudioSync for Windows can't send yet.
     PasswordNotYet,
     /// It needs pairing with a PIN, which AudioSync for Windows can't do yet.
@@ -118,6 +117,11 @@ pub enum AirPlayProblem {
     Refused,
     /// It asks for a password, which AudioSync for Windows can't send yet.
     PasswordNotYet,
+    /// An Apple TV that needs pairing with a PIN first; switching it on
+    /// pairs it.
+    NeedsPin,
+    /// Pairing with an Apple TV failed, so it is off.
+    PairingFailed,
     /// It needs pairing, which AudioSync for Windows can't do yet.
     PairingNotYet,
     /// Only AirPlay 2 can play it.
@@ -141,6 +145,37 @@ pub struct Speaker {
     pub delay_ms: Option<f64>,
     pub auto_connect: bool,
     pub availability: Availability,
+    /// An Apple TV AudioSync keeps pairing credentials for, which the user
+    /// can forget.
+    pub paired: bool,
+}
+
+/// Where a pairing's PIN prompt is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(dead_code, reason = "only the Windows backend pairs")
+)]
+pub enum PinPhase {
+    /// The Apple TV is asked to show a PIN.
+    Starting,
+    /// The Apple TV shows a PIN for the user to type.
+    Ready,
+    /// The PIN went to the Apple TV, which checks it.
+    Checking,
+}
+
+/// The PIN prompt of a running pairing: a dialog asks for the PIN an Apple
+/// TV shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinPrompt {
+    /// The speaker's ID.
+    pub speaker_id: String,
+    /// The speaker's name.
+    pub name: String,
+    pub phase: PinPhase,
+    /// The Apple TV turned the last PIN down and shows a new one.
+    pub wrong_pin: bool,
 }
 
 impl Speaker {
@@ -264,6 +299,8 @@ pub struct AppState {
     pub equalizer: EqSettings,
     /// Newest first.
     pub notices: Vec<Notice>,
+    /// The PIN prompt to show, while a pairing asks for a PIN.
+    pub pin_prompt: Option<PinPrompt>,
 }
 
 impl AppState {
@@ -347,6 +384,16 @@ pub trait Backend {
     fn dismiss_all_notices(&mut self);
     fn refresh_devices(&mut self);
 
+    /// The PIN the user typed for the pairing with speaker `id`.
+    fn submit_pin(&mut self, _id: &str, _pin: &str) {}
+
+    /// The user cancelled the pairing with speaker `id`; it stays off.
+    fn cancel_pairing(&mut self, _id: &str) {}
+
+    /// Forgets the pairing with speaker `id`: it asks for a PIN again next
+    /// time.
+    fn forget_pairing(&mut self, _id: &str) {}
+
     /// Takes in what happened since the last call (devices that came or went,
     /// a source that quit, an output that failed) and says whether the
     /// snapshot may have changed. The UI calls it about twice a second.
@@ -402,6 +449,7 @@ impl MockBackend {
             delay_ms,
             auto_connect: false,
             availability: Availability::Open,
+            paired: false,
         };
         let mut speakers = vec![
             speaker(
@@ -475,6 +523,7 @@ impl MockBackend {
             }],
             equalizer: EqSettings::default(),
             notices: Vec::new(),
+            pin_prompt: None,
         };
         MockBackend { state, next_id: 1 }
     }
@@ -664,6 +713,7 @@ mod tests {
             delay_ms: Some(0.0),
             auto_connect: false,
             availability: Availability::Open,
+            paired: false,
         };
         assert!(!speaker(SpeakerKind::Virtual, false).is_listed(false));
         assert!(speaker(SpeakerKind::Virtual, false).is_listed(true));

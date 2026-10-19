@@ -12,7 +12,7 @@ follows Windows 11 and lives only in the Windows app (the `Fluent` values in
 `windows/ui/widgets.slint`): text in Segoe UI Variable, 8 px corners on cards,
 notices and the flyout and 4 px on buttons and rows, 1 px card edges, hover and
 pressed fills, and short state changes (83 ms). Every titled window (main,
-equalizer, guide, About and the group dialog) asks Windows for Mica in its
+equalizer, guide, About, the group dialog and the Apple TV code dialog) asks Windows for Mica in its
 title bar (Windows 11 22H2 and later), on content in the token background,
 which is close to Mica's own tint; the tray flyout gets the system's rounded frame, border and shadow.
 Where Windows doesn't offer one, the window keeps the plain frame (and the
@@ -37,7 +37,8 @@ nothing plays and no audio device is opened there.
 
 Settings live in memory for now: the speakers you turned on, their delays and
 volumes, groups, auto-connect marks, the source and the equalizer start over
-at every launch.
+at every launch. Only Apple TV pairings are kept (see the pairing prompt
+below).
 
 ## Mac main window to Windows
 
@@ -64,7 +65,7 @@ at every launch.
 | Closing the window keeps the app in the menu bar | Closing it keeps the app in the tray | File > Exit (or Exit in the tray) quits |
 | Main menu: Edit | Built into the text fields | Ctrl+C, Ctrl+V and the rest work in every field |
 | Main menu: Window (Minimize, Zoom, Bring All to Front) | The title bar's own buttons | Not a Windows menu |
-| AirPlay pairing prompt | Later | Pairing, passwords and AirPlay 2 come with later stages of the sender |
+| AirPlay pairing prompt | The Pair with Apple TV dialog, for an Apple TV that asks for a code | Switching such an Apple TV on (its note reads "Asks for a code", then "Pairing…") makes it show a 4-digit code; the dialog names the speaker and takes the code (digits only, Enter pairs, Escape or Cancel stops the pairing and leaves the speaker off). A wrong code keeps the dialog open with a message, and the TV shows a new code; any other failure closes it with a notice. Once paired the speaker turns on, and the pairing is kept, encrypted for the Windows user, so no code is asked again; Forget Pairing in the speaker's "…" menu removes it. Auto-connect never starts a pairing by itself: it posts a notice instead. Passwords and AirPlay 2 come with later stages of the sender |
 
 ## Keyboard
 

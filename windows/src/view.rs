@@ -20,12 +20,19 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, Vec
 use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
-use crate::ui_model::{self, AppState, Backend, NoticeMessage, SourceKind, SpeakerState};
+use crate::ui_model::{
+    self, AppState, Backend, NoticeMessage, PinPrompt, SourceKind, SpeakerState,
+};
 use crate::{
     AboutDialog, AirPlayProblem, Availability, EqualizerWindow, GroupItem, GroupNameDialog,
-    GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, Palette, RowState, SpeakerItem,
-    SpeakerKind, Strings, TrayFlyout,
+    GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, Palette, PinDialog, PinPhase,
+    RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
 };
+
+/// The digits the PIN field keeps of what was typed: four at most.
+fn pin_digits(text: &str) -> String {
+    text.chars().filter(char::is_ascii_digit).take(4).collect()
+}
 
 /// What the group name dialog is open for.
 #[derive(Clone, Debug, PartialEq)]
@@ -126,6 +133,13 @@ pub struct App {
     pub flyout: TrayFlyout,
     pub equalizer: EqualizerWindow,
     group_dialog: GroupNameDialog,
+    /// The code prompt of an Apple TV pairing.
+    pin_dialog: PinDialog,
+    /// The speaker the PIN dialog is open for, while it is.
+    pin_for: RefCell<Option<String>>,
+    /// The PIN dialog shows a made-up pairing (the PIN preview), which no
+    /// refresh closes.
+    pin_preview: Cell<bool>,
     about: AboutDialog,
     guide: GuideWindow,
     /// The paragraphs the guide shows.
@@ -177,6 +191,9 @@ impl App {
             flyout: TrayFlyout::new()?,
             equalizer: EqualizerWindow::new()?,
             group_dialog: GroupNameDialog::new()?,
+            pin_dialog: PinDialog::new()?,
+            pin_for: RefCell::new(None),
+            pin_preview: Cell::new(false),
             about: AboutDialog::new()?,
             guide: GuideWindow::new()?,
             guide_steps: Rc::new(VecModel::default()),
@@ -263,6 +280,7 @@ impl App {
         self.group_dialog
             .global::<Palette>()
             .set_color_scheme(scheme);
+        self.pin_dialog.global::<Palette>().set_color_scheme(scheme);
         self.about.global::<Palette>().set_color_scheme(scheme);
         self.guide.global::<Palette>().set_color_scheme(scheme);
         self.theme_override.set(Some(dark));
@@ -413,6 +431,7 @@ impl App {
         self.flyout.set_notice_count(count(notices.len()));
         self.restore_flyout_focus(flyout_removed);
         self.refresh_guide(&state);
+        self.show_pin_prompt(state.pin_prompt.as_ref());
 
         for window in [&self.main as &dyn WindowState, &self.flyout] {
             window.show_state(&state, &status, source_index);
@@ -499,6 +518,10 @@ impl App {
         let w = weak.clone();
         main.on_auto_connect_toggled(move |id, on| {
             with_app(&w, |app| app.update(|b| b.set_auto_connect(&id, on)))
+        });
+        let w = weak.clone();
+        main.on_forget_pairing_requested(move |id| {
+            with_app(&w, |app| app.update(|b| b.forget_pairing(&id)))
         });
         let w = weak.clone();
         main.on_group_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_group(&id))));
@@ -659,12 +682,123 @@ impl App {
         let w = weak.clone();
         self.group_dialog
             .on_confirmed(move |name| with_app(&w, |app| app.confirm_dialog(&name)));
-        let w = weak;
+        let w = weak.clone();
         self.group_dialog.on_cancelled(move || {
             with_app(&w, |app| {
                 let _ = app.group_dialog.hide();
             })
         });
+
+        self.follow_frame(|app| app.pin_dialog.window(), "PIN dialog");
+        let dialog = self.pin_dialog.as_weak();
+        self.pin_dialog.on_pin_edited(move |text| {
+            if let Some(dialog) = dialog.upgrade() {
+                let digits = pin_digits(&text);
+                if digits != text.as_str() {
+                    dialog.set_pin(digits.into());
+                }
+            }
+        });
+        let w = weak.clone();
+        self.pin_dialog
+            .on_confirmed(move |pin| with_app(&w, |app| app.confirm_pin(&pin)));
+        let w = weak.clone();
+        self.pin_dialog
+            .on_cancelled(move || with_app(&w, App::cancel_pin));
+        let w = weak;
+        self.pin_dialog.window().on_close_requested(move || {
+            with_app(&w, App::cancel_pin);
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
+
+    /// Opens, updates or closes the PIN dialog for the pairing that asks for
+    /// a PIN. It opens when the Apple TV first shows a PIN, stays open while
+    /// that pairing runs (a wrong PIN clears the field for the new one), and
+    /// closes when it ends.
+    fn show_pin_prompt(&self, prompt: Option<&PinPrompt>) {
+        if self.pin_preview.get() {
+            return;
+        }
+        let dialog = &self.pin_dialog;
+        let Some(prompt) = prompt else {
+            if self.pin_for.borrow_mut().take().is_some() {
+                let _ = dialog.hide();
+                self.log.log(|| "PIN dialog: closed".to_owned());
+            }
+            return;
+        };
+        let opening = self.pin_for.borrow().as_deref() != Some(prompt.speaker_id.as_str());
+        let phase = pin_phase(prompt.phase);
+        let new_code = (prompt.wrong_pin && !dialog.get_wrong_pin())
+            || (phase == PinPhase::Ready && dialog.get_phase() != PinPhase::Ready);
+        dialog.set_speaker(prompt.name.as_str().into());
+        dialog.set_phase(phase);
+        dialog.set_wrong_pin(prompt.wrong_pin);
+        if opening {
+            *self.pin_for.borrow_mut() = Some(prompt.speaker_id.clone());
+            dialog.set_pin(SharedString::new());
+            self.open_pin_dialog();
+            self.log
+                .log(|| format!("PIN dialog: opened for {}", prompt.name));
+        } else if new_code {
+            if prompt.wrong_pin {
+                dialog.set_pin(SharedString::new());
+            }
+            dialog.invoke_prepare();
+        }
+    }
+
+    fn open_pin_dialog(&self) {
+        if let Err(error) = self.pin_dialog.show() {
+            self.show_window_error(&error);
+            return;
+        }
+        self.pin_dialog.invoke_prepare();
+        crate::platform::bring_to_front(self.pin_dialog.window());
+    }
+
+    /// Pair: the PIN goes to the pairing; the dialog stays open until it
+    /// ends.
+    fn confirm_pin(&self, pin: &str) {
+        if self.pin_preview.get() {
+            self.close_pin_preview();
+            return;
+        }
+        let id = self.pin_for.borrow().clone();
+        if let Some(id) = id {
+            self.update(|b| b.submit_pin(&id, pin));
+        }
+    }
+
+    /// Cancel, Escape or the close button: the pairing stops.
+    fn cancel_pin(&self) {
+        if self.pin_preview.get() {
+            self.close_pin_preview();
+            return;
+        }
+        let id = self.pin_for.borrow_mut().take();
+        let _ = self.pin_dialog.hide();
+        if let Some(id) = id {
+            self.update(|b| b.cancel_pairing(&id));
+        }
+    }
+
+    fn close_pin_preview(&self) {
+        self.pin_preview.set(false);
+        let _ = self.pin_dialog.hide();
+    }
+
+    /// Opens the PIN dialog for a made-up Apple TV, to look at it without
+    /// one: the PIN preview, debug only. `wrong`: as after a wrong PIN.
+    pub fn preview_pin(&self, wrong: bool) {
+        self.pin_preview.set(true);
+        let dialog = &self.pin_dialog;
+        dialog.set_speaker(self.strings().get_pin_preview_speaker());
+        dialog.set_phase(PinPhase::Ready);
+        dialog.set_wrong_pin(wrong);
+        dialog.set_pin(SharedString::new());
+        self.open_pin_dialog();
     }
 
     fn connect_guide(self: &Rc<Self>) {
@@ -1019,6 +1153,7 @@ fn availability(a: ui_model::Availability) -> Availability {
     match a {
         ui_model::Availability::Open => Availability::Open,
         ui_model::Availability::NeedsCode => Availability::NeedsCode,
+        ui_model::Availability::Pairing => Availability::Pairing,
         ui_model::Availability::PasswordNotYet => Availability::PasswordNotYet,
         ui_model::Availability::PairingNotYet => Availability::PairingNotYet,
         ui_model::Availability::AirPlay2NotYet => Availability::Airplay2NotYet,
@@ -1034,9 +1169,19 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::Busy => AirPlayProblem::Busy,
         P::Refused => AirPlayProblem::Refused,
         P::PasswordNotYet => AirPlayProblem::PasswordNotYet,
+        P::NeedsPin => AirPlayProblem::NeedsPin,
+        P::PairingFailed => AirPlayProblem::PairingFailed,
         P::PairingNotYet => AirPlayProblem::PairingNotYet,
         P::AirPlay2NotYet => AirPlayProblem::Airplay2NotYet,
         P::Unsupported => AirPlayProblem::Unsupported,
+    }
+}
+
+fn pin_phase(phase: ui_model::PinPhase) -> PinPhase {
+    match phase {
+        ui_model::PinPhase::Starting => PinPhase::Starting,
+        ui_model::PinPhase::Ready => PinPhase::Ready,
+        ui_model::PinPhase::Checking => PinPhase::Checking,
     }
 }
 
@@ -1064,6 +1209,7 @@ pub fn speaker_item(
         sync_open: sync_open && speaker.delay_ms.is_some(),
         auto_connect: speaker.auto_connect,
         availability: availability(speaker.availability),
+        paired: speaker.paired,
     }
 }
 
@@ -1254,6 +1400,15 @@ mod tests {
         // flyout's button opens the main window for the other notice.
         assert_eq!(messages, [NoticeMessage::NoSpeaker]);
         assert_eq!(newest_notices(&notices, MAIN_NOTICE_LIMIT).len(), 2);
+    }
+
+    #[test]
+    fn the_pin_field_keeps_four_digits_at_most() {
+        assert_eq!(pin_digits("4821"), "4821");
+        assert_eq!(pin_digits("48a2-1"), "4821");
+        assert_eq!(pin_digits("482199"), "4821");
+        assert_eq!(pin_digits(" ١٢ "), "", "ASCII digits only");
+        assert_eq!(pin_digits(""), "");
     }
 
     #[test]
