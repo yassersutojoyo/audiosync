@@ -461,9 +461,9 @@ fn no_text_promises_airplay() {
                 || line.contains("not supported yet")
                 || line.contains("doesn't support yet")
                 || line.contains(
-                    "notice-airplay-stopped: @tr(\"AirPlay stopped after an internal error"
+                    "notice-airplay-stopped: @tr(\"AirPlay stopped working after an internal error"
                 )
-                || line.contains("notice-retry-label: @tr(\"Start AirPlay again\")"),
+                || line.contains("notice-retry-label: @tr(\"Retry starting AirPlay\")"),
             "strings.slint: {}",
             line.trim()
         );
