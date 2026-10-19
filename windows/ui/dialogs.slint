@@ -4,6 +4,7 @@
 import { Button, LineEdit } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
+import { Fluent } from "widgets.slint";
 
 export component GroupNameDialog inherits Dialog {
     in property <string> heading;
@@ -19,6 +20,7 @@ export component GroupNameDialog inherits Dialog {
     title: root.heading;
     icon: @image-url("../res/audiosync-256.png");
     background: Tokens.background;
+    default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
     preferred-width: 380px;
 

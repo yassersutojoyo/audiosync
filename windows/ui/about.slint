@@ -6,6 +6,7 @@
 import { AboutSlint, StandardButton, VerticalBox } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
+import { Fluent } from "widgets.slint";
 
 export component AboutDialog inherits Dialog {
     in property <string> version;
@@ -15,6 +16,7 @@ export component AboutDialog inherits Dialog {
     icon: @image-url("../res/audiosync-256.png");
     background: Tokens.background;
     preferred-width: 360px;
+    default-font-family: Fluent.font;
 
     VerticalBox {
         alignment: start;

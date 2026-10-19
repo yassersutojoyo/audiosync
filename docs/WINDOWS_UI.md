@@ -11,10 +11,10 @@ shared design tokens (`brand/tokens.json`, see `brand/README.md`). The rest
 follows Windows 11 and lives only in the Windows app (the `Fluent` values in
 `windows/ui/widgets.slint`): text in Segoe UI Variable, 8 px corners on cards,
 notices and the flyout and 4 px on buttons and rows, 1 px card edges, hover and
-pressed fills, and short state changes (83 ms). The main window and the
-equalizer ask Windows for Mica in their title bars (Windows 11 22H2 and
-later), on content in the token background, which is close to Mica's own
-tint; the tray flyout gets the system's rounded frame, border and shadow.
+pressed fills, and short state changes (83 ms). Every titled window (main,
+equalizer, guide, About and the group dialog) asks Windows for Mica in its
+title bar (Windows 11 22H2 and later), on content in the token background,
+which is close to Mica's own tint; the tray flyout gets the system's rounded frame, border and shadow.
 Where Windows doesn't offer one, the window keeps the plain frame (and the
 flyout its own drawn edge). The standard controls (switches, sliders,
 drop-downs, the primary button) use the Windows accent color, as other

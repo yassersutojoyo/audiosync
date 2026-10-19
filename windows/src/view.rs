@@ -295,8 +295,9 @@ impl App {
         applied
     }
 
-    /// Gives a titled window its frame each time it gains the focus, which
-    /// covers a native window created after `show` returned.
+    /// Gives a titled window (every window but the flyout) its frame each
+    /// time it gains the focus, which covers a native window created after
+    /// `show` returned.
     fn follow_frame(self: &Rc<Self>, window: fn(&App) -> &slint::Window, name: &'static str) {
         use slint::winit_030::winit::event::WindowEvent;
         use slint::winit_030::{EventResult, WinitWindowAccessor};
@@ -652,6 +653,8 @@ impl App {
     }
 
     fn connect_dialogs(self: &Rc<Self>) {
+        self.follow_frame(|app| app.group_dialog.window(), "group name dialog");
+        self.follow_frame(|app| app.about.window(), "about dialog");
         let weak = Rc::downgrade(self);
         let w = weak.clone();
         self.group_dialog
@@ -665,6 +668,7 @@ impl App {
     }
 
     fn connect_guide(self: &Rc<Self>) {
+        self.follow_frame(|app| app.guide.window(), "guide");
         let weak = Rc::downgrade(self);
         let w = weak.clone();
         self.guide
