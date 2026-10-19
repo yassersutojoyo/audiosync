@@ -151,11 +151,12 @@ fn start_airplay(audio: &mut audio::wasapi::WasapiBackend, log: &DebugLog) {
             return;
         }
     };
-    match link.start_discovery() {
+    let discovery = link.start_discovery();
+    audio.set_airplay(Box::new(link), Some(FeedSlot::new(input)));
+    match discovery {
         Ok(()) => log.log(|| "AirPlay: browsing for receivers".to_owned()),
         Err(error) => log.log(|| format!("AirPlay: discovery couldn't start: {error}")),
     }
-    audio.set_airplay(Box::new(link), Some(FeedSlot::new(input)));
 }
 
 /// Off Windows, example speakers to work on the UI with.
