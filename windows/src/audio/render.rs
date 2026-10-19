@@ -152,6 +152,9 @@ impl RenderPipeline {
 
 #[cfg(test)]
 mod tests {
+    use std::f64::consts::PI;
+
+    use audiosync_core::render::RendererControl;
     use audiosync_core::ring::{Ring, RingWriter};
 
     use super::*;
@@ -159,6 +162,7 @@ mod tests {
     struct Setup {
         writer: RingWriter,
         gain: Arc<SharedGain>,
+        control: RendererControl,
         pipeline: RenderPipeline,
     }
 
@@ -168,14 +172,153 @@ mod tests {
         let writer = ring.writer().unwrap();
         let reader = Reader::new(ring, SESSION_RATE);
         reader.control().set_delay_frames(delay_frames);
+        let control = RendererControl::new(&reader);
         let gain = Arc::new(SharedGain::new(gain));
         let pipeline =
-            RenderPipeline::new(reader, Arc::clone(&gain), device_rate, channels).unwrap();
+            RenderPipeline::new(reader, &control, Arc::clone(&gain), device_rate, channels)
+                .unwrap();
         Setup {
             writer,
             gain,
+            control,
             pipeline,
         }
+    }
+
+    /// A fade's frames at `rate` (S182): 20 ms.
+    fn fade_len(rate: u32) -> usize {
+        (rate as usize * 20 + 500) / 1000
+    }
+
+    /// w of frame `i` of a fade-in, or of a fade-out, of `len` frames (S182).
+    fn fade_in(i: usize, len: usize) -> f64 {
+        0.5 - 0.5 * (PI * (i + 1) as f64 / len as f64).cos()
+    }
+
+    fn fade_out(i: usize, len: usize) -> f64 {
+        0.5 + 0.5 * (PI * (i + 1) as f64 / len as f64).cos()
+    }
+
+    /// Renders `frames` frames in callbacks of `callback` frames and returns
+    /// the first channel.
+    fn play(s: &mut Setup, frames: usize, callback: usize) -> Vec<f32> {
+        let mut played = Vec::new();
+        while played.len() < frames {
+            let n = callback.min(frames - played.len());
+            let mut out = vec![9.0f32; n * 2];
+            s.pipeline.render(&mut out);
+            played.extend(out.chunks_exact(2).map(|frame| frame[0]));
+        }
+        played
+    }
+
+    #[test]
+    fn the_first_audio_of_a_session_fades_in_over_20_ms() {
+        let mut s = setup(SESSION_RATE, 2, 1_000, 1.0);
+        s.writer.write(&vec![0.5f32; 20_000 * 2], 20_000);
+        let played = play(&mut s, 4_000, 480);
+        let len = fade_len(SESSION_RATE);
+        for (i, &sample) in played[..len].iter().enumerate() {
+            let expected = 0.5 * fade_in(i, len);
+            assert!(
+                (f64::from(sample) - expected).abs() <= 1e-6,
+                "frame {i}: {sample}, the fade says {expected}"
+            );
+        }
+        assert!(played[len - 1..].iter().all(|&sample| sample == 0.5));
+
+        // At another device rate the fade counts that rate's frames.
+        let mut s = setup(44_100, 2, 1_000, 1.0);
+        s.writer.write(&vec![0.5f32; 20_000 * 2], 20_000);
+        let played = play(&mut s, 4_000, 441);
+        let len = fade_len(44_100);
+        assert_eq!(len, 882);
+        assert!(played[100].abs() < 0.05, "{}", played[100]);
+        assert!((played[len / 2] - 0.25).abs() < 0.02, "{}", played[len / 2]);
+        assert!(played[len + 64..].iter().all(|&sample| (sample - 0.5).abs() < 1e-3));
+    }
+
+    #[test]
+    fn a_stop_fades_out_over_20_ms_whatever_the_callback_holds() {
+        let len = fade_len(SESSION_RATE);
+        for callback in [64usize, 480, 1_056, 4_096] {
+            let mut s = setup(SESSION_RATE, 2, 1_000, 1.0);
+            s.writer.write(&vec![0.5f32; 40_000 * 2], 40_000);
+            play(&mut s, 2_048, callback);
+            s.control.request_fade_out();
+            let played = play(&mut s, 3_000, callback);
+            for (i, &sample) in played[..len].iter().enumerate() {
+                let expected = 0.5 * fade_out(i, len);
+                assert!(
+                    (f64::from(sample) - expected).abs() <= 1e-6,
+                    "{callback}-frame callbacks, frame {i}: {sample} for {expected}"
+                );
+            }
+            assert!(
+                played[len - 1..].iter().all(|&sample| sample == 0.0),
+                "{callback}-frame callbacks: silent after 20 ms"
+            );
+        }
+    }
+
+    #[test]
+    fn a_delay_change_fades_out_first_and_in_after() {
+        let len = fade_len(SESSION_RATE);
+        let mut s = setup(SESSION_RATE, 2, 4_800, 1.0);
+        let block = vec![0.5f32; 480 * 2];
+        let mut tick = |s: &mut Setup| {
+            s.writer.write(&block, 480);
+            play(s, 480, 480)
+        };
+        for _ in 0..20 {
+            tick(&mut s);
+        }
+        assert_eq!(s.control.lag_frames(), 4_800 - 480);
+        s.control.set_delay_frames(2_400);
+        let mut played = Vec::new();
+        for _ in 0..6 {
+            played.extend(tick(&mut s));
+        }
+        for i in 0..len {
+            let out = 0.5 * fade_out(i, len);
+            let back = 0.5 * fade_in(i, len);
+            assert!((f64::from(played[i]) - out).abs() <= 1e-6, "out {i}");
+            assert!((f64::from(played[len + i]) - back).abs() <= 1e-6, "in {i}");
+        }
+        assert_eq!(
+            s.control.lag_frames(),
+            2_400 - 480,
+            "the change landed exactly after the fade-out"
+        );
+    }
+
+    #[test]
+    fn an_output_is_faded_only_when_the_endpoint_holds_nothing_but_zeros() {
+        let mut s = setup(SESSION_RATE, 2, 1_000, 1.0);
+        s.writer.write(&vec![0.5f32; 40_000 * 2], 40_000);
+        play(&mut s, 2_400, 480);
+        assert!(!s.pipeline.has_played_its_fade(0, 0), "no stop asked for");
+        s.control.request_fade_out();
+        play(&mut s, 480, 480);
+        assert!(!s.pipeline.has_played_its_fade(0, 0), "half the fade rendered");
+        // The fade's last frame is this callback's last.
+        play(&mut s, 480, 480);
+        assert!(s.pipeline.has_played_its_fade(0, 0));
+        assert!(
+            !s.pipeline.has_played_its_fade(480, 0),
+            "the endpoint still holds the end of the fade"
+        );
+        play(&mut s, 480, 480);
+        assert!(s.pipeline.has_played_its_fade(480, 0), "only zeros queued");
+        assert!(
+            !s.pipeline.has_played_its_fade(480, 240),
+            "the stream latency hasn't passed since"
+        );
+        play(&mut s, 240, 240);
+        assert!(s.pipeline.has_played_its_fade(480, 240));
+        assert!(!s.control.is_faded());
+        s.pipeline.mark_faded();
+        assert!(s.control.is_faded());
     }
 
     /// Writes stereo frames whose left sample is `index / 1e6` and right

@@ -1570,6 +1570,7 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
+    use std::thread;
 
     use audiosync_airplay::clock::SenderClock;
     use audiosync_airplay::discovery::Device;
@@ -1577,6 +1578,7 @@ mod tests {
     use audiosync_airplay::sender::SpeakerState;
     use audiosync_airplay::stream::{Stream, StreamConfig};
     use audiosync_airplay::volume::Volume;
+    use audiosync_core::render::STOP_FADE_CAP;
 
     use super::*;
     use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, device, id_of};
@@ -1588,6 +1590,7 @@ mod tests {
 
     const SPEAKERS: &str = "speakers";
     const HEADPHONES: &str = "headphones";
+    const USB_OUTPUT: &str = "usb-dac";
     const PLAYER_PID: u32 = 2000;
 
     /// A stopped mock with two outputs, both on and listed once (as the UI
@@ -1702,6 +1705,118 @@ mod tests {
         assert!(playing(&backend).is_empty());
         assert_eq!(backend.running_source(), None);
         assert_eq!(backend.driver().renderers_faded(), 2);
+    }
+
+    /// How long a call on the UI thread may take without counting as a wait.
+    const NO_WAIT: Duration = Duration::from_millis(100);
+
+    #[test]
+    fn a_speaker_switched_off_fades_out_before_its_stream_stops() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.driver().hold_fades(true);
+        let asked = Instant::now();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        assert!(asked.elapsed() < NO_WAIT, "the UI thread doesn't wait");
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        assert_eq!(backend.driver().renderers_faded(), 1, "asked to fade out");
+        assert_eq!(
+            backend.driver().renderers_running(),
+            2,
+            "its stream runs while it fades"
+        );
+        backend.poll();
+        assert_eq!(backend.driver().renderers_running(), 2);
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert_eq!(
+            backend.driver().renderers_running(),
+            1,
+            "stopped once it faded"
+        );
+    }
+
+    #[test]
+    fn a_stop_waits_for_every_output_to_fade_and_never_more_than_500_ms() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.driver().hold_fades(true);
+        let asked = Instant::now();
+        backend.stop();
+        assert!(asked.elapsed() < NO_WAIT, "the UI thread doesn't wait");
+        assert_eq!(backend.running_source(), None);
+        assert_eq!(
+            backend.driver().renderers_faded(),
+            2,
+            "every output is asked at once"
+        );
+        assert!(
+            backend.driver().capture_running(),
+            "the capture runs while they fade"
+        );
+        assert_eq!(backend.driver().renderers_running(), 2);
+        backend.poll();
+        assert!(backend.driver().capture_running());
+        // Once every output has faded, the next poll stops them and then
+        // the capture.
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert!(!backend.driver().capture_running());
+        assert_eq!(backend.driver().renderers_running(), 0);
+
+        // Outputs that never fade are stopped anyway once 500 ms have passed.
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.driver().hold_fades(true);
+        backend.stop();
+        backend.poll();
+        assert!(backend.driver().capture_running());
+        thread::sleep(STOP_FADE_CAP + Duration::from_millis(20));
+        backend.poll();
+        assert!(!backend.driver().capture_running());
+        assert_eq!(backend.driver().renderers_running(), 0);
+
+        // A source change is a stop and a start: the new capture waits for
+        // the old outputs' fades, never more than 500 ms.
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let asked = Instant::now();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        let waited = asked.elapsed();
+        assert!(
+            waited >= STOP_FADE_CAP && waited < STOP_FADE_CAP + Duration::from_millis(400),
+            "{waited:?}"
+        );
+        assert_eq!(backend.driver().captures_started().len(), 4);
+        assert_eq!(backend.driver().renderers_running(), 2, "only the new outputs");
+        backend.driver().hold_fades(false);
+    }
+
+    #[test]
+    fn removing_several_outputs_asks_all_to_fade_then_waits_once() {
+        let mut backend = backend();
+        backend.connect_output(USB_OUTPUT, "USB DAC");
+        backend.set_output_enabled(USB_OUTPUT, true).unwrap();
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(backend.driver().renderers_running(), 3);
+        backend.driver().hold_fades(true);
+        let asked = Instant::now();
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        assert!(asked.elapsed() < NO_WAIT, "the UI thread doesn't wait");
+        assert_eq!(
+            backend.driver().renderers_faded(),
+            2,
+            "both asked before either stopped"
+        );
+        assert_eq!(backend.driver().renderers_running(), 3);
+        assert_eq!(playing(&backend), [USB_OUTPUT]);
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert_eq!(backend.driver().renderers_running(), 1);
     }
 
     #[test]
