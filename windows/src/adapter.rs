@@ -2300,6 +2300,26 @@ mod tests {
     }
 
     #[test]
+    fn a_source_switch_keeps_airplay_speakers_in_the_stream() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        assert!(adapter.snapshot().running);
+        fake.take_calls();
+        adapter.select_source(&player());
+        assert_eq!(
+            captures(&adapter)[1],
+            (LoopbackMode::IncludeTree, PLAYER_PID),
+            "capture starts again from the player"
+        );
+        assert_eq!(
+            fake.take_calls(),
+            [Call::RestartTimeline],
+            "the speaker stays in the stream, only its timeline restarts (S141)"
+        );
+        assert!(adapter.snapshot().running);
+    }
+
+    #[test]
     fn groups_and_auto_connect_hold_airplay_speakers() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
         turn_on(&mut adapter, SPEAKERS);

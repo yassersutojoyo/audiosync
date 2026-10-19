@@ -427,6 +427,36 @@ impl CaptureConverter {
     }
 }
 
+/// Keeps the ring in real time across a loopback gap. Process loopback
+/// delivers nothing while the captured audio is silent, so without it the
+/// ring would stop while the outputs read on (see [`GapFill::packet`] and
+/// [`GapFill::idle`]). Times are in 100 ns units of the performance
+/// counter, as `IAudioCaptureClient::GetBuffer` gives a packet's position.
+pub struct GapFill {
+    rate: u32,
+}
+
+impl GapFill {
+    /// A tracker for a capture at `rate`, before its first packet.
+    pub fn new(rate: u32) -> GapFill {
+        GapFill { rate }
+    }
+
+    /// A packet of `frames` frames whose first frame was captured at
+    /// `start`. Returns the silent frames to write before it, and how many
+    /// of its first frames to skip.
+    pub fn packet(&mut self, start: u64, frames: usize, discontinuity: bool) -> (usize, usize) {
+        let _ = (start, frames, discontinuity, self.rate);
+        (0, 0)
+    }
+
+    /// No packet came, and it is `now`. Returns the silent frames to write.
+    pub fn idle(&mut self, now: u64) -> usize {
+        let _ = now;
+        0
+    }
+}
+
 /// Decodes little-endian samples into floats in -1.0..=1.0.
 fn decode(sample: SampleType, bytes: &[u8], out: &mut [f32]) {
     match sample {
@@ -450,7 +480,7 @@ mod tests {
     use audiosync_airplay::clock::SenderClock;
     use audiosync_airplay::stream::{Stream, StreamConfig};
     use audiosync_core::eq::{EqSettings, equalizer};
-    use audiosync_core::reader::{Correction, Reader};
+    use audiosync_core::reader::{Correction, Reader, tolerance_frames};
     use audiosync_core::ring::Ring;
 
     use super::*;
@@ -1009,6 +1039,67 @@ mod tests {
         let out = newest(&ring, 2400);
         let peak = out.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
         assert!((0.22..0.28).contains(&peak), "peak {peak}");
+    }
+
+    /// 100 ns units per millisecond, as packet positions count.
+    const HNS_PER_MS: u64 = 10_000;
+
+    #[test]
+    fn a_loopback_gap_keeps_the_ring_in_real_time_so_nothing_from_before_it_plays_after_it() {
+        let (ring, writer) = session_ring();
+        let (_control, processor) = equalizer();
+        let mut converter =
+            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor, None).unwrap();
+        let mut gaps = GapFill::new(SESSION_RATE);
+        // An output lined up with an AirPlay speaker: L = 1750 ms.
+        let mut reader = Reader::new(Arc::clone(&ring), SESSION_RATE);
+        let (delay, tolerance) = (84_000, tolerance_frames(SESSION_RATE));
+        let mut out = vec![0.0_f32; 480 * 2];
+        let mut played = Vec::new();
+        // 10 ms steps: 3 s of audio, a 2 s gap in which Windows delivers
+        // nothing and the loop wakes once a period, then 3 s of other audio.
+        for step in 0..800_u64 {
+            let start = step * 10 * HNS_PER_MS;
+            let level = match step {
+                0..300 => Some(0.5),
+                300..500 => None,
+                _ => Some(0.25),
+            };
+            match level {
+                Some(level) => {
+                    let (fill, skip) = gaps.packet(start, 480, false);
+                    if fill > 0 {
+                        converter.push(&[], fill, true);
+                    }
+                    let frames = 480 - skip;
+                    converter.push(&f32_bytes(&vec![level; frames * 2]), frames, false);
+                }
+                None => {
+                    let fill = gaps.idle(start + 10 * HNS_PER_MS);
+                    if fill > 0 {
+                        converter.push(&[], fill, true);
+                    }
+                }
+            }
+            reader.read(&mut out, 480, delay, tolerance);
+            played.push(out.clone());
+        }
+        for (step, block) in played.iter().enumerate().take(470).skip(300) {
+            assert!(
+                block.iter().all(|s| *s == 0.5),
+                "step {step}: the output plays on until the gap reaches it"
+            );
+        }
+        for (step, block) in played.iter().enumerate().skip(480) {
+            assert!(
+                !block.contains(&0.5),
+                "step {step}: audio from before the gap plays again"
+            );
+        }
+        assert!(
+            played[700].iter().all(|s| *s == 0.25),
+            "the audio after the gap plays 1.75 s after it came"
+        );
     }
 
     #[test]

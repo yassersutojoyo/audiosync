@@ -41,6 +41,9 @@ windows = { version = "0.62", features = [
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Diagnostics_ToolHelp",
+    # QueryPerformanceCounter: the capture loop's clock while loopback
+    # delivers nothing, in the time base of the packets' positions.
+    "Win32_System_Performance",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",

@@ -23,18 +23,19 @@ use audiosync_core::ring::RingWriter;
 use crate::audio::airplay::FeedLease;
 use windows::Win32::Foundation::{E_FAIL, ERROR_TIMEOUT, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
-    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
-    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK,
-    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, AUDIOCLIENT_ACTIVATION_PARAMS,
-    AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
-    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, ActivateAudioInterfaceAsync,
-    IActivateAudioInterfaceAsyncOperation, IActivateAudioInterfaceCompletionHandler,
-    IActivateAudioInterfaceCompletionHandler_Impl, IAudioCaptureClient, IAudioClient,
-    PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+    AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+    AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+    AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
+    AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
+    ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
+    IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
+    IAudioCaptureClient, IAudioClient, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
 };
 use windows::Win32::System::Com::BLOB;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::{WaitForMultipleObjects, WaitForSingleObject};
 use windows::Win32::System::Variant::VT_BLOB;
 use windows::core::{HRESULT, IUnknown, Interface, Ref};
@@ -47,7 +48,8 @@ use super::com::{
 use super::processes::ProcessWatch;
 use crate::audio::backend::BackendError;
 use crate::audio::capture::{
-    Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, LoopbackMode, StreamFormat,
+    Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, GapFill, LoopbackMode,
+    StreamFormat,
 };
 use crate::audio::controller::{CaptureHandle, CaptureState};
 use crate::audio::outputs::HNS_PER_MS;
@@ -368,12 +370,27 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for ActivationDone_Impl {
     }
 }
 
+/// The performance counter now, in 100 ns units like a packet's position;
+/// 0 when it can't be read.
+fn now_hns(frequency: i64) -> u64 {
+    let mut count = 0_i64;
+    // SAFETY: writes one integer.
+    if frequency <= 0 || unsafe { QueryPerformanceCounter(&mut count) }.is_err() {
+        return 0;
+    }
+    (i128::from(count) * 10_000_000 / i128::from(frequency)) as u64
+}
+
 /// Captures until `stop` is set (`Ok`) or a call fails (its HRESULT).
 ///
 /// Real-time: waits for Windows' packet event, then reads every packet and
 /// hands it to the converter. When no packet came for [`WAIT_MS`], it does
 /// the same: the packet size call fails once Windows invalidated the stream.
-/// Never allocates, locks or logs; it leaves on the first error.
+/// Process loopback delivers nothing while the captured audio is silent, so
+/// [`GapFill`] keeps the ring in real time: silence for a jump in the
+/// packets' positions, and, while nothing comes, silence up to shortly
+/// before now at every wake. Never allocates, locks or logs; it leaves on
+/// the first error.
 fn capture_loop(
     stream: &CaptureStream,
     converter: &mut CaptureConverter,
@@ -382,6 +399,10 @@ fn capture_loop(
     let handles = [stop.raw(), stream.event.raw()];
     let packet_ready = WAIT_EVENT(WAIT_OBJECT_0.0 + 1);
     let block = stream.format.block_align();
+    let mut gaps = GapFill::new(stream.format.rate);
+    let mut frequency = 0_i64;
+    // SAFETY: writes one integer.
+    let _ = unsafe { QueryPerformanceFrequency(&mut frequency) };
     loop {
         // SAFETY: both handles live as long as this loop.
         let wait = unsafe { WaitForMultipleObjects(&handles, false, WAIT_MS) };
@@ -391,6 +412,7 @@ fn capture_loop(
         if wait != packet_ready && wait != WAIT_TIMEOUT {
             return Err(E_FAIL);
         }
+        let mut packets = 0;
         loop {
             // SAFETY: calls on the capture client this thread owns.
             let packet = unsafe { stream.capture.GetNextPacketSize() }.map_err(|e| e.code())?;
@@ -400,27 +422,60 @@ fn capture_loop(
             let mut data = ptr::null_mut();
             let mut frames = 0u32;
             let mut flags = 0u32;
+            let mut position = 0u64;
             // SAFETY: as above, with writable out parameters.
             unsafe {
-                stream
-                    .capture
-                    .GetBuffer(&mut data, &mut frames, &mut flags, None, None)
+                stream.capture.GetBuffer(
+                    &mut data,
+                    &mut frames,
+                    &mut flags,
+                    None,
+                    Some(&mut position),
+                )
             }
             .map_err(|e| e.code())?;
             if frames == 0 {
                 break;
             }
+            packets += 1;
+            let count = frames as usize;
+            // A packet without a position counts as captured just now.
+            let start = if position != 0 {
+                position
+            } else {
+                let length = count as u64 * 10_000_000 / u64::from(stream.format.rate);
+                now_hns(frequency).saturating_sub(length)
+            };
+            let discontinuity = flags & (AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32) != 0;
+            let (fill, skip) = gaps.packet(start, count, discontinuity);
+            if fill > 0 {
+                converter.push(&[], fill, true);
+            }
+            let skip = skip.min(count);
             let silent = data.is_null() || flags & (AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
             let bytes: &[u8] = if silent {
                 &[]
             } else {
                 // SAFETY: GetBuffer handed out `frames` frames in the
                 // initialized format, readable until ReleaseBuffer.
-                unsafe { slice::from_raw_parts(data, frames as usize * block) }
+                unsafe { slice::from_raw_parts(data, count * block) }
             };
-            converter.push(bytes, frames as usize, silent);
+            if skip < count {
+                let rest = if silent {
+                    bytes
+                } else {
+                    &bytes[skip * block..]
+                };
+                converter.push(rest, count - skip, silent);
+            }
             // SAFETY: releases the packet read above.
             unsafe { stream.capture.ReleaseBuffer(frames) }.map_err(|e| e.code())?;
+        }
+        if packets == 0 {
+            let fill = gaps.idle(now_hns(frequency));
+            if fill > 0 {
+                converter.push(&[], fill, true);
+            }
         }
     }
 }

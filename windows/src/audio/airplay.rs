@@ -1005,6 +1005,13 @@ pub mod tests {
             ))));
         }
 
+        /// Discovery saw `device`'s records change.
+        pub fn change(&self, device: &Device) {
+            self.push(SenderEvent::Receiver(ReceiverEvent::Changed(Box::new(
+                ReceiverInfo::new(device.clone()),
+            ))));
+        }
+
         /// Discovery lost `device`.
         pub fn gone(&self, device: &Device) {
             self.push(SenderEvent::Receiver(ReceiverEvent::Gone(
@@ -1327,6 +1334,96 @@ pub mod tests {
         airplay.poll();
         assert!(!airplay.chosen(), "gone and not playing");
         assert_eq!(airplay.enabled_ids(), [id], "still on");
+    }
+
+    /// Den, a speaker with both services, or with its AirPlay service alone.
+    fn den(with_raop: bool) -> Device {
+        let address = ScopedAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 12)));
+        let raop = ServiceRecord {
+            kind: ServiceKind::Raop,
+            instance: "02005E005307@Den".to_owned(),
+            host: "den.local".to_owned(),
+            port: 7000,
+            txt: OPEN_TXT.iter().map(|s| s.as_bytes().to_vec()).collect(),
+            addresses: vec![address],
+        };
+        let airplay = ServiceRecord {
+            kind: ServiceKind::AirPlay,
+            instance: "Den".to_owned(),
+            host: "den.local".to_owned(),
+            port: 7000,
+            txt: vec![
+                b"deviceid=02:00:5E:00:53:07".to_vec(),
+                b"features=0x0,0x40".to_vec(),
+            ],
+            addresses: vec![address],
+        };
+        let key = DeviceKey::Id(DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 0x07]));
+        Device::from_records(key, with_raop.then_some(&raop), Some(&airplay)).expect("a device")
+    }
+
+    #[test]
+    fn a_two_service_speaker_that_loses_its_raop_record_first_stays_on() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let both = den(true);
+        let id = id_of(&both);
+        fake.appear(&both);
+        airplay.poll();
+        assert_eq!(
+            airplay.speakers()[0].availability,
+            AirPlayAvailability::Open
+        );
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.state(&both, SpeakerState::Playing);
+        airplay.poll();
+        fake.take_calls();
+        // Its RAOP record lapses first: "AirPlay 2 only" for a moment, then
+        // gone (EC12).
+        fake.change(&den(false));
+        fake.gone(&both);
+        let events = airplay.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::AirPlayFailed { .. })),
+            "no notice: {events:?}"
+        );
+        assert_eq!(
+            airplay.enabled_ids(),
+            std::slice::from_ref(&id),
+            "it stays on"
+        );
+        assert!(fake.take_calls().is_empty(), "its session goes on");
+        assert!(airplay.chosen(), "it still plays");
+        // Back with both records, it is listed as able to play again.
+        fake.appear(&both);
+        airplay.poll();
+        assert_eq!(
+            airplay.speakers()[0].availability,
+            AirPlayAvailability::Open
+        );
+        assert_eq!(airplay.enabled_ids(), [id]);
+    }
+
+    #[test]
+    fn a_listed_speaker_that_cant_play_doesnt_hold_local_outputs_back() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let both = den(true);
+        let id = id_of(&both);
+        fake.appear(&both);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        // Not streaming, so not playing: listed as AirPlay 2 only, it can't
+        // join, so it isn't chosen.
+        fake.change(&den(false));
+        airplay.poll();
+        assert_eq!(airplay.enabled_ids(), std::slice::from_ref(&id));
+        assert!(!airplay.chosen());
+        airplay.set_streaming(true);
+        assert!(fake.take_calls().is_empty(), "it doesn't join");
     }
 
     #[test]
