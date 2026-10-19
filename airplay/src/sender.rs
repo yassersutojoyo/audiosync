@@ -43,7 +43,17 @@
 //! [`Credentials`], which the host stores (for example with
 //! [`Credentials::to_bytes`]) and passes in
 //! [`SpeakerOptions::credentials`] whenever it adds that speaker. Every
-//! session to it then verifies with them before ANNOUNCE (P55).
+//! session to it then verifies with them before ANNOUNCE (P55). An Apple
+//! TV that also asks for a password is paired with
+//! [`Sender::start_pairing_with_password`] (P45, P46).
+//!
+//! Discovery only hints that a receiver needs pairing, through its
+//! verdict ([`Verdict::needs_pairing`](crate::discovery::Verdict::needs_pairing),
+//! and [`Verdict::legacy_pairing`](crate::discovery::Verdict::legacy_pairing)
+//! for an Apple TV this PIN pairing serves), as it hints that one is busy
+//! (P137). PairingRequired itself comes only from a connection: a session
+//! whose OPTIONS answer calls for pairing, or whose verification fails
+//! (P46, P58).
 
 mod driver;
 
@@ -163,11 +173,16 @@ pub struct NowPlaying {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReceiverInfo {
     pub device: Device,
-    /// Whether a session can start without credentials: `Ok`, or the
-    /// error it would end with before connecting: Unsupported with its
-    /// reason (P139, P2), or PairingRequired for an Apple TV that needs the
-    /// legacy pairing (P46). Such an Apple TV plays once the host pairs it
-    /// ([`Sender::start_pairing`]) and adds it with the credentials.
+    /// Whether a session can start: `Ok`, or the error it would end with
+    /// before connecting, Unsupported with its reason (P139, P2). Never
+    /// PairingRequired, which only a connection reports (P46): an Apple TV
+    /// whose flags call for the legacy pairing is `Ok` here, and discovery's
+    /// hint that it likely needs a PIN is its verdict's `needs_pairing`
+    /// (P16) and `legacy_pairing`, passed like the busy hint (P137). Added
+    /// without credentials, such a speaker is asked OPTIONS and then
+    /// reports PairingRequired, or Unsupported when it can't take AirPlay 1
+    /// audio; it plays once the host pairs it ([`Sender::start_pairing`])
+    /// and adds it with the credentials.
     pub plan: Result<(), ErrorKind>,
 }
 
@@ -179,9 +194,14 @@ impl ReceiverInfo {
 }
 
 /// The AirPlay 1 path with the AirPlay 2 path off (P2), then the start
-/// conditions without credentials (P46, P139).
+/// conditions known before connecting (P139). The legacy pairing of an
+/// Apple TV without credentials is no such condition: only a connection
+/// reports PairingRequired (P46), so the plan stays `Ok` for it.
 pub(crate) fn plan(device: &Device) -> Result<(), ErrorKind> {
-    plan_with(device, false)
+    match plan_with(device, false) {
+        Err(ErrorKind::PairingRequired) => Ok(()),
+        plan => plan,
+    }
 }
 
 /// The same, for a speaker the host has (or hasn't) credentials for.
@@ -423,14 +443,33 @@ impl Sender {
     }
 
     /// Pairs with an Apple TV that needs the legacy pairing (P46 to P54): on
-    /// its own connection to the receiver's RAOP port, the Apple TV is asked
-    /// to show a PIN, and [`PairingEvent::PinRequested`] follows. The
-    /// pairing then waits, without a timeout, for [`Sender::submit_pin`]
-    /// (P51), and ends with [`PairingEvent::Paired`] and the credentials, or
+    /// its own connection to the receiver's RAOP port, it is asked OPTIONS
+    /// first (a receiver that can't take AirPlay 1 audio ends the pairing
+    /// as Unsupported, with no PIN shown), then to show a PIN, and
+    /// [`PairingEvent::PinRequested`] follows. The pairing then waits,
+    /// without a timeout, for [`Sender::submit_pin`] (P51), and ends with
+    /// [`PairingEvent::Paired`] and the credentials, or
     /// [`PairingEvent::Failed`]. A pairing already running for the device is
-    /// replaced. Playing speakers are not touched.
+    /// replaced. Playing speakers are not touched. The same as
+    /// [`Sender::start_pairing_with_password`] without a password: a
+    /// receiver that also asks for one ends the pairing with
+    /// PasswordRequired before it shows a PIN.
     pub fn start_pairing(&self, device: Device) {
-        self.command(Command::StartPairing(Box::new(device)));
+        self.start_pairing_with_password(device, None);
+    }
+
+    /// [`Sender::start_pairing`] with the speaker's password, if the host
+    /// has one (P39, P45, P46): a 401 to the pairing's OPTIONS is answered
+    /// with digest authentication, and every later pairing request carries
+    /// `Authorization` (P36, P38). Without a password that 401 ends the
+    /// pairing with PasswordRequired before `/pair-pin-start`; a password
+    /// the receiver turns down ends it with WrongPassword (P135). The
+    /// password is never logged.
+    pub fn start_pairing_with_password(&self, device: Device, password: Option<String>) {
+        self.command(Command::StartPairing {
+            device: Box::new(device),
+            password,
+        });
     }
 
     /// The PIN the user read off the Apple TV (P50, P51). Digits only;

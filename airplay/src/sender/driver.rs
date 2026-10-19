@@ -75,7 +75,11 @@ pub(crate) enum Command {
     StartDiscovery(Box<dyn Browser + Send>),
     StopDiscovery,
     ArrivalTime(i64, mpsc::SyncSender<Instant>),
-    StartPairing(Box<Device>),
+    StartPairing {
+        device: Box<Device>,
+        /// The speaker's password, if the host has one (P39, P46).
+        password: Option<String>,
+    },
     SubmitPin(DeviceKey, String),
     CancelPairing(DeviceKey),
     Shutdown,
@@ -481,9 +485,10 @@ impl Driver {
         }
     }
 
-    /// Starts a pairing with a device on a connection of its own (P47); one
-    /// already running for it is dropped.
-    fn start_pairing(&mut self, device: Device, now: Instant) {
+    /// Starts a pairing with a device on a connection of its own (P47), with
+    /// the speaker's password when the host gave one (P46); one already
+    /// running for it is dropped.
+    fn start_pairing(&mut self, device: Device, password: Option<String>, now: Instant) {
         if self.stopping.is_some() {
             return;
         }
@@ -511,7 +516,8 @@ impl Driver {
             ids,
             u64::from_be_bytes(client),
             now,
-        );
+        )
+        .with_password(password);
         self.pairing_sessions.insert(session_key, key.clone());
         self.pairings.insert(
             key,
@@ -539,7 +545,7 @@ impl Driver {
                 if attempt != run.attempt || run.pairing.state() != PairingState::Connecting {
                     return;
                 }
-                match RtspIo::open(session, stream, notify) {
+                match RtspIo::open(session, attempt, stream, notify) {
                     Ok(io) => {
                         run.io = Some(io);
                         run.pairing.handle_connected(now);
@@ -552,8 +558,18 @@ impl Driver {
                     run.pairing.handle_connect_failed(now);
                 }
             }
-            IoEvent::Rtsp { bytes, .. } => run.pairing.handle_input(&bytes, now),
-            IoEvent::RtspClosed { .. } => run.pairing.handle_connection_closed(now),
+            // Only the current connection's: a late event from an earlier
+            // attempt is dropped.
+            IoEvent::Rtsp { attempt, bytes, .. } => {
+                if attempt == run.attempt {
+                    run.pairing.handle_input(&bytes, now);
+                }
+            }
+            IoEvent::RtspClosed { attempt, .. } => {
+                if attempt == run.attempt {
+                    run.pairing.handle_connection_closed(now);
+                }
+            }
             IoEvent::Control { .. } | IoEvent::TimingRequest { .. } => {}
         }
     }
@@ -786,7 +802,7 @@ impl Driver {
             IoEvent::Connected { session, .. }
             | IoEvent::ConnectFailed { session, .. }
             | IoEvent::Rtsp { session, .. }
-            | IoEvent::RtspClosed { session }
+            | IoEvent::RtspClosed { session, .. }
             | IoEvent::Control { session, .. }
             | IoEvent::TimingRequest { session, .. } => *session,
         };
@@ -815,7 +831,7 @@ impl Driver {
                     return;
                 }
                 let clock = self.stream.clock();
-                match SessionIo::open(session, stream, clock, counters, notify) {
+                match SessionIo::open(session, attempt, stream, clock, counters, notify) {
                     Ok((io, connection)) => {
                         active.io = Some(io);
                         active.session.handle_connected(connection, now);
@@ -828,8 +844,19 @@ impl Driver {
                     active.session.handle_connect_failed(now);
                 }
             }
-            IoEvent::Rtsp { bytes, .. } => active.session.handle_input(&bytes, now),
-            IoEvent::RtspClosed { .. } => active.session.handle_connection_closed(now),
+            // Only the current connection's: after the reconnect of P58 the
+            // earlier connection's reader and writer may still report its
+            // close, which must not end the new attempt.
+            IoEvent::Rtsp { attempt, bytes, .. } => {
+                if attempt == active.attempt {
+                    active.session.handle_input(&bytes, now);
+                }
+            }
+            IoEvent::RtspClosed { attempt, .. } => {
+                if attempt == active.attempt {
+                    active.session.handle_connection_closed(now);
+                }
+            }
             IoEvent::Control { bytes, .. } => {
                 if let Some(id) = active.stream_id {
                     self.stream.handle_control_packet(id, &bytes, now);
@@ -881,7 +908,9 @@ impl Driver {
             Command::ArrivalTime(n, reply) => {
                 let _ = reply.try_send(self.stream.arrival_time(n));
             }
-            Command::StartPairing(device) => self.start_pairing(*device, now),
+            Command::StartPairing { device, password } => {
+                self.start_pairing(*device, password, now);
+            }
             Command::SubmitPin(key, pin) => {
                 if let Some(run) = self.pairings.get_mut(&key) {
                     // A PIN while none is awaited is ignored (Sender::submit_pin).
@@ -971,7 +1000,10 @@ impl Driver {
     }
 
     /// Starts a new session for a speaker: fresh identifiers, the device's
-    /// current addresses and codec (P17, P74, P142).
+    /// current addresses and codec (P17, P74, P142). A speaker that needs
+    /// the legacy pairing without credentials still connects: it is asked
+    /// OPTIONS before PairingRequired is reported, so a receiver that can't
+    /// take AirPlay 1 audio is Unsupported instead (P46).
     fn start_session(&mut self, key: &DeviceKey, now: Instant) {
         let planned = {
             let Some(speaker) = self.speakers.get_mut(key) else {
@@ -982,11 +1014,16 @@ impl Driver {
             }
             let pcm = speaker.options.pcm && !self.directory.pcm_refused(key);
             let device = &speaker.device;
-            super::plan_with(device, speaker.options.credentials.is_some())
-                .and_then(|()| device.choose_codec(pcm).map_err(ErrorKind::Unsupported))
+            let (needs_pairing, plan) =
+                match super::plan_with(device, speaker.options.credentials.is_some()) {
+                    Err(ErrorKind::PairingRequired) => (true, Ok(())),
+                    plan => (false, plan),
+                };
+            plan.and_then(|()| device.choose_codec(pcm).map_err(ErrorKind::Unsupported))
+                .map(|codec| (codec, needs_pairing))
         };
-        let codec = match planned {
-            Ok(codec) => codec,
+        let (codec, needs_pairing) = match planned {
+            Ok(planned) => planned,
             Err(kind) => return self.refuse(key, SessionError::new(kind), now),
         };
         let mut entropy = OsEntropy;
@@ -1025,6 +1062,7 @@ impl Driver {
         config.codec = codec;
         config.alac_fallback = device.alac_fallback();
         config.apple_tv_without_credentials = device.is_apple_tv() && options.credentials.is_none();
+        config.needs_pairing = needs_pairing;
         config.verifier = verifier.map(|verifier| Box::new(verifier) as _);
         config.password = options.password.clone();
         config.software_volume = software_volume;
@@ -1250,5 +1288,150 @@ mod tests {
         let took = started.elapsed();
         let _ = release.send(());
         assert!(took < Duration::from_secs(1), "shutdown took {took:?}");
+    }
+
+    /// A verifier without keys, for driving a session by hand.
+    struct OpenVerifier;
+
+    impl crate::session::Verifier for OpenVerifier {
+        fn first_request(&mut self) -> Vec<u8> {
+            vec![1, 0, 0, 0]
+        }
+
+        fn second_request(&mut self, _first_response: &[u8]) -> Option<Vec<u8>> {
+            Some(vec![0, 0, 0, 0])
+        }
+    }
+
+    fn answer(cseq: u32, body: &[u8]) -> Vec<u8> {
+        let mut response = crate::rtsp::Response::new(200, "OK");
+        response.headers.push("CSeq", cseq.to_string());
+        response.body = body.to_vec();
+        response.encode()
+    }
+
+    // After the reconnect of P58, the earlier connection's reader and writer
+    // can both still report its close (and the reader its last bytes). Those
+    // carry the earlier connect attempt and are dropped, so they don't end
+    // the new attempt as Unreachable.
+    #[test]
+    fn late_events_from_the_connection_before_a_reconnect_are_dropped() {
+        use crate::discovery::{ScopedAddr, ServiceKind, ServiceRecord};
+        use crate::session::Connection;
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, emitted) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency);
+
+        // A receiver address that takes the reconnect and never answers.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a listener");
+        let address = listener.local_addr().expect("an address");
+        let record = ServiceRecord {
+            kind: ServiceKind::Raop,
+            instance: "0123456789AB@Living Room".to_owned(),
+            host: "living.local".to_owned(),
+            port: address.port(),
+            txt: vec![b"et=0".to_vec()],
+            addresses: vec![ScopedAddr::new(address.ip())],
+        };
+        let device =
+            Device::from_records(record.device_key(), Some(&record), None).expect("a device");
+        let key = device.key.clone();
+
+        // A session whose second pair-verify step was answered 200, with
+        // OPTIONS out: a close now gets the one reconnect.
+        let mut config = SessionConfig::new(vec![address], Volume::Db(-20.0));
+        config.verifier = Some(Box::new(OpenVerifier));
+        let ids = SessionIds::generate(&mut OsEntropy).expect("identifiers");
+        let mut session = Session::new(config, ids, now);
+        let connection = Connection {
+            local: address.ip(),
+            control_port: 1,
+            timing_port: 2,
+        };
+        session.handle_connected(connection, now);
+        session.handle_input(&answer(0, &[0x5A; 96]), now);
+        session.handle_input(&answer(1, &[]), now);
+        while session.poll_output().is_some() {}
+        let session_key = SessionKey(0);
+        driver.next_session = 1;
+        driver.sessions.insert(session_key, key.clone());
+        driver.speakers.insert(
+            key.clone(),
+            Speaker {
+                device,
+                options: SpeakerOptions::new(Volume::Db(-20.0)),
+                counters: Arc::new(SpeakerCounters::default()),
+                backoff: Backoff::new(),
+                phase: Phase::Active(Box::new(Active {
+                    key: session_key,
+                    session,
+                    codec: Codec::Alac,
+                    software_volume: false,
+                    software_mute: false,
+                    attempt: 1,
+                    io: None,
+                    stream_id: None,
+                })),
+                removing: false,
+            },
+        );
+
+        // The reader's close: the session connects again, as attempt 2.
+        let closed = |attempt| IoEvent::RtspClosed {
+            session: session_key,
+            attempt,
+        };
+        driver.io_event(closed(1), now);
+        driver.flush(now);
+        let state = |driver: &mut Driver| {
+            driver
+                .active(&key)
+                .map(|active| (active.session.state(), active.attempt))
+        };
+        assert_eq!(state(&mut driver), Some((State::Connecting, 2)));
+
+        // The writer's close and the reader's last bytes, late: dropped.
+        driver.io_event(closed(1), now);
+        driver.io_event(closed(1), now);
+        driver.io_event(
+            IoEvent::Rtsp {
+                session: session_key,
+                attempt: 1,
+                bytes: answer(2, &[]),
+            },
+            now,
+        );
+        driver.flush(now);
+        assert_eq!(state(&mut driver), Some((State::Connecting, 2)));
+        let failed = emitted.try_iter().any(|event| {
+            matches!(
+                event,
+                SenderEvent::Speaker {
+                    event: SpeakerEvent::Error(_),
+                    ..
+                }
+            )
+        });
+        assert!(!failed, "no error from the earlier connection's events");
+
+        // The current attempt's close still counts (here: Unreachable, as
+        // it closes while connecting).
+        driver.io_event(closed(2), now);
+        driver.flush(now);
+        let failed = emitted.try_iter().any(|event| {
+            matches!(
+                event,
+                SenderEvent::Speaker {
+                    event: SpeakerEvent::Error(_),
+                    ..
+                }
+            )
+        });
+        assert!(failed);
+        drop(listener);
     }
 }

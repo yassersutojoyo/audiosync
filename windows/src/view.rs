@@ -20,12 +20,20 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, Vec
 use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
-use crate::ui_model::{self, AppState, Backend, NoticeMessage, SourceKind, SpeakerState};
+use crate::ui_model::{
+    self, AppState, Backend, NoticeMessage, PinPrompt, SourceKind, SpeakerState, ViewSettings,
+    WindowFrame,
+};
 use crate::{
     AboutDialog, AirPlayProblem, Availability, EqualizerWindow, GroupItem, GroupNameDialog,
-    GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, Palette, RowState, SpeakerItem,
-    SpeakerKind, Strings, TrayFlyout,
+    GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, Palette, PinDialog, PinPhase,
+    RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
 };
+
+/// The digits the PIN field keeps of what was typed: four at most.
+fn pin_digits(text: &str) -> String {
+    text.chars().filter(char::is_ascii_digit).take(4).collect()
+}
 
 /// What the group name dialog is open for.
 #[derive(Clone, Debug, PartialEq)]
@@ -65,6 +73,10 @@ const FLYOUT_NOTICE_LIMIT: usize = 1;
 
 /// How often the backend is polled for what happened on its own.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How often, 20 ms apart, the saved main window size waits for the native
+/// window before it gives up (about two seconds).
+const NATIVE_WINDOW_TRIES: u8 = 100;
 
 /// The parts of the tray flyout that a refresh can remove, with the controls
 /// in them: the listed notice, the button for more notices, the group rows
@@ -126,6 +138,13 @@ pub struct App {
     pub flyout: TrayFlyout,
     pub equalizer: EqualizerWindow,
     group_dialog: GroupNameDialog,
+    /// The code prompt of an Apple TV pairing.
+    pin_dialog: PinDialog,
+    /// The speaker the PIN dialog is open for, while it is.
+    pin_for: RefCell<Option<String>>,
+    /// The PIN dialog shows a made-up pairing (the PIN preview), which no
+    /// refresh closes.
+    pin_preview: Cell<bool>,
     about: AboutDialog,
     guide: GuideWindow,
     /// The paragraphs the guide shows.
@@ -157,6 +176,24 @@ fn with_app(app: &Weak<App>, action: impl FnOnce(&App)) {
     }
 }
 
+/// Sets the main window's size as soon as its native window exists, checking
+/// every 20 ms up to `tries` times.
+fn set_size_once_native(main: slint::Weak<MainWindow>, size: slint::LogicalSize, tries: u8) {
+    use slint::winit_030::WinitWindowAccessor;
+
+    Timer::single_shot(Duration::from_millis(20), move || {
+        let Some(window_owner) = main.upgrade() else {
+            return;
+        };
+        let window = window_owner.window();
+        if window.with_winit_window(|_| ()).is_some() {
+            window.set_size(size);
+        } else if tries > 1 {
+            set_size_once_native(main, size, tries - 1);
+        }
+    });
+}
+
 impl App {
     /// The windows over `backend`; what they do themselves goes to `log`.
     pub fn new(backend: Box<dyn Backend>, log: DebugLog) -> Result<Rc<App>, slint::PlatformError> {
@@ -177,6 +214,9 @@ impl App {
             flyout: TrayFlyout::new()?,
             equalizer: EqualizerWindow::new()?,
             group_dialog: GroupNameDialog::new()?,
+            pin_dialog: PinDialog::new()?,
+            pin_for: RefCell::new(None),
+            pin_preview: Cell::new(false),
             about: AboutDialog::new()?,
             guide: GuideWindow::new()?,
             guide_steps: Rc::new(VecModel::default()),
@@ -197,6 +237,7 @@ impl App {
         app.connect_equalizer();
         app.connect_dialogs();
         app.connect_guide();
+        app.restore_view();
         app.refresh();
         let weak = Rc::downgrade(&app);
         app.poll_timer
@@ -263,6 +304,7 @@ impl App {
         self.group_dialog
             .global::<Palette>()
             .set_color_scheme(scheme);
+        self.pin_dialog.global::<Palette>().set_color_scheme(scheme);
         self.about.global::<Palette>().set_color_scheme(scheme);
         self.guide.global::<Palette>().set_color_scheme(scheme);
         self.theme_override.set(Some(dark));
@@ -413,6 +455,7 @@ impl App {
         self.flyout.set_notice_count(count(notices.len()));
         self.restore_flyout_focus(flyout_removed);
         self.refresh_guide(&state);
+        self.show_pin_prompt(state.pin_prompt.as_ref());
 
         for window in [&self.main as &dyn WindowState, &self.flyout] {
             window.show_state(&state, &status, source_index);
@@ -499,6 +542,10 @@ impl App {
         let w = weak.clone();
         main.on_auto_connect_toggled(move |id, on| {
             with_app(&w, |app| app.update(|b| b.set_auto_connect(&id, on)))
+        });
+        let w = weak.clone();
+        main.on_forget_pairing_requested(move |id| {
+            with_app(&w, |app| app.update(|b| b.forget_pairing(&id)))
         });
         let w = weak.clone();
         main.on_group_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_group(&id))));
@@ -659,12 +706,123 @@ impl App {
         let w = weak.clone();
         self.group_dialog
             .on_confirmed(move |name| with_app(&w, |app| app.confirm_dialog(&name)));
-        let w = weak;
+        let w = weak.clone();
         self.group_dialog.on_cancelled(move || {
             with_app(&w, |app| {
                 let _ = app.group_dialog.hide();
             })
         });
+
+        self.follow_frame(|app| app.pin_dialog.window(), "PIN dialog");
+        let dialog = self.pin_dialog.as_weak();
+        self.pin_dialog.on_pin_edited(move |text| {
+            if let Some(dialog) = dialog.upgrade() {
+                let digits = pin_digits(&text);
+                if digits != text.as_str() {
+                    dialog.set_pin(digits.into());
+                }
+            }
+        });
+        let w = weak.clone();
+        self.pin_dialog
+            .on_confirmed(move |pin| with_app(&w, |app| app.confirm_pin(&pin)));
+        let w = weak.clone();
+        self.pin_dialog
+            .on_cancelled(move || with_app(&w, App::cancel_pin));
+        let w = weak;
+        self.pin_dialog.window().on_close_requested(move || {
+            with_app(&w, App::cancel_pin);
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
+
+    /// Opens, updates or closes the PIN dialog for the pairing that asks for
+    /// a PIN. It opens when the Apple TV first shows a PIN, stays open while
+    /// that pairing runs (a wrong PIN clears the field for the new one), and
+    /// closes when it ends.
+    fn show_pin_prompt(&self, prompt: Option<&PinPrompt>) {
+        if self.pin_preview.get() {
+            return;
+        }
+        let dialog = &self.pin_dialog;
+        let Some(prompt) = prompt else {
+            if self.pin_for.borrow_mut().take().is_some() {
+                let _ = dialog.hide();
+                self.log.log(|| "PIN dialog: closed".to_owned());
+            }
+            return;
+        };
+        let opening = self.pin_for.borrow().as_deref() != Some(prompt.speaker_id.as_str());
+        let phase = pin_phase(prompt.phase);
+        let new_code = (prompt.wrong_pin && !dialog.get_wrong_pin())
+            || (phase == PinPhase::Ready && dialog.get_phase() != PinPhase::Ready);
+        dialog.set_speaker(prompt.name.as_str().into());
+        dialog.set_phase(phase);
+        dialog.set_wrong_pin(prompt.wrong_pin);
+        if opening {
+            *self.pin_for.borrow_mut() = Some(prompt.speaker_id.clone());
+            dialog.set_pin(SharedString::new());
+            self.open_pin_dialog();
+            self.log
+                .log(|| format!("PIN dialog: opened for {}", prompt.name));
+        } else if new_code {
+            if prompt.wrong_pin {
+                dialog.set_pin(SharedString::new());
+            }
+            dialog.invoke_prepare();
+        }
+    }
+
+    fn open_pin_dialog(&self) {
+        if let Err(error) = self.pin_dialog.show() {
+            self.show_window_error(&error);
+            return;
+        }
+        self.pin_dialog.invoke_prepare();
+        crate::platform::bring_to_front(self.pin_dialog.window());
+    }
+
+    /// Pair: the PIN goes to the pairing; the dialog stays open until it
+    /// ends.
+    fn confirm_pin(&self, pin: &str) {
+        if self.pin_preview.get() {
+            self.close_pin_preview();
+            return;
+        }
+        let id = self.pin_for.borrow().clone();
+        if let Some(id) = id {
+            self.update(|b| b.submit_pin(&id, pin));
+        }
+    }
+
+    /// Cancel, Escape or the close button: the pairing stops.
+    fn cancel_pin(&self) {
+        if self.pin_preview.get() {
+            self.close_pin_preview();
+            return;
+        }
+        let id = self.pin_for.borrow_mut().take();
+        let _ = self.pin_dialog.hide();
+        if let Some(id) = id {
+            self.update(|b| b.cancel_pairing(&id));
+        }
+    }
+
+    fn close_pin_preview(&self) {
+        self.pin_preview.set(false);
+        let _ = self.pin_dialog.hide();
+    }
+
+    /// Opens the PIN dialog for a made-up Apple TV, to look at it without
+    /// one: the PIN preview, debug only. `wrong`: as after a wrong PIN.
+    pub fn preview_pin(&self, wrong: bool) {
+        self.pin_preview.set(true);
+        let dialog = &self.pin_dialog;
+        dialog.set_speaker(self.strings().get_pin_preview_speaker());
+        dialog.set_phase(PinPhase::Ready);
+        dialog.set_wrong_pin(wrong);
+        dialog.set_pin(SharedString::new());
+        self.open_pin_dialog();
     }
 
     fn connect_guide(self: &Rc<Self>) {
@@ -801,7 +959,75 @@ impl App {
 
     fn show_virtual_devices(&self, on: bool) {
         self.ui.borrow_mut().show_virtual = on;
+        self.remember_view();
         self.refresh();
+    }
+
+    /// The main window's place and size while it shows normally (not
+    /// maximized or minimized).
+    fn main_frame(&self) -> Option<WindowFrame> {
+        let window = self.main.window();
+        if !window.is_visible() || window.is_maximized() || window.is_minimized() {
+            return None;
+        }
+        let position = window.position();
+        let size = window.size().to_logical(window.scale_factor());
+        Some(WindowFrame {
+            x: position.x,
+            y: position.y,
+            width: f64::from(size.width),
+            height: f64::from(size.height),
+        })
+    }
+
+    /// Hands the windows' own settings to the backend, which saves them with
+    /// the rest: View > Show Virtual Devices, and the main window's frame
+    /// when it shows (else the last one).
+    fn remember_view(&self) {
+        let mut backend = self.backend.borrow_mut();
+        let saved = backend.view_settings();
+        let settings = ViewSettings {
+            show_virtual_devices: self.ui.borrow().show_virtual,
+            window: self.main_frame().or(saved.window),
+        };
+        if settings != saved {
+            backend.set_view_settings(settings);
+        }
+    }
+
+    /// Shows the windows with the settings saved last time: View > Show
+    /// Virtual Devices, and the main window's size and, when it is still on
+    /// a monitor, its place.
+    fn restore_view(&self) {
+        let saved = self.backend.borrow().view_settings();
+        self.ui.borrow_mut().show_virtual = saved.show_virtual_devices;
+        let Some(frame) = saved.window else {
+            return;
+        };
+        let window = self.main.window();
+        let size = slint::LogicalSize::new(frame.width as f32, frame.height as f32);
+        window.set_size(size);
+        // The native menu bar is attached when the native window is created
+        // and takes its height out of a size set before that, so the window
+        // would shrink by the menu bar at every restart: set the size again
+        // once the native window exists.
+        set_size_once_native(self.main.as_weak(), size, NATIVE_WINDOW_TRIES);
+        if crate::platform::is_on_a_monitor(frame.x, frame.y) {
+            window.set_position(slint::PhysicalPosition::new(frame.x, frame.y));
+        }
+        self.log.log(|| {
+            format!(
+                "main window: {} x {} as last time",
+                frame.width, frame.height
+            )
+        });
+    }
+
+    /// Saves the settings now, with the main window's frame: the app is
+    /// about to quit.
+    pub fn save_settings(&self) {
+        self.remember_view();
+        self.backend.borrow_mut().save_settings();
     }
 
     fn step_delay(&self, id: &str, delta: i32) {
@@ -924,6 +1150,7 @@ impl App {
     /// Closing the main window keeps AudioSync running in the tray, like the
     /// Mac app in the menu bar. Without a tray icon, it quits.
     fn close_main(&self) {
+        self.remember_view();
         let _ = self.main.hide();
         if !self.tray_available.get() {
             let _ = slint::quit_event_loop();
@@ -1019,6 +1246,7 @@ fn availability(a: ui_model::Availability) -> Availability {
     match a {
         ui_model::Availability::Open => Availability::Open,
         ui_model::Availability::NeedsCode => Availability::NeedsCode,
+        ui_model::Availability::Pairing => Availability::Pairing,
         ui_model::Availability::PasswordNotYet => Availability::PasswordNotYet,
         ui_model::Availability::PairingNotYet => Availability::PairingNotYet,
         ui_model::Availability::AirPlay2NotYet => Availability::Airplay2NotYet,
@@ -1034,9 +1262,19 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::Busy => AirPlayProblem::Busy,
         P::Refused => AirPlayProblem::Refused,
         P::PasswordNotYet => AirPlayProblem::PasswordNotYet,
+        P::NeedsPin => AirPlayProblem::NeedsPin,
+        P::PairingFailed => AirPlayProblem::PairingFailed,
         P::PairingNotYet => AirPlayProblem::PairingNotYet,
         P::AirPlay2NotYet => AirPlayProblem::Airplay2NotYet,
         P::Unsupported => AirPlayProblem::Unsupported,
+    }
+}
+
+fn pin_phase(phase: ui_model::PinPhase) -> PinPhase {
+    match phase {
+        ui_model::PinPhase::Starting => PinPhase::Starting,
+        ui_model::PinPhase::Ready => PinPhase::Ready,
+        ui_model::PinPhase::Checking => PinPhase::Checking,
     }
 }
 
@@ -1064,6 +1302,7 @@ pub fn speaker_item(
         sync_open: sync_open && speaker.delay_ms.is_some(),
         auto_connect: speaker.auto_connect,
         availability: availability(speaker.availability),
+        paired: speaker.paired,
     }
 }
 
@@ -1254,6 +1493,15 @@ mod tests {
         // flyout's button opens the main window for the other notice.
         assert_eq!(messages, [NoticeMessage::NoSpeaker]);
         assert_eq!(newest_notices(&notices, MAIN_NOTICE_LIMIT).len(), 2);
+    }
+
+    #[test]
+    fn the_pin_field_keeps_four_digits_at_most() {
+        assert_eq!(pin_digits("4821"), "4821");
+        assert_eq!(pin_digits("48a2-1"), "4821");
+        assert_eq!(pin_digits("482199"), "4821");
+        assert_eq!(pin_digits(" ١٢ "), "", "ASCII digits only");
+        assert_eq!(pin_digits(""), "");
     }
 
     #[test]

@@ -13,6 +13,8 @@
 //! - [`fifo`]: PCM16 conversion and the FIFO feed, whose writer the host's
 //!   thread steps through C callbacks for the pipe (S83-S95, S160).
 //! - [`sync`]: the AirPlay sync rule and the delay helpers (S3, S77-S80).
+//! - [`airplay`]: AudioSync's own AirPlay sender, so far its discovery: the
+//!   one part of this interface that runs threads and sockets of its own.
 //!
 //! Threading (S113, S132): each handle states which thread makes which call.
 //! A handle that an audio thread shares with other threads keeps the two
@@ -35,11 +37,13 @@ use crate::eq::{
 };
 use crate::volume;
 
+pub mod airplay;
 pub mod fifo;
 pub mod render;
 pub mod ring;
 pub mod sync;
 
+pub use self::airplay::*;
 pub use self::fifo::*;
 pub use self::render::*;
 pub use self::ring::*;
@@ -363,8 +367,9 @@ mod tests {
     const HEADER: &str = include_str!("../include/audiosync_core.h");
 
     /// Every source file of the C interface, by its path under `src/`.
-    const SOURCES: [(&str, &str); 5] = [
+    const SOURCES: [(&str, &str); 6] = [
         ("ffi.rs", include_str!("ffi.rs")),
+        ("ffi/airplay.rs", include_str!("ffi/airplay.rs")),
         ("ffi/fifo.rs", include_str!("ffi/fifo.rs")),
         ("ffi/render.rs", include_str!("ffi/render.rs")),
         ("ffi/ring.rs", include_str!("ffi/ring.rs")),
@@ -880,6 +885,66 @@ mod tests {
             ("ASC_PIPE_WOULD_BLOCK", PIPE_WOULD_BLOCK.to_string()),
             ("ASC_PIPE_BROKEN", PIPE_BROKEN.to_string()),
             ("ASC_PIPE_FAILED", PIPE_FAILED.to_string()),
+            ("ASC_AIRPLAY_APPEARED", AIRPLAY_APPEARED.to_string()),
+            ("ASC_AIRPLAY_CHANGED", AIRPLAY_CHANGED.to_string()),
+            ("ASC_AIRPLAY_GONE", AIRPLAY_GONE.to_string()),
+            ("ASC_AIRPLAY_AVAILABLE", AIRPLAY_AVAILABLE.to_string()),
+            ("ASC_AIRPLAY_NEEDS_PIN", AIRPLAY_NEEDS_PIN.to_string()),
+            (
+                "ASC_AIRPLAY_NEEDS_PASSWORD",
+                AIRPLAY_NEEDS_PASSWORD.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_NEEDS_PAIRING",
+                AIRPLAY_NEEDS_PAIRING.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_AIRPLAY2_ONLY",
+                AIRPLAY_AIRPLAY2_ONLY.to_string(),
+            ),
+            ("ASC_AIRPLAY_UNSUPPORTED", AIRPLAY_UNSUPPORTED.to_string()),
+            ("ASC_AIRPLAY_REASON_NONE", AIRPLAY_REASON_NONE.to_string()),
+            (
+                "ASC_AIRPLAY_REASON_ENCRYPTION",
+                AIRPLAY_REASON_ENCRYPTION.to_string(),
+            ),
+            ("ASC_AIRPLAY_REASON_CODEC", AIRPLAY_REASON_CODEC.to_string()),
+            (
+                "ASC_AIRPLAY_REASON_TRANSPORT",
+                AIRPLAY_REASON_TRANSPORT.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_REASON_METHODS",
+                AIRPLAY_REASON_METHODS.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_REASON_FORMAT",
+                AIRPLAY_REASON_FORMAT.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_REASON_AIRPLAY2_ONLY",
+                AIRPLAY_REASON_AIRPLAY2_ONLY.to_string(),
+            ),
+            ("ASC_AIRPLAY_FLAG_RAOP", AIRPLAY_FLAG_RAOP.to_string()),
+            ("ASC_AIRPLAY_FLAG_AIRPLAY", AIRPLAY_FLAG_AIRPLAY.to_string()),
+            (
+                "ASC_AIRPLAY_FLAG_APPLE_TV",
+                AIRPLAY_FLAG_APPLE_TV.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_FLAG_PASSWORD",
+                AIRPLAY_FLAG_PASSWORD.to_string(),
+            ),
+            ("ASC_AIRPLAY_FLAG_PAIRING", AIRPLAY_FLAG_PAIRING.to_string()),
+            (
+                "ASC_AIRPLAY_FLAG_LEGACY_PAIRING",
+                AIRPLAY_FLAG_LEGACY_PAIRING.to_string(),
+            ),
+            ("ASC_AIRPLAY_FLAG_BUSY", AIRPLAY_FLAG_BUSY.to_string()),
+            (
+                "ASC_AIRPLAY_FLAG_AIRPLAY2",
+                AIRPLAY_FLAG_AIRPLAY2.to_string(),
+            ),
         ]
         .into_iter()
         .map(|(name, value)| (name.to_owned(), value))

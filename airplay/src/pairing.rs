@@ -5,15 +5,28 @@
 //! [`Session`](crate::session::Session): it names the address to connect
 //! to ([`Output::Connect`]), takes the connect result, the bytes read, the
 //! PIN and the time, and gives back bytes to write, events and the order to
-//! close. On one connection to the RAOP port (P47) it sends
+//! close. On one connection to the RAOP port (P47) it asks OPTIONS first,
+//! so a receiver that can't take AirPlay 1 audio is Unsupported before any
+//! PIN is asked for (P27, P46). A 401 to that OPTIONS is the receiver
+//! asking for its password, not a pairing answer: with the speaker's
+//! password ([`Pairing::with_password`]) the sender answers the digest
+//! challenge and every later request carries `Authorization`, pairing
+//! requests included (P36, P38); without one the pairing ends with
+//! PasswordRequired before `/pair-pin-start`, so the Apple TV never shows
+//! a PIN for a pairing that can't go on (P39, P46). Then it sends
 //! `POST /pair-pin-start` (the Apple TV shows a PIN, P48), the first
 //! `POST /pair-setup-pin` with the client ID (P49), waits without a timeout
 //! for the host's PIN (P51), sends A and M1 (P50, P52), checks M2, sends
-//! the sealed public key (P53), and hands the host the [`Credentials`]
-//! (P54). The host stores them; the crate never writes them anywhere.
+//! the sealed public key (P53), opens the receiver's sealed key when its
+//! answer carries one, and hands the host the [`Credentials`] (P54). The
+//! host stores them; the crate never writes them anywhere. A 401 to any of
+//! these pairing requests, also with no challenge before it, is the same
+//! password challenge: the request goes again with `Authorization`, or the
+//! pairing ends with PasswordRequired (P58).
 //!
 //! [`LegacyVerifier`] runs the pair-verify on every later connection
-//! (P55, P56), through the session's [`Verifier`] seam.
+//! (P55, P56), through the session's [`Verifier`] seam, and checks the
+//! receiver's signature when the credentials hold its key (a warning only).
 //!
 //! The arithmetic is in [`srp`] (SRP-6a, RFC 5054) and [`keys`] (the AES,
 //! Ed25519 and X25519 steps); both use established crates for every
@@ -32,10 +45,12 @@ use plist::{Dictionary, Value};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::error::{ErrorKind, SessionError};
+use crate::digest::{self, Challenge};
+use crate::error::UnsupportedReason;
+use crate::error::{ErrorKind, SessionError, Warning};
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
-use crate::rtsp::{Message, Method, ParseError, Parser, Request, Response};
-use crate::session::{CONNECT_TIMEOUT, RESPONSE_TIMEOUT, Verifier};
+use crate::rtsp::{self, Message, Method, ParseError, Parser, Request, Response};
+use crate::session::{CONNECT_TIMEOUT, RESPONSE_TIMEOUT, STATUS_CONFLICT, Verifier};
 
 use keys::{KEY_BYTES, RECEIVER_DATA_BYTES};
 use srp::{HASH_BYTES, SrpError, SrpGroup};
@@ -53,16 +68,20 @@ pub const STATUS_PAIRING_FAILED: u16 = 470;
 /// Bytes of the secret a (P50, P54).
 pub const SECRET_BYTES: usize = KEY_BYTES;
 /// How many times a is drawn before giving up: the redraw of P50 is needed
-/// about once in 256 pairings, so this only ends a broken random source.
+/// about once in 128 pairings, so this only ends a broken random source.
 const MAX_DRAWS: usize = 64;
-/// The version byte of the credential blob.
+/// The version byte of a credential blob without the receiver's key.
 const BLOB_VERSION: u8 = 1;
+/// The version byte of a credential blob with the receiver's key (P54).
+const BLOB_VERSION_WITH_KEY: u8 = 2;
 /// Characters of a client ID: 16 uppercase hex digits (P49).
 pub const CLIENT_ID_CHARS: usize = 16;
 
 /// The credentials of one paired Apple TV (P54): the client ID and the
 /// 32-byte secret a, which also seeds the Ed25519 key the Apple TV now
-/// knows. The host stores them securely per speaker and hands them back in
+/// knows, plus the receiver's own Ed25519 public key when its last
+/// pair-setup answer carried one that opened (P53). The host stores them
+/// securely per speaker and hands them back in
 /// [`SpeakerOptions::credentials`](crate::sender::SpeakerOptions::credentials);
 /// losing them means pairing again. `Debug` shows the client ID only, the
 /// secret is wiped from memory when the value is dropped, and equality is
@@ -71,6 +90,7 @@ pub const CLIENT_ID_CHARS: usize = 16;
 pub struct Credentials {
     client_id: [u8; CLIENT_ID_CHARS],
     secret: [u8; SECRET_BYTES],
+    receiver_key: Option<[u8; KEY_BYTES]>,
 }
 
 impl Credentials {
@@ -102,6 +122,7 @@ impl Credentials {
         let mut credentials = Credentials {
             client_id: [0; CLIENT_ID_CHARS],
             secret: [0; SECRET_BYTES],
+            receiver_key: None,
         };
         credentials.client_id.copy_from_slice(bytes);
         credentials.secret.copy_from_slice(secret);
@@ -125,35 +146,67 @@ impl Credentials {
         keys::public_key(&self.secret)
     }
 
-    /// The blob a host stores: a version byte (1), the 16 characters of the
-    /// client ID, then the 32 bytes of the secret; 49 bytes in all. It
-    /// holds the secret, so the host keeps it where secrets go (P54).
+    /// The receiver's Ed25519 public key, when its last pair-setup answer
+    /// carried one that opened (P53, P54). Pair-verify checks the
+    /// receiver's signature with it (P56).
+    pub fn receiver_key(&self) -> Option<[u8; KEY_BYTES]> {
+        self.receiver_key
+    }
+
+    /// The same credentials with the receiver's Ed25519 public key (P54).
+    pub fn with_receiver_key(mut self, key: [u8; KEY_BYTES]) -> Credentials {
+        self.receiver_key = Some(key);
+        self
+    }
+
+    /// The blob a host stores: a version byte, the 16 characters of the
+    /// client ID, then the 32 bytes of the secret; 49 bytes in all with
+    /// version 1. With the receiver's key (P54) the version is 2 and its 32
+    /// bytes follow, 81 bytes in all. It holds the secret, so the host keeps
+    /// it where secrets go (P54).
     pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
-        let mut blob = Vec::with_capacity(1 + CLIENT_ID_CHARS + SECRET_BYTES);
-        blob.push(BLOB_VERSION);
+        let mut blob = Vec::with_capacity(1 + CLIENT_ID_CHARS + SECRET_BYTES + KEY_BYTES);
+        match &self.receiver_key {
+            None => blob.push(BLOB_VERSION),
+            Some(_) => blob.push(BLOB_VERSION_WITH_KEY),
+        }
         blob.extend_from_slice(&self.client_id);
         blob.extend_from_slice(&self.secret);
+        if let Some(key) = &self.receiver_key {
+            blob.extend_from_slice(key);
+        }
         Zeroizing::new(blob)
     }
 
-    /// Reads a blob written by [`Credentials::to_bytes`].
+    /// Reads a blob written by [`Credentials::to_bytes`], of either version.
     pub fn from_bytes(blob: &[u8]) -> Result<Credentials, CredentialsError> {
         let [version, rest @ ..] = blob else {
             return Err(CredentialsError);
         };
-        if *version != BLOB_VERSION || rest.len() != CLIENT_ID_CHARS + SECRET_BYTES {
+        let key_bytes = match *version {
+            BLOB_VERSION => 0,
+            BLOB_VERSION_WITH_KEY => KEY_BYTES,
+            _ => return Err(CredentialsError),
+        };
+        if rest.len() != CLIENT_ID_CHARS + SECRET_BYTES + key_bytes {
             return Err(CredentialsError);
         }
-        let (id, secret) = rest.split_at(CLIENT_ID_CHARS);
+        let (id, rest) = rest.split_at(CLIENT_ID_CHARS);
+        let (secret, key) = rest.split_at(SECRET_BYTES);
         let id = std::str::from_utf8(id).map_err(|_| CredentialsError)?;
-        Credentials::with_secret(id, secret)
+        let credentials = Credentials::with_secret(id, secret)?;
+        match <[u8; KEY_BYTES]>::try_from(key) {
+            Ok(key) => Ok(credentials.with_receiver_key(key)),
+            Err(_) => Ok(credentials),
+        }
     }
 }
 
 impl PartialEq for Credentials {
     fn eq(&self, other: &Credentials) -> bool {
         let same = self.client_id.ct_eq(&other.client_id) & self.secret.ct_eq(&other.secret);
-        same.into()
+        // The receiver's key is public; only the secret needs constant time.
+        bool::from(same) && self.receiver_key == other.receiver_key
     }
 }
 
@@ -164,6 +217,7 @@ impl fmt::Debug for Credentials {
         f.debug_struct("Credentials")
             .field("client_id", &self.client_id())
             .field("secret", &"<hidden>")
+            .field("receiver_key", &self.receiver_key.is_some())
             .finish()
     }
 }
@@ -239,11 +293,15 @@ pub enum PairingEvent {
     /// Pairing succeeded: store these credentials for the receiver (P54).
     Paired(Credentials),
     /// Pairing ended with an error (P58, P136): PairingFailed for a 470 or
-    /// another failure status at a pairing step, PairingCancelled when the
+    /// another failure status at a pairing step, Busy for a 409 (P137),
+    /// Unsupported when the OPTIONS answer shows a receiver that can't take
+    /// AirPlay 1 audio (P27, P46), PasswordRequired for a 401 to OPTIONS
+    /// when the pairing has no password and WrongPassword when the receiver
+    /// turns the password down (P39, P46, P135), PairingCancelled when the
     /// Apple TV closed the connection while the PIN was awaited, or the
     /// connection errors of P134 and P140. `wrong_pin` says the Apple TV
-    /// turned the PIN down (470 to the proof, P52); a new pairing shows a
-    /// new PIN.
+    /// turned the PIN down (470 to the proof, P52); a new pairing starts
+    /// again from `/pair-pin-start` and shows a new PIN.
     Failed {
         error: SessionError,
         wrong_pin: bool,
@@ -272,7 +330,7 @@ pub enum Output {
 pub enum PairingState {
     /// Waiting for the TCP connect.
     Connecting,
-    /// `POST /pair-pin-start` is out (P48).
+    /// OPTIONS (P46) or `POST /pair-pin-start` (P48) is out.
     Starting,
     /// The first `POST /pair-setup-pin` is out (P49).
     Requesting,
@@ -288,6 +346,7 @@ pub enum PairingState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
+    Options,
     PinStart,
     Identify,
     Prove,
@@ -297,8 +356,16 @@ enum Step {
 impl Step {
     fn path(self) -> &'static str {
         match self {
+            Step::Options => "*",
             Step::PinStart => PIN_START_PATH,
             Step::Identify | Step::Prove | Step::Seal => SETUP_PATH,
+        }
+    }
+
+    fn method(self) -> Method {
+        match self {
+            Step::Options => Method::Options,
+            _ => Method::Post,
         }
     }
 }
@@ -306,8 +373,22 @@ impl Step {
 #[derive(Debug)]
 struct InFlight {
     step: Step,
+    /// The body it carried, for a resend after a 401 (P36, P38).
+    body: Vec<u8>,
     cseq: u32,
     sent_at: Instant,
+    /// The nonce of the `Authorization` it carried, if any (P38).
+    nonce: Option<String>,
+    /// It is already the resend after a `stale=true` challenge (P38).
+    stale_retried: bool,
+}
+
+/// The digest challenge the receiver sent on this connection (P36, P38).
+#[derive(Debug)]
+struct Auth {
+    challenge: Challenge,
+    /// Requests sent with this nonce, for `nc` (RFC 2617 §3.2.2).
+    count: u32,
 }
 
 /// What the exchange has established so far; a and K are wiped when
@@ -340,6 +421,10 @@ pub struct Pairing {
     connected: bool,
     ids: SessionIds,
     client_id: String,
+    /// The speaker's password, if the host has one (P39, P46). Never
+    /// logged: `Debug` leaves it out.
+    password: Option<String>,
+    auth: Option<Auth>,
     state: PairingState,
     parser: Parser,
     next_cseq: u32,
@@ -371,6 +456,8 @@ impl Pairing {
             connected: false,
             ids,
             client_id: client_id(client),
+            password: None,
+            auth: None,
             state: PairingState::Connecting,
             parser: Parser::new(),
             next_cseq: 0,
@@ -387,6 +474,18 @@ impl Pairing {
             ),
         }
         pairing
+    }
+
+    /// The same pairing with the speaker's password, if the host has one
+    /// (P39): a 401 to OPTIONS or to any pairing request is then answered
+    /// with digest authentication and every later request carries
+    /// `Authorization`, pairing requests included (P36, P38, P46, P58).
+    /// Without one, such a 401 ends the pairing with PasswordRequired, a
+    /// 401 to OPTIONS before `/pair-pin-start`. Call it right after
+    /// [`Pairing::new`], before the connect completes.
+    pub fn with_password(mut self, password: Option<String>) -> Pairing {
+        self.password = password;
+        self
     }
 
     pub fn state(&self) -> PairingState {
@@ -417,13 +516,13 @@ impl Pairing {
     }
 
     /// The TCP connect to the last [`Output::Connect`] address succeeded:
-    /// `POST /pair-pin-start` goes out (P48).
+    /// OPTIONS goes out (P46), then `POST /pair-pin-start` (P48).
     pub fn handle_connected(&mut self, now: Instant) {
         if self.state != PairingState::Connecting {
             return;
         }
         self.connected = true;
-        self.send(Step::PinStart, Vec::new(), now);
+        self.send(Step::Options, Vec::new(), now);
     }
 
     /// The TCP connect failed: the next address is tried, and after the last
@@ -467,12 +566,13 @@ impl Pairing {
                 }
             }
             _ => {
-                if self
+                let late = self
                     .in_flight
                     .as_ref()
-                    .is_some_and(|in_flight| now >= in_flight.sent_at + RESPONSE_TIMEOUT)
-                {
-                    self.fail(ErrorKind::Timeout, Some(Method::Post), None);
+                    .filter(|in_flight| now >= in_flight.sent_at + RESPONSE_TIMEOUT)
+                    .map(|in_flight| in_flight.step.method());
+                if let Some(method) = late {
+                    self.fail(ErrorKind::Timeout, Some(method), None);
                 }
             }
         }
@@ -566,21 +666,14 @@ impl Pairing {
             );
             return Ok(());
         };
-        let Some(b_padded) = group.pad(&self.secrets.b_pub) else {
-            self.fail(
-                ErrorKind::ProtocolError,
-                Some(Method::Post),
-                Some("unusable SRP value B"),
-            );
-            return Ok(());
-        };
+        // K, M1 and M2 hash A, B and S in their shortest form (P50, P52).
         let key = Zeroizing::new(srp::session_key(&values.premaster));
         let m1 = srp::client_proof(
             &group,
             identity,
             &self.secrets.salt,
             &values.public,
-            &b_padded,
+            &self.secrets.b_pub,
             &key[..],
         );
         self.secrets.m2 = srp::server_proof(&values.public, &m1, &key[..]);
@@ -647,33 +740,58 @@ impl Pairing {
         self.send(step, bytes, now);
     }
 
-    /// Encodes and queues one request: `POST <path> RTSP/1.0` with the next
-    /// CSeq and the common headers (P21, P22, P47).
+    /// Encodes and queues one request: `OPTIONS * RTSP/1.0` or
+    /// `POST <path> RTSP/1.0`, with the next CSeq, the common headers and,
+    /// once a challenge arrived, `Authorization` (P21, P22, P27, P38, P47).
     fn send(&mut self, step: Step, body: Vec<u8>, now: Instant) {
+        self.send_request(step, body, now, false);
+    }
+
+    fn send_request(&mut self, step: Step, body: Vec<u8>, now: Instant, stale_retried: bool) {
         let cseq = self.next_cseq;
         self.next_cseq = self.next_cseq.wrapping_add(1);
-        let mut request = Request::new(Method::Post, step.path());
+        let method = step.method();
+        let uri = step.path();
+        let mut request = Request::new(method, uri);
         let headers = &mut request.headers;
         headers.push("CSeq", cseq.to_string());
         if !body.is_empty() {
             headers.push("Content-Type", PLIST_TYPE);
         }
+        let mut nonce = None;
+        if let (Some(auth), Some(password)) = (&mut self.auth, &self.password) {
+            auth.count = auth.count.wrapping_add(1);
+            let value = digest::authorization(
+                &auth.challenge,
+                password,
+                method,
+                uri,
+                auth.count,
+                &self.ids.cnonce_hex(),
+            );
+            request.headers.push("Authorization", value);
+            nonce = Some(auth.challenge.nonce.clone());
+        }
+        let headers = &mut request.headers;
         headers.push("User-Agent", crate::user_agent());
         headers.push("Client-Instance", self.ids.client_instance_hex());
         headers.push("DACP-ID", self.ids.client_instance_hex());
         headers.push("Active-Remote", self.ids.active_remote.to_string());
-        request.body = body;
+        request.body = body.clone();
         self.outputs.push_back(Output::Send(request.encode()));
         self.state = match step {
-            Step::PinStart => PairingState::Starting,
+            Step::Options | Step::PinStart => PairingState::Starting,
             Step::Identify => PairingState::Requesting,
             Step::Prove => PairingState::Proving,
             Step::Seal => PairingState::Sealing,
         };
         self.in_flight = Some(InFlight {
             step,
+            body,
             cseq,
             sent_at: now,
+            nonce,
+            stale_retried,
         });
     }
 
@@ -686,24 +804,50 @@ impl Pairing {
             );
             return;
         };
+        let method = in_flight.step.method();
         if response.cseq() != Some(in_flight.cseq) {
             self.fail_status(
                 ErrorKind::ProtocolError,
+                method,
                 response.code,
                 Some("response CSeq does not match the request"),
                 false,
             );
             return;
         }
+        if response.code == STATUS_CONFLICT {
+            // Busy, ahead of PairingFailed (P137, P58).
+            self.fail_status(ErrorKind::Busy, method, response.code, None, false);
+            return;
+        }
+        if response.code == 401 {
+            // A password challenge, never a pairing answer, to OPTIONS and
+            // to every pairing request alike, also when nothing earlier on
+            // the connection was challenged (P36, P38, P46, P58).
+            self.on_unauthorized(in_flight, &response, now);
+            return;
+        }
+        if in_flight.step == Step::Options {
+            self.on_options(&response, now);
+            return;
+        }
         if response.code != 200 {
-            // A 470 at any step ends the pairing (P58); so does any other
-            // failure status, which the spec doesn't list. A 470 to the
-            // proof is the Apple TV turning the PIN down (P52).
+            // A 470, or any other non-200 answer to a pairing request but
+            // the 409 and 401 above, ends the pairing (P58). A 470 to the
+            // proof is the Apple TV turning the PIN down (P52); the proof is
+            // never sent again.
             let wrong_pin = in_flight.step == Step::Prove && response.code == STATUS_PAIRING_FAILED;
-            self.fail_status(ErrorKind::PairingFailed, response.code, None, wrong_pin);
+            self.fail_status(
+                ErrorKind::PairingFailed,
+                method,
+                response.code,
+                None,
+                wrong_pin,
+            );
             return;
         }
         match in_flight.step {
+            Step::Options => {}
             Step::PinStart => {
                 let mut body = Dictionary::new();
                 body.insert("method".to_owned(), Value::String("pin".to_owned()));
@@ -712,20 +856,106 @@ impl Pairing {
             }
             Step::Identify => self.on_identified(&response),
             Step::Prove => self.on_proved(&response, now),
-            Step::Seal => self.on_sealed(),
+            Step::Seal => self.on_sealed(&response),
         }
+    }
+
+    /// A 401 to any request of the pairing, OPTIONS or a pairing step
+    /// (P36, P38, P39, P46, P58, P135). The first challenge leads to one
+    /// resend of the same request, body included, with `Authorization` when
+    /// the host gave the speaker's password, and to PasswordRequired when
+    /// it didn't (before `/pair-pin-start` when OPTIONS was challenged); a
+    /// `stale=true` challenge to a request that carried it leads to one
+    /// more resend; any other 401 to such a request means the password is
+    /// wrong. Neither error is retried. Resending the proof here is not the
+    /// resend P52 rules out, as the receiver hasn't judged it, and a 401 is
+    /// never `wrong_pin`.
+    fn on_unauthorized(&mut self, in_flight: InFlight, response: &Response, now: Instant) {
+        let method = in_flight.step.method();
+        let Some(challenge) = Challenge::from_headers(&response.headers) else {
+            self.fail_status(
+                ErrorKind::ProtocolError,
+                method,
+                401,
+                Some("401 without a usable digest challenge"),
+                false,
+            );
+            return;
+        };
+        if challenge.needs_unsupported_qop() {
+            self.fail_status(
+                ErrorKind::ProtocolError,
+                method,
+                401,
+                Some("digest challenge offers only qop=auth-int or other unsupported options"),
+                false,
+            );
+            return;
+        }
+        if self.password.is_none() {
+            self.fail_status(ErrorKind::PasswordRequired, method, 401, None, false);
+            return;
+        }
+        let stale_retry = match in_flight.nonce {
+            None => false,
+            Some(_) if challenge.stale && !in_flight.stale_retried => true,
+            Some(_) => {
+                self.fail_status(ErrorKind::WrongPassword, method, 401, None, false);
+                return;
+            }
+        };
+        self.auth = Some(Auth {
+            challenge,
+            count: 0,
+        });
+        self.send_request(
+            in_flight.step,
+            in_flight.body,
+            now,
+            stale_retry || in_flight.stale_retried,
+        );
+    }
+
+    /// The OPTIONS answer (P27, P46): a success whose `Public` lacks
+    /// ANNOUNCE, SETUP or RECORD is a receiver that can't take AirPlay 1
+    /// audio, Unsupported before any PIN is asked for. Any other answer
+    /// but a 401, which is a password challenge (`on_unauthorized`),
+    /// goes on to `/pair-pin-start`, whose answer decides (P58): a 403 from
+    /// an Apple TV that wants verification, also to the OPTIONS resent
+    /// after a 401, a 501, or no `Public`.
+    fn on_options(&mut self, response: &Response, now: Instant) {
+        if response.is_success()
+            && let Some(public) = response.headers.get("Public")
+        {
+            let methods = rtsp::public_methods(public);
+            let complete = ["ANNOUNCE", "SETUP", "RECORD"]
+                .iter()
+                .all(|needed| methods.iter().any(|m| m == needed));
+            if !complete {
+                self.fail_status(
+                    ErrorKind::Unsupported(UnsupportedReason::Methods),
+                    Method::Options,
+                    response.code,
+                    None,
+                    false,
+                );
+                return;
+            }
+        }
+        self.send(Step::PinStart, Vec::new(), now);
     }
 
     fn fail_status(
         &mut self,
         kind: ErrorKind,
+        method: Method,
         status: u16,
         detail: Option<&'static str>,
         wrong_pin: bool,
     ) {
         let error = SessionError {
             kind,
-            method: Some(Method::Post),
+            method: Some(method),
             status: Some(status),
             fallback: None,
             detail,
@@ -744,6 +974,7 @@ impl Pairing {
         let Some((b_pub, salt)) = fields else {
             self.fail_status(
                 ErrorKind::ProtocolError,
+                Method::Post,
                 response.code,
                 Some("pair-setup answer without pk and salt"),
                 false,
@@ -753,6 +984,7 @@ impl Pairing {
         if salt.is_empty() || srp::check_server_value(&SrpGroup::RFC5054_2048, &b_pub).is_err() {
             self.fail_status(
                 ErrorKind::ProtocolError,
+                Method::Post,
                 response.code,
                 Some("unusable SRP value B or salt"),
                 false,
@@ -777,6 +1009,7 @@ impl Pairing {
         let Some(proof) = proof else {
             self.fail_status(
                 ErrorKind::ProtocolError,
+                Method::Post,
                 response.code,
                 Some("pair-setup answer without proof"),
                 false,
@@ -790,6 +1023,7 @@ impl Pairing {
             // the Apple TV answers with 470 before any M2 is sent.
             self.fail_status(
                 ErrorKind::PairingFailed,
+                Method::Post,
                 response.code,
                 Some("M2 check failed: the receiver's SRP proof differs from the one computed from K"),
                 false,
@@ -804,15 +1038,27 @@ impl Pairing {
         self.send_plist(Step::Seal, body, now);
     }
 
-    /// The last answer: paired. Its body is ignored (P53), and the host
-    /// gets the credentials (P54).
-    fn on_sealed(&mut self) {
+    /// The last answer: paired (P53). When its body is {`epk`, `authTag`}
+    /// and opens to an Ed25519 public key, the receiver's key goes into the
+    /// credentials; a missing body, or one that doesn't open, changes
+    /// nothing. The host gets the credentials (P54).
+    fn on_sealed(&mut self, response: &Response) {
+        let receiver_key = read_plist(&response.body).and_then(|body| {
+            let sealed = body.get("epk")?.as_data()?;
+            let tag = body.get("authTag")?.as_data()?;
+            keys::open_receiver_key(&self.secrets.key[..], sealed, tag)
+        });
         let credentials = Credentials::with_secret(&self.client_id, &self.secrets.a[..]);
         self.close();
         match credentials {
-            Ok(credentials) => self
-                .outputs
-                .push_back(Output::Event(PairingEvent::Paired(credentials))),
+            Ok(credentials) => {
+                let credentials = match receiver_key {
+                    Some(key) => credentials.with_receiver_key(key),
+                    None => credentials,
+                };
+                self.outputs
+                    .push_back(Output::Event(PairingEvent::Paired(credentials)));
+            }
             // The client ID is made by `client_id`, so this doesn't happen.
             Err(_) => self.outputs.push_back(Output::Event(PairingEvent::Failed {
                 error: SessionError::new(ErrorKind::PairingFailed),
@@ -834,8 +1080,12 @@ fn read_plist(body: &[u8]) -> Option<Dictionary> {
 pub struct LegacyVerifier {
     secret: Zeroizing<[u8; SECRET_BYTES]>,
     public: [u8; KEY_BYTES],
+    receiver_key: Option<[u8; KEY_BYTES]>,
     verify_secret: Zeroizing<[u8; KEY_BYTES]>,
     verify_public: [u8; KEY_BYTES],
+    /// A second X25519 secret for the one reconnect of P58.
+    spare_secret: Option<Zeroizing<[u8; KEY_BYTES]>>,
+    warning: Option<Warning>,
 }
 
 impl fmt::Debug for LegacyVerifier {
@@ -845,21 +1095,28 @@ impl fmt::Debug for LegacyVerifier {
 }
 
 impl LegacyVerifier {
-    /// A verifier for one connection: (v_priv, v_pub) is drawn fresh from
-    /// `entropy` (P55).
+    /// A verifier for one session: (v_priv, v_pub) is drawn fresh from
+    /// `entropy` (P55), and a second secret for the one reconnect a close
+    /// right after verification gets (P58), so every connection has its own
+    /// key pair.
     pub fn new(
         credentials: &Credentials,
         entropy: &mut impl Entropy,
     ) -> Result<LegacyVerifier, EntropyUnavailable> {
         let mut verify_secret = Zeroizing::new([0u8; KEY_BYTES]);
         entropy.fill(&mut verify_secret[..])?;
+        let mut spare_secret = Zeroizing::new([0u8; KEY_BYTES]);
+        entropy.fill(&mut spare_secret[..])?;
         let mut secret = Zeroizing::new([0u8; SECRET_BYTES]);
         secret.copy_from_slice(credentials.secret());
         Ok(LegacyVerifier {
             secret,
             public: credentials.public_key(),
+            receiver_key: credentials.receiver_key(),
             verify_public: keys::x25519_public(&verify_secret),
             verify_secret,
+            spare_secret: Some(spare_secret),
+            warning: None,
         })
     }
 
@@ -881,7 +1138,10 @@ impl Verifier for LegacyVerifier {
 
     /// From atv_pub | atv_data (96 bytes): 00 00 00 00 | the encrypted
     /// signature, 68 bytes (P56). Another length, or an atv_pub that gives
-    /// an all-zero shared secret, is a malformed answer.
+    /// an all-zero shared secret, is a malformed answer. With the
+    /// receiver's key in the credentials, atv_data is decrypted and checked
+    /// as its signature over atv_pub | v_pub; a failed check is only a
+    /// warning (P56).
     fn second_request(&mut self, first_response: &[u8]) -> Option<Vec<u8>> {
         if first_response.len() != KEY_BYTES + RECEIVER_DATA_BYTES {
             return None;
@@ -891,11 +1151,39 @@ impl Verifier for LegacyVerifier {
         let mut receiver_data = [0u8; RECEIVER_DATA_BYTES];
         receiver_data.copy_from_slice(&first_response[KEY_BYTES..]);
         let shared = Zeroizing::new(keys::shared_secret(&self.verify_secret, &receiver_public)?);
+        if let Some(receiver_key) = &self.receiver_key {
+            let receiver_signature = keys::decrypt_receiver_data(&shared, &receiver_data);
+            let valid = keys::check_receiver_signature(
+                receiver_key,
+                &receiver_public,
+                &self.verify_public,
+                &receiver_signature,
+            );
+            if !valid {
+                self.warning = Some(Warning::ReceiverSignatureInvalid);
+            }
+        }
         let signature = keys::verify_signature(&self.secret, &self.verify_public, &receiver_public);
         let encrypted = keys::encrypt_signature(&shared, &receiver_data, &signature);
         let mut body = Vec::with_capacity(4 + encrypted.len());
         body.extend_from_slice(&[0, 0, 0, 0]);
         body.extend_from_slice(&encrypted);
         Some(body)
+    }
+
+    fn take_warning(&mut self) -> Option<Warning> {
+        self.warning.take()
+    }
+
+    /// Switches to the spare key pair for the reconnect of P58; there is
+    /// one, so a second renewal fails.
+    fn renew(&mut self) -> bool {
+        let Some(spare) = self.spare_secret.take() else {
+            return false;
+        };
+        self.verify_public = keys::x25519_public(&spare);
+        self.verify_secret = spare;
+        self.warning = None;
+        true
     }
 }

@@ -1,0 +1,331 @@
+{
+ "engine": "rust",
+ "generated": "2026-10-19T06:12:01Z",
+ "minutes_per_config": 60,
+ "commit": "cdc11c1",
+ "uncommitted_changes": false,
+ "machine": {
+  "model_name": "MacBook Air",
+  "model_identifier": "Mac16,12",
+  "chip": "Apple M4",
+  "memory_gb": 16,
+  "macos": "26.6.2",
+  "macos_build": "25G83"
+ },
+ "configs": {
+  "two_local": {
+   "harness": {
+    "baseline": "no baseline",
+    "checks": [],
+    "config": {
+     "delay_ms": 2000,
+     "fifo": false,
+     "interval_s": 10,
+     "outputs": [
+      {
+       "name": "Microsoft Teams Audio",
+       "transport": "virtual"
+      },
+      {
+       "name": "MacBook Air Speakers",
+       "transport": "built-in"
+      }
+     ],
+     "seconds": 3600
+    },
+    "delay_accuracy": [
+     {
+      "error_ms": -10.667,
+      "max_ms": 139.333,
+      "measured_ms": 139.333,
+      "min_ms": 139.333,
+      "output": "Microsoft Teams Audio",
+      "target_ms": 150
+     },
+     {
+      "error_ms": -11.2,
+      "max_ms": 489.333,
+      "measured_ms": 488.8,
+      "min_ms": 478.667,
+      "output": "Microsoft Teams Audio",
+      "target_ms": 500
+     },
+     {
+      "error_ms": -10.667,
+      "max_ms": 2000,
+      "measured_ms": 1989.333,
+      "min_ms": 1978.667,
+      "output": "Microsoft Teams Audio",
+      "target_ms": 2000
+     },
+     {
+      "error_ms": 0.533,
+      "max_ms": 3010.667,
+      "measured_ms": 3000.533,
+      "min_ms": 3000,
+      "output": "Microsoft Teams Audio",
+      "target_ms": 3000
+     },
+     {
+      "error_ms": -4.267,
+      "max_ms": 150,
+      "measured_ms": 145.733,
+      "min_ms": 139.333,
+      "output": "MacBook Air Speakers",
+      "target_ms": 150
+     },
+     {
+      "error_ms": -4.267,
+      "max_ms": 500,
+      "measured_ms": 495.733,
+      "min_ms": 489.333,
+      "output": "MacBook Air Speakers",
+      "target_ms": 500
+     },
+     {
+      "error_ms": -4.8,
+      "max_ms": 2000,
+      "measured_ms": 1995.2,
+      "min_ms": 1989.333,
+      "output": "MacBook Air Speakers",
+      "target_ms": 2000
+     },
+     {
+      "error_ms": -1.6,
+      "max_ms": 3000,
+      "measured_ms": 2998.4,
+      "min_ms": 2989.333,
+      "output": "MacBook Air Speakers",
+      "target_ms": 3000
+     }
+    ],
+    "engine": "rust",
+    "fifo": {},
+    "label": "two_local",
+    "machine": {
+     "macos": "26.6.2",
+     "model_identifier": "Mac16,12"
+    },
+    "metrics": {
+     "cpu_pct_max": 1.078,
+     "cpu_pct_mean": 0.822,
+     "duration_s": 3600.04,
+     "footprint_mb_growth": 2.109,
+     "footprint_mb_max": 42.516,
+     "footprint_mb_start": 40.391,
+     "inter_output_drift_ms_change": 3.758,
+     "inter_output_drift_ms_max_abs": 9.432,
+     "inter_output_drift_ms_mean": 6.605,
+     "inter_output_drift_ms_sample_max": 10.667,
+     "inter_output_drift_ms_sample_min": -32,
+     "local_drift_corrections": 6,
+     "local_drift_corrections_per_h": 6,
+     "local_dropouts": 0,
+     "local_dropouts_per_h": 0,
+     "local_lag_err_ms_max_abs": 9.319,
+     "local_starved_renders": 0,
+     "local_starved_renders_per_h": 0,
+     "producer_late_ms_max": 81.229
+    },
+    "outputs": [
+     {
+      "drift_corrections_per_h": 2,
+      "drift_silence_ms": 42.667,
+      "drift_silences": 1,
+      "drift_skip_ms": 42.667,
+      "drift_skips": 1,
+      "dropouts": 0,
+      "dropouts_per_h": 0,
+      "lag_err_ms_max": 10.667,
+      "lag_err_ms_mean": 0.07,
+      "lag_err_ms_min": -32,
+      "lag_err_ms_window_max_abs": 0.908,
+      "name": "Microsoft Teams Audio",
+      "primes": 0,
+      "rendered_ratio": 1,
+      "resyncs": 0,
+      "starved_ms": 0,
+      "starved_renders": 0,
+      "starved_renders_per_h": 0,
+      "transport": "virtual"
+     },
+     {
+      "drift_corrections_per_h": 6,
+      "drift_silence_ms": 128,
+      "drift_silences": 3,
+      "drift_skip_ms": 128,
+      "drift_skips": 3,
+      "dropouts": 0,
+      "dropouts_per_h": 0,
+      "lag_err_ms_max": 21.333,
+      "lag_err_ms_mean": -6.535,
+      "lag_err_ms_min": -21.333,
+      "lag_err_ms_window_max_abs": 9.319,
+      "name": "MacBook Air Speakers",
+      "primes": 0,
+      "rendered_ratio": 1,
+      "resyncs": 0,
+      "starved_ms": 0,
+      "starved_renders": 0,
+      "starved_renders_per_h": 0,
+      "transport": "built-in"
+     }
+    ],
+    "sanity": [
+     {
+      "detail": "1.000 of the expected frames",
+      "name": "Microsoft Teams Audio renders in real time",
+      "pass": true
+     },
+     {
+      "detail": "1.000 of the expected frames",
+      "name": "MacBook Air Speakers renders in real time",
+      "pass": true
+     },
+     {
+      "detail": "worst lateness 81.2 ms",
+      "name": "harness producer kept real time",
+      "pass": true
+     },
+     {
+      "detail": "3600 s",
+      "name": "run reached its duration",
+      "pass": true
+     }
+    ],
+    "verdict": "NO BASELINE",
+    "warnings": []
+   },
+   "process": {
+    "samples": 3558,
+    "cpu_pct_mean": 0.31,
+    "cpu_pct_max": 1.6,
+    "rss_mb_mean": 43.5,
+    "rss_mb_max": 53.2
+   }
+  },
+  "local_plus_fifo": {
+   "harness": {
+    "baseline": "no baseline",
+    "checks": [],
+    "config": {
+     "delay_ms": 2000,
+     "fifo": true,
+     "interval_s": 10,
+     "outputs": [
+      {
+       "name": "Microsoft Teams Audio",
+       "transport": "virtual"
+      }
+     ],
+     "seconds": 3600
+    },
+    "delay_accuracy": [],
+    "engine": "rust",
+    "fifo": {
+     "backlog_skip_ms": 0,
+     "backlog_skips": 0,
+     "bytes_written": 691202048,
+     "dropped_frames": 0,
+     "opens": 0,
+     "pipe_full_waits": 0,
+     "received_ratio": 1,
+     "repeated_frames": 0,
+     "short_writes": 0,
+     "underrun_ms": 0,
+     "write_errors": 0
+    },
+    "label": "local_plus_fifo",
+    "machine": {
+     "macos": "26.6.2",
+     "model_identifier": "Mac16,12"
+    },
+    "metrics": {
+     "cpu_pct_max": 1.74,
+     "cpu_pct_mean": 1.486,
+     "duration_s": 3600.005,
+     "fifo_backlog_skips": 0,
+     "fifo_gaps": 0,
+     "fifo_gaps_per_h": 0,
+     "fifo_latency_ms_change": -0.564,
+     "fifo_latency_ms_max": 25.521,
+     "fifo_latency_ms_mean": 14.968,
+     "fifo_pipe_full_waits": 0,
+     "fifo_short_writes": 0,
+     "fifo_underruns": 0,
+     "fifo_underruns_per_h": 0,
+     "fifo_write_errors": 0,
+     "footprint_mb_growth": 2.109,
+     "footprint_mb_max": 43.172,
+     "footprint_mb_start": 41.141,
+     "local_drift_corrections": 0,
+     "local_drift_corrections_per_h": 0,
+     "local_dropouts": 0,
+     "local_dropouts_per_h": 0,
+     "local_lag_err_ms_max_abs": 6.996,
+     "local_starved_renders": 0,
+     "local_starved_renders_per_h": 0,
+     "producer_late_ms_max": 28.375
+    },
+    "outputs": [
+     {
+      "drift_corrections_per_h": 0,
+      "drift_silence_ms": 0,
+      "drift_silences": 0,
+      "drift_skip_ms": 0,
+      "drift_skips": 0,
+      "dropouts": 0,
+      "dropouts_per_h": 0,
+      "lag_err_ms_max": 0,
+      "lag_err_ms_mean": -5.378,
+      "lag_err_ms_min": -10.667,
+      "lag_err_ms_window_max_abs": 6.996,
+      "name": "Microsoft Teams Audio",
+      "primes": 0,
+      "rendered_ratio": 1,
+      "resyncs": 0,
+      "starved_ms": 0,
+      "starved_renders": 0,
+      "starved_renders_per_h": 0,
+      "transport": "virtual"
+     }
+    ],
+    "sanity": [
+     {
+      "detail": "1.000 of the expected frames",
+      "name": "Microsoft Teams Audio renders in real time",
+      "pass": true
+     },
+     {
+      "detail": "1.000 of the expected frames",
+      "name": "FIFO reader receives in real time",
+      "pass": true
+     },
+     {
+      "detail": "worst lateness 28.4 ms",
+      "name": "harness producer kept real time",
+      "pass": true
+     },
+     {
+      "detail": "3600 s",
+      "name": "run reached its duration",
+      "pass": true
+     }
+    ],
+    "verdict": "NO BASELINE",
+    "warnings": []
+   },
+   "process": {
+    "samples": 3537,
+    "cpu_pct_mean": 1.0,
+    "cpu_pct_max": 2.4,
+    "rss_mb_mean": 51.9,
+    "rss_mb_max": 54.0
+   }
+  },
+  "airplay": {
+   "status": "not available",
+   "reason": "real AirPlay needs a speaker on the network and makes sound; the FIFO path to a local reader stands in for the engine"
+  }
+ }
+}

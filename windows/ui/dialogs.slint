@@ -1,10 +1,12 @@
-// The dialog that names a group: New Speaker Group and Rename Group. Enter
-// confirms, Escape cancels.
+// The app's small dialogs: the one that names a group (New Speaker Group and
+// Rename Group) and the code prompt of an Apple TV pairing. Enter confirms,
+// Escape cancels.
 
 import { Button, LineEdit } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Fluent } from "widgets.slint";
+import { PinPhase } from "types.slint";
+import { Card, Fluent, Glyph, Glyphs } from "widgets.slint";
 
 export component GroupNameDialog inherits Dialog {
     in property <string> heading;
@@ -83,6 +85,155 @@ export component GroupNameDialog inherits Dialog {
         accessible-label: root.confirm-label;
         clicked => {
             root.confirmed(root.name);
+        }
+    }
+
+    Button {
+        text: Strings.cancel;
+        dialog-button-role: reject;
+        accessible-label: Strings.cancel;
+        clicked => {
+            root.cancelled();
+        }
+    }
+}
+
+// The code prompt of an Apple TV pairing: the TV shows a 4-digit code and the
+// user types it here. Enter pairs once four digits are in, Escape cancels.
+// After a wrong code it stays open, says so, and takes the new code. The
+// Rust side keeps the field to digits (src/view.rs).
+export component PinDialog inherits Dialog {
+    in property <string> speaker;
+    in property <PinPhase> phase;
+    in property <bool> wrong-pin;
+    in-out property <string> pin;
+    callback pin-edited(string);
+    callback confirmed(string);
+    callback cancelled();
+
+    property <string> message: Strings.pin-message(root.speaker, root.phase, root.wrong-pin);
+    property <bool> can-pair: root.phase == PinPhase.ready && root.pin.character-count == 4;
+
+    title: Strings.pin-dialog-title;
+    icon: @image-url("../res/audiosync-256.png");
+    background: Tokens.background;
+    default-font-family: Fluent.font;
+    default-font-size: Tokens.font-size-body;
+    preferred-width: 380px;
+
+    // Bumped each time the dialog opens or wants a new code, so the field
+    // takes the cursor with its text selected.
+    property <int> focus-request;
+
+    public function prepare() {
+        root.focus-request += 1;
+    }
+
+    FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.cancelled();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            padding: 18px;
+
+            Card {
+                inner-padding: 14px;
+
+                VerticalLayout {
+                    spacing: 12px;
+
+                    HorizontalLayout {
+                        spacing: 10px;
+
+                        Glyph {
+                            glyph: Glyphs.display;
+                            font-size: 20px;
+                            color: Tokens.teal-text;
+                        }
+
+                        Text {
+                            text: root.speaker;
+                            font-family: Fluent.display-font;
+                            font-size: Tokens.font-size-body;
+                            font-weight: 600;
+                            color: Tokens.text;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                            accessible-role: none;
+                        }
+                    }
+
+                    // A wrong code sits on the notice color, so it reads as a
+                    // problem at a glance.
+                    Rectangle {
+                        background: root.wrong-pin ? Tokens.notice : transparent;
+                        border-radius: Fluent.radius-control;
+
+                        HorizontalLayout {
+                            padding: root.wrong-pin ? 8px : 0px;
+                            spacing: 8px;
+
+                            if root.wrong-pin: Glyph {
+                                glyph: Glyphs.warning;
+                                font-size: 14px;
+                                vertical-alignment: top;
+                            }
+
+                            Text {
+                                text: root.message;
+                                color: Tokens.text;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                    }
+
+                    LineEdit {
+                        property <int> focus-request: root.focus-request;
+                        text <=> root.pin;
+                        placeholder-text: Strings.pin-field-placeholder;
+                        input-type: number;
+                        // Typing only while the Apple TV waits for a code.
+                        read-only: root.phase != PinPhase.ready;
+                        font-size: 20px;
+                        horizontal-alignment: center;
+                        accessible-label: Strings.pin-field-label;
+                        accessible-description: root.message;
+                        init => {
+                            self.focus();
+                        }
+                        changed focus-request => {
+                            self.focus();
+                            self.select-all();
+                        }
+                        edited(text) => {
+                            root.pin-edited(text);
+                        }
+                        accepted => {
+                            if root.can-pair {
+                                root.confirmed(root.pin);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Button {
+        text: Strings.pair;
+        primary: true;
+        enabled: root.can-pair;
+        dialog-button-role: accept;
+        accessible-label: Strings.pair;
+        clicked => {
+            root.confirmed(root.pin);
         }
     }
 

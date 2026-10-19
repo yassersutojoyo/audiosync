@@ -11,10 +11,17 @@ one app, or everything the PC plays except AudioSync itself, and plays it on
 the outputs you turn on, each at its own delay and volume, through the
 equalizer. AirPlay speakers on your network show up under Connected Speakers,
 through AudioSync's own sender ([`../airplay`](../airplay)); that part hasn't
-been tried with a real speaker yet. Nothing is saved: the speakers you turned
-on, their delays and volumes, groups and the equalizer start over at every
-launch. So far it has only been started on one Windows 11
-PC, with nothing playing, and nobody has listened to it there yet; CI builds and
+been tried with a real speaker yet. An Apple TV that asks for a code is paired
+the first time you switch it on: type the 4-digit code it shows, and AudioSync
+remembers the pairing (encrypted for your Windows account in
+`%LOCALAPPDATA%\AudioSync`); Forget Pairing in the speaker's menu undoes it.
+Your other choices are saved next to it, in `settings.json`: the source, the
+speakers you turned on with their delays and volumes, the master volume,
+auto-connect marks, groups, the equalizer, View > Show Virtual Devices and
+where the main window was. A launch doesn't start streaming by itself, unless
+an auto-connect speaker is there, as on the Mac; a speaker that's missing
+keeps its settings for when it's back. So far it has only been started on one
+Windows 11 PC, with nothing playing, and nobody has listened to it there yet; CI builds and
 tests it. [docs/WINDOWS_UI.md](../docs/WINDOWS_UI.md) maps each
 part of the Mac main window to its Windows counterpart and lists the keyboard
 shortcuts.

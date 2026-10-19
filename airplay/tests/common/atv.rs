@@ -1,7 +1,9 @@
 //! A fake Apple TV that answers the legacy pairing (P47 to P53) and the
 //! pair-verify (P55, P56) the way docs/AIRPLAY_SPEC.md describes the
 //! receiver's side, plus a harness that wires a sans-I/O [`Pairing`] to a
-//! [`FakeReceiver`] holding one.
+//! [`FakeReceiver`] holding one. Like the receivers P50 and P53 describe,
+//! it hashes A, B and S in their shortest form in M1, M2 and K, and answers
+//! the last pair-setup step with its own Ed25519 key, sealed.
 //!
 //! The receiver's arithmetic is written here, from RFC 5054 (the server's
 //! B, S and the check of M1), RFC 2945 (M2) and the spec, straight on the
@@ -62,6 +64,13 @@ fn pad(value: &[u8]) -> Vec<u8> {
     let mut out = vec![0u8; 256 - value.len()];
     out.extend_from_slice(value);
     out
+}
+
+/// Big-endian bytes without leading zero bytes: the form M1, M2 and K hash
+/// A, B and S in (P50, P52).
+fn short(value: &[u8]) -> &[u8] {
+    let first = value.iter().position(|&b| b != 0).unwrap_or(value.len());
+    &value[first..]
 }
 
 fn int(value: &[u8]) -> U2048 {
@@ -171,6 +180,18 @@ struct Verification {
     shared: [u8; 32],
 }
 
+/// How the fake answers the last pair-setup step (P53).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SealAnswer {
+    /// 200 with no body.
+    Empty,
+    /// 200 with {epk, authTag}: its own Ed25519 public key, sealed with the
+    /// pair-setup key and the sender's nonce plus one more in the last byte.
+    Sealed,
+    /// The same with a tag that doesn't match.
+    Tampered,
+}
+
 #[derive(Debug)]
 struct State {
     pin: String,
@@ -189,6 +210,10 @@ struct State {
     setup_status: VecDeque<Option<u16>>,
     /// Answers the proof with a wrong M2.
     wrong_server_proof: bool,
+    /// How the last pair-setup step is answered (P53).
+    seal_answer: SealAnswer,
+    /// Signs atv_data with a key other than the one it sealed (P56).
+    wrong_receiver_signature: bool,
 }
 
 /// The fake Apple TV; clones share one state.
@@ -214,8 +239,68 @@ impl FakeAppleTv {
                 proofs: Vec::new(),
                 setup_status: VecDeque::new(),
                 wrong_server_proof: false,
+                seal_answer: SealAnswer::Sealed,
+                wrong_receiver_signature: false,
             })),
         }
+    }
+
+    /// An Apple TV whose B, for the client with this ID, starts with a zero
+    /// byte: b is searched from the default upwards, one multiplication by g
+    /// per step (P50: only such a B, the receiver's own choice, depends on
+    /// hashing the shortest form).
+    pub fn with_zero_led_b(pin: &str, user: &str) -> FakeAppleTv {
+        let atv = FakeAppleTv::new(pin);
+        {
+            let mut state = atv.state();
+            let group = Group::new();
+            let (verifier, _) = server_values(&group, &state, user);
+            let kv = group.form(&group.k()).mul(&group.form(&verifier));
+            let g = group.form(&[2]);
+            let mut b = state.b;
+            let mut g_b = group.pow_form(&g, &b);
+            let mut found = false;
+            for _ in 0..100_000 {
+                if bytes(&kv.add(&g_b).retrieve())[0] == 0 {
+                    found = true;
+                    break;
+                }
+                g_b = g_b.mul(&g);
+                for byte in b.iter_mut().rev() {
+                    *byte = byte.wrapping_add(1);
+                    if *byte != 0 {
+                        break;
+                    }
+                }
+            }
+            assert!(found, "a b whose B starts with a zero byte");
+            state.b = b;
+        }
+        atv
+    }
+
+    /// B for the client with this ID, as the receiver sends it: 256 bytes.
+    pub fn b_of(&self, user: &str) -> Vec<u8> {
+        let state = self.state();
+        server_values(&Group::new(), &state, user).1
+    }
+
+    /// Its own Ed25519 public key, which it seals into its last pair-setup
+    /// answer (P53) and signs atv_data with (P56).
+    pub fn receiver_key(&self) -> [u8; 32] {
+        SigningKey::from_bytes(&self.state().own_key)
+            .verifying_key()
+            .to_bytes()
+    }
+
+    /// How to answer the last pair-setup step (P53).
+    pub fn answer_seal_with(&self, answer: SealAnswer) {
+        self.state().seal_answer = answer;
+    }
+
+    /// Signs atv_data with another key (P56).
+    pub fn sign_with_another_key(&self) {
+        self.state().wrong_receiver_signature = true;
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -361,8 +446,8 @@ impl State {
             let premaster =
                 server_premaster(&group, a_pub, &exchange.b_pub, &exchange.verifier, &self.b);
             let mut key = [0u8; 40];
-            key[..20].copy_from_slice(&sha1(&[&premaster, &[0, 0, 0, 0]]));
-            key[20..].copy_from_slice(&sha1(&[&premaster, &[0, 0, 0, 1]]));
+            key[..20].copy_from_slice(&sha1(&[short(&premaster), &[0, 0, 0, 0]]));
+            key[20..].copy_from_slice(&sha1(&[short(&premaster), &[0, 0, 0, 1]]));
             let hash_n = sha1(&[&group.n]);
             let hash_g = sha1(&[&[2]]);
             let mixed: Vec<u8> = hash_n.iter().zip(hash_g).map(|(n, g)| n ^ g).collect();
@@ -370,8 +455,8 @@ impl State {
                 &mixed,
                 &sha1(&[exchange.user.as_bytes()]),
                 &self.salt,
-                &pad(a_pub),
-                &pad(&exchange.b_pub),
+                short(a_pub),
+                short(&exchange.b_pub),
                 &key,
             ]);
             if m1 != expected {
@@ -379,7 +464,7 @@ impl State {
                 self.exchange = None;
                 return failed();
             }
-            let mut m2 = sha1(&[&pad(a_pub), &m1, &key]);
+            let mut m2 = sha1(&[short(a_pub), &m1, &key]);
             if self.wrong_server_proof {
                 m2[0] ^= 1;
             }
@@ -421,7 +506,27 @@ impl State {
         }
         self.paired.push(sealed.try_into().expect("32 bytes"));
         self.exchange = None;
-        Response::new(200, "OK")
+        if self.seal_answer == SealAnswer::Empty {
+            return Response::new(200, "OK");
+        }
+        // Its own key, sealed with an IV whose last byte is 2 more than the
+        // hash's, without a carry (P53).
+        let mut answer_nonce = sha512_16(b"Pair-Setup-AES-IV", &key);
+        answer_nonce[15] = answer_nonce[15].wrapping_add(2);
+        let mut own = SigningKey::from_bytes(&self.own_key)
+            .verifying_key()
+            .to_bytes();
+        let mut answer_tag: [u8; 16] = cipher
+            .encrypt_inout_detached(&answer_nonce.into(), b"", own.as_mut_slice().into())
+            .expect("sealed")
+            .into();
+        if self.seal_answer == SealAnswer::Tampered {
+            answer_tag[0] ^= 1;
+        }
+        let mut answer = Dictionary::new();
+        answer.insert("epk".to_owned(), Value::Data(own.to_vec()));
+        answer.insert("authTag".to_owned(), Value::Data(answer_tag.to_vec()));
+        plist_response(answer)
     }
 
     fn verify(&mut self, request: &Request) -> Response {
@@ -448,11 +553,16 @@ impl State {
                 let shared = secret
                     .diffie_hellman(&PublicKey::from(verify_public))
                     .to_bytes();
-                // The receiver's own 64 bytes; the sender doesn't check
-                // them (P56), and only their length moves its keystream.
+                // Its signature over atv_pub | v_pub (P56), which the
+                // sender checks only when it holds the key from P53.
                 let mut message = receiver_public.to_vec();
                 message.extend_from_slice(&verify_public);
-                let mut data = SigningKey::from_bytes(&self.own_key)
+                let signing_key = if self.wrong_receiver_signature {
+                    [0x43; 32]
+                } else {
+                    self.own_key
+                };
+                let mut data = SigningKey::from_bytes(&signing_key)
                     .sign(&message)
                     .to_bytes();
                 let mut cipher = ctr::Ctr128BE::<Aes128>::new(
@@ -561,10 +671,16 @@ pub const CLIENT: u64 = 0x0123_4567_89AB_CDEF;
 
 impl PairLink {
     pub fn new(receiver: FakeReceiver) -> PairLink {
+        PairLink::with_password(receiver, None)
+    }
+
+    /// A pairing with the speaker's password, if any (P46).
+    pub fn with_password(receiver: FakeReceiver, password: Option<&str>) -> PairLink {
         let now = Instant::now();
         let addresses = vec![SocketAddr::new(super::RECEIVER, super::RAOP_PORT)];
         PairLink {
-            pairing: Pairing::new(addresses, ids(), CLIENT, now),
+            pairing: Pairing::new(addresses, ids(), CLIENT, now)
+                .with_password(password.map(str::to_owned)),
             receiver,
             events: Vec::new(),
             sent: Vec::new(),

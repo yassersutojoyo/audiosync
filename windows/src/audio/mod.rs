@@ -20,6 +20,8 @@
 //!   formats and the conversion of captured packets into the ring, through
 //!   the equalizer.
 //! - [`outputs`]: which outputs play, at what delay and gain, and their format.
+//! - [`pairings`]: the credentials of paired Apple TVs, kept per speaker in a
+//!   file encrypted for the current user (DPAPI on Windows).
 //! - [`render`]: an output's render pipeline, from the ring to the device.
 //! - [`routing`]: whether the source is heard twice, straight from Windows
 //!   as well as through AudioSync's delayed copies.
@@ -38,6 +40,7 @@ pub mod controller;
 #[cfg(test)]
 pub mod mock;
 pub mod outputs;
+pub mod pairings;
 pub mod process;
 pub mod render;
 pub mod routing;

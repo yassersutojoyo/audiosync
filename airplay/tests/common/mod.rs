@@ -70,6 +70,13 @@ pub struct PasswordGate {
     /// The n-th request that carries a valid `Authorization` (1-based) is
     /// answered with a `stale=true` challenge and a new nonce.
     pub stale_on: Option<usize>,
+    /// How many valid requests in a row, from `stale_on` on, get such a
+    /// stale challenge (1: only the `stale_on`-th).
+    pub stale_times: usize,
+    /// Requests received before this one (0-based, in order) pass without
+    /// a challenge, as on a receiver that first challenges a later request
+    /// on the connection; 0 challenges from the first request on.
+    pub from_request: usize,
 }
 
 impl PasswordGate {
@@ -81,6 +88,8 @@ impl PasswordGate {
             qop: false,
             qop_options: "auth".to_owned(),
             stale_on: None,
+            stale_times: 1,
+            from_request: 0,
         }
     }
 }
@@ -108,6 +117,10 @@ pub struct FakeReceiver {
     pub transport: String,
     pub session: Option<String>,
     pub audio_latency: Option<u32>,
+    /// `Audio-Latency` as raw text, in place of `audio_latency` (P110).
+    pub audio_latency_text: Option<String>,
+    /// The body of a 200 to the first pair-verify request (P55).
+    pub verify_body: Vec<u8>,
     pub jack: Option<String>,
     pub server: Option<String>,
     pub volume_answer: String,
@@ -139,6 +152,8 @@ impl Default for FakeReceiver {
                 .to_owned(),
             session: Some("1".to_owned()),
             audio_latency: Some(2205),
+            audio_latency_text: None,
+            verify_body: vec![0x5A; 96],
             jack: Some("connected; type=analog".to_owned()),
             server: Some("FakeReceiver/1.0".to_owned()),
             volume_answer: "volume: -20.000000\r\n".to_owned(),
@@ -219,6 +234,9 @@ impl FakeReceiver {
     /// `Some(challenge)` when the request must be answered with 401.
     fn check_password(&mut self, request: &Request) -> Option<String> {
         let gate = self.gate.clone()?;
+        if self.requests.len() <= gate.from_request {
+            return None;
+        }
         let challenge = |nonce: &str, stale: bool| {
             let mut value = format!("Digest realm=\"{}\", nonce=\"{nonce}\"", gate.realm);
             if gate.qop {
@@ -236,7 +254,10 @@ impl FakeReceiver {
             return Some(challenge(&gate.nonce, false));
         }
         self.authorized += 1;
-        if gate.stale_on == Some(self.authorized) {
+        if gate
+            .stale_on
+            .is_some_and(|first| (first..first + gate.stale_times).contains(&self.authorized))
+        {
             self.nonce_generation += 1;
             let nonce = format!("{}{:02}", &gate.nonce[..30], self.nonce_generation);
             self.gate.as_mut().expect("gate").nonce = nonce.clone();
@@ -273,7 +294,9 @@ impl FakeReceiver {
                 }
             }
             Method::Record => {
-                if let Some(latency) = self.audio_latency {
+                if let Some(text) = &self.audio_latency_text {
+                    headers.push("Audio-Latency", text.clone());
+                } else if let Some(latency) = self.audio_latency {
                     headers.push("Audio-Latency", latency.to_string());
                 }
             }
@@ -283,7 +306,7 @@ impl FakeReceiver {
             }
             Method::Flush => headers.push("RTP-Info", "rtptime=1"),
             Method::Post if request.uri == "/pair-verify" => {
-                response.body = vec![0x5A; 96];
+                response.body = self.verify_body.clone();
             }
             Method::Post if request.uri == "/auth-setup" => {
                 response.body = vec![0xA5; 64];
