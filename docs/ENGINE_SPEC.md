@@ -163,6 +163,30 @@ S182 to S191 take the click out of starts, stops, source changes and re-timings.
 - **S75** *Observed* (`AppSettings.swift:44-46`, `:109-113`, `:160-169`; "volume: legacy 3.49% migrates to ≈33", "settings: older linear gains become slider positions (3.49 % → 32.68, 150 % → 100, S75)"). Legacy linear percentages (0…150) migrate as `p(pct / 100)`, clamped (3.49 % → 32.68; anything ≥ 100 % → 100). Local volumes stored that way are converted once at launch, saved as positions and the old values removed; positions already stored win.
 - **S76** *Observed* (`AppDelegate+Outputs.swift:51-62`). Host-side volume inputs are clamped to [0, 100] before use.
 
+### Output devices' own volume
+
+S192 to S202 make a turned-down or muted output device visible. Every local output also has its own volume and mute, kept by the operating system per device and applied after AudioSync's renderer gain (S71), so what is heard is AudioSync's gain times the device's. On a Mac only the default output's volume is in the Sound menu and on the volume keys; the others are reached only through Audio MIDI Setup, so a device left at a low volume stays out of sight: at a test on a MacBook, its speakers sounded very quiet with AudioSync's slider at 100 because their own volume was 13 %. Windows keeps a volume and a mute per endpoint the same way. Today neither app reads or sets an output device's volume or mute (the Windows app reads them only for the double-audio check, `windows/src/audio/wasapi/routing.rs`). These clauses are design requirements, kept small for the feature freeze: AudioSync reads and shows, and writes only when the user clicks the fix.
+
+- **S192** *Required.* Scope. The *device volume* of a local output is its operating system volume as a scalar from 0 to 1 (the position of the system's own slider for that device) and its mute. AudioSync reads both for every local output row that is switched on, whether or not a session runs, and for no other device: not for AirPlay speakers (whose volume is S73), not for outputs switched off, not for the capture source. It never sets a device volume or mute by itself: not at launch, at a start or stop, when an output is switched on or plugged in, on a source change, at quit, nor to restore an earlier value. The only write is the fix the user clicks (S197). The device volume never changes AudioSync's own volumes, its stored settings or the renderer gain (S70 to S76), and has no part in delay or sync.
+- **S193** *Required.* Reading on the Mac (Apple's Core Audio documentation). In the output scope of the device: the volume is `kAudioDevicePropertyVolumeScalar` of the main element when the device has it there; otherwise the mean of that property over the device's preferred stereo channels (`kAudioDevicePropertyPreferredChannelsForStereo`, channels 1 and 2 when the device doesn't say) that have it. The mute is `kAudioDevicePropertyMute` of the main element when the device has it; otherwise the device counts as muted only when every one of those channels that has a mute is muted. Each part counts as *known* only when its property is present and settable (`AudioObjectIsPropertySettable`): a volume that can't be set can't be fixed, so it is treated as absent. Many HDMI and DisplayPort outputs, some USB devices, and aggregate and multi-output devices have neither; S196 then shows nothing. Reading happens on the control or main thread, never on an audio thread.
+- **S194** *Required.* Reading on Windows. The volume is `IAudioEndpointVolume::GetMasterVolumeLevelScalar` of the endpoint and the mute is `GetMute`, as the double-audio snapshot reads them today. Windows applies the endpoint volume in software where the hardware has none, so both parts are known whenever the endpoint's volume control can be activated and read; when activation or a read fails, both are unknown. Channel volumes are not used: the master scalar is what the Sound settings slider shows.
+- **S195** *Required.* Following changes. When an output's row is switched on (including the rows switched on at launch) or its device appears again (S137, S161), the host reads its device volume once and registers for changes: on the Mac a property listener on each address S193 read (`AudioObjectAddPropertyListenerBlock`, on a serial queue, results passed to the main thread); on Windows `IAudioEndpointVolume::RegisterControlChangeNotify`, whose callback runs on a system thread and passes the new mute and level to the UI thread. The row then shows the latest value; several notifications before the UI thread runs collapse into one update. The host removes the listener or unregisters the callback when the row is switched off, its device goes away, or the app quits, and holds no listener for any other device. A notification never touches an audio thread or the renderer.
+- **S196** *Required.* The decision, a pure function of the two parts. A known volume v becomes the whole percent `round(100 × clamp(v, 0, 1))` (half away from zero); a NaN or infinite reading makes the volume unknown. The output is *muted* when the mute is known and set, *low* when the volume is known and below 25 %, both when both hold, and *fine* otherwise; with both parts unknown it is *unknown*. Muted, low, and muted and low show a hint (S198); fine and unknown show nothing. Reason for 25 %: it catches a device left near the bottom (13 % in the case above, which sounded very quiet at AudioSync's 100) and leaves alone users who keep a device moderately low on purpose, such as a laptop at a third of its volume at night. A volume of 0 % without mute counts as low. The hint stays for as long as the decision does: it has no dismiss button and doesn't time out, and it goes only when the volume or the mute changes (or the row is switched off). This is intended: a user who keeps headphones at 15 % on purpose keeps seeing it, and it is small enough to live with.
+- **S197** *Required.* The fix. One click writes, once each: the volume, set to 0.75 only when the output is low; and the mute, cleared only when it is muted. The fix never lowers a volume, so unmuting a device at 90 % leaves it at 90 %. On the Mac it sets the same addresses S193 read: the main element's scalar, or each preferred stereo channel's scalar to 0.75 (a channel balance set on such a device is lost, which is rare and stated here), and the main mute or each channel's mute to 0; on Windows `SetMasterVolumeLevelScalar(0.75)` and `SetMute(false)`. The row is then updated from the change notification (S195), not from the values written, so a write the device ignores or refuses leaves the hint and the button exactly as they were, and only the log says so (S201). This is intended: the row always shows what the device reports, and a second click simply tries again. No dialog, alert or confirmation is shown. Reason for 75 % rather than 100 %: it is loud enough that AudioSync's own slider spans its useful range again, and short of the device's maximum, so one click doesn't put headphones or a nearby speaker at full scale; anyone who wants more raises it in the system's settings or with AudioSync's slider.
+- **S198** *Required.* Where the hint shows. In the main window's row of a switched-on local output (Mac `SpeakerRow`, Windows `SpeakerRow` in `widgets.slint`), on its own line under the volume slider: a small speaker glyph (decorative, hidden from VoiceOver and Narrator), the hint text in the secondary text style with at least 4.5:1 contrast in light and dark appearance, and the fix as a borderless, link-style button after it. It appears and disappears with the decision (S196) without moving focus, raising a window or showing a notice, and never on an AirPlay row or a row switched off. The Mac's compact menu bar panel (`CompactRow`) and the Windows tray flyout (`FlyoutRow`) have no per-output slider, so their row of a switched-on local output shows the state as a small glyph only, in the slot at the row's right where the availability note sits (a speaker with a slash when muted, a speaker with one wave when low), with no button: the hint text of S199 is its tooltip on the Mac and is added to the row's VoiceOver hint (Mac) or accessible description (Windows), and the fix is in the main window. The glyph uses the secondary text color, not a warning color, so it reads as information. On the Mac the main window's hint text carries a tooltip that explains it (S199).
+- **S199** *Required.* Wording, through `AppText` on the Mac and `strings.slint` on Windows; n is the whole percent of S196:
+
+  | Case | Mac hint | Mac button | Windows hint | Windows button |
+  |---|---|---|---|---|
+  | low | macOS volume is n% | Set to 75% | Windows volume is n% | Set to 75% |
+  | muted | Muted in macOS | Unmute | Muted in Windows | Unmute |
+  | muted and low | Muted in macOS, volume n% | Unmute at 75% | Muted in Windows, volume n% | Unmute at 75% |
+
+  The Mac tooltip: "macOS has its own volume for each output, and it limits AudioSync's slider." Every percentage, in the hints and in the button labels ("Set to 75%", "Unmute at 75%") alike, is formatted for the user's locale like the app's other numbers.
+- **S200** *Required.* Accessibility. The hint text is one static-text element whose label names the output: "MacBook Pro Speakers: macOS volume is 13%", "MacBook Pro Speakers: muted in macOS", "MacBook Pro Speakers: muted in macOS, volume 13%" (on Windows "…: Windows volume is 13%" and so on). The fix button's label starts with its visible text, so Voice Control and speech input find it by what is on screen, and then names the output: "Set to 75%, MacBook Pro Speakers", "Unmute, MacBook Pro Speakers", "Unmute at 75%, MacBook Pro Speakers" (the same on Windows); that it is the macOS or Windows volume is said by the hint read just before it. VoiceOver and Narrator reach both in reading order right after the row's volume slider; the slider's own label and value are unchanged. The hint appearing is not announced, so a system volume being dragged elsewhere doesn't interrupt a screen reader.
+- **S201** *Required.* Debug log (the Mac's `AUDIOSYNC_DEBUG` log, the Windows debug log). One line when an output's device volume is first read after S195 registers it (the output as the log already names outputs, the percent or "unknown", muted or not, and which parts are settable); one line when the decision of S196 changes (for example "fine → low"); and one line per fix click with what was written and whether each write succeeded. A reading whose decision stays the same logs nothing, so dragging a system slider from 80 % to 30 % logs nothing and dragging it on to 20 % logs one line. Nothing is logged from an audio thread or from the listener callback itself; the line is written where the UI thread applies the reading.
+- **S202** *Required.* Outputs that change underneath. A device that goes away drops its listener and its hint (S195); when it comes back its device volume is read afresh, and so is a row switched off and on again. Every notification re-reads both parts the way S193 or S194 says rather than trusting the value it carries alone, so a device whose controls changed is read as it is now. Reading stays best-effort: an unreadable part counts as unknown, which shows nothing rather than a wrong hint.
+
 ## 8. AirPlay sync rule (local delay policy)
 
 - **S77** *Superseded by S175 and S178* (local delay model, below). *Observed* (`AppSettings.swift:41-43`, `:54-55`, `:81-82`, `:106-107`; `AppDelegate.swift:129-130`; `AppDelegate+Outputs.swift:100-106`; `README.md` "Using it"). Each local output has a configured delay in ms, range 0…20 000, default 2000 (seeded from a legacy single delay when present, clamped to the range). Non-finite input is ignored; other input is clamped.
@@ -1053,3 +1077,51 @@ Windows (`cargo test` in `windows/`):
 | a_delay_change_fades_out_first_and_in_after | S187 |
 
 By ear on real AirPlay receivers, outside these suites: with a speaker playing, a stop and a source change make no click on the speaker when the engine stops or the native sender flushes it, and the first sound after a start or a source change fades in (S189).
+
+### device volume (to be written first, failing)
+
+The checks for S192 to S202. None exists yet: each is written first and fails against today's code (the first row of each host table reproduces the quiet MacBook speakers at 13 %), then the code follows the clauses. Once a check exists, its row moves to the table of the suite that runs it. The host checks drive the host's device-volume access through a fake that stands in for Core Audio or `IAudioEndpointVolume` (the Windows mock backend already keeps a volume and a mute per output), so no real device is read or written.
+
+Core (`cargo test` in `core/`, test functions with `// covers:` markers):
+
+| Test | Clauses |
+|---|---|
+| a_device_at_13_percent_is_low_and_one_at_25_percent_is_fine | S196 |
+| a_muted_device_is_muted_whatever_its_volume | S196 |
+| an_unknown_or_non_finite_volume_shows_nothing | S196 |
+| the_fix_raises_to_75_percent_only_below_25_and_never_lowers | S197 |
+| the_fix_unmutes_without_touching_a_fine_volume | S197 |
+| a_reading_logs_only_when_its_decision_changes | S201 |
+
+Mac (`Tests/logictest.swift`):
+
+| Check | Clauses |
+|---|---|
+| device volume: a switched-on output at 13% shows the low hint and the fix | S196, S198 |
+| device volume: a muted output shows the unmute fix | S196, S198 |
+| device volume: the fix writes 0.75 and unmute once each, and only on a click | S197 |
+| device volume: nothing is written at launch, start, stop, switch-on, source change or quit | S192, S197 |
+| device volume: a per-channel device reads the mean of its stereo channels and the fix sets each | S193, S197 |
+| device volume: a device without a settable volume or mute shows nothing | S193, S196 |
+| device volume: AirPlay rows and switched-off rows show nothing and hold no listener | S192, S195, S198 |
+| device volume: a change notification updates the row, and switching off removes the listener | S195, S202 |
+| device volume: the hint and the fix name the output for VoiceOver, the fix's label starting with its visible text | S199, S200 |
+| device volume: the compact panel's row shows the glyph with the hint as tooltip and VoiceOver hint, without a button | S198, S199 |
+| device volume: a write the device ignores leaves the hint and the fix as they were and logs it | S197, S201 |
+| device volume: dragging the system volume across 25% logs one line | S201 |
+
+Windows (`cargo test` in `windows/`):
+
+| Test | Clauses |
+|---|---|
+| a_switched_on_output_at_13_percent_shows_the_low_hint | S196, S198 |
+| a_muted_output_shows_the_unmute_fix | S196, S198 |
+| the_fix_sets_75_percent_and_unmutes_once_each | S197 |
+| nothing_is_written_without_a_click | S192, S197 |
+| an_endpoint_whose_volume_cannot_be_read_shows_nothing | S194, S196 |
+| an_endpoint_volume_notification_updates_the_row | S195, S202 |
+| the_hint_and_the_fix_name_the_output_for_narrator | S199, S200 |
+| the_flyout_row_shows_the_glyph_and_the_hint_in_its_description | S198, S199 |
+| a_volume_change_logs_only_when_its_decision_changes | S201 |
+
+By hand on the Mac, outside these suites: set the built-in speakers to 13 % in Audio MIDI Setup, switch them on in AudioSync and see the hint; click Set to 75% and hear the level rise, with the hint gone and the system volume at 75 %; check the hint and the button in light and dark appearance and with VoiceOver (S193, S198, S200).
