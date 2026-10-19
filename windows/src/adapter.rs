@@ -1699,6 +1699,9 @@ fn app_key(root_pid: u32, executable: &str) -> String {
 }
 
 #[cfg(test)]
+mod device_volume_tests;
+
+#[cfg(test)]
 mod tests {
     use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, output_gain};
 

@@ -67,6 +67,8 @@ use super::routing::{
 };
 use crate::debug_log::DebugLog;
 
+mod device_volume;
+
 /// How often the debug log gets a status line while a session runs.
 const STATUS_INTERVAL: Duration = Duration::from_secs(5);
 
