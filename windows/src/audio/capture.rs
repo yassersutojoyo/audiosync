@@ -464,11 +464,14 @@ const MAX_FILL_SECONDS: u64 = 21;
 /// allocates, locks or blocks.
 pub struct GapFill {
     rate: u32,
-    /// When the frame after the last one written is due; `None` before the
-    /// first packet.
-    end: Option<u64>,
-    /// Whether the frames written up to `end` end with silence written while
-    /// nothing came.
+    /// When the last packet that set the pace started; `None` before the
+    /// first packet. The frames written count from here, so filling a long
+    /// gap in many small steps never adds up rounding.
+    anchor: Option<u64>,
+    /// Frames written from `anchor` on.
+    written: u64,
+    /// Whether the frames written so far end with silence written while
+    /// nothing came, and no packet has reached past it yet.
     filled: bool,
 }
 
@@ -477,9 +480,22 @@ impl GapFill {
     pub fn new(rate: u32) -> GapFill {
         GapFill {
             rate,
-            end: None,
+            anchor: None,
+            written: 0,
             filled: false,
         }
+    }
+
+    /// When the frame after the last one written is due.
+    fn end(&self) -> Option<u64> {
+        self.anchor
+            .map(|anchor| anchor.saturating_add(self.length(self.written)))
+    }
+
+    /// The pace starts again from a packet of `frames` frames at `start`.
+    fn rebase(&mut self, start: u64, frames: usize) {
+        self.anchor = Some(start);
+        self.written = frames as u64;
     }
 
     /// The frames in `hns` at the capture rate, rounded down.
@@ -501,10 +517,10 @@ impl GapFill {
     /// of its first frames to skip. Each packet's own position counts, so
     /// the device clock's drift never adds up to a gap.
     pub fn packet(&mut self, start: u64, frames: usize, discontinuity: bool) -> (usize, usize) {
-        let length = self.length(frames as u64);
+        let packet_end = start.saturating_add(self.length(frames as u64));
         let filled = std::mem::take(&mut self.filled);
-        let Some(end) = self.end else {
-            self.end = Some(start.saturating_add(length));
+        let Some(end) = self.end() else {
+            self.rebase(start, frames);
             return (0, 0);
         };
         if start >= end {
@@ -514,16 +530,23 @@ impl GapFill {
             } else {
                 0
             };
-            self.end = Some(start.saturating_add(length));
+            self.rebase(start, frames);
             return (fill as usize, 0);
         }
         if filled {
-            // It starts inside the silence written while nothing came.
+            // It starts inside the silence written while nothing came: its
+            // frames up to the fill's end are there already. One that ends
+            // inside the fill too is skipped whole, and the next late packet
+            // still finds the fill.
             let skip = (self.frames_in(end - start) as usize).min(frames);
-            self.end = Some(end.max(start.saturating_add(length)));
+            if packet_end > end {
+                self.rebase(start, frames);
+            } else {
+                self.filled = true;
+            }
             return (0, skip);
         }
-        self.end = Some(start.saturating_add(length));
+        self.rebase(start, frames);
         (0, 0)
     }
 
@@ -531,7 +554,7 @@ impl GapFill {
     /// none until the capture is in a gap, then enough to reach shortly
     /// before now.
     pub fn idle(&mut self, now: u64) -> usize {
-        let Some(end) = self.end else {
+        let (Some(anchor), Some(end)) = (self.anchor, self.end()) else {
             return 0;
         };
         if !self.filled && now < end.saturating_add(IDLE_AFTER_HNS) {
@@ -541,16 +564,19 @@ impl GapFill {
         if target <= end {
             return 0;
         }
-        let wanted = self.frames_in(target - end);
+        // Counted from the anchor, so no step's rounding is ever lost.
+        let wanted = self.frames_in(target - anchor).saturating_sub(self.written);
         if wanted == 0 {
             return 0;
         }
         let frames = wanted.min(self.max_fill());
-        self.end = Some(if frames < wanted {
-            target
+        if frames < wanted {
+            // A longer stall: the pace starts again from now.
+            self.anchor = Some(target);
+            self.written = 0;
         } else {
-            end + self.length(frames)
-        });
+            self.written += frames;
+        }
         self.filled = true;
         frames as usize
     }
