@@ -7,8 +7,14 @@
 //! PIN and the time, and gives back bytes to write, events and the order to
 //! close. On one connection to the RAOP port (P47) it asks OPTIONS first,
 //! so a receiver that can't take AirPlay 1 audio is Unsupported before any
-//! PIN is asked for (P27, P46), then sends `POST /pair-pin-start` (the
-//! Apple TV shows a PIN, P48), the first
+//! PIN is asked for (P27, P46). A 401 to that OPTIONS is the receiver
+//! asking for its password, not a pairing answer: with the speaker's
+//! password ([`Pairing::with_password`]) the sender answers the digest
+//! challenge and every later request carries `Authorization`, pairing
+//! requests included (P36, P38); without one the pairing ends with
+//! PasswordRequired before `/pair-pin-start`, so the Apple TV never shows
+//! a PIN for a pairing that can't go on (P39, P46). Then it sends
+//! `POST /pair-pin-start` (the Apple TV shows a PIN, P48), the first
 //! `POST /pair-setup-pin` with the client ID (P49), waits without a timeout
 //! for the host's PIN (P51), sends A and M1 (P50, P52), checks M2, sends
 //! the sealed public key (P53), opens the receiver's sealed key when its
@@ -36,6 +42,7 @@ use plist::{Dictionary, Value};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::digest::{self, Challenge};
 use crate::error::UnsupportedReason;
 use crate::error::{ErrorKind, SessionError, Warning};
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
@@ -285,11 +292,13 @@ pub enum PairingEvent {
     /// Pairing ended with an error (P58, P136): PairingFailed for a 470 or
     /// another failure status at a pairing step, Busy for a 409 (P137),
     /// Unsupported when the OPTIONS answer shows a receiver that can't take
-    /// AirPlay 1 audio (P27, P46), PairingCancelled when the Apple TV
-    /// closed the connection while the PIN was awaited, or the connection
-    /// errors of P134 and P140. `wrong_pin` says the Apple TV turned the
-    /// PIN down (470 to the proof, P52); a new pairing starts again from
-    /// `/pair-pin-start` and shows a new PIN.
+    /// AirPlay 1 audio (P27, P46), PasswordRequired for a 401 to OPTIONS
+    /// when the pairing has no password and WrongPassword when the receiver
+    /// turns the password down (P39, P46, P135), PairingCancelled when the
+    /// Apple TV closed the connection while the PIN was awaited, or the
+    /// connection errors of P134 and P140. `wrong_pin` says the Apple TV
+    /// turned the PIN down (470 to the proof, P52); a new pairing starts
+    /// again from `/pair-pin-start` and shows a new PIN.
     Failed {
         error: SessionError,
         wrong_pin: bool,
@@ -361,8 +370,22 @@ impl Step {
 #[derive(Debug)]
 struct InFlight {
     step: Step,
+    /// The body it carried, for a resend after a 401 (P36, P38).
+    body: Vec<u8>,
     cseq: u32,
     sent_at: Instant,
+    /// The nonce of the `Authorization` it carried, if any (P38).
+    nonce: Option<String>,
+    /// It is already the resend after a `stale=true` challenge (P38).
+    stale_retried: bool,
+}
+
+/// The digest challenge the receiver sent on this connection (P36, P38).
+#[derive(Debug)]
+struct Auth {
+    challenge: Challenge,
+    /// Requests sent with this nonce, for `nc` (RFC 2617 §3.2.2).
+    count: u32,
 }
 
 /// What the exchange has established so far; a and K are wiped when
@@ -395,6 +418,10 @@ pub struct Pairing {
     connected: bool,
     ids: SessionIds,
     client_id: String,
+    /// The speaker's password, if the host has one (P39, P46). Never
+    /// logged: `Debug` leaves it out.
+    password: Option<String>,
+    auth: Option<Auth>,
     state: PairingState,
     parser: Parser,
     next_cseq: u32,
@@ -426,6 +453,8 @@ impl Pairing {
             connected: false,
             ids,
             client_id: client_id(client),
+            password: None,
+            auth: None,
             state: PairingState::Connecting,
             parser: Parser::new(),
             next_cseq: 0,
@@ -442,6 +471,17 @@ impl Pairing {
             ),
         }
         pairing
+    }
+
+    /// The same pairing with the speaker's password, if the host has one
+    /// (P39): a 401 to OPTIONS is then answered with digest authentication
+    /// and every later request carries `Authorization`, pairing requests
+    /// included (P36, P38, P46). Without one, that 401 ends the pairing
+    /// with PasswordRequired before `/pair-pin-start`. Call it right after
+    /// [`Pairing::new`], before the connect completes.
+    pub fn with_password(mut self, password: Option<String>) -> Pairing {
+        self.password = password;
+        self
     }
 
     pub fn state(&self) -> PairingState {
@@ -697,22 +737,43 @@ impl Pairing {
     }
 
     /// Encodes and queues one request: `OPTIONS * RTSP/1.0` or
-    /// `POST <path> RTSP/1.0`, with the next CSeq and the common headers
-    /// (P21, P22, P27, P47).
+    /// `POST <path> RTSP/1.0`, with the next CSeq, the common headers and,
+    /// once a challenge arrived, `Authorization` (P21, P22, P27, P38, P47).
     fn send(&mut self, step: Step, body: Vec<u8>, now: Instant) {
+        self.send_request(step, body, now, false);
+    }
+
+    fn send_request(&mut self, step: Step, body: Vec<u8>, now: Instant, stale_retried: bool) {
         let cseq = self.next_cseq;
         self.next_cseq = self.next_cseq.wrapping_add(1);
-        let mut request = Request::new(step.method(), step.path());
+        let method = step.method();
+        let uri = step.path();
+        let mut request = Request::new(method, uri);
         let headers = &mut request.headers;
         headers.push("CSeq", cseq.to_string());
         if !body.is_empty() {
             headers.push("Content-Type", PLIST_TYPE);
         }
+        let mut nonce = None;
+        if let (Some(auth), Some(password)) = (&mut self.auth, &self.password) {
+            auth.count = auth.count.wrapping_add(1);
+            let value = digest::authorization(
+                &auth.challenge,
+                password,
+                method,
+                uri,
+                auth.count,
+                &self.ids.cnonce_hex(),
+            );
+            request.headers.push("Authorization", value);
+            nonce = Some(auth.challenge.nonce.clone());
+        }
+        let headers = &mut request.headers;
         headers.push("User-Agent", crate::user_agent());
         headers.push("Client-Instance", self.ids.client_instance_hex());
         headers.push("DACP-ID", self.ids.client_instance_hex());
         headers.push("Active-Remote", self.ids.active_remote.to_string());
-        request.body = body;
+        request.body = body.clone();
         self.outputs.push_back(Output::Send(request.encode()));
         self.state = match step {
             Step::Options | Step::PinStart => PairingState::Starting,
@@ -722,8 +783,11 @@ impl Pairing {
         };
         self.in_flight = Some(InFlight {
             step,
+            body,
             cseq,
             sent_at: now,
+            nonce,
+            stale_retried,
         });
     }
 
@@ -752,14 +816,20 @@ impl Pairing {
             self.fail_status(ErrorKind::Busy, method, response.code, None, false);
             return;
         }
+        if response.code == 401 && (in_flight.step == Step::Options || in_flight.nonce.is_some()) {
+            // A password answer, not a pairing answer (P36, P38, P46).
+            self.on_unauthorized(in_flight, &response, now);
+            return;
+        }
         if in_flight.step == Step::Options {
             self.on_options(&response, now);
             return;
         }
         if response.code != 200 {
             // A 470, or any other non-200 answer to a pairing request, ends
-            // the pairing (P58). A 470 to the proof is the Apple TV turning
-            // the PIN down (P52); the proof is never sent again.
+            // the pairing (P58), a 401 to one that carried no
+            // `Authorization` included. A 470 to the proof is the Apple TV
+            // turning the PIN down (P52); the proof is never sent again.
             let wrong_pin = in_flight.step == Step::Prove && response.code == STATUS_PAIRING_FAILED;
             self.fail_status(
                 ErrorKind::PairingFailed,
@@ -784,11 +854,66 @@ impl Pairing {
         }
     }
 
+    /// A 401 to OPTIONS, or to a request that carried `Authorization`
+    /// (P36, P38, P39, P46, P135). The first challenge leads to one resend
+    /// with `Authorization` when the host gave the speaker's password, and
+    /// to PasswordRequired before `/pair-pin-start` when it didn't; a
+    /// `stale=true` challenge to a request that carried it leads to one
+    /// more resend; any other 401 to such a request means the password is
+    /// wrong. Neither error is retried.
+    fn on_unauthorized(&mut self, in_flight: InFlight, response: &Response, now: Instant) {
+        let method = in_flight.step.method();
+        let Some(challenge) = Challenge::from_headers(&response.headers) else {
+            self.fail_status(
+                ErrorKind::ProtocolError,
+                method,
+                401,
+                Some("401 without a usable digest challenge"),
+                false,
+            );
+            return;
+        };
+        if challenge.needs_unsupported_qop() {
+            self.fail_status(
+                ErrorKind::ProtocolError,
+                method,
+                401,
+                Some("digest challenge offers only qop=auth-int or other unsupported options"),
+                false,
+            );
+            return;
+        }
+        if self.password.is_none() {
+            self.fail_status(ErrorKind::PasswordRequired, method, 401, None, false);
+            return;
+        }
+        let stale_retry = match in_flight.nonce {
+            None => false,
+            Some(_) if challenge.stale && !in_flight.stale_retried => true,
+            Some(_) => {
+                self.fail_status(ErrorKind::WrongPassword, method, 401, None, false);
+                return;
+            }
+        };
+        self.auth = Some(Auth {
+            challenge,
+            count: 0,
+        });
+        self.send_request(
+            in_flight.step,
+            in_flight.body,
+            now,
+            stale_retry || in_flight.stale_retried,
+        );
+    }
+
     /// The OPTIONS answer (P27, P46): a success whose `Public` lacks
     /// ANNOUNCE, SETUP or RECORD is a receiver that can't take AirPlay 1
     /// audio, Unsupported before any PIN is asked for. Any other answer
-    /// (a 403 from an Apple TV that wants verification, a 501, no `Public`)
-    /// goes on to `/pair-pin-start`, whose answer decides (P58).
+    /// but a 401, which is a password challenge (`on_unauthorized`),
+    /// goes on to `/pair-pin-start`, whose answer decides (P58): a 403 from
+    /// an Apple TV that wants verification, also to the OPTIONS resent
+    /// after a 401, a 501, or no `Public`.
     fn on_options(&mut self, response: &Response, now: Instant) {
         if response.is_success()
             && let Some(public) = response.headers.get("Public")

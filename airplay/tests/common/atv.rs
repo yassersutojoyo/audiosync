@@ -671,10 +671,16 @@ pub const CLIENT: u64 = 0x0123_4567_89AB_CDEF;
 
 impl PairLink {
     pub fn new(receiver: FakeReceiver) -> PairLink {
+        PairLink::with_password(receiver, None)
+    }
+
+    /// A pairing with the speaker's password, if any (P46).
+    pub fn with_password(receiver: FakeReceiver, password: Option<&str>) -> PairLink {
         let now = Instant::now();
         let addresses = vec![SocketAddr::new(super::RECEIVER, super::RAOP_PORT)];
         PairLink {
-            pairing: Pairing::new(addresses, ids(), CLIENT, now),
+            pairing: Pairing::new(addresses, ids(), CLIENT, now)
+                .with_password(password.map(str::to_owned)),
             receiver,
             events: Vec::new(),
             sent: Vec::new(),

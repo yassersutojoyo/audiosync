@@ -16,7 +16,7 @@ use audiosync_airplay::pairing::{
 use audiosync_airplay::rtsp::{Method, Request};
 use audiosync_airplay::session::{SessionEvent, State, Verifier};
 use common::atv::{CLIENT, FakeAppleTv, PairLink, SealAnswer, TestEntropy, public_of};
-use common::{FakeReceiver, Link, key};
+use common::{FakeReceiver, Link, PasswordGate, digest_params, key};
 use plist::Value;
 
 const PIN: &str = "4821";
@@ -401,6 +401,127 @@ fn options_goes_first_and_the_receivers_sealed_key_is_kept_when_it_opens() {
             "{answer:?}"
         );
     }
+}
+
+// covers: P46, P38, P39
+#[test]
+fn a_401_to_the_pairing_options_is_a_password_challenge_not_a_pairing_answer() {
+    let gated = |atv: &FakeAppleTv| {
+        let mut receiver = apple_tv_receiver(atv);
+        receiver.gate = Some(PasswordGate::new("secret"));
+        receiver
+    };
+
+    // Without the speaker's password: PasswordRequired, and the pairing
+    // stops before `/pair-pin-start`, so the Apple TV shows no PIN.
+    let atv = FakeAppleTv::new(PIN);
+    let mut link = PairLink::new(gated(&atv));
+    link.connect();
+    let (error, wrong_pin) = link.failure().expect("failed");
+    assert_eq!(error.kind, ErrorKind::PasswordRequired);
+    assert_eq!(error.method, Some(Method::Options));
+    assert_eq!(error.status, Some(401));
+    assert!(!wrong_pin);
+    assert_eq!(link.receiver.keys(), ["OPTIONS"]);
+    assert!(atv.paths().is_empty(), "no pin-start: {:?}", atv.paths());
+    assert!(!link.events.contains(&PairingEvent::PinRequested));
+    assert!(link.closed);
+
+    // With it: the challenge is answered, and every later request on the
+    // connection, pairing requests included, carries `Authorization` with
+    // the same nonce, made for its own method and URI (P36, P37, P38).
+    let atv = FakeAppleTv::new(PIN);
+    let mut link = PairLink::with_password(gated(&atv), Some("secret"));
+    link.connect();
+    assert_eq!(link.events, [PairingEvent::PinRequested]);
+    link.submit(PIN, &mut TestEntropy::new());
+    let credentials = link
+        .paired()
+        .unwrap_or_else(|| panic!("paired: {:?}", link.events));
+    assert_eq!(atv.paired(), [credentials.public_key()]);
+    assert_eq!(
+        link.receiver.keys(),
+        [
+            "OPTIONS",
+            "OPTIONS",
+            "POST /pair-pin-start",
+            "POST /pair-setup-pin",
+            "POST /pair-setup-pin",
+            "POST /pair-setup-pin"
+        ]
+    );
+    let requests = &link.receiver.requests;
+    assert!(requests[0].headers.get("Authorization").is_none());
+    let nonce = PasswordGate::new("secret").nonce;
+    for request in &requests[1..] {
+        let authorization = request
+            .headers
+            .get("Authorization")
+            .unwrap_or_else(|| panic!("{} {} without Authorization", request.method, request.uri));
+        let params = digest_params(authorization);
+        assert_eq!(params["username"], "iTunes");
+        assert_eq!(params["uri"], request.uri);
+        assert_eq!(params["nonce"], nonce);
+    }
+    assert_eq!(
+        link.receiver.authorized, 5,
+        "every resent and later request"
+    );
+    assert!(!format!("{:?}", link.pairing).contains("secret"));
+
+    // A 403 to the OPTIONS resent with `Authorization` is the Apple TV
+    // asking for verification: the pairing goes on to pin-start (P46).
+    let atv = FakeAppleTv::new(PIN);
+    let mut receiver = gated(&atv);
+    receiver.status.insert("OPTIONS".to_owned(), 403);
+    let mut link = PairLink::with_password(receiver, Some("secret"));
+    link.connect();
+    assert_eq!(link.events, [PairingEvent::PinRequested]);
+    assert_eq!(
+        link.receiver.keys(),
+        [
+            "OPTIONS",
+            "OPTIONS",
+            "POST /pair-pin-start",
+            "POST /pair-setup-pin"
+        ]
+    );
+
+    // A password the receiver turns down: WrongPassword, no resend, no
+    // pin-start (P135).
+    let atv = FakeAppleTv::new(PIN);
+    let mut link = PairLink::with_password(gated(&atv), Some("wrong"));
+    link.connect();
+    let (error, wrong_pin) = link.failure().expect("failed");
+    assert_eq!(error.kind, ErrorKind::WrongPassword);
+    assert_eq!(error.status, Some(401));
+    assert!(!wrong_pin, "the PIN was never asked for");
+    assert_eq!(link.receiver.keys(), ["OPTIONS", "OPTIONS"]);
+    assert!(atv.paths().is_empty());
+
+    // A stale nonce on a pairing request: one resend with the new nonce,
+    // and the pairing goes on (P38). The pin-start is the second request
+    // with a valid `Authorization`.
+    let atv = FakeAppleTv::new(PIN);
+    let mut receiver = gated(&atv);
+    receiver.gate.as_mut().expect("gate").stale_on = Some(2);
+    let mut link = PairLink::with_password(receiver, Some("secret"));
+    link.connect();
+    assert_eq!(link.events, [PairingEvent::PinRequested]);
+    assert_eq!(
+        link.receiver.keys(),
+        [
+            "OPTIONS",
+            "OPTIONS",
+            "POST /pair-pin-start",
+            "POST /pair-pin-start",
+            "POST /pair-setup-pin"
+        ]
+    );
+    assert_eq!(atv.paths(), ["*", "/pair-pin-start", "/pair-setup-pin"]);
+    let last = link.receiver.requests.last().expect("a request");
+    let params = digest_params(last.headers.get("Authorization").expect("Authorization"));
+    assert_ne!(params["nonce"], nonce, "the new nonce");
 }
 
 // covers: P58, P136, P137
