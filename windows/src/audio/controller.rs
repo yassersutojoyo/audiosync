@@ -291,6 +291,9 @@ pub struct Controller<D: Driver> {
     starter: Option<SenderStarter>,
     /// Outputs fading out before they stop.
     retiring: Vec<Retiring<D>>,
+    /// A start that waits for the last session's outputs to fade out: the
+    /// first poll after they have faded starts it (S186).
+    next_start: Option<SourceId>,
     /// The own volume and mute of each output that is on and connected
     /// (spec S192 to S202), followed through Windows' notifications.
     device_volumes: device_volume::Followed,
@@ -320,6 +323,7 @@ impl<D: Driver> Controller<D> {
             feed: None,
             starter: None,
             retiring: Vec::new(),
+            next_start: None,
             device_volumes: device_volume::Followed::default(),
         }
     }
@@ -740,14 +744,16 @@ impl<D: Driver> Controller<D> {
         }
     }
 
-    /// Drops what `entry` holds: the outputs, then the capture, then the
-    /// ring. Each renderer waits for its thread, and the capture for its
-    /// own, before the ring they use is freed (S134).
+    /// Drops what `entry` holds: an ended session's capture first, then the
+    /// outputs (S115, S186), then the ring. The capture and each renderer
+    /// wait for their threads before the ring they use is freed (S134).
     fn retire(&mut self, entry: Retiring<D>, faded: bool, waited: Duration) {
         let Retiring {
             outputs, session, ..
         } = entry;
         let stopped = outputs.len();
+        let (capture, ring) = session.unzip();
+        drop(capture);
         drop(outputs);
         if !faded {
             self.log.log(|| {
@@ -757,8 +763,7 @@ impl<D: Driver> Controller<D> {
                 )
             });
         }
-        if let Some((capture, ring)) = session {
-            drop(capture);
+        if let Some(ring) = ring {
             let captured = ring.frames_written();
             drop(ring);
             self.log.log(|| {
@@ -874,12 +879,57 @@ impl<D: Driver> Controller<D> {
         }
     }
 
-    /// Starts a session capturing `source`, after the running one ended. The
-    /// outputs of the one before finish their fade-outs first (at most
-    /// [`STOP_FADE_CAP`]): its capture still holds the AirPlay feed and the
-    /// outputs their endpoints (S186).
+    /// Starts a session capturing `source`, or, while the last session's
+    /// outputs still fade out (its capture holds the AirPlay feed and its
+    /// outputs their endpoints), leaves it to the first poll after they have
+    /// faded, at most [`STOP_FADE_CAP`] later (S186), so the UI thread never
+    /// waits for a fade. A source that can't be captured is refused at once
+    /// either way.
+    fn begin_session(&mut self, source: &SourceId) -> Result<(), BackendError> {
+        self.next_start = None;
+        self.reap(false);
+        if !self.last_session_fading() {
+            return self.start_session(source);
+        }
+        let processes = match source {
+            SourceId::WholeSystem => ProcessTable::default(),
+            SourceId::App { .. } => self.driver.processes()?,
+        };
+        decide_activation(source, self.driver.own_pid(), &processes)?;
+        self.log
+            .log(|| "the capture starts once the last session's outputs have faded out".to_owned());
+        self.next_start = Some(source.clone());
+        Ok(())
+    }
+
+    /// Whether an ended session's outputs are still fading out.
+    fn last_session_fading(&self) -> bool {
+        self.retiring.iter().any(|entry| entry.session.is_some())
+    }
+
+    /// Starts the session that waits for the last one's outputs to fade, once
+    /// they have; a capture that can't start then ends it with that reason.
+    fn start_when_faded(&mut self) {
+        if self.last_session_fading() {
+            return;
+        }
+        let Some(source) = self.next_start.take() else {
+            return;
+        };
+        match self.start_session(&source) {
+            Ok(()) => self.follow_device_volumes(),
+            Err(error) => {
+                self.log.log(|| format!("the start failed: {error}"));
+                self.airplay_streaming(false);
+                self.pending.push(BackendEvent::Stopped {
+                    reason: StopReason::CaptureFailed(error),
+                });
+            }
+        }
+    }
+
+    /// Starts a session capturing `source` now, after the running one ended.
     fn start_session(&mut self, source: &SourceId) -> Result<(), BackendError> {
-        self.reap(true);
         let processes = match source {
             SourceId::WholeSystem => ProcessTable::default(),
             SourceId::App { .. } => self.driver.processes()?,
@@ -1030,6 +1080,7 @@ impl<D: Driver> Controller<D> {
 
 impl<D: Driver> Drop for Controller<D> {
     fn drop(&mut self) {
+        self.next_start = None;
         self.end_session();
         self.reap(true);
         self.stop_following_device_volumes();
@@ -1113,7 +1164,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.end_session();
         self.log
             .log(|| format!("starting: capturing {}", describe_source(source)));
-        let started = self.start_session(source).inspect_err(|error| {
+        let started = self.begin_session(source).inspect_err(|error| {
             self.log.log(|| format!("the start failed: {error}"));
         });
         // Outputs that couldn't start were turned off.
@@ -1122,15 +1173,19 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn stop(&mut self) {
-        if self.session.is_some() {
+        if self.session.is_some() || self.next_start.is_some() {
             self.log.log(|| "stopping".to_owned());
         }
+        self.next_start = None;
         self.end_session();
         self.airplay_streaming(false);
     }
 
     fn running_source(&self) -> Option<SourceId> {
-        self.session.as_ref().map(|session| session.source.clone())
+        self.session
+            .as_ref()
+            .map(|session| session.source.clone())
+            .or_else(|| self.next_start.clone())
     }
 
     fn set_output_enabled(&mut self, id: &str, enabled: bool) -> Result<(), BackendError> {
@@ -1359,7 +1414,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.feed = feed;
         self.sync_airplay_rule();
         if let Some(source) = source
-            && let Err(error) = self.start_session(&source)
+            && let Err(error) = self.begin_session(&source)
         {
             self.log
                 .log(|| format!("the capture couldn't start again after Retry: {error}"));
@@ -1372,8 +1427,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn poll(&mut self) -> Vec<BackendEvent> {
-        // Outputs that faded out stop, and then an ended session's capture.
+        // Outputs that faded out stop, and then an ended session's capture;
+        // a start that waited for them goes ahead.
         self.reap(false);
+        self.start_when_faded();
         // A session whose capture stopped ends first.
         let stop_reason = self
             .session
