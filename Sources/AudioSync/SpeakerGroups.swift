@@ -45,3 +45,32 @@ enum GroupName {
         cleaned(typed) ?? current
     }
 }
+
+/// Speakers saved under the bundled engine's output IDs move to the IDs of
+/// AudioSync's own sender (docs/ENGINE_SPEC.md S204).
+enum SpeakerIDMigration {
+    /// What is saved by AirPlay speaker ID: the speakers switched on, their
+    /// volumes, the groups and the auto-connect list.
+    struct Saved: Equatable {
+        var enabledAirPlay: Set<String>
+        var airplayVolumes: [String: Double]
+        var groups: [SpeakerGroup]
+        var autoConnect: Set<String>
+    }
+
+    /// The new app ID for each saved bundled-engine ID that stands for one
+    /// of `receivers` (the native sender's receiver IDs).
+    static func renames(_ saved: Saved, receivers: [String]) -> [String: String] {
+        [:]
+    }
+
+    /// `saved` with every ID in `renames` replaced.
+    static func apply(_ renames: [String: String], to saved: Saved) -> Saved {
+        saved
+    }
+
+    /// `apply(renames(saved, receivers:), to: saved)`.
+    static func migrate(_ saved: Saved, receivers: [String]) -> Saved {
+        apply(renames(saved, receivers: receivers), to: saved)
+    }
+}
