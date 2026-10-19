@@ -4,7 +4,8 @@ import AppKit
 // (`AirPlayImpl.forThisRun`): the bundled engine stays stopped, the AirPlay
 // rows come from the native sender's discovery (under `NativeAirPlayID`s, so
 // the bundled engine's saved per-speaker settings stay apart), the switches,
-// volumes and master reach its speakers, and their errors become notices. The
+// volumes and master reach its speakers, the user's click pairs an Apple TV
+// or asks for a password, and their errors become notices. The
 // OwnTone code paths check `usesNativeAirPlay` and hand over to these.
 
 extension AppDelegate {
@@ -70,20 +71,126 @@ extension AppDelegate {
     private func nativeSpeakerEvent(_ event: NativeSpeakerEvent, _ outcome: NativeAirPlayOutcome?) {
         let names = nativeAirPlay?.model.names ?? [:]
         DBG.log(event.logLine { names[$0] })
+        if let outcome { nativeOutcome(outcome) }
+    }
+
+    /// Acts on what the native model decided.
+    private func nativeOutcome(_ outcome: NativeAirPlayOutcome) {
         switch outcome {
-        case .playingChanged(let id, let playing)?:
+        case .playingChanged(let id, let playing):
             if playing { clearNotices([SpeakerKey.make(id: id, airplay: true)]) }   // playing: whatever went wrong is over
             refreshNativeRows()   // a lapsed receiver that stops playing leaves the list; chosen may flip
-        case .turnOff(let id, let reason)?:
+        case .turnOff(let id, let reason):
             turnOffNativeSpeaker(id, reason: reason, origin: .automatic)
-        case .latencyChanged?:
+        case .latencyChanged:
             retimeLocalOutputs()   // L = L_s + A follows the new L_s (S178)
             pushModel()   // and so does the AirPlay delay field (S181)
-        case .senderFailed?:
+        case .senderFailed:
             nativeSenderFailed()
-        case nil:
+        case .startPairing(let receiver):
+            startNativePairing(receiver)
+        case .cancelPairing(let receiver):
+            nativeAirPlay?.cancelPairing(receiver)
+        case .prompt:
+            // Not from inside the event loop: a prompt runs modally.
+            DispatchQueue.main.async { [weak self] in self?.showNextNativePrompt() }
+        case .paired(let id):
+            clearNotices([SpeakerKey.make(id: id, airplay: true)])
+            syncNativeSpeakers()   // it joins with its new credentials
+            pushModel()
+        }
+    }
+
+    // MARK: Pairing and passwords
+
+    /// The user switched these native speakers on themselves (app IDs,
+    /// already switched on): each is a new attempt, which may start a PIN
+    /// pairing or ask for a password (`NativeAirPlayModel.turnedOnByUser`).
+    /// Call before the sender's speakers follow the switches, so a speaker
+    /// that pairs or prompts waits instead of going off.
+    func beginNativeAttempts(_ ids: [String]) {
+        guard let native = nativeAirPlay else { return }
+        for id in ids {
+            guard let receiver = NativeAirPlayID.receiver(id) else { continue }
+            endNativeAttempt(id)   // an attempt still under way ends first
+            if let outcome = native.model.turnedOnByUser(receiver) { nativeOutcome(outcome) }
+        }
+    }
+
+    /// The native speaker `id` (app ID) was switched off: its attempt ends,
+    /// its prompt is dropped, and a pairing under way stops, since the
+    /// sender would otherwise wait for its PIN forever.
+    func endNativeAttempt(_ id: String) {
+        guard let receiver = NativeAirPlayID.receiver(id), let native = nativeAirPlay else { return }
+        if native.model.turnedOff(receiver) { native.cancelPairing(receiver) }
+    }
+
+    /// Starts a PIN pairing with `receiver`. A speaker of it still in the
+    /// sender (its stored pairing was turned down) leaves first and joins
+    /// again once paired; a pairing that can't start turns the speaker off.
+    private func startNativePairing(_ receiver: String) {
+        guard let native = nativeAirPlay else { return }
+        if native.model.states[receiver] != nil { native.remove(receiver) }
+        DBG.log("[AudioSync] native AirPlay: pairing with \(nativeLabel(receiver))")
+        native.startPairing(receiver) { [weak self, weak native] started in
+            guard !started, let self, let native, self.nativeAirPlay === native,
+                  let outcome = native.model.pairingNotStarted(receiver) else { return }
+            self.nativeOutcome(outcome)
+        }
+    }
+
+    /// Shows the next queued PIN or password prompt, one at a time (the
+    /// bundled engine's prompts share `codePromptBusy`), and acts on the
+    /// answer. The PIN or password goes to the sender only, never to a log.
+    private func showNextNativePrompt() {
+        guard !codePromptBusy, let native = nativeAirPlay, let prompt = native.model.nextPrompt() else { return }
+        let id = NativeAirPlayID.app(prompt.id)
+        let name = airplayNames[id] ?? native.model.names[prompt.id] ?? prompt.id
+        let message: String
+        switch (prompt.password, prompt.wrong) {
+        case (true, false): message = text.pairPasswordMessage(name: name)
+        case (true, true): message = text.pairWrongPasswordMessage(name: name)
+        case (false, false): message = text.nativePairPINMessage(name: name)
+        case (false, true): message = text.nativePairWrongPINMessage(name: name)
+        }
+        DBG.log("[AudioSync] native AirPlay: asking for the \(prompt.password ? "password" : "PIN") of \(nativeLabel(prompt.id))"
+            + (prompt.wrong ? " again" : ""))
+        codePromptBusy = true
+        let code = runCodePrompt(name: name, password: prompt.password, message: message, pinOnly: !prompt.password)
+        codePromptBusy = false
+        // A sender that stopped meanwhile took its pairings and prompts with it.
+        if nativeAirPlay === native { nativeAnswered(native, prompt, code: code) }
+        DispatchQueue.main.async { [weak self] in self?.showNextNativePrompt() }
+    }
+
+    /// Hands the user's answer to `prompt` (nil: Cancel) to the sender.
+    private func nativeAnswered(_ native: NativeAirPlay, _ prompt: NativePrompt, code: String?) {
+        let receiver = prompt.id
+        switch native.model.answered(prompt, code: code) {
+        case .submitPin:
+            guard let pin = code else { return }
+            native.submitPin(receiver, pin: pin) { [weak self, weak native] taken in
+                guard !taken, let self, let native, self.nativeAirPlay === native,
+                      let outcome = native.model.pinNotTaken(receiver) else { return }
+                self.nativeOutcome(outcome)
+            }
+        case .sendPassword(let pair):
+            native.setPassword(receiver, code)
+            if pair {
+                startNativePairing(receiver)
+            } else {
+                // A session it turned down starts again, now with the password.
+                if native.model.states[receiver] != nil { native.remove(receiver) }
+                syncNativeSpeakers()
+            }
+        case .askAgain:
+            break   // queued again: the next prompt is this one
+        case .turnOff(let reason):
+            turnOffNativeSpeaker(NativeAirPlayID.app(receiver), reason: reason, origin: .automatic)
+        case .ignore:
             break
         }
+        pushModel()
     }
 
     /// The sender stopped after an internal error: it goes (torn down off
@@ -155,20 +262,15 @@ extension AppDelegate {
         }
     }
 
-    /// The user's click on a native speaker: one that asks for a PIN or a
-    /// password stays off, with a notice; any other is switched, and the
-    /// sender's speakers follow (streaming starts if it was off).
+    /// The user's click on a native speaker: it is switched, and the
+    /// sender's speakers follow (streaming starts if it was off). Switched
+    /// on, it is a new attempt: one that asks for a PIN pairs, and one that
+    /// asks for a password AudioSync doesn't have this run prompts for it;
+    /// switched off, a pairing under way stops.
     func setNativeAirPlayEnabled(_ id: String, _ on: Bool) {
-        let key = SpeakerKey.make(id: id, airplay: true)
-        if on, let receiver = NativeAirPlayID.receiver(id),
-           let reason = nativeAirPlay?.model.refusal(receiver) {
-            DBG.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) stays off (\(reason))")
-            notify(nativeTurnOffText(id, reason), origin: .user, subject: key)
-            pushModel()
-            return
-        }
-        if on { clearNotices([key]) }   // a new attempt
+        if on { clearNotices([SpeakerKey.make(id: id, airplay: true)]) }   // a new attempt
         if on { enabledAirPlay.insert(id) } else { enabledAirPlay.remove(id) }
+        if on { beginNativeAttempts([id]) } else { endNativeAttempt(id) }
         if StreamingPolicy.startsStreaming(turnedOn: on, streaming: engine.running) {
             startEngine(origin: .user)
         } else {
@@ -192,8 +294,11 @@ extension AppDelegate {
         nativeAirPlay?.restartTimeline()
     }
 
-    /// Switches a native speaker off and says why.
+    /// Switches a native speaker off and says why. Its attempt ends first,
+    /// whether or not it is still switched on: a cancelled prompt leaves its
+    /// stage in the model so that this stops the pairing that waited for it.
     func turnOffNativeSpeaker(_ id: String, reason: NativeTurnOff, origin: StartOrigin) {
+        endNativeAttempt(id)
         guard enabledAirPlay.contains(id) else { return }
         DBG.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) turned off (\(reason))")
         enabledAirPlay.remove(id)
@@ -206,10 +311,12 @@ extension AppDelegate {
     private func nativeTurnOffText(_ id: String, _ reason: NativeTurnOff) -> String {
         let name = airplayNames[id].map(text.deviceName) ?? text.unknownDevice
         switch reason {
-        case .needsCode: return text.nativeAirPlayNeedsCode(name: name)
-        case .needsPassword: return text.nativeAirPlayNeedsPassword(name: name)
+        case .needsCode, .needsPassword: return text.airPlayTurnedOff(name: name, reason: .needsCode)
         case .unreachable: return text.airPlayTurnedOff(name: name, reason: .unreachable)
         case .cantPlay: return text.nativeAirPlayCantPlay(name: name)
+        case .cancelled: return text.airPlayTurnedOff(name: name, reason: .cancelled)
+        case .pairingFailed: return text.nativeAirPlayPairingFailed(name: name)
+        case .stillNeedsCode: return text.airPlayTurnedOff(name: name, reason: .stillNeedsCode)
         }
     }
 

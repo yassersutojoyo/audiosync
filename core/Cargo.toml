@@ -17,6 +17,9 @@ crate-type = ["rlib", "staticlib"]
 # Rust static library, so the sender comes in through the core's. Its
 # third-party crates are listed in THIRD_PARTY_NOTICES.md.
 audiosync-airplay = { path = "../airplay" }
+# Wipes the pairing store's plaintext from memory (src/airplay_pairings.rs);
+# already in the tree through the AirPlay sender.
+zeroize = "1.8.1"
 
 [dev-dependencies]
 criterion = { version = "0.7.0", default-features = false, features = ["cargo_bench_support"] }

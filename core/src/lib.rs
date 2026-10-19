@@ -5,6 +5,7 @@
 //! (the macOS app, later the Windows app) owns capture, output devices and the
 //! pipe, and calls into this crate a whole buffer at a time.
 
+pub mod airplay_pairings;
 pub mod channels;
 pub mod convert;
 pub mod eq;

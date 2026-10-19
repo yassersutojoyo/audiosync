@@ -87,6 +87,7 @@ dependencies = [
  "audiosync-airplay",
  "criterion",
  "proptest",
+ "zeroize",
 ]
 
 [[package]]
