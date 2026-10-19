@@ -372,6 +372,18 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | source: missing value → system | S12 |
 | source: legacy bundle-ID value → app | S12 |
 | source: input has no bundle ID | S12 |
+| source: the whole system is stored as an empty string | S12 |
+| source: an input device is stored as its UID after an input: tag | S12 |
+| source: an input UID with colons in it comes back whole | S12 |
+| source: an app is stored as its plain bundle ID, as earlier versions stored it | S12 |
+| source: the whole system has no bundle ID | S12 |
+| processes: the app's own process and its helpers, in Core Audio's order | S11 |
+| processes: another app's helper belongs to that app only | S11 |
+| processes: without the responsibility lookup only the app's own process counts | S11 |
+| processes: AudioSync's own process never counts, even when the source app is responsible for it | S10, S11 |
+| processes: unknown objects and unreadable PIDs never count; an object counts once | S11 |
+| processes: no PID, no process objects | S11 |
+| processes: an app with no audio client yet has no process objects | S11 |
 | appearance: round-trip system | S155 |
 | appearance: round-trip light | S155 |
 | appearance: round-trip dark | S155 |
