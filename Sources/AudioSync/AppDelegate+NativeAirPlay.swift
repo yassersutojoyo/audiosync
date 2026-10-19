@@ -55,9 +55,14 @@ extension AppDelegate {
         if started {
             clearNotices([Notice.airplaySender])
             resendTrackInfo()   // a new sender knows nothing of what plays
+            // Its discovery raised the Local Network prompt, if any: the
+            // probe may ask now, and an empty list counts from here.
+            airplayEmptySince = native.model.rows.isEmpty ? Date() : nil
+            updateLocalNetworkProbe(engine: .running)
         } else if nativeAirPlay === native {
             nativeAirPlay = nil
             if news { notify(text.nativeAirPlayCouldNotStart, origin: .automatic, subject: Notice.airplaySender) }
+            stopNativeLocalNetworkProbe()
             retimeLocalOutputs()   // no native speaker is chosen any more
         }
         retimeLocalOutputs()   // L is known now
@@ -228,9 +233,16 @@ extension AppDelegate {
         nativeStarts.senderFailed()
         native.discard()
         airplayOrder = []
+        stopNativeLocalNetworkProbe()
         notify(text.nativeAirPlayStopped, origin: .automatic, subject: Notice.airplaySender)
         retimeLocalOutputs()   // no native speaker is chosen any more
         pushModel()
+    }
+
+    /// No sender runs: the Local Network probe stops, and no empty list counts.
+    private func stopNativeLocalNetworkProbe() {
+        airplayEmptySince = nil
+        updateLocalNetworkProbe(engine: .stopped)
     }
 
     /// Retry after the sender stopped: a new one starts now.
@@ -255,6 +267,7 @@ extension AppDelegate {
         }
         let appeared = rows.filter { !known.contains($0) }
         airplayOrder = rows
+        airplayEmptySince = rows.isEmpty ? (airplayEmptySince ?? Date()) : nil
         retimeLocalOutputs()   // also when only a speaker's playing state changed
         syncNativeSpeakers()
         let joinable = appeared.filter { id in
