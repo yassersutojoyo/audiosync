@@ -15,13 +15,18 @@ final class AppModel: ObservableObject {
         let tag: SpeakerTag
         var enabled: Bool
         var volume: Double          // slider position 0…100
-        var delayMs: Double?        // nil for AirPlay (AirPlay 2 is the reference)
+        /// A local speaker's offset relative to the reference (S175); nil
+        /// where the row has no delay field: AirPlay speakers, which wait for
+        /// nothing, and the reference itself (S181).
+        var offsetMs: Double?
         var autoConnect = false
         /// From the AirPlay engine's last report; always `.open` for local speakers.
         var availability: SpeakerAvailability = .open
 
+        /// A speaker AudioSync streams to through AirPlay, not a local output.
+        var isAirPlay: Bool { tag == .airplay }
         /// Stable key across both kinds, used by groups and auto-connect.
-        var key: String { SpeakerKey.make(id: id, airplay: delayMs == nil) }
+        var key: String { SpeakerKey.make(id: id, airplay: isAirPlay) }
     }
 
     struct Group: Identifiable, Equatable {
@@ -48,7 +53,8 @@ final class AppModel: ObservableObject {
         var setAirPlayVolume: (String, Double) -> Void = { _, _ in }
         var setLocalEnabled: (String, Bool) -> Void = { _, _ in }
         var setLocalVolume: (String, Double) -> Void = { _, _ in }
-        var setLocalDelay: (String, Double) -> Void = { _, _ in }
+        var setLocalOffset: (String, Double) -> Void = { _, _ in }
+        var setAirPlayDelay: (Double) -> Void = { _ in }
         var openMainWindow: () -> Void = {}
         var openGuide: () -> Void = {}
         var refreshDevices: () -> Void = {}
@@ -82,6 +88,11 @@ final class AppModel: ObservableObject {
     @Published var master: Double = 100
     @Published var airplay: [Speaker] = []
     @Published var local: [Speaker] = []
+    /// The Mac's built-in speakers are listed, so local offsets are relative
+    /// to them (S173, S181).
+    @Published var hasLocalReference = true
+    /// What the AirPlay delay field shows, L in whole ms (S178, S181).
+    @Published var airPlayDelayMs: Double = LocalDelay.defaultAirPlayDelayMs
     @Published var airplayReachable = true
     @Published var airplayEngineBundled = true
     @Published var airplayEngine: AirPlayEngineState = .stopped
@@ -583,7 +594,7 @@ struct MenuBarView: View {
                            text: t, height: rowHeight, kind: speaker.tag,
                            availability: speaker.availability) {
                     let on = model.state(of: speaker).clickTurnsOn
-                    if speaker.delayMs == nil {   // an engine speaker, not a local one
+                    if speaker.isAirPlay {
                         model.actions.setAirPlayEnabled(speaker.id, on)
                     } else {
                         model.actions.setLocalEnabled(speaker.id, on)
