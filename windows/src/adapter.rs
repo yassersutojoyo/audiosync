@@ -3115,6 +3115,42 @@ mod tests {
     }
 
     #[test]
+    fn auto_connect_at_the_first_launch_after_the_upgrade_starts_at_the_migrated_delays() {
+        let dir = test_dir("adapter-settings-delay-migration-auto-connect");
+        let path = dir.join(settings::FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"{
+                "version": 1,
+                "outputs": {
+                    "builtin": {"enabled": true, "delay_ms": 250},
+                    "bluetooth": {"enabled": true, "delay_ms": 0}
+                },
+                "auto_connect": ["lc:bluetooth"]
+            }"#,
+        )
+        .expect("written");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let mut audio = reference_audio();
+        audio.set_debug_log(log.clone());
+        let file = SettingsFile::at(path.clone());
+        let adapter = AudioAdapter::with_settings(audio, || "09.41".to_owned(), log.clone(), file);
+        assert!(
+            adapter.snapshot().running,
+            "the auto-connect speaker starts"
+        );
+        assert_eq!(local_delay(&adapter, "builtin"), 12_000, "250 ms at 48 kHz");
+        assert_eq!(local_delay(&adapter, "bluetooth"), 0);
+        assert!(log.flush(TEST_FLUSH));
+        let messages = read_messages(&dir.join(FILE_NAME));
+        assert!(
+            !messages.iter().any(|message| message.contains("delay now")),
+            "the outputs start at their migrated hold-backs, not re-timed: {messages:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn an_older_file_waits_for_an_output_list_before_it_is_migrated() {
         let dir = test_dir("adapter-settings-delay-migration-wait");
         let path = dir.join(settings::FILE_NAME);

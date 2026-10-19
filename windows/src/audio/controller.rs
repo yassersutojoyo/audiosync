@@ -2675,6 +2675,28 @@ mod tests {
         assert_eq!(held(&backend), [Some(300), Some(500), Some(0)]);
     }
 
+    #[test]
+    fn a_late_speaker_that_cant_start_doesnt_hold_the_others_back() {
+        let mut backend = local_delay_backend();
+        backend.set_output_enabled(BLUETOOTH, false).unwrap();
+        // Started after the others (IDs in order), at −250 ms, and failing.
+        let late = "zz-late";
+        backend.connect_output_as(late, "Late Earbuds", OutputKind::Bluetooth);
+        backend.set_output_enabled(late, true).unwrap();
+        backend.set_output_delay(late, -250.0);
+        backend.list_outputs().unwrap();
+        backend.fail_output(
+            late,
+            Some(BackendError::System {
+                call: "IAudioClient::Initialize",
+                code: 0x8889_000A_u32 as i32,
+            }),
+        );
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(backend.playing_params(late).is_none(), "it is turned off");
+        assert_eq!(held(&backend), [Some(0), Some(150), None]);
+    }
+
     /// [`local_delay_backend`] with an AirPlay sender (L = 1750 ms) that
     /// lists Kitchen.
     fn local_delay_with_airplay() -> (MockBackend, FakeAirPlay, Device) {
