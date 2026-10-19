@@ -162,7 +162,7 @@ The host side: `Sender::start` creates the stream on the calling thread (so its 
 | wasi | 0.11.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | mio on WASI targets only, taken under MIT |
 | alac | 0.5.0 | MIT/Apache-2.0 | development only: the reference ALAC decoder of the tests, without default features, so it brings no other crate |
 
-`deny.toml` mirrors core's allow-list (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, Zlib, ISC, Unicode-3.0) with dev and build dependencies included; CI runs cargo-deny 0.20.2. The crate isn't bundled in either app yet, so `THIRD_PARTY_NOTICES.md` doesn't list it; it will when the crate ships.
+`deny.toml` mirrors core's allow-list (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, Zlib, ISC, Unicode-3.0) with dev and build dependencies included; CI runs cargo-deny 0.20.2. The Windows app bundles the crate, so the Windows section of `THIRD_PARTY_NOTICES.md` names its dependencies and the `THIRD-PARTY-NOTICES.txt` of each Windows build carries their license texts; the macOS app doesn't bundle it.
 
 ## Spec coverage
 

@@ -36,15 +36,15 @@ at every launch.
 | Equalizer card and window | Same: on/off, presets (Custom when none matches), preamp, ten bands, Reset | View > Equalizer (Ctrl+E); presets, band limits and the filters come from `audiosync-core`. It changes the captured audio once, so every speaker hears it |
 | This Mac | This PC | The PC's own outputs: its speakers or line out, and headphones on its jack. USB, Bluetooth, HDMI, DisplayPort and virtual outputs are under Connected Speakers, each with its kind. A Bluetooth hands-free endpoint ("Hands-Free", the call profile) is left out on purpose: it carries mono, low-bandwidth call audio, and opening it puts the device in call mode. A headset's stereo endpoint, when it has one, is listed |
 | Groups | Same: toggle, members, Rename Group… and Delete Group | In a context menu: right-click, the Menu key, or the "…" button |
-| Connected Speakers | Same: toggle, kind icon, availability note, auto-connect mark, volume | Kind icons come from Segoe Fluent Icons. With none listed it says "No connected speakers"; the Mac's note about the AirPlay engine isn't shown, since Windows has no AirPlay yet |
-| Per-speaker delay (sync controls) | Same: −100, −10, a field that applies as you type, +10, +100, and the hint | Local outputs only, as on the Mac |
-| AirPlay problem with Retry | Later | Comes with the Windows AirPlay engine; until then nothing in the Windows app mentions AirPlay |
-| Local Network hint | Not needed | Windows has no Local Network permission (the firewall may ask once the AirPlay engine runs) |
+| Connected Speakers | Same: toggle, kind icon, availability note, auto-connect mark, volume | Kind icons come from Segoe Fluent Icons. AirPlay speakers come from AudioSync's own sender and are listed by name with the other connected speakers. One the sender can't play yet carries a note instead of playing: "Password not supported yet", "Pairing not supported yet", "AirPlay 2 not supported yet", or "Not supported" (an encryption or format it can't send); selecting it leaves it off and posts a notice saying why. With none listed it says "No connected speakers"; the Mac's note about the AirPlay engine isn't shown |
+| Per-speaker delay (sync controls) | Same: −100, −10, a field that applies as you type, +10, +100, and the hint | Local outputs only, as on the Mac. While an AirPlay speaker is on, a local output plays at the AirPlay sender's latency plus its own delay (counted up to 3000 ms), so it stays in step with the AirPlay speakers; otherwise at its own delay |
+| AirPlay problem with Retry | A notice, without Retry | A speaker that stops answering stays on while the sender keeps trying, with a notice that clears itself once it plays again; one that turns out to need a password or pairing is turned off with a notice saying so |
+| Local Network hint | Not needed | Windows has no Local Network permission (Windows Firewall may ask once, the first time AudioSync looks for AirPlay speakers) |
 | Menu bar panel | Tray icon and flyout | Left click opens the flyout, double click the main window, right click a menu (Open AudioSync, Turn Streaming On/Off, Exit AudioSync). Escape or a click elsewhere closes the flyout |
 | Closing the window keeps the app in the menu bar | Closing it keeps the app in the tray | File > Exit (or Exit in the tray) quits |
 | Main menu: Edit | Built into the text fields | Ctrl+C, Ctrl+V and the rest work in every field |
 | Main menu: Window (Minimize, Zoom, Bring All to Front) | The title bar's own buttons | Not a Windows menu |
-| AirPlay pairing prompt | Later | With the AirPlay engine |
+| AirPlay pairing prompt | Later | Pairing, passwords and AirPlay 2 come with later stages of the sender |
 
 ## Keyboard
 
