@@ -54,6 +54,7 @@ extension AppDelegate {
         let news = nativeStarts.finished(started: started, at: Date())
         if started {
             clearNotices([Notice.airplaySender])
+            resendTrackInfo()   // a new sender knows nothing of what plays
         } else if nativeAirPlay === native {
             nativeAirPlay = nil
             if news { notify(text.nativeAirPlayCouldNotStart, origin: .automatic, subject: Notice.airplaySender) }
