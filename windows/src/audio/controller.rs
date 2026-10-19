@@ -1939,7 +1939,8 @@ mod tests {
         assert_eq!(backend.driver().renderers_running(), 0);
 
         // A source change is a stop and a start: the new capture waits for
-        // the old outputs' fades, never more than 500 ms.
+        // the old outputs' fades, never more than 500 ms, and the UI thread
+        // doesn't wait for it.
         backend.start(&SourceId::WholeSystem).unwrap();
         let asked = Instant::now();
         backend
@@ -1947,11 +1948,10 @@ mod tests {
                 root_pid: PLAYER_PID,
             })
             .unwrap();
-        let waited = asked.elapsed();
-        assert!(
-            waited >= STOP_FADE_CAP && waited < STOP_FADE_CAP + Duration::from_millis(400),
-            "{waited:?}"
-        );
+        assert!(asked.elapsed() < NO_WAIT, "the UI thread doesn't wait");
+        assert_eq!(backend.driver().captures_started().len(), 3);
+        thread::sleep(STOP_FADE_CAP + Duration::from_millis(20));
+        backend.poll();
         assert_eq!(backend.driver().captures_started().len(), 4);
         assert_eq!(
             backend.driver().renderers_running(),
@@ -1959,6 +1959,65 @@ mod tests {
             "only the new outputs"
         );
         backend.driver().hold_fades(false);
+    }
+
+    #[test]
+    fn a_source_change_starts_the_new_capture_at_a_poll_once_the_old_outputs_faded() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.driver().hold_fades(true);
+        let app = SourceId::App {
+            root_pid: PLAYER_PID,
+        };
+        let asked = Instant::now();
+        backend.start(&app).unwrap();
+        assert!(asked.elapsed() < NO_WAIT, "the UI thread doesn't wait");
+        assert_eq!(backend.running_source(), Some(app.clone()));
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            1,
+            "the new capture waits"
+        );
+        assert!(
+            backend.driver().capture_running(),
+            "the old capture runs while its outputs fade"
+        );
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 1);
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert_eq!(backend.driver().renderers_running(), 2);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(backend.running_source(), Some(app.clone()));
+
+        // A source that can't be captured is refused at once; one whose
+        // capture fails when it starts at the poll stops with that reason.
+        backend.driver().hold_fades(true);
+        assert_eq!(
+            backend.start(&SourceId::App { root_pid: 4321 }),
+            Err(BackendError::SourceGone)
+        );
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        backend.driver().hold_fades(false);
+        let events = backend.poll();
+        assert!(events.contains(&BackendEvent::Stopped {
+            reason: StopReason::CaptureFailed(BackendError::DeviceGone),
+        }));
+        assert_eq!(backend.running_source(), None);
+
+        // A stop while the start waits forgets it.
+        backend.refuse_captures(None);
+        backend.start(&app).unwrap();
+        backend.driver().hold_fades(true);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.stop();
+        assert_eq!(backend.running_source(), None);
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert_eq!(backend.running_source(), None);
+        assert_eq!(backend.driver().renderers_running(), 0);
     }
 
     #[test]
