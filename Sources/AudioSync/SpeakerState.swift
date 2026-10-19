@@ -92,6 +92,8 @@ protocol LocalOutputEngine: AnyObject {
     func addOutput(uid: String, deviceID: AudioObjectID, delayMs: Double, gain: Double) throws
     /// Stops the renderer of `uid`.
     func removeOutput(uid: String)
+    /// Sets the linear gain of the renderer of `uid`.
+    func setGain(uid: String, g: Double)
 }
 
 extension LocalOutputSync {
@@ -161,5 +163,11 @@ extension LocalOutputSync {
         return FailureReport(enabled: enabled.subtracting(failures.map(\.uid)),
                              alertNames: origin == .user ? failures.map(\.deviceName) : nil,
                              notices: failures)
+    }
+
+    /// A master change (S72): every running renderer gets its gain again, as
+    /// `gain` works it out from the speaker's own volume and the new master (S71).
+    static func reapplyGains(on engine: LocalOutputEngine, gain: (String) -> Double) {
+        for uid in engine.activeOutputUIDs { engine.setGain(uid: uid, g: gain(uid)) }
     }
 }
