@@ -158,9 +158,12 @@ fn a_session_plays_takes_volume_and_metadata_and_tears_down_over_loopback() {
     }
 
     // A resend request gets the packet exactly as first sent (P87). The
-    // request and the reply are single UDP datagrams that a busy runner may
-    // drop, so ask again for a newer packet before calling it a failure.
-    // Any reply counts, but only byte for byte.
+    // request and the reply are single UDP datagrams, and a loaded Windows
+    // runner once lost one (no reply in 15 s; a timed-out receive there
+    // can cancel a datagram that was arriving at that moment), so the test
+    // asks again, each time for the newest packet, which is well inside the
+    // history (P88) and not yet resent. A reply to any request counts, but
+    // only when it carries that packet byte for byte.
     let mut requested = Vec::new();
     let mut resent = false;
     for attempt in 1..=RESEND_ATTEMPTS {
