@@ -14,8 +14,9 @@ src="${1:-$root/icon-source.png}"
 out="${2:-$root/AppIcon.icns}"
 
 [ -f "$src" ] || { echo "makeicon.sh: no such file: $src" >&2; exit 1; }
-width=$(sips -g pixelWidth "$src" | awk '/pixelWidth/ { print $2 }')
-height=$(sips -g pixelHeight "$src" | awk '/pixelHeight/ { print $2 }')
+# One sips call reports both sides.
+read -r width height < <(sips -g pixelWidth -g pixelHeight "$src" |
+  awk '$1 == "pixelWidth:" { w = $2 } $1 == "pixelHeight:" { h = $2 } END { print w, h }')
 if [ "$width" != "$height" ] || [ "$width" -lt 1024 ]; then
   echo "makeicon.sh: $src is ${width}x${height}; it must be square and at least 1024 px" >&2
   exit 1

@@ -23,7 +23,8 @@ mkdir "$work/expected" "$work/actual" "$work/site"
 cp AppIcon.icns "$work/expected/"
 while IFS= read -r file; do
   cp "$file" "$work/expected/site-${file#site/}"
-done < <(git ls-files 'site/*.png' 'site/*.ico')
+done < <(printf 'site/%s\n' apple-touch-icon.png favicon-16x16.png favicon-32x32.png favicon.ico \
+  favicon.png icon-192.png icon-512.png icon.png mstile-150x150.png)
 for file in "$work/site"/*; do
   cp "$file" "$work/actual/site-${file##*/}"
 done
@@ -36,8 +37,8 @@ if [ "$expected_list" != "$actual_list" ]; then
   exit 1
 fi
 
-# icon.png is a plain copy of the source, so it must match byte for byte.
-cmp -s icon-source.png "$work/actual/site-icon.png" || { echo "site/icon.png is not a copy of icon-source.png"; exit 1; }
+# site/icon.png is a plain copy of the source, so the committed one must match it byte for byte.
+cmp -s icon-source.png site/icon.png || { echo "site/icon.png is not a copy of icon-source.png"; exit 1; }
 
 echo "Comparing $(echo "$expected_list" | wc -l | tr -d ' ') icon files:"
 # shellcheck disable=SC2086 # the names have no spaces; one argument per file
