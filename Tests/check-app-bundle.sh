@@ -5,27 +5,35 @@
 # `./build.sh --no-install` leaves in .build/app; it works on an installed copy
 # too.
 #
-# Usage: Tests/check-app-bundle.sh [--engine] [--launch] PATH/TO/AudioSync.app
-#   --engine  the AirPlay engine must be bundled (without it, the engine is
-#             checked only when it's there)
-#   --launch  also starts the app with AUDIOSYNC_DEBUG=1 for a few seconds and
-#             checks that it keeps running, writes its debug log and quits on
-#             SIGTERM. Quit AudioSync first: a second copy hands over to the
-#             running one and exits.
+# Usage: Tests/check-app-bundle.sh [--engine] [--launch] [--signer NAME] PATH/TO/AudioSync.app
+#   --engine       the AirPlay engine must be bundled (without it, the engine
+#                  is checked only when it's there)
+#   --launch       also starts the app with AUDIOSYNC_DEBUG=1 for a few seconds
+#                  and checks that it keeps running, writes its debug log and
+#                  quits on SIGTERM. Quit AudioSync first: a second copy hands
+#                  over to the running one and exits.
+#   --signer NAME  every signature must be NAME's: the certificate's name, as
+#                  in "AudioSync Local Code Signing", or adhoc
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-usage() { echo "usage: Tests/check-app-bundle.sh [--engine] [--launch] PATH/TO/AudioSync.app" >&2; exit 2; }
+usage() {
+  echo "usage: Tests/check-app-bundle.sh [--engine] [--launch] [--signer NAME] PATH/TO/AudioSync.app" >&2
+  exit 2
+}
 need_engine=0
 launch=0
+want_signer=""
 app=""
-for arg in "$@"; do
-  case "$arg" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --engine) need_engine=1 ;;
     --launch) launch=1 ;;
+    --signer) [ $# -gt 1 ] || usage; want_signer=$2; shift ;;
     -*) usage ;;
-    *) app=${arg%/} ;;
+    *) app=${1%/} ;;
   esac
+  shift
 done
 if [ -z "$app" ] || [ ! -d "$app" ]; then usage; fi
 
@@ -105,6 +113,9 @@ echo "▶ Signatures"
 expect "codesign --verify --deep --strict" codesign --verify --deep --strict "$app"
 app_signer=$(signer "$app")
 if [ -n "$app_signer" ]; then pass "app signed: $app_signer"; else fail "the app has no signature"; fi
+if [ -n "$want_signer" ]; then
+  expect "signed by $want_signer" test "$app_signer" = "$want_signer"
+fi
 macho=0
 while IFS= read -r -d '' f; do
   case "$(file -b "$f")" in *Mach-O*) ;; *) continue ;; esac
@@ -126,6 +137,9 @@ if [ -e "$contents/Helpers/owntone" ] || [ "$need_engine" = 1 ]; then
   owntone="$contents/Helpers/owntone"
   frameworks="$contents/Frameworks"
   expect "Contents/Helpers/owntone is executable" test -x "$owntone"
+  engine_id=$(plist CFBundleIdentifier || true).engine
+  identifier() { codesign -dv "$owntone" 2>&1 | grep -x "Identifier=$engine_id" >/dev/null; }
+  expect "the engine's signing identifier is $engine_id" identifier
   expect "Frameworks/owntone-sqlext.so" test -f "$frameworks/owntone-sqlext.so"
   libraries=$(find "$frameworks" -maxdepth 1 -name '*.dylib' | wc -l | tr -d ' ')
   expect "its libraries in Frameworks ($libraries)" test "$libraries" -gt 0
