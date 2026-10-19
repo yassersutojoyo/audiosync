@@ -665,12 +665,12 @@ impl Session {
             self.finish();
             return;
         }
-        if let Some(in_flight) = &self.in_flight {
-            if now >= in_flight.sent_at + RESPONSE_TIMEOUT {
-                let method = in_flight.kind.method();
-                self.fail(ErrorKind::Timeout, Some(method), None, None);
-                return;
-            }
+        if let Some(in_flight) = &self.in_flight
+            && now >= in_flight.sent_at + RESPONSE_TIMEOUT
+        {
+            let method = in_flight.kind.method();
+            self.fail(ErrorKind::Timeout, Some(method), None, None);
+            return;
         }
         if self
             .last_timing_request
@@ -983,10 +983,8 @@ impl Session {
                 | Method::Flush
                 | Method::Teardown
         );
-        if carries_session {
-            if let Some(session) = &self.session_header {
-                request.headers.push("Session", session.clone());
-            }
+        if carries_session && let Some(session) = &self.session_header {
+            request.headers.push("Session", session.clone());
         }
         let mut nonce = None;
         if let (Some(auth), Some(password)) = (&mut self.auth, &self.config.password) {
@@ -1191,23 +1189,23 @@ impl Session {
     /// Server and Audio-Jack-Status, reported when first seen or changed
     /// (P24).
     fn note_receiver_headers(&mut self, response: &Response) {
-        if let Some(server) = response.headers.get("Server") {
-            if self.server.as_deref() != Some(server) {
-                self.server = Some(server.to_owned());
-                self.event(SessionEvent::Server(server.to_owned()));
-            }
+        if let Some(server) = response.headers.get("Server")
+            && self.server.as_deref() != Some(server)
+        {
+            self.server = Some(server.to_owned());
+            self.event(SessionEvent::Server(server.to_owned()));
         }
         let jack = response
             .headers
             .get("Audio-Jack-Status")
             .and_then(JackStatus::parse);
-        if let Some(jack) = jack {
-            if self.jack != Some(jack) {
-                self.jack = Some(jack);
-                self.event(SessionEvent::AudioJack(jack));
-                if !jack.connected {
-                    self.event(SessionEvent::Warning(Warning::JackDisconnected));
-                }
+        if let Some(jack) = jack
+            && self.jack != Some(jack)
+        {
+            self.jack = Some(jack);
+            self.event(SessionEvent::AudioJack(jack));
+            if !jack.connected {
+                self.event(SessionEvent::Warning(Warning::JackDisconnected));
             }
         }
     }

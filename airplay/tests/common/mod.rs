@@ -252,12 +252,11 @@ impl FakeReceiver {
         if let Some(response) = self.apple_tv.as_ref().and_then(|atv| atv.answer(request)) {
             return response;
         }
-        if request.method == Method::Announce {
-            if let Some(code) = self.refuse_pcm {
-                if String::from_utf8_lossy(&request.body).contains("L16/44100/2") {
-                    return Response::new(code, "Not Acceptable");
-                }
-            }
+        if request.method == Method::Announce
+            && let Some(code) = self.refuse_pcm
+            && String::from_utf8_lossy(&request.body).contains("L16/44100/2")
+        {
+            return Response::new(code, "Not Acceptable");
         }
         let mut response = Response::new(200, "OK");
         let headers = &mut response.headers;

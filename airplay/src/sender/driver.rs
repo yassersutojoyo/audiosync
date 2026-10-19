@@ -852,10 +852,10 @@ impl Driver {
                     return;
                 };
                 speaker.options.delay = delay;
-                if let Phase::Active(active) = &speaker.phase {
-                    if let Some(id) = active.stream_id {
-                        self.stream.set_delay(id, delay, now);
-                    }
+                if let Phase::Active(active) = &speaker.phase
+                    && let Some(id) = active.stream_id
+                {
+                    self.stream.set_delay(id, delay, now);
                 }
             }
             Command::SetVolume(key, volume) => self.set_volume(&key, volume, now),
@@ -963,10 +963,10 @@ impl Driver {
             return;
         };
         active.session.set_volume(volume, now);
-        if active.software_volume || active.software_mute {
-            if let Some(id) = active.stream_id {
-                self.stream.set_software_volume(id, volume);
-            }
+        if (active.software_volume || active.software_mute)
+            && let Some(id) = active.stream_id
+        {
+            self.stream.set_software_volume(id, volume);
         }
     }
 
