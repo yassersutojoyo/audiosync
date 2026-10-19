@@ -68,7 +68,7 @@ Manual: start AudioSync with the debug log on (`docs/DEVELOPMENT.md`). Stream to
 Expected: a local speaker whose device changes rate keeps playing, at most with a short glitch, and stays in sync. When the change also changes the capture rate (the tap's format follows the output; an input-device source can be switched to another rate), streaming rebuilds itself at the new rate: a short dropout on every speaker, then playback resumes with the same delays and no notice.
 
 Code path:
-- Each `OutputRenderer.start` gives its output unit the capture rate as the input format, so the output unit converts to whatever rate its device runs at.
+- Each `OutputRenderer.start` makes the core's renderer for the rate its device runs at then and gives the output unit that rate, so the renderer converts from the capture rate (S62) and its fades count device frames; should the device's rate change while it plays, the output unit converts from the rate the output started at.
 - `ProcessTapCapture` listens to `kAudioTapPropertyFormat` and the aggregate device's `kAudioDevicePropertyNominalSampleRate` (tap), or the input device's `kAudioDevicePropertyNominalSampleRate`; `CaptureRate.running` takes the rate of the device the IOProc runs on (the tap's own rate only when that can't be read) and `CaptureRate.needsRestart` (`CaptureCheck.swift`) decides; an app tap built again for new processes goes through the same rule; `.formatChanged` goes through `SyncEngine.handleInterruption` to the `engine.onInterrupted` handler in `AppDelegate.swift`, which calls `startEngine(origin: .automatic)`.
 - Delays are kept in milliseconds and converted at the new rate (`OutputRenderer.setDelayMs`); `CoreFifoFeed.setInputRate` resamples to the engine's 48 kHz.
 

@@ -136,7 +136,7 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
 
 ### Fades at stream boundaries
 
-S182 to S191 take the click out of starts, stops, source changes and re-timings. A short click is heard on every source change and every start and stop on the Mac's local outputs, Bluetooth included: an output plays the first frame its reader copies at full level, whatever the source plays at that instant (S45); a stop halts every output in mid-waveform (S115); a source change does both (S141); and a delay change joins two unrelated points of the waveform or cuts to silence (S47, S48). Each of these boundaries gets a short fade. These clauses are design requirements: the Rust core and the Windows app follow them; until the Mac app does, its code behaves as the clauses they supersede in part say (S66, S115). The Windows app used to fade an output out over whatever one device callback held, which could be a few frames; S185 replaced that with a fixed length.
+S182 to S191 take the click out of starts, stops, source changes and re-timings. A short click is heard on every source change and every start and stop on the Mac's local outputs, Bluetooth included: an output plays the first frame its reader copies at full level, whatever the source plays at that instant (S45); a stop halts every output in mid-waveform (S115); a source change does both (S141); and a delay change joins two unrelated points of the waveform or cuts to silence (S47, S48). Each of these boundaries gets a short fade. These clauses are design requirements: the Rust core, the Windows app and the Mac app follow them. The Windows app used to fade an output out over whatever one device callback held, which could be a few frames; S185 replaced that with a fixed length.
 
 - **S182** *Required.* Fade shape and length. A fade is a gain w applied alike to every channel of a frame, over F = round(0.020 × R) frames at the rate R of the stream it is applied to (960 at 48 kHz, 882 at 44.1 kHz). For frame i = 0 … F − 1 of a fade, with x = (i + 1) / F: a fade-in has w = ½ − ½·cos(π·x), and w = 1 exactly at i = F − 1; a fade-out has w = ½ + ½·cos(π·x), and w = 0 exactly at i = F − 1. A stream is *open* (w = 1), *fading in*, *fading out* or *closed* (w = 0: exact zeros, whatever the input, NaN and ±infinity included). A fade-out requested while fading in, or a fade-in requested while fading out, continues from the frame of the other curve whose w is closest to the current one, so w never jumps; a request for the state a stream is already in or heading to changes nothing. Reasons: 20 ms is long enough that the ramp itself carries next to no energy above about 50 Hz (1 / 20 ms), so it isn't heard as a click even on bass-heavy material, and short enough to sound like a clean edge rather than a fade, while a stop waits only about that long (S186). A raised cosine has zero slope at both ends, so it has no corner where it meets silence or full level; its largest step between frames is π / (2F) of the signal (0.16 % at 48 kHz, against 0.10 % for a linear ramp of the same length, which has corners at both ends); and starting it a few frames early is inaudible: 16 frames early, the audio enters at 0.08 % (−62 dB) where a linear ramp would already be at 1.8 % (−35 dB), which S184 relies on.
 - **S183** *Required.* Where a local output fades. Each local output's renderer applies its fade at the device rate, after rate conversion and channel mapping (S62, S63), as a factor of its own after the volume gain (S64, S71): the device gets the sample × the gain × w, so the last frame of a fade-out and every frame after it are exact zeros whatever the gain or the converter left. F counts device frames (S182 with R the device's rate). The fade never changes the gain or a stored volume; a gain change during a fade changes only the gain factor, with its own ramp (S64) as before, and an output at gain 0 stays exact zeros. NaN and ±infinity are replaced by 0 before the fade multiplies (S65), so w = 0 never turns them into NaN.
@@ -832,6 +832,14 @@ Removed on 2026-10-19 with the Swift engine's ring (`Tests/ringtest.swift`). Wha
 | offset text: +150 ms, −250 ms and 0 ms | S181 |
 | offset text: a leading + or − (a hyphen too) is read and other text is ignored | S175, S181 |
 | speaker row: the reference has no delay field | S181 |
+| fade: a stop asks every output and the AirPlay input to fade out before capture stops | S186 |
+| fade: a stop waits for the slowest output, never more than 500 ms | S186 |
+| fade: an output is faded once the host clock passes its last faded frame's output time plus its latency | S185 |
+| fade: a source change fades out on the old source before the new one starts | S186 |
+| fade: a speaker switched off is stopped only after it faded | S185, S186 |
+| fade: switching several speakers off asks all of them to fade, then waits once | S186 |
+| fade: a lost device is stopped at once, without a fade | S185 |
+| fade: the fade cap and the quit waits fit in 5 s | S110, S186 |
 
 ### fifo
 
@@ -848,6 +856,8 @@ Since 2026-10-19 the suite runs the app's pipe feed, `CoreFifoFeed`, and checks 
 | fifo: stop closes the writer | S88 |
 | fifo: stop returns once the writer closed the pipe, with a reader that never reads (S88) | S88, S93 |
 | fifo: stop returns once the writer closed the pipe, with a reader that reads slowly (S88) | S88, S93 |
+| fifo: the first 20 ms after the pipe opens fade in | S189, S191 |
+| fifo: a stop request fades the pipe stream out | S189, S191 |
 | metadata pipe: an empty pipe takes a whole message in one write | S82, S168 |
 | metadata pipe: FIONREAD on a read end counts what waits | S82 |
 | metadata pipe: the writer opens it | S82 |
@@ -914,11 +924,14 @@ Removed on 2026-10-19 with the Swift engine (`Tests/paritytest.swift`): with one
 |---|---|
 | found output devices | S60 |
 | \<device\>: output starts | S61 |
+| \<device\>: first audio fades in | S184, S191 |
 | \<device\>: renders audio | S64, S67 |
 | \<device\>: delay 2000 ms | S46, S56, S62, S66 |
 | \<device\>: delay 500 ms | S46, S48, S56, S62, S66 |
 | \<device\>: delay 3000 ms | S46, S47, S56, S62, S66 |
 | \<device\>: delay 150 ms | S46, S48, S56, S62, S66 |
+| \<device\>: stop fades out before the output stops | S185, S186, S191 |
+| \<device\>: stop returns once the fade has played, within 500 ms | S185, S186 |
 
 ### pipe start (`--hardware`, `Tests/pipestart.swift`)
 
@@ -1046,36 +1059,9 @@ The checks for S182 to S191 in the Rust core, test functions with `// covers:` m
 | a_delay_change_fades_out_first_and_in_after | S187 |
 | the_fade_cap_and_the_quit_waits_fit_in_5_s | S110, S186 |
 
-### fades: Mac (to be written first, failing)
+### fades: Mac
 
-The Mac's checks for S182 to S191. None exists yet: each is written first and fails against today's Mac code (the first row of each table reproduces the reported click), then the Mac app follows the clauses through the core's C interface. Once a check exists, its row moves to the table of the suite that runs it.
-
-Mac (`Tests/logictest.swift`):
-
-| Check | Clauses |
-|---|---|
-| fade: a stop asks every output and the AirPlay input to fade out before capture stops | S186 |
-| fade: a stop waits for the slowest output, never more than 500 ms | S186 |
-| fade: an output is faded once the host clock passes its last faded frame's output time plus its latency | S185 |
-| fade: a source change fades out on the old source before the new one starts | S186 |
-| fade: a speaker switched off is stopped only after it faded | S185, S186 |
-| fade: switching several speakers off asks all of them to fade, then waits once | S186 |
-| fade: a lost device is stopped at once, without a fade | S185 |
-
-Mac FIFO (`Tests/fifotest.swift`):
-
-| Check | Clauses |
-|---|---|
-| fifo: the first 20 ms after the pipe opens fade in | S189, S191 |
-| fifo: a stop request fades the pipe stream out | S189, S191 |
-
-Mac engine (`--hardware`):
-
-| Check | Clauses |
-|---|---|
-| \<device\>: stop fades out before the output stops | S185, S186, S191 |
-| \<device\>: first audio fades in | S184, S191 |
-| \<device\>: stop returns once the fade has played, within 500 ms | S185, S186 |
+The Mac's checks for S182 to S191 were written first and failed against a scaffold that answered as the Mac code of that day behaved (a stop stopped capture first and every output at once, nothing faded and nothing waited); they pass now that the Mac app renders through the core's renderer (`AscRenderer`) and waits for the fades, and are listed in the logic, fifo and engine tables above, as "fade: …", "fifo: the first 20 ms after the pipe opens fade in", "fifo: a stop request fades the pipe stream out" and the three "\<device\>" rows. The fifo suite's EC7 and stall checks read the block number of frame 960 after an open, the first at full level, since the pipe fades in over the frames before it.
 
 By ear on real AirPlay receivers, outside these suites: with a speaker playing, a stop and a source change make no click on the speaker when the engine stops or the native sender flushes it, and the first sound after a start or a source change fades in (S189).
 

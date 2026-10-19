@@ -52,27 +52,30 @@ else
 fi
 
 echo "▶ streaming off stops the pipe writer before the engine"
-# stopEngine must call engine.stop(), which returns once the pipe writer has
-# closed the pipe, before it asks the AirPlay engine to stop. The other way
-# round, audio still coming in makes the engine start the pipe again by itself
-# (pipe_autostart), and that stray start plays the next session late (EC13).
+# stopEngine must ask the AirPlay engine to stop only in the completion of
+# engine.stop(then:), which runs once the outputs have faded out and the pipe
+# writer has closed the pipe. Asked earlier, audio still coming in makes the
+# engine start the pipe again by itself (pipe_autostart), and that stray start
+# plays the next session late (EC13). The request must sit inside the
+# completion's braces.
 if awk '
   /func stopEngine\(/ { inside = 1 }
   inside {
     line = $0
     sub(/\/\/.*/, "", line)
-    if (!writer && line ~ /engine\.stop\(\)/) writer = NR
-    if (!player && line ~ /OwnToneClient\.stopPlayback\(\)/) player = NR
+    if (writer && !closed && !player && depth > outer && line ~ /OwnToneClient\.stopPlayback\(\)/) player = NR
+    if (!writer && line ~ /engine\.stop\(then: *\{/) { writer = NR; outer = depth }
     depth += gsub(/[{]/, "{", line) - gsub(/[}]/, "}", line)
+    if (writer && NR > writer && depth <= outer) closed = 1
     if (depth > 0) opened = 1
     if (opened && depth == 0) inside = 0
   }
-  END { exit !(writer && player && writer < player) }
+  END { exit !(writer && player) }
 ' "$SRC/AppDelegate+Engine.swift"; then
   echo "PASSED"
 else
-  echo "FAIL: stopEngine in AppDelegate+Engine.swift must call engine.stop() (the pipe writer)" \
-    "before OwnToneClient.stopPlayback() (the engine's stop request)"
+  echo "FAIL: stopEngine in AppDelegate+Engine.swift must call OwnToneClient.stopPlayback() (the engine's" \
+    "stop request) inside the completion of engine.stop(then: { … }) (the fades and the pipe writer)"
   status=1
 fi
 

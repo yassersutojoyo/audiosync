@@ -62,10 +62,10 @@ struct EngineParts {
     }
 
     /// A local output reading this session's ring, captured at `captureRate`
-    /// Hz; nil when the core can't make its reader or gain stage.
+    /// Hz; nil for a rate the core doesn't take (S16). Its renderer is made by
+    /// each start, for the device it starts on.
     func makeRenderer(captureRate: Double) -> OutputRenderer? {
-        guard let reader = CoreDelayReader(ring: ring, captureRate: captureRate),
-              let gain = CoreGainStage() else { return nil }
-        return OutputRenderer(reader: reader, gain: gain)
+        guard CoreRate.hz(captureRate) != nil else { return nil }
+        return OutputRenderer(ring: ring)
     }
 }
