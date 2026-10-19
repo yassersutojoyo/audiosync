@@ -13,8 +13,9 @@
 //! - [`fifo`]: PCM16 conversion and the FIFO feed, whose writer the host's
 //!   thread steps through C callbacks for the pipe (S83-S95, S160).
 //! - [`sync`]: the AirPlay sync rule and the delay helpers (S3, S77-S80).
-//! - [`airplay`]: AudioSync's own AirPlay sender, so far its discovery: the
-//!   one part of this interface that runs threads and sockets of its own.
+//! - [`airplay`]: AudioSync's own AirPlay sender: discovery, speakers, their
+//!   events and the capture's input, the one part of this interface that
+//!   runs threads and sockets of its own.
 //!
 //! Threading (S113, S132): each handle states which thread makes which call.
 //! A handle that an audio thread shares with other threads keeps the two
@@ -945,6 +946,66 @@ mod tests {
                 "ASC_AIRPLAY_FLAG_AIRPLAY2",
                 AIRPLAY_FLAG_AIRPLAY2.to_string(),
             ),
+            ("ASC_AIRPLAY_EVENT_STATE", AIRPLAY_EVENT_STATE.to_string()),
+            ("ASC_AIRPLAY_EVENT_ERROR", AIRPLAY_EVENT_ERROR.to_string()),
+            (
+                "ASC_AIRPLAY_EVENT_LATENCY",
+                AIRPLAY_EVENT_LATENCY.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_EVENT_TIMELINE",
+                AIRPLAY_EVENT_TIMELINE.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_STATE_CONNECTING",
+                AIRPLAY_STATE_CONNECTING.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_STATE_PLAYING",
+                AIRPLAY_STATE_PLAYING.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_STATE_RETRYING",
+                AIRPLAY_STATE_RETRYING.to_string(),
+            ),
+            ("ASC_AIRPLAY_STATE_FAILED", AIRPLAY_STATE_FAILED.to_string()),
+            (
+                "ASC_AIRPLAY_STATE_STOPPED",
+                AIRPLAY_STATE_STOPPED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_ERROR_NOT_RESPONDING",
+                AIRPLAY_ERROR_NOT_RESPONDING.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_ERROR_CONNECTION_LOST",
+                AIRPLAY_ERROR_CONNECTION_LOST.to_string(),
+            ),
+            ("ASC_AIRPLAY_ERROR_BUSY", AIRPLAY_ERROR_BUSY.to_string()),
+            (
+                "ASC_AIRPLAY_ERROR_REFUSED",
+                AIRPLAY_ERROR_REFUSED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_ERROR_INCOMPATIBLE",
+                AIRPLAY_ERROR_INCOMPATIBLE.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_ERROR_PASSWORD_REQUIRED",
+                AIRPLAY_ERROR_PASSWORD_REQUIRED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_ERROR_WRONG_PASSWORD",
+                AIRPLAY_ERROR_WRONG_PASSWORD.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_ERROR_PAIRING_REQUIRED",
+                AIRPLAY_ERROR_PAIRING_REQUIRED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_ERROR_UNSUPPORTED",
+                AIRPLAY_ERROR_UNSUPPORTED.to_string(),
+            ),
         ]
         .into_iter()
         .map(|(name, value)| (name.to_owned(), value))
@@ -1191,6 +1252,46 @@ mod realtime {
             drop(boxed);
         });
         assert_eq!(events, 2);
+    }
+
+    // The AirPlay spec's P6 asks the same of the sender's input.
+    // covers: S126
+    #[test]
+    fn airplay_input_calls_never_touch_the_heap() {
+        // Setup may allocate: the sender, its input, the block.
+        let mut sender = asc_airplay_create();
+        assert!(!sender.is_null());
+        // SAFETY: a live sender handle, used by this thread only.
+        let mut input = unsafe { asc_airplay_take_input(sender) };
+        assert!(!input.is_null());
+        let block: Vec<f32> = (0..512 * 2).map(|i| (i % 17) as f32 / 34.0).collect();
+        let mut handed = 0usize;
+        let events = heap_events(|| {
+            for round in 0..2000usize {
+                // SAFETY: a live input, written by this thread only; `block`
+                // holds 512 stereo frames. A rate request is an any-thread
+                // call; each one makes the next write start its resampler
+                // afresh at that rate, which must not allocate either.
+                unsafe {
+                    if round % 250 == 0 {
+                        let rate = [48_000.0, 44_100.0, 96_000.0, 22_050.0][round / 250 % 4];
+                        assert!(asc_airplay_input_set_rate(input, rate));
+                    }
+                    handed += asc_airplay_input_write(input, block.as_ptr(), 512);
+                }
+            }
+        });
+        // SAFETY: each handle destroyed once, by this thread, with no call
+        // in progress.
+        unsafe {
+            asc_airplay_input_destroy(&mut input);
+            asc_airplay_destroy(&mut sender);
+        }
+        assert_eq!(
+            events, 0,
+            "a write or a rate request allocated or freed memory"
+        );
+        assert!(handed > 0);
     }
 
     // covers: S126, S128, S130
