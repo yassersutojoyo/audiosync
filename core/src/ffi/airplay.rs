@@ -53,7 +53,7 @@
 //! write marks the input and its sender dead. Destroying a dead handle
 //! still frees it.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -323,8 +323,11 @@ pub struct AscAirPlay {
     /// The passwords the host handed over, by receiver ID, for this
     /// handle's life only; wiped from memory when dropped.
     passwords: HashMap<String, Zeroizing<String>>,
-    /// The receivers with a pairing running, by ID.
-    pairing: HashSet<String>,
+    /// The receivers with a pairing running, by ID, with the key the
+    /// sender knows each by: a receiver that leaves discovery while the
+    /// user reads its PIN (the wait has no timeout, P51) still takes the
+    /// PIN and is still cancelled.
+    pairing: HashMap<String, DeviceKey>,
     /// The master position, 0 to 100.
     master: f64,
     /// Set when a call on this handle or its input panicked; shared with
@@ -581,11 +584,10 @@ impl AscAirPlay {
                 }
             }
             // The host cancelled it, or the sender shut down: nothing to
-            // tell.
-            PairingEvent::Stopped => {
-                self.pairing.remove(&id);
-                return;
-            }
+            // tell. The cancel already cleared its mark, and a pairing the
+            // host started again since then (a cancel and a start back to
+            // back) keeps its own.
+            PairingEvent::Stopped => return,
         };
         self.events.push_back(Pending::Pairing {
             kind,
@@ -886,7 +888,7 @@ pub extern "C" fn asc_airplay_create() -> *mut AscAirPlay {
                 added: HashMap::new(),
                 store: PairingStore::in_memory(),
                 passwords: HashMap::new(),
-                pairing: HashSet::new(),
+                pairing: HashMap::new(),
                 master: 100.0,
                 dead: Arc::new(AtomicBool::new(false)),
                 failure_reported: false,
@@ -1305,8 +1307,9 @@ pub unsafe extern "C" fn asc_airplay_start_pairing(
                 .passwords
                 .get(id)
                 .map(|password| String::clone(password));
+            let key = device.key.clone();
             airplay.sender.start_pairing_with_password(device, password);
-            airplay.pairing.insert(id.to_owned());
+            airplay.pairing.insert(id.to_owned(), key);
             true
         })
     }
@@ -1316,7 +1319,8 @@ pub unsafe extern "C" fn asc_airplay_start_pairing(
 /// (P50, P51); its outcome comes as an event. False, sending nothing, when
 /// the handle, `id` or `pin` is null, no pairing runs for `id`, or `pin`
 /// isn't ASCII digits only. A PIN while the pairing doesn't wait for one is
-/// ignored. The PIN is never kept or logged.
+/// ignored. A receiver that left discovery since its pairing started still
+/// takes it. The PIN is never kept or logged.
 ///
 /// # Safety
 ///
@@ -1337,20 +1341,16 @@ pub unsafe extern "C" fn asc_airplay_submit_pin(
     unsafe {
         live(airplay, false, |airplay| {
             airplay.pump();
-            if !airplay.pairing.contains(id) {
-                return false;
-            }
-            let Some(info) = airplay.listed.get(id) else {
+            let Some(key) = airplay.pairing.get(id) else {
                 return false;
             };
-            let key = info.device.key.clone();
-            airplay.sender.submit_pin(&key, pin).is_ok()
+            airplay.sender.submit_pin(key, pin).is_ok()
         })
     }
 }
 
-/// Stops the pairing with the receiver `id`, if one runs; nothing is
-/// reported for it any more.
+/// Stops the pairing with the receiver `id`, if one runs, also when the
+/// receiver left discovery since; nothing is reported for it any more.
 ///
 /// # Safety
 ///
@@ -1367,11 +1367,8 @@ pub unsafe extern "C" fn asc_airplay_cancel_pairing(airplay: *mut AscAirPlay, id
     unsafe {
         live(airplay, (), |airplay| {
             airplay.pump();
-            if !airplay.pairing.remove(id) {
-                return;
-            }
-            if let Some(info) = airplay.listed.get(id) {
-                airplay.sender.cancel_pairing(&info.device.key);
+            if let Some(key) = airplay.pairing.remove(id) {
+                airplay.sender.cancel_pairing(&key);
             }
         })
     }
@@ -2833,7 +2830,7 @@ mod tests {
         // A pairing whose Apple TV shows a PIN (its SRP answer is the
         // crate's to test) waits for it.
         let key = inside(handle).listed[id].device.key.clone();
-        inside(handle).pairing.insert(id.to_owned());
+        inside(handle).pairing.insert(id.to_owned(), key.clone());
         inside(handle).take_in(SenderEvent::Pairing {
             key,
             event: PairingEvent::PinRequested,
@@ -2930,7 +2927,7 @@ mod tests {
             [7; audiosync_airplay::pairing::SECRET_BYTES],
         )
         .expect("valid credentials");
-        inside(handle).pairing.insert(id.to_owned());
+        inside(handle).pairing.insert(id.to_owned(), key.clone());
         inside(handle).take_in(SenderEvent::Pairing {
             key: key.clone(),
             event: PairingEvent::Paired(credentials),
