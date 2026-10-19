@@ -44,8 +44,7 @@ use super::SESSION_RATE;
 use super::airplay::{AirPlayLink, AirPlaySpeakers, FeedLease, FeedSlot};
 use super::backend::{
     AirPlayInfo, AirPlayPinPrompt, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
-    OutputInfo, SourceId,
-    SourceInfo, StopReason,
+    OutputInfo, SourceId, SourceInfo, StopReason,
 };
 use super::capture::{
     Activation, CaptureAttempt, LoopbackMode, SampleType, decide_activation, running_app,
@@ -1450,6 +1449,7 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::AirPlayFailed { id, problem } => {
             format!("AirPlay speaker ({id}) can't play ({problem:?}); it is turned off")
         }
+        BackendEvent::AirPlayPaired { id } => format!("AirPlay speaker ({id}) paired and on"),
     }
 }
 

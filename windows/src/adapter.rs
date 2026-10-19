@@ -49,10 +49,10 @@ use crate::audio::backend::{
     AirPlayAvailability, AirPlayInfo, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
     OutputInfo, OutputKind, SourceId, SourceInfo, StopReason,
 };
+use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
 use crate::audio::capture::WHOLE_SYSTEM_NAME;
 use crate::audio::routing::{DirectPath, DirectReason};
 use crate::debug_log::DebugLog;
-use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
 use crate::ui_model::{
     self, AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, PinPhase,
     PinPrompt, Source, SourceKind, Speaker, SpeakerKind, clamp_delay_ms,
@@ -1347,13 +1347,15 @@ mod tests {
     use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, output_gain};
 
     use audiosync_airplay::discovery::Device;
-    use audiosync_airplay::error::ErrorKind;
+    use audiosync_airplay::error::{ErrorKind, SessionError};
+    use audiosync_airplay::pairing::PairingEvent;
     use audiosync_airplay::sender::SpeakerState as AirPlayState;
 
     use super::*;
-    use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, device, id_of};
+    use crate::audio::airplay::tests::{APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, device, id_of};
     use crate::audio::capture::LoopbackMode;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
+    use crate::audio::pairings::tests::credentials;
     use crate::audio::routing::HOLD_CHECKS;
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
     use crate::ui_model::{MAX_DELAY_MS, SpeakerState};
@@ -2357,6 +2359,172 @@ mod tests {
         assert_eq!(fake.take_calls()[0], Call::RestartTimeline);
         adapter.set_speaker_enabled(&ap(&kitchen), false);
         assert!(!adapter.snapshot().running, "nothing is on anymore");
+    }
+
+    /// `airplay_adapter()` with an Apple TV that asks for a PIN listed too.
+    fn apple_tv_adapter() -> (AudioAdapter<MockBackend>, FakeAirPlay, Device) {
+        let (mut adapter, fake, _, _) = airplay_adapter();
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        fake.appear(&tv);
+        adapter.poll();
+        fake.take_calls();
+        (adapter, fake, tv)
+    }
+
+    #[test]
+    fn switching_on_an_apple_tv_pairs_it_and_then_it_streams() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let id = ap(&tv);
+        assert_eq!(
+            adapter.snapshot().speaker(&id).unwrap().availability,
+            Availability::NeedsCode
+        );
+        adapter.set_speaker_enabled(&id, true);
+        assert_eq!(fake.take_calls(), [Call::StartPairing(id_of(&tv))]);
+        let state = adapter.snapshot();
+        assert!(!state.running, "nothing streams while it pairs");
+        assert_eq!(state.pin_prompt, None, "no prompt until the PIN shows");
+        assert_eq!(
+            state.speaker(&id).unwrap().availability,
+            Availability::Pairing
+        );
+
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        assert!(adapter.poll());
+        assert_eq!(
+            adapter.snapshot().pin_prompt,
+            Some(PinPrompt {
+                speaker_id: id.clone(),
+                name: "Den TV".to_owned(),
+                phase: PinPhase::Ready,
+                wrong_pin: false,
+            })
+        );
+        adapter.submit_pin(&id, "4821");
+        assert_eq!(
+            fake.take_calls(),
+            [Call::SubmitPin(id_of(&tv), "4821".to_owned())]
+        );
+        assert_eq!(
+            adapter.snapshot().pin_prompt.unwrap().phase,
+            PinPhase::Checking
+        );
+
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEF", 0x11)),
+        );
+        assert!(adapter.poll());
+        let state = adapter.snapshot();
+        assert_eq!(state.pin_prompt, None);
+        let row = state.speaker(&id).unwrap();
+        assert!(row.enabled && row.paired);
+        assert_eq!(row.availability, Availability::Open);
+        assert!(state.running, "paired and on: streaming starts");
+        assert!(
+            fake.take_calls().contains(&Call::Credentials(
+                id_of(&tv),
+                "0123456789ABCDEF".to_owned()
+            )),
+            "it joins with its credentials"
+        );
+
+        adapter.forget_pairing(&id);
+        let state = adapter.snapshot();
+        let row = state.speaker(&id).unwrap();
+        assert!(!row.enabled && !row.paired);
+        assert_eq!(row.availability, Availability::NeedsCode);
+        assert!(!state.running, "nothing else is on");
+        assert_eq!(fake.take_calls().last(), Some(&Call::Remove(id_of(&tv))));
+    }
+
+    #[test]
+    fn a_wrong_pin_keeps_the_prompt_and_cancel_leaves_the_speaker_off() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "1111");
+        fake.take_calls();
+        fake.pairing(
+            &tv,
+            PairingEvent::Failed {
+                error: SessionError::new(ErrorKind::PairingFailed),
+                wrong_pin: true,
+            },
+        );
+        adapter.poll();
+        assert_eq!(fake.take_calls(), [Call::StartPairing(id_of(&tv))]);
+        let prompt = adapter.snapshot().pin_prompt.expect("the prompt stays");
+        assert!(prompt.wrong_pin);
+        assert_eq!(prompt.phase, PinPhase::Starting);
+        assert!(messages(&adapter).is_empty(), "no notice for a wrong PIN");
+
+        adapter.cancel_pairing(&id);
+        assert_eq!(fake.take_calls(), [Call::CancelPairing(id_of(&tv))]);
+        let state = adapter.snapshot();
+        assert_eq!(state.pin_prompt, None);
+        assert!(!state.speaker(&id).unwrap().enabled);
+        assert!(!state.running);
+        fake.pairing(&tv, PairingEvent::Stopped);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "no notice for a cancel");
+    }
+
+    #[test]
+    fn a_failed_pairing_closes_the_prompt_with_a_notice() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        fake.pairing(
+            &tv,
+            PairingEvent::Failed {
+                error: SessionError::new(ErrorKind::Unreachable),
+                wrong_pin: false,
+            },
+        );
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert_eq!(state.pin_prompt, None);
+        assert!(!state.speaker(&id).unwrap().enabled);
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Den TV".to_owned(),
+                problem: ui_model::AirPlayProblem::PairingFailed,
+            }]
+        );
+    }
+
+    #[test]
+    fn auto_connect_never_starts_a_pairing() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let id = ap(&tv);
+        adapter.set_auto_connect(&id, true);
+        fake.gone(&tv);
+        adapter.poll();
+        fake.appear(&tv);
+        adapter.poll();
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::StartPairing(_))),
+            "no PIN appears on the TV by itself"
+        );
+        let state = adapter.snapshot();
+        assert_eq!(state.pin_prompt, None);
+        assert!(!state.speaker(&id).unwrap().enabled);
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Den TV".to_owned(),
+                problem: ui_model::AirPlayProblem::NeedsPin,
+            }]
+        );
     }
 
     #[test]

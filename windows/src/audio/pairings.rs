@@ -86,7 +86,10 @@ impl fmt::Display for Loaded {
             Loaded::Speakers(1) => f.write_str("credentials loaded for 1 speaker"),
             Loaded::Speakers(n) => write!(f, "credentials loaded for {n} speakers"),
             Loaded::Ignored(reason) => {
-                write!(f, "the stored credentials were ignored ({reason}); pair again")
+                write!(
+                    f,
+                    "the stored credentials were ignored ({reason}); pair again"
+                )
             }
         }
     }
@@ -155,11 +158,6 @@ impl PairingStore {
         (store, loaded)
     }
 
-    /// The file, if the store has one.
-    pub fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
-    }
-
     /// Whether the speaker `id` is paired.
     pub fn contains(&self, id: &str) -> bool {
         self.entries.contains_key(id)
@@ -218,9 +216,8 @@ fn read(path: &Path, sealer: Sealer) -> Result<Option<BTreeMap<String, Credentia
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("the file can't be read: {error}")),
     };
-    let plain = (sealer.open)(&sealed).map_err(|error| {
-        format!("the file can't be decrypted for this Windows user: {error}")
-    })?;
+    let plain = (sealer.open)(&sealed)
+        .map_err(|error| format!("the file can't be decrypted for this Windows user: {error}"))?;
     decode(&plain)
         .map(Some)
         .ok_or_else(|| "the file isn't in the expected format".to_owned())
@@ -515,7 +512,10 @@ pub mod tests {
 
     #[test]
     fn the_load_summary_never_holds_a_secret() {
-        assert_eq!(Loaded::Speakers(1).to_string(), "credentials loaded for 1 speaker");
+        assert_eq!(
+            Loaded::Speakers(1).to_string(),
+            "credentials loaded for 1 speaker"
+        );
         let ignored = Loaded::Ignored("the file isn't in the expected format".to_owned());
         assert!(ignored.to_string().contains("pair again"));
         let store_debug = format!("{:?}", {

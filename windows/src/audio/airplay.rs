@@ -62,8 +62,7 @@ use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, sanitize_position};
 
 use super::SESSION_RATE;
 use super::backend::{
-    AirPlayAvailability, AirPlayInfo, AirPlayPinPrompt, AirPlayProblem, BackendEvent,
-    PairingPhase,
+    AirPlayAvailability, AirPlayInfo, AirPlayPinPrompt, AirPlayProblem, BackendEvent, PairingPhase,
 };
 use super::pairings::PairingStore;
 use crate::debug_log::DebugLog;
@@ -401,7 +400,7 @@ fn describe_availability(availability: AirPlayAvailability) -> &'static str {
     match availability {
         AirPlayAvailability::Open => "can play",
         AirPlayAvailability::PasswordNotYet => "asks for a password (not supported yet)",
-        AirPlayAvailability::NeedsPin => "an Apple TV to pair with a PIN",
+        AirPlayAvailability::NeedsPin => "needs pairing with a PIN",
         AirPlayAvailability::PairingNotYet => "needs pairing (not supported yet)",
         AirPlayAvailability::AirPlay2NotYet => "AirPlay 2 only (not supported yet)",
         AirPlayAvailability::Unsupported => "not supported",
@@ -951,8 +950,13 @@ impl AirPlaySpeakers {
         event: PairingEvent,
         events: &mut Vec<BackendEvent>,
     ) -> bool {
-        self.log
-            .log(|| format!("AirPlay pairing {}: {}", self.label(id), pairing_summary(&event)));
+        self.log.log(|| {
+            format!(
+                "AirPlay pairing {}: {}",
+                self.label(id),
+                pairing_summary(&event)
+            )
+        });
         match event {
             PairingEvent::PinRequested => {
                 let Some(run) = self.pairings.get_mut(id) else {
@@ -960,12 +964,8 @@ impl AirPlaySpeakers {
                 };
                 run.phase = PairingPhase::WaitingForPin;
                 run.shown = true;
-                self.log.log(|| {
-                    format!(
-                        "AirPlay pairing {}: PIN prompt shown",
-                        self.label(id)
-                    )
-                });
+                self.log
+                    .log(|| format!("AirPlay pairing {}: PIN prompt shown", self.label(id)));
                 true
             }
             PairingEvent::Paired(credentials) => {
@@ -1594,7 +1594,10 @@ pub mod tests {
         fake.appear(tv);
         airplay.poll();
         let id = id_of(tv);
-        assert_eq!(airplay.set_enabled(&id, true), Err(AirPlayProblem::NeedsPin));
+        assert_eq!(
+            airplay.set_enabled(&id, true),
+            Err(AirPlayProblem::NeedsPin)
+        );
         airplay.start_pairing(&id).expect("the pairing starts");
         assert_eq!(fake.take_calls(), [Call::StartPairing(id.clone())]);
         assert!(airplay.speakers()[0].pairing);
@@ -1648,13 +1651,20 @@ pub mod tests {
             ]
         );
         assert_eq!(airplay.pin_prompt(), None);
-        assert_eq!(airplay.enabled_ids(), [id.clone()], "paired, it is on");
+        assert_eq!(
+            airplay.enabled_ids(),
+            std::slice::from_ref(&id),
+            "paired, it is on"
+        );
         let row = &airplay.speakers()[0];
         assert!(row.paired && !row.pairing);
         assert_eq!(row.availability, AirPlayAvailability::Open);
         airplay.set_streaming(true);
         let calls = fake.take_calls();
-        assert!(matches!(&calls[..], [Call::Add { .. }, Call::Credentials(..)]));
+        assert!(matches!(
+            &calls[..],
+            [Call::Add { .. }, Call::Credentials(..)]
+        ));
         assert_eq!(
             calls[1],
             Call::Credentials(id.clone(), "0123456789ABCDEF".to_owned())
@@ -1851,8 +1861,7 @@ pub mod tests {
         crate::debug_log::assert_in_order(
             &messages,
             &[
-                "pairing \"Den TV\"",
-                "started, asking the Apple TV to show a PIN",
+                "pairing \"Den TV\" (02005E005306): started, asking the Apple TV to show a PIN",
                 "PIN prompt shown",
                 "PIN sent",
                 "wrong PIN",
