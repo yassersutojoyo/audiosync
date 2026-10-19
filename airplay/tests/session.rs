@@ -10,7 +10,7 @@ use std::time::Duration;
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, Warning};
 use audiosync_airplay::ids::{Entropy, EntropyUnavailable, OsEntropy, SessionIds};
 use audiosync_airplay::metadata::{Metadata, MetadataError, MetadataSupport, TrackInfo};
-use audiosync_airplay::rtsp::{JackKind, JackStatus};
+use audiosync_airplay::rtsp::{JackKind, JackStatus, Method};
 use audiosync_airplay::sdp::{self, Codec};
 use audiosync_airplay::session::{
     MediaDestinations, Output, ReceiverPorts, SessionConfig, SessionEvent, State, UdpSendResult,
@@ -354,6 +354,47 @@ fn a_close_right_after_a_verify_200_reconnects_and_verifies_once_more() {
     link.session.handle_connection_closed(now);
     link.pump();
     assert_eq!(kinds(&link), [ErrorKind::Lost]);
+
+    // Only the second step's 200 starts that rule: a close after the first
+    // step's 200, before the second step is answered, is a connection loss
+    // as usual, with no reconnect at once and never PairingRequired.
+    let mut receiver = FakeReceiver::new();
+    receiver.hold = Some("POST /pair-verify".to_owned());
+    let mut link = Link::new(verifying_config(), receiver);
+    link.connect();
+    link.release();
+    assert_eq!(link.keys(), ["POST /pair-verify", "POST /pair-verify"]);
+    assert!(
+        !link.receiver.held.is_empty(),
+        "the second step is not answered"
+    );
+    let now = link.now;
+    link.session.handle_connection_closed(now);
+    link.pump();
+    assert_eq!(kinds(&link), [ErrorKind::Lost]);
+    assert_eq!(link.connects.len(), 1, "no reconnect at once");
+    assert!(!ErrorKind::Lost.needs_user());
+
+    // The same on the one new connection of the rule: a close after its
+    // first step's 200 is Lost, not PairingRequired.
+    let mut receiver = FakeReceiver::new();
+    receiver.silent = Some("OPTIONS".to_owned());
+    let mut link = Link::new(verifying_config(), receiver);
+    link.connect();
+    let now = link.now;
+    link.session.handle_connection_closed(now);
+    link.pump();
+    assert_eq!(link.connects.len(), 2);
+    link.receiver.silent = None;
+    link.receiver.hold = Some("POST /pair-verify".to_owned());
+    link.connect();
+    link.release();
+    assert_eq!(link.keys().len(), 5, "{:?}", link.keys());
+    let now = link.now;
+    link.session.handle_connection_closed(now);
+    link.pump();
+    assert_eq!(kinds(&link), [ErrorKind::Lost]);
+    assert_eq!(link.connects.len(), 2);
 }
 
 // covers: P46
@@ -392,7 +433,8 @@ fn a_speaker_that_needs_pairing_is_asked_options_before_pairing_required() {
         [ErrorKind::Unsupported(UnsupportedReason::Methods)]
     );
 
-    // A 403 to OPTIONS from any receiver: PairingRequired, not Refused.
+    // A 403 to the OPTIONS that sets up a connection, from any receiver:
+    // PairingRequired, not Refused.
     for needs_pairing in [true, false] {
         let mut config = common::config();
         config.needs_pairing = needs_pairing;
@@ -404,28 +446,32 @@ fn a_speaker_that_needs_pairing_is_asked_options_before_pairing_required() {
         assert_eq!(error.kind, ErrorKind::PairingRequired, "{needs_pairing}");
         assert_eq!(error.status, Some(403));
     }
+    // Also when that OPTIONS is resent after a 401: the challenge is
+    // answered with the password, and the 403 to the resend is the pairing
+    // answer (P36, P46).
+    let mut receiver = FakeReceiver::new();
+    receiver.gate = Some(PasswordGate::new("secret"));
+    receiver.status.insert("OPTIONS".to_owned(), 403);
+    let mut link = Link::new(password_config("secret"), receiver);
+    link.connect();
+    assert_eq!(link.keys(), ["OPTIONS", "OPTIONS"]);
+    let error = link.failure().expect("failed");
+    assert_eq!(error.kind, ErrorKind::PairingRequired);
+    assert_eq!(error.status, Some(403));
+    // Without a password that 401 is PasswordRequired, not a pairing answer.
+    let mut config = common::config();
+    config.needs_pairing = true;
+    let mut receiver = FakeReceiver::new();
+    receiver.gate = Some(PasswordGate::new("secret"));
+    let mut link = Link::new(config, receiver);
+    link.connect();
+    assert_eq!(kinds(&link), [ErrorKind::PasswordRequired]);
+    assert_eq!(link.keys(), ["OPTIONS"]);
 
     // Without the flags calling for pairing, OPTIONS goes on to ANNOUNCE.
     let mut link = Link::new(common::config(), FakeReceiver::new());
     link.connect();
     assert_eq!(link.keys(), START);
-}
-
-// covers: P46, P138
-#[test]
-fn a_403_to_the_keep_alive_options_stays_refused_and_asks_for_no_pin() {
-    // A verified, playing session: only the connection's first OPTIONS maps
-    // 403 to PairingRequired (P46); the keep-alive's is P138's Refused.
-    let mut link = Link::new(verifying_config(), FakeReceiver::new());
-    link.connect();
-    assert_eq!(link.session.state(), State::Playing);
-    link.receiver.status.insert("OPTIONS".to_owned(), 403);
-    link.advance(Duration::from_secs(31));
-    assert_eq!(link.keys().last().map(String::as_str), Some("OPTIONS"));
-    let error = link.failure().expect("failed");
-    assert_eq!(error.kind, ErrorKind::Refused);
-    assert_eq!(error.status, Some(403));
-    assert!(!error.kind.needs_user(), "no new PIN asked for");
 }
 
 // covers: P110
@@ -1245,8 +1291,8 @@ fn errors_refused_per_method_and_warnings_after_record() {
     }
 
     // Not Refused: a 501 to OPTIONS reads as an answer without `Public`, a
-    // 403 to OPTIONS is a pairing answer (P46), a 401 is digest (P36), and
-    // the Busy answers are Busy (P137).
+    // 403 to the OPTIONS that sets up a connection is a pairing answer
+    // (P46), a 401 is digest (P36), and the Busy answers are Busy (P137).
     let mut receiver = FakeReceiver::new();
     receiver.status.insert("OPTIONS".to_owned(), 501);
     let mut link = Link::new(common::config(), receiver);
@@ -1288,6 +1334,20 @@ fn errors_refused_per_method_and_warnings_after_record() {
             .iter()
             .all(|warning| matches!(warning, Warning::RequestFailed { status: 500, .. }))
     );
+    assert!(!link.closed);
+    // So is one to the keep-alive OPTIONS, 403 included (P131).
+    link.receiver.status.insert("OPTIONS".to_owned(), 403);
+    link.advance(Duration::from_secs(31));
+    assert_eq!(link.keys().last().map(String::as_str), Some("OPTIONS"));
+    assert_eq!(
+        warnings(&link).last(),
+        Some(&Warning::RequestFailed {
+            method: Method::Options,
+            status: 403
+        })
+    );
+    assert_eq!(link.session.state(), State::Playing);
+    assert!(link.failure().is_none());
     assert!(!link.closed);
 }
 
@@ -1614,7 +1674,7 @@ fn metadata_requests_follow_the_listed_types() {
     assert_eq!(link.keys().len(), before);
 }
 
-// covers: P130, P131
+// covers: P130, P131, P138
 // Part of P141 (other speakers keep playing: stream stage).
 #[test]
 fn keepalive_ap1() {
@@ -1633,6 +1693,57 @@ fn keepalive_ap1() {
     assert_eq!(keepalives.len(), 2, "at 30 s and 60 s");
     assert!(keepalives.iter().all(|request| request.uri == "*"));
     assert!(link.now - idle_from >= Duration::from_secs(60));
+
+    // The keep-alive checks the connection, not the session's rights: on a
+    // verified, playing session any 4xx or 5xx answer to it, 403 included,
+    // is a warning. The session goes on, sends the next keep-alive, and
+    // reports neither Refused nor PairingRequired, so the host keeps its
+    // credentials and no PIN is asked for (P131, P138).
+    for status in [400, 403, 404, 409, 453, 500, 501, 503] {
+        let mut link = Link::new(verifying_config(), FakeReceiver::new());
+        link.connect();
+        assert_eq!(link.session.state(), State::Playing);
+        link.receiver.status.insert("OPTIONS".to_owned(), status);
+        link.advance(Duration::from_secs(31));
+        link.advance(Duration::from_secs(30));
+        let options = link.keys().iter().filter(|key| *key == "OPTIONS").count();
+        assert_eq!(
+            options, 3,
+            "{status}: the first OPTIONS and two keep-alives"
+        );
+        assert!(link.failure().is_none(), "{status}: {:?}", link.events);
+        let failed = Warning::RequestFailed {
+            method: Method::Options,
+            status,
+        };
+        assert_eq!(warnings(&link), [failed.clone(), failed], "{status}");
+        assert_eq!(link.session.state(), State::Playing);
+        assert!(!link.closed);
+    }
+
+    // A 401 to the keep-alive follows P38 as on any request: a stale nonce
+    // gets one resend and the session goes on (the keep-alive is the sixth
+    // request with a valid Authorization, after OPTIONS, ANNOUNCE, SETUP,
+    // RECORD and the initial volume) ...
+    let mut gate = PasswordGate::new("secret");
+    gate.stale_on = Some(6);
+    let mut receiver = FakeReceiver::new();
+    receiver.gate = Some(gate);
+    let mut link = Link::new(password_config("secret"), receiver);
+    link.connect();
+    assert_eq!(link.session.state(), State::Playing, "{:?}", link.events);
+    link.advance(Duration::from_secs(31));
+    let keys = link.keys();
+    assert_eq!(keys[keys.len() - 2..], ["OPTIONS", "OPTIONS"]);
+    assert_eq!(link.receiver.authorized, 7);
+    assert!(link.failure().is_none(), "{:?}", link.events);
+    assert_eq!(link.session.state(), State::Playing);
+    // ... and a challenge to it without a password is PasswordRequired
+    // (P39).
+    let mut link = playing();
+    link.receiver.gate = Some(PasswordGate::new("secret"));
+    link.advance(Duration::from_secs(31));
+    assert_eq!(kinds(&link), [ErrorKind::PasswordRequired]);
 
     // 10 s without timing requests after the first: lost.
     let mut link = playing();

@@ -15,6 +15,7 @@ use audiosync_airplay::discovery::{
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
 use audiosync_airplay::metadata::MetadataSupport;
 use audiosync_airplay::sdp::Codec;
+use audiosync_airplay::sender::ReceiverInfo;
 use audiosync_airplay::session::State;
 use common::{FakeReceiver, Link, config};
 
@@ -979,6 +980,8 @@ fn an_apple_tv_with_the_pin_flags_needs_legacy_pairing() {
         assert!(apple_tv.verdict.legacy_pairing, "{flags}");
         // Legacy pairing makes it AirPlay 1 capable without `et` 0.
         assert_eq!(apple_tv.verdict.airplay1, Ok(()));
+        // Without credentials the decision rule asks OPTIONS and then ends
+        // with PairingRequired; with them the session verifies first.
         assert_eq!(
             apple_tv.airplay1_plan(false),
             Err(ErrorKind::PairingRequired)
@@ -988,6 +991,11 @@ fn an_apple_tv_with_the_pin_flags_needs_legacy_pairing() {
             Ok(()),
             "verifies with credentials"
         );
+        // What discovery tells the host is only a hint: the verdict's flags,
+        // with the plan still Ok, since only a connection reports
+        // PairingRequired.
+        assert!(apple_tv.verdict.needs_pairing);
+        assert_eq!(ReceiverInfo::new(apple_tv).plan, Ok(()), "{flags}");
     }
     // The AirPlay `model` counts too.
     let by_model = device(Some(&["et=0"]), Some(&["model=AppleTV9,4", "flags=0x8"]));

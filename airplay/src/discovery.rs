@@ -291,7 +291,8 @@ impl Endpoint {
 pub struct Verdict {
     /// RAOP `pw` true, AirPlay `pw` present and not false, or flags bit 7.
     pub needs_password: bool,
-    /// Flags bit 3 or 9.
+    /// Flags bit 3 or 9: the receiver likely needs pairing. Only a hint, as
+    /// `busy_hint` is: PairingRequired comes only from a connection (P46).
     pub needs_pairing: bool,
     /// Flags bit 17: another sender may be playing (P137). Only a hint.
     pub busy_hint: bool,
@@ -589,9 +590,14 @@ impl Device {
     }
 
     /// Whether an AirPlay 1 session may start (P46, P139): an unsupported
-    /// device is reported without connecting, and an Apple TV that needs the
-    /// legacy pairing reports PairingRequired until the host has stored
-    /// credentials.
+    /// device is reported without connecting. For an Apple TV that needs
+    /// the legacy pairing and has no stored credentials it answers
+    /// PairingRequired, the input of P46's decision rule: such a session
+    /// connects, asks OPTIONS and only then reports PairingRequired (or
+    /// Unsupported). Before any connection the host gets only the hint of
+    /// [`Verdict::needs_pairing`] and [`Verdict::legacy_pairing`]
+    /// ([`ReceiverInfo::plan`](crate::sender::ReceiverInfo::plan) stays
+    /// `Ok`).
     pub fn airplay1_plan(&self, has_credentials: bool) -> Result<(), ErrorKind> {
         self.verdict.airplay1.map_err(ErrorKind::Unsupported)?;
         if self.verdict.legacy_pairing && !has_credentials {
