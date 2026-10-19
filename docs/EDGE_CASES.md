@@ -70,7 +70,7 @@ Code path:
 - `ProcessTapCapture.watch` listens to `kAudioTapPropertyFormat` (tap) or `kAudioDevicePropertyNominalSampleRate` (input device); `CaptureRate.needsRestart` (`CaptureCheck.swift`) decides; `.formatChanged` goes through `SyncEngine.handleInterruption` to the `engine.onInterrupted` handler in `AppDelegate.swift`, which calls `startEngine(origin: .automatic)`.
 - Delays are kept in milliseconds and converted at the new rate (`OutputRenderer.setDelayMs`); `FifoFeed.setInputRate` resamples to the engine's 48 kHz.
 
-Automated: "EC4 rate: a new capture rate rebuilds the session", "EC4 rate: a higher capture rate rebuilds the session", "EC4 rate: the same rate keeps playing", "EC4 rate: an unreadable rate keeps playing", "EC4 rate: a format change rebuilds a session that still streams", "EC4 rate: a format change reported after streaming stopped starts nothing"; logic "fifo: <rate> Hz → 48 kHz frame count"; ring buffer "I …: lag stays within tolerance".
+Automated: "EC4 rate: a new capture rate rebuilds the session", "EC4 rate: a higher capture rate rebuilds the session", "EC4 rate: the same rate keeps playing", "EC4 rate: an unreadable rate keeps playing", "EC4 rate: a format change rebuilds the session the engine stopped, unless the user switched streaming off"; logic "fifo: <rate> Hz → 48 kHz frame count"; ring buffer "I …: lag stays within tolerance".
 
 Manual: stream to a USB output and an AirPlay speaker. In Audio MIDI Setup, change the USB output's format from 48,000 Hz to 44,100 Hz and back. Expected: at most a short glitch, then in sync with AirPlay, no notice. Do the same on the Mac's default output device: a short dropout everywhere, then playback resumes in sync; the debug log shows "capture rate changed".
 

@@ -42,10 +42,11 @@ enum AppLifecycle {
     /// it is quitting: the new copy then waits for it to go and carries on.
     static func answersSecondLaunch(exiting: Bool) -> Bool { !exiting }
 
-    /// A capture format change rebuilds the session at the new rate (S20),
-    /// but only one that is still streaming: a report that arrives after the
-    /// user stopped starts nothing.
-    static func restartsAfterFormatChange(streaming: Bool) -> Bool { streaming }
+    /// A capture format change rebuilds the session at the new rate (S20).
+    /// The engine stops the session before it reports the change, so the
+    /// restart doesn't ask whether it still runs; only the user switching
+    /// streaming off holds it back.
+    static func restartsAfterFormatChange(userStopped: Bool) -> Bool { !userStopped }
 
     /// The app that just quit was the source of a running session: the
     /// session ends, with the AirPlay speakers released and a notice (S142,

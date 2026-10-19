@@ -12,37 +12,38 @@ import Foundation
 /// Clause numbers refer to docs/ENGINE_SPEC.md.
 struct AppSettings: Equatable {
 
-    /// The UserDefaults keys. Every key AudioSync stores lives here.
+    /// The UserDefaults keys. Every key AudioSync stores lives here, and
+    /// existing installs depend on each string: a rename loses that setting.
     enum Keys {
         /// `AudioSource.defaultsValue` (S12): "" or missing is the whole system.
-        static let source = "audioSource"
+        static let source = "audioSourceBundleID"
         /// Engine output IDs of the AirPlay speakers that are on, as an array.
-        static let enabledAirPlay = "enabledAirPlay"
+        static let enabledAirPlay = "enabledAirPlayIds"
         /// Device UIDs of the local speakers that are on, as an array.
-        static let enabledLocal = "enabledLocal"
+        static let enabledLocal = "enabledLocalUIDs"
         /// The master slider's position, 0…100.
         static let master = "masterVolume"
         /// Each local speaker's slider position (0…100), by device UID.
-        static let localVolumes = "localVolume"
+        static let localVolumes = "localVolumePosByUID"
         /// Each local speaker's configured delay in ms, by device UID.
-        static let localDelays = "localDelayMs"
+        static let localDelays = "localDelayMsByUID"
         /// Each AirPlay speaker's own slider position (0…100), by output ID (S73).
-        static let airplayVolumes = "airplayVolume"
+        static let airplayVolumes = "airPlayVolumeByID"
         /// `[SpeakerGroup]` as JSON (S149).
-        static let groups = "groups"
+        static let groups = "speakerGroups"
         /// Speaker keys (`SpeakerKey`) marked for auto-connect, as an array.
-        static let autoConnect = "autoConnect"
-        static let showVirtualDevices = "showVirtualDevices"
+        static let autoConnect = "autoConnectSpeakers"
+        static let showVirtualDevices = "showVirtualOutputDevices"
         /// `AppAppearance.defaultsValue` (S155).
         static let appearance = "appearance"
         /// `Equalizer.Settings` as JSON (S24, `StoredEqualizer`).
-        static let equalizer = "equalizer"
-
-        /// Older forms, read only while the current key is missing: volumes as
-        /// linear percentages (0…150), and one delay for every local speaker.
-        static let legacyLocalPercents = "outputVolumes"
-        static let legacyMasterPercent = "masterVolumePercent"
+        static let equalizer = "equalizerSettings"
+        /// One delay in ms for every local speaker, from before delays were
+        /// per speaker: where a speaker without its own delay starts (S77).
         static let legacyDelayMs = "delayMs"
+        /// Local volumes as linear gain in percent (0…150), from before the
+        /// volume curve. Converted to `localVolumes` once, then removed (S75).
+        static let legacyLocalGains = "localGainByUID"
     }
 
     /// Where a speaker without a volume of its own starts (S71, S105).
@@ -75,16 +76,8 @@ struct AppSettings: Equatable {
         s.enabledAirPlay = ids(read(Keys.enabledAirPlay))
         s.enabledLocal = ids(read(Keys.enabledLocal))
         s.autoConnect = ids(read(Keys.autoConnect))
-        if let stored = read(Keys.master) {
-            s.master = number(stored).map(volume) ?? defaultMaster
-        } else if let percent = read(Keys.legacyMasterPercent).flatMap(number) {
-            s.master = position(percent: percent)
-        }
-        if let stored = read(Keys.localVolumes) {
-            s.localVolumes = levels(stored, volume)
-        } else if let percents = read(Keys.legacyLocalPercents) {
-            s.localVolumes = levels(percents, position(percent:))
-        }
+        s.master = read(Keys.master).flatMap(number).map(volume) ?? defaultMaster
+        s.localVolumes = levels(read(Keys.localVolumes), volume)
         s.localDelays = levels(read(Keys.localDelays), delay)
         s.defaultDelayMs = read(Keys.legacyDelayMs).flatMap(number).map(delay) ?? standardDelayMs
         s.airplayVolumes = levels(read(Keys.airplayVolumes), volume)
@@ -113,8 +106,8 @@ struct AppSettings: Equatable {
     /// A delay in ms, clamped to 0…`maxDelayMs`.
     static func delay(_ value: Double) -> Double { min(maxDelayMs, max(0, value)) }
 
-    /// An older linear percentage (0…150) as a slider position: the position
-    /// whose gain is that percentage, so 100 % and more are 100 (S75).
+    /// An older linear gain in percent (0…150) as a slider position: the
+    /// position whose gain is that percentage, so 100 % and more are 100 (S75).
     static func position(percent: Double) -> Double {
         volume(VolumeCurve.position(gain: percent / 100))
     }
@@ -158,7 +151,22 @@ struct SettingsStore {
                       write: { UserDefaults.standard.set($0, forKey: $1) })
     }
 
-    func load() -> AppSettings { AppSettings.load(read) }
+    /// Brings older forms up to date (`migrate`), then reads every setting.
+    func load() -> AppSettings {
+        migrate()
+        return AppSettings.load(read)
+    }
+
+    /// Local volumes stored as linear gain become slider positions under
+    /// `Keys.localVolumes`, and the old key goes (S75). Positions already
+    /// stored win; the old key is removed either way.
+    func migrate() {
+        guard let gains = read(Keys.legacyLocalGains) else { return }
+        if read(Keys.localVolumes) == nil {
+            save(levels: AppSettings.levels(gains, AppSettings.position(percent:)), forKey: Keys.localVolumes)
+        }
+        write(nil, Keys.legacyLocalGains)
+    }
 
     func save(source: AudioSource) { write(source.defaultsValue, Keys.source) }
 
