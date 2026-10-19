@@ -236,7 +236,7 @@ fn every_control_has_an_accessible_label() {
         "CheckBox",
         "SpinBox",
     ];
-    let own = ["IconButton", "SpeakerBadge", "VolumeSlider"];
+    let own = ["IconButton", "SpeakerBadge", "VolumeSlider", "LinkButton"];
     let mut checked = 0;
     for (file, source) in UI_FILES {
         for element in standard {
@@ -270,6 +270,7 @@ fn custom_controls_are_accessible_and_show_focus() {
     for (source, component) in [
         (widgets, "IconButton"),
         (widgets, "SpeakerBadge"),
+        (widgets, "LinkButton"),
         (main, "EqualizerCard"),
     ] {
         let start = source
@@ -728,10 +729,7 @@ fn the_hint_and_the_fix_name_the_output_for_narrator() {
         )
         .expect("the hint names the output");
     let fix_at = row
-        .find(
-            "accessible-label: Strings.device-volume-fix-label(root.item.name, \
-             root.item.device-volume);",
-        )
+        .find("label: Strings.device-volume-fix-label(root.item.name, root.item.device-volume);")
         .expect("the fix names the output");
     let options = row
         .find("options := IconButton {")

@@ -988,6 +988,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::AirPlayStopped => {
                 self.post(NoticeSubject::AirPlay, NoticeMessage::AirPlayStopped);
             }
+            // The next snapshot shows it; no notice, no focus change (S198).
+            BackendEvent::DeviceVolumeChanged { .. } => {}
         }
     }
 
@@ -1123,6 +1125,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 availability(speaker.availability)
             },
             paired: speaker.paired,
+            // An AirPlay speaker's volume is its own slider (S192).
+            device_volume: None,
         }
     }
 
@@ -1153,6 +1157,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
             delay_ms: (!output.is_reference).then_some(output.delay_ms),
             availability: Availability::Open,
             paired: false,
+            // Read only while the output is on (S192).
+            device_volume: output
+                .device_volume
+                .and_then(|device_volume| device_volume.hint()),
         }
     }
 
@@ -1532,6 +1540,15 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     /// The speakers that were on come back as they do after a launch: the
     /// backend kept their settings, and the auto-connect ones switch on as
     /// the new sender lists them.
+    fn fix_device_volume(&mut self, id: &str) {
+        let Some(SpeakerKey::Local(endpoint_id)) = SpeakerKey::parse(id) else {
+            return;
+        };
+        // The audio backend logs what it wrote (S201).
+        self.audio.fix_device_volume(&endpoint_id);
+        self.take_events();
+    }
+
     fn retry_airplay(&mut self) {
         self.log
             .log(|| "the user asked to start AirPlay again (Retry)".to_owned());

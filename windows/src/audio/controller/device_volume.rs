@@ -1,5 +1,199 @@
 //! An output device's own volume and mute (spec S192 to S202): which outputs
 //! are followed, their readings, the log lines and the fix.
+//!
+//! Windows keeps a volume and a mute for every endpoint and applies them
+//! after AudioSync's gain, so an output left at 13 % in Windows sounds very
+//! quiet whatever AudioSync's slider says. The controller follows the own
+//! volume of every output that is on and connected, and of no other: it
+//! reads it once when the output is switched on or its device comes back,
+//! and again whenever Windows reports a change (the driver's notification
+//! only marks the endpoint; the read happens here, on the thread that polls).
+//! It lets go of an output switched off, unplugged, or at quit. The core
+//! (`audiosync_core::policy::device_volume`) decides what a reading means and
+//! what the fix writes; the only write is that fix, when the user clicks it,
+//! and the row follows what Windows reports afterwards, never the values
+//! written. None of this touches an audio thread, the renderers or
+//! AudioSync's own volumes.
+
+use std::collections::BTreeMap;
+
+use audiosync_core::policy::device_volume::{DeviceVolume, decision_change};
+
+use super::{Controller, Driver, label};
+use crate::audio::backend::{BackendError, BackendEvent};
+use crate::audio::routing::EndpointVolume;
+
+/// The outputs whose own volume is followed, by endpoint ID, each with its
+/// last reading.
+#[derive(Debug, Default)]
+pub(super) struct Followed {
+    readings: BTreeMap<String, DeviceVolume>,
+}
+
+impl Followed {
+    /// The last reading of output `id`, or `None` while it isn't followed.
+    pub(super) fn reading(&self, id: &str) -> Option<DeviceVolume> {
+        self.readings.get(id).copied()
+    }
+}
+
+/// A reading as the core decides on it: both parts, or neither when Windows
+/// can't activate or read the endpoint's volume control (S194).
+fn device_volume(volume: Option<EndpointVolume>) -> DeviceVolume {
+    volume.map_or(DeviceVolume::UNKNOWN, |volume| DeviceVolume {
+        volume: Some(f64::from(volume.level)),
+        muted: Some(volume.muted),
+    })
+}
+
+/// A reading as the log shows it: "13%, muted", or "unknown".
+fn describe(reading: DeviceVolume) -> String {
+    if reading == DeviceVolume::UNKNOWN {
+        return "unknown".to_owned();
+    }
+    let volume = reading.percent().map_or_else(
+        || "volume unknown".to_owned(),
+        |percent| format!("{percent}%"),
+    );
+    let mute = match reading.muted {
+        Some(true) => "muted",
+        Some(false) => "not muted",
+        None => "mute unknown",
+    };
+    format!("{volume}, {mute}")
+}
+
+/// How a write of the fix went, for the log.
+fn outcome(result: &Result<(), BackendError>) -> String {
+    match result {
+        Ok(()) => "done".to_owned(),
+        Err(error) => format!("failed: {error}"),
+    }
+}
+
+impl<D: Driver> Controller<D> {
+    /// Follows the own volume of every output that is on and connected, and
+    /// of no other (S192, S195): an output newly on, or whose device came
+    /// back, is registered with Windows and read once, with a line in the
+    /// log (S201); one switched off or gone is let go. Called whenever the
+    /// outputs that are on, or the connected ones, may have changed.
+    pub(super) fn follow_device_volumes(&mut self) {
+        let wanted: Vec<String> = self
+            .present
+            .iter()
+            .filter(|endpoint| self.policy.settings(&endpoint.id).enabled)
+            .map(|endpoint| endpoint.id.clone())
+            .collect();
+        let dropped: Vec<String> = self
+            .device_volumes
+            .readings
+            .keys()
+            .filter(|id| !wanted.contains(id))
+            .cloned()
+            .collect();
+        for id in dropped {
+            self.driver.unwatch_endpoint_volume(&id);
+            self.device_volumes.readings.remove(&id);
+        }
+        for id in wanted {
+            if self.device_volumes.readings.contains_key(&id) {
+                continue;
+            }
+            let watched = self.driver.watch_endpoint_volume(&id);
+            let reading = device_volume(self.driver.endpoint_volume(&id));
+            self.log.log(|| {
+                // Windows can set both parts whenever it can read them.
+                let settable = if reading == DeviceVolume::UNKNOWN {
+                    "not settable"
+                } else {
+                    "settable"
+                };
+                let followed = match &watched {
+                    Ok(()) => String::new(),
+                    Err(error) => format!("; its changes aren't followed: {error}"),
+                };
+                format!(
+                    "output {} device volume: {}; volume and mute {settable}{followed}",
+                    label(&self.names, &id),
+                    describe(reading)
+                )
+            });
+            self.device_volumes.readings.insert(id, reading);
+        }
+    }
+
+    /// Reads again each followed output that Windows reported a change for
+    /// (S195, S202): both parts, whatever the notification said. A new
+    /// reading that changes what the row shows is reported as
+    /// [`BackendEvent::DeviceVolumeChanged`]; one whose decision changed
+    /// gets a line in the log, others none (S201).
+    pub(super) fn read_device_volume_changes(&mut self) {
+        for id in self.driver.endpoint_volume_changes() {
+            let Some(before) = self.device_volumes.reading(&id) else {
+                continue;
+            };
+            let reading = device_volume(self.driver.endpoint_volume(&id));
+            if let Some((from, to)) = decision_change(Some(before.decision()), reading.decision()) {
+                self.log.log(|| {
+                    format!(
+                        "output {} device volume: {from} → {to} ({})",
+                        label(&self.names, &id),
+                        describe(reading)
+                    )
+                });
+            }
+            self.device_volumes.readings.insert(id.clone(), reading);
+            if reading.hint() != before.hint() {
+                self.pending.push(BackendEvent::DeviceVolumeChanged { id });
+            }
+        }
+    }
+
+    /// The fix the user clicked under output `id` (S197): writes what the
+    /// core decides for the last reading, once each, and logs what it wrote
+    /// and how each write went (S201). The reading stays as it was until
+    /// Windows reports the change, so a write the device ignores leaves the
+    /// hint and the fix showing. An output that isn't followed, or has
+    /// nothing to fix, writes nothing.
+    pub(super) fn fix_followed_device_volume(&mut self, id: &str) {
+        let Some(reading) = self.device_volumes.reading(id) else {
+            return;
+        };
+        let fix = reading.fix();
+        if fix.is_empty() {
+            return;
+        }
+        let level = fix
+            .volume
+            .map(|volume| (volume, self.driver.set_endpoint_level(id, volume as f32)));
+        let unmuted = fix.unmute.then(|| self.driver.unmute_endpoint(id));
+        self.log.log(|| {
+            let mut written = Vec::new();
+            if let Some((volume, result)) = &level {
+                written.push(format!(
+                    "volume set to {}%: {}",
+                    (volume * 100.0).round(),
+                    outcome(result)
+                ));
+            }
+            if let Some(result) = &unmuted {
+                written.push(format!("unmuted: {}", outcome(result)));
+            }
+            format!(
+                "output {} device volume fix: {}",
+                label(&self.names, id),
+                written.join("; ")
+            )
+        });
+    }
+
+    /// Lets go of every output's own volume: AudioSync quits.
+    pub(super) fn stop_following_device_volumes(&mut self) {
+        for id in std::mem::take(&mut self.device_volumes.readings).into_keys() {
+            self.driver.unwatch_endpoint_volume(&id);
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

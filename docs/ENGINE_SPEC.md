@@ -1081,11 +1081,9 @@ Windows (`cargo test` in `windows/`):
 
 By ear on real AirPlay receivers, outside these suites: with a speaker playing, a stop and a source change make no click on the speaker when the engine stops or the native sender flushes it, and the first sound after a start or a source change fades in (S189).
 
-### device volume (to be written first, failing)
+### device volume: core (`cargo test` in `core/`)
 
-The checks for S192 to S202. None exists yet: each is written first and fails against today's code (the first row of each host table reproduces the quiet MacBook speakers at 13 %), then the code follows the clauses. Once a check exists, its row moves to the table of the suite that runs it. The host checks drive the host's device-volume access through a fake that stands in for Core Audio or `IAudioEndpointVolume` (the Windows mock backend already keeps a volume and a mute per output), so no real device is read or written.
-
-Core (`cargo test` in `core/`, test functions with `// covers:` markers):
+The checks for S196, S197 and S201 in the Rust core, test functions with `// covers:` markers (`core/tests/policy_device_volume.rs`). The first row reproduces the quiet MacBook speakers at 13 %.
 
 | Test | Clauses |
 |---|---|
@@ -1095,6 +1093,28 @@ Core (`cargo test` in `core/`, test functions with `// covers:` markers):
 | the_fix_raises_to_75_percent_only_below_25_and_never_lowers | S197 |
 | the_fix_unmutes_without_touching_a_fine_volume | S197 |
 | a_reading_logs_only_when_its_decision_changes | S201 |
+
+### device volume: Windows (`cargo test` in `windows/`)
+
+The Windows checks for S192 to S202 (`windows/src/audio/controller/device_volume.rs`, `windows/src/adapter/device_volume_tests.rs` and, for the windows' sources, `windows/src/contrast.rs`). They drive `IAudioEndpointVolume` through the mock driver, which keeps a volume and a mute per output, records the listeners and every write, and notifies a followed output when a test changes its volume, so no real device is read or written. The first row reproduces the quiet speakers at 13 %.
+
+| Test | Clauses |
+|---|---|
+| a_switched_on_output_at_13_percent_shows_the_low_hint | S196, S198 |
+| a_muted_output_shows_the_unmute_fix | S196, S198 |
+| the_fix_sets_75_percent_and_unmutes_once_each | S197 |
+| nothing_is_written_without_a_click | S192, S197 |
+| an_endpoint_whose_volume_cannot_be_read_shows_nothing | S194, S196 |
+| an_endpoint_volume_notification_updates_the_row | S195, S202 |
+| the_hint_and_the_fix_name_the_output_for_narrator | S199, S200 |
+| the_flyout_row_shows_the_glyph_and_the_hint_in_its_description | S198, S199 |
+| a_volume_change_logs_only_when_its_decision_changes | S201 |
+
+Outside these suites, `cargo test real_endpoint_volumes -- --ignored --nocapture` in `windows/` reads the PC's own endpoint volumes and registers and unregisters a listener on each, changing nothing (S194, S195).
+
+### device volume: Mac (to be written first, failing)
+
+The Mac's checks for S192 to S202. None exists yet: each is written first and fails against today's Mac code (the first row reproduces the quiet MacBook speakers at 13 %), then the Mac app follows the clauses, deciding through the core (S196, S197, S201). Once a check exists, its row moves to the logic table. The checks drive the host's device-volume access through a fake that stands in for Core Audio, so no real device is read or written.
 
 Mac (`Tests/logictest.swift`):
 
@@ -1112,19 +1132,5 @@ Mac (`Tests/logictest.swift`):
 | device volume: the compact panel's row shows the glyph with the hint as tooltip and VoiceOver hint, without a button | S198, S199 |
 | device volume: a write the device ignores leaves the hint and the fix as they were and logs it | S197, S201 |
 | device volume: dragging the system volume across 25% logs one line | S201 |
-
-Windows (`cargo test` in `windows/`):
-
-| Test | Clauses |
-|---|---|
-| a_switched_on_output_at_13_percent_shows_the_low_hint | S196, S198 |
-| a_muted_output_shows_the_unmute_fix | S196, S198 |
-| the_fix_sets_75_percent_and_unmutes_once_each | S197 |
-| nothing_is_written_without_a_click | S192, S197 |
-| an_endpoint_whose_volume_cannot_be_read_shows_nothing | S194, S196 |
-| an_endpoint_volume_notification_updates_the_row | S195, S202 |
-| the_hint_and_the_fix_name_the_output_for_narrator | S199, S200 |
-| the_flyout_row_shows_the_glyph_and_the_hint_in_its_description | S198, S199 |
-| a_volume_change_logs_only_when_its_decision_changes | S201 |
 
 By hand on the Mac, outside these suites: set the built-in speakers to 13 % in Audio MIDI Setup, switch them on in AudioSync and see the hint; click Set to 75% and hear the level rise, with the hint gone and the system volume at 75 %; check the hint and the button in light and dark appearance and with VoiceOver (S193, S198, S200).

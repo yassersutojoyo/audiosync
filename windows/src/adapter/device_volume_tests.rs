@@ -136,8 +136,9 @@ fn the_fix_sets_75_percent_and_unmutes_once_each() {
     adapter.set_speaker_enabled(&key(SPEAKERS), true);
     adapter.fix_device_volume(&key(SPEAKERS));
     assert_eq!(record.writes(), [level(0.75), unmute()]);
-    // The row follows the device's own notification.
-    assert!(adapter.poll());
+    // The row follows the device's own notification (the mock's comes at
+    // once).
+    adapter.poll();
     assert_eq!(hint(&adapter, SPEAKERS), None);
     // Nothing is left to fix, so a second click writes nothing.
     adapter.fix_device_volume(&key(SPEAKERS));

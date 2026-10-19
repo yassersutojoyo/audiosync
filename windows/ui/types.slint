@@ -16,6 +16,10 @@ export enum AirPlayProblem { not-responding, connection-lost, busy, refused, pas
 // Where the PIN dialog of an Apple TV pairing is.
 export enum PinPhase { starting, ready, checking }
 
+// What a switched-on local output's own volume in Windows calls for: none,
+// or the hint under its volume slider (low, muted, or both).
+export enum DeviceVolumeHint { none, low, muted, muted-low }
+
 export struct SpeakerItem {
     id: string,
     name: string,
@@ -39,7 +43,12 @@ export struct SpeakerItem {
     // An Apple TV AudioSync keeps pairing credentials for: its menu offers
     // Forget Pairing.
     paired: bool,
+    // The output's own volume in Windows, when it is low or muted, and its
+    // whole percent.
+    device-volume: DeviceVolumeHint,
+    device-volume-percent: int,
 }
+
 
 export struct GroupItem {
     id: string,

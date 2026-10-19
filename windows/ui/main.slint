@@ -18,7 +18,7 @@ export { GuideWindow } from "guide.slint";
 export { Strings } from "strings.slint";
 // The style's palette, for the theme preview (src/view.rs).
 export { Palette } from "std-widgets.slint";
-export { AirPlayProblem, Availability, GroupItem, GuidePage, GuideStepItem, NoticeItem, PinPhase, RowState, SpeakerItem, SpeakerKind } from "types.slint";
+export { AirPlayProblem, Availability, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, NoticeItem, PinPhase, RowState, SpeakerItem, SpeakerKind } from "types.slint";
 
 // A titled card of speaker rows, with a note when it has none.
 component SpeakerSection inherits VerticalLayout {
@@ -33,6 +33,7 @@ component SpeakerSection inherits VerticalLayout {
     callback delay-edited(string, string);
     callback auto-connect-toggled(string, bool);
     callback forget-pairing(string);
+    callback device-volume-fix(string);
 
     spacing: 8px;
     accessible-role: groupbox;
@@ -75,6 +76,9 @@ component SpeakerSection inherits VerticalLayout {
                 }
                 forget-pairing => {
                     root.forget-pairing(speaker.id);
+                }
+                device-volume-fix => {
+                    root.device-volume-fix(speaker.id);
                 }
             }
         }
@@ -212,7 +216,10 @@ export component MainWindow inherits Window {
     callback airplay-delay-edited(string);
     callback auto-connect-toggled(string, bool);
     callback forget-pairing-requested(string);
+    // The fix under a speaker's device-volume hint.
+    callback device-volume-fix-requested(string);
     callback group-toggled(string);
+
     callback group-rename-requested(string);
     callback group-deleted(string);
     callback new-group-requested();
@@ -502,6 +509,9 @@ export component MainWindow inherits Window {
                         forget-pairing(id) => {
                             root.forget-pairing-requested(id);
                         }
+                        device-volume-fix(id) => {
+                            root.device-volume-fix-requested(id);
+                        }
                         compact: root.compact;
                         note: root.this-pc.length == 0 ? Strings.this-pc-none : "";
                         toggled(id) => {
@@ -564,6 +574,9 @@ export component MainWindow inherits Window {
                         speakers: root.connected;
                         forget-pairing(id) => {
                             root.forget-pairing-requested(id);
+                        }
+                        device-volume-fix(id) => {
+                            root.device-volume-fix-requested(id);
                         }
                         compact: root.compact;
                         note: root.connected.length == 0 ? Strings.connected-none : "";
