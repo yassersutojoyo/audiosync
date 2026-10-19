@@ -128,7 +128,7 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_ERROR 2    /* an error ended a speaker's session: .error */
 #define ASC_AIRPLAY_EVENT_LATENCY 3  /* a speaker's latencies: .latency_ms, .receiver_latency_frames */
 #define ASC_AIRPLAY_EVENT_TIMELINE 4 /* the base latency L or the timeline changed: .latency_ms */
-#define ASC_AIRPLAY_EVENT_FAILED 5   /* the sender stopped working (a bug); destroy it, create a new one */
+#define ASC_AIRPLAY_EVENT_FAILED 5   /* the sender or its discovery stopped working (a bug); destroy it, create a new one */
 
 /* A speaker's state (AscAirPlayEvent.state). */
 #define ASC_AIRPLAY_STATE_CONNECTING 1 /* a session is starting */
@@ -647,8 +647,9 @@ bool asc_delay_ms_to_frames(double delay_ms, uint32_t rate, int64_t *frames);
  *
  * A bug in the sender never ends the host: a panic inside a call returns
  * that call's failure value (NULL, false or 0) and makes its handle dead,
- * as does a panic that ends the sender's own driver thread. A dead handle's
- * calls do nothing and return their failure values, except that
+ * as does a panic that ends the sender's own driver thread or discovery's
+ * mDNS daemon. A dead handle's calls do nothing and return their failure
+ * values, except that
  * asc_airplay_next_event reports ASC_AIRPLAY_EVENT_FAILED once; the host
  * then destroys it (which still frees it) and may create a new sender. A
  * panic in an input write makes the input and its sender dead.

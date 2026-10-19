@@ -1155,6 +1155,18 @@ impl Driver {
         while let Some(event) = browser.poll_event() {
             changes.extend(self.directory.apply(event));
         }
+        let dead = browser.is_dead();
+        self.report_changes(changes);
+        if dead {
+            // Nothing will change the list any more: drop it rather than
+            // keep one that silently goes stale, and tell the host.
+            self.stop_discovery();
+            self.emit(SenderEvent::DiscoveryFailed);
+        }
+    }
+
+    /// Reports what discovery changed in the directory to the host.
+    fn report_changes(&mut self, changes: Vec<DirectoryEvent>) {
         for change in changes {
             match change {
                 DirectoryEvent::Updated(device) => {

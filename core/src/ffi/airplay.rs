@@ -29,7 +29,8 @@
 //! here runs its work behind [`std::panic::catch_unwind`] (the core's
 //! release build unwinds): a panic inside one returns that call's failure
 //! value (null, false or 0) and marks its handle dead, and a panic that
-//! ends the sender's driver thread does the same. A dead handle's calls do
+//! ends the sender's driver thread does the same, as does discovery's
+//! browser dying (its mDNS daemon ended). A dead handle's calls do
 //! nothing and return their failure values, except that
 //! [`asc_airplay_next_event`] reports [`AIRPLAY_EVENT_FAILED`] once; the
 //! host then destroys it and may create a new sender. A panic in an input
@@ -127,9 +128,9 @@ pub const AIRPLAY_EVENT_LATENCY: i32 = 3;
 /// The base latency L or the timeline changed; local outputs line up with
 /// the new L (P98, P114, P143).
 pub const AIRPLAY_EVENT_TIMELINE: i32 = 4;
-/// The sender stopped working: a bug ended one of its calls or its driver
-/// thread. It lists, plays and reports nothing more; the host destroys it
-/// and may create a new one. Reported once, with no ID.
+/// The sender stopped working: a bug ended one of its calls, its driver
+/// thread or its discovery. It lists, plays and reports nothing more; the
+/// host destroys it and may create a new one. Reported once, with no ID.
 pub const AIRPLAY_EVENT_FAILED: i32 = 5;
 
 /// A speaker's state ([`AscAirPlayEvent::state`]): a session is starting.
@@ -427,6 +428,9 @@ impl AscAirPlay {
                     .events
                     .push_back(Pending::Timeline { latency, restarted }),
                 SenderEvent::Pairing { .. } => {}
+                // Discovery's browser died (a bug in it): the sender no
+                // longer lists anything new, so it counts as dead too.
+                SenderEvent::DiscoveryFailed => self.dead.store(true, Ordering::Release),
             }
         }
     }
@@ -819,6 +823,9 @@ pub unsafe extern "C" fn asc_airplay_next_event(
         return false;
     }
     let take = |airplay: &mut AscAirPlay| {
+        if !airplay.is_dead() {
+            airplay.pump();
+        }
         let pending = if airplay.is_dead() {
             if airplay.failure_reported {
                 return false;
@@ -827,7 +834,6 @@ pub unsafe extern "C" fn asc_airplay_next_event(
             airplay.events.clear();
             Pending::Failed
         } else {
-            airplay.pump();
             let Some(pending) = airplay.events.pop_front() else {
                 return false;
             };
@@ -2201,5 +2207,40 @@ mod tests {
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
         assert!(started.elapsed() < Duration::from_secs(1), "destroy waited");
+    }
+
+    /// A browser whose daemon is already gone, as one a bug ended leaves it.
+    struct Dead;
+
+    impl Browser for Dead {
+        fn poll_event(&mut self) -> Option<BrowseEvent> {
+            None
+        }
+
+        fn is_dead(&self) -> bool {
+            true
+        }
+    }
+
+    // Discovery that died is the sender's failure too: the host gets the
+    // same failed state and Retry, not a list that silently stops changing.
+    #[test]
+    fn dead_discovery_reports_the_failure_once() {
+        let mut handle = asc_airplay_create();
+        // SAFETY: a live handle, used by this thread only.
+        unsafe { &*handle }
+            .sender
+            .start_discovery_with(Box::new(Dead));
+        let events = events_until(handle, failed);
+        assert_eq!(events.last(), Some(&failure_event()), "{events:?}");
+        let mut raw = blank_event();
+        // SAFETY: as above; a local out struct.
+        unsafe {
+            assert!(
+                !asc_airplay_next_event(handle, &mut raw),
+                "nothing after it"
+            );
+            asc_airplay_destroy(&mut handle);
+        }
     }
 }

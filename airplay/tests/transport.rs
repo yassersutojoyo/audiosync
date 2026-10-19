@@ -983,6 +983,49 @@ fn timing_replies_read_only_seq_and_transmit_and_leave_within_100_ms_under_load(
     sender.shutdown();
 }
 
+/// A browser that lists one receiver and then dies, as an mDNS daemon
+/// ended by a bug leaves it.
+struct Dying(Option<BrowseEvent>);
+
+impl Browser for Dying {
+    fn poll_event(&mut self) -> Option<BrowseEvent> {
+        self.0.take()
+    }
+
+    fn is_dead(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
+// A browser that died is reported, not left silently frozen: the receivers
+// it listed go, discovery fails, and the sender itself keeps running.
+#[test]
+fn a_dead_browser_drops_its_receivers_and_reports_discovery_failed() {
+    let (sender, _writer) = Sender::start(SenderConfig::default()).expect("sender");
+    let mut events = Events::default();
+    let id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 0x42]);
+    sender.start_discovery_with(Box::new(Dying(Some(BrowseEvent::Resolved(record(
+        ServiceKind::Raop,
+        &format!("{id}@Study"),
+        &["cn=0,1", "et=0"],
+    ))))));
+    let failed = events.wait_for(&sender, LONG, |e| matches!(e, SenderEvent::DiscoveryFailed));
+    assert_eq!(failed, Some(SenderEvent::DiscoveryFailed));
+    let order: Vec<&str> = events
+        .seen
+        .iter()
+        .filter_map(|(_, event)| match event {
+            SenderEvent::Receiver(ReceiverEvent::Appeared(_)) => Some("appeared"),
+            SenderEvent::Receiver(ReceiverEvent::Gone(_)) => Some("gone"),
+            SenderEvent::DiscoveryFailed => Some("failed"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(order, ["appeared", "gone", "failed"]);
+    assert!(sender.is_running(), "the sender keeps running");
+    sender.shutdown();
+}
+
 /// A browser whose first poll panics, as a bug in discovery would.
 struct Panicking;
 

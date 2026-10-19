@@ -296,6 +296,12 @@ pub enum SenderEvent {
         origin: i64,
         restarted: bool,
     },
+    /// Discovery stopped for good: its browser can never report anything
+    /// again ([`Browser::is_dead`]), which only a bug in the browser causes.
+    /// Every receiver it listed was reported gone just before. Speakers keep
+    /// playing; a host that wants discovery back starts it again, or
+    /// replaces the sender.
+    DiscoveryFailed,
 }
 
 /// The sender: one stream, any number of speakers, optional discovery.
