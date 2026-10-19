@@ -18,7 +18,9 @@ import Synchronization
 /// Lifetime: the owner installs an input it took from its sender and, to
 /// free it, uninstalls it first; `uninstall` returns once no write or rate
 /// call can still be using it, so the input is never freed under the
-/// capture thread.
+/// capture thread. A sender's teardown may overlap the next sender's start
+/// (Retry after a failure): uninstalling takes out only the input it names,
+/// never the newer one installed since.
 enum NativeAirPlayTap {
     /// The installed input (an `AscAirPlayInput`), or nil.
     private static let slot = Atomic<UnsafeMutableRawPointer?>(nil)
@@ -59,12 +61,14 @@ enum NativeAirPlayTap {
         if rate > 0 { _ = asc_airplay_input_set_rate(input, rate) }
     }
 
-    /// Takes the input out of the capture path and returns it once no call
-    /// can still be using it, for its owner to destroy; nil when none was
-    /// installed. Off the capture thread; it may wait for one block.
-    static func uninstall() -> OpaquePointer? {
-        guard let raw = slot.exchange(nil, ordering: .sequentiallyConsistent) else { return nil }
+    /// Takes `input` out of the capture path if it is still installed, and
+    /// returns once no call can still be using it, for its owner to destroy.
+    /// Off the capture thread; it may wait for one block.
+    static func uninstall(_ input: OpaquePointer) {
+        _ = slot.compareExchange(expected: UnsafeMutableRawPointer(input), desired: nil,
+                                 ordering: .sequentiallyConsistent)
+        // A call that loaded `input` started before it left the slot (here
+        // or when a newer input replaced it), so it ends before users is 0.
         while users.load(ordering: .sequentiallyConsistent) != 0 { usleep(50) }
-        return OpaquePointer(raw)
     }
 }

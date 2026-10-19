@@ -301,6 +301,7 @@ func airPlaySender() {
     check(taken && event.kind == ASC_AIRPLAY_EVENT_TIMELINE && abs(event.latency_ms - 1750) < 0.01
               && abs(asc_airplay_latency_ms(handle) - 1750) < 0.01 && String(cString: event.id).isEmpty,
           "the first event is the timeline, L = \(event.latency_ms) ms")
+    check(!asc_airplay_next_event(handle, &event), "a working sender reports nothing more, no failure")
     check(!asc_airplay_add_speaker(handle, "02005E005301", 50), "only a listed receiver can be added")
     asc_airplay_set_master(handle, 80)
     // The capture's input: handed over once, silent until it has a rate,
@@ -318,7 +319,8 @@ func airPlaySender() {
     check(handle == nil, "destroy sets the host's pointer to NULL")
     asc_airplay_destroy(&handle)
     asc_airplay_destroy(nil)
-    check(Int(ASC_AIRPLAY_FLAG_AIRPLAY2) == 128 && ASC_AIRPLAY_GONE == 3, "the AirPlay constants cross the header")
+    check(Int(ASC_AIRPLAY_FLAG_AIRPLAY2) == 128 && ASC_AIRPLAY_GONE == 3 && ASC_AIRPLAY_EVENT_FAILED == 5,
+          "the AirPlay constants cross the header")
 }
 
 versionVolumeAndEqualizer()
