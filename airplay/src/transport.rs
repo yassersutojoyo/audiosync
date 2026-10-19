@@ -31,6 +31,11 @@
 //! A pairing (P47) needs only the TCP connection: [`RtspIo`] runs the same
 //! RTSP reader and writer threads, without UDP sockets.
 //!
+//! A thread whose work panics (a bug) reports what a failure of that work
+//! would: a connect thread a failed connect, a session or pairing thread a
+//! closed connection. The driver then retries at once, as after a real
+//! failure, instead of noticing only at a timeout.
+//!
 //! Where an ICMP unreachable is reported matters for P141. Windows reports
 //! it as a reset on the next call on the socket, which is the control
 //! thread's receive, not the send that caused it; the control thread notes
@@ -40,6 +45,7 @@
 
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, SocketAddrV6, TcpStream, UdpSocket};
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -107,8 +113,32 @@ pub(crate) trait Notify: Fn(IoEvent) -> bool + Send + Clone + 'static {}
 
 impl<T: Fn(IoEvent) -> bool + Send + Clone + 'static> Notify for T {}
 
-fn spawn(name: &str, body: impl FnOnce() + Send + 'static) -> io::Result<JoinHandle<()>> {
-    thread::Builder::new().name(name.to_owned()).spawn(body)
+/// Starts the thread `name` running `body`. A panic in `body` (a bug) is
+/// stopped there: the thread then runs `on_panic`, which tells the driver
+/// what a failure of the thread's own work would, and ends. The speaker is
+/// retried at once instead of after a session timeout.
+fn spawn(
+    name: &str,
+    body: impl FnOnce() + Send + 'static,
+    on_panic: impl FnOnce() + Send + 'static,
+) -> io::Result<JoinHandle<()>> {
+    thread::Builder::new().name(name.to_owned()).spawn(move || {
+        if panic::catch_unwind(AssertUnwindSafe(body)).is_err() {
+            on_panic();
+        }
+    })
+}
+
+/// What a session thread that panicked reports: its connection closed
+/// (P141), which the session handles as a lost speaker.
+fn report_closed(
+    session: SessionKey,
+    attempt: u32,
+    notify: impl Notify,
+) -> impl FnOnce() + Send + 'static {
+    move || {
+        notify(IoEvent::RtspClosed { session, attempt });
+    }
 }
 
 /// Starts connect attempt `attempt` to `address` on a thread of its own; the
@@ -122,17 +152,24 @@ pub(crate) fn connect(
     address: SocketAddr,
     notify: impl Notify,
 ) -> io::Result<()> {
-    spawn("airplay-connect", move || {
-        let event = match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
-            Ok(stream) => IoEvent::Connected {
-                session,
-                attempt,
-                stream,
-            },
-            Err(_) => IoEvent::ConnectFailed { session, attempt },
-        };
-        notify(event);
-    })
+    let failed = notify.clone();
+    spawn(
+        "airplay-connect",
+        move || {
+            let event = match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
+                Ok(stream) => IoEvent::Connected {
+                    session,
+                    attempt,
+                    stream,
+                },
+                Err(_) => IoEvent::ConnectFailed { session, attempt },
+            };
+            notify(event);
+        },
+        move || {
+            failed(IoEvent::ConnectFailed { session, attempt });
+        },
+    )
     .map(drop)
 }
 
@@ -226,6 +263,7 @@ impl SessionIo {
                 io.stop.clone(),
                 notify.clone(),
             ),
+            report_closed(session, attempt, notify.clone()),
         )?;
         io.threads.push(thread);
         let thread = spawn(
@@ -237,11 +275,13 @@ impl SessionIo {
                 io.reset.clone(),
                 notify.clone(),
             ),
+            report_closed(session, attempt, notify.clone()),
         )?;
         io.threads.push(thread);
         let thread = spawn(
             "airplay-rtsp-read",
             read_loop(session, attempt, reader, io.stop.clone(), notify.clone()),
+            report_closed(session, attempt, notify.clone()),
         )?;
         io.threads.push(thread);
         let thread = spawn(
@@ -252,8 +292,9 @@ impl SessionIo {
                 writer_stream,
                 writes,
                 io.stop.clone(),
-                notify,
+                notify.clone(),
             ),
+            report_closed(session, attempt, notify),
         )?;
         io.threads.push(thread);
         Ok((io, connection))
@@ -347,6 +388,7 @@ impl RtspIo {
         let thread = spawn(
             "airplay-pair-read",
             read_loop(session, attempt, reader, io.stop.clone(), notify.clone()),
+            report_closed(session, attempt, notify.clone()),
         )?;
         io.threads.push(thread);
         let thread = spawn(
@@ -357,8 +399,9 @@ impl RtspIo {
                 writer_stream,
                 writes,
                 io.stop.clone(),
-                notify,
+                notify.clone(),
             ),
+            report_closed(session, attempt, notify),
         )?;
         io.threads.push(thread);
         Ok(io)
@@ -548,5 +591,75 @@ fn write_loop(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    const WAIT: Duration = Duration::from_secs(2);
+
+    /// A driver that panics on the events `bug` picks, as a bug in a
+    /// thread's work would, and passes every other event on.
+    fn panicking_on(bug: fn(&IoEvent) -> bool) -> (impl Notify, mpsc::Receiver<IoEvent>) {
+        let (events, received) = mpsc::channel();
+        let notify = move |event: IoEvent| {
+            if bug(&event) {
+                panic!("a bug in a thread's work (test)");
+            }
+            events.send(event).is_ok()
+        };
+        (notify, received)
+    }
+
+    // A connect thread whose work panics reports a failed connect at once.
+    #[test]
+    fn a_panicking_connect_thread_reports_a_failed_connect() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let (notify, received) = panicking_on(|event| matches!(event, IoEvent::Connected { .. }));
+        connect(SessionKey(3), 7, address, notify).expect("thread");
+        match received.recv_timeout(WAIT) {
+            Ok(IoEvent::ConnectFailed { session, attempt }) => {
+                assert_eq!((session, attempt), (SessionKey(3), 7));
+            }
+            other => panic!("expected a failed connect, got {other:?}"),
+        }
+    }
+
+    // A session thread whose work panics reports its connection closed at
+    // once, long before a session timeout, while the connection itself
+    // stays open.
+    #[test]
+    fn a_panicking_session_thread_reports_the_connection_closed() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let tcp = TcpStream::connect(listener.local_addr().expect("address")).expect("connect");
+        let (mut receiver, _) = listener.accept().expect("accept");
+        let (notify, received) = panicking_on(|event| matches!(event, IoEvent::Rtsp { .. }));
+        let (io, _connection) = SessionIo::open(
+            SessionKey(5),
+            2,
+            tcp,
+            SenderClock::new(Instant::now()),
+            Arc::new(SpeakerCounters::default()),
+            notify,
+        )
+        .expect("session I/O");
+        receiver.write_all(b"RTSP/1.0 200 OK\r\n").expect("write");
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match received.recv_timeout(left) {
+                Ok(IoEvent::RtspClosed { session, attempt }) => {
+                    assert_eq!((session, attempt), (SessionKey(5), 2));
+                    break;
+                }
+                Ok(_) => {}
+                Err(error) => panic!("no closed connection: {error:?}"),
+            }
+        }
+        drop(io);
     }
 }

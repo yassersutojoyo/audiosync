@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Toolchain versions (Swift)
+        run: swift --version
+
+      - name: Rust toolchain (stable, with the Apple silicon and Intel targets)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          rustc --version
+
+      - name: Audio core (universal static library)
+        run: scripts/build_core.sh
+
+      - name: App, release build
+        run: swift build -c release
+
+      - name: The app links the audio core
+        run: nm -gU .build/release/AudioSync | grep -x '[0-9a-f]* T _asc_version'
+
+      - name: Install the pinned shellcheck (Tests/run-tests.sh requires it)
+        run: |
+          scripts/shellcheck.sh --install "$RUNNER_TEMP/shellcheck"
+          echo "$RUNNER_TEMP/shellcheck" >> "$GITHUB_PATH"
+
+      - name: Tests (shellcheck, ring buffer, logic, FIFO, core parity)
+        run: Tests/run-tests.sh
+
+      - name: make-dmg.sh packages a signed bundle into an image that mounts with the app, an Applications link and the README
+        run: |
+          # A stand-in bundle around the release binary, signed ad hoc: the
+          # real bundle needs the engine build, which CI doesn't do.
+          work="$RUNNER_TEMP/dmg-check"
+          app="$work/AudioSync.app"
+          mkdir -p "$app/Contents/MacOS" "$work/mnt"
+          cp .build/release/AudioSync "$app/Contents/MacOS/AudioSync"
+          plist="$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string AudioSync" \
+            -c "Add :CFBundleIdentifier string io.github.yassersutojoyo.audiosync.dmgcheck" \
+            -c "Add :CFBundlePackageType string APPL" \
+            -c "Add :CFBundleShortVersionString string 0.0.0" "$plist"
+          cp -R "$app" "$work/Unsigned.app"
+          codesign --remove-signature "$work/Unsigned.app/Contents/MacOS/AudioSync"
+          codesign --force --sign - "$app"
+
+          # Refusals, each for its own reason: an unsigned bundle, and an
+          # output name without .dmg.
+          if said=$(./make-dmg.sh --app "$work/Unsigned.app" --out "$work/unsigned.dmg" 2>&1); then
+            echo "an unsigned bundle was packaged"; exit 1
+          fi
+          echo "$said"
+          grep -q "no valid code signature" <<< "$said"
+          if said=$(./make-dmg.sh --app "$app" --out "$work/AudioSync.img" 2>&1); then
+            echo "an output name without .dmg was accepted"; exit 1
+          fi
+          echo "$said"
+          grep -q "must end in .dmg" <<< "$said"
+
+          # A lone path is the app; the default output is AudioSync.dmg in the
+          # repository root (RELEASE.md).
+          rm -f AudioSync.dmg
+          ./make-dmg.sh "$app"
+          test -f AudioSync.dmg
+          hdiutil imageinfo AudioSync.dmg | grep -E '^ *Format: UDZO$'
+
+          trap 'hdiutil detach -force "$work/mnt" 2>/dev/null || true' EXIT
+          hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$work/mnt" AudioSync.dmg
+          ls -la "$work/mnt"
+          diskutil info "$work/mnt" | grep -E 'Volume Name: +AudioSync$'
+          test "$(ls "$work/mnt" | tr '\n' ' ')" = "Applications AudioSync.app README.md "
+          test "$(readlink "$work/mnt/Applications")" = /Applications
+          cmp "$app/Contents/MacOS/AudioSync" "$work/mnt/AudioSync.app/Contents/MacOS/AudioSync"
+          codesign --verify --strict --verbose=1 "$work/mnt/AudioSync.app"
+          # The README keeps the install guide, with its links made absolute.
+          readme="$work/mnt/README.md"
+          grep -q "Open Anyway" "$readme"
+          grep -qF '(https://github.com/yassersutojoyo/audiosync/blob/main/docs/DEVELOPMENT.md)' "$readme"
+          grep -qF 'src="https://github.com/yassersutojoyo/audiosync/raw/main/docs/images/main-window-light.png"' "$readme"
+          if grep -nE ']\((\.?/)?[A-Za-z0-9_.][^):#"<> ]*[)# ]|(src|href)="(\.?/)?[A-Za-z0-9_.][^:#"<> ]*"' "$readme"; then
+            echo "README.md in the image still has relative links"; exit 1
+          fi
+          hdiutil detach "$work/mnt" || { sleep 2; hdiutil detach -force "$work/mnt"; }
+          rm -f AudioSync.dmg
+
+      - name: Python syntax
+        run: python3 -I -m py_compile scripts/bundle_engine.py scripts/brand/compose.py scripts/brand/tidy-svg.py scripts/brand/tokens.py scripts/brand/ico.py scripts/windows_notices.py scripts/core_notices.py scripts/privacy_check.py
+
+      - name: Generated brand files are up to date (SVGs, the SwiftUI mark and the design tokens)
+        run: |
+          python3 -I scripts/brand/compose.py
+          swift scripts/brand/wordmark.swift
+          cp brand/audiosync-wordmark.svg site/wordmark.svg
+          cp brand/audiosync-wordmark-dark.svg site/wordmark-dark.svg
+          python3 -I scripts/brand/tokens.py
+          git diff --exit-code -- brand Sources/AudioSync/BrandMark.swift site/wordmark.svg site/wordmark-dark.svg \
+            Sources/AudioSync/BrandTokens.swift windows/ui/tokens.slint windows/src/tokens.rs site/index.html
+
+      - name: The icon scripts reproduce the committed app and site icons
+        run: scripts/brand/check-icons.sh
+
+      - name: Whitespace / conflict markers (whole tree)
+        run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the pinned shellcheck
+        run: |
+          scripts/shellcheck.sh --install "$RUNNER_TEMP/shellcheck"
+          echo "$RUNNER_TEMP/shellcheck" >> "$GITHUB_PATH"
+      - name: Lint shell scripts (the list in scripts/shellcheck-files.txt)
+        run: scripts/shellcheck.sh
+
+  private-refs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: No private references (home paths on either host, LAN names, private IPs, private names)
+        run: |
+          python3 -I scripts/privacy_check.py --self-test
+          python3 -I scripts/privacy_check.py
+
+  engine-patches:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: OwnTone patches still apply (pinned 29.2 source, checksum-verified)
+        run: ./setup.sh --patches-only "$RUNNER_TEMP/owntone"

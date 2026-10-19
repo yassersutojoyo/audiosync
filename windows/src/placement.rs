@@ -54,6 +54,29 @@ pub fn flyout_origin(
     )
 }
 
+/// A window's outer frame `frame` (physical pixels) as it opens in
+/// `work_area`: no larger than the work area, and moved as little as needed
+/// to lie wholly inside it; centered in it unless `keep_place` (a saved
+/// place on a monitor that is gone means nothing here).
+pub fn fit_window(frame: Bounds, work_area: Bounds, keep_place: bool) -> Bounds {
+    let width = frame.width.min(work_area.width);
+    let height = frame.height.min(work_area.height);
+    let (x, y) = if keep_place {
+        (frame.x, frame.y)
+    } else {
+        (
+            work_area.x + (work_area.width - width) / 2.0,
+            work_area.y + (work_area.height - height) / 2.0,
+        )
+    };
+    Bounds {
+        x: clamp(x, work_area.x, work_area.right() - width),
+        y: clamp(y, work_area.y, work_area.bottom() - height),
+        width,
+        height,
+    }
+}
+
 /// `value` within `low..=high`; `low` when the range is empty (a flyout larger
 /// than the work area keeps its top-left corner on screen).
 fn clamp(value: f64, low: f64, high: f64) -> f64 {
@@ -130,5 +153,50 @@ mod tests {
     fn a_flyout_taller_than_the_screen_keeps_its_top_on_screen() {
         let (_, y) = flyout_origin(icon(1500.0, 1044.0), 320.0, 2000.0, SCREEN, 12.0);
         assert_eq!(y, 12.0);
+    }
+
+    const LAPTOP: Bounds = Bounds {
+        x: 0.0,
+        y: 0.0,
+        width: 1366.0,
+        height: 728.0,
+    };
+
+    fn frame(x: f64, y: f64, width: f64, height: f64) -> Bounds {
+        Bounds {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn a_window_bigger_than_the_work_area_shrinks_to_it() {
+        // Saved on a 4K monitor, opened on a laptop.
+        let fitted = fit_window(frame(300.0, 200.0, 2500.0, 1400.0), LAPTOP, true);
+        assert_eq!(fitted, LAPTOP);
+    }
+
+    #[test]
+    fn a_window_partly_off_the_right_and_bottom_edges_moves_in() {
+        let fitted = fit_window(frame(1000.0, 500.0, 900.0, 600.0), LAPTOP, true);
+        assert_eq!(fitted, frame(1366.0 - 900.0, 728.0 - 600.0, 900.0, 600.0));
+        // On a second monitor to the left, partly off its top-left corner.
+        let left = frame(-1920.0, 0.0, 1920.0, 1040.0);
+        let fitted = fit_window(frame(-1950.0, -20.0, 900.0, 600.0), left, true);
+        assert_eq!(fitted, frame(-1920.0, 0.0, 900.0, 600.0));
+    }
+
+    #[test]
+    fn a_window_that_fits_stays_where_it_was() {
+        let saved = frame(100.0, 50.0, 900.0, 600.0);
+        assert_eq!(fit_window(saved, LAPTOP, true), saved);
+    }
+
+    #[test]
+    fn a_window_from_a_monitor_that_is_gone_opens_centered() {
+        let fitted = fit_window(frame(5000.0, 3000.0, 2500.0, 600.0), LAPTOP, false);
+        assert_eq!(fitted, frame(0.0, 64.0, 1366.0, 600.0));
     }
 }

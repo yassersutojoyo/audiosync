@@ -18,6 +18,7 @@ struct Notice: Identifiable, Equatable {
     static let start = "start"          // streaming couldn't start
     static let capture = "capture"      // streaming started but no audio arrives
     static let login = "login"          // Launch at Login
+    static let airplaySender = "airplay-sender"   // AudioSync's own AirPlay sender couldn't start
     /// Now Playing may not control this player.
     static func automation(_ bundleID: String) -> String { "automation:" + bundleID }
 }
