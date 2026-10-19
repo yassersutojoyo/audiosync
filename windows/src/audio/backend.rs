@@ -269,6 +269,10 @@ pub enum BackendEvent {
         /// The speaker's ID.
         id: String,
     },
+    /// The AirPlay sender stopped after an internal error, so no AirPlay
+    /// speaker is listed or plays, or its discovery did, so none is listed;
+    /// [`AudioBackend::retry_airplay`] starts a new sender.
+    AirPlayStopped,
 }
 
 /// Why playback stopped on its own.
@@ -444,6 +448,13 @@ pub trait AudioBackend {
     /// Sets an AirPlay speaker's own delay d_s in milliseconds, live. A value
     /// that isn't finite is ignored; others are clamped to 0 to 3000.
     fn set_airplay_delay(&mut self, id: &str, delay_ms: f64);
+
+    /// Replaces an AirPlay sender that stopped (see
+    /// [`BackendEvent::AirPlayStopped`]) with a new one. The speakers that
+    /// were on stay on, with their settings, and play again once the new
+    /// sender lists them. A new sender that can't start reports
+    /// `AirPlayStopped` again.
+    fn retry_airplay(&mut self);
 
     /// Handles device changes, lost outputs, the end of capture and what the
     /// AirPlay sender reports, and returns what the UI should know. Call it
