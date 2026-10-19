@@ -104,7 +104,8 @@ final class NativeAirPlay {
     }
 
     /// The track's title, artist and album for the receivers that show it,
-    /// sent with the artwork set last (P123 to P127). Main queue.
+    /// sent with the artwork set last, which a new track drops
+    /// (`NativeNowPlaying`, P123 to P127). Main queue.
     func setTrack(_ fields: PipeMetadata.Fields) {
         queue.async { [weak self] in
             guard let self else { return }
