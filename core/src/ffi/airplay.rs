@@ -3023,6 +3023,107 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    /// A receiver on 127.0.0.1 whose port takes connections and never
+    /// answers: a pairing with it stays open, waiting, until it is
+    /// cancelled.
+    fn silent_receiver() -> (TcpListener, u16) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a TCP port");
+        let port = listener.local_addr().expect("its address").port();
+        (listener, port)
+    }
+
+    /// Waits at most 10 s for the sender itself, not the handle's queues,
+    /// to report that its pairing with `id` stopped: it does once a cancel
+    /// reached it.
+    fn sender_stopped_pairing(handle: *mut AscAirPlay, id: &str) -> bool {
+        wait_for(|| {
+            while let Some(event) = inside(handle).sender.poll_event() {
+                if let SenderEvent::Pairing {
+                    key,
+                    event: PairingEvent::Stopped,
+                } = &event
+                    && receiver_id(key) == id
+                {
+                    return true;
+                }
+            }
+            false
+        })
+    }
+
+    // The PIN wait has no timeout (P51), so the Apple TV may drop out of
+    // discovery while the user reads its PIN: the pairing still takes the
+    // PIN, and turning the speaker off still cancels it at the sender
+    // instead of leaving it waiting on an open connection.
+    #[test]
+    fn a_receiver_that_goes_away_mid_pairing_still_takes_the_pin_and_the_cancel() {
+        let (_receiver, port) = silent_receiver();
+        let id = "02005E005313";
+        let c_id = c"02005E005313";
+        let mut handle = listing(vec![apple_tv_at(id, "Den TV", port)]);
+        let key = inside(handle).listed[id].device.key.clone();
+        // SAFETY: a live handle, used by this thread only; a local C string.
+        unsafe {
+            assert!(asc_airplay_start_pairing(handle, c_id.as_ptr()));
+        }
+        inside(handle).take_in(SenderEvent::Pairing {
+            key: key.clone(),
+            event: PairingEvent::PinRequested,
+        });
+        inside(handle).take_in(SenderEvent::Receiver(ReceiverEvent::Gone(key)));
+        assert_eq!(next(handle, 1)[0].event, AIRPLAY_GONE);
+        // SAFETY: as above; local C strings.
+        unsafe {
+            assert!(
+                asc_airplay_submit_pin(handle, c_id.as_ptr(), c"1234".as_ptr()),
+                "the PIN still goes to the pairing"
+            );
+            asc_airplay_cancel_pairing(handle, c_id.as_ptr());
+        }
+        assert!(
+            sender_stopped_pairing(handle, id),
+            "the cancel reached the sender"
+        );
+        // SAFETY: as above; local C strings.
+        unsafe {
+            assert!(
+                !asc_airplay_submit_pin(handle, c_id.as_ptr(), c"1234".as_ptr()),
+                "a cancelled pairing takes no PIN"
+            );
+            asc_airplay_destroy(&mut handle);
+        }
+    }
+
+    // A group click can cancel a member's pairing and start it again back
+    // to back: the cancelled pairing's Stopped, reported after the new one
+    // started, doesn't end the new one, whose PIN would then be refused.
+    #[test]
+    fn a_late_stopped_from_a_cancelled_pairing_does_not_end_the_next_one() {
+        let (_receiver, port) = silent_receiver();
+        let id = "02005E005314";
+        let c_id = c"02005E005314";
+        let mut handle = listing(vec![apple_tv_at(id, "Den TV", port)]);
+        let key = inside(handle).listed[id].device.key.clone();
+        // SAFETY: a live handle, used by this thread only; a local C string.
+        unsafe {
+            assert!(asc_airplay_start_pairing(handle, c_id.as_ptr()));
+            asc_airplay_cancel_pairing(handle, c_id.as_ptr());
+            assert!(asc_airplay_start_pairing(handle, c_id.as_ptr()));
+        }
+        inside(handle).take_in(SenderEvent::Pairing {
+            key,
+            event: PairingEvent::Stopped,
+        });
+        // SAFETY: as above; local C strings.
+        unsafe {
+            assert!(
+                asc_airplay_submit_pin(handle, c_id.as_ptr(), c"1234".as_ptr()),
+                "the new pairing takes its PIN"
+            );
+            asc_airplay_destroy(&mut handle);
+        }
+    }
+
     #[test]
     fn pairings_last_across_handles_through_the_store_file() {
         let folder = scratch("ffi-pairings");
