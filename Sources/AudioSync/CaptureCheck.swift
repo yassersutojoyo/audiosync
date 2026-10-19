@@ -50,8 +50,7 @@ enum CaptureRate {
     /// else 0 when neither could be read. Only finite rates above 0 count.
     static func running(device: Double, tap: Double = 0) -> Double {
         if device.isFinite && device > 0 { return device }
-        if tap.isFinite && tap > 0 { return tap }
-        return 0
+        return tap.isFinite && tap > 0 ? tap : 0
     }
 
     /// A session's capture rate (Rc, S16) from the rate read at its start:
