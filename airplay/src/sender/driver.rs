@@ -994,3 +994,36 @@ impl Driver {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clock::SenderClock;
+    use crate::stream::StreamConfig;
+
+    // A thread that outlives its session's close, such as an RTSP writer
+    // blocked in a send that a socket shutdown doesn't wake (Windows) and
+    // only its own timeout ends, doesn't hold up shutdown (P129).
+    #[test]
+    fn shutdown_does_not_wait_for_a_thread_stuck_after_its_close() {
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs.clone(), events, latency);
+        let (release, stuck) = mpsc::channel::<()>();
+        driver.retired.push(thread::spawn(move || {
+            let _ = stuck.recv_timeout(Duration::from_secs(10));
+        }));
+        let run = thread::spawn(move || driver.run());
+        let started = Instant::now();
+        inputs
+            .send(Input::Command(Command::Shutdown))
+            .expect("the driver runs");
+        run.join().expect("the driver ends");
+        let took = started.elapsed();
+        let _ = release.send(());
+        assert!(took < Duration::from_secs(1), "shutdown took {took:?}");
+    }
+}

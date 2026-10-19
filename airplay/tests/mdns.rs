@@ -61,10 +61,7 @@ fn resolved_services_of_both_types_become_one_device() {
         AIRPLAY_TYPE,
         "Kitchen",
         &[v4],
-        props(&[
-            ("deviceid", "02:00:5E:00:53:01"),
-            ("features", "0x5A7FFFF7,0x1E"),
-        ]),
+        props(&[("deviceid", "02:00:5E:00:53:01"), ("features", "0x200,0x0")]),
     );
 
     let Some(BrowseEvent::Resolved(record)) = browse_event(raop.clone()) else {

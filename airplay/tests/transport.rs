@@ -568,7 +568,9 @@ fn an_unsupported_speaker_fails_without_connecting() {
 }
 
 // Stopping the sender tears every speaker down at once: two receivers that
-// never answer TEARDOWN still let it finish in about 2 s, not 4.
+// never answer TEARDOWN still see their connections closed within 2 s of
+// the stop, and the whole shutdown, threads included, stays within 2 s
+// (with a margin for slow runners), not 4.
 // covers: P129
 #[test]
 fn shutdown_tears_every_speaker_down_in_parallel_within_two_seconds() {
@@ -601,14 +603,104 @@ fn shutdown_tears_every_speaker_down_in_parallel_within_two_seconds() {
     assert_eq!(a.log().count("TEARDOWN"), 1);
     assert_eq!(b.log().count("TEARDOWN"), 1);
     assert!(
-        took >= Duration::from_millis(1900),
-        "waited for the answer: {took:?}"
+        took >= Duration::from_millis(1600),
+        "waited for the answers: {took:?}"
     );
-    assert!(took <= Duration::from_millis(3500), "in parallel: {took:?}");
+    assert!(took <= Duration::from_millis(2300), "within 2 s: {took:?}");
+    assert!(wait_until(LONG, || {
+        !a.log().closed.is_empty() && !b.log().closed.is_empty()
+    }));
+    for receiver in [&a, &b] {
+        let closed = receiver.log().closed[0] - started;
+        assert!(
+            closed < Duration::from_secs(2),
+            "connection closed {closed:?} after the stop"
+        );
+    }
     std::thread::sleep(Duration::from_millis(300));
     let counts = (a.log().audio.len(), b.log().audio.len());
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!((a.log().audio.len(), b.log().audio.len()), counts);
+}
+
+// A receiver that hangs during an artwork upload: it stops reading, so the
+// request is never answered and TEARDOWN can't follow it. Shutdown still
+// keeps its bound (P129). Whether the upload also blocks the writer depends
+// on the socket buffers (loopback on Windows takes megabytes); the driver's
+// own test covers a writer stuck in its send.
+#[test]
+fn shutdown_keeps_its_bound_when_a_receiver_stops_reading() {
+    let _serial = serial();
+    let receiver = NetReceiver::start(Behavior {
+        deaf_after: Some("SET_PARAMETER".to_owned()),
+        ..Behavior::default()
+    });
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let device = receiver.device(15, PCM_TXT);
+    let key = device.key.clone();
+    sender.add_speaker(device, options(-20.0));
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some()
+    );
+    assert!(wait_until(LONG, || {
+        let log = receiver.log();
+        log.count("SET_PARAMETER") == 1 && log.audio.len() >= 20
+    }));
+    // The largest artwork there is: more than the socket buffers take.
+    let mut jpeg = vec![0x5Au8; audiosync_airplay::metadata::MAX_ARTWORK_BYTES];
+    jpeg[..3].copy_from_slice(&[0xFF, 0xD8, 0xFF]);
+    sender
+        .set_now_playing(NowPlaying {
+            artwork: Some(jpeg),
+            ..NowPlaying::default()
+        })
+        .expect("valid artwork");
+    std::thread::sleep(Duration::from_millis(500));
+    let started = Instant::now();
+    sender.shutdown();
+    let took = started.elapsed();
+    assert!(took <= Duration::from_millis(2300), "took {took:?}");
+}
+
+// Windows reports an ICMP port unreachable as a reset on the next receive
+// call, not on the send that caused it; the sender still counts it against
+// its sends, so a speaker whose UDP ports are gone is lost (P141).
+#[cfg(windows)]
+#[test]
+fn closed_udp_ports_make_a_speaker_lost() {
+    let _serial = serial();
+    let receiver = NetReceiver::start(Behavior::default());
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let device = receiver.device(16, PCM_TXT);
+    let key = device.key.clone();
+    sender.add_speaker(device, options(-20.0));
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some()
+    );
+    assert!(wait_until(LONG, || receiver.log().audio.len() >= 20));
+    receiver.close_udp();
+    let lost = events.wait_for(&sender, LONG, |event| {
+        matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Error(error) }
+            if *k == key && error.error.kind == ErrorKind::Lost)
+    });
+    let Some(SenderEvent::Speaker {
+        event: SpeakerEvent::Error(error),
+        ..
+    }) = lost
+    else {
+        panic!("never lost: {:?}", events.of(&key));
+    };
+    assert_eq!(
+        error.error.detail,
+        Some("two UDP sends in a row were unreachable")
+    );
+    sender.shutdown();
 }
 
 #[test]

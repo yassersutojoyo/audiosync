@@ -58,6 +58,9 @@ pub struct Behavior {
     pub timing_interval: Option<Duration>,
     /// Accept and at once close this many of the next connections.
     pub reject: usize,
+    /// After answering the first request with this key, stop reading the
+    /// connection (but keep it open), as a receiver that hangs.
+    pub deaf_after: Option<String>,
 }
 
 impl Default for Behavior {
@@ -69,6 +72,7 @@ impl Default for Behavior {
             probe: true,
             timing_interval: Some(Duration::from_millis(500)),
             reject: 0,
+            deaf_after: None,
         }
     }
 }
@@ -109,6 +113,8 @@ pub struct Log {
     pub resends: Vec<(Instant, Vec<u8>)>,
     pub timing: Vec<TimingSeen>,
     pub setups: Vec<SetupSeen>,
+    /// When the receiver saw a connection closed by the sender.
+    pub closed: Vec<Instant>,
 }
 
 impl Log {
@@ -146,6 +152,8 @@ struct Shared {
     log: Mutex<Log>,
     behavior: Mutex<Behavior>,
     stop: AtomicBool,
+    /// Set by `close_udp`: the audio and control sockets close.
+    udp_closed: AtomicBool,
     /// Bumped by `kill`: the connection being served closes.
     generation: AtomicU64,
     sender: Mutex<Option<SenderPorts>>,
@@ -163,7 +171,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 pub struct NetReceiver {
     pub address: SocketAddr,
     shared: Arc<Shared>,
-    control: Arc<UdpSocket>,
+    control: Mutex<Option<Arc<UdpSocket>>>,
     threads: Vec<JoinHandle<()>>,
 }
 
@@ -191,6 +199,7 @@ impl NetReceiver {
             log: Mutex::new(Log::default()),
             behavior: Mutex::new(behavior),
             stop: AtomicBool::new(false),
+            udp_closed: AtomicBool::new(false),
             generation: AtomicU64::new(0),
             sender: Mutex::new(None),
             audio_port: audio.local_addr()?.port(),
@@ -209,7 +218,7 @@ impl NetReceiver {
         Ok(NetReceiver {
             address,
             shared,
-            control,
+            control: Mutex::new(Some(control)),
             threads,
         })
     }
@@ -253,7 +262,17 @@ impl NetReceiver {
             first,
             count,
         };
-        let _ = self.control.send_to(&request.encode(), ports.control);
+        if let Some(control) = lock(&self.control).as_ref() {
+            let _ = control.send_to(&request.encode(), ports.control);
+        }
+    }
+
+    /// Closes the audio and control sockets while the RTSP connection and
+    /// the timing exchange go on, so the sender's datagrams meet closed
+    /// ports.
+    pub fn close_udp(&self) {
+        lock(&self.control).take();
+        self.shared.udp_closed.store(true, Ordering::SeqCst);
     }
 }
 
@@ -309,8 +328,11 @@ fn serve(shared: Arc<Shared>, mut stream: TcpStream, peer: SocketAddr) {
         "RTP/AVP/UDP;unicast;mode=record;server_port={};control_port={};timing_port={}",
         shared.audio_port, shared.control_port, shared.timing_port
     );
+    let deaf_after = lock(&shared.behavior).deaf_after.clone();
+    let mut deaf = false;
     let mut parser = Parser::new();
     let mut buf = [0u8; 8192];
+    let closed = |shared: &Shared| lock(&shared.log).closed.push(Instant::now());
     loop {
         if shared.stop.load(Ordering::SeqCst)
             || shared.generation.load(Ordering::SeqCst) != generation
@@ -318,8 +340,12 @@ fn serve(shared: Arc<Shared>, mut stream: TcpStream, peer: SocketAddr) {
             let _ = stream.shutdown(std::net::Shutdown::Both);
             return;
         }
+        if deaf {
+            thread::sleep(POLL);
+            continue;
+        }
         match stream.read(&mut buf) {
-            Ok(0) => return,
+            Ok(0) => return closed(&shared),
             Ok(len) => {
                 parser.push(&buf[..len]);
                 while let Ok(Some(message)) = parser.next_message() {
@@ -334,7 +360,11 @@ fn serve(shared: Arc<Shared>, mut stream: TcpStream, peer: SocketAddr) {
                     }
                     let answer = fake.feed(&request.encode());
                     if !answer.is_empty() && stream.write_all(&answer).is_err() {
-                        return;
+                        return closed(&shared);
+                    }
+                    if deaf_after.as_deref() == Some(key(&request).as_str()) {
+                        deaf = true;
+                        break;
                     }
                     match request.method {
                         Method::Record => {
@@ -352,7 +382,7 @@ fn serve(shared: Arc<Shared>, mut stream: TcpStream, peer: SocketAddr) {
                     error.kind(),
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) => {}
-            Err(_) => return,
+            Err(_) => return closed(&shared),
         }
     }
 }
@@ -411,7 +441,7 @@ fn probe_timing(ip: IpAddr, to: SocketAddr) -> Option<SocketAddr> {
 
 fn audio_loop(shared: Arc<Shared>, socket: UdpSocket) {
     let mut buf = [0u8; 2048];
-    while !shared.stop.load(Ordering::SeqCst) {
+    while !shared.stop.load(Ordering::SeqCst) && !shared.udp_closed.load(Ordering::SeqCst) {
         let Ok((len, from)) = socket.recv_from(&mut buf) else {
             continue;
         };
@@ -429,7 +459,7 @@ fn audio_loop(shared: Arc<Shared>, socket: UdpSocket) {
 
 fn control_loop(shared: Arc<Shared>, socket: Arc<UdpSocket>) {
     let mut buf = [0u8; 2048];
-    while !shared.stop.load(Ordering::SeqCst) {
+    while !shared.stop.load(Ordering::SeqCst) && !shared.udp_closed.load(Ordering::SeqCst) {
         let Ok((len, from)) = socket.recv_from(&mut buf) else {
             continue;
         };
