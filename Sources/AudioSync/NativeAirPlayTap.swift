@@ -7,13 +7,12 @@ import Synchronization
 /// The capture thread hands it every equalized block (`write`, called from
 /// `EngineParts.deliver`) and each capture build gives it the capture rate
 /// (`prepare`, from `EngineParts.prepare`); the input resamples to 44.1 kHz
-/// itself. With nothing installed (the bundled engine is the AirPlay sender)
+/// itself. With nothing installed (the sender hasn't started, or it stopped)
 /// a write is two atomic counts and a load.
 ///
 /// A capture rewrite keeps this contract: `prepare(captureRate:)` at each
 /// capture (re)build, before its first block, and `write(_:frames:)` with
-/// each block after the equalizer, on the capture thread, alongside the ring
-/// and the pipe feed.
+/// each block after the equalizer, on the capture thread, alongside the ring.
 ///
 /// Lifetime: the owner installs an input it took from its sender and, to
 /// free it, uninstalls it first; `uninstall` returns once no write or rate

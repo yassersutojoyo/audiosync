@@ -11,7 +11,7 @@ import CAudioSyncCore
 // stream's latency) or 500 ms after the request, whichever comes first. A
 // session's stop waits the same way with its capture still running, so an
 // output at a short hold-back fades out on audio that is still being
-// captured; then capture stops, every output stops, then the pipe writer.
+// captured; then capture stops and every output stops.
 // Nothing here waits on the main thread unless asked to (`finishAll`): the
 // session polls `poll` on a short timer.
 
@@ -74,7 +74,7 @@ final class OutputRetirement {
         let askedNs: UInt64
         /// A session's stop: runs once the outputs faded, before they stop.
         let stopCapture: (() -> Void)?
-        /// Runs after the outputs stopped (a session's pipe writer, the caller's completion).
+        /// Runs after the outputs stopped (the caller's completion).
         var after: [() -> Void]
         /// A session's stop: whether capture has given the AirPlay inputs
         /// their fade-out's frames, and how long to wait for that when it
@@ -128,19 +128,16 @@ final class OutputRetirement {
     /// out and every one of `outputs` is asked to fade out, all at once.
     /// Once they have faded (or the cap passed), and the switch-offs asked
     /// for before have finished, `stopCapture` runs, then every output
-    /// stops, then `stopWriter`, then `completion`. Capture also keeps
-    /// running until the AirPlay inputs have had their fade-out's frames
-    /// (S189), also with no local output on: until `inputsFaded` says so,
-    /// or for `inputsFallbackNs` while capture gives nothing, never past the
-    /// cap.
+    /// stops, then `completion`. Capture also keeps running until the
+    /// AirPlay inputs have had their fade-out's frames (S189), also with no
+    /// local output on: until `inputsFaded` says so, or for
+    /// `inputsFallbackNs` while capture gives nothing, never past the cap.
     func stopSession(_ outputs: [FadingOutput], fadeInputs: () -> Void,
                      inputsFaded: @escaping () -> Bool = { true }, inputsFallbackNs: UInt64 = 0,
-                     stopCapture: @escaping () -> Void, stopWriter: @escaping () -> Void,
-                     then completion: (() -> Void)? = nil) {
+                     stopCapture: @escaping () -> Void, then completion: (() -> Void)? = nil) {
         fadeInputs()
         for output in outputs { output.requestFadeOut() }
-        var after: [() -> Void] = [stopWriter]
-        if let completion { after.append(completion) }
+        let after: [() -> Void] = completion.map { [$0] } ?? []
         batches.append(Batch(outputs: outputs, askedNs: clock(), stopCapture: stopCapture, after: after,
                              inputsFaded: inputsFaded, inputsFallbackNs: inputsFallbackNs))
         poll()

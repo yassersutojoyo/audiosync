@@ -5,13 +5,10 @@ import AppKit
 /// `validateMenuItem` handle the AudioSync-specific ones.
 enum MainMenu {
 
-    /// `appMenuDelegate` gets the AudioSync menu's `menuNeedsUpdate`, which
-    /// shows the hidden debug item while Option is held.
-    static func make(text t: AppText, checksForUpdates: Bool, appMenuDelegate: NSMenuDelegate? = nil) -> NSMenu {
+    static func make(text t: AppText, checksForUpdates: Bool) -> NSMenu {
         let main = NSMenu()
 
         let app = submenu(of: main, title: t.appName)
-        app.delegate = appMenuDelegate
         app.addItem(item(t.menuAbout, #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
         #if canImport(Sparkle)
         if checksForUpdates {
@@ -27,9 +24,6 @@ enum MainMenu {
         }
         app.addItem(withTitle: t.appearance, action: nil, keyEquivalent: "").submenu = appearance
         app.addItem(item(t.launchAtLogin, #selector(AppDelegate.toggleLaunchAtLogin(_:))))
-        let airplay = item(t.menuNativeAirPlay, #selector(AppDelegate.toggleAirPlayImpl(_:)))
-        airplay.isHidden = true  // a debug option: shown while Option is held
-        app.addItem(airplay)
         app.addItem(.separator())
         let services = NSMenu(title: t.menuServices)
         app.addItem(withTitle: t.menuServices, action: nil, keyEquivalent: "").submenu = services

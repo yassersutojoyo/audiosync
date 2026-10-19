@@ -6,35 +6,31 @@ Please report vulnerabilities privately through GitHub: Security → Report a vu
 
 ## How AudioSync is put together
 
-AudioSync captures the audio source on your Mac and hands it to its bundled AirPlay engine (OwnTone), which runs as a separate child process and streams to your speakers. Most of the security story is about keeping that engine private to your Mac.
+AudioSync captures the audio source on your Mac and streams it to your AirPlay speakers with its own AirPlay sender, which runs inside the app. It starts no other process.
 
-### The engine's API
+### The native sender
 
-Every time it starts the engine, AudioSync writes its config with `bind_address = "127.0.0.1"`, so the API only listens on this Mac. There are no trusted networks and a random `admin_password`, so every API request needs this run's password, which AudioSync sends as Basic auth. An AudioSync patch puts the same password on the HTTP audio stream and the library, so other user accounts, and local processes without the password, can't listen in. There's no `Access-Control-Allow-Origin`, so web pages in a browser can't read the API's responses, and without the password they can't control it. Websocket, MPD, RSP and local audio output are turned off, which means fewer open ports and less code running.
+The native sender doesn't run a server or an API of its own, and it publishes no Bonjour records. Its mDNS browser shares UDP port 5353 with macOS's own responder and only sends queries. It browses `_raop._tcp` and `_airplay._tcp` over mDNS, which is what the Local Network permission is for, and leaves this Mac's own AirPlay Receiver out of the list. For each speaker you turn on, it opens an RTSP connection to the speaker, plus two UDP sockets (control and timing) on random ports, bound to the address that connection uses. The speaker sends its timing and resend requests to those, and the audio and track info go out over the same session. When streaming stops, the sessions and their sockets close.
 
-A few DAAP/DACP info endpoints (`/server-info`, `/content-codes`, `/ctrl-int`) still answer without a password; they only describe the server. If port 3689 is taken, the engine uses a free port instead.
+### Network
 
-The password sits in the config file (readable only by your user) just until the engine has loaded it, and then AudioSync rewrites the file without it. That keeps it off the disk, but it doesn't protect against software already running as your user, which macOS doesn't separate from AudioSync anyway.
-
-### What faces the network
-
-Only the AirPlay sockets listen on all interfaces: UDP control and timing, and PTP on 319/320. Speakers have to be able to reach those. The engine browses for AirPlay speakers (and `_touch-remote._tcp` for Remote pairing), which is what the Local Network permission is for. It doesn't advertise a library, web or media service. The only Bonjour records it publishes are the two OwnTone always registers for AirPlay remote control (`_dacp._tcp` "iTunes_Ctrl_…" and `_touch-able._tcp`, named by a hash), and both point at the loopback-only API, so other devices can't connect to them.
-
-AudioSync sends no telemetry. Its network traffic is the localhost engine API, AirPlay discovery (mDNS browsing plus those two records) and streaming, and album artwork for Spotify's Now Playing, fetched from the https URL Spotify provides.
+AudioSync sends no telemetry. Its network traffic is AirPlay discovery (mDNS browsing) and streaming to the speakers you turn on, and album artwork for Spotify's Now Playing, fetched from the https URL Spotify provides.
 
 ### Pairing
 
-`setup.sh` patches OwnTone to try transient (PIN-less) pairing with HomePods. Who can stream is then decided by the HomePod's Allow Speaker & TV Access setting (Home app → Home Settings → Speakers & TV). Use "Anyone on the Same Network" on a network you trust, and avoid "Everyone".
+An Apple TV that asks for a PIN pairs once, when you turn it on. The PIN goes only to the sender and is never logged. The resulting credentials are kept per receiver in `~/Library/Application Support/AudioSync/airplay-pairings.dat`, readable and writable only by your user. A speaker password is kept in memory for the current run only and never written to disk or logged.
 
-A PIN or speaker password you type into AudioSync's prompt only goes to the engine's loopback API, which pairs with the speaker. AudioSync doesn't store or log it. The engine keeps only the resulting pairing key, in its database under `~/Library/Application Support/AudioSync/AirPlay`.
+Who can stream to a HomePod is decided by its Allow Speaker & TV Access setting (Home app → Home Settings → Speakers & TV). Use "Anyone on the Same Network" on a network you trust, and avoid "Everyone".
+
+Versions up to 0.4.1 ran a bundled AirPlay engine that kept its files, including speaker pairing keys, under `~/Library/Application Support/AudioSync/AirPlay`. AudioSync no longer reads or writes that folder; you can delete it.
 
 ### Audio
 
-Capture uses a Core Audio process tap (behind the Screen & System Audio Recording permission) or an input device (behind the Microphone permission). The audio stays in memory and goes to the local outputs and the engine's pipe in real time. It's never written to disk.
+Capture uses a Core Audio process tap (behind the Screen & System Audio Recording permission) or an input device (behind the Microphone permission). The audio stays in memory and goes to the local outputs and the AirPlay sender in real time. It's never written to disk.
 
 ### Supply chain
 
-`setup.sh` pins OwnTone and every library the engine links (versions and SHA-256 in `scripts/engine_deps.sh`), checks each download before building it from source, and stops if any of AudioSync's patches fails to apply. Homebrew only supplies build tools (`pkg-config`, `cmake`); none of its libraries end up in the app. `build.sh` pins Sparkle 2.9.5 by SHA-256, unless you pass an already verified copy with `SPARKLE_DIR`, which skips the check. The exact library versions are recorded in the app (`Contents/Resources/ThirdParty/versions.txt`).
+The Rust core and the native sender build with `--locked`, so their crates are exactly the ones in the committed `Cargo.lock`, and `scripts/build_core.sh` records each one's version and license in the app (`Contents/Resources/ThirdParty/licenses/rust/crates.txt`). `build.sh` pins Sparkle 2.9.5 by SHA-256, unless you pass an already verified copy with `SPARKLE_DIR`, which skips the check.
 
 ## Signing and distribution
 

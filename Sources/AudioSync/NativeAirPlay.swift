@@ -1,10 +1,10 @@
+import AppKit
 import CAudioSyncCore
-import Foundation
+import SystemConfiguration
 
 /// AudioSync's own AirPlay sender (`airplay/`), reached through the Rust
-/// core's C interface (`asc_airplay_*` in `core/include/audiosync_core.h`),
-/// while it is this run's AirPlay sender (`AirPlayImpl.forThisRun`). `start`
-/// creates the sender, installs its audio input in the capture path
+/// core's C interface (`asc_airplay_*` in `core/include/audiosync_core.h`).
+/// `start` creates the sender, installs its audio input in the capture path
 /// (`NativeAirPlayTap`) and starts discovery; the app adds and removes
 /// speakers by receiver ID, sets their volumes and the master, and gets
 /// discovery's changes and the speakers' events, which also keep `model` up
@@ -35,6 +35,8 @@ final class NativeAirPlay {
     private var input: OpaquePointer?
     /// The poll timer (queue only).
     private var timer: DispatchSourceTimer?
+    /// What the receivers that show it get as playing (queue only).
+    private var nowPlaying = NativeNowPlaying()
 
     /// `onChange` gets each discovery change, `onEvent` each speaker or
     /// timeline event with what the model made of it, on the main queue.
@@ -97,6 +99,32 @@ final class NativeAirPlay {
         queue.async { [weak self] in
             guard let handle = self?.handle else { return }
             asc_airplay_set_master(handle, master)
+        }
+    }
+
+    /// The track's title, artist and album for the receivers that show it,
+    /// sent with the artwork set last, which a new track drops
+    /// (`NativeNowPlaying`, P123 to P127). Main queue.
+    func setTrack(_ fields: TrackMetadata.Fields) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.nowPlaying.setTrack(fields)
+            self.sendNowPlaying()
+        }
+    }
+
+    /// The artwork for the receivers that show it, scaled and encoded as a
+    /// small JPEG on the queue (`TrackMetadata.jpeg`), and sent with the
+    /// track set last. Main queue.
+    func setArtwork(_ image: NSImage) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            guard let jpeg = TrackMetadata.jpeg(image) else {
+                DispatchQueue.main.async { DBG.log("[AudioSync] native AirPlay: the artwork could not be made small enough") }
+                return
+            }
+            self.nowPlaying.setArtwork(jpeg)
+            self.sendNowPlaying()
         }
     }
 
@@ -238,6 +266,21 @@ final class NativeAirPlay {
         return asc_airplay_latency_ms(created)
     }
 
+    /// Hands the sender the track and the artwork set last; nothing before
+    /// the sender runs or after it stopped.
+    private func sendNowPlaying() {
+        guard let handle else { return }
+        let fields = nowPlaying.fields
+        let artwork = nowPlaying.artwork ?? Data()
+        let taken = artwork.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Bool in
+            asc_airplay_set_now_playing(handle, fields?.title, fields?.artist, fields?.album,
+                                        raw.bindMemory(to: UInt8.self).baseAddress, raw.count)
+        }
+        if !taken {
+            DispatchQueue.main.async { DBG.log("[AudioSync] native AirPlay: the sender turned the track info down") }
+        }
+    }
+
     private func stopOnQueue() {
         timer?.cancel()
         timer = nil
@@ -270,6 +313,7 @@ final class NativeAirPlay {
 
     private func apply(_ changes: [NativeReceiverChange], _ events: [NativeSpeakerEvent]) {
         guard active else { return }
+        if !changes.isEmpty { model.computerName = SCDynamicStoreCopyComputerName(nil, nil) as String? }
         for change in changes {
             if case .gone(let id, _) = change {
                 let name = model.receivers[id]?.name

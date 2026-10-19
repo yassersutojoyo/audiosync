@@ -1,9 +1,8 @@
 #!/bin/bash
 # Soak test of the engine, completely silent and unattended: plays a known
 # signal through two local outputs at gain 0 (a virtual output first, then the
-# built-in one; never AirPlay, never an input device) and through the FIFO path
-# to a local reader standing in for the AirPlay engine. Logs a record every 10 s
-# and ends with a summary judged against the engine's baseline,
+# built-in one; never AirPlay, never an input device). Logs a record every
+# 10 s and ends with a summary judged against the engine's baseline,
 # Tests/baseline/rust.json (see docs/BENCHMARKS.md). Keeps the Mac awake while
 # it runs.
 #
@@ -16,7 +15,7 @@
 # Exit status: 0 PASS, 1 FAIL, 2 setup error (the core or the harness doesn't
 # build, too few usable outputs, a baseline without a needed metric), 3 no
 # baseline file (numbers only; run Tests/bench.sh first).
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 export LC_ALL=C
 cd "$(dirname "$0")/.."
 
@@ -30,7 +29,7 @@ while [ $# -gt 0 ]; do
     --out)      out=${2:?--out needs a value}; shift 2 ;;
     --baseline) baseline=${2:?--baseline needs a value}; shift 2 ;;
     --device)   devices+=(--device "${2:?--device needs a value}"); shift 2 ;;
-    -h|--help)  sed -n '2,18p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '2,17p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -48,7 +47,7 @@ if ! scripts/build_core.sh > "$out/core-build.log" 2>&1; then
 fi
 if ! Tests/build-harness.sh "$bin"; then echo "the harness did not compile" >&2; exit 2; fi
 
-args=(--label soak --seconds $((minutes * 60)) --interval 10 --outputs 2 --fifo --out "$out")
+args=(--label soak --seconds $((minutes * 60)) --interval 10 --outputs 2 --out "$out")
 if [ -f "$baseline" ]; then
   args+=(--baseline "$baseline")
 else

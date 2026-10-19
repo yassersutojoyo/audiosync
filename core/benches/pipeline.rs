@@ -8,7 +8,6 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use audiosync_core::convert;
-use audiosync_core::fifo::FifoFeed;
 use audiosync_core::reader::{Reader, tolerance_frames};
 use audiosync_core::resample::Resampler;
 use audiosync_core::ring::{Ring, RingWriter};
@@ -57,13 +56,6 @@ fn per_block(c: &mut Criterion) {
         })
     });
 
-    // Float to PCM16 frames.
-    let samples = music(N);
-    let mut packed = vec![0u32; N];
-    group.bench_function("convert_pcm16", |b| {
-        b.iter(|| convert::pack_stereo(black_box(&samples), &mut packed))
-    });
-
     // Resampling one capture block to 48 kHz.
     let mut out = vec![0.0f32; 4 * N * 2];
     for rate in [44_100u32, 96_000, 48_000] {
@@ -74,33 +66,19 @@ fn per_block(c: &mut Criterion) {
         });
     }
 
-    // The whole chain: write, read at 2 s, resample 44.1 -> 48 kHz, convert.
+    // The whole chain of a local output: write, read at 2 s, resample
+    // 44.1 -> 48 kHz, then the output stage onto a stereo device buffer.
     let (ring, mut writer, block) = primed(44_100);
     let mut reader = Reader::new(Arc::clone(&ring), 44_100);
     let mut resampler = Resampler::new(44_100, 48_000).unwrap();
+    let mut device = vec![0.0f32; 4 * N * 2];
     let t = tolerance_frames(44_100);
-    group.bench_function("pipeline_read_resample_convert_44100", |b| {
+    group.bench_function("pipeline_read_resample_render_44100", |b| {
         b.iter(|| {
             writer.write(&block, N);
             reader.read(&mut dst, N, 88_200, t);
             let (_, made) = resampler.process(&dst, &mut out);
-            convert::pack_stereo(&out[..made * 2], &mut packed);
-            black_box(made)
-        })
-    });
-
-    // The capture side of the pipe feed at 44.1 kHz: resample, convert,
-    // enqueue (the queue is drained so it never fills).
-    let feed = FifoFeed::new(4).unwrap();
-    let mut producer = feed.producer().unwrap();
-    producer.set_input_rate(44_100).unwrap();
-    let mut drain = feed.writer().unwrap();
-    let input = music(N);
-    group.bench_function("fifo_feed_44100", |b| {
-        b.iter(|| {
-            let queued = producer.feed(black_box(&input), N);
-            drain.clear();
-            queued
+            black_box(convert::map_to_device(&out, made, 0.5, &mut device, 2))
         })
     });
 

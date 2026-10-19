@@ -4,27 +4,27 @@ import Foundation
 // app makes from it, kept free of the C interface and the UI so they can be
 // tested (`NativeAirPlay` feeds it, `AppDelegate+NativeAirPlay` acts on it).
 
-/// The app's ID for a receiver the native sender lists: its receiver ID
-/// behind a "native:" prefix. The speaker list, the switches, the volumes,
-/// groups and auto-connect key AirPlay speakers by these IDs, so a native
-/// receiver never takes over the saved settings of a bundled-engine output
-/// (whose IDs are the engine's numbers), and the other sender's speakers just
-/// aren't listed while one sender runs.
+/// The app's ID for a receiver AudioSync's AirPlay sender lists: its
+/// receiver ID behind a "native:" prefix. The speaker list, the switches,
+/// the volumes, groups and auto-connect key AirPlay speakers by these IDs.
+/// What older versions saved under another ID for a receiver moves to its
+/// native ID once discovery reports that receiver (`SpeakerIDMigration`,
+/// S204).
 enum NativeAirPlayID {
     static let prefix = "native:"
 
     static func app(_ receiverID: String) -> String { prefix + receiverID }
 
-    /// The receiver ID behind an app ID; nil for a bundled-engine output.
+    /// The receiver ID behind an app ID; nil for an ID older versions saved.
     static func receiver(_ appID: String) -> String? {
         appID.hasPrefix(prefix) ? String(appID.dropFirst(prefix.count)) : nil
     }
 
-    /// The switched-on AirPlay speakers of one sender: the native ones, or
-    /// the bundled engine's. A speaker switched on under the other sender
-    /// stays saved but neither starts nor holds up streaming in this run.
-    static func ofSender(_ enabled: Set<String>, native: Bool) -> Set<String> {
-        enabled.filter { (receiver($0) != nil) == native }
+    /// The switched-on AirPlay speakers the sender can play to. One saved
+    /// under an older version's ID that discovery hasn't moved yet stays
+    /// saved but neither starts nor holds up streaming.
+    static func playable(_ enabled: Set<String>) -> Set<String> {
+        enabled.filter { receiver($0) != nil }
     }
 }
 
@@ -241,12 +241,20 @@ struct NativeAirPlayModel {
     var latencyMs: Double = 0
     /// The last name of every receiver seen, for rows and notices.
     private(set) var names: [String: String] = [:]
+    /// This Mac's computer name: a receiver announced under it is this Mac's
+    /// own AirPlay Receiver, which is never listed (S100,
+    /// `NativeReceiver.isThisMac`). Nil hides nothing.
+    var computerName: String?
 
     mutating func apply(_ change: NativeReceiverChange) {
         switch change {
         case .appeared(let receiver), .changed(let receiver):
-            receivers[receiver.id] = receiver
             names[receiver.id] = receiver.name
+            if NativeReceiver.isThisMac(receiver.name, computerName: computerName) {
+                receivers.removeValue(forKey: receiver.id)
+            } else {
+                receivers[receiver.id] = receiver
+            }
         case .gone(let id, _):
             receivers.removeValue(forKey: id)
         }
@@ -556,6 +564,10 @@ struct NativeSenderStarts {
     private(set) var failedAt: Date?
     /// The sender stopped after an internal error, and Retry wasn't clicked yet.
     private(set) var stopped = false
+    /// The last start worked and the sender hasn't stopped since: it and its
+    /// discovery run, which is what the Local Network hint needs to know
+    /// (`LocalNetworkHint.decide`).
+    private(set) var isUp = false
 
     /// Whether a reconcile at `now` starts the sender (none runs).
     func mayStart(at now: Date) -> Bool {
@@ -564,7 +576,10 @@ struct NativeSenderStarts {
     }
 
     /// The sender stopped after an internal error.
-    mutating func senderFailed() { stopped = true }
+    mutating func senderFailed() {
+        stopped = true
+        isUp = false
+    }
 
     /// The user clicked Retry: the next reconcile starts a new sender.
     mutating func retry() {
@@ -572,15 +587,38 @@ struct NativeSenderStarts {
         failedAt = nil
     }
 
-    /// How the AirPlay section shows this sender, in the bundled engine's
-    /// terms (failed, with Retry); nil while nothing is wrong with it.
-    var problem: AirPlayEngineState? { stopped ? .failed(.nativeSender) : nil }
-
     /// A start finished at `now`; true when its failure is news for the user
     /// (the first in a row).
     mutating func finished(started: Bool, at now: Date) -> Bool {
         let news = !started && failedAt == nil
         failedAt = started ? nil : now
+        isUp = started
         return news
+    }
+}
+
+/// What AudioSync's own sender hands the receivers that show it as playing
+/// (P123 to P127): the track and the artwork set last, which go out together
+/// whenever either is set (`NativeAirPlay.setTrack`, `setArtwork`; the
+/// sender's queue). A new track (another title, artist or album) drops the
+/// last one's artwork, so the wrong cover never goes out with it: until this
+/// track's artwork, or AudioSync's icon, is set (the app sends one after every
+/// new track, `SentTrackInfo`), the track goes out without artwork, which
+/// sends none. A receiver already playing may keep the last cover until then;
+/// only one that starts in that gap shows no cover. The same track set again,
+/// as on a resend, keeps its artwork.
+struct NativeNowPlaying: Equatable {
+    /// The track's title, artist and album, once one was set.
+    private(set) var fields: TrackMetadata.Fields?
+    /// The artwork as a JPEG, once one was set for this track.
+    private(set) var artwork: Data?
+
+    mutating func setTrack(_ track: TrackMetadata.Fields) {
+        if track != fields { artwork = nil }
+        fields = track
+    }
+
+    mutating func setArtwork(_ jpeg: Data) {
+        artwork = jpeg
     }
 }

@@ -4,21 +4,7 @@ use audiosync_core::policy::delay::{
     DEFAULT_DELAY_MS, MAX_DELAY_MS, SyncRule, airplay_chosen, effective_delay_ms, initial_delay_ms,
     sanitize_delay_ms,
 };
-use audiosync_core::policy::pairing::AirPlayVersion;
-use audiosync_core::policy::reconcile::{Poll, Reconciler, Speaker};
 use proptest::prelude::*;
-
-fn speaker(id: &str) -> Speaker {
-    Speaker {
-        id: id.to_owned(),
-        name: format!("Speaker {id}"),
-        version: AirPlayVersion::AirPlay2,
-        selected: true,
-        volume: 50,
-        needs_pin: false,
-        has_password: false,
-    }
-}
 
 // covers: S77
 #[test]
@@ -113,31 +99,16 @@ fn every_running_output_is_retimed_when_the_condition_flips() {
 
 // covers: S81
 #[test]
-fn an_unreachable_engine_leaves_the_listed_set_and_the_local_delays_alone() {
-    let mut reconciler = Reconciler::new();
+fn a_listed_set_kept_through_failed_polls_leaves_the_local_delays_alone() {
+    // A poll that can't read the AirPlay speakers keeps the listed set as it
+    // was (S81): the rule sees the same set again, so nothing flips.
     let mut rule = SyncRule::default();
-    let speakers = [speaker("7")];
-    let answered = Poll {
-        requested_at: 0.0,
-        run: 1,
-        speakers: Some(&speakers),
-        writes_busy: false,
-    };
-    reconciler.poll(&answered, true, &["7"]);
-    assert!(rule.update(&["7"], reconciler.listed()));
-    for (at, busy) in [(3.0, false), (6.0, true), (9.0, false)] {
-        let failed = Poll {
-            requested_at: at,
-            run: 1,
-            speakers: None,
-            writes_busy: busy,
-        };
-        let outcome = reconciler.poll(&failed, true, &["7"]);
-        assert!(!outcome.listed_changed);
-        assert_eq!(reconciler.listed(), ["7"]);
+    let listed = ["7".to_owned()];
+    assert!(rule.update(&["7"], &listed));
+    for _ in 0..3 {
         assert!(
-            !rule.update(&["7"], reconciler.listed()),
-            "no flap while the engine restarts"
+            !rule.update(&["7"], &listed),
+            "no flap while the speakers can't be read"
         );
         assert_eq!(rule.effective_delay_ms(2000.0), 2000.0);
     }

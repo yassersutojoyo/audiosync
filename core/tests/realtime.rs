@@ -1,10 +1,9 @@
-//! Real-time proof for the audio path (S126, S128, S129).
+//! Real-time proof for the audio path (S126, S128).
 //!
 //! A counting global allocator records every allocation, reallocation and
 //! free made by a thread while it is "tracking". After setup, each test
 //! tracks only the audio-path calls (ring write, reader read, resample,
-//! convert, FIFO feed, and the FIFO writer's step) and asserts the count
-//! stays at zero. Other test threads never track, so they cannot interfere.
+//! convert, render and fades) and asserts the count stays at zero. Other test threads never track, so they cannot interfere.
 //!
 //! The audio-path modules also forbid unsafe code and contain no lock types,
 //! and the C interface's audio-path files, which hold the crate's unsafe code,
@@ -17,11 +16,9 @@ use std::cell::Cell;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use audiosync_core::convert;
 use audiosync_core::fade::InputFade;
-use audiosync_core::fifo::{FifoFeed, OpenError, PipeSink, Step, WriteError};
 use audiosync_core::reader::{Reader, ReaderControl, tolerance_frames};
 use audiosync_core::render::{Renderer, RendererControl};
 use audiosync_core::resample::Resampler;
@@ -175,8 +172,6 @@ fn resample_and_convert_do_not_allocate() {
     input[100] = f32::NAN;
     input[777] = f32::NEG_INFINITY;
     let mut out = vec![0.0f32; 2 * 2048];
-    let mut packed = vec![0u32; 4096];
-    let mut pcm = vec![0i16; 8192];
     let mut device = vec![0.0f32; 4096 * 6];
     let count = allocations_in(|| {
         for r in &mut resamplers {
@@ -186,7 +181,7 @@ fn resample_and_convert_do_not_allocate() {
                     let need = r.input_frames_for(64);
                     std::hint::black_box(need);
                     let (used, made) = r.process(chunk, &mut out);
-                    convert::pack_stereo(&out[..made * 2], &mut packed);
+                    std::hint::black_box(&out[..made * 2]);
                     chunk = &chunk[used * 2..];
                     if chunk.is_empty() && made < out.len() / 2 {
                         break;
@@ -197,82 +192,21 @@ fn resample_and_convert_do_not_allocate() {
             r.set_input_rate(32_000).unwrap();
             r.reset();
         }
-        convert::f32_to_i16_slice(&input, &mut pcm);
         let mut copy_in_place = [0.5f32, f32::NAN, f32::INFINITY, -2.0];
         convert::zero_non_finite(&mut copy_in_place);
         for channels in [1usize, 2, 6] {
             convert::map_to_device(&input, 4096, 0.5, &mut device, channels);
         }
-        std::hint::black_box((&packed, &pcm, &device));
+        std::hint::black_box(&device);
     });
     assert_eq!(count, 0, "resample / convert allocated or freed");
-}
-
-// covers: S126, S95, S87
-#[test]
-fn fifo_feed_does_not_allocate() {
-    let feed = FifoFeed::new(1).unwrap();
-    let mut producer = feed.producer().unwrap();
-    let mut drain = feed.writer().unwrap();
-    let mut block = noisy_block(10_000, 5);
-    block[3] = f32::NAN;
-    block[4] = f32::INFINITY;
-    let count = allocations_in(|| {
-        for rate in [48_000u32, 44_100, 96_000, 8_000, 384_000] {
-            producer.set_input_rate(rate).unwrap();
-            for size in [441usize, 512, 1, 10_000, 4096] {
-                producer.feed(&block, size);
-            }
-            // Fill the queue past capacity: the overflow is dropped (S87).
-            for _ in 0..12 {
-                producer.feed(&block, 10_000);
-            }
-            drain.clear();
-        }
-        std::hint::black_box(producer.samples_queued());
-    });
-    assert_eq!(count, 0, "feed allocated or freed");
-    assert!(feed.frames_dropped() > 0);
-}
-
-/// A pipe that never allocates: it plays a fixed script of write outcomes,
-/// refuses every third open and counts the bytes it accepts.
-struct ScriptedPipe {
-    script: [Result<usize, WriteError>; 8],
-    call: usize,
-    open: bool,
-    opens: usize,
-    bytes: u64,
-}
-
-impl PipeSink for ScriptedPipe {
-    fn open(&mut self) -> Result<(), OpenError> {
-        self.opens += 1;
-        if self.opens % 3 == 1 {
-            return Err(OpenError::NoReader);
-        }
-        self.open = true;
-        Ok(())
-    }
-
-    fn write(&mut self, bytes: &[u8]) -> Result<usize, WriteError> {
-        let outcome = self.script[self.call % self.script.len()];
-        self.call += 1;
-        let n = outcome?.min(bytes.len());
-        self.bytes += n as u64;
-        Ok(n)
-    }
-
-    fn close(&mut self) {
-        self.open = false;
-    }
 }
 
 // covers: S190, S126, S127
 #[test]
 fn fading_allocates_and_locks_nothing_on_the_audio_thread() {
-    // Setup may allocate: a renderer converting to 44.1 kHz, the pipe feed
-    // and its writer, and the native input's fade.
+    // Setup may allocate: a renderer converting to 44.1 kHz and the native
+    // input's fade.
     let ring = Ring::for_rate(48_000).unwrap();
     let mut writer = ring.writer().unwrap();
     let reader = Reader::new(Arc::clone(&ring), 48_000);
@@ -281,16 +215,6 @@ fn fading_allocates_and_locks_nothing_on_the_audio_thread() {
     let gain = Arc::new(SharedGain::new(0.8));
     let mut renderer =
         Renderer::new(reader, &control, Arc::clone(&gain), 48_000, 44_100, 2).unwrap();
-    let feed = FifoFeed::new(1).unwrap();
-    let mut producer = feed.producer().unwrap();
-    let mut pipe_writer = feed.writer().unwrap();
-    let mut pipe = ScriptedPipe {
-        script: [Ok(512); 8],
-        call: 0,
-        open: false,
-        opens: 0,
-        bytes: 0,
-    };
     let mut input = InputFade::new(48_000, 256);
     let block = noisy_block(512, 9);
     let burst = noisy_block(3000, 10);
@@ -305,18 +229,12 @@ fn fading_allocates_and_locks_nothing_on_the_audio_thread() {
                 300..=320 => {}
                 _ => writer.write(&block, 512),
             }
-            // The control thread: delay changes and a stop, then a new
-            // session's rate sets.
+            // The control thread: delay changes, then the native input's stop
+            // and a new session's rate.
             match round % 500 {
                 50 => control.set_delay_frames(8000),
                 120 => control.set_delay_frames(2048),
                 121 => control.set_delay_frames(3000),
-                250 => feed.request_fade_out(),
-                260 => {
-                    producer
-                        .set_input_rate([48_000, 44_100][round / 500 % 2])
-                        .unwrap();
-                }
                 400 => input.fade_out(),
                 450 => input.restart([48_000, 96_000][round / 500 % 2]),
                 _ => {}
@@ -334,11 +252,7 @@ fn fading_allocates_and_locks_nothing_on_the_audio_thread() {
             }
             std::hint::black_box(renderer.frames_after_fade());
             std::hint::black_box(control.faded_by_time(1_000_000, round as u64));
-            // The pipe feed and its writer, and the native input.
-            producer.feed(&block, 512);
-            for _ in 0..3 {
-                std::hint::black_box(pipe_writer.step(&mut pipe));
-            }
+            // The native input.
             input.process(&block, |piece| handed += piece.len());
         }
     });
@@ -349,51 +263,7 @@ fn fading_allocates_and_locks_nothing_on_the_audio_thread() {
         "{counters:?}"
     );
     assert!(control.fade_rendered());
-    assert!(handed > 0 && pipe.bytes > 0);
-}
-
-// covers: S129, S90, S93
-#[test]
-fn fifo_writer_step_does_not_allocate() {
-    let feed = FifoFeed::new(1).unwrap();
-    let mut producer = feed.producer().unwrap();
-    let mut writer = feed.writer().unwrap();
-    let block = noisy_block(4800, 6);
-    let mut pipe = ScriptedPipe {
-        script: [
-            Ok(4098),
-            Ok(3),
-            Err(WriteError::WouldBlock),
-            Ok(usize::MAX),
-            Err(WriteError::BrokenPipe),
-            Ok(1),
-            Err(WriteError::Interrupted),
-            Ok(0),
-        ],
-        call: 0,
-        open: false,
-        opens: 0,
-        bytes: 0,
-    };
-    let count = allocations_in(|| {
-        for round in 0..2000 {
-            if round % 4 == 0 {
-                producer.feed(&block, 4800);
-            }
-            let step = writer.step(&mut pipe);
-            std::hint::black_box(step == Step::Continue);
-        }
-        // Closing as a stop does, giving a partly written frame a few tries.
-        let mut tries = 0;
-        writer.close_aligned(&mut pipe, |pause: Duration| {
-            std::hint::black_box(pause);
-            tries += 1;
-            tries < 8
-        });
-    });
-    assert_eq!(count, 0, "the writer's step allocated or freed");
-    assert!(pipe.bytes > 0 && feed.counters().backlog_skips > 0);
-    assert!(!pipe.open);
+    assert!(handed > 0);
 }
 
 /// The source of a module without its unit tests, with `\n` line ends
@@ -459,7 +329,7 @@ fn the_source_scan_reads_crlf_checkouts_and_finds_what_it_looks_for() {
 fn audio_path_modules_use_only_atomics() {
     // Where each module may wait: never on an audio thread; the equalizer's
     // control side may yield while the capture thread copies a set (S31,
-    // S130); the FIFO writer thread parks between steps (S129).
+    // S130).
     let modules = [
         ("ring.rs", "none"),
         ("reader.rs", "none"),
@@ -470,7 +340,6 @@ fn audio_path_modules_use_only_atomics() {
         ("fade.rs", "none"),
         ("render.rs", "none"),
         ("eq.rs", "yield"),
-        ("fifo.rs", "park"),
     ];
     for (name, waits) in modules {
         let source = source_file(&[name]);
@@ -482,21 +351,15 @@ fn audio_path_modules_use_only_atomics() {
     }
 }
 
-// covers: S126, S128, S129
+// covers: S126, S128
 #[test]
 fn c_interface_audio_calls_use_only_atomics() {
     // The C interface's files with audio-path calls: the equalizer and the
-    // gain (ffi.rs), the ring and its readers, the resampler and the output
-    // stage, and the FIFO feed and its writer. They hold the crate's unsafe
-    // code, so they can't forbid it, but the rest of the scan applies. None
-    // of them waits: the host's FIFO writer thread sleeps between steps,
-    // outside the core. The sync rule (ffi/sync.rs) is a control-thread call.
-    let files: [&[&str]; 4] = [
-        &["ffi.rs"],
-        &["ffi", "ring.rs"],
-        &["ffi", "render.rs"],
-        &["ffi", "fifo.rs"],
-    ];
+    // gain (ffi.rs), the ring and its readers, and the resampler and the
+    // output stage. They hold the crate's unsafe code, so they can't forbid
+    // it, but the rest of the scan applies, and none of them waits. The sync
+    // rule (ffi/sync.rs) is a control-thread call.
+    let files: [&[&str]; 3] = [&["ffi.rs"], &["ffi", "ring.rs"], &["ffi", "render.rs"]];
     for parts in files {
         let name = parts.join("/");
         let code = production_part(&source_file(parts));
@@ -509,23 +372,14 @@ fn c_interface_audio_calls_use_only_atomics() {
 }
 
 /// Asserts that a module's production code holds no word of
-/// [`NOT_REAL_TIME`] and waits only as `waits` allows: "none", "yield" (a
-/// `thread::yield_now`) or "park" (the FIFO writer thread's parking and
-/// spawning).
+/// [`NOT_REAL_TIME`] and waits only as `waits` allows: "none" or "yield" (a
+/// `thread::yield_now`).
 fn assert_waits_only_as_allowed(name: &str, code: &str, waits: &str) {
     assert_eq!(forbidden_words(code), [] as [&str; 0], "{name}");
     let mut thread_calls = code.match_indices("thread::").map(|(at, _)| &code[at..]);
-    let allowed = |call: &str| match waits {
-        "yield" => call.starts_with("thread::yield_now"),
-        "park" => ["thread::park_timeout", "thread::Builder", "thread::{"]
-            .iter()
-            .any(|prefix| call.starts_with(prefix)),
-        _ => false,
-    };
+    let allowed = |call: &str| waits == "yield" && call.starts_with("thread::yield_now");
     assert!(thread_calls.all(allowed), "{name} blocks");
-    if waits != "park" {
-        assert!(!code.contains("park"), "{name} parks");
-    }
+    assert!(!code.contains("park"), "{name} parks");
 }
 
 /// A source file under `src/`, by its path components.
@@ -546,12 +400,9 @@ fn shared_types_are_send_and_sync() {
     send_sync::<Ring>();
     send_sync::<ReaderControl>();
     send_sync::<RendererControl>();
-    send_sync::<FifoFeed>();
     send::<Renderer>();
     send::<InputFade>();
     send::<RingWriter>();
     send::<Reader>();
     send::<Resampler>();
-    send::<audiosync_core::fifo::FifoProducer>();
-    send::<audiosync_core::fifo::FifoWriter>();
 }
