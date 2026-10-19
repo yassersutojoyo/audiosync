@@ -63,17 +63,23 @@ launchApp.setActivationPolicy(.regular)
 // write happened, not end the whole process.
 signal(SIGPIPE, SIG_IGN)
 
-// SIGTERM is handled off the main queue because a modal alert can keep the
-// main queue busy, and the bundled engine must still be stopped on the way out.
-signal(SIGTERM, SIG_IGN)
-let termSignalSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global(qos: .userInitiated))
-termSignalSource.setEventHandler { @Sendable in
-    // A launch arriving during the shutdown should not be told we're here.
-    AppDelegate.exiting.store(true, ordering: .relaxed)
-    AirPlayEngine.shared.stopForExit()
-    exit(0)
+// The exit signals are handled off the main queue because a modal alert can
+// keep the main queue busy, and the bundled engine must still be stopped on
+// the way out. One serial queue for all of them, so two signals arriving
+// together never run the shutdown twice at once.
+let exitSignalQueue = DispatchQueue(label: "audiosync.exit-signals", qos: .userInitiated)
+let exitSignalSources = AppLifecycle.exitSignals.map { number -> DispatchSourceSignal in
+    signal(number, SIG_IGN)   // the default action would end the process before the source sees it
+    let source = DispatchSource.makeSignalSource(signal: number, queue: exitSignalQueue)
+    source.setEventHandler { @Sendable in
+        // A launch arriving during the shutdown should not be told we're here.
+        AppDelegate.exiting.store(true, ordering: .relaxed)
+        AirPlayEngine.shared.stopForExit()
+        exit(0)
+    }
+    source.resume()
+    return source
 }
-termSignalSource.resume()
 
-// `termSignalSource` is a top-level constant, so it lives as long as the process.
+// `exitSignalSources` is a top-level constant, so the sources live as long as the process.
 launchApp.run()
