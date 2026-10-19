@@ -19,8 +19,10 @@ final class NativeAirPlay {
     /// How often the queue asks the sender for discovery changes and events.
     static let pollInterval: DispatchTimeInterval = .milliseconds(250)
 
-    /// The receivers listed, the speakers added and L (main queue).
-    private(set) var model = NativeAirPlayModel()
+    /// The receivers listed, the speakers added, L, and the pairings and
+    /// prompts under way (main queue; the app records prompts and turn-offs
+    /// in it).
+    var model = NativeAirPlayModel()
     /// False once `shutdown` ran: changes still on their way are dropped (main queue).
     private var active = true
 
@@ -98,6 +100,75 @@ final class NativeAirPlay {
         }
     }
 
+    /// Starts a PIN pairing with the receiver `id`; `completion` gets, on the
+    /// main queue, whether it started (false: it is no longer listed).
+    func startPairing(_ id: String, completion: @escaping (Bool) -> Void) {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            let started = asc_airplay_start_pairing(handle, id)
+            DispatchQueue.main.async { completion(started) }
+        }
+    }
+
+    /// Hands the PIN the user typed to the pairing with `id`; `completion`
+    /// gets, on the main queue, whether the pairing took it. Never logged.
+    func submitPin(_ id: String, pin: String, completion: @escaping (Bool) -> Void) {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            let taken = asc_airplay_submit_pin(handle, id, pin)
+            DispatchQueue.main.async { completion(taken) }
+        }
+    }
+
+    /// Stops the pairing with `id`, if one runs.
+    func cancelPairing(_ id: String) {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            asc_airplay_cancel_pairing(handle, id)
+        }
+    }
+
+    /// Hands the sender the password of `id` for this run (memory only,
+    /// never stored or logged); nil forgets it.
+    func setPassword(_ id: String, _ password: String?) {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            _ = asc_airplay_set_password(handle, id, password)
+        }
+    }
+
+    /// Forgets the stored pairing of `id`; it needs a PIN again.
+    func forgetPairing(_ id: String) {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            _ = asc_airplay_forget_pairing(handle, id)
+        }
+    }
+
+    /// Where the pairing store lives:
+    /// ~/Library/Application Support/AudioSync/airplay-pairings.dat (mode
+    /// 0600, written by the core; not the Keychain, which would ask again
+    /// after every locally signed rebuild).
+    static var pairingsPath: String? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("AudioSync", isDirectory: true)
+            .appendingPathComponent("airplay-pairings.dat").path
+    }
+
+    /// What opening the pairing store found, for the debug log.
+    static func pairingsLogLine(_ loaded: Int32) -> String {
+        switch loaded {
+        case ASC_AIRPLAY_PAIRINGS_IGNORED:
+            return "the pairings file was unreadable or not in the expected format; it is ignored, and the next pairing replaces it"
+        case ASC_AIRPLAY_PAIRINGS_NEWER:
+            return "a newer AudioSync wrote the pairings file; it is left as it is, and pairings made now last until AudioSync quits"
+        case ASC_AIRPLAY_PAIRINGS_FAILED:
+            return "the pairings file couldn't be opened; pairings made now last until AudioSync quits"
+        default:
+            return "\(loaded) paired Apple TV(s) in the pairings file"
+        }
+    }
+
     /// A new capture session started (P143): the speakers are flushed and the
     /// timeline starts over.
     func restartTimeline() {
@@ -146,6 +217,10 @@ final class NativeAirPlay {
         if let handle { return asc_airplay_latency_ms(handle) }
         guard let created = asc_airplay_create() else { return nil }
         handle = created
+        // Before discovery, so a paired Apple TV is listed as able to play
+        // from its first report.
+        let loaded = Self.pairingsPath.map { asc_airplay_open_pairings(created, $0) } ?? ASC_AIRPLAY_PAIRINGS_FAILED
+        DispatchQueue.main.async { DBG.log("[AudioSync] native AirPlay: " + Self.pairingsLogLine(loaded)) }
         asc_airplay_set_master(created, master)
         if let taken = asc_airplay_take_input(created) {
             input = taken
@@ -243,6 +318,15 @@ final class NativeAirPlay {
             return .timeline(latencyMs: raw.latency_ms, restarted: raw.restarted)
         case ASC_AIRPLAY_EVENT_FAILED:
             return .failed
+        case ASC_AIRPLAY_EVENT_PIN_NEEDED:
+            return .pinNeeded(id: id)
+        case ASC_AIRPLAY_EVENT_PASSWORD_NEEDED:
+            return .passwordNeeded(id: id, wrong: raw.error == ASC_AIRPLAY_ERROR_WRONG_PASSWORD)
+        case ASC_AIRPLAY_EVENT_PAIRING_FAILED:
+            return .pairingFailed(id: id, wrongPin: raw.error == ASC_AIRPLAY_ERROR_WRONG_PIN,
+                                  Self.problem(raw.error), detail: text(raw.detail))
+        case ASC_AIRPLAY_EVENT_PAIRED:
+            return .paired(id: id, storeNote: text(raw.detail))
         default:
             return nil
         }
