@@ -66,10 +66,11 @@ use audiosync_airplay::audio::SAMPLE_RATE;
 use audiosync_airplay::discovery::{DeviceKey, ServiceKind};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
 use audiosync_airplay::input::InputWriter;
+use audiosync_airplay::metadata::TrackInfo;
 use audiosync_airplay::pairing::PairingEvent;
 use audiosync_airplay::sender::{
-    ReceiverEvent, ReceiverInfo, Sender, SenderConfig, SenderEvent, SpeakerError, SpeakerEvent,
-    SpeakerOptions, SpeakerState,
+    NowPlaying, ReceiverEvent, ReceiverInfo, Sender, SenderConfig, SenderEvent, SpeakerError,
+    SpeakerEvent, SpeakerOptions, SpeakerState,
 };
 use audiosync_airplay::stream::SpeakerLatency;
 use audiosync_airplay::volume::{MIN_DB, Volume};
@@ -1252,6 +1253,64 @@ pub unsafe extern "C" fn asc_airplay_restart_timeline(airplay: *mut AscAirPlay) 
     // SAFETY: by the caller's contract null or a live handle that no other
     // call uses now.
     unsafe { live(airplay, (), |airplay| airplay.sender.restart_timeline()) }
+}
+
+/// Sets what is playing, for the receivers that show it (P123 to P127): the
+/// track's title, artist and album as UTF-8 text, and its artwork as a JPEG
+/// of at most 512 KiB (P125). Every speaker that lists the type gets it now,
+/// and every speaker that starts or restarts later gets it too. A null text
+/// is an empty one, and three null texts send no track information; null
+/// artwork, or a length of 0, sends none. Returns false, changing nothing,
+/// for a null or dead handle, a text that isn't UTF-8, a null `artwork`
+/// with a length, or artwork the sender refuses (not a JPEG, or too large).
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading
+/// contract; each text is null or a NUL-terminated string; `artwork` is
+/// null or points to `artwork_len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_set_now_playing(
+    airplay: *mut AscAirPlay,
+    title: *const c_char,
+    artist: *const c_char,
+    album: *const c_char,
+    artwork: *const u8,
+    artwork_len: usize,
+) -> bool {
+    let mut texts = [None; 3];
+    for (text, pointer) in texts.iter_mut().zip([title, artist, album]) {
+        if pointer.is_null() {
+            continue;
+        }
+        // SAFETY: non-null, and by the caller's contract NUL-terminated.
+        let Some(value) = (unsafe { host_text(pointer) }) else {
+            return false;
+        };
+        *text = Some(value);
+    }
+    // SAFETY: by the caller's contract null or `artwork_len` bytes.
+    let Some(jpeg) = (unsafe { host_slice(artwork, artwork_len) }) else {
+        return false;
+    };
+    let [title, artist, album] = texts;
+    let track = (title.is_some() || artist.is_some() || album.is_some()).then(|| TrackInfo {
+        title: title.unwrap_or_default().to_owned(),
+        artist: artist.unwrap_or_default().to_owned(),
+        album: album.unwrap_or_default().to_owned(),
+    });
+    let now_playing = NowPlaying {
+        track,
+        artwork: (!jpeg.is_empty()).then(|| jpeg.to_vec()),
+        progress: None,
+    };
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, false, |airplay| {
+            airplay.sender.set_now_playing(now_playing).is_ok()
+        })
+    }
 }
 
 /// Opens the pairing store kept in the file at `path` (see
@@ -2442,6 +2501,96 @@ mod tests {
             "{stopped:?}"
         );
         assert!(receiver.methods().contains(&Method::Teardown));
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    #[test]
+    fn now_playing_reaches_a_speaker_that_shows_it_and_bad_input_is_refused() {
+        let jpeg: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        let none = ptr::null::<c_char>();
+        // SAFETY: null handles and pointers are part of the contract.
+        unsafe {
+            assert!(!asc_airplay_set_now_playing(
+                ptr::null_mut(),
+                c"Track One".as_ptr(),
+                none,
+                none,
+                ptr::null(),
+                0
+            ));
+        }
+
+        let receiver = Loopback::start();
+        let id = "02005E005331";
+        let mut txt = OPEN.to_vec();
+        txt.push("md=0,1,2");
+        let record = ServiceRecord {
+            port: receiver.port,
+            addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))],
+            ..raop(id, "Den", &txt)
+        };
+        let mut handle = listing(vec![record]);
+        let c_id = c_string(id);
+        let not_utf8: [u8; 3] = [0xC3, 0x28, 0x00];
+        let mut large = vec![0u8; audiosync_airplay::metadata::MAX_ARTWORK_BYTES + 1];
+        large[..3].copy_from_slice(&[0xFF, 0xD8, 0xFF]);
+        // SAFETY: a live handle, used by this thread only; C strings and
+        // byte buffers of the lengths given.
+        unsafe {
+            assert!(
+                !asc_airplay_set_now_playing(
+                    handle,
+                    not_utf8.as_ptr().cast(),
+                    none,
+                    none,
+                    ptr::null(),
+                    0
+                ),
+                "a title that isn't UTF-8"
+            );
+            assert!(
+                !asc_airplay_set_now_playing(handle, none, none, none, ptr::null(), 4),
+                "a length without artwork"
+            );
+            assert!(
+                !asc_airplay_set_now_playing(handle, none, none, none, b"GIF89a".as_ptr(), 6),
+                "artwork that isn't a JPEG"
+            );
+            assert!(
+                !asc_airplay_set_now_playing(handle, none, none, none, large.as_ptr(), large.len()),
+                "artwork over 512 KiB"
+            );
+            assert!(
+                asc_airplay_set_now_playing(handle, none, none, none, ptr::null(), 0),
+                "nothing playing"
+            );
+            assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 50.0));
+        }
+        let events = events_until(handle, |seen| has_state(seen, id, AIRPLAY_STATE_PLAYING));
+        assert!(has_state(&events, id, AIRPLAY_STATE_PLAYING), "{events:?}");
+        // SAFETY: a live handle, used by this thread only; C strings and a
+        // byte buffer of the length given.
+        unsafe {
+            assert!(asc_airplay_set_now_playing(
+                handle,
+                c"Track One".as_ptr(),
+                c"Some Artist".as_ptr(),
+                c"Some Album".as_ptr(),
+                jpeg.as_ptr(),
+                jpeg.len()
+            ));
+        }
+        assert!(
+            wait_for(|| receiver
+                .bodies(Method::SetParameter)
+                .iter()
+                .any(|body| body.contains("Track One")
+                    && body.contains("Some Artist")
+                    && body.contains("Some Album"))),
+            "{:?}",
+            receiver.bodies(Method::SetParameter)
+        );
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
