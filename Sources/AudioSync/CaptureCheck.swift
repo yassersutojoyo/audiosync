@@ -40,4 +40,23 @@ enum CaptureRate {
     static func needsRestart(current: Double, reported: Double) -> Bool {
         reported > 0 && reported != current
     }
+
+    /// The capture rate assumed until a format is read, and when one reads 0.
+    static let fallback: Double = 48_000
+
+    /// The rate a capture runs at: the rate of the device its IOProc runs on,
+    /// which is what the delivered frames are clocked at (the input device, or
+    /// the tap's private aggregate device), else the tap's own format rate,
+    /// else 0 when neither could be read. Only finite rates above 0 count.
+    static func running(device: Double, tap: Double = 0) -> Double {
+        if device.isFinite && device > 0 { return device }
+        if tap.isFinite && tap > 0 { return tap }
+        return 0
+    }
+
+    /// A session's capture rate (Rc, S16) from the rate read at its start:
+    /// `fallback` when nothing real could be read.
+    static func session(reported: Double) -> Double {
+        reported.isFinite && reported > 0 ? reported : fallback
+    }
 }

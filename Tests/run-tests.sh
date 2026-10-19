@@ -113,6 +113,25 @@ if [ -z "$select_var" ] \
 fi
 if [ "$requests_ok" = 1 ]; then echo "PASSED"; else status=1; fi
 
+echo "▶ capture IOProc stays real-time safe"
+# The capture IOProc runs CaptureSink (ProcessTapCapture.swift) and the
+# CaptureChannels it builds (CaptureSupport.swift). Neither may log, lock,
+# dispatch or build strings; the debug log is written from the main thread only.
+# Comment lines are dropped first; an empty extract means the check lost track.
+capture_rt=$(awk '/^    final class CaptureSink/ { f = 1 } f { print } f && /^    }$/ { exit }' \
+    "$SRC/ProcessTapCapture.swift"
+  awk '/^struct CaptureChannels/ { f = 1 } f { print } f && /^}$/ { exit }' "$SRC/CaptureSupport.swift")
+capture_rt=$(grep -vE '^[[:space:]]*//' <<< "$capture_rt" || true)
+if ! grep -q 'func consume' <<< "$capture_rt" || ! grep -q 'func copy' <<< "$capture_rt"; then
+  echo "FAIL: the capture IOProc's code (CaptureSink, CaptureChannels) wasn't found"
+  status=1
+elif grep -nE 'DBG|print\(|NSLog|os_log|Logger|DispatchQueue|Lock|Mutex|pthread_|String\(|"' <<< "$capture_rt"; then
+  echo "FAIL: the capture IOProc logs, locks, dispatches or builds strings"
+  status=1
+else
+  echo "PASSED"
+fi
+
 echo "▶ ring buffer"
 build ring Tests/ringtest.swift RingBuffer.swift
 "$OUT/ring/run" > "$OUT/ring.log" || status=1
@@ -120,7 +139,7 @@ grep -E "FAIL|PASSED" "$OUT/ring.log" || true
 
 echo "▶ logic"
 build logic Tests/logictest.swift PipeMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
-  Equalizer.swift FifoFeed.swift RingBuffer.swift Diagnostics.swift AirPlayPairing.swift AirPlayReconcile.swift EngineLifecycle.swift Notices.swift SpeakerState.swift CaptureCheck.swift \
+  Equalizer.swift FifoFeed.swift RingBuffer.swift Diagnostics.swift AirPlayPairing.swift AirPlayReconcile.swift EngineLifecycle.swift Notices.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \
   AudioDevices.swift OwnToneOutputs.swift OwnTonePlayer.swift AirPlayEngineConfig.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift \
   EngineImpl.swift AirPlayImpl.swift NativeAirPlayModel.swift WindowRules.swift
 "$OUT/logic/run" || status=1
