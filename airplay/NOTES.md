@@ -205,7 +205,7 @@ Where the test vector comes from: the spec names the write-up's test vector (P57
 | curve25519-dalek-derive, proc-macro2, quote, syn, unicode-ident, rustc_version, semver, autocfg | 0.1.1, 1.0.107, 1.0.47, 2.0.119, 1.0.27, 0.4.1, 1.0.28, 1.5.1 | MIT/Apache-2.0; unicode-ident (MIT OR Apache-2.0) AND Unicode-3.0 | build time only: curve25519-dalek's backend macro and build script, num-traits' build script |
 | zeroize | 1.9.1 | Apache-2.0 OR MIT | wiping the pairing secrets |
 | plist | 1.8.0 | MIT | the binary property list bodies of the pairing (P47), without default features (no serde) |
-| base64, indexmap, equivalent, hashbrown, quick-xml, memchr, time, time-core, deranged, powerfmt, num-conv, itoa | 0.22.1, 2.14.2, 1.0.3, 0.17.1, 0.38.4, 2.8.3, 0.3.45, 0.1.7, 0.5.9, 0.2.1, 0.1.0, 1.0.18 | MIT OR Apache-2.0, except quick-xml (MIT) and memchr (Unlicense OR MIT, taken under MIT) | plist's dependencies |
+| base64, indexmap, equivalent, hashbrown, quick-xml, memchr, time, time-core, deranged, powerfmt, num-conv | 0.22.1, 2.14.2, 1.0.3, 0.17.1, 0.38.4, 2.8.3, 0.3.55, 0.1.9, 0.5.9, 0.2.1, 0.2.2 | MIT OR Apache-2.0, except quick-xml (MIT) and memchr (Unlicense OR MIT, taken under MIT) | plist's dependencies |
 
 `deny.toml` mirrors core's allow-list (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, Zlib, ISC, Unicode-3.0) with dev and build dependencies included; CI runs cargo-deny 0.20.2. Crates the lock file lists that no build of this crate compiles (optional features off) aren't in the table. The Windows app bundles the crate, pairing crates included, so the Windows section of `THIRD_PARTY_NOTICES.md` names its dependencies and the `THIRD-PARTY-NOTICES.txt` of each Windows build carries their license texts; the macOS app doesn't bundle it.
 

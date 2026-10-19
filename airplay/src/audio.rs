@@ -40,7 +40,7 @@ pub fn sample_from_f32(sample: f32) -> i16 {
 /// A PCM payload (P76): every sample big-endian, left before right, 1408
 /// bytes for a full packet. `out` must hold `4 × frames.len()` bytes.
 pub fn write_pcm_payload(frames: &[Frame], out: &mut [u8]) {
-    for (frame, bytes) in frames.iter().zip(out.chunks_exact_mut(4)) {
+    for (frame, bytes) in frames.iter().zip(out.as_chunks_mut::<4>().0) {
         bytes[..2].copy_from_slice(&frame[0].to_be_bytes());
         bytes[2..].copy_from_slice(&frame[1].to_be_bytes());
     }
@@ -48,7 +48,7 @@ pub fn write_pcm_payload(frames: &[Frame], out: &mut [u8]) {
 
 /// The frames of a PCM payload, the inverse of [`write_pcm_payload`].
 pub fn read_pcm_payload(bytes: &[u8], out: &mut [Frame]) {
-    for (frame, chunk) in out.iter_mut().zip(bytes.chunks_exact(4)) {
+    for (frame, chunk) in out.iter_mut().zip(bytes.as_chunks::<4>().0) {
         *frame = [
             i16::from_be_bytes([chunk[0], chunk[1]]),
             i16::from_be_bytes([chunk[2], chunk[3]]),
