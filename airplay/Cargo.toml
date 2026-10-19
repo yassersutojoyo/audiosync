@@ -11,6 +11,9 @@ publish = false
 [dependencies]
 getrandom = "0.4.3"
 md-5 = { version = "0.11.0", default-features = false }
+# Live mDNS browsing of _raop._tcp and _airplay._tcp (P7). Without default
+# features: no async runtime glue and no logging.
+mdns-sd = { version = "0.21.5", default-features = false }
 
 [dev-dependencies]
 # A reference ALAC decoder for the tests (P77): the payloads the sender

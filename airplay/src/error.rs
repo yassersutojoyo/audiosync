@@ -86,6 +86,51 @@ impl ErrorKind {
     }
 }
 
+impl ErrorKind {
+    /// What a host tells the user about this kind (P133).
+    pub fn user_reason(self) -> UserReason {
+        match self {
+            ErrorKind::Unreachable | ErrorKind::Timeout => UserReason::NotResponding,
+            ErrorKind::PasswordRequired => UserReason::PasswordRequired,
+            ErrorKind::WrongPassword => UserReason::WrongPassword,
+            ErrorKind::PairingRequired | ErrorKind::PairingFailed | ErrorKind::PairingCancelled => {
+                UserReason::PairingRequired
+            }
+            ErrorKind::Busy => UserReason::Busy,
+            ErrorKind::Refused => UserReason::Refused,
+            ErrorKind::Unsupported(reason) => UserReason::Unsupported(reason),
+            ErrorKind::ProtocolError => UserReason::Incompatible,
+            ErrorKind::Lost => UserReason::ConnectionLost,
+        }
+    }
+}
+
+/// The few kinds of message a host shows for an error, grouped from the
+/// kinds of P133. Whether the user must act is
+/// [`ErrorKind::needs_user`]; everything else is retried (P142).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UserReason {
+    /// The speaker didn't answer: no connection, or no response in time
+    /// (Unreachable, Timeout).
+    NotResponding,
+    /// The speaker needs a password and none was given.
+    PasswordRequired,
+    /// The speaker rejected the password.
+    WrongPassword,
+    /// The speaker needs pairing, or rejected or cancelled it.
+    PairingRequired,
+    /// Another sender seems to be playing to it.
+    Busy,
+    /// The speaker turned the session down.
+    Refused,
+    /// The sender can't drive this speaker, for this reason.
+    Unsupported(UnsupportedReason),
+    /// The speaker answered in a way the sender doesn't understand.
+    Incompatible,
+    /// The connection died or the speaker went silent while playing.
+    ConnectionLost,
+}
+
 /// An error that ended a session, with the request and status that caused it
 /// when there is one (P133).
 #[derive(Debug, Clone, PartialEq, Eq)]
