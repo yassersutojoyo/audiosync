@@ -8,7 +8,7 @@ import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { GroupItem, NoticeItem, RowState, SpeakerItem } from "types.slint";
-import { BrandMark, Divider, Glyphs, NoticeStack, SecondaryText, SectionTitle, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { BrandMark, Divider, Fluent, Glyphs, NoticeStack, SecondaryText, SectionTitle, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 // A compact row: the toggle and the name.
 component FlyoutRow inherits HorizontalLayout {
@@ -23,11 +23,11 @@ component FlyoutRow inherits HorizontalLayout {
     callback focus-changed(bool);
 
     spacing: 10px;
-    padding-top: 3px;
-    padding-bottom: 3px;
+    padding-top: 4px;
+    padding-bottom: 4px;
 
     SpeakerBadge {
-        size: 26px;
+        size: 28px;
         glyph: root.glyph;
         state: root.state;
         enabled: root.enabled;
@@ -79,8 +79,11 @@ export component TrayFlyout inherits Window {
     title: Strings.flyout-title;
     no-frame: true;
     always-on-top: true;
-    width: 320px;
+    width: 340px;
+    // True once Windows draws the flyout's rounded frame (border and shadow).
+    in property <bool> rounded;
     background: Tokens.surface;
+    default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
     // Key events go to the focused item, so Escape needs the scope focused.
     forward-focus: focus;
@@ -115,9 +118,9 @@ export component TrayFlyout inherits Window {
         source.current-index = root.source-index;
     }
 
-    // The window has no frame; draw its edge.
+    // Without the system's rounded frame, draw the edge.
     Rectangle {
-        border-width: 1px;
+        border-width: root.rounded ? 0px : 1px;
         border-color: Tokens.separator;
     }
 
@@ -131,7 +134,8 @@ export component TrayFlyout inherits Window {
         }
 
         VerticalLayout {
-            padding: Tokens.spacing-panel-padding;
+            padding: 16px;
+            padding-top: 14px;
             spacing: 10px;
 
             HorizontalLayout {
@@ -231,8 +235,8 @@ export component TrayFlyout inherits Window {
             Divider { }
 
             ScrollView {
-                max-height: 260px;
-                preferred-height: list.preferred-height;
+                // Every row up to five or so, then it scrolls.
+                height: min(list.preferred-height, 260px);
 
                 list := VerticalLayout {
                     for group in root.groups: FlyoutRow {

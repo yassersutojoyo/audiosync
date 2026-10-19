@@ -17,13 +17,14 @@ use std::time::Duration;
 use audiosync_core::eq::{self, EqSettings};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
+use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::ui_model::{self, AppState, Backend, NoticeMessage, SourceKind, SpeakerState};
 use crate::{
     AboutDialog, Availability, EqualizerWindow, GroupItem, GroupNameDialog, GuidePage,
-    GuideStepItem, GuideWindow, MainWindow, NoticeItem, RowState, SpeakerItem, SpeakerKind,
-    Strings, TrayFlyout,
+    GuideStepItem, GuideWindow, MainWindow, NoticeItem, Palette, RowState, SpeakerItem,
+    SpeakerKind, Strings, TrayFlyout,
 };
 
 /// What the group name dialog is open for.
@@ -138,6 +139,9 @@ pub struct App {
     models: Models,
     /// With a tray icon, closing the main window keeps the app running there.
     tray_available: Cell<bool>,
+    /// Dark (true) or light for every window instead of the Windows setting:
+    /// the theme preview, `None` normally.
+    theme_override: Cell<Option<bool>>,
     /// Called after every refresh, e.g. to update the tray icon and tooltip.
     on_refresh: RefCell<Option<RefreshHook>>,
     /// Polls the backend; it stops when the app is dropped.
@@ -180,6 +184,7 @@ impl App {
             dialog_purpose: RefCell::new(DialogPurpose::Message),
             models,
             tray_available: Cell::new(false),
+            theme_override: Cell::new(None),
             on_refresh: RefCell::new(None),
             poll_timer: Timer::default(),
         });
@@ -236,7 +241,49 @@ impl App {
             self.show_window_error(&error);
             return;
         }
+        self.apply_frame(self.main.window(), "main window", Frame::Titled);
         crate::platform::bring_to_front(self.main.window());
+    }
+
+    /// Shows every window light or dark, whatever Windows uses, to check both
+    /// appearances without changing the Windows setting (the theme preview).
+    pub fn preview_theme(&self, dark: bool) {
+        use slint::language::ColorScheme;
+        let scheme = if dark {
+            ColorScheme::Dark
+        } else {
+            ColorScheme::Light
+        };
+        self.main.global::<Palette>().set_color_scheme(scheme);
+        self.flyout.global::<Palette>().set_color_scheme(scheme);
+        self.equalizer.global::<Palette>().set_color_scheme(scheme);
+        self.group_dialog
+            .global::<Palette>()
+            .set_color_scheme(scheme);
+        self.about.global::<Palette>().set_color_scheme(scheme);
+        self.guide.global::<Palette>().set_color_scheme(scheme);
+        self.theme_override.set(Some(dark));
+    }
+
+    /// Gives a window that is showing its Windows 11 frame (`backdrop`), and
+    /// logs whether DWM took it. `true` when it did.
+    pub fn apply_frame(&self, window: &slint::Window, name: &str, frame: Frame) -> bool {
+        if let Some(dark) = self.theme_override.get() {
+            use slint::winit_030::WinitWindowAccessor;
+            use slint::winit_030::winit::window::Theme;
+            let theme = if dark { Theme::Dark } else { Theme::Light };
+            window.with_winit_window(|window| window.set_theme(Some(theme)));
+        }
+        let applied = crate::backdrop::apply(window, frame);
+        self.log.log(|| {
+            let what = match frame {
+                Frame::Titled => "Mica title bar",
+                Frame::Flyout => "rounded corners",
+            };
+            let result = if applied { "on" } else { "not available" };
+            format!("{name}: {what} {result}")
+        });
+        applied
     }
 
     fn attach_models(&self) {
@@ -767,6 +814,7 @@ impl App {
             self.show_window_error(&error);
             return;
         }
+        self.apply_frame(self.equalizer.window(), "equalizer", Frame::Titled);
         self.equalizer.invoke_take_focus();
         crate::platform::bring_to_front(self.equalizer.window());
     }
