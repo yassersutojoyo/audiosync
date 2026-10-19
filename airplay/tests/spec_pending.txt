@@ -4,20 +4,7 @@
 # test, so this list only shrinks. "Partly done" names what already exists.
 
 # Pairing and crypto.
-P47 Legacy pairing connection and requests: pairing stage.
-P48 POST /pair-pin-start: pairing stage.
-P49 First /pair-setup-pin request: pairing stage.
-P50 SRP-6a for the Apple TV PIN pairing: pairing stage.
-P51 Waiting for the PIN without a timeout: pairing stage.
-P52 Second /pair-setup-pin request and M2: pairing stage.
-P53 Third /pair-setup-pin request (AES-GCM): pairing stage.
-P54 Handing the credentials to the host: pairing stage.
-P55 Partly done: pair-verify runs before ANNOUNCE on every connection through the session's Verifier seam; the X25519 request bodies come with the pairing stage.
-P56 Pair-verify signature and AES-CTR: pairing stage.
-P57 The published pairing test vector: pairing stage.
-P58 Partly done: a non-200 verification gives PairingRequired (session.rs); 470 during pairing comes with the pairing stage.
-P60 Partly done: /auth-setup goes right after OPTIONS and any answer lets the session go on (session.rs); until the pairing stage generates a real X25519 key, the sender puts 32 fresh random bytes in its place (sender/driver.rs).
-P136 PairingFailed and PairingCancelled during pairing: pairing stage.
+P57 Partly done: the pairing and verification steps are checked against RFC 5054, RFC 8032, RFC 7748 and a fake Apple TV with its own arithmetic (tests/pairing_vectors.rs, tests/pairing.rs); the write-up's own vector comes next.
 
 # AirPlay 2 (behind its flag, blocked by the gaps of section 11).
 P41 GET /info and binary-plist bodies: AirPlay 2 stage.
