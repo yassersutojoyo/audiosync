@@ -109,6 +109,10 @@ struct DeviceVolumes {
     ignore_writes: bool,
     /// Writes fail with this error.
     write_error: Option<BackendError>,
+    /// Notifications wait in `held` until a test lets them through, as
+    /// Windows' come some time after the change.
+    hold: bool,
+    held: BTreeSet<String>,
 }
 
 /// What a mock capture shares with the driver.
@@ -309,10 +313,17 @@ impl MockDriver {
         self.outputs.iter().any(|output| output.id == id)
     }
 
-    /// Output `id`'s mute or volume changed: Windows notifies its listener.
+    /// Output `id`'s mute or volume changed: Windows notifies its listener,
+    /// now or once a test lets held notifications through.
     fn notify_volume(&mut self, id: &str) {
         if self.device_volumes.record.lock().watched.contains(id) {
-            self.device_volumes.changed.insert(id.to_owned());
+            let volumes = &mut self.device_volumes;
+            let queue = if volumes.hold {
+                &mut volumes.held
+            } else {
+                &mut volumes.changed
+            };
+            queue.insert(id.to_owned());
         }
     }
 
@@ -418,6 +429,7 @@ impl Driver for MockDriver {
     fn unwatch_endpoint_volume(&mut self, id: &str) {
         self.device_volumes.record.lock().watched.remove(id);
         self.device_volumes.changed.remove(id);
+        self.device_volumes.held.remove(id);
     }
 
     fn endpoint_volume_changes(&mut self) -> Vec<String> {
@@ -631,6 +643,12 @@ impl Controller<MockDriver> {
         let driver = self.driver_mut();
         driver.outputs.retain(|output| output.id != id);
         driver.changed = true;
+        // Its volume control goes with it, and its listener is never called
+        // again, even once the device is back.
+        let volumes = &mut driver.device_volumes;
+        volumes.record.lock().watched.remove(id);
+        volumes.changed.remove(id);
+        volumes.held.remove(id);
     }
 
     /// Adds an endpoint as Windows would describe it, which the listing
@@ -748,6 +766,18 @@ impl Controller<MockDriver> {
     /// anything (`true`), as on a device that ignores them, or work again.
     pub fn ignore_volume_writes(&mut self, ignore: bool) {
         self.driver_mut().device_volumes.ignore_writes = ignore;
+    }
+
+    /// Holds the volume notifications back (`true`) until this is called
+    /// with `false`, which lets them through, as Windows sends them some
+    /// time after a change.
+    pub fn hold_volume_notifications(&mut self, hold: bool) {
+        let volumes = &mut self.driver_mut().device_volumes;
+        volumes.hold = hold;
+        if !hold {
+            let held = std::mem::take(&mut volumes.held);
+            volumes.changed.extend(held);
+        }
     }
 
     /// Makes later writes to the outputs' own volumes fail with `error`, or

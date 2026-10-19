@@ -202,7 +202,7 @@ mod tests {
     use audiosync_core::policy::device_volume::{DeviceVolume, Hint};
 
     use crate::audio::backend::{AudioBackend, BackendError, BackendEvent, SourceId};
-    use crate::audio::mock::MockBackend;
+    use crate::audio::mock::{MockBackend, VolumeWrite};
     use crate::debug_log::{DebugLog, FILE_NAME, TEST_FLUSH, read_messages, test_dir};
 
     const SPEAKERS: &str = "speakers";
@@ -342,6 +342,55 @@ mod tests {
         backend.set_output_enabled("usb", true).unwrap();
         assert_eq!(record.watched(), [SPEAKERS]);
         assert_eq!(device_volume(&backend, "usb"), None);
+    }
+
+    // S197
+    #[test]
+    fn the_fix_reads_the_device_again_and_never_lowers_a_volume_raised_meanwhile() {
+        let mut backend = backend();
+        let record = backend.volume_record();
+        backend.set_output_level(SPEAKERS, 0.125);
+        backend.poll();
+        assert_eq!(hint(&backend, SPEAKERS), Some(Hint::Low { percent: 13 }));
+        // Raised to 90 % in Windows, and clicked before the next poll.
+        backend.set_output_level(SPEAKERS, 0.9);
+        backend.fix_device_volume(SPEAKERS);
+        assert!(record.writes().is_empty(), "never lowered to 75 %");
+        // That read doesn't update the row; Windows' notification does.
+        assert_eq!(hint(&backend, SPEAKERS), Some(Hint::Low { percent: 13 }));
+        backend.poll();
+        assert_eq!(hint(&backend, SPEAKERS), None);
+        // Muted meanwhile at a fine volume: only unmuted.
+        backend.set_output_level(SPEAKERS, 0.125);
+        backend.poll();
+        backend.set_output_level(SPEAKERS, 0.5);
+        backend.mute_output(SPEAKERS, true);
+        backend.fix_device_volume(SPEAKERS);
+        assert_eq!(
+            record.writes(),
+            [VolumeWrite::Unmute {
+                id: SPEAKERS.to_owned()
+            }]
+        );
+    }
+
+    // S195, S202
+    #[test]
+    fn an_output_replugged_between_two_listings_is_followed_again() {
+        let mut backend = backend();
+        let record = backend.volume_record();
+        backend.poll();
+        // Unplugged and plugged in again before the next listing: the list
+        // looks the same, but the old listener went with the device.
+        backend.disconnect_output(SPEAKERS);
+        backend.set_output_level(SPEAKERS, 0.25);
+        backend.connect_output(SPEAKERS, "Speakers");
+        backend.poll();
+        assert_eq!(record.watched(), [HEADPHONES, SPEAKERS]);
+        assert_eq!(device_volume(&backend, SPEAKERS), at(0.25, false));
+        backend.set_output_level(SPEAKERS, 0.125);
+        assert_eq!(changed(&backend.poll()), [SPEAKERS]);
+        assert_eq!(hint(&backend, SPEAKERS), Some(Hint::Low { percent: 13 }));
     }
 
     fn logged(log: &DebugLog, dir: &Path) -> Vec<String> {

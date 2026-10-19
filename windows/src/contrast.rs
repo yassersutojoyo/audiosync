@@ -780,6 +780,44 @@ fn the_hint_and_the_fix_name_the_output_for_narrator() {
     assert!(include_str!("view.rs").contains("b.fix_device_volume(&id)"));
 }
 
+/// The fix goes away with its hint once Windows reports the change, so a
+/// fix pressed from the keyboard first hands the focus to the row's volume
+/// slider, right before it in reading order; the focus stays in the row
+/// rather than being lost (S198). A mouse click leaves the focus alone.
+#[test]
+fn the_fix_keeps_the_keyboard_focus_in_the_row() {
+    let widgets = include_str!("../ui/widgets.slint");
+    let slider = component_body(widgets, "VolumeSlider");
+    let function = slider
+        .find("public function focus-slider() {")
+        .expect("VolumeSlider can take the focus");
+    assert!(slider[function..].contains("slider.focus();"));
+
+    let row = component_body(widgets, "SpeakerRow");
+    assert!(row.contains("volume-slider := VolumeSlider {"));
+    let button = row
+        .find("fix-button := LinkButton {")
+        .expect("the fix button is named");
+    let handler = &row[button..];
+    let handler = &handler[handler.find("clicked => {").expect("its click")..];
+    let focus = handler
+        .find("if fix-button.keyboard-focused {\n")
+        .expect("only a keyboard focus moves");
+    let moved = handler
+        .find("volume-slider.focus-slider();")
+        .expect("the focus moves to the slider");
+    let fixed = handler
+        .find("root.device-volume-fix();")
+        .expect("then the fix");
+    assert!(
+        focus < moved && moved < fixed,
+        "the focus moves before the fix"
+    );
+    let link = component_body(widgets, "LinkButton");
+    assert!(link.contains("out property <bool> keyboard-focused: focus.has-focus;"));
+    assert!(link.contains("focus-on-click: false;"));
+}
+
 /// The tray flyout's row of a switched-on local output shows the state as a
 /// small glyph in the secondary text color, with no button, and Narrator
 /// hears the hint in the row's description (S198, S199).

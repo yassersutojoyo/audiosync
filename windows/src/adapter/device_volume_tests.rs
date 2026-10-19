@@ -134,11 +134,15 @@ fn the_fix_sets_75_percent_and_unmutes_once_each() {
     let record = audio.volume_record();
     let mut adapter = adapter(audio);
     adapter.set_speaker_enabled(&key(SPEAKERS), true);
+    // Windows' notification comes some time after the writes.
+    adapter.audio_mut().hold_volume_notifications(true);
     adapter.fix_device_volume(&key(SPEAKERS));
     assert_eq!(record.writes(), [level(0.75), unmute()]);
-    // The row follows the device's own notification (the mock's comes at
-    // once).
-    adapter.poll();
+    // The row follows that notification, not the values written.
+    assert_eq!(row(&adapter, SPEAKERS), (DeviceVolumeHint::MutedLow, 13));
+    assert!(!adapter.poll(), "nothing reported yet");
+    adapter.audio_mut().hold_volume_notifications(false);
+    assert!(adapter.poll(), "the notification came");
     assert_eq!(hint(&adapter, SPEAKERS), None);
     // Nothing is left to fix, so a second click writes nothing.
     adapter.fix_device_volume(&key(SPEAKERS));
