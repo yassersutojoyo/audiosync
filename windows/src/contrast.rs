@@ -801,7 +801,7 @@ fn the_fix_keeps_the_keyboard_focus_in_the_row() {
     let handler = &row[button..];
     let handler = &handler[handler.find("clicked => {").expect("its click")..];
     let focus = handler
-        .find("if fix-button.keyboard-focused {\n")
+        .find("if fix-button.keyboard-focused {")
         .expect("only a keyboard focus moves");
     let moved = handler
         .find("volume-slider.focus-slider();")
