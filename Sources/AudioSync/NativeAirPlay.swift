@@ -1,5 +1,6 @@
 import AppKit
 import CAudioSyncCore
+import SystemConfiguration
 
 /// AudioSync's own AirPlay sender (`airplay/`), reached through the Rust
 /// core's C interface (`asc_airplay_*` in `core/include/audiosync_core.h`),
@@ -314,6 +315,7 @@ final class NativeAirPlay {
 
     private func apply(_ changes: [NativeReceiverChange], _ events: [NativeSpeakerEvent]) {
         guard active else { return }
+        if !changes.isEmpty { model.computerName = SCDynamicStoreCopyComputerName(nil, nil) as String? }
         for change in changes {
             if case .gone(let id, _) = change {
                 let name = model.receivers[id]?.name
