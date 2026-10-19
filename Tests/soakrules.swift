@@ -35,19 +35,36 @@ enum SoakRules {
         min(memoryWarmUpSeconds, max(runSeconds, 0) / 2)
     }
 
-    /// Memory growth over a run: the last window's footprint minus the
-    /// highest footprint logged in the warm-up, the level the run settled at.
-    /// A climb that ends within the warm-up counts as nothing; a leak keeps
-    /// climbing after it and shows up in full from the warm-up's end. The run
-    /// lasts until its last window. With no window in the warm-up (windows
-    /// longer than it), growth is measured from the first window.
+    /// How many of the warm-up's last windows set the level a run settled at.
+    static let memorySettleWindows = 3
+
+    /// Memory growth over a run: the last window's footprint minus the level
+    /// the run settled at, the median of the warm-up's last three windows (of
+    /// those there are, when fewer). A climb that ends within the warm-up
+    /// counts as nothing; a leak keeps climbing after it and shows up in full
+    /// from the warm-up's end. The median, not the warm-up's highest window,
+    /// so one short spike in the warm-up, even in its last window, can't
+    /// raise the level and hide a later leak up to the spike's height. The
+    /// windows come in time order, and the run lasts until its last one. With
+    /// no window in the warm-up (windows longer than it), growth is measured
+    /// from the first window.
     static func memoryGrowth(_ samples: [MemorySample]) -> MemoryGrowth {
         guard let first = samples.first, let last = samples.last else {
             return MemoryGrowth(growth: 0, settledMB: 0, warmUpSeconds: 0)
         }
         let warmUp = memoryWarmUp(runSeconds: last.t)
-        let settled = samples.lazy.filter { $0.t <= warmUp }.map(\.mb).max() ?? first.mb
+        let lastInWarmUp = samples.filter { $0.t <= warmUp }.suffix(memorySettleWindows).map(\.mb)
+        let settled = median(lastInWarmUp) ?? first.mb
         return MemoryGrowth(growth: last.mb - settled, settledMB: settled, warmUpSeconds: warmUp)
+    }
+
+    /// The middle value, or the mean of the two middle values of an even
+    /// count; nil when there are none.
+    static func median(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        let mid = sorted.count / 2
+        return sorted.count % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
     }
 
     /// The most a run's memory may grow, from the baseline run's growth:
