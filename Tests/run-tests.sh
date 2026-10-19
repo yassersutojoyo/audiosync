@@ -153,6 +153,10 @@ else
   status=1
 fi
 
+echo "▶ soak rules (the harness's memory check on recorded series)"
+build soakrules Tests/soakrulestest.swift -- Tests/soakrules.swift
+"$OUT/soakrules/run" || status=1
+
 echo "▶ soak harness (compile only; Tests/soak.sh and Tests/bench.sh run it)"
 Tests/build-harness.sh "$OUT/soaktest" || status=1
 
