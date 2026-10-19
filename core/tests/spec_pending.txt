@@ -10,7 +10,7 @@ S177 Re-timing the running outputs whose hold-back changed when the outputs taki
 S182 The fade itself: a 20 ms raised cosine at the stream's rate, its states, and a reversal midway without a jump.
 S183 Applying a renderer's fade at the device rate after the gain, with a closed output as exact zeros.
 S184 Reads that report their leading silence and copied frames, and the fade-in from the first copied frame after silence.
-S185 A renderer's fade-out on request and its faded report after one more buffer of zeros.
+S185 A renderer's fade-out on request, staying closed afterwards, and the output time of the fade's last frame it publishes.
 S187 Holding a delay change until the renderer's fade-out is done, then fading in after the resync.
 S188 Reads with drift corrections held while the renderer fades out.
 S189 Fades in the FIFO feed and writer and in the native sender's input.
