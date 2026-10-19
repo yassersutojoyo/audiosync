@@ -15,6 +15,7 @@
 //! ones), and a new output starts at 0 ms.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use audiosync_core::policy::delay::{DEFAULT_DELAY_MS, effective_delay_ms, sanitize_delay_ms};
 use audiosync_core::policy::session::sync_outputs;
@@ -260,6 +261,8 @@ pub enum AirPlay {
     Available {
         /// Whether an AirPlay speaker is chosen.
         chosen: bool,
+        /// The sender's base latency L.
+        latency: Duration,
     },
 }
 
@@ -276,7 +279,7 @@ impl AirPlay {
     pub fn effective_delay_ms(self, configured_ms: f64) -> f64 {
         match self {
             AirPlay::Unavailable => configured_ms,
-            AirPlay::Available { chosen } => effective_delay_ms(configured_ms, chosen),
+            AirPlay::Available { chosen, .. } => effective_delay_ms(configured_ms, chosen),
         }
     }
 }
@@ -829,10 +832,17 @@ mod tests {
         );
     }
 
+    /// The sender's default L: 77 175 frames at 44.1 kHz.
+    const L: Duration = Duration::from_millis(1750);
+
+    fn sender(chosen: bool, latency: Duration) -> AirPlay {
+        AirPlay::Available { chosen, latency }
+    }
+
     #[test]
-    fn with_airplay_a_new_output_starts_at_2000_ms() {
-        let policy = OutputPolicy::new(AirPlay::Available { chosen: true });
-        assert_eq!(policy.settings("new").delay_ms, 2000.0);
+    fn with_airplay_a_new_output_still_starts_with_no_delay() {
+        let policy = OutputPolicy::new(sender(true, L));
+        assert_eq!(policy.settings("new").delay_ms, 0.0);
     }
 
     #[test]
@@ -919,15 +929,60 @@ mod tests {
     }
 
     #[test]
-    fn with_airplay_and_no_speaker_chosen_outputs_play_at_once() {
+    fn with_no_airplay_speaker_chosen_outputs_play_at_their_own_delay() {
         let mut policy = policy_with(&["a"]);
-        policy.set_delay_ms("a", 2000.0);
-        assert!(policy.set_airplay(AirPlay::Available { chosen: false }));
-        assert_eq!(policy.params("a").delay_frames, 0);
-        assert!(policy.set_airplay(AirPlay::Available { chosen: true }));
-        assert_eq!(policy.params("a").delay_frames, 96_000);
-        assert!(!policy.set_airplay(AirPlay::Available { chosen: true }));
-        assert_eq!(policy.settings("a").delay_ms, 2000.0, "the setting is kept");
+        policy.set_delay_ms("a", 150.0);
+        assert!(policy.set_airplay(sender(false, L)));
+        assert_eq!(policy.params("a").delay_frames, 7_200);
+    }
+
+    #[test]
+    fn with_an_airplay_speaker_chosen_outputs_play_at_l_plus_their_trim() {
+        // P114: L + d_local, d_local being the output's own delay.
+        let mut policy = policy_with(&["a", "b"]);
+        policy.set_delay_ms("a", 150.0);
+        assert!(policy.set_airplay(sender(true, L)));
+        assert_eq!(policy.params("a").delay_frames, 91_200, "1750 + 150 ms");
+        assert_eq!(policy.params("b").delay_frames, 84_000, "1750 ms");
+        assert!(!policy.set_airplay(sender(true, L)));
+        // Turned off again: back to the output's own delay.
+        assert!(policy.set_airplay(sender(false, L)));
+        assert_eq!(policy.params("a").delay_frames, 7_200);
+        assert_eq!(policy.params("b").delay_frames, 0);
+        assert_eq!(policy.settings("a").delay_ms, 150.0, "the setting is kept");
+    }
+
+    #[test]
+    fn the_trim_counts_up_to_3000_ms_while_an_airplay_speaker_is_chosen() {
+        let mut policy = policy_with(&["a"]);
+        policy.set_delay_ms("a", 5000.0);
+        policy.set_airplay(sender(true, L));
+        assert_eq!(policy.params("a").delay_frames, 228_000, "1750 + 3000 ms");
+        policy.set_airplay(sender(false, L));
+        assert_eq!(policy.params("a").delay_frames, 240_000, "5000 ms");
+    }
+
+    #[test]
+    fn a_new_l_re_anchors_the_outputs() {
+        let mut policy = policy_with(&["a"]);
+        policy.set_airplay(sender(true, L));
+        // Lf changed to 44 100 frames (P98): L is 1 s.
+        assert!(policy.set_airplay(sender(true, Duration::from_secs(1))));
+        assert_eq!(policy.params("a").delay_frames, 48_000);
+        // A new L while no speaker is chosen changes no delay.
+        policy.set_airplay(sender(false, L));
+        assert!(!policy.set_airplay(sender(false, Duration::from_secs(1))));
+    }
+
+    #[test]
+    fn the_effective_delay_is_the_senders_local_output_delay() {
+        // The sender's own rule (P114), so the policy and the crate agree.
+        for (trim_ms, latency) in [(0, L), (150, L), (4000, Duration::from_millis(500))] {
+            let trim = Duration::from_millis(trim_ms);
+            let expected = latency + trim.min(audiosync_airplay::stream::MAX_DELAY);
+            let effective = sender(true, latency).effective_delay_ms(trim_ms as f64);
+            assert!((effective - expected.as_secs_f64() * 1000.0).abs() < 1e-9);
+        }
     }
 
     fn mix(float32: bool, rate: u32, channels: u16, channel_mask: u32) -> MixFormat {

@@ -14,6 +14,9 @@ path = "src/main.rs"
 
 [dependencies]
 audiosync-core = { path = "../core" }
+# AudioSync's own AirPlay sender: discovery, one session per speaker and the
+# stream they share, on the crate's own threads.
+audiosync-airplay = { path = "../airplay" }
 # Used under the Slint Royalty-free Desktop, Mobile, and Web Applications
 # License 2.0, checked for the 1.18 line; see THIRD_PARTY_NOTICES.md.
 # unstable-winit-030: the winit window behind a Slint window, to focus it and
