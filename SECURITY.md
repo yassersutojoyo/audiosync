@@ -10,7 +10,7 @@ AudioSync captures the audio source on your Mac and streams it to your AirPlay s
 
 ### The native sender
 
-The native sender doesn't run a server or an API of its own, and it publishes no Bonjour records. It browses `_raop._tcp` and `_airplay._tcp` over mDNS, which is what the Local Network permission is for, and leaves this Mac's own AirPlay Receiver out of the list. For each speaker you turn on, it opens an RTSP connection to the speaker, plus two UDP sockets (control and timing) on random ports, bound to the address that connection uses. The speaker sends its timing and resend requests to those, and the audio and track info go out over the same session. When streaming stops, the sessions and their sockets close.
+The native sender doesn't run a server or an API of its own, and it publishes no Bonjour records. Its mDNS browser shares UDP port 5353 with macOS's own responder and only sends queries. It browses `_raop._tcp` and `_airplay._tcp` over mDNS, which is what the Local Network permission is for, and leaves this Mac's own AirPlay Receiver out of the list. For each speaker you turn on, it opens an RTSP connection to the speaker, plus two UDP sockets (control and timing) on random ports, bound to the address that connection uses. The speaker sends its timing and resend requests to those, and the audio and track info go out over the same session. When streaming stops, the sessions and their sockets close.
 
 ### The bundled engine's API (fallback only)
 
