@@ -21,21 +21,35 @@ pub fn folder() -> Option<PathBuf> {
     local.is_absolute().then(|| local.join(FOLDER_NAME))
 }
 
-/// The temporary file `path` is written through: the same name with the
-/// extension `tmp`, in the same folder, so the rename never crosses volumes.
+/// The temporary file `path` is written through: the same name with this
+/// process's ID and the extension `tmp` (`settings.1234.tmp`), in the same
+/// folder, so the rename never crosses volumes and two copies of the app
+/// never write through the same file.
 pub fn temporary_path(path: &Path) -> PathBuf {
-    path.with_extension("tmp")
+    path.with_extension(format!("{}.tmp", std::process::id()))
 }
 
 /// Replaces the file at `path` with `bytes`, creating its folder if needed.
 /// The bytes go to a temporary file, flushed to disk before it is renamed
 /// over `path`; a temporary file left by a failed write is removed.
+///
+/// A leftover at the temporary path (from a crash, or a link someone put
+/// there) is removed first, and the temporary file is then created new, so
+/// the bytes never go through a file or link that was already there.
 pub fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(folder) = path.parent() {
         fs::create_dir_all(folder)?;
     }
     let temporary = temporary_path(path);
-    let replaced = fs::File::create(&temporary)
+    match fs::remove_file(&temporary) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let replaced = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
         .and_then(|mut file| {
             file.write_all(bytes)?;
             file.sync_all()
@@ -72,5 +86,37 @@ mod tests {
         fs::create_dir(temporary_path(&path)).expect("the folder is made");
         assert!(write_atomically(&path, b"new").is_err());
         assert_eq!(fs::read(&path).expect("still there"), b"old contents");
+    }
+
+    #[test]
+    fn a_link_planted_at_the_temporary_path_is_not_written_through() {
+        let folder = test_dir("data-folder-link");
+        let path = folder.join("file.json");
+        let victim = folder.join("victim.txt");
+        fs::write(&victim, b"not yours").expect("written");
+        // A hard link needs no privileges, unlike a symbolic one.
+        fs::hard_link(&victim, temporary_path(&path)).expect("linked");
+        write_atomically(&path, b"settings").expect("written");
+        assert_eq!(fs::read(&victim).expect("still there"), b"not yours");
+        assert_eq!(fs::read(&path).expect("the file is there"), b"settings");
+        assert!(!temporary_path(&path).exists());
+    }
+
+    #[test]
+    fn each_process_writes_through_its_own_temporary_file() {
+        let path = Path::new("folder").join("file.json");
+        let temporary = temporary_path(&path);
+        let name = temporary.file_name().and_then(|name| name.to_str());
+        let expected = format!("file.{}.tmp", std::process::id());
+        assert_eq!(name, Some(expected.as_str()));
+    }
+
+    #[test]
+    fn a_leftover_temporary_file_from_a_crash_does_not_block_the_write() {
+        let path = test_dir("data-folder-leftover").join("file.json");
+        fs::write(temporary_path(&path), b"half a fi").expect("written");
+        write_atomically(&path, b"whole").expect("written");
+        assert_eq!(fs::read(&path).expect("the file is there"), b"whole");
+        assert!(!temporary_path(&path).exists());
     }
 }

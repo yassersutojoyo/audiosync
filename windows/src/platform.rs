@@ -301,10 +301,18 @@ pub fn small_icon_size() -> Option<(u32, u32)> {
 /// in physical pixels.
 #[cfg(windows)]
 pub fn work_area_at(x: f64, y: f64) -> Option<crate::placement::Bounds> {
+    monitor_at(x, y).map(|(work_area, _)| work_area)
+}
+
+/// The work area of the monitor at a point (or the nearest one), in physical
+/// pixels, and that monitor's scale factor (1.0 at 96 DPI).
+#[cfg(windows)]
+pub fn monitor_at(x: f64, y: f64) -> Option<(crate::placement::Bounds, f64)> {
     use windows::Win32::Foundation::POINT;
     use windows::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
     };
+    use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 
     let point = POINT {
         x: x.round() as i32,
@@ -314,19 +322,37 @@ pub fn work_area_at(x: f64, y: f64) -> Option<crate::placement::Bounds> {
         cbSize: size_of::<MONITORINFO>() as u32,
         ..Default::default()
     };
+    let (mut dpi_x, mut dpi_y) = (0u32, 0u32);
     // SAFETY: MonitorFromPoint takes the point by value; `info` is a valid,
-    // writable MONITORINFO whose size field is set.
-    let found = unsafe {
+    // writable MONITORINFO whose size field is set, and the DPI outputs are
+    // valid, writable u32s.
+    let (found, dpi) = unsafe {
         let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
-        GetMonitorInfoW(monitor, &mut info)
+        let found = GetMonitorInfoW(monitor, &mut info);
+        let dpi = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
+        (found, dpi)
+    };
+    let scale = if dpi.is_ok() && dpi_x > 0 {
+        f64::from(dpi_x) / 96.0
+    } else {
+        1.0
     };
     let work = info.rcWork;
-    found.as_bool().then(|| crate::placement::Bounds {
-        x: f64::from(work.left),
-        y: f64::from(work.top),
-        width: f64::from(work.right - work.left),
-        height: f64::from(work.bottom - work.top),
+    found.as_bool().then(|| {
+        let work_area = crate::placement::Bounds {
+            x: f64::from(work.left),
+            y: f64::from(work.top),
+            width: f64::from(work.right - work.left),
+            height: f64::from(work.bottom - work.top),
+        };
+        (work_area, scale)
     })
+}
+
+/// Elsewhere the window manager places windows itself.
+#[cfg(not(windows))]
+pub fn monitor_at(_x: f64, _y: f64) -> Option<(crate::placement::Bounds, f64)> {
+    None
 }
 
 /// Whether a window whose outer frame starts at `(x, y)`, in physical

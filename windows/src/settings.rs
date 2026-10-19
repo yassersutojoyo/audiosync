@@ -12,7 +12,8 @@
 //! The file carries a format version ([`VERSION`]). A file from an older
 //! version is read for the fields it has; one from a newer version, one that
 //! can't be read or one that isn't valid JSON is ignored as a whole (the
-//! defaults apply, and the next change writes a fresh file). Fields this
+//! defaults apply, and the next change writes a fresh file; a newer
+//! version's file is first kept as [`NEWER_FILE_NAME`]). Fields this
 //! version doesn't know are ignored, missing ones take their defaults, and
 //! values out of range are clamped ([`Settings::clamped`]). Nothing here
 //! panics on a bad file, and the caller logs what [`Loaded`] says.
@@ -38,6 +39,10 @@ use crate::ui_model::WindowFrame;
 
 /// The file's name in the app's data folder.
 pub const FILE_NAME: &str = "settings.json";
+
+/// Where a newer AudioSync's settings file is kept before this build first
+/// saves over it.
+pub const NEWER_FILE_NAME: &str = "settings.newer.json";
 
 /// The format version this build writes, and the newest it reads.
 pub const VERSION: u32 = 1;
@@ -187,6 +192,7 @@ pub fn clamp_window(frame: WindowFrame) -> Option<WindowFrame> {
         y: frame.y.clamp(-MAX_POSITION, MAX_POSITION),
         width: frame.width.clamp(MIN_WINDOW.0, MAX_WINDOW.0),
         height: frame.height.clamp(MIN_WINDOW.1, MAX_WINDOW.1),
+        maximized: frame.maximized,
     })
 }
 
@@ -444,12 +450,37 @@ impl SettingsFile {
     }
 
     /// Replaces the file with `settings`. Without a file it does nothing.
-    pub fn save(&self, settings: &Settings) -> io::Result<()> {
-        match &self.path {
-            Some(path) => data_folder::write_atomically(path, settings.to_json().as_bytes()),
-            None => Ok(()),
-        }
+    ///
+    /// A file a newer AudioSync wrote is first copied to
+    /// [`NEWER_FILE_NAME`] next to it (replacing an older copy), so going
+    /// back to an older build doesn't lose the newer one's settings; the
+    /// copy's path is returned when that happened. If the copy fails, the
+    /// file is left alone and the error returned.
+    pub fn save(&self, settings: &Settings) -> io::Result<Option<PathBuf>> {
+        let Some(path) = &self.path else {
+            return Ok(None);
+        };
+        let kept = match fs::read(path) {
+            Ok(bytes) if written_by_a_newer_build(&bytes) => {
+                let kept = path.with_file_name(NEWER_FILE_NAME);
+                data_folder::write_atomically(&kept, &bytes)?;
+                Some(kept)
+            }
+            _ => None,
+        };
+        data_folder::write_atomically(path, settings.to_json().as_bytes())?;
+        Ok(kept)
     }
+}
+
+/// Whether `bytes` are a settings file in a format newer than [`VERSION`].
+fn written_by_a_newer_build(bytes: &[u8]) -> bool {
+    #[derive(Deserialize)]
+    struct Header {
+        #[serde(default)]
+        version: u32,
+    }
+    serde_json::from_slice::<Header>(bytes).is_ok_and(|header| header.version > VERSION)
 }
 
 #[cfg(test)]
@@ -471,6 +502,7 @@ mod tests {
                 y: 40,
                 width: 1024.0,
                 height: 700.0,
+                maximized: true,
             }),
             ..Settings::default()
         };
@@ -662,6 +694,7 @@ mod tests {
                 y: -MAX_POSITION,
                 width: MIN_WINDOW.0,
                 height: MAX_WINDOW.1,
+                maximized: false,
             })
         );
     }
@@ -722,5 +755,52 @@ mod tests {
         fs::create_dir(data_folder::temporary_path(&path)).expect("blocked");
         assert!(file.save(&Settings::default()).is_err());
         assert_eq!(file.load().0, sample());
+    }
+
+    #[test]
+    fn a_maximized_window_is_kept_with_its_last_normal_frame() {
+        let window = r#""window": {"x": 10, "y": 20, "width": 1000.0, "height": 700.0"#;
+        let text = format!(r#"{{"version": 1, {window}, "maximized": true}}}}"#);
+        let (read, _) = Settings::from_json(&text).expect("read");
+        let written = read.to_json();
+        assert!(written.contains(r#""maximized": true"#), "{written}");
+        assert!(written.contains(r#""width": 1000.0"#), "{written}");
+        // A file from before the flag reads as not maximized.
+        let text = format!(r#"{{"version": 1, {window}}}}}"#);
+        let (read, _) = Settings::from_json(&text).expect("read");
+        assert!(read.to_json().contains(r#""maximized": false"#));
+    }
+
+    #[test]
+    fn a_newer_file_is_kept_aside_before_the_first_save_over_it() {
+        let folder = test_dir("settings-newer-kept");
+        let path = folder.join(FILE_NAME);
+        let kept = folder.join("settings.newer.json");
+        let mut newer = sample();
+        newer.version = VERSION + 1;
+        let newer_text = newer.to_json();
+        fs::write(&path, &newer_text).expect("written");
+        // An older copy kept earlier is replaced.
+        fs::write(&kept, b"an older copy").expect("written");
+        let file = SettingsFile::at(path.clone());
+        assert!(matches!(file.load().1, Loaded::Ignored(_)));
+
+        file.save(&Settings::default()).expect("saved");
+        assert_eq!(fs::read_to_string(&kept).expect("kept"), newer_text);
+        assert_eq!(file.load().0, Settings::default());
+
+        // The file is this build's now: the next save leaves the copy alone.
+        file.save(&sample()).expect("saved again");
+        assert_eq!(fs::read_to_string(&kept).expect("kept"), newer_text);
+    }
+
+    #[test]
+    fn a_file_this_build_reads_is_not_kept_aside() {
+        let folder = test_dir("settings-not-newer");
+        let path = folder.join(FILE_NAME);
+        let file = SettingsFile::at(path.clone());
+        file.save(&sample()).expect("saved");
+        file.save(&Settings::default()).expect("saved again");
+        assert!(!folder.join("settings.newer.json").exists());
     }
 }
