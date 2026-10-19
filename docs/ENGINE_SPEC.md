@@ -689,7 +689,7 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 
 The bundled engine's checks were removed with it on 2026-10-20: the metadata pipe (`metadata pipe: …`) and the sync rule's checks against its output list (`delay: …` for a chosen speaker, listed or not, and "EC12 network loss: local speakers stop waiting for an AirPlay speaker that is gone").
 
-The pipe feed's own checks were removed with it on 2026-10-20 (the `fifo: …` checks, the EC7 reopen check and the session's pipe feed rows); the suite keeps its name and checks the app's wrappers of the core. 
+The pipe feed's own checks were removed with it on 2026-10-20 (the `fifo: …` checks, the EC7 reopen check and the session's pipe feed rows); the suite keeps its name and checks the app's wrappers of the core.
 From 2026-10-19 to 2026-10-20 the suite ran the app's pipe feed, `CoreFifoFeed`, besides the app's other wrappers of the core; the equalizer, frame count, delay and sync rule rows came from the logic suite, where they ran on the Swift engine. "ring: reset clears history" went with the Swift ring: every session gets a new core ring (S39, `core/src/ring.rs`). The check of a stop inside a chunk's last frame went too: the core wrote at most 512 bytes at a time, which a pipe takes whole, and its tests drove that case with a fake pipe (S93).
 
 | Check | Clauses |
