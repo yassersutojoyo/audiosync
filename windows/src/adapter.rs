@@ -1,21 +1,33 @@
 //! The UI's [`Backend`] over the audio backend.
 //!
-//! The windows show what the audio backend lists, the sources to capture and
-//! the connected outputs with their settings, and every user action becomes
-//! audio backend calls, decided by the session rules of `audiosync-core`
-//! (`policy::session`): switching a speaker on starts streaming, switching the
-//! last one off stops it, an output that can't start is turned off, a source
-//! that quits ends the session. What happens on its own comes from
+//! The windows show what the audio backend lists, the sources to capture, the
+//! connected outputs and the AirPlay speakers with their settings, and every
+//! user action becomes audio backend calls, decided by the session rules of
+//! `audiosync-core` (`policy::session`): switching a speaker on starts
+//! streaming, switching the last one off stops it, an output that can't start
+//! is turned off, a source that quits ends the session. AirPlay speakers count
+//! like any other speaker; one that can't play from AudioSync (a password,
+//! AirPlay 2 only) is listed with that note and stays off, with a notice when
+//! the user tries it. An Apple TV that asks for a PIN is paired when the user
+//! switches it on (never by auto-connect, which only posts a notice): the
+//! snapshot's [`PinPrompt`] asks the UI for the PIN, and once paired the
+//! speaker is on and streaming starts like for any speaker switched on. What
+//! happens on its own comes from
 //! [`AudioBackend::poll`], which [`Backend::poll`] passes on, and the adapter
 //! turns it into notices. Notices carry a [`NoticeMessage`]; the UI words it.
 //!
 //! The chosen source, groups, auto-connect marks and notices live here, not in
-//! the audio backend. Like the speakers' settings they are kept in memory only
+//! the audio backend. The double-audio notice (the source heard straight from
+//! an output as well as through AudioSync) follows what the backend reports:
+//! it is posted when the outputs it names change, changed in place when only
+//! which of them AudioSync plays to changes, and cleared when the cause is
+//! gone. Once dismissed, it stays away for the same source and those outputs
+//! (or fewer of them) until that app quits. Like the speakers' settings they are kept in memory only
 //! for now: AudioSync for Windows doesn't save its settings yet.
 //!
-//! Speakers are named by the core's speaker keys (`lc:` and the endpoint ID),
-//! so groups and auto-connect marks can hold AirPlay speakers (`ap:`) once
-//! Windows has them. Sources are `system`, or `app:` with the app's process ID
+//! Speakers are named by the core's speaker keys: `lc:` and the endpoint ID
+//! for a local output, `ap:` and the speaker's ID for an AirPlay speaker, so
+//! groups and auto-connect marks hold both. Sources are `system`, or `app:` with the app's process ID
 //! and executable (`app:2000:spotify.exe`), so a process ID that Windows gives
 //! to another app later is never taken for the chosen one.
 //!
@@ -26,6 +38,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use audiosync_core::eq::EqSettings;
+use audiosync_core::policy::pairing::DropReason;
 use audiosync_core::policy::session::{
     AutoStartGate, Incident, SpeakerEvent, StartOrigin, StreamingAction, may_start, reaction,
     source_switch, streaming_after,
@@ -33,14 +46,16 @@ use audiosync_core::policy::session::{
 use audiosync_core::policy::speakers::{NoticeSubject, Notices, SpeakerKey, renamed_group};
 
 use crate::audio::backend::{
-    AudioBackend, BackendError, BackendEvent, OutputInfo, OutputKind, SourceId, SourceInfo,
-    StopReason,
+    AirPlayAvailability, AirPlayInfo, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
+    OutputInfo, OutputKind, SourceId, SourceInfo, StopReason,
 };
+use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
 use crate::audio::capture::WHOLE_SYSTEM_NAME;
+use crate::audio::routing::{DirectPath, DirectReason};
 use crate::debug_log::DebugLog;
 use crate::ui_model::{
-    AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, Source, SourceKind,
-    Speaker, SpeakerKind, clamp_delay_ms,
+    self, AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, PinPhase,
+    PinPrompt, Source, SourceKind, Speaker, SpeakerKind, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -106,6 +121,14 @@ struct Posted {
     time: String,
 }
 
+/// What the double-audio notice is about: the source, by its UI ID, and the
+/// outputs it names, by endpoint ID and name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HeardTwiceSubject {
+    source: String,
+    endpoints: Vec<(String, String)>,
+}
+
 /// The UI's backend over an audio backend. See the module documentation.
 pub struct AudioAdapter<A: AudioBackend> {
     audio: A,
@@ -117,6 +140,10 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The last name of every output listed, for a notice about one that is
     /// gone.
     names: BTreeMap<String, String>,
+    /// The AirPlay speaker IDs of the last listing, to tell which appeared.
+    airplay_listed: BTreeSet<String>,
+    /// The last name of every AirPlay speaker listed.
+    airplay_names: BTreeMap<String, String>,
     /// The speaker keys marked auto-connect.
     auto_connect: BTreeSet<String>,
     groups: Vec<Group>,
@@ -124,6 +151,11 @@ pub struct AudioAdapter<A: AudioBackend> {
     gate: AutoStartGate,
     notices: Notices<NoticeSubject, Posted>,
     next_notice: u64,
+    /// What the double-audio notice showing is about.
+    heard_twice: Option<HeardTwiceSubject>,
+    /// The outputs named in a double-audio notice the user dismissed, by
+    /// source UI ID, until that app quits.
+    heard_twice_dismissed: BTreeMap<String, BTreeSet<String>>,
     equalizer: EqSettings,
     /// Polls since the sources were last listed.
     polls: u32,
@@ -148,12 +180,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
             chosen: Chosen::WholeSystem,
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
+            airplay_listed: BTreeSet::new(),
+            airplay_names: BTreeMap::new(),
             auto_connect: BTreeSet::new(),
             groups: Vec::new(),
             next_group: 1,
             gate: AutoStartGate::default(),
             notices: Notices::new(),
             next_notice: 1,
+            heard_twice: None,
+            heard_twice_dismissed: BTreeMap::new(),
             equalizer: EqSettings::default(),
             polls: 0,
             clock,
@@ -176,9 +212,31 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.audio.running_source().is_some()
     }
 
-    /// Outputs turned on, connected or not.
+    /// Speakers turned on, local and AirPlay, connected or not.
     fn enabled_count(&self) -> usize {
-        self.audio.enabled_outputs().len()
+        self.audio.enabled_outputs().len() + self.audio.enabled_airplay().len()
+    }
+
+    /// The streaming policy after `event` (S162), from the speakers on.
+    fn streaming_after(&self, event: SpeakerEvent) -> StreamingAction {
+        streaming_after(
+            event,
+            self.running(),
+            self.audio.enabled_outputs().len(),
+            self.audio.enabled_airplay().len(),
+        )
+    }
+
+    fn is_airplay_enabled(&self, id: &str) -> bool {
+        self.audio.enabled_airplay().iter().any(|on| on == id)
+    }
+
+    /// The name of an AirPlay speaker as last listed.
+    fn airplay_name(&self, id: &str) -> String {
+        self.airplay_names
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| id.to_owned())
     }
 
     fn is_enabled(&self, endpoint_id: &str) -> bool {
@@ -227,6 +285,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let _ = self.audio.list_outputs();
         self.take_events();
         self.outputs_listed();
+        self.airplay_listed();
         self.refresh_sources();
     }
 
@@ -250,6 +309,42 @@ impl<A: AudioBackend> AudioAdapter<A> {
             });
         }
         self.auto_connect(&appeared);
+    }
+
+    /// Takes in the AirPlay speakers as last listed: remembers their names,
+    /// and switches on the auto-connect speakers that appeared.
+    fn airplay_listed(&mut self) {
+        let mut listed = BTreeSet::new();
+        let mut appeared = Vec::new();
+        for speaker in self.audio.airplay_speakers() {
+            if !self.airplay_listed.contains(&speaker.id) {
+                appeared.push(speaker.id.clone());
+            }
+            self.airplay_names.insert(speaker.id.clone(), speaker.name);
+            listed.insert(speaker.id);
+        }
+        self.airplay_listed = listed;
+        let hits: Vec<String> = appeared
+            .into_iter()
+            .filter(|id| self.auto_connect.contains(&airplay_key(id)))
+            .collect();
+        if hits.is_empty() {
+            return;
+        }
+        self.log.log(|| {
+            let names: Vec<String> = hits.iter().map(|id| self.airplay_name(id)).collect();
+            format!("auto-connect: switching on {}", names.join(", "))
+        });
+        for id in &hits {
+            if !self.is_airplay_enabled(id)
+                && let Err(problem) = self.audio.set_airplay_enabled(id, true)
+            {
+                self.airplay_cant_play(id, problem);
+            }
+        }
+        if !self.running() && self.enabled_count() > 0 {
+            self.start_session(StartOrigin::AutoConnect);
+        }
     }
 
     /// Switches on the auto-connect speakers among `appeared`, then starts
@@ -363,7 +458,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Starts streaming the chosen source to the enabled outputs (S116, S119,
     /// S120). A user's start clears the notices about the last attempt.
-    fn start_session(&mut self, origin: StartOrigin) {
+    /// Returns whether streaming started.
+    fn start_session(&mut self, origin: StartOrigin) -> bool {
         if origin == StartOrigin::User {
             self.gate.user_acted();
             self.notices.clear(&[
@@ -378,13 +474,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
                      or an automatic start failed"
                 )
             });
-            return;
+            return false;
         }
         if !may_start(self.enabled_count()) {
             self.log
                 .log(|| format!("start ({origin:?}) refused: no speaker is on"));
             self.post(NoticeSubject::Start, NoticeMessage::NoSpeaker);
-            return;
+            return false;
         }
         self.log.log(|| {
             format!(
@@ -403,6 +499,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 // Outputs that couldn't start are reported at the next poll;
                 // take them now.
                 self.take_events();
+                true
             }
             Err(error) => {
                 self.log
@@ -411,6 +508,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.audio.stop();
                 let message = self.start_problem(&error);
                 self.post(NoticeSubject::Start, message);
+                false
             }
         }
     }
@@ -454,15 +552,99 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// An AirPlay speaker can't play from AudioSync, so it is off: tells the
+    /// user, and stops streaming when nothing else is on (S109, S136).
+    fn airplay_cant_play(&mut self, id: &str, problem: AirPlayProblem) {
+        let reason = match problem {
+            AirPlayProblem::PasswordNotYet => DropReason::PasswordUnsupported,
+            AirPlayProblem::PairingNotYet
+            | AirPlayProblem::NeedsPin
+            | AirPlayProblem::PairingFailed => DropReason::NeedsCode,
+            _ => DropReason::Unreachable,
+        };
+        let reaction = reaction(&Incident::SpeakerDropped {
+            id: id.to_owned(),
+            reason,
+            enabled_left: self.enabled_count(),
+        });
+        if let Some(subject) = reaction.notice {
+            let speaker = self.airplay_name(id);
+            self.post(
+                subject,
+                NoticeMessage::AirPlayCantPlay {
+                    speaker,
+                    problem: ui_problem(problem),
+                },
+            );
+        }
+        if reaction.stop_session && self.running() {
+            self.log.log(|| {
+                format!(
+                    "streaming stops: {} can't play and no other speaker is on",
+                    self.airplay_name(id)
+                )
+            });
+            self.audio.stop();
+        }
+    }
+
+    /// The user switched an AirPlay speaker on or off. One that can't play
+    /// stays off, with a notice saying why.
+    fn set_airplay_enabled(&mut self, id: &str, on: bool) {
+        if on
+            && !self
+                .audio
+                .airplay_speakers()
+                .iter()
+                .any(|speaker| speaker.id == id)
+        {
+            self.log
+                .log(|| format!("AirPlay speaker ({id}) isn't listed; nothing to switch on"));
+            return;
+        }
+        self.log.log(|| {
+            let state = if on { "on" } else { "off" };
+            format!("the user switched {} {state}", self.airplay_name(id))
+        });
+        if on {
+            // A new attempt.
+            self.notices.clear(&[airplay_subject(id)]);
+        }
+        if let Err(problem) = self.audio.set_airplay_enabled(id, on) {
+            self.airplay_switch_failed(id, problem);
+            return;
+        }
+        if on {
+            self.start_if_switched_on();
+        } else {
+            self.stop_if_idle();
+        }
+        self.take_events();
+    }
+
+    /// An AirPlay speaker the user switched on didn't turn on: an Apple TV
+    /// that asks for a PIN is paired (it turns on once paired); any other
+    /// stays off with a notice.
+    fn airplay_switch_failed(&mut self, id: &str, problem: AirPlayProblem) {
+        if problem == AirPlayProblem::NeedsPin {
+            self.log.log(|| {
+                format!(
+                    "{} needs pairing with a PIN: the pairing starts",
+                    self.airplay_name(id)
+                )
+            });
+            if let Err(problem) = self.audio.start_airplay_pairing(id) {
+                self.airplay_cant_play(id, problem);
+            }
+            return;
+        }
+        self.airplay_cant_play(id, problem);
+    }
+
     /// Stops streaming when a speaker was switched off and none is left on
     /// (S118, S162).
     fn stop_if_idle(&mut self) {
-        let action = streaming_after(
-            SpeakerEvent::SwitchedOff,
-            self.running(),
-            self.enabled_count(),
-            0,
-        );
+        let action = self.streaming_after(SpeakerEvent::SwitchedOff);
         if action == StreamingAction::Stop {
             self.log
                 .log(|| "streaming stops: no speaker is on anymore".to_owned());
@@ -473,12 +655,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Starts streaming when a speaker was switched on while nothing streams
     /// (S119, S162).
     fn start_if_switched_on(&mut self) {
-        let action = streaming_after(
-            SpeakerEvent::SwitchedOn,
-            self.running(),
-            self.enabled_count(),
-            0,
-        );
+        let action = self.streaming_after(SpeakerEvent::SwitchedOn);
         if action == StreamingAction::Start {
             self.start_session(StartOrigin::User);
         }
@@ -510,15 +687,134 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::OutputFailed { id, .. } => self.output_failed(&id, false),
             BackendEvent::Stopped { reason } => {
                 let message = match reason {
-                    StopReason::SourceQuit => NoticeMessage::SourceQuit {
-                        source: self.chosen_name(),
-                    },
+                    StopReason::SourceQuit => {
+                        // A dismissed double-audio notice was about this run
+                        // of the app.
+                        self.heard_twice_dismissed.remove(&self.chosen.key());
+                        NoticeMessage::SourceQuit {
+                            source: self.chosen_name(),
+                        }
+                    }
                     StopReason::CaptureFailed(_) => NoticeMessage::CaptureLost,
                 };
                 self.post(NoticeSubject::Source, message);
                 self.refresh_sources();
             }
+            BackendEvent::HeardTwice { paths } => self.heard_twice_changed(paths),
+            BackendEvent::AirPlayChanged => self.airplay_listed(),
+            BackendEvent::AirPlayPlaying { id } => {
+                self.clear_if(airplay_subject(&id), |message| {
+                    matches!(message, NoticeMessage::AirPlayRetrying { .. })
+                });
+            }
+            BackendEvent::AirPlayTrouble { id, problem } => {
+                let speaker = self.airplay_name(&id);
+                self.post(
+                    airplay_subject(&id),
+                    NoticeMessage::AirPlayRetrying {
+                        speaker,
+                        problem: ui_problem(problem),
+                    },
+                );
+            }
+            BackendEvent::AirPlayFailed { id, problem } => self.airplay_cant_play(&id, problem),
+            BackendEvent::AirPlayPaired { id } => {
+                self.log
+                    .log(|| format!("{} is paired and on", self.airplay_name(&id)));
+                self.notices.clear(&[airplay_subject(&id)]);
+                self.start_if_switched_on();
+            }
         }
+    }
+
+    /// Takes in where the source is heard straight now: see the module
+    /// documentation.
+    fn heard_twice_changed(&mut self, paths: Vec<DirectPath>) {
+        let subject = HeardTwiceSubject {
+            source: self.chosen.key(),
+            endpoints: paths
+                .iter()
+                .map(|path| (path.endpoint_id.clone(), path.endpoint_name.clone()))
+                .collect(),
+        };
+        let dismissed = !paths.is_empty()
+            && self
+                .heard_twice_dismissed
+                .get(&subject.source)
+                .is_some_and(|dismissed| {
+                    paths
+                        .iter()
+                        .all(|path| dismissed.contains(&path.endpoint_id))
+                });
+        if paths.is_empty() || dismissed {
+            self.heard_twice = None;
+            if self.notices.clear(&[NoticeSubject::DoubleAudio]) {
+                self.log.log(|| {
+                    "notice about DoubleAudio cleared: the source is heard only through \
+                     AudioSync"
+                        .to_owned()
+                });
+            }
+            if dismissed {
+                self.log.log(|| {
+                    format!(
+                        "no notice about DoubleAudio: the user dismissed it for {:?}",
+                        subject.endpoints
+                    )
+                });
+            }
+            return;
+        }
+        let names = |plays_here: bool| -> Vec<String> {
+            paths
+                .iter()
+                .filter(|path| path.audiosync_plays_here == plays_here)
+                .map(|path| path.endpoint_name.clone())
+                .collect()
+        };
+        let message = NoticeMessage::HeardTwice {
+            source: match &self.chosen {
+                Chosen::WholeSystem => None,
+                Chosen::App { name, .. } => Some(name.clone()),
+            },
+            mute: names(false),
+            shared: names(true),
+            default_output: paths
+                .iter()
+                .find(|path| path.reason == DirectReason::DefaultEndpoint)
+                .map(|path| path.endpoint_name.clone()),
+        };
+        let showing = self.heard_twice.as_ref() == Some(&subject)
+            && self.notices.get(&NoticeSubject::DoubleAudio).is_some();
+        if !showing {
+            self.post(NoticeSubject::DoubleAudio, message);
+        } else if let Some(posted) = self.notices.get_mut(&NoticeSubject::DoubleAudio)
+            && posted.message != message
+        {
+            // The same outputs: only which of them AudioSync plays to
+            // changed, so the notice changes where it is.
+            self.log
+                .log(|| format!("notice about DoubleAudio changed: {message:?}"));
+            posted.message = message;
+        }
+        self.heard_twice = Some(subject);
+    }
+
+    /// Remembers that the user dismissed the double-audio notice showing.
+    fn remember_heard_twice_dismissal(&mut self) {
+        let Some(subject) = self.heard_twice.take() else {
+            return;
+        };
+        self.log.log(|| {
+            format!(
+                "notice about DoubleAudio dismissed: it stays away for {} and {:?}",
+                subject.source, subject.endpoints
+            )
+        });
+        self.heard_twice_dismissed
+            .entry(subject.source)
+            .or_default()
+            .extend(subject.endpoints.into_iter().map(|(id, _)| id));
     }
 
     /// The sources as the UI lists them: what is listed, and the chosen app
@@ -547,6 +843,39 @@ impl<A: AudioBackend> AudioAdapter<A> {
         rows
     }
 
+    fn airplay_speaker(&self, speaker: AirPlayInfo) -> Speaker {
+        let id = airplay_key(&speaker.id);
+        Speaker {
+            auto_connect: self.auto_connect.contains(&id),
+            id,
+            name: speaker.name,
+            kind: SpeakerKind::AirPlay,
+            enabled: speaker.enabled,
+            volume: speaker.volume,
+            delay_ms: None,
+            availability: if speaker.pairing {
+                Availability::Pairing
+            } else {
+                availability(speaker.availability)
+            },
+            paired: speaker.paired,
+        }
+    }
+
+    /// A pairing's PIN prompt as the UI shows it.
+    fn pin_prompt(&self, prompt: AirPlayPinPrompt) -> PinPrompt {
+        PinPrompt {
+            speaker_id: airplay_key(&prompt.id),
+            name: prompt.name,
+            phase: match prompt.phase {
+                PairingPhase::Starting => PinPhase::Starting,
+                PairingPhase::WaitingForPin => PinPhase::Ready,
+                PairingPhase::Checking => PinPhase::Checking,
+            },
+            wrong_pin: prompt.wrong_pin,
+        }
+    }
+
     fn speaker(&self, output: OutputInfo) -> Speaker {
         let id = speaker_key(&output.id);
         Speaker {
@@ -558,6 +887,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             volume: output.volume,
             delay_ms: Some(output.delay_ms),
             availability: Availability::Open,
+            paired: false,
         }
     }
 }
@@ -574,6 +904,12 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 .outputs()
                 .into_iter()
                 .map(|output| self.speaker(output))
+                .chain(
+                    self.audio
+                        .airplay_speakers()
+                        .into_iter()
+                        .map(|speaker| self.airplay_speaker(speaker)),
+                )
                 .collect(),
             groups: self.groups.clone(),
             equalizer: self.equalizer,
@@ -587,6 +923,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                     time: posted.time.clone(),
                 })
                 .collect(),
+            pin_prompt: self
+                .audio
+                .airplay_pin_prompt()
+                .map(|prompt| self.pin_prompt(prompt)),
         }
     }
 
@@ -602,12 +942,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             }
             return;
         }
-        let action = streaming_after(
-            SpeakerEvent::StartRequested,
-            self.running(),
-            self.enabled_count(),
-            0,
-        );
+        let action = self.streaming_after(SpeakerEvent::StartRequested);
         match action {
             // Without a speaker on, the start asks for one.
             StreamingAction::Start | StreamingAction::AskForSpeaker => {
@@ -642,12 +977,15 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.chosen = picked;
         self.notices
             .clear(&[NoticeSubject::Source, NoticeSubject::Capture]);
+        // A start ends the running session by itself and keeps the AirPlay
+        // speakers in the stream, restarting only their timeline (S141); a
+        // stop would tear them down and connect them again.
         let switch = source_switch(self.running());
-        if switch.stop_keeping_airplay {
+        let started = switch
+            .start
+            .is_some_and(|origin| self.start_session(origin));
+        if switch.stop_keeping_airplay && !started && self.running() {
             self.audio.stop();
-        }
-        if let Some(origin) = switch.start {
-            self.start_session(origin);
         }
     }
 
@@ -656,8 +994,13 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn set_speaker_enabled(&mut self, id: &str, on: bool) {
-        let Some(endpoint_id) = local_id(id) else {
-            return;
+        let endpoint_id = match SpeakerKey::parse(id) {
+            Some(SpeakerKey::Local(endpoint_id)) => endpoint_id,
+            Some(SpeakerKey::AirPlay(airplay_id)) => {
+                self.set_airplay_enabled(&airplay_id, on);
+                return;
+            }
+            None => return,
         };
         self.log.log(|| {
             let state = if on { "on" } else { "off" };
@@ -683,15 +1026,29 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn set_speaker_volume(&mut self, id: &str, position: f64) {
-        if let Some(endpoint_id) = local_id(id) {
-            self.audio.set_output_volume(&endpoint_id, position);
+        match SpeakerKey::parse(id) {
+            Some(SpeakerKey::Local(endpoint_id)) => {
+                self.audio.set_output_volume(&endpoint_id, position);
+            }
+            Some(SpeakerKey::AirPlay(airplay_id)) => {
+                self.audio.set_airplay_volume(&airplay_id, position);
+            }
+            None => {}
         }
     }
 
+    /// A local output's delay, or an AirPlay speaker's own delay d_s.
     fn set_speaker_delay(&mut self, id: &str, ms: f64) {
-        if let Some(endpoint_id) = local_id(id) {
-            self.audio
-                .set_output_delay(&endpoint_id, clamp_delay_ms(ms));
+        match SpeakerKey::parse(id) {
+            Some(SpeakerKey::Local(endpoint_id)) => {
+                self.audio
+                    .set_output_delay(&endpoint_id, clamp_delay_ms(ms));
+            }
+            Some(SpeakerKey::AirPlay(airplay_id)) => {
+                self.audio
+                    .set_airplay_delay(&airplay_id, clamp_delay_ms(ms));
+            }
+            None => {}
         }
     }
 
@@ -713,9 +1070,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let Some(group) = state.groups.iter().find(|group| group.id == id) else {
             return;
         };
-        let members: Vec<String> = state
+        let members: Vec<SpeakerKey> = state
             .available_members(group)
-            .filter_map(|speaker| local_id(&speaker.id))
+            .filter_map(|speaker| SpeakerKey::parse(&speaker.id))
             .collect();
         if members.is_empty() {
             return;
@@ -731,16 +1088,31 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 members.len()
             )
         });
-        for endpoint_id in &members {
-            if turn_on {
-                if self.running() && self.is_enabled(endpoint_id) {
-                    continue;
+        for member in &members {
+            match member {
+                SpeakerKey::Local(endpoint_id) => {
+                    if turn_on {
+                        if self.running() && self.is_enabled(endpoint_id) {
+                            continue;
+                        }
+                        // A new attempt.
+                        self.notices.clear(&[speaker_subject(endpoint_id)]);
+                    }
+                    if self.audio.set_output_enabled(endpoint_id, turn_on).is_err() {
+                        self.output_failed(endpoint_id, true);
+                    }
                 }
-                // A new attempt.
-                self.notices.clear(&[speaker_subject(endpoint_id)]);
-            }
-            if self.audio.set_output_enabled(endpoint_id, turn_on).is_err() {
-                self.output_failed(endpoint_id, true);
+                SpeakerKey::AirPlay(id) => {
+                    if turn_on {
+                        if self.running() && self.is_airplay_enabled(id) {
+                            continue;
+                        }
+                        self.notices.clear(&[airplay_subject(id)]);
+                    }
+                    if let Err(problem) = self.audio.set_airplay_enabled(id, turn_on) {
+                        self.airplay_switch_failed(id, problem);
+                    }
+                }
             }
         }
         if turn_on {
@@ -758,6 +1130,13 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             .into_iter()
             .filter(|output| output.enabled)
             .map(|output| speaker_key(&output.id))
+            .chain(
+                self.audio
+                    .airplay_speakers()
+                    .into_iter()
+                    .filter(|speaker| speaker.enabled)
+                    .map(|speaker| airplay_key(&speaker.id)),
+            )
             .collect();
         if members.is_empty() {
             return Err(GroupError::NoActiveSpeakers);
@@ -800,11 +1179,17 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             .find(|(_, posted)| posted.id == id)
             .map(|(subject, _)| subject.clone());
         if let Some(subject) = subject {
+            if subject == NoticeSubject::DoubleAudio {
+                self.remember_heard_twice_dismissal();
+            }
             self.notices.clear(&[subject]);
         }
     }
 
     fn dismiss_all_notices(&mut self) {
+        if self.notices.get(&NoticeSubject::DoubleAudio).is_some() {
+            self.remember_heard_twice_dismissal();
+        }
         self.notices.clear_all();
     }
 
@@ -812,6 +1197,51 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.log
             .log(|| "the user asked to list the devices again".to_owned());
         self.list_devices();
+    }
+
+    /// The PIN itself is never logged.
+    fn submit_pin(&mut self, id: &str, pin: &str) {
+        let Some(SpeakerKey::AirPlay(airplay_id)) = SpeakerKey::parse(id) else {
+            return;
+        };
+        let sent = self.audio.submit_airplay_pin(&airplay_id, pin);
+        self.log.log(|| {
+            let what = if sent { "sent" } else { "not taken" };
+            format!(
+                "the user typed the PIN for {}: {what}",
+                self.airplay_name(&airplay_id)
+            )
+        });
+    }
+
+    fn cancel_pairing(&mut self, id: &str) {
+        let Some(SpeakerKey::AirPlay(airplay_id)) = SpeakerKey::parse(id) else {
+            return;
+        };
+        self.log.log(|| {
+            format!(
+                "the user cancelled the pairing with {}",
+                self.airplay_name(&airplay_id)
+            )
+        });
+        self.audio.cancel_airplay_pairing(&airplay_id);
+        self.take_events();
+    }
+
+    fn forget_pairing(&mut self, id: &str) {
+        let Some(SpeakerKey::AirPlay(airplay_id)) = SpeakerKey::parse(id) else {
+            return;
+        };
+        self.log.log(|| {
+            format!(
+                "the user forgot the pairing with {}",
+                self.airplay_name(&airplay_id)
+            )
+        });
+        self.audio.forget_airplay_pairing(&airplay_id);
+        self.notices.clear(&[airplay_subject(&airplay_id)]);
+        self.stop_if_idle();
+        self.take_events();
     }
 
     fn poll(&mut self) -> bool {
@@ -844,17 +1274,48 @@ fn speaker_key(endpoint_id: &str) -> String {
     SpeakerKey::Local(endpoint_id.to_owned()).to_string()
 }
 
-/// The endpoint ID of a local output's speaker key.
-fn local_id(key: &str) -> Option<String> {
-    match SpeakerKey::parse(key)? {
-        SpeakerKey::Local(endpoint_id) => Some(endpoint_id),
-        SpeakerKey::AirPlay(_) => None,
-    }
+/// The UI's ID of an AirPlay speaker.
+fn airplay_key(id: &str) -> String {
+    SpeakerKey::AirPlay(id.to_owned()).to_string()
 }
 
 /// What a notice about one local output is about.
 fn speaker_subject(endpoint_id: &str) -> NoticeSubject {
     NoticeSubject::Speaker(SpeakerKey::Local(endpoint_id.to_owned()))
+}
+
+/// What a notice about one AirPlay speaker is about.
+fn airplay_subject(id: &str) -> NoticeSubject {
+    NoticeSubject::Speaker(SpeakerKey::AirPlay(id.to_owned()))
+}
+
+/// How an AirPlay speaker's row shows whether it can play.
+fn availability(availability: AirPlayAvailability) -> Availability {
+    match availability {
+        AirPlayAvailability::Open => Availability::Open,
+        AirPlayAvailability::PasswordNotYet => Availability::PasswordNotYet,
+        AirPlayAvailability::NeedsPin => Availability::NeedsCode,
+        AirPlayAvailability::PairingNotYet => Availability::PairingNotYet,
+        AirPlayAvailability::AirPlay2NotYet => Availability::AirPlay2NotYet,
+        AirPlayAvailability::Unsupported => Availability::Unsupported,
+    }
+}
+
+/// An AirPlay problem as a notice words it.
+fn ui_problem(problem: AirPlayProblem) -> ui_model::AirPlayProblem {
+    use ui_model::AirPlayProblem as P;
+    match problem {
+        AirPlayProblem::NotResponding => P::NotResponding,
+        AirPlayProblem::ConnectionLost => P::ConnectionLost,
+        AirPlayProblem::Busy => P::Busy,
+        AirPlayProblem::Refused => P::Refused,
+        AirPlayProblem::PasswordNotYet => P::PasswordNotYet,
+        AirPlayProblem::NeedsPin => P::NeedsPin,
+        AirPlayProblem::PairingFailed => P::PairingFailed,
+        AirPlayProblem::PairingNotYet => P::PairingNotYet,
+        AirPlayProblem::AirPlay2NotYet => P::AirPlay2NotYet,
+        AirPlayProblem::Unsupported => P::Unsupported,
+    }
 }
 
 /// A listed source as the debug log names it.
@@ -885,9 +1346,17 @@ fn app_key(root_pid: u32, executable: &str) -> String {
 mod tests {
     use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, output_gain};
 
+    use audiosync_airplay::discovery::Device;
+    use audiosync_airplay::error::{ErrorKind, SessionError};
+    use audiosync_airplay::pairing::PairingEvent;
+    use audiosync_airplay::sender::SpeakerState as AirPlayState;
+
     use super::*;
+    use crate::audio::airplay::tests::{APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, device, id_of};
     use crate::audio::capture::LoopbackMode;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
+    use crate::audio::pairings::tests::credentials;
+    use crate::audio::routing::HOLD_CHECKS;
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
     use crate::ui_model::{MAX_DELAY_MS, SpeakerState};
 
@@ -1570,5 +2039,583 @@ mod tests {
             ],
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    const TV: &str = "tv";
+    const CABLE: &str = "cable";
+
+    /// The double-audio notices showing.
+    fn heard_twice(adapter: &AudioAdapter<MockBackend>) -> Vec<NoticeMessage> {
+        adapter
+            .snapshot()
+            .notices
+            .into_iter()
+            .filter(|notice| matches!(notice.message, NoticeMessage::HeardTwice { .. }))
+            .map(|notice| notice.message)
+            .collect()
+    }
+
+    /// The double-audio notice for `source` (`None` for the whole system),
+    /// naming the outputs to mute and the ones AudioSync plays to as well.
+    fn twice(source: Option<&str>, mute: &[&str], shared: &[&str]) -> NoticeMessage {
+        let names = |list: &[&str]| list.iter().map(|name| (*name).to_owned()).collect();
+        NoticeMessage::HeardTwice {
+            source: source.map(str::to_owned),
+            mute: names(mute),
+            shared: names(shared),
+            default_output: None,
+        }
+    }
+
+    /// The ID of the double-audio notice showing.
+    fn heard_twice_id(adapter: &AudioAdapter<MockBackend>) -> Option<u64> {
+        adapter
+            .snapshot()
+            .notices
+            .into_iter()
+            .find(|notice| matches!(notice.message, NoticeMessage::HeardTwice { .. }))
+            .map(|notice| notice.id)
+    }
+
+    /// Runs the double-audio check now and takes in what it reports.
+    fn check_routing(adapter: &mut AudioAdapter<MockBackend>) {
+        adapter.audio_mut().check_routing_now();
+        adapter.poll();
+    }
+
+    /// The adapter of [`adapter`] with a TV and a virtual cable connected,
+    /// streaming the player to the speakers while it plays on the TV.
+    fn player_on_the_tv() -> AudioAdapter<MockBackend> {
+        let mut adapter = adapter();
+        let audio = adapter.audio_mut();
+        audio.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        audio.connect_output_as(CABLE, "Cable Input", OutputKind::Virtual);
+        audio.play_on(PLAYER_PID, TV);
+        adapter.refresh_devices();
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+        adapter
+    }
+
+    #[test]
+    fn hearing_the_app_twice_raises_one_notice_that_follows_the_routing() {
+        let mut adapter = player_on_the_tv();
+        assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &["TV"], &[])]);
+        assert_eq!(
+            adapter.snapshot().notices[0].subject,
+            "DoubleAudio",
+            "one subject"
+        );
+        // It plays on the speakers as well, which AudioSync plays to: the
+        // TV can be muted, the speakers can't.
+        adapter.audio_mut().play_on(PLAYER_PID, SPEAKERS);
+        check_routing(&mut adapter);
+        assert_eq!(
+            heard_twice(&adapter),
+            [twice(Some("Player"), &["TV"], &["Speakers"])]
+        );
+        // Moved in the volume mixer to a virtual cable nobody listens to, it
+        // is heard once again after a few checks.
+        adapter.audio_mut().pause_on(PLAYER_PID, SPEAKERS);
+        adapter.audio_mut().move_session(PLAYER_PID, TV, CABLE);
+        check_routing(&mut adapter);
+        assert_eq!(heard_twice(&adapter).len(), 1, "held a few checks");
+        for _ in 0..HOLD_CHECKS {
+            check_routing(&mut adapter);
+        }
+        assert!(heard_twice(&adapter).is_empty());
+    }
+
+    #[test]
+    fn the_double_audio_notice_clears_when_the_output_is_muted() {
+        let mut adapter = player_on_the_tv();
+        adapter.audio_mut().mute_output(TV, true);
+        check_routing(&mut adapter);
+        assert!(heard_twice(&adapter).is_empty());
+        adapter.audio_mut().mute_output(TV, false);
+        check_routing(&mut adapter);
+        assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &["TV"], &[])]);
+    }
+
+    #[test]
+    fn the_double_audio_notice_clears_when_streaming_stops() {
+        let mut adapter = player_on_the_tv();
+        adapter.set_running(false);
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        assert!(heard_twice(&adapter).is_empty());
+    }
+
+    #[test]
+    fn the_double_audio_notice_follows_a_new_source() {
+        let mut adapter = player_on_the_tv();
+        adapter.audio_mut().add_app(3000, "video.exe");
+        adapter.refresh_devices();
+        adapter.select_source("app:3000:video.exe");
+        assert!(adapter.snapshot().running);
+        assert!(
+            heard_twice(&adapter).is_empty(),
+            "the new app plays nowhere yet"
+        );
+        // The whole system takes in the player on the TV too.
+        adapter.select_source(SYSTEM_KEY);
+        assert_eq!(heard_twice(&adapter), [twice(None, &["TV"], &[])]);
+    }
+
+    #[test]
+    fn the_whole_system_notice_names_the_default_output() {
+        let mut adapter = player_on_the_tv();
+        adapter.audio_mut().set_default_output(SPEAKERS);
+        adapter.select_source(SYSTEM_KEY);
+        // The speakers count as the default output, the TV because the
+        // player plays there: the guide words each its own way.
+        let expected = NoticeMessage::HeardTwice {
+            source: None,
+            mute: vec!["TV".to_owned()],
+            shared: vec!["Speakers".to_owned()],
+            default_output: Some("Speakers".to_owned()),
+        };
+        assert_eq!(heard_twice(&adapter), [expected]);
+    }
+
+    #[test]
+    fn a_dismissed_double_audio_notice_comes_back_only_when_the_routing_changes() {
+        let mut adapter = player_on_the_tv();
+        let id = adapter.snapshot().notices[0].id;
+        adapter.dismiss_notice(id);
+        check_routing(&mut adapter);
+        assert!(heard_twice(&adapter).is_empty(), "nothing changed");
+        adapter.audio_mut().play_on(PLAYER_PID, SPEAKERS);
+        check_routing(&mut adapter);
+        assert_eq!(
+            heard_twice(&adapter),
+            [twice(Some("Player"), &["TV"], &["Speakers"])]
+        );
+    }
+
+    #[test]
+    fn turning_on_an_output_the_notice_names_changes_it_in_place() {
+        let mut adapter = player_on_the_tv();
+        let id = heard_twice_id(&adapter);
+        turn_on(&mut adapter, TV);
+        check_routing(&mut adapter);
+        assert_eq!(heard_twice_id(&adapter), id, "not posted again");
+        assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &[], &["TV"])]);
+        // Dismissed, it stays away while the output goes off and on again.
+        adapter.dismiss_notice(id.unwrap());
+        adapter.set_speaker_enabled(&key(TV), false);
+        check_routing(&mut adapter);
+        turn_on(&mut adapter, TV);
+        check_routing(&mut adapter);
+        assert!(heard_twice(&adapter).is_empty());
+    }
+
+    #[test]
+    fn a_dismissed_double_audio_notice_stays_away_until_the_app_quits() {
+        const BUDS: &str = "buds";
+        let mut adapter = player_on_the_tv();
+        adapter.dismiss_notice(heard_twice_id(&adapter).unwrap());
+        // Streaming off and on again.
+        adapter.set_running(false);
+        adapter.poll();
+        adapter.set_running(true);
+        assert!(adapter.snapshot().running);
+        assert!(heard_twice(&adapter).is_empty(), "after a restart");
+        // Every speaker off, then on again.
+        adapter.set_speaker_enabled(&key(SPEAKERS), false);
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(heard_twice(&adapter).is_empty(), "after the speakers");
+        // Another output: a notice that names it.
+        adapter
+            .audio_mut()
+            .connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        adapter.audio_mut().play_on(PLAYER_PID, BUDS);
+        check_routing(&mut adapter);
+        assert_eq!(
+            heard_twice(&adapter),
+            [twice(Some("Player"), &["Buds", "TV"], &[])]
+        );
+        // Dismissed, it stays away while that output drops out for a moment.
+        adapter.dismiss_all_notices();
+        adapter.audio_mut().disconnect_output(BUDS);
+        check_routing(&mut adapter);
+        adapter
+            .audio_mut()
+            .connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        check_routing(&mut adapter);
+        assert!(heard_twice(&adapter).is_empty(), "after the drop-out");
+        // The app quits and starts again: a notice about the new one.
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        adapter.audio_mut().add_app(2100, "player.exe");
+        adapter.audio_mut().play_on(2100, TV);
+        adapter.set_running(true);
+        assert!(adapter.snapshot().running);
+        assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &["TV"], &[])]);
+    }
+
+    const PASSWORD_TXT: &[&str] = &[
+        "txtvers=1",
+        "ch=2",
+        "cn=0,1",
+        "et=0",
+        "sr=44100",
+        "ss=16",
+        "tp=UDP",
+        "pw=true",
+    ];
+
+    /// [`adapter`] with an AirPlay sender that lists Kitchen, which can
+    /// play, and Study, which asks for a password.
+    fn airplay_adapter() -> (AudioAdapter<MockBackend>, FakeAirPlay, Device, Device) {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.connect_output(HEADPHONES, "Headphones");
+        audio.add_app(PLAYER_PID, "player.exe");
+        let fake = FakeAirPlay::new();
+        audio.set_airplay(fake.link(), None);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let study = device(2, "Study", PASSWORD_TXT);
+        fake.appear(&kitchen);
+        fake.appear(&study);
+        let adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        (adapter, fake, kitchen, study)
+    }
+
+    /// The UI's ID of an AirPlay speaker.
+    fn ap(device: &Device) -> String {
+        format!("ap:{}", id_of(device))
+    }
+
+    fn local_delay(adapter: &AudioAdapter<MockBackend>, endpoint_id: &str) -> i64 {
+        adapter
+            .audio
+            .playing_params(endpoint_id)
+            .expect("it plays")
+            .delay_frames
+    }
+
+    #[test]
+    fn an_airplay_receiver_that_appears_becomes_a_connected_speaker_row() {
+        let (mut adapter, fake, kitchen, study) = airplay_adapter();
+        let state = adapter.snapshot();
+        let row = state.speaker(&ap(&kitchen)).expect("Kitchen is listed");
+        assert_eq!(row.name, "Kitchen");
+        assert_eq!(row.kind, SpeakerKind::AirPlay);
+        assert_eq!(row.delay_ms, None, "AirPlay rows have no sync delay");
+        assert_eq!(row.availability, Availability::Open);
+        assert!(!row.enabled);
+        assert_eq!(
+            state.speaker(&ap(&study)).unwrap().availability,
+            Availability::PasswordNotYet
+        );
+        let (this_pc, connected) = state.layout();
+        assert!(this_pc.is_empty());
+        let names: Vec<&str> = connected.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Headphones", "Kitchen", "Speakers", "Study"]);
+
+        let bedroom = device(3, "Bedroom", OPEN_TXT);
+        fake.appear(&bedroom);
+        assert!(adapter.poll(), "the snapshot changed");
+        assert!(adapter.snapshot().speaker(&ap(&bedroom)).is_some());
+        fake.gone(&bedroom);
+        assert!(adapter.poll());
+        assert!(adapter.snapshot().speaker(&ap(&bedroom)).is_none());
+    }
+
+    #[test]
+    fn turning_an_airplay_speaker_on_and_off_lines_local_outputs_up_and_back() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_delay(&key(SPEAKERS), 150.0);
+        assert!(adapter.snapshot().running);
+        assert_eq!(local_delay(&adapter, SPEAKERS), 7_200);
+        fake.take_calls();
+
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
+        assert!(matches!(fake.take_calls()[..], [Call::Add { .. }]));
+        assert_eq!(local_delay(&adapter, SPEAKERS), 91_200, "L + 150 ms");
+
+        adapter.set_speaker_enabled(&ap(&kitchen), false);
+        assert_eq!(
+            local_delay(&adapter, SPEAKERS),
+            7_200,
+            "its own delay again"
+        );
+        assert!(adapter.snapshot().running, "Speakers is still on");
+    }
+
+    #[test]
+    fn an_airplay_speaker_alone_starts_and_stops_streaming() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        assert!(adapter.snapshot().running, "one AirPlay speaker is enough");
+        assert!(playing(&adapter).is_empty());
+        assert_eq!(fake.take_calls()[0], Call::RestartTimeline);
+        adapter.set_speaker_enabled(&ap(&kitchen), false);
+        assert!(!adapter.snapshot().running, "nothing is on anymore");
+    }
+
+    /// `airplay_adapter()` with an Apple TV that asks for a PIN listed too.
+    fn apple_tv_adapter() -> (AudioAdapter<MockBackend>, FakeAirPlay, Device) {
+        let (mut adapter, fake, _, _) = airplay_adapter();
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        fake.appear(&tv);
+        adapter.poll();
+        fake.take_calls();
+        (adapter, fake, tv)
+    }
+
+    #[test]
+    fn switching_on_an_apple_tv_pairs_it_and_then_it_streams() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let id = ap(&tv);
+        assert_eq!(
+            adapter.snapshot().speaker(&id).unwrap().availability,
+            Availability::NeedsCode
+        );
+        adapter.set_speaker_enabled(&id, true);
+        assert_eq!(fake.take_calls(), [Call::StartPairing(id_of(&tv))]);
+        let state = adapter.snapshot();
+        assert!(!state.running, "nothing streams while it pairs");
+        assert_eq!(state.pin_prompt, None, "no prompt until the PIN shows");
+        assert_eq!(
+            state.speaker(&id).unwrap().availability,
+            Availability::Pairing
+        );
+
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        assert!(adapter.poll());
+        assert_eq!(
+            adapter.snapshot().pin_prompt,
+            Some(PinPrompt {
+                speaker_id: id.clone(),
+                name: "Den TV".to_owned(),
+                phase: PinPhase::Ready,
+                wrong_pin: false,
+            })
+        );
+        adapter.submit_pin(&id, "4821");
+        assert_eq!(
+            fake.take_calls(),
+            [Call::SubmitPin(id_of(&tv), "4821".to_owned())]
+        );
+        assert_eq!(
+            adapter.snapshot().pin_prompt.unwrap().phase,
+            PinPhase::Checking
+        );
+
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEF", 0x11)),
+        );
+        assert!(adapter.poll());
+        let state = adapter.snapshot();
+        assert_eq!(state.pin_prompt, None);
+        let row = state.speaker(&id).unwrap();
+        assert!(row.enabled && row.paired);
+        assert_eq!(row.availability, Availability::Open);
+        assert!(state.running, "paired and on: streaming starts");
+        assert!(
+            fake.take_calls().contains(&Call::Credentials(
+                id_of(&tv),
+                "0123456789ABCDEF".to_owned()
+            )),
+            "it joins with its credentials"
+        );
+
+        adapter.forget_pairing(&id);
+        let state = adapter.snapshot();
+        let row = state.speaker(&id).unwrap();
+        assert!(!row.enabled && !row.paired);
+        assert_eq!(row.availability, Availability::NeedsCode);
+        assert!(!state.running, "nothing else is on");
+        assert_eq!(fake.take_calls().last(), Some(&Call::Remove(id_of(&tv))));
+    }
+
+    #[test]
+    fn a_wrong_pin_keeps_the_prompt_and_cancel_leaves_the_speaker_off() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "1111");
+        fake.take_calls();
+        fake.pairing(
+            &tv,
+            PairingEvent::Failed {
+                error: SessionError::new(ErrorKind::PairingFailed),
+                wrong_pin: true,
+            },
+        );
+        adapter.poll();
+        assert_eq!(fake.take_calls(), [Call::StartPairing(id_of(&tv))]);
+        let prompt = adapter.snapshot().pin_prompt.expect("the prompt stays");
+        assert!(prompt.wrong_pin);
+        assert_eq!(prompt.phase, PinPhase::Starting);
+        assert!(messages(&adapter).is_empty(), "no notice for a wrong PIN");
+
+        adapter.cancel_pairing(&id);
+        assert_eq!(fake.take_calls(), [Call::CancelPairing(id_of(&tv))]);
+        let state = adapter.snapshot();
+        assert_eq!(state.pin_prompt, None);
+        assert!(!state.speaker(&id).unwrap().enabled);
+        assert!(!state.running);
+        fake.pairing(&tv, PairingEvent::Stopped);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "no notice for a cancel");
+    }
+
+    #[test]
+    fn a_failed_pairing_closes_the_prompt_with_a_notice() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        fake.pairing(
+            &tv,
+            PairingEvent::Failed {
+                error: SessionError::new(ErrorKind::Unreachable),
+                wrong_pin: false,
+            },
+        );
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert_eq!(state.pin_prompt, None);
+        assert!(!state.speaker(&id).unwrap().enabled);
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Den TV".to_owned(),
+                problem: ui_model::AirPlayProblem::PairingFailed,
+            }]
+        );
+    }
+
+    #[test]
+    fn auto_connect_never_starts_a_pairing() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let id = ap(&tv);
+        adapter.set_auto_connect(&id, true);
+        fake.gone(&tv);
+        adapter.poll();
+        fake.appear(&tv);
+        adapter.poll();
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::StartPairing(_))),
+            "no PIN appears on the TV by itself"
+        );
+        let state = adapter.snapshot();
+        assert_eq!(state.pin_prompt, None);
+        assert!(!state.speaker(&id).unwrap().enabled);
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Den TV".to_owned(),
+                problem: ui_model::AirPlayProblem::NeedsPin,
+            }]
+        );
+    }
+
+    #[test]
+    fn an_airplay_speaker_that_cant_play_stays_off_with_a_notice() {
+        let (mut adapter, fake, _, study) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&study), true);
+        assert!(!adapter.snapshot().speaker(&ap(&study)).unwrap().enabled);
+        assert!(!adapter.snapshot().running);
+        assert!(fake.take_calls().is_empty(), "never connected");
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Study".to_owned(),
+                problem: ui_model::AirPlayProblem::PasswordNotYet,
+            }]
+        );
+    }
+
+    #[test]
+    fn airplay_errors_become_notices() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        assert!(adapter.poll());
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayRetrying {
+                speaker: "Kitchen".to_owned(),
+                problem: ui_model::AirPlayProblem::NotResponding,
+            }]
+        );
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
+        // It plays again: the notice goes.
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+        // One that needs the user is turned off, and streaming stops with it.
+        fake.fail(&kitchen, ErrorKind::PairingRequired);
+        adapter.poll();
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Kitchen".to_owned(),
+                problem: ui_model::AirPlayProblem::PairingNotYet,
+            }]
+        );
+        assert!(!adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
+        assert!(!adapter.snapshot().running);
+    }
+
+    #[test]
+    fn a_source_switch_keeps_airplay_speakers_in_the_stream() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        assert!(adapter.snapshot().running);
+        fake.take_calls();
+        adapter.select_source(&player());
+        assert_eq!(
+            captures(&adapter)[1],
+            (LoopbackMode::IncludeTree, PLAYER_PID),
+            "capture starts again from the player"
+        );
+        assert_eq!(
+            fake.take_calls(),
+            [Call::RestartTimeline],
+            "the speaker stays in the stream, only its timeline restarts (S141)"
+        );
+        assert!(adapter.snapshot().running);
+    }
+
+    #[test]
+    fn groups_and_auto_connect_hold_airplay_speakers() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.new_group("Downstairs").unwrap();
+        let group = adapter.snapshot().groups[0].clone();
+        assert_eq!(group.members, [key(SPEAKERS), ap(&kitchen)]);
+        adapter.toggle_group(&group.id);
+        assert!(!adapter.snapshot().running, "both switched off");
+        assert!(!adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
+
+        // Auto-connect: Kitchen switches on when it appears again.
+        adapter.set_auto_connect(&ap(&kitchen), true);
+        fake.gone(&kitchen);
+        adapter.poll();
+        fake.appear(&kitchen);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
+        assert!(adapter.snapshot().running);
     }
 }

@@ -14,12 +14,18 @@ path = "src/main.rs"
 
 [dependencies]
 audiosync-core = { path = "../core" }
+# AudioSync's own AirPlay sender: discovery, one session per speaker and the
+# stream they share, on the crate's own threads.
+audiosync-airplay = { path = "../airplay" }
 # Used under the Slint Royalty-free Desktop, Mobile, and Web Applications
 # License 2.0, checked for the 1.18 line; see THIRD_PARTY_NOTICES.md.
 # unstable-winit-030: the winit window behind a Slint window, to focus it and
 # to close the tray flyout when it loses focus. Pinned to the 1.18 line, like
 # Slint itself.
 slint = { version = "~1.18.1", features = ["unstable-winit-030"] }
+# Wipes the decrypted Apple TV pairing store from memory (Apache-2.0 OR MIT);
+# the AirPlay sender already depends on it.
+zeroize = "1.8.1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
@@ -27,21 +33,31 @@ windows = { version = "0.62", features = [
     "Win32_Devices_FunctionDiscovery",
     "Win32_Foundation",
     "Win32_Globalization",
+    # DWM: Mica in the title bars and the flyout's rounded corners (src/backdrop.rs).
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_Media_Audio",
-    # IAudioEndpointVolume, for examples/mute_probe.rs.
+    # IAudioEndpointVolume: the double-audio check reads each output's mute
+    # and volume, and examples/mute_probe.rs sets them.
     "Win32_Media_Audio_Endpoints",
     "Win32_Media_KernelStreaming",
     "Win32_Media_Multimedia",
     "Win32_Security",
+    # DPAPI (CryptProtectData): the Apple TV pairing store, encrypted for the
+    # current user (src/audio/pairings.rs).
+    "Win32_Security_Cryptography",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Diagnostics_ToolHelp",
+    # QueryPerformanceCounter: the capture loop's clock while loopback
+    # delivers nothing, in the time base of the packets' positions.
+    "Win32_System_Performance",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_Variant",
     "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
 ] }

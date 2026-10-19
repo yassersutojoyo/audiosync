@@ -16,6 +16,20 @@
 //! ([`DebugLog`]), from the thread that calls it, never from an audio
 //! thread; while a session runs, [`AudioBackend::poll`] adds a status line
 //! every few seconds from the counters the audio threads keep.
+//!
+//! While a session runs, [`AudioBackend::poll`] also checks every few
+//! seconds whether the source is heard twice, straight from an output as
+//! well as through AudioSync ([`routing`](super::routing)), from a read-only
+//! snapshot of the endpoints and the processes, and reports a change as
+//! [`BackendEvent::HeardTwice`].
+//!
+//! With an AirPlay sender ([`Controller::set_airplay`]), the capture also
+//! feeds the sender, AirPlay speakers that are on join the stream while a
+//! session runs ([`airplay`](super::airplay)), and local outputs follow the
+//! AirPlay sync rule: L + their own delay while an AirPlay speaker is chosen,
+//! their own delay otherwise (see [`outputs`](super::outputs)). A new capture
+//! restarts the sender's timeline (P143); a new L from the sender re-anchors
+//! every playing output.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -27,8 +41,10 @@ use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 
 use super::SESSION_RATE;
+use super::airplay::{AirPlayLink, AirPlaySpeakers, FeedLease, FeedSlot};
 use super::backend::{
-    AudioBackend, BackendError, BackendEvent, OutputInfo, SourceId, SourceInfo, StopReason,
+    AirPlayInfo, AirPlayPinPrompt, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
+    OutputInfo, SourceId, SourceInfo, StopReason,
 };
 use super::capture::{
     Activation, CaptureAttempt, LoopbackMode, SampleType, decide_activation, running_app,
@@ -36,12 +52,20 @@ use super::capture::{
 };
 #[cfg(test)]
 use super::outputs::OutputParams;
-use super::outputs::{AirPlay, Endpoint, OutputPolicy, StreamSetup};
+use super::outputs::{AirPlay, Endpoint, Listing, ListingNote, OutputPolicy, StreamSetup};
+use super::pairings::PairingStore;
 use super::process::ProcessTable;
+use super::routing::{
+    self, Captured, DirectPath, DirectReason, EndpointAudio, EndpointVolume, PlayedOn,
+};
 use crate::debug_log::DebugLog;
 
 /// How often the debug log gets a status line while a session runs.
 const STATUS_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How often a running session checks whether the source is heard twice
+/// ([`routing`](super::routing)).
+const ROUTING_INTERVAL: Duration = Duration::from_secs(3);
 
 /// How a running capture is doing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,20 +118,31 @@ pub trait Driver {
     /// output.
     fn session_pids(&mut self) -> Result<Vec<u32>, BackendError>;
 
-    /// The connected render endpoints.
-    fn outputs(&mut self) -> Result<Vec<Endpoint>, BackendError>;
+    /// The connected render endpoints, and notes for the log on the ones
+    /// left out or listed without their properties.
+    fn outputs(&mut self) -> Result<Listing, BackendError>;
 
     /// Whether outputs may have changed since the last call.
     fn outputs_changed(&mut self) -> bool;
 
+    /// A snapshot of the active render endpoints for the double-audio check
+    /// ([`routing`](super::routing)): each one's name, whether it is the
+    /// default output, its mute and master volume, and the processes with an
+    /// active audio session on it. It only reads: no mute, volume or default
+    /// output changes.
+    fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError>;
+
     /// Starts capturing as `activation` says, writing to the ring through
-    /// `equalizer` and `writer`. Returns once the capture runs, or with why
-    /// it couldn't start.
+    /// `equalizer` and `writer`, and handing the same audio to the AirPlay
+    /// sender's feed when there is one. Returns once the capture runs, or
+    /// with why it couldn't start. The feed goes back to its slot when the
+    /// capture stops.
     fn start_capture(
         &mut self,
         activation: Activation,
         writer: RingWriter,
         equalizer: EqProcessor,
+        airplay: Option<FeedLease>,
     ) -> Result<Self::Capture, BackendError>;
 
     /// Starts rendering to `endpoint` through `reader`, at the gain in
@@ -124,6 +159,8 @@ pub trait Driver {
 /// A running session.
 struct Session<D: Driver> {
     source: SourceId,
+    /// What the capture takes in.
+    activation: Activation,
     ring: Arc<Ring>,
     capture: D::Capture,
     /// The control half of the capture's equalizer.
@@ -137,6 +174,20 @@ struct Playing<R> {
     control: ReaderControl,
     gain: Arc<SharedGain>,
     handle: R,
+}
+
+/// The double-audio check of the running session.
+#[derive(Default)]
+struct RoutingState {
+    /// When the check last ran; `None` until the session's first check.
+    last_check: Option<Instant>,
+    /// The endpoints the source played on at the last check.
+    played_on: Vec<PlayedOn>,
+    /// What was last reported: empty while the source is heard only through
+    /// AudioSync.
+    reported: Vec<DirectPath>,
+    /// The last error of the check: an error that repeats is logged once.
+    error: Option<BackendError>,
 }
 
 /// The audio backend over a driver. See the module documentation.
@@ -164,8 +215,17 @@ pub struct Controller<D: Driver> {
     /// error that repeats at every poll is logged once.
     listing_error: Option<BackendError>,
     sources_error: Option<BackendError>,
+    /// The notes of the last listing: notes that repeat at every listing
+    /// are logged once.
+    listing_notes: Vec<ListingNote>,
     /// When the log last got a status line, and the frames captured then.
     last_status: Option<(Instant, u64)>,
+    /// The double-audio check of the running session.
+    routing: RoutingState,
+    /// The AirPlay side, once there is a sender.
+    airplay: Option<AirPlaySpeakers>,
+    /// The sender's feed, which each capture borrows.
+    feed: Option<FeedSlot>,
 }
 
 impl<D: Driver> Controller<D> {
@@ -185,13 +245,98 @@ impl<D: Driver> Controller<D> {
             setups: BTreeMap::new(),
             listing_error: None,
             sources_error: None,
+            listing_notes: Vec::new(),
             last_status: None,
+            routing: RoutingState::default(),
+            airplay: None,
+            feed: None,
         }
     }
 
     /// Sends what the backend does to `log`.
     pub fn set_debug_log(&mut self, log: DebugLog) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_debug_log(log.clone());
+        }
         self.log = log;
+    }
+
+    /// Plays to AirPlay speakers through `link`, fed by the capture through
+    /// `feed`: local outputs follow the AirPlay sync rule from now on. Apple
+    /// TV pairings are kept for this run only.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the app keeps its pairings"))]
+    pub fn set_airplay(&mut self, link: Box<dyn AirPlayLink>, feed: Option<FeedSlot>) {
+        self.set_airplay_with_pairings(link, feed, PairingStore::in_memory());
+    }
+
+    /// [`Controller::set_airplay`], with the paired Apple TVs' credentials
+    /// in `store`.
+    pub fn set_airplay_with_pairings(
+        &mut self,
+        link: Box<dyn AirPlayLink>,
+        feed: Option<FeedSlot>,
+        store: PairingStore,
+    ) {
+        let airplay = AirPlaySpeakers::new(link, self.policy.master(), self.log.clone(), store);
+        self.log.log(|| {
+            format!(
+                "AirPlay: the sender runs, L = {} ms; local outputs play at their own delay \
+                 until an AirPlay speaker is chosen",
+                airplay.latency().as_millis()
+            )
+        });
+        self.policy.set_airplay(AirPlay::Available {
+            chosen: false,
+            latency: airplay.latency(),
+        });
+        self.airplay = Some(airplay);
+        self.feed = feed;
+        if self.session.is_some() {
+            self.airplay_streaming(true);
+        }
+    }
+
+    /// AirPlay speakers that are on join the stream, or leave it.
+    fn airplay_streaming(&mut self, streaming: bool) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_streaming(streaming);
+        }
+        self.sync_airplay_rule();
+    }
+
+    /// Gives local outputs the delays of the AirPlay sync rule, live, when
+    /// whether an AirPlay speaker is chosen, or L while one is, changed.
+    fn sync_airplay_rule(&mut self) {
+        let Some(airplay) = &self.airplay else {
+            return;
+        };
+        let rule = AirPlay::Available {
+            chosen: airplay.chosen(),
+            latency: airplay.latency(),
+        };
+        if !self.policy.set_airplay(rule) {
+            return;
+        }
+        self.log.log(|| match rule {
+            AirPlay::Available {
+                chosen: true,
+                latency,
+            } => format!(
+                "local outputs play at L + their own delay (L = {} ms): an AirPlay speaker is chosen",
+                latency.as_millis()
+            ),
+            _ => "local outputs play at their own delay: no AirPlay speaker is chosen".to_owned(),
+        });
+        for id in self.playing_ids() {
+            self.apply_delay(&id);
+            self.log.log(|| {
+                format!(
+                    "output {} delay now {} frames",
+                    label(&self.names, &id),
+                    self.policy.params(&id).delay_frames
+                )
+            });
+        }
     }
 
     /// The driver.
@@ -248,8 +393,11 @@ impl<D: Driver> Controller<D> {
     /// and the error when listing failed. A failed listing keeps the last
     /// list, and the next refresh lists again.
     fn refresh_outputs(&mut self) -> (bool, Result<(), BackendError>) {
-        let mut listed = match self.driver.outputs() {
-            Ok(listed) => listed,
+        let Listing {
+            endpoints: mut listed,
+            notes,
+        } = match self.driver.outputs() {
+            Ok(listing) => listing,
             Err(error) => {
                 self.listing_ok = false;
                 if self.listing_error.as_ref() != Some(&error) {
@@ -270,6 +418,14 @@ impl<D: Driver> Controller<D> {
             Some(_) if !changed => format!("outputs listed again, no change ({})", listed.len()),
             _ => describe_listing(previous, &listed, &self.setups),
         });
+        // An endpoint left out, or listed without its properties, is
+        // logged with the full listing and whenever the notes change.
+        if previous.is_none() || notes != self.listing_notes {
+            for note in &notes {
+                self.log.log(|| note.to_string());
+            }
+        }
+        self.listing_notes = notes;
         for endpoint in &listed {
             self.names
                 .insert(endpoint.id.clone(), endpoint.name.clone());
@@ -459,6 +615,14 @@ impl<D: Driver> Controller<D> {
                 started.elapsed().as_millis()
             )
         });
+        // Without a session, nothing is heard twice.
+        let routing = std::mem::take(&mut self.routing);
+        if !routing.reported.is_empty() {
+            self.log
+                .log(|| "double audio: none, streaming stopped".to_owned());
+            self.pending
+                .push(BackendEvent::HeardTwice { paths: Vec::new() });
+        }
     }
 
     /// Logs how the session is doing, at most every [`STATUS_INTERVAL`]:
@@ -515,6 +679,10 @@ impl<D: Driver> Controller<D> {
             if session.outputs.is_empty() {
                 text.push_str("\n  no output plays");
             }
+            if let Some(airplay) = self.airplay.as_ref().and_then(AirPlaySpeakers::status) {
+                text.push('\n');
+                text.push_str(&airplay);
+            }
             text
         });
     }
@@ -552,15 +720,28 @@ impl<D: Driver> Controller<D> {
         let (mut equalizer, processor) = eq::equalizer();
         equalizer.set_sample_rate(f64::from(SESSION_RATE));
         equalizer.set_settings(self.equalizer);
-        let capture = self.driver.start_capture(activation, writer, processor)?;
+        let feed = self.feed.as_ref().and_then(FeedSlot::lease);
+        let feeds_airplay = feed.is_some();
+        let capture = self
+            .driver
+            .start_capture(activation, writer, processor, feed)?;
         self.log.log(|| {
+            let airplay = if feeds_airplay {
+                "; it feeds the AirPlay sender"
+            } else {
+                ""
+            };
             format!(
-                "capture started: {}",
+                "capture started: {}{airplay}",
                 describe_capture(activation, capture.setup())
             )
         });
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.restart_timeline();
+        }
         self.session = Some(Session {
             source: source.clone(),
+            activation,
             ring,
             capture,
             equalizer,
@@ -569,7 +750,95 @@ impl<D: Driver> Controller<D> {
         self.refresh_if_needed(false);
         let failures = self.sync_outputs();
         self.report_failures(failures);
+        self.airplay_streaming(true);
         Ok(())
+    }
+
+    /// Checks whether the source is heard twice, at the first poll of a
+    /// session and then every [`ROUTING_INTERVAL`].
+    fn check_routing_if_due(&mut self, now: Instant) {
+        if self.session.is_none() {
+            return;
+        }
+        let due = self
+            .routing
+            .last_check
+            .is_none_or(|last| now.saturating_duration_since(last) >= ROUTING_INTERVAL);
+        if due {
+            self.check_routing(now);
+        }
+    }
+
+    /// Checks whether the source is heard twice now, whenever the last check
+    /// ran; the next poll reports a change.
+    #[cfg(test)]
+    pub fn check_routing_now(&mut self) {
+        if self.session.is_some() {
+            self.check_routing(Instant::now());
+        }
+    }
+
+    /// Checks whether the source of the running session is heard twice, and
+    /// queues [`BackendEvent::HeardTwice`] when the answer changed. A
+    /// snapshot that fails keeps the last answer.
+    fn check_routing(&mut self, now: Instant) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        self.routing.last_check = Some(now);
+        let activation = session.activation;
+        let rendered: Vec<String> = session.outputs.keys().cloned().collect();
+        let snapshot = self
+            .driver
+            .endpoint_audio()
+            .and_then(|endpoints| Ok((endpoints, self.driver.processes()?)));
+        let (mut endpoints, processes) = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                if self.routing.error.as_ref() != Some(&error) {
+                    self.log
+                        .log(|| format!("the double-audio check failed: {error}"));
+                    self.routing.error = Some(error);
+                }
+                return;
+            }
+        };
+        if self.routing.error.take().is_some() {
+            self.log
+                .log(|| "the double-audio check works again".to_owned());
+        }
+        for endpoint in &mut endpoints {
+            if endpoint.name.is_empty() {
+                endpoint.name = self
+                    .names
+                    .get(&endpoint.id)
+                    .cloned()
+                    .unwrap_or_else(|| endpoint.id.clone());
+            }
+        }
+        let tree = processes.tree(activation.target_pid);
+        let captured = match activation.mode {
+            LoopbackMode::IncludeTree => Captured::Only(tree),
+            LoopbackMode::ExcludeTree => Captured::AllExcept(tree),
+        };
+        let answer = routing::check(&captured, &endpoints, &rendered, &self.routing.played_on);
+        if answer.paths != self.routing.reported {
+            self.log.log(|| {
+                describe_routing(
+                    &answer.paths,
+                    &self.routing.reported,
+                    &endpoints,
+                    &captured,
+                    &rendered,
+                    &answer.played_on,
+                )
+            });
+            self.routing.reported.clone_from(&answer.paths);
+            self.pending.push(BackendEvent::HeardTwice {
+                paths: answer.paths,
+            });
+        }
+        self.routing.played_on = answer.played_on;
     }
 
     /// The sources to offer, from the processes and audio sessions now.
@@ -675,6 +944,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
             self.log.log(|| "stopping".to_owned());
         }
         self.end_session();
+        self.airplay_streaming(false);
     }
 
     fn running_source(&self) -> Option<SourceId> {
@@ -745,6 +1015,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
             for id in self.playing_ids() {
                 self.apply_gain(&id);
             }
+            let master = self.policy.master();
+            if let Some(airplay) = self.airplay.as_mut()
+                && master != before
+            {
+                airplay.set_master(master);
+            }
             let after = self.policy.master();
             if after != before {
                 self.log.log(|| format!("master volume: {after}"));
@@ -767,6 +1043,76 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn airplay_speakers(&self) -> Vec<AirPlayInfo> {
+        self.airplay
+            .as_ref()
+            .map(AirPlaySpeakers::speakers)
+            .unwrap_or_default()
+    }
+
+    fn enabled_airplay(&self) -> Vec<String> {
+        self.airplay
+            .as_ref()
+            .map(AirPlaySpeakers::enabled_ids)
+            .unwrap_or_default()
+    }
+
+    fn set_airplay_enabled(&mut self, id: &str, enabled: bool) -> Result<(), AirPlayProblem> {
+        let Some(airplay) = self.airplay.as_mut() else {
+            // Without a sender nothing is listed, so nothing can play.
+            return if enabled {
+                Err(AirPlayProblem::Unsupported)
+            } else {
+                Ok(())
+            };
+        };
+        let result = airplay.set_enabled(id, enabled);
+        self.sync_airplay_rule();
+        result
+    }
+
+    fn start_airplay_pairing(&mut self, id: &str) -> Result<(), AirPlayProblem> {
+        match self.airplay.as_mut() {
+            Some(airplay) => airplay.start_pairing(id),
+            None => Err(AirPlayProblem::Unsupported),
+        }
+    }
+
+    fn submit_airplay_pin(&mut self, id: &str, pin: &str) -> bool {
+        self.airplay
+            .as_mut()
+            .is_some_and(|airplay| airplay.submit_pin(id, pin))
+    }
+
+    fn cancel_airplay_pairing(&mut self, id: &str) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.cancel_pairing(id);
+        }
+    }
+
+    fn forget_airplay_pairing(&mut self, id: &str) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.forget_pairing(id);
+        }
+        self.sync_airplay_rule();
+    }
+
+    fn airplay_pin_prompt(&self) -> Option<AirPlayPinPrompt> {
+        self.airplay.as_ref().and_then(AirPlaySpeakers::pin_prompt)
+    }
+
+    fn set_airplay_volume(&mut self, id: &str, position: f64) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_volume(id, position);
+        }
+    }
+
+    fn set_airplay_delay(&mut self, id: &str, delay_ms: f64) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_delay(id, delay_ms);
+        }
+    }
+
     fn poll(&mut self) -> Vec<BackendEvent> {
         // A session whose capture stopped ends first.
         let stop_reason = self
@@ -781,7 +1127,15 @@ impl<D: Driver> AudioBackend for Controller<D> {
             self.log
                 .log(|| format!("the capture ended: {}", describe_stop(&reason)));
             self.end_session();
+            self.airplay_streaming(false);
             self.pending.push(BackendEvent::Stopped { reason });
+        }
+
+        // What the AirPlay sender reported.
+        if let Some(airplay) = self.airplay.as_mut() {
+            let events = airplay.poll();
+            self.pending.extend(events);
+            self.sync_airplay_rule();
         }
 
         // Outputs that stopped by themselves.
@@ -820,7 +1174,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
             }
         }
         self.report_failures(failures);
-        self.log_status_if_due(Instant::now());
+        let now = Instant::now();
+        self.check_routing_if_due(now);
+        self.log_status_if_due(now);
         let events = std::mem::take(&mut self.pending);
         for event in &events {
             self.log
@@ -879,6 +1235,111 @@ fn describe_listing(
         text.push_str(&format!("\n  - \"{}\" ({}): gone", gone.name, gone.id));
     }
     text
+}
+
+/// The log lines for a double-audio answer of `paths` after `previous`: a
+/// heading, each endpoint the source is heard from straight and why, with
+/// its mute and volume, then each endpoint dropped since and why.
+fn describe_routing(
+    paths: &[DirectPath],
+    previous: &[DirectPath],
+    endpoints: &[EndpointAudio],
+    captured: &Captured,
+    rendered: &[String],
+    played_on: &[PlayedOn],
+) -> String {
+    let silent = !endpoints.iter().any(|endpoint| {
+        endpoint
+            .active_pids
+            .iter()
+            .any(|&pid| captured.captures(pid))
+    });
+    let mut text = if paths.is_empty() {
+        "double audio: none, the source is heard only through AudioSync".to_owned()
+    } else {
+        format!(
+            "double audio: the source plays straight from {} output(s) too",
+            paths.len()
+        )
+    };
+    for path in paths {
+        let endpoint = endpoints.iter().find(|e| e.id == path.endpoint_id);
+        let why = match path.reason {
+            DirectReason::DefaultEndpoint => {
+                "Windows' default output, and the whole system is captured".to_owned()
+            }
+            DirectReason::Session => {
+                let pids: Vec<String> = endpoint
+                    .map(|endpoint| {
+                        endpoint
+                            .active_pids
+                            .iter()
+                            .filter(|&&pid| captured.captures(pid))
+                            .map(u32::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let idle = played_on
+                    .iter()
+                    .find(|played| played.endpoint_id == path.endpoint_id)
+                    .map_or(0, |played| played.idle_checks);
+                match pids.as_slice() {
+                    [] if silent => "the source played there last and is silent now".to_owned(),
+                    [] => format!("no active session of the source there for {idle} check(s)"),
+                    [pid] => format!("an active session of process {pid}"),
+                    _ => format!("active sessions of processes {}", pids.join(", ")),
+                }
+            }
+        };
+        let volume = describe_volume(endpoint.and_then(|endpoint| endpoint.volume));
+        let plays = if path.audiosync_plays_here {
+            "; AudioSync plays there too"
+        } else {
+            ""
+        };
+        text.push_str(&format!(
+            "\n  \"{}\" ({}): {why}; {volume}{plays}",
+            path.endpoint_name, path.endpoint_id
+        ));
+    }
+    for gone in previous.iter().filter(|gone| {
+        !paths
+            .iter()
+            .any(|path| path.endpoint_id == gone.endpoint_id)
+    }) {
+        let why = match endpoints.iter().find(|e| e.id == gone.endpoint_id) {
+            None => "not connected anymore",
+            Some(_) if rendered.is_empty() => "AudioSync plays to no output",
+            Some(endpoint) => match endpoint.volume {
+                Some(volume) if volume.muted => "muted",
+                Some(volume) if volume.level <= 0.0 => "volume 0",
+                _ if endpoint.virtual_device && !rendered.contains(&endpoint.id) => {
+                    "a software device AudioSync doesn't play to"
+                }
+                _ if gone.reason == DirectReason::DefaultEndpoint && !endpoint.is_default => {
+                    "not Windows' default output anymore"
+                }
+                _ => "the source doesn't play there anymore",
+            },
+        };
+        text.push_str(&format!(
+            "\n  no longer \"{}\" ({}): {why}",
+            gone.endpoint_name, gone.endpoint_id
+        ));
+    }
+    text
+}
+
+/// An endpoint's mute and volume, as the log shows them.
+fn describe_volume(volume: Option<EndpointVolume>) -> String {
+    match volume {
+        Some(volume) => format!(
+            "{}, volume {:.2}",
+            if volume.muted { "muted" } else { "not muted" },
+            volume.level
+        ),
+        None => "mute and volume unknown".to_owned(),
+    }
 }
 
 /// A source as the log names it.
@@ -967,6 +1428,28 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
             format!("output {} failed: {error}", label(names, id))
         }
         BackendEvent::Stopped { reason } => format!("stopped: {}", describe_stop(reason)),
+        BackendEvent::HeardTwice { paths } if paths.is_empty() => {
+            "the source is heard only through AudioSync again".to_owned()
+        }
+        BackendEvent::HeardTwice { paths } => {
+            let endpoints: Vec<String> = paths
+                .iter()
+                .map(|path| label(names, &path.endpoint_id))
+                .collect();
+            format!(
+                "the source is heard twice, straight from {}",
+                endpoints.join(", ")
+            )
+        }
+        BackendEvent::AirPlayChanged => "the AirPlay speakers changed".to_owned(),
+        BackendEvent::AirPlayPlaying { id } => format!("AirPlay speaker ({id}) plays"),
+        BackendEvent::AirPlayTrouble { id, problem } => {
+            format!("AirPlay speaker ({id}) stopped ({problem:?}); the sender keeps trying")
+        }
+        BackendEvent::AirPlayFailed { id, problem } => {
+            format!("AirPlay speaker ({id}) can't play ({problem:?}); it is turned off")
+        }
+        BackendEvent::AirPlayPaired { id } => format!("AirPlay speaker ({id}) paired and on"),
     }
 }
 
@@ -974,9 +1457,19 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
 mod tests {
     use std::path::{Path, PathBuf};
 
+    use audiosync_airplay::clock::SenderClock;
+    use audiosync_airplay::discovery::Device;
+    use audiosync_airplay::error::ErrorKind;
+    use audiosync_airplay::sender::SpeakerState;
+    use audiosync_airplay::stream::{Stream, StreamConfig};
+    use audiosync_airplay::volume::Volume;
+
     use super::*;
+    use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, device, id_of};
     use crate::audio::backend::OutputKind;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
+    use crate::audio::outputs::{EndpointProperties, EndpointReading};
+    use crate::audio::routing::{DirectPath, DirectReason, HOLD_CHECKS};
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
 
     const SPEAKERS: &str = "speakers";
@@ -1247,7 +1740,11 @@ mod tests {
         backend.start(&SourceId::WholeSystem).unwrap();
         backend.fail_listing(Some(listing_error()));
         backend.set_default_output(SPEAKERS);
-        assert!(backend.poll().is_empty());
+        // The speakers, now the default output, play the whole system
+        // straight too; the double-audio tests cover that report.
+        let mut events = backend.poll();
+        events.retain(|event| !matches!(event, BackendEvent::HeardTwice { .. }));
+        assert!(events.is_empty(), "{events:?}");
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
 
         backend.fail_listing(None);
@@ -1588,6 +2085,53 @@ mod tests {
     }
 
     #[test]
+    fn endpoints_left_out_of_the_listing_are_logged_once() {
+        let (mut backend, log, dir) = logged_backend("controller-left-out");
+        backend.enumerate_endpoint(EndpointReading {
+            index: 2,
+            id: Ok("buds-call".to_owned()),
+            properties: Ok(EndpointProperties {
+                name: Some("Headset (Example Buds Hands-Free)".to_owned()),
+                form_factor: Some(5),
+                enumerator: Some("BTHHFENUM".to_owned()),
+                display_port: false,
+            }),
+        });
+        backend.enumerate_endpoint(EndpointReading {
+            index: 3,
+            id: Err("IMMDevice::GetId failed (0x80070490)".to_owned()),
+            properties: Ok(EndpointProperties::default()),
+        });
+        backend.poll();
+        let listed = backend.list_outputs().unwrap();
+        assert_eq!(
+            listed.iter().map(|o| o.id.as_str()).collect::<Vec<_>>(),
+            [HEADPHONES, SPEAKERS],
+            "neither endpoint is listed"
+        );
+        let messages = logged(&log, &dir);
+        let hands_free = "output \"Headset (Example Buds Hands-Free)\" (buds-call) left out: \
+                          a Bluetooth hands-free endpoint, for calls only";
+        let no_id = "render endpoint 3 left out: it couldn't be read \
+                     (IMMDevice::GetId failed (0x80070490))";
+        assert_in_order(
+            &messages,
+            &[
+                "Windows reported a change of the outputs",
+                "outputs listed again, no change (2)",
+                hands_free,
+                no_id,
+                "outputs listed again, no change (2)",
+            ],
+        );
+        for note in [hands_free, no_id] {
+            let count = messages.iter().filter(|m| m.as_str() == note).count();
+            assert_eq!(count, 1, "logged once, not at every listing: {messages:?}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn setting_changes_are_logged_when_they_change_something() {
         let (mut backend, log, dir) = logged_backend("controller-settings");
         backend.set_output_delay(SPEAKERS, 120.0);
@@ -1652,6 +2196,495 @@ mod tests {
                         drift skips 0 (0 frames), drift silences 0 (0 frames), rejected copies 0";
         let outputs = messages.iter().filter(|m| m.starts_with("  output "));
         assert!(outputs.clone().count() == 2 && outputs.clone().all(|m| m.ends_with(counters)));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The double-audio reports among `events`: the endpoint IDs of each.
+    fn heard_twice(events: &[BackendEvent]) -> Vec<Vec<String>> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                BackendEvent::HeardTwice { paths } => {
+                    Some(paths.iter().map(|path| path.endpoint_id.clone()).collect())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Runs the double-audio check now, and returns what the next poll
+    /// reports about it.
+    fn check_routing(backend: &mut MockBackend) -> Vec<Vec<String>> {
+        backend.check_routing_now();
+        heard_twice(&backend.poll())
+    }
+
+    const TV: &str = "tv";
+    const CABLE: &str = "cable";
+
+    /// The backend of [`backend`] with a TV and a virtual cable connected
+    /// and off, streaming the player.
+    fn streaming_player() -> MockBackend {
+        let mut backend = backend();
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.connect_output_as(CABLE, "Cable Input", OutputKind::Virtual);
+        backend.list_outputs().unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert!(
+            heard_twice(&backend.poll()).is_empty(),
+            "the player is silent"
+        );
+        backend
+    }
+
+    #[test]
+    fn an_app_heard_straight_from_an_output_is_reported_when_that_changes() {
+        let mut backend = streaming_player();
+        backend.play_on(PLAYER_PID, TV);
+        let events = {
+            backend.check_routing_now();
+            backend.poll()
+        };
+        let paths: Vec<&DirectPath> = events
+            .iter()
+            .flat_map(|event| match event {
+                BackendEvent::HeardTwice { paths } => paths.iter().collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            [&DirectPath {
+                endpoint_id: TV.to_owned(),
+                endpoint_name: "TV".to_owned(),
+                reason: DirectReason::Session,
+                audiosync_plays_here: false,
+            }]
+        );
+        assert!(
+            check_routing(&mut backend).is_empty(),
+            "no change, no report"
+        );
+        // It plays on an output AudioSync plays to as well.
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        assert_eq!(check_routing(&mut backend), [[SPEAKERS, TV]]);
+        // A helper process of the app counts as the app.
+        backend.add_helper(PLAYER_PID + 1, PLAYER_PID, "player.exe");
+        backend.pause_on(PLAYER_PID, SPEAKERS);
+        backend.play_on(PLAYER_PID + 1, SPEAKERS);
+        assert!(check_routing(&mut backend).is_empty(), "the same outputs");
+    }
+
+    #[test]
+    fn an_app_moved_to_a_virtual_cable_is_heard_once_again() {
+        let mut backend = streaming_player();
+        backend.play_on(PLAYER_PID, TV);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+        backend.move_session(PLAYER_PID, TV, CABLE);
+        for _ in 0..HOLD_CHECKS {
+            assert!(check_routing(&mut backend).is_empty(), "the TV is held");
+        }
+        assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
+        // A virtual device AudioSync plays to passes the sound on to
+        // something the user listens to.
+        backend.set_output_enabled(CABLE, true).unwrap();
+        assert_eq!(check_routing(&mut backend), [[CABLE]]);
+    }
+
+    #[test]
+    fn muting_the_output_or_turning_it_down_to_0_clears_the_report() {
+        let mut backend = streaming_player();
+        backend.play_on(PLAYER_PID, TV);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+        backend.mute_output(TV, true);
+        assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
+        backend.mute_output(TV, false);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+        backend.set_output_level(TV, 0.0);
+        assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
+        // An output whose volume can't be read counts as heard.
+        backend.hide_output_volume(TV);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+    }
+
+    #[test]
+    fn a_paused_app_stays_reported_where_it_played() {
+        let mut backend = streaming_player();
+        backend.play_on(PLAYER_PID, TV);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+        backend.pause_on(PLAYER_PID, TV);
+        for _ in 0..HOLD_CHECKS * 2 {
+            assert!(check_routing(&mut backend).is_empty(), "still reported");
+        }
+        backend.play_on(PLAYER_PID, CABLE);
+        for _ in 0..HOLD_CHECKS {
+            assert!(check_routing(&mut backend).is_empty(), "held a few checks");
+        }
+        assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
+    }
+
+    #[test]
+    fn stopping_or_changing_the_source_clears_the_report() {
+        let mut backend = streaming_player();
+        backend.play_on(PLAYER_PID, TV);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+        backend.stop();
+        assert_eq!(heard_twice(&backend.poll()), [Vec::<String>::new()]);
+        assert!(check_routing(&mut backend).is_empty(), "nothing streams");
+
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(heard_twice(&backend.poll()), [[TV]]);
+        backend.add_app(3000, "video.exe");
+        backend.start(&SourceId::App { root_pid: 3000 }).unwrap();
+        assert_eq!(
+            heard_twice(&backend.poll()),
+            [Vec::<String>::new()],
+            "the new source plays nowhere yet"
+        );
+    }
+
+    #[test]
+    fn nothing_is_heard_twice_while_no_output_plays() {
+        let mut backend = streaming_player();
+        backend.play_on(PLAYER_PID, TV);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
+    }
+
+    #[test]
+    fn the_whole_system_is_heard_twice_from_the_default_output() {
+        let mut backend = backend();
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.set_default_output(TV);
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let events = backend.poll();
+        let reasons: Vec<(String, DirectReason, bool)> = events
+            .iter()
+            .flat_map(|event| match event {
+                BackendEvent::HeardTwice { paths } => paths
+                    .iter()
+                    .map(|path| {
+                        (
+                            path.endpoint_id.clone(),
+                            path.reason,
+                            path.audiosync_plays_here,
+                        )
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        // AudioSync's own sessions on the speakers and headphones don't
+        // count.
+        assert_eq!(
+            reasons,
+            [(TV.to_owned(), DirectReason::DefaultEndpoint, false)]
+        );
+        backend.play_on(PLAYER_PID, HEADPHONES);
+        assert_eq!(check_routing(&mut backend), [[HEADPHONES, TV]]);
+        backend.set_default_output(SPEAKERS);
+        backend.pause_on(PLAYER_PID, HEADPHONES);
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        assert_eq!(
+            check_routing(&mut backend),
+            [[HEADPHONES, SPEAKERS]],
+            "the headphones are held a few checks"
+        );
+        for _ in 1..HOLD_CHECKS {
+            assert!(check_routing(&mut backend).is_empty());
+        }
+        assert_eq!(check_routing(&mut backend), [[SPEAKERS]]);
+    }
+
+    #[test]
+    fn another_app_pausing_now_and_then_doesnt_flap_the_whole_system_report() {
+        let mut backend = backend();
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.set_default_output(TV);
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(heard_twice(&backend.poll()), [[TV]]);
+        // One app plays on the TV all along, another on the headphones now
+        // and then.
+        backend.play_on(PLAYER_PID, TV);
+        backend.add_app(3000, "video.exe");
+        backend.play_on(3000, HEADPHONES);
+        assert_eq!(check_routing(&mut backend), [[HEADPHONES, TV]]);
+        for _ in 0..3 {
+            backend.pause_on(3000, HEADPHONES);
+            for _ in 0..HOLD_CHECKS {
+                assert!(check_routing(&mut backend).is_empty(), "held");
+            }
+            backend.play_on(3000, HEADPHONES);
+            assert!(check_routing(&mut backend).is_empty());
+        }
+    }
+
+    #[test]
+    fn the_check_runs_at_the_first_poll_then_every_few_seconds() {
+        let mut backend = backend();
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.list_outputs().unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.play_on(PLAYER_PID, TV);
+        let start = Instant::now();
+        backend.check_routing_if_due(start);
+        assert_eq!(heard_twice(&backend.poll()), [[TV]], "the first check");
+        backend.mute_output(TV, true);
+        backend.check_routing_if_due(start + ROUTING_INTERVAL / 2);
+        assert!(heard_twice(&backend.poll()).is_empty(), "not due yet");
+        backend.check_routing_if_due(start + ROUTING_INTERVAL);
+        assert_eq!(heard_twice(&backend.poll()), [Vec::<String>::new()]);
+    }
+
+    #[test]
+    fn a_snapshot_that_fails_keeps_the_last_answer() {
+        let mut backend = streaming_player();
+        backend.play_on(PLAYER_PID, TV);
+        assert_eq!(check_routing(&mut backend), [[TV]]);
+        backend.fail_endpoint_audio(Some(listing_error()));
+        backend.mute_output(TV, true);
+        assert!(check_routing(&mut backend).is_empty());
+        backend.fail_endpoint_audio(None);
+        assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
+    }
+
+    #[test]
+    fn double_audio_is_logged_when_it_changes() {
+        let (mut backend, log, dir) = logged_backend("controller-double-audio");
+        backend.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        backend.list_outputs().unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        backend.play_on(PLAYER_PID, TV);
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        backend.set_output_level(SPEAKERS, 0.25);
+        check_routing(&mut backend);
+        check_routing(&mut backend);
+        backend.mute_output(SPEAKERS, true);
+        check_routing(&mut backend);
+        backend.fail_endpoint_audio(Some(listing_error()));
+        check_routing(&mut backend);
+        check_routing(&mut backend);
+        backend.fail_endpoint_audio(None);
+        backend.pause_on(PLAYER_PID, TV);
+        backend.pause_on(PLAYER_PID, SPEAKERS);
+        backend.mute_output(SPEAKERS, false);
+        check_routing(&mut backend);
+        backend.stop();
+        backend.poll();
+        let messages = logged(&log, &dir);
+        assert_in_order(
+            &messages,
+            &[
+                "double audio: the source plays straight from 2 output(s) too",
+                "  \"Speakers\" (speakers): an active session of process 2000; \
+                 not muted, volume 0.25; AudioSync plays there too",
+                "  \"TV\" (tv): an active session of process 2000; \
+                 not muted, volume 1.00",
+                "event: the source is heard twice, straight from \"Speakers\" (speakers), \
+                 \"TV\" (tv)",
+                "double audio: the source plays straight from 1 output(s) too",
+                "  \"TV\" (tv): an active session of process 2000; not muted, volume 1.00",
+                "  no longer \"Speakers\" (speakers): muted",
+                "event: the source is heard twice, straight from \"TV\" (tv)",
+                "the double-audio check failed: \
+                 IMMDeviceEnumerator::EnumAudioEndpoints failed (0x80004005).",
+                "double audio: the source plays straight from 2 output(s) too",
+                "  \"Speakers\" (speakers): the source played there last and is silent now; \
+                 not muted, volume 0.25; AudioSync plays there too",
+                "  \"TV\" (tv): the source played there last and is silent now; \
+                 not muted, volume 1.00",
+                "double audio: none, streaming stopped",
+                "event: the source is heard only through AudioSync again",
+            ],
+        );
+        let failures = messages
+            .iter()
+            .filter(|m| m.starts_with("the double-audio check failed"))
+            .count();
+        assert_eq!(failures, 1, "logged once: {messages:?}");
+        let changes = messages
+            .iter()
+            .filter(|m| m.starts_with("double audio:"))
+            .count();
+        assert_eq!(changes, 4, "only changes are logged: {messages:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// `backend()` with an AirPlay sender that lists one speaker it can
+    /// play, Kitchen.
+    fn with_airplay() -> (MockBackend, FakeAirPlay, Device) {
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        backend.set_airplay(fake.link(), None);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        assert_eq!(backend.poll(), [BackendEvent::AirPlayChanged]);
+        (backend, fake, kitchen)
+    }
+
+    fn delay_frames(backend: &MockBackend, id: &str) -> i64 {
+        backend.playing_params(id).expect("it plays").delay_frames
+    }
+
+    #[test]
+    fn an_airplay_speaker_on_moves_local_outputs_to_l_plus_their_delay_and_off_back() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        let id = id_of(&kitchen);
+        backend.set_output_delay(SPEAKERS, 150.0);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(delay_frames(&backend, SPEAKERS), 7_200, "its own delay");
+        assert_eq!(delay_frames(&backend, HEADPHONES), 0);
+        fake.take_calls();
+
+        backend.set_airplay_enabled(&id, true).unwrap();
+        // L + d_local (P114): 1750 + 150 ms and 1750 + 0 ms at 48 kHz.
+        assert_eq!(delay_frames(&backend, SPEAKERS), 91_200);
+        assert_eq!(delay_frames(&backend, HEADPHONES), 84_000);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Add {
+                id: id.clone(),
+                volume: Volume::Db(-12.0),
+                delay: Duration::ZERO,
+            }]
+        );
+        assert_eq!(backend.enabled_airplay(), std::slice::from_ref(&id));
+
+        backend.set_airplay_enabled(&id, false).unwrap();
+        assert_eq!(delay_frames(&backend, SPEAKERS), 7_200, "back to its own");
+        assert_eq!(delay_frames(&backend, HEADPHONES), 0);
+        assert_eq!(fake.take_calls(), [Call::Remove(id)]);
+    }
+
+    #[test]
+    fn airplay_speakers_join_with_the_capture_and_leave_when_streaming_stops() {
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        let feed = FeedSlot::new(input);
+        backend.set_airplay(fake.link(), Some(feed.clone()));
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        backend.poll();
+        backend.set_airplay_enabled(&id, true).unwrap();
+        assert!(fake.take_calls().is_empty(), "nothing streams yet");
+
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(backend.driver().capture_feeds_airplay());
+        assert!(!feed.is_free(), "the capture holds the feed");
+        assert_eq!(
+            fake.take_calls(),
+            [
+                Call::RestartTimeline,
+                Call::Add {
+                    id: id.clone(),
+                    volume: Volume::Db(-12.0),
+                    delay: Duration::ZERO,
+                }
+            ]
+        );
+        assert_eq!(delay_frames(&backend, SPEAKERS), 84_000);
+
+        backend.stop();
+        assert_eq!(fake.take_calls(), [Call::Remove(id.clone())]);
+        assert!(feed.is_free(), "the feed is back for the next capture");
+        assert_eq!(backend.enabled_airplay(), [id], "it stays on");
+    }
+
+    #[test]
+    fn a_new_l_from_the_sender_re_anchors_the_playing_outputs() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(delay_frames(&backend, SPEAKERS), 84_000);
+        fake.set_latency(Duration::from_secs(1));
+        backend.poll();
+        assert_eq!(delay_frames(&backend, SPEAKERS), 48_000);
+    }
+
+    #[test]
+    fn an_airplay_speaker_that_needs_a_password_is_turned_off_and_outputs_follow() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        let id = id_of(&kitchen);
+        backend.set_output_delay(SPEAKERS, 150.0);
+        backend.set_airplay_enabled(&id, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fake.state(&kitchen, SpeakerState::Playing);
+        assert_eq!(
+            backend.poll(),
+            [
+                BackendEvent::AirPlayChanged,
+                BackendEvent::AirPlayPlaying { id: id.clone() }
+            ]
+        );
+        fake.fail(&kitchen, ErrorKind::PasswordRequired);
+        assert_eq!(
+            backend.poll(),
+            [
+                BackendEvent::AirPlayChanged,
+                BackendEvent::AirPlayFailed {
+                    id: id.clone(),
+                    problem: AirPlayProblem::PasswordNotYet,
+                }
+            ]
+        );
+        assert!(backend.enabled_airplay().is_empty());
+        assert_eq!(delay_frames(&backend, SPEAKERS), 7_200);
+    }
+
+    #[test]
+    fn airplay_is_logged() {
+        let (mut backend, log, dir) = logged_backend("airplay_is_logged");
+        let fake = FakeAirPlay::new();
+        backend.set_airplay(fake.link(), None);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        backend.poll();
+        backend.set_airplay_enabled(&id, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fake.state(&kitchen, SpeakerState::Playing);
+        fake.fail(&kitchen, ErrorKind::Lost);
+        backend.poll();
+        backend.stop();
+        let messages = logged(&log, &dir);
+        assert_in_order(
+            &messages,
+            &[
+                "AirPlay: the sender runs, L = 1750 ms",
+                "AirPlay receiver found: \"Kitchen\" (02005E005301), can play",
+                "AirPlay speaker \"Kitchen\" (02005E005301) switched on",
+                "local outputs play at L + their own delay (L = 1750 ms)",
+                "capture started:",
+                "AirPlay speaker \"Kitchen\" (02005E005301) added: volume 60 (-12.0 dB), delay 0 ms",
+                "AirPlay speaker \"Kitchen\" (02005E005301): playing",
+                "AirPlay speaker \"Kitchen\" (02005E005301) error: Lost (ConnectionLost)",
+                "AirPlay speaker \"Kitchen\" (02005E005301) removed",
+            ],
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

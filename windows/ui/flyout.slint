@@ -8,7 +8,7 @@ import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { GroupItem, NoticeItem, RowState, SpeakerItem } from "types.slint";
-import { BrandMark, Divider, Glyphs, NoticeStack, SecondaryText, SectionTitle, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { BrandMark, Divider, Fluent, Glyphs, NoticeStack, SecondaryText, SectionTitle, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 // A compact row: the toggle and the name.
 component FlyoutRow inherits HorizontalLayout {
@@ -23,11 +23,11 @@ component FlyoutRow inherits HorizontalLayout {
     callback focus-changed(bool);
 
     spacing: 10px;
-    padding-top: 3px;
-    padding-bottom: 3px;
+    padding-top: 4px;
+    padding-bottom: 4px;
 
     SpeakerBadge {
-        size: 26px;
+        size: 28px;
         glyph: root.glyph;
         state: root.state;
         enabled: root.enabled;
@@ -70,6 +70,8 @@ export component TrayFlyout inherits Window {
     callback group-toggled(string);
     callback notice-dismissed(int);
     callback notices-dismissed-all();
+    // Show How on a notice: open its guide.
+    callback notice-guide-requested(int);
     callback open-app();
     callback exit-app();
     callback close-requested();
@@ -77,15 +79,18 @@ export component TrayFlyout inherits Window {
     title: Strings.flyout-title;
     no-frame: true;
     always-on-top: true;
-    width: 320px;
+    width: 340px;
+    // True once Windows draws the flyout's rounded frame (border and shadow).
+    in property <bool> rounded;
     background: Tokens.surface;
+    default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
     // Key events go to the focused item, so Escape needs the scope focused.
     forward-focus: focus;
 
     // Whether a control that a refresh can remove has keyboard focus: the
-    // notice's dismiss button, the button for more notices, or a group or
-    // speaker row. Slint leaves nothing focused when the focused control is
+    // notice's buttons (dismiss, Show How), the button for more notices, or
+    // a group or speaker row. Slint leaves nothing focused when the focused control is
     // removed, and Escape then does nothing until Tab, so the app calls
     // `take-focus` when a refresh removed the part that held it. A removed
     // control never reports losing focus; `take-focus` clears these. (The
@@ -113,9 +118,9 @@ export component TrayFlyout inherits Window {
         source.current-index = root.source-index;
     }
 
-    // The window has no frame; draw its edge.
+    // Without the system's rounded frame, draw the edge.
     Rectangle {
-        border-width: 1px;
+        border-width: root.rounded ? 0px : 1px;
         border-color: Tokens.separator;
     }
 
@@ -129,7 +134,8 @@ export component TrayFlyout inherits Window {
         }
 
         VerticalLayout {
-            padding: Tokens.spacing-panel-padding;
+            padding: 16px;
+            padding-top: 14px;
             spacing: 10px;
 
             HorizontalLayout {
@@ -175,7 +181,10 @@ export component TrayFlyout inherits Window {
                 dismissed-all => {
                     root.notices-dismissed-all();
                 }
-                dismiss-focus-changed(focused) => {
+                guide-requested(id) => {
+                    root.notice-guide-requested(id);
+                }
+                button-focus-changed(focused) => {
                     root.notice-focused = focused;
                 }
             }
@@ -226,8 +235,8 @@ export component TrayFlyout inherits Window {
             Divider { }
 
             ScrollView {
-                max-height: 260px;
-                preferred-height: list.preferred-height;
+                // Every row up to five or so, then it scrolls.
+                height: min(list.preferred-height, 260px);
 
                 list := VerticalLayout {
                     for group in root.groups: FlyoutRow {

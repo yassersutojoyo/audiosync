@@ -354,6 +354,18 @@ fn notices_are_newest_first_one_per_subject_and_capped_at_four() {
 
 // covers: S153
 #[test]
+fn a_notice_changed_in_place_keeps_its_place() {
+    let mut notices: Notices<NoticeSubject, &str> = Notices::new();
+    notices.post(NoticeSubject::Start, "a");
+    notices.post(NoticeSubject::Source, "b");
+    *notices.get_mut(&NoticeSubject::Start).unwrap() = "changed";
+    let order: Vec<&str> = notices.iter().map(|(_, text)| *text).collect();
+    assert_eq!(order, ["b", "changed"], "still the older one");
+    assert!(notices.get_mut(&NoticeSubject::Capture).is_none());
+}
+
+// covers: S153
+#[test]
 fn clearing_removes_only_the_given_subjects() {
     let mut notices: Notices<NoticeSubject, &str> = Notices::new();
     notices.post(NoticeSubject::Start, "a");

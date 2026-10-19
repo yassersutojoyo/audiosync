@@ -1,5 +1,6 @@
 //! The WASAPI driver: process loopback capture, one render stream per
-//! output, endpoint listing and notifications, and the process snapshot.
+//! output, endpoint listing and notifications, the process snapshot, and the
+//! read-only endpoint snapshot of the double-audio check.
 //!
 //! Each audio thread initializes COM in the multithreaded apartment and makes
 //! its own COM objects; only endpoint IDs, the ring's reader and writer, and
@@ -11,6 +12,7 @@ mod devices;
 mod endpoint;
 mod loopback;
 mod processes;
+mod routing;
 
 use std::sync::Arc;
 
@@ -19,11 +21,13 @@ use audiosync_core::reader::Reader;
 use audiosync_core::ring::RingWriter;
 use audiosync_core::volume::SharedGain;
 
+use super::airplay::FeedLease;
 use super::backend::BackendError;
 use super::capture::Activation;
 use super::controller::{Controller, Driver};
-use super::outputs::Endpoint;
+use super::outputs::{Endpoint, Listing};
 use super::process::ProcessTable;
+use super::routing::EndpointAudio;
 
 /// The platform calls of the Windows backend.
 pub struct WasapiDriver {
@@ -57,7 +61,7 @@ impl Driver for WasapiDriver {
         processes::audio_session_pids()
     }
 
-    fn outputs(&mut self) -> Result<Vec<Endpoint>, BackendError> {
+    fn outputs(&mut self) -> Result<Listing, BackendError> {
         devices::render_endpoints()
     }
 
@@ -65,13 +69,18 @@ impl Driver for WasapiDriver {
         self.watcher.take_changed()
     }
 
+    fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError> {
+        routing::endpoint_audio()
+    }
+
     fn start_capture(
         &mut self,
         activation: Activation,
         writer: RingWriter,
         equalizer: EqProcessor,
+        airplay: Option<FeedLease>,
     ) -> Result<loopback::LoopbackCapture, BackendError> {
-        loopback::start(activation, writer, equalizer)
+        loopback::start(activation, writer, equalizer, airplay)
     }
 
     fn start_renderer(

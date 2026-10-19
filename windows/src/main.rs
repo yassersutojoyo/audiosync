@@ -18,9 +18,11 @@
 mod adapter;
 #[cfg(any(windows, test))]
 mod audio;
+mod backdrop;
 #[cfg(test)]
 mod contrast;
 mod debug_log;
+mod guide;
 mod os_version;
 #[cfg(any(windows, test))]
 mod placement;
@@ -46,6 +48,19 @@ slint::include_modules!();
 
 /// How long the app waits, as it stops, for the debug log to reach its file.
 const LOG_FLUSH_AT_EXIT: Duration = Duration::from_secs(1);
+
+/// With the debug log on, `app` or `system` here opens the double-audio
+/// guide at launch for a made-up notice (`guide::preview`).
+const PREVIEW_GUIDE_VAR: &str = "AUDIOSYNC_PREVIEW_GUIDE";
+
+/// With the debug log on, `light` or `dark` here shows every window in that
+/// appearance, whatever Windows uses (`view::App::preview_theme`).
+const PREVIEW_THEME_VAR: &str = "AUDIOSYNC_PREVIEW_THEME";
+
+/// With the debug log on, `code` or `wrong` here opens the PIN dialog of an
+/// Apple TV pairing at launch for a made-up Apple TV, as when it shows a PIN
+/// or after a wrong one (`view::App::preview_pin`). Nothing is paired.
+const PREVIEW_PIN_VAR: &str = "AUDIOSYNC_PREVIEW_PIN";
 
 fn main() -> ExitCode {
     let log = DebugLog::from_env();
@@ -117,18 +132,61 @@ impl From<slint::PlatformError> for StartError {
     }
 }
 
-/// What the windows show and drive: the Windows audio backend, through the
-/// adapter that keeps the UI's own state. Both log to `log`.
+/// What the windows show and drive: the Windows audio backend, with the
+/// AirPlay sender, through the adapter that keeps the UI's own state. Both
+/// log to `log`.
 #[cfg(windows)]
 fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
     let mut audio = audio::wasapi::open().map_err(StartError::Audio)?;
     log.log(|| "audio: the WASAPI backend is open".to_owned());
     audio.set_debug_log(log.clone());
+    start_airplay(&mut audio, log);
     Ok(Box::new(adapter::AudioAdapter::new(
         audio,
         platform::notice_time,
         log.clone(),
     )))
+}
+
+/// Starts the AirPlay sender and its discovery, and hands both to the audio
+/// backend. Without a sender the app runs on with local outputs only;
+/// without discovery no AirPlay speaker is listed.
+#[cfg(windows)]
+fn start_airplay(audio: &mut audio::wasapi::WasapiBackend, log: &DebugLog) {
+    use audio::airplay::{FeedSlot, SenderLink};
+    let (link, input) = match SenderLink::start() {
+        Ok(started) => started,
+        Err(error) => {
+            log.log(|| format!("AirPlay: the sender couldn't start: {error}"));
+            return;
+        }
+    };
+    let discovery = link.start_discovery();
+    audio.set_airplay_with_pairings(
+        Box::new(link),
+        Some(FeedSlot::new(input)),
+        open_pairings(log),
+    );
+    match discovery {
+        Ok(()) => log.log(|| "AirPlay: browsing for receivers".to_owned()),
+        Err(error) => log.log(|| format!("AirPlay: discovery couldn't start: {error}")),
+    }
+}
+
+/// The paired Apple TVs' credentials, from the file in the app's data
+/// folder; kept for this run only when Windows names no such folder.
+#[cfg(windows)]
+fn open_pairings(log: &DebugLog) -> audio::pairings::PairingStore {
+    use audio::pairings::{PairingStore, Sealer};
+    let Some(path) = PairingStore::default_path() else {
+        log.log(|| {
+            "AirPlay pairings: no app data folder; pairings last until AudioSync quits".to_owned()
+        });
+        return PairingStore::in_memory();
+    };
+    let (store, loaded) = PairingStore::open(path, Sealer::current_user());
+    log.log(|| format!("AirPlay pairings: {loaded}"));
+    store
 }
 
 /// Off Windows, example speakers to work on the UI with.
@@ -140,7 +198,7 @@ fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
 
 /// Shows the main window and runs the UI until the user exits.
 fn run(log: &DebugLog) -> Result<(), StartError> {
-    let app = view::App::new(backend(log)?)?;
+    let app = view::App::new(backend(log)?, log.clone())?;
 
     // With a tray icon, closing the main window keeps AudioSync running in
     // the notification area; without one (or off Windows), it quits.
@@ -157,8 +215,54 @@ fn run(log: &DebugLog) -> Result<(), StartError> {
         }
     };
 
+    // To look at both appearances without changing the Windows setting, only
+    // while the debug log is on.
+    if log.enabled()
+        && let Some(dark) =
+            std::env::var(PREVIEW_THEME_VAR)
+                .ok()
+                .and_then(|theme| match theme.as_str() {
+                    "light" => Some(false),
+                    "dark" => Some(true),
+                    _ => None,
+                })
+    {
+        log.log(|| {
+            format!(
+                "theme: {} for every window ({PREVIEW_THEME_VAR})",
+                if dark { "dark" } else { "light" }
+            )
+        });
+        app.preview_theme(dark);
+    }
     app.show_main();
     log.log(|| "main window: shown".to_owned());
+    // To look at the double-audio guide without streaming: a made-up notice,
+    // only while the debug log is on.
+    if log.enabled()
+        && let Some(message) = std::env::var(PREVIEW_GUIDE_VAR)
+            .ok()
+            .as_deref()
+            .and_then(guide::preview)
+    {
+        log.log(|| format!("guide: opened for a made-up notice ({PREVIEW_GUIDE_VAR})"));
+        app.show_guide_for(&message);
+    }
+    // To look at the PIN dialog without an Apple TV: a made-up pairing, only
+    // while the debug log is on.
+    if log.enabled()
+        && let Some(wrong) =
+            std::env::var(PREVIEW_PIN_VAR)
+                .ok()
+                .and_then(|pin| match pin.as_str() {
+                    "code" => Some(false),
+                    "wrong" => Some(true),
+                    _ => None,
+                })
+    {
+        log.log(|| format!("PIN dialog: opened for a made-up Apple TV ({PREVIEW_PIN_VAR})"));
+        app.preview_pin(wrong);
+    }
     slint::run_event_loop_until_quit()?;
     log.log(|| "the event loop ended".to_owned());
     Ok(())
@@ -221,12 +325,16 @@ mod tests {
     fn escape_works_as_soon_as_the_flyout_or_equalizer_opens() {
         let flyout = include_str!("../ui/flyout.slint");
         let equalizer = include_str!("../ui/equalizer.slint");
+        let guide = include_str!("../ui/guide.slint");
         assert!(flyout.contains("forward-focus: focus;") && flyout.contains("focus := FocusScope"));
-        assert!(
-            equalizer.contains("forward-focus: keys;") && equalizer.contains("keys := FocusScope")
-        );
+        for window in [equalizer, guide] {
+            assert!(
+                window.contains("forward-focus: keys;") && window.contains("keys := FocusScope")
+            );
+        }
         assert!(include_str!("tray.rs").contains("app.flyout.invoke_take_focus();"));
         assert!(include_str!("view.rs").contains("self.equalizer.invoke_take_focus();"));
+        assert!(include_str!("view.rs").contains("self.guide.invoke_take_focus();"));
     }
 
     /// Slint leaves nothing focused when the focused control is removed, and
@@ -246,15 +354,35 @@ mod tests {
                 "{component}: {body}"
             );
         }
+        // A notice row reports when either of its buttons has the focus.
         let body = handler_body(
             widgets,
             "export component NoticeStack",
             "focus-changed(focused)",
         );
+        assert!(body.contains("row.dismiss-focused = focused;"), "{body}");
+        let body = handler_body(
+            widgets,
+            "text: Strings.notice-show-how;",
+            "changed has-focus",
+        );
         assert!(
-            body.contains("root.dismiss-focus-changed(focused);"),
+            body.contains("row.guide-focused = self.has-focus;"),
             "{body}"
         );
+        for flag in ["dismiss-focused", "guide-focused"] {
+            let body = handler_body(
+                widgets,
+                "export component NoticeStack",
+                &format!("changed {flag}"),
+            );
+            assert!(
+                body.contains(
+                    "root.button-focus-changed(self.dismiss-focused || self.guide-focused);"
+                ),
+                "{flag}: {body}"
+            );
+        }
 
         let flyout = include_str!("../ui/flyout.slint");
         let body = handler_body(flyout, "component FlyoutRow", "focus-changed(focused)");
@@ -267,7 +395,7 @@ mod tests {
         for (element, handler, flag) in [
             (
                 "NoticeStack {",
-                "dismiss-focus-changed(focused)",
+                "button-focus-changed(focused)",
                 "notice-focused",
             ),
             (

@@ -7,6 +7,10 @@
 //! [`MockBackend`] change the pretend world the way Windows would (an output
 //! is unplugged, an app quits, a device refuses to start), and the next
 //! [`AudioBackend::poll`](super::backend::AudioBackend::poll) reports it.
+//!
+//! For the double-audio check, each mock output has a mute, a volume and the
+//! processes with an active session on it; an output AudioSync plays to has
+//! an active session of AudioSync's own, as on Windows.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -17,11 +21,15 @@ use audiosync_core::reader::Reader;
 use audiosync_core::ring::RingWriter;
 use audiosync_core::volume::SharedGain;
 
+use super::airplay::FeedLease;
 use super::backend::{BackendError, OutputKind};
 use super::capture::{Activation, CAPTURE_ATTEMPTS, CaptureAttempt, LoopbackMode};
 use super::controller::{CaptureHandle, CaptureState, Controller, Driver, RendererHandle};
-use super::outputs::{Endpoint, RenderFormat, StreamSetup};
+use super::outputs::{
+    Endpoint, EndpointReading, Listing, RenderFormat, StreamSetup, list_endpoints,
+};
 use super::process::{ProcessEntry, ProcessTable};
+use super::routing::{EndpointAudio, EndpointVolume};
 
 /// AudioSync's process ID in the mock.
 pub const MOCK_OWN_PID: u32 = 1000;
@@ -41,6 +49,12 @@ pub const MOCK_STREAM: StreamSetup = StreamSetup {
 /// The mock's Explorer, which started AudioSync and every mock app.
 const EXPLORER_PID: u32 = 900;
 
+/// How a mock output starts: unmuted, at full volume.
+const FULL_VOLUME: EndpointVolume = EndpointVolume {
+    muted: false,
+    level: 1.0,
+};
+
 /// What a mock capture shares with the driver.
 struct CaptureLink {
     activation: Activation,
@@ -49,6 +63,8 @@ struct CaptureLink {
     writer: Option<RingWriter>,
     /// The processing half of the capture's equalizer.
     equalizer: EqProcessor,
+    /// The AirPlay sender's feed, until the capture stops.
+    airplay: Option<FeedLease>,
 }
 
 fn lock(link: &Mutex<CaptureLink>) -> std::sync::MutexGuard<'_, CaptureLink> {
@@ -73,15 +89,39 @@ impl CaptureHandle for MockCapture {
 
 impl Drop for MockCapture {
     fn drop(&mut self) {
-        lock(&self.link).writer = None;
+        let mut link = lock(&self.link);
+        link.writer = None;
+        link.airplay = None;
     }
 }
 
 /// A mock output.
 pub struct MockRenderer {
     ended: Arc<AtomicBool>,
+    /// Set once the backend dropped it.
+    dropped: Arc<AtomicBool>,
     faded: Arc<AtomicUsize>,
     stop_requested: bool,
+}
+
+impl Drop for MockRenderer {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::Relaxed);
+    }
+}
+
+/// What the driver keeps of each output started.
+struct RendererLink {
+    id: String,
+    ended: Arc<AtomicBool>,
+    dropped: Arc<AtomicBool>,
+}
+
+impl RendererLink {
+    /// Whether it still plays: neither ended by itself nor dropped.
+    fn plays(&self) -> bool {
+        !self.ended.load(Ordering::Relaxed) && !self.dropped.load(Ordering::Relaxed)
+    }
 }
 
 impl RendererHandle for MockRenderer {
@@ -106,13 +146,23 @@ pub struct MockDriver {
     processes: Vec<ProcessEntry>,
     session_pids: Vec<u32>,
     outputs: Vec<Endpoint>,
+    /// Endpoints as Windows would describe them, which go through the
+    /// listing's own rules.
+    readings: Vec<EndpointReading>,
     changed: bool,
     listing_error: Option<BackendError>,
     output_errors: BTreeMap<String, BackendError>,
     capture_error: Option<BackendError>,
     capture: Option<Arc<Mutex<CaptureLink>>>,
-    /// The ended flag of every output started, by endpoint ID.
-    renderers: Vec<(String, Arc<AtomicBool>)>,
+    /// Every output started that hasn't ended by itself.
+    renderers: Vec<RendererLink>,
+    /// The processes with an active audio session on each output, besides
+    /// AudioSync's own, by endpoint ID.
+    active_sessions: BTreeMap<String, Vec<u32>>,
+    /// The mute and volume of the outputs set otherwise than unmuted at full
+    /// volume; `None` when they can't be read.
+    volumes: BTreeMap<String, Option<EndpointVolume>>,
+    endpoint_audio_error: Option<BackendError>,
     faded: Arc<AtomicUsize>,
     captures_started: Vec<Activation>,
     renderers_started: Vec<String>,
@@ -145,12 +195,16 @@ impl MockDriver {
             ],
             session_pids: Vec::new(),
             outputs: Vec::new(),
+            readings: Vec::new(),
             changed: false,
             listing_error: None,
             output_errors: BTreeMap::new(),
             capture_error: None,
             capture: None,
             renderers: Vec::new(),
+            active_sessions: BTreeMap::new(),
+            volumes: BTreeMap::new(),
+            endpoint_audio_error: None,
             faded: Arc::new(AtomicUsize::new(0)),
             captures_started: Vec::new(),
             renderers_started: Vec::new(),
@@ -160,6 +214,13 @@ impl MockDriver {
     /// Every capture started, in order.
     pub fn captures_started(&self) -> &[Activation] {
         &self.captures_started
+    }
+
+    /// Whether the running capture feeds the AirPlay sender.
+    pub fn capture_feeds_airplay(&self) -> bool {
+        self.capture
+            .as_ref()
+            .is_some_and(|link| lock(link).airplay.is_some())
     }
 
     /// The endpoint ID of every output started, in order.
@@ -173,11 +234,16 @@ impl MockDriver {
     }
 
     fn end_renderers_of(&mut self, id: &str) {
-        for (renderer_id, ended) in &self.renderers {
-            if renderer_id == id {
-                ended.store(true, Ordering::Relaxed);
+        for renderer in &self.renderers {
+            if renderer.id == id {
+                renderer.ended.store(true, Ordering::Relaxed);
             }
         }
+    }
+
+    /// The mute and volume of output `id`.
+    fn volume_of(&self, id: &str) -> Option<EndpointVolume> {
+        self.volumes.get(id).copied().unwrap_or(Some(FULL_VOLUME))
     }
 }
 
@@ -197,15 +263,49 @@ impl Driver for MockDriver {
         Ok(self.session_pids.clone())
     }
 
-    fn outputs(&mut self) -> Result<Vec<Endpoint>, BackendError> {
-        match &self.listing_error {
-            Some(error) => Err(error.clone()),
-            None => Ok(self.outputs.clone()),
+    fn outputs(&mut self) -> Result<Listing, BackendError> {
+        if let Some(error) = &self.listing_error {
+            return Err(error.clone());
         }
+        let mut listing = list_endpoints(self.readings.clone(), None);
+        listing.endpoints.extend(self.outputs.iter().cloned());
+        Ok(listing)
     }
 
     fn outputs_changed(&mut self) -> bool {
         std::mem::take(&mut self.changed)
+    }
+
+    fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError> {
+        if let Some(error) = &self.endpoint_audio_error {
+            return Err(error.clone());
+        }
+        Ok(self
+            .outputs
+            .iter()
+            .map(|output| {
+                let mut active_pids = self
+                    .active_sessions
+                    .get(&output.id)
+                    .cloned()
+                    .unwrap_or_default();
+                if self
+                    .renderers
+                    .iter()
+                    .any(|renderer| renderer.id == output.id && renderer.plays())
+                {
+                    active_pids.push(MOCK_OWN_PID);
+                }
+                EndpointAudio {
+                    id: output.id.clone(),
+                    name: output.name.clone(),
+                    is_default: output.is_default,
+                    virtual_device: output.kind == OutputKind::Virtual,
+                    volume: self.volume_of(&output.id),
+                    active_pids,
+                }
+            })
+            .collect())
     }
 
     fn start_capture(
@@ -213,6 +313,7 @@ impl Driver for MockDriver {
         activation: Activation,
         writer: RingWriter,
         equalizer: EqProcessor,
+        airplay: Option<FeedLease>,
     ) -> Result<MockCapture, BackendError> {
         if let Some(error) = &self.capture_error {
             return Err(error.clone());
@@ -223,6 +324,7 @@ impl Driver for MockDriver {
             state: CaptureState::Running,
             writer: Some(writer),
             equalizer,
+            airplay,
         }));
         self.capture = Some(Arc::clone(&link));
         Ok(MockCapture { link })
@@ -241,13 +343,18 @@ impl Driver for MockDriver {
             return Err(error.clone());
         }
         self.renderers
-            .retain(|(_, stopped)| !stopped.load(Ordering::Relaxed));
+            .retain(|renderer| !renderer.ended.load(Ordering::Relaxed));
         let ended = Arc::new(AtomicBool::new(false));
-        self.renderers
-            .push((endpoint.id.clone(), Arc::clone(&ended)));
+        let dropped = Arc::new(AtomicBool::new(false));
+        self.renderers.push(RendererLink {
+            id: endpoint.id.clone(),
+            ended: Arc::clone(&ended),
+            dropped: Arc::clone(&dropped),
+        });
         self.renderers_started.push(endpoint.id.clone());
         Ok(MockRenderer {
             ended,
+            dropped,
             faded: Arc::clone(&self.faded),
             stop_requested: false,
         })
@@ -382,6 +489,14 @@ impl Controller<MockDriver> {
         driver.changed = true;
     }
 
+    /// Adds an endpoint as Windows would describe it, which the listing
+    /// lists or leaves out by its own rules.
+    pub fn enumerate_endpoint(&mut self, reading: EndpointReading) {
+        let driver = self.driver_mut();
+        driver.readings.push(reading);
+        driver.changed = true;
+    }
+
     /// Makes every later listing of the outputs fail with `error`, or work
     /// again with `None`.
     pub fn fail_listing(&mut self, error: Option<BackendError>) {
@@ -427,6 +542,63 @@ impl Controller<MockDriver> {
                 link.state = CaptureState::Failed(error);
             }
         }
+    }
+
+    /// Gives process `pid` an active audio session on output `id`, as when
+    /// it plays there.
+    pub fn play_on(&mut self, pid: u32, id: &str) {
+        let pids = self
+            .driver_mut()
+            .active_sessions
+            .entry(id.to_owned())
+            .or_default();
+        if !pids.contains(&pid) {
+            pids.push(pid);
+        }
+    }
+
+    /// Ends the active session of process `pid` on output `id`, as when it
+    /// pauses: its session there turns inactive.
+    pub fn pause_on(&mut self, pid: u32, id: &str) {
+        if let Some(pids) = self.driver_mut().active_sessions.get_mut(id) {
+            pids.retain(|&active| active != pid);
+        }
+    }
+
+    /// Moves the active session of process `pid` from output `from` to
+    /// output `to`, as the volume mixer's per-app output does.
+    pub fn move_session(&mut self, pid: u32, from: &str, to: &str) {
+        self.pause_on(pid, from);
+        self.play_on(pid, to);
+    }
+
+    /// Mutes or unmutes output `id`.
+    pub fn mute_output(&mut self, id: &str, muted: bool) {
+        let driver = self.driver_mut();
+        let level = driver.volume_of(id).map_or(1.0, |volume| volume.level);
+        driver
+            .volumes
+            .insert(id.to_owned(), Some(EndpointVolume { muted, level }));
+    }
+
+    /// Sets the master volume of output `id`, 0 to 1.
+    pub fn set_output_level(&mut self, id: &str, level: f32) {
+        let driver = self.driver_mut();
+        let muted = driver.volume_of(id).is_some_and(|volume| volume.muted);
+        driver
+            .volumes
+            .insert(id.to_owned(), Some(EndpointVolume { muted, level }));
+    }
+
+    /// Makes the mute and volume of output `id` unreadable.
+    pub fn hide_output_volume(&mut self, id: &str) {
+        self.driver_mut().volumes.insert(id.to_owned(), None);
+    }
+
+    /// Makes every later double-audio snapshot fail with `error`, or work
+    /// again with `None`.
+    pub fn fail_endpoint_audio(&mut self, error: Option<BackendError>) {
+        self.driver_mut().endpoint_audio_error = error;
     }
 
     /// Writes `frames` frames of silence to the running capture's ring, as if

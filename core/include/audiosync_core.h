@@ -6,6 +6,8 @@
  * interleaved stereo float32 frames (L, R) plus a frame count, never one
  * sample per call. The core owns no thread, device, file or pipe: the host
  * captures, plays, opens the pipe and runs every thread, and calls in here.
+ * The one exception is AudioSync's own AirPlay sender (asc_airplay_*), which
+ * runs its own threads and network sockets.
  *
  * Real-time calls (marked "Real-time safe") never allocate, free, lock, wait,
  * log or make a system call, and never panic: bad arguments make them do
@@ -88,6 +90,38 @@ extern "C" {
 #define ASC_PIPE_WOULD_BLOCK 3 /* write: the pipe is full (EAGAIN) */
 #define ASC_PIPE_BROKEN 4      /* write: the reader went away (EPIPE) */
 #define ASC_PIPE_FAILED 5      /* open or write: any other error */
+
+/* What an AirPlay receiver event reports (AscAirPlayReceiver.event). */
+#define ASC_AIRPLAY_APPEARED 1 /* discovery found a receiver */
+#define ASC_AIRPLAY_CHANGED 2  /* its records or its verdict changed */
+#define ASC_AIRPLAY_GONE 3     /* it left the network, or discovery stopped */
+
+/* Whether a receiver can play from this sender (AscAirPlayReceiver.availability). */
+#define ASC_AIRPLAY_AVAILABLE 0      /* it can */
+#define ASC_AIRPLAY_NEEDS_PIN 1      /* an Apple TV that asks for a PIN once */
+#define ASC_AIRPLAY_NEEDS_PASSWORD 2 /* it asks for a password */
+#define ASC_AIRPLAY_NEEDS_PAIRING 3  /* it likely needs another kind of pairing */
+#define ASC_AIRPLAY_AIRPLAY2_ONLY 4  /* only AirPlay 2 could serve it, and that path is off */
+#define ASC_AIRPLAY_UNSUPPORTED 5    /* the sender can't drive it; .unsupported says why */
+
+/* Why a receiver can't play (AscAirPlayReceiver.unsupported). */
+#define ASC_AIRPLAY_REASON_NONE 0          /* none: it can, or another reason */
+#define ASC_AIRPLAY_REASON_ENCRYPTION 1    /* no encryption mode the sender supports */
+#define ASC_AIRPLAY_REASON_CODEC 2         /* no codec the sender may use */
+#define ASC_AIRPLAY_REASON_TRANSPORT 3     /* no UDP transport */
+#define ASC_AIRPLAY_REASON_METHODS 4       /* no ANNOUNCE, SETUP or RECORD */
+#define ASC_AIRPLAY_REASON_FORMAT 5        /* not 44 100 Hz, 16-bit stereo */
+#define ASC_AIRPLAY_REASON_AIRPLAY2_ONLY 6 /* only AirPlay 2 could serve it */
+
+/* What discovery saw (AscAirPlayReceiver.flags), bit by bit. */
+#define ASC_AIRPLAY_FLAG_RAOP 1            /* announces _raop._tcp (AirPlay 1 audio) */
+#define ASC_AIRPLAY_FLAG_AIRPLAY 2         /* announces _airplay._tcp */
+#define ASC_AIRPLAY_FLAG_APPLE_TV 4        /* its model is an Apple TV */
+#define ASC_AIRPLAY_FLAG_PASSWORD 8        /* its records say it needs a password */
+#define ASC_AIRPLAY_FLAG_PAIRING 16        /* its flags hint that it needs pairing */
+#define ASC_AIRPLAY_FLAG_LEGACY_PAIRING 32 /* an Apple TV that needs the PIN pairing */
+#define ASC_AIRPLAY_FLAG_BUSY 64           /* its flags hint that another sender plays */
+#define ASC_AIRPLAY_FLAG_AIRPLAY2 128      /* it lists AirPlay 2 features */
 
 /* ---- Version and volume ------------------------------------------------- */
 
@@ -447,7 +481,7 @@ typedef struct AscPipeSink {
 typedef struct AscFifoCounters {
     uint64_t opens;                 /* successful opens of the pipe */
     uint64_t write_errors;          /* failed writes other than a full pipe */
-    uint64_t backlog_skips;         /* times the 250 ms backlog cap dropped audio */
+    uint64_t backlog_skips;         /* times the 250 ms backlog cap or an open dropped audio */
     uint64_t backlog_skip_samples;  /* 16-bit samples those drops removed */
     uint64_t pipe_full_waits;       /* waits on a full pipe */
     uint64_t short_writes;          /* writes that took only part of the bytes */
@@ -514,12 +548,13 @@ void asc_fifo_writer_destroy(AscFifoWriter *writer);
 /*
  * Writer thread: one bounded piece of work. It keeps the unwritten audio at
  * or under 250 ms (dropping the oldest whole frames), opens the pipe while it
- * is closed, otherwise makes one write of at most ASC_PIPE_WRITE_MAX_BYTES
- * that ends on a frame boundary, resumes a short write at the next byte and
- * reopens after a broken pipe on a frame boundary. Returns the microseconds
- * to sleep before the next step (or until the host wakes the thread to
- * stop); 0 means step again at once. A NULL writer or sink does nothing and
- * returns the open retry pause.
+ * is closed (each open, the first or a reopen, drops whatever queued before
+ * it, so writing starts at the live edge), otherwise makes one write of at
+ * most ASC_PIPE_WRITE_MAX_BYTES that ends on a frame boundary, resumes a
+ * short write at the next byte and reopens after a broken pipe on a frame
+ * boundary. Returns the microseconds to sleep before the next step (or until
+ * the host wakes the thread to stop); 0 means step again at once. A NULL
+ * writer or sink does nothing and returns the open retry pause.
  */
 uint32_t asc_fifo_writer_step(AscFifoWriter *writer, const AscPipeSink *sink);
 
@@ -573,6 +608,65 @@ bool asc_delay_sanitize_ms(double delay_ms, double *sanitized_ms);
  * delay or a NULL frames.
  */
 bool asc_delay_ms_to_frames(double delay_ms, uint32_t rate, int64_t *frames);
+
+/* ---- AirPlay sender (AudioSync's own, airplay/): discovery ---------------- */
+
+/*
+ * AudioSync's own AirPlay sender. So far it carries discovery only: no audio
+ * crosses this interface yet, and nothing secret ever does (no password, PIN,
+ * key or credential). Every asc_airplay_* call on a handle runs on one
+ * control thread at a time, never an audio thread; the sender runs its own
+ * threads and sockets.
+ */
+typedef struct AscAirPlay AscAirPlay;
+
+/*
+ * One change discovery saw. The strings are NUL-terminated UTF-8 that the
+ * handle owns, valid until the next asc_airplay_next_receiver call on it or
+ * its destroy. A gone receiver has only its id; its name and model are "",
+ * its availability ASC_AIRPLAY_AVAILABLE, its reason and flags 0.
+ */
+typedef struct AscAirPlayReceiver {
+    int32_t event;        /* ASC_AIRPLAY_APPEARED, _CHANGED or _GONE */
+    const char *id;       /* its 12-hex-digit device ID, or "raop:<instance>" / "airplay:<instance>" */
+    const char *name;     /* the name it announces */
+    const char *model;    /* its model, "" when it announces none */
+    int32_t availability; /* ASC_AIRPLAY_AVAILABLE ... ASC_AIRPLAY_UNSUPPORTED */
+    int32_t unsupported;  /* ASC_AIRPLAY_REASON_*: why it can't play */
+    uint32_t flags;       /* ASC_AIRPLAY_FLAG_* bits */
+} AscAirPlayReceiver;
+
+/*
+ * Starts an AirPlay sender: its stream, silent for now, and its driver
+ * thread; discovery waits for asc_airplay_start_discovery. Returns NULL when
+ * the thread can't start.
+ */
+AscAirPlay *asc_airplay_create(void);
+
+/*
+ * Stops the sender and frees it, waiting up to about 2 s for its threads to
+ * end, so call it off the main thread. Takes the address of the host's
+ * pointer and sets that pointer to NULL, so destroying through it again does
+ * nothing; a NULL address or pointer does nothing.
+ */
+void asc_airplay_destroy(AscAirPlay **airplay);
+
+/*
+ * Starts browsing the local network for AirPlay receivers over multicast DNS;
+ * they arrive through asc_airplay_next_receiver. Returns false when the handle
+ * is NULL or multicast DNS can't start.
+ */
+bool asc_airplay_start_discovery(AscAirPlay *airplay);
+
+/* Stops browsing; every receiver discovery listed is then reported gone. */
+void asc_airplay_stop_discovery(AscAirPlay *airplay);
+
+/*
+ * Takes the next change discovery saw, if one is waiting, into *receiver and
+ * returns true. Returns false, leaving *receiver as it was, when none is
+ * waiting or either pointer is NULL. Never waits.
+ */
+bool asc_airplay_next_receiver(AscAirPlay *airplay, AscAirPlayReceiver *receiver);
 
 #ifdef __cplusplus
 }

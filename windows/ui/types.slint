@@ -3,11 +3,18 @@
 // How a speaker or group row shows: playing only while streaming is on.
 export enum RowState { off, will-play, playing }
 
-// The kind of output, shown as a small icon after a connected speaker's name.
+// The kind of output: the icon in a speaker's toggle, and the line under a
+// connected speaker's name.
 export enum SpeakerKind { airplay, built-in, headphones, bluetooth, usb, hdmi, display-port, virtual, other }
 
 // Whether an AirPlay speaker can simply play.
-export enum Availability { open, needs-code, password-unsupported }
+export enum Availability { open, needs-code, pairing, password-not-yet, pairing-not-yet, airplay2-not-yet, unsupported }
+
+// What went wrong with an AirPlay speaker, for its notice.
+export enum AirPlayProblem { not-responding, connection-lost, busy, refused, password-not-yet, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, unsupported }
+
+// Where the PIN dialog of an Apple TV pairing is.
+export enum PinPhase { starting, ready, checking }
 
 export struct SpeakerItem {
     id: string,
@@ -17,7 +24,8 @@ export struct SpeakerItem {
     show-kind: bool,
     state: RowState,
     volume: float,
-    // Local outputs have a sync delay; AirPlay speakers don't.
+    // Local outputs have a sync delay; AirPlay speakers don't (local outputs
+    // line up with them instead).
     has-delay: bool,
     delay-ms: int,
     // What the delay field shows: the applied value, or what is being typed.
@@ -25,6 +33,9 @@ export struct SpeakerItem {
     sync-open: bool,
     auto-connect: bool,
     availability: Availability,
+    // An Apple TV AudioSync keeps pairing credentials for: its menu offers
+    // Forget Pairing.
+    paired: bool,
 }
 
 export struct GroupItem {
@@ -39,4 +50,15 @@ export struct NoticeItem {
     id: int,
     message: string,
     time: string,
+    // The notice offers Show How, which opens its guide.
+    has-guide: bool,
+}
+
+// The Settings page a guide step opens, if any.
+export enum GuidePage { none, volume-mixer, sound }
+
+// One paragraph of the double-audio guide, with the page its button opens.
+export struct GuideStepItem {
+    text: string,
+    page: GuidePage,
 }

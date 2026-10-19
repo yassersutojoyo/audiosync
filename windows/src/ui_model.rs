@@ -43,8 +43,7 @@ pub struct Source {
 }
 
 /// The kind of output a speaker is, shown as a small icon and read by Narrator.
-// The WASAPI backend reports every kind but AirPlay (Windows has no AirPlay
-// engine yet); the mock lists only a few.
+// The mock lists only a few kinds.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpeakerKind {
@@ -68,19 +67,67 @@ impl SpeakerKind {
 
 /// Whether an AirPlay speaker can simply play.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    all(windows, not(test)),
-    expect(
-        dead_code,
-        reason = "only AirPlay speakers need a code; Windows has none yet"
-    )
-)]
 pub enum Availability {
     Open,
-    /// It asks for a PIN or password.
+    /// It asks for a PIN, which the user types once when switching it on.
     NeedsCode,
-    /// An older receiver with a password AudioSync can't send.
-    PasswordUnsupported,
+    /// A pairing with it runs: the PIN prompt is open or about to open.
+    #[cfg_attr(
+        all(not(windows), not(test)),
+        expect(dead_code, reason = "only the Windows backend pairs")
+    )]
+    Pairing,
+    /// It asks for a password, which AudioSync for Windows can't send yet.
+    PasswordNotYet,
+    /// It needs pairing with a PIN, which AudioSync for Windows can't do yet.
+    #[cfg_attr(
+        all(not(windows), not(test)),
+        expect(dead_code, reason = "only the Windows backend lists real receivers")
+    )]
+    PairingNotYet,
+    /// Only AirPlay 2 can play it, which AudioSync for Windows doesn't speak
+    /// yet.
+    #[cfg_attr(
+        all(not(windows), not(test)),
+        expect(dead_code, reason = "only the Windows backend lists real receivers")
+    )]
+    AirPlay2NotYet,
+    /// It wants an encryption, codec or format AudioSync can't send.
+    #[cfg_attr(
+        all(not(windows), not(test)),
+        expect(dead_code, reason = "only the Windows backend lists real receivers")
+    )]
+    Unsupported,
+}
+
+/// What went wrong with an AirPlay speaker, as a notice words it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(dead_code, reason = "only the Windows backend posts notices")
+)]
+pub enum AirPlayProblem {
+    /// It doesn't answer; AudioSync keeps trying.
+    NotResponding,
+    /// The connection was lost while it played; AudioSync keeps trying.
+    ConnectionLost,
+    /// Another device seems to play to it; AudioSync keeps trying.
+    Busy,
+    /// It turned the stream down; AudioSync tries again.
+    Refused,
+    /// It asks for a password, which AudioSync for Windows can't send yet.
+    PasswordNotYet,
+    /// An Apple TV that needs pairing with a PIN first; switching it on
+    /// pairs it.
+    NeedsPin,
+    /// Pairing with an Apple TV failed, so it is off.
+    PairingFailed,
+    /// It needs pairing, which AudioSync for Windows can't do yet.
+    PairingNotYet,
+    /// Only AirPlay 2 can play it.
+    AirPlay2NotYet,
+    /// AudioSync can't play to it.
+    Unsupported,
 }
 
 /// One output: a local device or an AirPlay speaker.
@@ -94,10 +141,41 @@ pub struct Speaker {
     /// 0 to 100.
     pub volume: f64,
     /// The sync delay of a local output; AirPlay speakers have none (the
-    /// AirPlay engine keeps them in sync).
+    /// AirPlay sender keeps them in sync, and local outputs follow it).
     pub delay_ms: Option<f64>,
     pub auto_connect: bool,
     pub availability: Availability,
+    /// An Apple TV AudioSync keeps pairing credentials for, which the user
+    /// can forget.
+    pub paired: bool,
+}
+
+/// Where a pairing's PIN prompt is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(dead_code, reason = "only the Windows backend pairs")
+)]
+pub enum PinPhase {
+    /// The Apple TV is asked to show a PIN.
+    Starting,
+    /// The Apple TV shows a PIN for the user to type.
+    Ready,
+    /// The PIN went to the Apple TV, which checks it.
+    Checking,
+}
+
+/// The PIN prompt of a running pairing: a dialog asks for the PIN an Apple
+/// TV shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinPrompt {
+    /// The speaker's ID.
+    pub speaker_id: String,
+    /// The speaker's name.
+    pub name: String,
+    pub phase: PinPhase,
+    /// The Apple TV turned the last PIN down and shows a new one.
+    pub wrong_pin: bool,
 }
 
 impl Speaker {
@@ -157,6 +235,30 @@ pub enum NoticeMessage {
     /// A speaker's device went away while it played. It stays on and plays
     /// again once the device is back.
     SpeakerLost { speaker: String },
+    /// An AirPlay speaker stopped playing; it stays on while AudioSync keeps
+    /// trying to reach it.
+    AirPlayRetrying {
+        speaker: String,
+        problem: AirPlayProblem,
+    },
+    /// An AirPlay speaker can't play from AudioSync, so it is off.
+    AirPlayCantPlay {
+        speaker: String,
+        problem: AirPlayProblem,
+    },
+    /// The source also plays straight from these outputs, undelayed, so it
+    /// is heard twice. `source` is the app's name, or `None` for the whole
+    /// system. `mute` names the outputs AudioSync doesn't play to, which the
+    /// user may mute; `shared` the ones AudioSync plays to as well, where
+    /// only sending the source elsewhere helps. `default_output` is the one
+    /// of them that counts because it is Windows' default output (the whole
+    /// system only); any other plays the source because an app plays there.
+    HeardTwice {
+        source: Option<String>,
+        mute: Vec<String>,
+        shared: Vec<String>,
+        default_output: Option<String>,
+    },
 }
 
 /// How a speaker or group row shows: playing only while streaming is on.
@@ -197,6 +299,8 @@ pub struct AppState {
     pub equalizer: EqSettings,
     /// Newest first.
     pub notices: Vec<Notice>,
+    /// The PIN prompt to show, while a pairing asks for a PIN.
+    pub pin_prompt: Option<PinPrompt>,
 }
 
 impl AppState {
@@ -280,6 +384,16 @@ pub trait Backend {
     fn dismiss_all_notices(&mut self);
     fn refresh_devices(&mut self);
 
+    /// The PIN the user typed for the pairing with speaker `id`.
+    fn submit_pin(&mut self, _id: &str, _pin: &str) {}
+
+    /// The user cancelled the pairing with speaker `id`; it stays off.
+    fn cancel_pairing(&mut self, _id: &str) {}
+
+    /// Forgets the pairing with speaker `id`: it asks for a PIN again next
+    /// time.
+    fn forget_pairing(&mut self, _id: &str) {}
+
     /// Takes in what happened since the last call (devices that came or went,
     /// a source that quit, an output that failed) and says whether the
     /// snapshot may have changed. The UI calls it about twice a second.
@@ -335,6 +449,7 @@ impl MockBackend {
             delay_ms,
             auto_connect: false,
             availability: Availability::Open,
+            paired: false,
         };
         let mut speakers = vec![
             speaker(
@@ -388,7 +503,7 @@ impl MockBackend {
             ),
         ];
         speakers[3].availability = Availability::NeedsCode;
-        speakers[6].availability = Availability::PasswordUnsupported;
+        speakers[6].availability = Availability::PasswordNotYet;
         speakers[2].auto_connect = true;
         let state = AppState {
             running: false,
@@ -408,6 +523,7 @@ impl MockBackend {
             }],
             equalizer: EqSettings::default(),
             notices: Vec::new(),
+            pin_prompt: None,
         };
         MockBackend { state, next_id: 1 }
     }
@@ -597,6 +713,7 @@ mod tests {
             delay_ms: Some(0.0),
             auto_connect: false,
             availability: Availability::Open,
+            paired: false,
         };
         assert!(!speaker(SpeakerKind::Virtual, false).is_listed(false));
         assert!(speaker(SpeakerKind::Virtual, false).is_listed(true));

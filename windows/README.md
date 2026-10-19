@@ -9,9 +9,15 @@ app's screens (the main window, the equalizer, a tray icon with a flyout, the
 About dialog), and on Windows they drive the real audio backend: it captures
 one app, or everything the PC plays except AudioSync itself, and plays it on
 the outputs you turn on, each at its own delay and volume, through the
-equalizer. There's no AirPlay on Windows yet, and nothing is saved: the
-speakers you turned on, their delays and volumes, groups and the equalizer
-start over at every launch. So far it has only been started on one Windows 11
+equalizer. AirPlay speakers on your network show up under Connected Speakers,
+through AudioSync's own sender ([`../airplay`](../airplay)); that part hasn't
+been tried with a real speaker yet. An Apple TV that asks for a code is paired
+the first time you switch it on: type the 4-digit code it shows, and AudioSync
+remembers the pairing (encrypted for your Windows account in
+`%LOCALAPPDATA%\AudioSync`); Forget Pairing in the speaker's menu undoes it.
+Nothing else is saved: the speakers you turned on, their delays and volumes,
+groups and the equalizer start over at every launch. So far it has only been
+started on one Windows 11
 PC, with nothing playing, and nobody has listened to it there yet; CI builds and
 tests it. [docs/WINDOWS_UI.md](../docs/WINDOWS_UI.md) maps each
 part of the Mac main window to its Windows counterpart and lists the keyboard
@@ -51,6 +57,23 @@ output too, without the delay. To hear only AudioSync's copies, send the app
 output you don't listen to, and turn the others on in AudioSync.
 [docs/WINDOWS_AUDIO_ROUTING.md](../docs/WINDOWS_AUDIO_ROUTING.md) explains why
 and lists the tests worth running on a real PC.
+
+### AirPlay
+
+AirPlay speakers that the sender can play are listed like any other speaker:
+turn one on and it joins the stream. While an AirPlay speaker is on, the local
+outputs wait for it: each plays at the sender's latency (1.75 s) plus its own
+delay, counted up to 3000 ms, so they stay in step with the AirPlay speakers.
+Turn the last AirPlay speaker off and each local output goes back to its own
+delay. A speaker that stops answering stays on while AudioSync keeps trying
+to reach it, with a notice.
+
+Not supported yet: speakers that ask for a password, speakers that need
+pairing with a PIN (such as an Apple TV that asks for one), and speakers that
+only play AirPlay 2. They're listed with a note saying so, and AudioSync never
+connects to them. Windows Firewall may ask whether AudioSync can use the
+network the first time it looks for speakers; it needs private networks for
+AirPlay.
 
 If something acts up, start it from PowerShell with
 `$env:AUDIOSYNC_DEBUG=1; .\audiosync.exe` and read

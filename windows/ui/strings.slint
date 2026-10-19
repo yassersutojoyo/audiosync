@@ -6,7 +6,7 @@
 // English only for now. @tr marks each string for Slint's gettext translation
 // when a second language is added.
 
-import { SpeakerKind, Availability, RowState } from "types.slint";
+import { SpeakerKind, Availability, AirPlayProblem, GuidePage, PinPhase, RowState } from "types.slint";
 
 export global Strings {
     // Main window
@@ -26,6 +26,9 @@ export global Strings {
     out property <string> dismiss-notice: @tr("Dismiss Notice");
     out property <string> dismiss-all-notices: @tr("Dismiss All");
     out property <string> notices: @tr("Notices");
+    // The button on the double-audio notice that opens its guide.
+    out property <string> notice-show-how: @tr("Show How");
+    out property <string> notice-show-how-label: @tr("Show how to hear it only once");
     out property <string> delay-field-label: @tr("Delay in milliseconds");
     out property <string> source-label: @tr("Audio Source");
     out property <string> equalizer: @tr("Equalizer");
@@ -43,6 +46,34 @@ export global Strings {
     out property <string> notice-no-speaker: @tr("Turn on at least one speaker first (under This PC or Connected Speakers).");
     out property <string> notice-capture-failed: @tr("AudioSync couldn't capture audio from the selected source. Turn streaming off and on again, or pick another source. If it keeps happening, restart your PC.");
     out property <string> notice-capture-lost: @tr("AudioSync lost the audio from the selected source, so streaming has stopped. Turn streaming on again, or pick another source.");
+
+    // Pairing with an Apple TV that asks for a code: the dialog and the
+    // speaker menu.
+    out property <string> pin-dialog-title: @tr("Pair with Apple TV");
+    out property <string> pin-field-label: @tr("Code");
+    out property <string> pin-field-placeholder: @tr("4 digits");
+    out property <string> pair: @tr("Pair");
+    out property <string> forget-pairing: @tr("Forget Pairing");
+    // The made-up Apple TV of the PIN dialog preview (debug only).
+    out property <string> pin-preview-speaker: @tr("Living Room");
+
+    // What the dialog says while the TV is asked for a code, shows one, or
+    // checks the one typed; after a wrong code the TV shows a new one.
+    public pure function pin-message(speaker: string, phase: PinPhase, wrong-pin: bool) -> string {
+        if phase == PinPhase.checking {
+            return @tr("Checking the code with {}…", speaker);
+        }
+        if phase == PinPhase.starting {
+            if wrong-pin {
+                return @tr("That code didn't work. Asking {} for a new one…", speaker);
+            }
+            return @tr("Asking {} to show a code…", speaker);
+        }
+        if wrong-pin {
+            return @tr("That code didn't work. Type the new code {} shows.", speaker);
+        }
+        return @tr("Type the 4-digit code {} shows on the screen.", speaker);
+    }
 
     // Groups
     out property <string> new-group: @tr("New Group from Active Speakers…");
@@ -152,6 +183,131 @@ export global Strings {
         return @tr("{} was disconnected. It plays again as soon as it's back.", speaker);
     }
 
+    // An AirPlay speaker stopped playing or can't play. For the first four
+    // problems it stays on and AudioSync keeps trying; for the others it is
+    // off, because AudioSync for Windows can't play to it (yet).
+    public pure function notice-airplay(problem: AirPlayProblem, speaker: string) -> string {
+        if problem == AirPlayProblem.not-responding {
+            return @tr("{} isn't responding. AudioSync keeps trying to reach it.", speaker);
+        }
+        if problem == AirPlayProblem.connection-lost {
+            return @tr("{} lost its connection. AudioSync keeps trying to reconnect.", speaker);
+        }
+        if problem == AirPlayProblem.busy {
+            return @tr("{} seems to be playing from another device. AudioSync keeps trying.", speaker);
+        }
+        if problem == AirPlayProblem.refused {
+            return @tr("{} turned the stream down. AudioSync tries again shortly.", speaker);
+        }
+        if problem == AirPlayProblem.password-not-yet {
+            return @tr("{} asks for a password, which AudioSync for Windows can't send yet, so it's off.", speaker);
+        }
+        if problem == AirPlayProblem.needs-pin {
+            return @tr("{} needs pairing with a code. Switch it on to pair.", speaker);
+        }
+        if problem == AirPlayProblem.pairing-failed {
+            return @tr("{} couldn't be paired, so it's off. Make sure the TV is on, then switch {} on in AudioSync to try again.", speaker, speaker);
+        }
+        if problem == AirPlayProblem.pairing-not-yet {
+            return @tr("{} needs pairing with a code, which AudioSync for Windows can't do yet, so it's off.", speaker);
+        }
+        if problem == AirPlayProblem.airplay2-not-yet {
+            return @tr("{} plays only AirPlay 2, which AudioSync for Windows doesn't support yet, so it's off.", speaker);
+        }
+        return @tr("AudioSync can't play to {}, so it's off.", speaker);
+    }
+
+    // Windows can't mute the captured app, so it also plays straight from
+    // some outputs, undelayed, next to AudioSync's delayed copies. `mute`
+    // names the ones AudioSync doesn't play to (muting them helps), `shared`
+    // the ones AudioSync plays to as well (only moving the app helps); each is
+    // one output's name, several as "A, B and C" (list-and), or empty.
+    public pure function notice-heard-twice-app(source: string, mute: string, shared: string) -> string {
+        if shared == "" {
+            return @tr("You may hear {0} twice: it also plays straight from {1}. Send it to an output you don't listen to (Volume mixer), or mute {1}.", source, mute);
+        }
+        if mute == "" {
+            return @tr("You may hear {0} twice: it also plays straight from {1}, where AudioSync plays too. Send it to an output you don't listen to (Volume mixer).", source, shared);
+        }
+        return @tr("You may hear {0} twice: it also plays straight from {1}, and from {2}, where AudioSync plays too. Send it to an output you don't listen to (Volume mixer). Muting {1} alone isn't enough.", source, mute, shared);
+    }
+
+    // The same while the whole system is captured: what Windows plays on its
+    // default output, or another app plays elsewhere, is heard there too.
+    public pure function notice-heard-twice-system(mute: string, shared: string) -> string {
+        if shared == "" {
+            return @tr("You may hear your PC's sound twice: it also plays straight from {0}. Make an output you don't listen to the Windows default (Sound settings), or mute {0}.", mute);
+        }
+        if mute == "" {
+            return @tr("You may hear your PC's sound twice: it also plays straight from {0}, where AudioSync plays too. Make an output you don't listen to the Windows default (Sound settings).", shared);
+        }
+        return @tr("You may hear your PC's sound twice: it also plays straight from {0}, and from {1}, where AudioSync plays too. Make an output you don't listen to the Windows default (Sound settings). Muting {0} alone isn't enough.", mute, shared);
+    }
+
+    // The double-audio guide, opened from Show How on that notice. Each list
+    // is output names as "A, B and C" (list-and). AudioSync changes none of these
+    // settings itself; a step's button opens the Settings page where the
+    // user does.
+    out property <string> guide-title: @tr("Avoid Double Audio");
+    out property <string> guide-steps: @tr("Steps");
+    out property <string> guide-footer: @tr("AudioSync doesn't change these settings itself. The notice goes away on its own once the sound plays only through AudioSync.");
+    out property <string> guide-close: @tr("Close");
+    // Shown in the guide when the shell didn't open the Settings page.
+    out property <string> guide-settings-failed: @tr("Couldn't open Settings. Open it from the Start menu: Settings > System > Sound.");
+
+    // Joins a list of names: `head` is all but the last, already joined by
+    // commas ("TV, Speakers"), `last` the last one.
+    public pure function list-and(head: string, last: string) -> string {
+        return @tr("{0} and {1}", head, last);
+    }
+
+    public pure function guide-intro-app(source: string, outputs: string) -> string {
+        return @tr("Windows keeps playing {0} straight from {1}, next to AudioSync's synced copies. To hear it only once:", source, outputs);
+    }
+
+    public pure function guide-intro-system(outputs: string) -> string {
+        return @tr("Windows keeps playing your PC's sound straight from {0}, next to AudioSync's synced copies. To hear it only once:", outputs);
+    }
+
+    public pure function guide-route-app(source: string) -> string {
+        return @tr("Open the Volume mixer, find {0} and set its output to one you don't listen to, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on.", source);
+    }
+
+    public pure function guide-change-default(current: string) -> string {
+        return @tr("Open Sound settings and make an output you don't listen to the default instead of {0}, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on.", current);
+    }
+
+    public pure function guide-route-other-apps(outputs: string) -> string {
+        return @tr("Some apps play straight to {0}. In the Volume mixer, set them to an output you don't listen to as well.", outputs);
+    }
+
+    // `count` is how many outputs `outputs` names.
+    public pure function guide-mute-outputs(outputs: string, count: int) -> string {
+        if count == 1 {
+            return @tr("Or, if you don't need {0}, mute it: in Sound settings, open it and turn its volume all the way down. AudioSync doesn't play there, so its copies stay as they are.", outputs);
+        }
+        return @tr("Or, if you don't need {0}, mute them: in Sound settings, open each of them and turn its volume all the way down. AudioSync doesn't play there, so its copies stay as they are.", outputs);
+    }
+
+    public pure function guide-shared-outputs(outputs: string) -> string {
+        return @tr("Muting {0} won't help: AudioSync plays there too, so its copies would go quiet as well.", outputs);
+    }
+
+    public pure function guide-keep-app-unmuted(source: string) -> string {
+        return @tr("Don't mute {0} itself in the Volume mixer: AudioSync would capture silence.", source);
+    }
+
+    // The label of a guide step's button.
+    public pure function guide-open(page: GuidePage) -> string {
+        if page == GuidePage.volume-mixer {
+            return @tr("Open Volume Mixer");
+        }
+        if page == GuidePage.sound {
+            return @tr("Open Sound Settings");
+        }
+        return "";
+    }
+
     public pure function speaker-options(name: string) -> string {
         return @tr("Options for {}", name);
     }
@@ -183,8 +339,20 @@ export global Strings {
         if a == Availability.needs-code {
             return @tr("Asks for a code");
         }
-        if a == Availability.password-unsupported {
-            return @tr("Password not supported");
+        if a == Availability.pairing {
+            return @tr("Pairing…");
+        }
+        if a == Availability.password-not-yet {
+            return @tr("Password not supported yet");
+        }
+        if a == Availability.pairing-not-yet {
+            return @tr("Pairing not supported yet");
+        }
+        if a == Availability.airplay2-not-yet {
+            return @tr("AirPlay 2 not supported yet");
+        }
+        if a == Availability.unsupported {
+            return @tr("Not supported");
         }
         return "";
     }
@@ -223,6 +391,18 @@ export global Strings {
             return name;
         }
         return @tr("{}, {}", name, root.speaker-kind(kind));
+    }
+
+    // The line under a speaker's name: its kind, its note, or both
+    // ("AirPlay · Asks for a code"); either may be empty.
+    public pure function speaker-caption(kind: string, note: string) -> string {
+        if kind == "" {
+            return note;
+        }
+        if note == "" {
+            return kind;
+        }
+        return @tr("{} · {}", kind, note);
     }
 
     public pure function volume-of(name: string) -> string {

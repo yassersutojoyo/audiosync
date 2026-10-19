@@ -7,16 +7,26 @@
 //! into the delay and gain its renderer applies (S3, S71, S78) and picks the
 //! format its stream uses.
 //!
-//! On macOS, local outputs are delayed to line up with AirPlay speakers, so
-//! they play at once while no AirPlay speaker is chosen (S78) and a new output
-//! starts at 2000 ms (S77). The Windows app has no AirPlay yet, so there is
-//! nothing to line up with: each output plays at the delay the user set (used
-//! to line outputs up with each other, such as a Bluetooth speaker with wired
-//! ones), and a new output starts at 0 ms.
+//! Each output's delay is its own trim, used to line outputs up with each
+//! other (a Bluetooth speaker with wired ones, say), and a new output starts
+//! at 0 ms. While an AirPlay speaker is chosen (S79), local outputs line up
+//! with the AirPlay sender instead: each plays at exactly L + d_local, the
+//! sender's base latency plus its own delay as d_local on the sender's 0 to
+//! 3000 ms scale (AirPlay spec P114, which replaces S78's rule under this
+//! sender). Otherwise each plays at its own delay.
+//!
+//! P114 also migrates a stored delay once, to clamp(configured − L, 0,
+//! 3000), for a delay stored with S77's meaning (the whole delay to the
+//! speakers, 2000 ms by default). The Windows app has no such delay: its
+//! settings aren't saved yet, and its delay was always a trim starting at 0,
+//! so it is used as d_local as it is; migrating it would turn every trim
+//! under L into 0.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
-use audiosync_core::policy::delay::{DEFAULT_DELAY_MS, effective_delay_ms, sanitize_delay_ms};
+use audiosync_airplay::stream::MAX_DELAY;
+use audiosync_core::policy::delay::sanitize_delay_ms;
 use audiosync_core::policy::session::sync_outputs;
 use audiosync_core::reader::delay_ms_to_frames;
 use audiosync_core::ring::is_supported_rate;
@@ -84,39 +94,205 @@ pub fn output_kind(form_factor: Option<u32>, enumerator: &str, display_port: boo
     }
 }
 
+/// What the listing read about one render endpoint, before deciding whether
+/// to list it. A call that failed keeps its error text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EndpointReading {
+    /// Its position in Windows' collection of endpoints.
+    pub index: u32,
+    /// Its endpoint ID, or why the endpoint or its ID couldn't be read.
+    pub id: Result<String, String>,
+    /// Its properties, or why its property store couldn't be opened.
+    pub properties: Result<EndpointProperties, String>,
+}
+
+/// The properties of an endpoint that the listing uses. One that can't be
+/// read is left out.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EndpointProperties {
+    /// The name Windows shows (`PKEY_Device_FriendlyName`).
+    pub name: Option<String>,
+    /// Its form factor (`PKEY_AudioEndpoint_FormFactor`).
+    pub form_factor: Option<u32>,
+    /// The enumerator of its device (`PKEY_Device_EnumeratorName`).
+    pub enumerator: Option<String>,
+    /// Whether its jack is DisplayPort (`PKEY_AudioEndpoint_JackSubType`).
+    pub display_port: bool,
+}
+
+/// Something the listing did with an endpoint that the log should say.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ListingNote {
+    /// Left out: a Bluetooth hands-free endpoint.
+    HandsFree {
+        /// Its endpoint ID.
+        id: String,
+        /// Its name, if it could be read.
+        name: Option<String>,
+    },
+    /// Left out: the endpoint or its ID couldn't be read, so nothing could
+    /// play to it.
+    NoId {
+        /// Its position in Windows' collection.
+        index: u32,
+        /// Why.
+        error: String,
+    },
+    /// Listed under its ID, as an output of unknown kind: its properties
+    /// couldn't be read.
+    NoProperties {
+        /// Its endpoint ID.
+        id: String,
+        /// Why.
+        error: String,
+    },
+}
+
+/// The outputs to list, by ID, and what the log should say about the
+/// endpoints left out or listed without their properties.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Listing {
+    /// The endpoints to list, sorted by ID.
+    pub endpoints: Vec<Endpoint>,
+    /// What the log should say, in the order Windows gave the endpoints.
+    pub notes: Vec<ListingNote>,
+}
+
+impl std::fmt::Display for ListingNote {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ListingNote::HandsFree { id, name } => {
+                let name = name.as_deref().unwrap_or("(no name)");
+                write!(
+                    f,
+                    "output {name:?} ({id}) left out: a Bluetooth hands-free endpoint, \
+                     for calls only"
+                )
+            }
+            ListingNote::NoId { index, error } => write!(
+                f,
+                "render endpoint {index} left out: it couldn't be read ({error})"
+            ),
+            ListingNote::NoProperties { id, error } => write!(
+                f,
+                "output {id} listed under its ID, kind unknown: its properties couldn't \
+                 be read ({error})"
+            ),
+        }
+    }
+}
+
+/// The enumerator name (`PKEY_Device_EnumeratorName`) the endpoints of
+/// Windows' Bluetooth Hands-Free Profile audio driver report.
+pub const HANDS_FREE_ENUMERATOR: &str = "BTHHFENUM";
+
+/// Whether an endpoint whose device has this enumerator is a Bluetooth
+/// hands-free one, which AudioSync doesn't list.
+///
+/// A Bluetooth headset gets two render endpoints from Windows: a stereo one
+/// from its A2DP profile (enumerator `BTHENUM`), and a call one from its
+/// Hands-Free Profile (`BTHHFENUM`). The call one carries mono,
+/// low-bandwidth audio, and opening it switches the headset to call mode,
+/// which interrupts its stereo sound. A phone that uses the PC for its calls
+/// gets a hands-free endpoint too.
+///
+/// The enumerator tells them apart; the form factor can't, since a
+/// headset's hands-free endpoint says `Headset` and a phone's says
+/// `Speakers`, while a USB or wired headset that plays in stereo says
+/// `Headset` as well.
+pub fn is_hands_free(enumerator: &str) -> bool {
+    enumerator.eq_ignore_ascii_case(HANDS_FREE_ENUMERATOR)
+}
+
+/// Turns what was read about each active render endpoint into the outputs to
+/// list. `default_id` is the ID of Windows' default output, if there is one.
+///
+/// Every endpoint is listed except a Bluetooth hands-free one
+/// ([`is_hands_free`]) and one without an ID, which nothing could play to.
+/// One whose properties can't be read is listed under its ID as an output
+/// of unknown kind. The notes say what was left out, or listed without its
+/// properties, and why, so nothing goes missing without a word in the log.
+pub fn list_endpoints(readings: Vec<EndpointReading>, default_id: Option<&str>) -> Listing {
+    let mut listing = Listing::default();
+    for reading in readings {
+        let id = match reading.id {
+            Ok(id) => id,
+            Err(error) => {
+                listing.notes.push(ListingNote::NoId {
+                    index: reading.index,
+                    error,
+                });
+                continue;
+            }
+        };
+        let properties = match reading.properties {
+            Ok(properties) => properties,
+            Err(error) => {
+                listing.notes.push(ListingNote::NoProperties {
+                    id: id.clone(),
+                    error,
+                });
+                EndpointProperties::default()
+            }
+        };
+        let enumerator = properties.enumerator.as_deref().unwrap_or_default();
+        if is_hands_free(enumerator) {
+            listing.notes.push(ListingNote::HandsFree {
+                id,
+                name: properties.name,
+            });
+            continue;
+        }
+        listing.endpoints.push(Endpoint {
+            is_default: default_id == Some(id.as_str()),
+            kind: output_kind(properties.form_factor, enumerator, properties.display_port),
+            name: properties.name.unwrap_or_else(|| id.clone()),
+            id,
+        });
+    }
+    listing.endpoints.sort_by(|a, b| a.id.cmp(&b.id));
+    listing
+}
+
 /// Whether AirPlay speakers exist to line local outputs up with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AirPlay {
-    /// No AirPlay engine on this platform: outputs play at their own delay.
+    /// No AirPlay sender runs: outputs play at their own delay.
     Unavailable,
-    /// An AirPlay engine runs; `chosen` says whether a speaker is chosen (S79).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Windows has no AirPlay engine yet; the rule is tested"
-        )
-    )]
+    /// The AirPlay sender runs; `chosen` says whether an AirPlay speaker is
+    /// chosen (S79).
     Available {
         /// Whether an AirPlay speaker is chosen.
         chosen: bool,
+        /// The sender's base latency L (P98, P113).
+        latency: Duration,
     },
 }
 
 impl AirPlay {
-    /// The delay of an output the user has never set, in ms.
-    pub fn default_delay_ms(self) -> f64 {
+    /// What local outputs line up with: L while an AirPlay speaker is
+    /// chosen, nothing otherwise.
+    fn anchor(self) -> Option<Duration> {
         match self {
-            AirPlay::Unavailable => 0.0,
-            AirPlay::Available { .. } => DEFAULT_DELAY_MS,
+            AirPlay::Available {
+                chosen: true,
+                latency,
+            } => Some(latency),
+            _ => None,
         }
     }
 
-    /// The delay an output with this configured delay plays at, in ms.
+    /// The delay an output with this configured delay plays at, in ms: L +
+    /// d_local while an AirPlay speaker is chosen, the configured delay
+    /// standing for d_local up to the sender's 3000 ms (P114, the sender's
+    /// `local_output_delay`), and the configured delay otherwise.
     pub fn effective_delay_ms(self, configured_ms: f64) -> f64 {
-        match self {
-            AirPlay::Unavailable => configured_ms,
-            AirPlay::Available { chosen } => effective_delay_ms(configured_ms, chosen),
+        match self.anchor() {
+            Some(latency) => {
+                let trim_ms = configured_ms.clamp(0.0, MAX_DELAY.as_secs_f64() * 1000.0);
+                latency.as_secs_f64() * 1000.0 + trim_ms
+            }
+            None => configured_ms,
         }
     }
 }
@@ -178,11 +354,11 @@ impl OutputPolicy {
     }
 
     /// The settings of output `id`: what the user set, or the defaults (off,
-    /// the default delay, volume 60).
+    /// no delay, volume 60).
     pub fn settings(&self, id: &str) -> OutputSettings {
         self.settings.get(id).copied().unwrap_or(OutputSettings {
             enabled: false,
-            delay_ms: self.airplay.default_delay_ms(),
+            delay_ms: 0.0,
             volume: DEFAULT_LOCAL_POSITION,
         })
     }
@@ -239,16 +415,11 @@ impl OutputPolicy {
     }
 
     /// Changes the AirPlay state. Returns true when the delay of outputs
-    /// changes because of it, so running renderers need new delays (S80).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Windows has no AirPlay engine yet; the rule is tested"
-        )
-    )]
+    /// changes because of it, so running renderers need new delays (S80,
+    /// P114): an AirPlay speaker is chosen or no longer is, or L changed
+    /// while one is.
     pub fn set_airplay(&mut self, airplay: AirPlay) -> bool {
-        let changed = airplay != self.airplay;
+        let changed = airplay.anchor() != self.airplay.anchor();
         self.airplay = airplay;
         changed
     }
@@ -459,6 +630,130 @@ mod tests {
         assert_eq!(output_kind(None, "", false), OutputKind::Other);
     }
 
+    fn reading(index: u32, id: &str, name: &str, form: u32, bus: &str) -> EndpointReading {
+        EndpointReading {
+            index,
+            id: Ok(id.to_owned()),
+            properties: Ok(EndpointProperties {
+                name: Some(name.to_owned()),
+                form_factor: Some(form),
+                enumerator: Some(bus.to_owned()),
+                display_port: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn bluetooth_hands_free_endpoints_are_left_out_and_noted() {
+        let listing = list_endpoints(
+            vec![
+                reading(0, "b", "Headphones (Example Buds)", 3, "BTHENUM"),
+                reading(1, "c", "Headset (Example Buds Hands-Free)", 5, "BTHHFENUM"),
+                reading(2, "a", "Speakers (Example Phone HF Audio)", 1, "BthHfEnum"),
+            ],
+            Some("b"),
+        );
+        assert_eq!(
+            listing.endpoints,
+            vec![Endpoint {
+                id: "b".to_owned(),
+                name: "Headphones (Example Buds)".to_owned(),
+                is_default: true,
+                kind: OutputKind::Bluetooth,
+            }],
+            "the stereo endpoint stays, whatever the hands-free one's form factor"
+        );
+        assert_eq!(
+            listing.notes,
+            vec![
+                ListingNote::HandsFree {
+                    id: "c".to_owned(),
+                    name: Some("Headset (Example Buds Hands-Free)".to_owned()),
+                },
+                ListingNote::HandsFree {
+                    id: "a".to_owned(),
+                    name: Some("Speakers (Example Phone HF Audio)".to_owned()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn headsets_on_other_buses_are_listed() {
+        let listing = list_endpoints(
+            vec![
+                reading(0, "a", "Headset (Example USB Headset)", 5, "USB"),
+                reading(1, "b", "Headset Earphone (Example Jack)", 5, "HDAUDIO"),
+            ],
+            None,
+        );
+        assert_eq!(ids(&listing.endpoints), ["a", "b"]);
+        assert!(listing.notes.is_empty());
+    }
+
+    #[test]
+    fn an_endpoint_whose_properties_fail_is_listed_under_its_id_and_noted() {
+        let listing = list_endpoints(
+            vec![EndpointReading {
+                index: 0,
+                id: Ok("a".to_owned()),
+                properties: Err("IMMDevice::OpenPropertyStore: access denied".to_owned()),
+            }],
+            None,
+        );
+        assert_eq!(
+            listing.endpoints,
+            vec![Endpoint {
+                id: "a".to_owned(),
+                name: "a".to_owned(),
+                is_default: false,
+                kind: OutputKind::Other,
+            }]
+        );
+        assert_eq!(
+            listing.notes,
+            vec![ListingNote::NoProperties {
+                id: "a".to_owned(),
+                error: "IMMDevice::OpenPropertyStore: access denied".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn an_endpoint_without_an_id_is_left_out_and_noted() {
+        let listing = list_endpoints(
+            vec![
+                EndpointReading {
+                    index: 0,
+                    id: Err("IMMDevice::GetId: element not found".to_owned()),
+                    properties: Ok(EndpointProperties::default()),
+                },
+                reading(1, "b", "Speakers (Example)", 1, "HDAUDIO"),
+            ],
+            None,
+        );
+        assert_eq!(ids(&listing.endpoints), ["b"]);
+        assert_eq!(
+            listing.notes,
+            vec![ListingNote::NoId {
+                index: 0,
+                error: "IMMDevice::GetId: element not found".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_name_that_cannot_be_read_falls_back_to_the_id() {
+        let mut nameless = reading(0, "a", "", 1, "HDAUDIO");
+        if let Ok(properties) = &mut nameless.properties {
+            properties.name = None;
+        }
+        let listing = list_endpoints(vec![nameless], None);
+        assert_eq!(listing.endpoints[0].name, "a");
+        assert_eq!(listing.endpoints[0].kind, OutputKind::BuiltIn);
+        assert!(listing.notes.is_empty());
+    }
+
     fn ids(endpoints: &[Endpoint]) -> Vec<&str> {
         endpoints
             .iter()
@@ -545,10 +840,17 @@ mod tests {
         );
     }
 
+    /// The sender's default L: 77 175 frames at 44.1 kHz.
+    const L: Duration = Duration::from_millis(1750);
+
+    fn sender(chosen: bool, latency: Duration) -> AirPlay {
+        AirPlay::Available { chosen, latency }
+    }
+
     #[test]
-    fn with_airplay_a_new_output_starts_at_2000_ms() {
-        let policy = OutputPolicy::new(AirPlay::Available { chosen: true });
-        assert_eq!(policy.settings("new").delay_ms, 2000.0);
+    fn with_airplay_a_new_output_still_starts_with_no_delay() {
+        let policy = OutputPolicy::new(sender(true, L));
+        assert_eq!(policy.settings("new").delay_ms, 0.0);
     }
 
     #[test]
@@ -635,15 +937,63 @@ mod tests {
     }
 
     #[test]
-    fn with_airplay_and_no_speaker_chosen_outputs_play_at_once() {
+    fn with_no_airplay_speaker_chosen_outputs_play_at_their_own_delay() {
         let mut policy = policy_with(&["a"]);
-        policy.set_delay_ms("a", 2000.0);
-        assert!(policy.set_airplay(AirPlay::Available { chosen: false }));
-        assert_eq!(policy.params("a").delay_frames, 0);
-        assert!(policy.set_airplay(AirPlay::Available { chosen: true }));
-        assert_eq!(policy.params("a").delay_frames, 96_000);
-        assert!(!policy.set_airplay(AirPlay::Available { chosen: true }));
-        assert_eq!(policy.settings("a").delay_ms, 2000.0, "the setting is kept");
+        policy.set_delay_ms("a", 150.0);
+        assert!(
+            !policy.set_airplay(sender(false, L)),
+            "a sender with no speaker chosen changes no delay"
+        );
+        assert_eq!(policy.params("a").delay_frames, 7_200);
+    }
+
+    #[test]
+    fn with_an_airplay_speaker_chosen_outputs_play_at_l_plus_their_trim() {
+        // P114: L + d_local, d_local being the output's own delay.
+        let mut policy = policy_with(&["a", "b"]);
+        policy.set_delay_ms("a", 150.0);
+        assert!(policy.set_airplay(sender(true, L)));
+        assert_eq!(policy.params("a").delay_frames, 91_200, "1750 + 150 ms");
+        assert_eq!(policy.params("b").delay_frames, 84_000, "1750 ms");
+        assert!(!policy.set_airplay(sender(true, L)));
+        // Turned off again: back to the output's own delay.
+        assert!(policy.set_airplay(sender(false, L)));
+        assert_eq!(policy.params("a").delay_frames, 7_200);
+        assert_eq!(policy.params("b").delay_frames, 0);
+        assert_eq!(policy.settings("a").delay_ms, 150.0, "the setting is kept");
+    }
+
+    #[test]
+    fn the_trim_counts_up_to_3000_ms_while_an_airplay_speaker_is_chosen() {
+        let mut policy = policy_with(&["a"]);
+        policy.set_delay_ms("a", 5000.0);
+        policy.set_airplay(sender(true, L));
+        assert_eq!(policy.params("a").delay_frames, 228_000, "1750 + 3000 ms");
+        policy.set_airplay(sender(false, L));
+        assert_eq!(policy.params("a").delay_frames, 240_000, "5000 ms");
+    }
+
+    #[test]
+    fn a_new_l_re_anchors_the_outputs() {
+        let mut policy = policy_with(&["a"]);
+        policy.set_airplay(sender(true, L));
+        // Lf changed to 44 100 frames (P98): L is 1 s.
+        assert!(policy.set_airplay(sender(true, Duration::from_secs(1))));
+        assert_eq!(policy.params("a").delay_frames, 48_000);
+        // A new L while no speaker is chosen changes no delay.
+        policy.set_airplay(sender(false, L));
+        assert!(!policy.set_airplay(sender(false, Duration::from_secs(1))));
+    }
+
+    #[test]
+    fn the_effective_delay_is_the_senders_local_output_delay() {
+        // The sender's own rule (P114), so the policy and the crate agree.
+        for (trim_ms, latency) in [(0, L), (150, L), (4000, Duration::from_millis(500))] {
+            let trim = Duration::from_millis(trim_ms);
+            let expected = latency + trim.min(audiosync_airplay::stream::MAX_DELAY);
+            let effective = sender(true, latency).effective_delay_ms(trim_ms as f64);
+            assert!((effective - expected.as_secs_f64() * 1000.0).abs() < 1e-9);
+        }
     }
 
     fn mix(float32: bool, rate: u32, channels: u16, channel_mask: u32) -> MixFormat {

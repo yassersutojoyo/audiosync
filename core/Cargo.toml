@@ -2,9 +2,9 @@
 name = "audiosync-core"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MIT"
-description = "Platform-independent audio core of AudioSync: delay ring buffer, drift correction, resampling, equalizer, volume, sync policy and PCM16 conversion."
+description = "Platform-independent audio core of AudioSync: delay ring buffer, drift correction, resampling, equalizer, volume, sync policy and PCM16 conversion, plus the C interface of AudioSync's own AirPlay sender."
 repository = "https://github.com/yassersutojoyo/audiosync"
 publish = false
 
@@ -12,6 +12,11 @@ publish = false
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
+# AudioSync's own AirPlay sender (airplay/, MIT), reached by the macOS app
+# through this crate's C interface (src/ffi/airplay.rs): the app links one
+# Rust static library, so the sender comes in through the core's. Its
+# third-party crates are listed in THIRD_PARTY_NOTICES.md.
+audiosync-airplay = { path = "../airplay" }
 
 [dev-dependencies]
 criterion = { version = "0.7.0", default-features = false, features = ["cargo_bench_support"] }
@@ -24,6 +29,14 @@ harness = false
 [[bench]]
 name = "eq"
 harness = false
+
+[lints.clippy]
+# The minimum Rust went from 1.85 to 1.88 with the AirPlay sender, which turns
+# on two lints for std APIs stabilized in between (`as_chunks`,
+# `is_multiple_of`). The audio code's `chunks_exact(2)` frame loops and
+# `% n == 0` checks stay as they are here; moving them is a change of its own.
+chunks_exact_to_as_chunks = "allow"
+manual_is_multiple_of = "allow"
 
 [profile.release]
 panic = "abort"

@@ -1,9 +1,9 @@
 // Calls audiosync-core through its C header, the way the macOS app will: the
 // version, the volume curve, the presets, one equalizer pass, a ring with a
 // delay reader, the FIFO feed with its writer stepped through a C pipe sink,
-// and the AirPlay sync rule, audio always a whole buffer at a time. Prints
-// one line per check; exits 1 on a failure. Touches no audio device and no
-// pipe; nothing plays.
+// the AirPlay sync rule and the AirPlay sender's handle, audio always a whole
+// buffer at a time. Prints one line per check; exits 1 on a failure. Touches
+// no audio device, pipe or network; nothing plays.
 
 import AudioSyncCore
 import Foundation
@@ -201,8 +201,6 @@ func fifoFeed() {
         return
     }
     check(asc_fifo_writer_create(feed) == nil, "a second FIFO writer is refused")
-    let queued = asc_fifo_feed(feed, samples, samples.count / 2)
-    check(queued == samples.count / 2, "\(queued) frames queued at 48 kHz pass through")
 
     let pipe = PipeRecorder()
     var sink = AscPipeSink(
@@ -219,6 +217,11 @@ func fifoFeed() {
         close: { context in
             recorder(context).closes += 1
         })
+    // The first step opens the pipe, which starts at the live edge: only
+    // audio fed after it is written.
+    check(asc_fifo_writer_step(writer, &sink) == 0 && pipe.opens == 1, "the first step opens the pipe")
+    let queued = asc_fifo_feed(feed, samples, samples.count / 2)
+    check(queued == samples.count / 2, "\(queued) frames queued at 48 kHz pass through")
     var steps = 0
     while asc_fifo_writer_step(writer, &sink) == 0 && steps < 100 {
         steps += 1
@@ -275,8 +278,28 @@ func syncRule() {
     check(asc_delay_ms_to_frames(1820, 48_000, &frames) && frames == 87_360, "1820 ms is \(frames) frames at 48 kHz")
 }
 
+// AudioSync's own AirPlay sender: created, asked for receivers before any
+// discovery (none), and destroyed twice through the same pointer, the second
+// time doing nothing. No discovery starts, so nothing touches the network.
+func airPlaySender() {
+    var handle: OpaquePointer? = asc_airplay_create()
+    check(handle != nil, "the AirPlay sender starts")
+    var receiver = AscAirPlayReceiver()
+    receiver.availability = -1
+    check(!asc_airplay_next_receiver(handle, &receiver) && receiver.availability == -1,
+          "no receiver before discovery, the out struct untouched")
+    check(!asc_airplay_next_receiver(nil, &receiver) && !asc_airplay_start_discovery(nil),
+          "a NULL sender does nothing")
+    asc_airplay_destroy(&handle)
+    check(handle == nil, "destroy sets the host's pointer to NULL")
+    asc_airplay_destroy(&handle)
+    asc_airplay_destroy(nil)
+    check(Int(ASC_AIRPLAY_FLAG_AIRPLAY2) == 128 && ASC_AIRPLAY_GONE == 3, "the AirPlay constants cross the header")
+}
+
 versionVolumeAndEqualizer()
 ringAndReader()
 fifoFeed()
 syncRule()
+airPlaySender()
 exit(failures == 0 ? 0 : 1)

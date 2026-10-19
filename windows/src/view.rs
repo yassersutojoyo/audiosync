@@ -17,11 +17,22 @@ use std::time::Duration;
 use audiosync_core::eq::{self, EqSettings};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
-use crate::ui_model::{self, AppState, Backend, NoticeMessage, SourceKind, SpeakerState};
+use crate::backdrop::Frame;
+use crate::debug_log::DebugLog;
+use crate::guide::{self, Guide, GuideStep, SettingsPage};
+use crate::ui_model::{
+    self, AppState, Backend, NoticeMessage, PinPrompt, SourceKind, SpeakerState,
+};
 use crate::{
-    AboutDialog, Availability, EqualizerWindow, GroupItem, GroupNameDialog, MainWindow, NoticeItem,
+    AboutDialog, AirPlayProblem, Availability, EqualizerWindow, GroupItem, GroupNameDialog,
+    GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, Palette, PinDialog, PinPhase,
     RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
 };
+
+/// The digits the PIN field keeps of what was typed: four at most.
+fn pin_digits(text: &str) -> String {
+    text.chars().filter(char::is_ascii_digit).take(4).collect()
+}
 
 /// What the group name dialog is open for.
 #[derive(Clone, Debug, PartialEq)]
@@ -122,12 +133,31 @@ pub struct App {
     pub flyout: TrayFlyout,
     pub equalizer: EqualizerWindow,
     group_dialog: GroupNameDialog,
+    /// The code prompt of an Apple TV pairing.
+    pin_dialog: PinDialog,
+    /// The speaker the PIN dialog is open for, while it is.
+    pin_for: RefCell<Option<String>>,
+    /// The PIN dialog shows a made-up pairing (the PIN preview), which no
+    /// refresh closes.
+    pin_preview: Cell<bool>,
     about: AboutDialog,
+    guide: GuideWindow,
+    /// The paragraphs the guide shows.
+    guide_steps: Rc<VecModel<GuideStepItem>>,
+    /// The guide is open for the double-audio notice and follows it (not
+    /// for a made-up preview notice).
+    guide_follows_notice: Cell<bool>,
+    log: DebugLog,
     ui: RefCell<UiState>,
     dialog_purpose: RefCell<DialogPurpose>,
     models: Models,
     /// With a tray icon, closing the main window keeps the app running there.
     tray_available: Cell<bool>,
+    /// Dark (true) or light for every window instead of the Windows setting:
+    /// the theme preview, `None` normally.
+    theme_override: Cell<Option<bool>>,
+    /// Whether each window got its Windows 11 frame, as last logged.
+    frames: RefCell<HashMap<&'static str, bool>>,
     /// Called after every refresh, e.g. to update the tray icon and tooltip.
     on_refresh: RefCell<Option<RefreshHook>>,
     /// Polls the backend; it stops when the app is dropped.
@@ -142,7 +172,8 @@ fn with_app(app: &Weak<App>, action: impl FnOnce(&App)) {
 }
 
 impl App {
-    pub fn new(backend: Box<dyn Backend>) -> Result<Rc<App>, slint::PlatformError> {
+    /// The windows over `backend`; what they do themselves goes to `log`.
+    pub fn new(backend: Box<dyn Backend>, log: DebugLog) -> Result<Rc<App>, slint::PlatformError> {
         let models = Models {
             sources: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
@@ -160,11 +191,20 @@ impl App {
             flyout: TrayFlyout::new()?,
             equalizer: EqualizerWindow::new()?,
             group_dialog: GroupNameDialog::new()?,
+            pin_dialog: PinDialog::new()?,
+            pin_for: RefCell::new(None),
+            pin_preview: Cell::new(false),
             about: AboutDialog::new()?,
+            guide: GuideWindow::new()?,
+            guide_steps: Rc::new(VecModel::default()),
+            guide_follows_notice: Cell::new(false),
+            log,
             ui: RefCell::default(),
             dialog_purpose: RefCell::new(DialogPurpose::Message),
             models,
             tray_available: Cell::new(false),
+            theme_override: Cell::new(None),
+            frames: RefCell::default(),
             on_refresh: RefCell::new(None),
             poll_timer: Timer::default(),
         });
@@ -173,6 +213,7 @@ impl App {
         app.connect_flyout();
         app.connect_equalizer();
         app.connect_dialogs();
+        app.connect_guide();
         app.refresh();
         let weak = Rc::downgrade(&app);
         app.poll_timer
@@ -220,7 +261,74 @@ impl App {
             self.show_window_error(&error);
             return;
         }
+        self.apply_frame(self.main.window(), "main window", Frame::Titled);
         crate::platform::bring_to_front(self.main.window());
+    }
+
+    /// Shows every window light or dark, whatever Windows uses, to check both
+    /// appearances without changing the Windows setting (the theme preview).
+    pub fn preview_theme(&self, dark: bool) {
+        use slint::language::ColorScheme;
+        let scheme = if dark {
+            ColorScheme::Dark
+        } else {
+            ColorScheme::Light
+        };
+        self.main.global::<Palette>().set_color_scheme(scheme);
+        self.flyout.global::<Palette>().set_color_scheme(scheme);
+        self.equalizer.global::<Palette>().set_color_scheme(scheme);
+        self.group_dialog
+            .global::<Palette>()
+            .set_color_scheme(scheme);
+        self.pin_dialog.global::<Palette>().set_color_scheme(scheme);
+        self.about.global::<Palette>().set_color_scheme(scheme);
+        self.guide.global::<Palette>().set_color_scheme(scheme);
+        self.theme_override.set(Some(dark));
+    }
+
+    /// Gives a window that is showing its Windows 11 frame (`backdrop`), and
+    /// logs whether DWM took it. `true` when it did.
+    pub fn apply_frame(&self, window: &slint::Window, name: &'static str, frame: Frame) -> bool {
+        if let Some(dark) = self.theme_override.get() {
+            use slint::winit_030::WinitWindowAccessor;
+            use slint::winit_030::winit::window::Theme;
+            let theme = if dark { Theme::Dark } else { Theme::Light };
+            window.with_winit_window(|window| window.set_theme(Some(theme)));
+        }
+        // Before the event loop runs there is no native window yet; the
+        // window's first focus (see `follow_frame`) tries again.
+        let Some(applied) = crate::backdrop::apply(window, frame) else {
+            return false;
+        };
+        if self.frames.borrow_mut().insert(name, applied) != Some(applied) {
+            self.log.log(|| {
+                let what = match frame {
+                    Frame::Titled => "Mica title bar",
+                    Frame::Flyout => "rounded corners",
+                };
+                let result = if applied { "on" } else { "not available" };
+                format!("{name}: {what} {result}")
+            });
+        }
+        applied
+    }
+
+    /// Gives a titled window (every window but the flyout) its frame each
+    /// time it gains the focus, which covers a native window created after
+    /// `show` returned.
+    fn follow_frame(self: &Rc<Self>, window: fn(&App) -> &slint::Window, name: &'static str) {
+        use slint::winit_030::winit::event::WindowEvent;
+        use slint::winit_030::{EventResult, WinitWindowAccessor};
+
+        let weak = Rc::downgrade(self);
+        window(self).on_winit_window_event(move |_, event| {
+            if let WindowEvent::Focused(true) = event {
+                with_app(&weak, |app| {
+                    app.apply_frame(window(app), name, Frame::Titled);
+                });
+            }
+            EventResult::Propagate
+        });
     }
 
     fn attach_models(&self) {
@@ -243,6 +351,8 @@ impl App {
         self.equalizer
             .set_band_hz(ModelRc::new(VecModel::from(band_hz)));
         self.equalizer.set_max_gain(eq::MAX_GAIN_DB as f32);
+        self.guide
+            .set_steps(ModelRc::from(self.guide_steps.clone()));
         self.about.set_version(env!("CARGO_PKG_VERSION").into());
         self.about.set_core_version(audiosync_core::VERSION.into());
     }
@@ -320,6 +430,8 @@ impl App {
         sync_model(&m.flyout_notices, flyout_notices);
         self.flyout.set_notice_count(count(notices.len()));
         self.restore_flyout_focus(flyout_removed);
+        self.refresh_guide(&state);
+        self.show_pin_prompt(state.pin_prompt.as_ref());
 
         for window in [&self.main as &dyn WindowState, &self.flyout] {
             window.show_state(&state, &status, source_index);
@@ -375,6 +487,7 @@ impl App {
     }
 
     fn connect_main(self: &Rc<Self>) {
+        self.follow_frame(|app| app.main.window(), "main window");
         let main = &self.main;
         let weak = Rc::downgrade(self);
 
@@ -407,6 +520,10 @@ impl App {
             with_app(&w, |app| app.update(|b| b.set_auto_connect(&id, on)))
         });
         let w = weak.clone();
+        main.on_forget_pairing_requested(move |id| {
+            with_app(&w, |app| app.update(|b| b.forget_pairing(&id)))
+        });
+        let w = weak.clone();
         main.on_group_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_group(&id))));
         let w = weak.clone();
         main.on_group_rename_requested(move |id| with_app(&w, |app| app.ask_rename(&id)));
@@ -428,6 +545,8 @@ impl App {
         main.on_notices_dismissed_all(move || {
             with_app(&w, |app| app.update(|b| b.dismiss_all_notices()))
         });
+        let w = weak.clone();
+        main.on_notice_guide_requested(move |id| with_app(&w, |app| app.show_guide(id)));
         let w = weak.clone();
         main.on_close_requested(move || with_app(&w, App::close_main));
         main.on_exit_requested(|| {
@@ -481,6 +600,13 @@ impl App {
             with_app(&w, |app| app.update(|b| b.dismiss_all_notices()))
         });
         let w = weak.clone();
+        flyout.on_notice_guide_requested(move |id| {
+            with_app(&w, |app| {
+                app.hide_flyout();
+                app.show_guide(id);
+            })
+        });
+        let w = weak.clone();
         flyout.on_open_app(move || {
             with_app(&w, |app| {
                 app.hide_flyout();
@@ -495,6 +621,7 @@ impl App {
     }
 
     fn connect_equalizer(self: &Rc<Self>) {
+        self.follow_frame(|app| app.equalizer.window(), "equalizer");
         let eq_window = &self.equalizer;
         let weak = Rc::downgrade(self);
 
@@ -549,16 +676,232 @@ impl App {
     }
 
     fn connect_dialogs(self: &Rc<Self>) {
+        self.follow_frame(|app| app.group_dialog.window(), "group name dialog");
+        self.follow_frame(|app| app.about.window(), "about dialog");
         let weak = Rc::downgrade(self);
         let w = weak.clone();
         self.group_dialog
             .on_confirmed(move |name| with_app(&w, |app| app.confirm_dialog(&name)));
-        let w = weak;
+        let w = weak.clone();
         self.group_dialog.on_cancelled(move || {
             with_app(&w, |app| {
                 let _ = app.group_dialog.hide();
             })
         });
+
+        self.follow_frame(|app| app.pin_dialog.window(), "PIN dialog");
+        let dialog = self.pin_dialog.as_weak();
+        self.pin_dialog.on_pin_edited(move |text| {
+            if let Some(dialog) = dialog.upgrade() {
+                let digits = pin_digits(&text);
+                if digits != text.as_str() {
+                    dialog.set_pin(digits.into());
+                }
+            }
+        });
+        let w = weak.clone();
+        self.pin_dialog
+            .on_confirmed(move |pin| with_app(&w, |app| app.confirm_pin(&pin)));
+        let w = weak.clone();
+        self.pin_dialog
+            .on_cancelled(move || with_app(&w, App::cancel_pin));
+        let w = weak;
+        self.pin_dialog.window().on_close_requested(move || {
+            with_app(&w, App::cancel_pin);
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
+
+    /// Opens, updates or closes the PIN dialog for the pairing that asks for
+    /// a PIN. It opens when the Apple TV first shows a PIN, stays open while
+    /// that pairing runs (a wrong PIN clears the field for the new one), and
+    /// closes when it ends.
+    fn show_pin_prompt(&self, prompt: Option<&PinPrompt>) {
+        if self.pin_preview.get() {
+            return;
+        }
+        let dialog = &self.pin_dialog;
+        let Some(prompt) = prompt else {
+            if self.pin_for.borrow_mut().take().is_some() {
+                let _ = dialog.hide();
+                self.log.log(|| "PIN dialog: closed".to_owned());
+            }
+            return;
+        };
+        let opening = self.pin_for.borrow().as_deref() != Some(prompt.speaker_id.as_str());
+        let phase = pin_phase(prompt.phase);
+        let new_code = (prompt.wrong_pin && !dialog.get_wrong_pin())
+            || (phase == PinPhase::Ready && dialog.get_phase() != PinPhase::Ready);
+        dialog.set_speaker(prompt.name.as_str().into());
+        dialog.set_phase(phase);
+        dialog.set_wrong_pin(prompt.wrong_pin);
+        if opening {
+            *self.pin_for.borrow_mut() = Some(prompt.speaker_id.clone());
+            dialog.set_pin(SharedString::new());
+            self.open_pin_dialog();
+            self.log
+                .log(|| format!("PIN dialog: opened for {}", prompt.name));
+        } else if new_code {
+            if prompt.wrong_pin {
+                dialog.set_pin(SharedString::new());
+            }
+            dialog.invoke_prepare();
+        }
+    }
+
+    fn open_pin_dialog(&self) {
+        if let Err(error) = self.pin_dialog.show() {
+            self.show_window_error(&error);
+            return;
+        }
+        self.pin_dialog.invoke_prepare();
+        crate::platform::bring_to_front(self.pin_dialog.window());
+    }
+
+    /// Pair: the PIN goes to the pairing; the dialog stays open until it
+    /// ends.
+    fn confirm_pin(&self, pin: &str) {
+        if self.pin_preview.get() {
+            self.close_pin_preview();
+            return;
+        }
+        let id = self.pin_for.borrow().clone();
+        if let Some(id) = id {
+            self.update(|b| b.submit_pin(&id, pin));
+        }
+    }
+
+    /// Cancel, Escape or the close button: the pairing stops.
+    fn cancel_pin(&self) {
+        if self.pin_preview.get() {
+            self.close_pin_preview();
+            return;
+        }
+        let id = self.pin_for.borrow_mut().take();
+        let _ = self.pin_dialog.hide();
+        if let Some(id) = id {
+            self.update(|b| b.cancel_pairing(&id));
+        }
+    }
+
+    fn close_pin_preview(&self) {
+        self.pin_preview.set(false);
+        let _ = self.pin_dialog.hide();
+    }
+
+    /// Opens the PIN dialog for a made-up Apple TV, to look at it without
+    /// one: the PIN preview, debug only. `wrong`: as after a wrong PIN.
+    pub fn preview_pin(&self, wrong: bool) {
+        self.pin_preview.set(true);
+        let dialog = &self.pin_dialog;
+        dialog.set_speaker(self.strings().get_pin_preview_speaker());
+        dialog.set_phase(PinPhase::Ready);
+        dialog.set_wrong_pin(wrong);
+        dialog.set_pin(SharedString::new());
+        self.open_pin_dialog();
+    }
+
+    fn connect_guide(self: &Rc<Self>) {
+        self.follow_frame(|app| app.guide.window(), "guide");
+        let weak = Rc::downgrade(self);
+        let w = weak.clone();
+        self.guide
+            .on_page_requested(move |page| with_app(&w, |app| app.open_guide_page(page)));
+        let w = weak.clone();
+        self.guide
+            .on_close_requested(move || with_app(&w, App::close_guide));
+        let w = weak;
+        self.guide.window().on_close_requested(move || {
+            with_app(&w, App::close_guide);
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
+
+    fn close_guide(&self) {
+        self.guide_follows_notice.set(false);
+        let _ = self.guide.hide();
+    }
+
+    /// Opens the Settings page a guide button asks for; only the pages the
+    /// guide names, nothing else. When the shell doesn't take it, the guide
+    /// says where to find the page.
+    fn open_guide_page(&self, page: GuidePage) {
+        let Some(page) = settings_page(page) else {
+            return;
+        };
+        let opened = crate::platform::open_settings(page.uri());
+        if !opened {
+            self.log
+                .log(|| format!("guide: the shell did not open {}", page.uri()));
+        }
+        self.guide.set_settings_failed(!opened);
+    }
+
+    /// Keeps an open guide in step with the double-audio notice it was
+    /// opened from: updated while that notice changes, closed once it is
+    /// gone (the app quit, streaming stopped, the routing was fixed).
+    fn refresh_guide(&self, state: &AppState) {
+        if !self.guide_follows_notice.get() {
+            return;
+        }
+        match guide::current(&state.notices) {
+            Some(guide) => self.fill_guide(&guide),
+            None => {
+                self.log
+                    .log(|| "guide: closed, its notice is gone".to_owned());
+                self.close_guide();
+            }
+        }
+    }
+
+    /// Shows `guide` in the guide window, row by row so a focused button
+    /// keeps its focus.
+    fn fill_guide(&self, guide: &Guide) {
+        let strings = self.strings();
+        self.guide.set_intro(guide_intro(&strings, guide));
+        let items: Vec<GuideStepItem> = guide
+            .steps
+            .iter()
+            .map(|step| GuideStepItem {
+                text: guide_step_text(&strings, step),
+                page: guide_page(step.page()),
+            })
+            .collect();
+        sync_model(&self.guide_steps, items);
+    }
+
+    /// Opens the guide of notice `id`, if it is still there and has one.
+    fn show_guide(&self, id: i32) {
+        let state = self.snapshot();
+        let Some(notice) = state
+            .notices
+            .iter()
+            .find(|notice| i32::try_from(notice.id).ok() == Some(id))
+        else {
+            return;
+        };
+        if self.show_guide_for(&notice.message) {
+            self.guide_follows_notice.set(true);
+        }
+    }
+
+    /// Opens the guide for a notice saying `message`, if it has one, and
+    /// brings it to the front. Returns whether it opened. A guide opened
+    /// this way stays as it is; one opened from a notice follows it.
+    pub fn show_guide_for(&self, message: &NoticeMessage) -> bool {
+        let Some(guide) = guide::guide(message) else {
+            return false;
+        };
+        self.guide_follows_notice.set(false);
+        self.fill_guide(&guide);
+        self.guide.set_settings_failed(false);
+        if let Err(error) = self.guide.show() {
+            self.show_window_error(&error);
+            return false;
+        }
+        self.guide.invoke_take_focus();
+        crate::platform::bring_to_front(self.guide.window());
+        true
     }
 
     fn select_source(&self, index: i32) {
@@ -637,6 +980,7 @@ impl App {
             self.show_window_error(&error);
             return;
         }
+        self.apply_frame(self.equalizer.window(), "equalizer", Frame::Titled);
         self.equalizer.invoke_take_focus();
         crate::platform::bring_to_front(self.equalizer.window());
     }
@@ -809,7 +1153,35 @@ fn availability(a: ui_model::Availability) -> Availability {
     match a {
         ui_model::Availability::Open => Availability::Open,
         ui_model::Availability::NeedsCode => Availability::NeedsCode,
-        ui_model::Availability::PasswordUnsupported => Availability::PasswordUnsupported,
+        ui_model::Availability::Pairing => Availability::Pairing,
+        ui_model::Availability::PasswordNotYet => Availability::PasswordNotYet,
+        ui_model::Availability::PairingNotYet => Availability::PairingNotYet,
+        ui_model::Availability::AirPlay2NotYet => Availability::Airplay2NotYet,
+        ui_model::Availability::Unsupported => Availability::Unsupported,
+    }
+}
+
+fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
+    use ui_model::AirPlayProblem as P;
+    match problem {
+        P::NotResponding => AirPlayProblem::NotResponding,
+        P::ConnectionLost => AirPlayProblem::ConnectionLost,
+        P::Busy => AirPlayProblem::Busy,
+        P::Refused => AirPlayProblem::Refused,
+        P::PasswordNotYet => AirPlayProblem::PasswordNotYet,
+        P::NeedsPin => AirPlayProblem::NeedsPin,
+        P::PairingFailed => AirPlayProblem::PairingFailed,
+        P::PairingNotYet => AirPlayProblem::PairingNotYet,
+        P::AirPlay2NotYet => AirPlayProblem::Airplay2NotYet,
+        P::Unsupported => AirPlayProblem::Unsupported,
+    }
+}
+
+fn pin_phase(phase: ui_model::PinPhase) -> PinPhase {
+    match phase {
+        ui_model::PinPhase::Starting => PinPhase::Starting,
+        ui_model::PinPhase::Ready => PinPhase::Ready,
+        ui_model::PinPhase::Checking => PinPhase::Checking,
     }
 }
 
@@ -837,6 +1209,7 @@ pub fn speaker_item(
         sync_open: sync_open && speaker.delay_ms.is_some(),
         auto_connect: speaker.auto_connect,
         availability: availability(speaker.availability),
+        paired: speaker.paired,
     }
 }
 
@@ -855,6 +1228,77 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
         id: i32::try_from(notice.id).unwrap_or(i32::MAX),
         message: notice_text(strings, &notice.message),
         time: notice.time.as_str().into(),
+        has_guide: guide::guide(&notice.message).is_some(),
+    }
+}
+
+/// Names as one list, "A, B and C": commas between all but the last two,
+/// then `and` (the UI's words for "head and last").
+fn join_names(names: &[String], and: impl FnOnce(&str, &str) -> String) -> String {
+    match names {
+        [] => String::new(),
+        [only] => only.clone(),
+        [head @ .., last] => and(&head.join(", "), last),
+    }
+}
+
+/// Output names as one list in the UI's words: what every notice and the
+/// guide name outputs with.
+fn joined(strings: &Strings<'_>, names: &[String]) -> SharedString {
+    join_names(names, |head, last| {
+        strings
+            .invoke_list_and(head.into(), last.into())
+            .to_string()
+    })
+    .into()
+}
+
+/// The guide's first paragraph, in the UI's words.
+fn guide_intro(strings: &Strings<'_>, guide: &Guide) -> SharedString {
+    let outputs = joined(strings, &guide.outputs);
+    match &guide.source {
+        Some(source) => strings.invoke_guide_intro_app(source.as_str().into(), outputs),
+        None => strings.invoke_guide_intro_system(outputs),
+    }
+}
+
+/// A guide step in the UI's words.
+fn guide_step_text(strings: &Strings<'_>, step: &GuideStep) -> SharedString {
+    match step {
+        GuideStep::RouteApp { app } => strings.invoke_guide_route_app(app.as_str().into()),
+        GuideStep::ChangeDefault { current } => {
+            strings.invoke_guide_change_default(current.as_str().into())
+        }
+        GuideStep::RouteOtherApps { outputs } => {
+            strings.invoke_guide_route_other_apps(joined(strings, outputs))
+        }
+        GuideStep::MuteOutputs { outputs } => {
+            strings.invoke_guide_mute_outputs(joined(strings, outputs), count(outputs.len()))
+        }
+        GuideStep::SharedOutputs { outputs } => {
+            strings.invoke_guide_shared_outputs(joined(strings, outputs))
+        }
+        GuideStep::KeepAppUnmuted { app } => {
+            strings.invoke_guide_keep_app_unmuted(app.as_str().into())
+        }
+    }
+}
+
+/// The UI's name of a step's Settings page.
+fn guide_page(page: Option<SettingsPage>) -> GuidePage {
+    match page {
+        None => GuidePage::None,
+        Some(SettingsPage::VolumeMixer) => GuidePage::VolumeMixer,
+        Some(SettingsPage::Sound) => GuidePage::Sound,
+    }
+}
+
+/// The Settings page a step's button asks for.
+fn settings_page(page: GuidePage) -> Option<SettingsPage> {
+    match page {
+        GuidePage::None => None,
+        GuidePage::VolumeMixer => Some(SettingsPage::VolumeMixer),
+        GuidePage::Sound => Some(SettingsPage::Sound),
     }
 }
 
@@ -878,6 +1322,25 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         }
         NoticeMessage::SpeakerLost { speaker } => {
             strings.invoke_notice_speaker_lost(speaker.as_str().into())
+        }
+        NoticeMessage::AirPlayRetrying { speaker, problem }
+        | NoticeMessage::AirPlayCantPlay { speaker, problem } => {
+            strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
+        }
+        NoticeMessage::HeardTwice {
+            source,
+            mute,
+            shared,
+            ..
+        } => {
+            let mute = joined(strings, mute);
+            let shared = joined(strings, shared);
+            match source {
+                Some(source) => {
+                    strings.invoke_notice_heard_twice_app(source.as_str().into(), mute, shared)
+                }
+                None => strings.invoke_notice_heard_twice_system(mute, shared),
+            }
         }
     }
 }
@@ -937,6 +1400,58 @@ mod tests {
         // flyout's button opens the main window for the other notice.
         assert_eq!(messages, [NoticeMessage::NoSpeaker]);
         assert_eq!(newest_notices(&notices, MAIN_NOTICE_LIMIT).len(), 2);
+    }
+
+    #[test]
+    fn the_pin_field_keeps_four_digits_at_most() {
+        assert_eq!(pin_digits("4821"), "4821");
+        assert_eq!(pin_digits("48a2-1"), "4821");
+        assert_eq!(pin_digits("482199"), "4821");
+        assert_eq!(pin_digits(" ١٢ "), "", "ASCII digits only");
+        assert_eq!(pin_digits(""), "");
+    }
+
+    #[test]
+    fn output_names_read_as_a_list() {
+        let and = |head: &str, last: &str| format!("{head} and {last}");
+        let names =
+            |list: &[&str]| -> Vec<String> { list.iter().map(|name| (*name).to_owned()).collect() };
+        assert_eq!(join_names(&names(&[]), and), "");
+        assert_eq!(join_names(&names(&["TV"]), and), "TV");
+        assert_eq!(
+            join_names(&names(&["TV", "Speakers"]), and),
+            "TV and Speakers"
+        );
+        assert_eq!(
+            join_names(&names(&["TV", "Speakers", "Monitor"]), and),
+            "TV, Speakers and Monitor"
+        );
+        // Every notice and the guide join names through it.
+        let view = include_str!("view.rs");
+        let comma_joins = view.matches(concat!(".join(", "\", \"", ")")).count();
+        assert_eq!(comma_joins, 1, "only join_names joins names by commas");
+    }
+
+    #[test]
+    fn guide_buttons_ask_for_the_page_their_step_names() {
+        for page in [
+            None,
+            Some(SettingsPage::VolumeMixer),
+            Some(SettingsPage::Sound),
+        ] {
+            assert_eq!(settings_page(guide_page(page)), page);
+        }
+        let message = guide::preview("app").unwrap();
+        let pages: Vec<GuidePage> = guide::guide(&message)
+            .unwrap()
+            .steps
+            .iter()
+            .map(|step| guide_page(step.page()))
+            .collect();
+        assert_eq!(
+            pages,
+            [GuidePage::VolumeMixer, GuidePage::Sound, GuidePage::None]
+        );
     }
 
     #[test]

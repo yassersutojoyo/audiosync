@@ -8,28 +8,33 @@ import { ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { GroupItem, NoticeItem, RowState, SpeakerItem } from "types.slint";
-import { BrandMark, Card, Divider, Glyph, Glyphs, GroupRow, NoticeStack, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, NoticeStack, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
 export { TrayFlyout } from "flyout.slint";
-export { GroupNameDialog } from "dialogs.slint";
+export { GroupNameDialog, PinDialog } from "dialogs.slint";
+export { GuideWindow } from "guide.slint";
 export { Strings } from "strings.slint";
-export { Availability, GroupItem, NoticeItem, RowState, SpeakerItem, SpeakerKind } from "types.slint";
+// The style's palette, for the theme preview (src/view.rs).
+export { Palette } from "std-widgets.slint";
+export { AirPlayProblem, Availability, GroupItem, GuidePage, GuideStepItem, NoticeItem, PinPhase, RowState, SpeakerItem, SpeakerKind } from "types.slint";
 
 // A titled card of speaker rows, with a note when it has none.
 component SpeakerSection inherits VerticalLayout {
     in property <string> title;
     in property <[SpeakerItem]> speakers;
     in property <string> note;
+    in property <bool> compact;
     callback toggled(string);
     callback volume-changed(string, float);
     callback sync-toggled(string);
     callback delay-stepped(string, int);
     callback delay-edited(string, string);
     callback auto-connect-toggled(string, bool);
+    callback forget-pairing(string);
 
-    spacing: 6px;
+    spacing: 8px;
     accessible-role: groupbox;
     accessible-label: root.title;
 
@@ -42,12 +47,14 @@ component SpeakerSection inherits VerticalLayout {
 
         for speaker[index] in root.speakers: VerticalLayout {
             if index > 0: HorizontalLayout {
-                padding-left: 52px;
+                padding-left: Fluent.name-inset;
+                padding-right: 8px;
                 Divider { }
             }
 
             SpeakerRow {
                 item: speaker;
+                compact: root.compact;
                 toggled => {
                     root.toggled(speaker.id);
                 }
@@ -66,6 +73,9 @@ component SpeakerSection inherits VerticalLayout {
                 auto-connect-toggled(on) => {
                     root.auto-connect-toggled(speaker.id, on);
                 }
+                forget-pairing => {
+                    root.forget-pairing(speaker.id);
+                }
             }
         }
 
@@ -73,7 +83,7 @@ component SpeakerSection inherits VerticalLayout {
             if root.speakers.length > 0: Divider { }
 
             HorizontalLayout {
-                padding: 10px;
+                padding: 12px;
                 SecondaryText {
                     text: root.note;
                     font-size: Tokens.font-size-callout;
@@ -88,10 +98,12 @@ component EqualizerCard inherits Rectangle {
     in property <bool> on;
     callback clicked();
 
-    background: Tokens.surface;
-    border-radius: Tokens.radius-card;
+    // A Windows 11 settings card: the whole card is the button.
+    background: touch.pressed ? Tokens.surface.mix(Tokens.text, 0.97) : touch.has-hover ? Tokens.surface.mix(Tokens.text, 0.95) : Tokens.surface;
+    animate background { duration: Fluent.fast; }
+    border-radius: Fluent.radius-card;
     border-width: 1px;
-    border-color: touch.has-hover ? Tokens.teal : Tokens.separator;
+    border-color: Fluent.stroke;
     forward-focus: focus;
     accessible-role: button;
     accessible-label: Strings.equalizer;
@@ -118,8 +130,10 @@ component EqualizerCard inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding: Tokens.spacing-card-padding;
-        spacing: 10px;
+        padding: Fluent.card-padding;
+        padding-top: 14px;
+        padding-bottom: 14px;
+        spacing: 12px;
 
         Glyph {
             glyph: Glyphs.equalizer;
@@ -191,6 +205,7 @@ export component MainWindow inherits Window {
     callback delay-stepped(string, int);
     callback delay-edited(string, string);
     callback auto-connect-toggled(string, bool);
+    callback forget-pairing-requested(string);
     callback group-toggled(string);
     callback group-rename-requested(string);
     callback group-deleted(string);
@@ -199,17 +214,23 @@ export component MainWindow inherits Window {
     callback show-virtual-devices-toggled(bool);
     callback notice-dismissed(int);
     callback notices-dismissed-all();
+    // Show How on a notice: open its guide.
+    callback notice-guide-requested(int);
     callback close-requested();
     callback exit-requested();
     callback about-requested();
 
     title: Strings.main-window-title;
     icon: @image-url("../res/audiosync-256.png");
-    min-width: 720px;
-    min-height: 460px;
-    preferred-width: 900px;
-    preferred-height: 640px;
+    // Wide enough for a speaker row's columns next to the left column.
+    min-width: 860px;
+    min-height: 520px;
+    preferred-width: 980px;
+    preferred-height: 680px;
+    // Below this width the volume sliders in the speaker rows are shorter.
+    property <bool> compact: root.width < 960px;
     background: Tokens.background;
+    default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
 
     // Rust sets these; a user's click or drag replaces the controls' bindings,
@@ -309,31 +330,36 @@ export component MainWindow inherits Window {
     }
 
     VerticalLayout {
-        padding-left: Tokens.spacing-window-margin;
-        padding-right: Tokens.spacing-window-margin;
-        padding-top: 12px;
+        padding-left: Tokens.spacing-window-margin + 4px;
+        padding-right: Tokens.spacing-window-margin + 4px;
+        padding-top: 16px;
         padding-bottom: Tokens.spacing-window-margin;
-        spacing: 14px;
+        spacing: 20px;
 
-        // Header
+        // Header: the brand and the state on the left, the switch on the right.
         HorizontalLayout {
             spacing: 12px;
+            min-height: 44px;
+            vertical-stretch: 0;
 
-            BrandMark {
-                running: root.running;
-                width: 32px;
-                height: 32px;
+            VerticalLayout {
+                alignment: center;
+                BrandMark {
+                    running: root.running;
+                    width: 34px;
+                    height: 34px;
+                }
             }
 
             VerticalLayout {
                 alignment: center;
-                spacing: 2px;
+                spacing: 0px;
 
                 Wordmark { }
 
                 SecondaryText {
                     text: root.status;
-                    font-size: Tokens.font-size-callout;
+                    font-size: Tokens.font-size-caption;
                     accessible-role: text;
                     accessible-label: self.text;
                 }
@@ -366,23 +392,37 @@ export component MainWindow inherits Window {
             dismissed-all => {
                 root.notices-dismissed-all();
             }
+            guide-requested(id) => {
+                root.notice-guide-requested(id);
+            }
         }
 
         HorizontalLayout {
-            spacing: Tokens.spacing-column-gap;
+            spacing: Tokens.spacing-window-margin;
+            vertical-stretch: 1;
 
-            // Left column
+            // Left column: what plays and how loud, each in its own card.
             VerticalLayout {
-                width: 280px;
-                spacing: Tokens.spacing-card-gap;
+                width: 264px;
+                spacing: 8px;
                 alignment: start;
 
                 Card {
                     VerticalLayout {
-                        spacing: 8px;
+                        spacing: 10px;
 
-                        SectionTitle {
-                            text: Strings.source-label;
+                        HorizontalLayout {
+                            spacing: 10px;
+
+                            Glyph {
+                                glyph: Glyphs.source;
+                                color: Tokens.teal-text;
+                                width: 20px;
+                            }
+
+                            SectionTitle {
+                                text: Strings.source-label;
+                            }
                         }
 
                         source := ComboBox {
@@ -399,27 +439,27 @@ export component MainWindow inherits Window {
 
                 Card {
                     VerticalLayout {
-                        spacing: 8px;
-
-                        SectionTitle {
-                            text: Strings.master-volume-title;
-                        }
+                        spacing: 6px;
 
                         HorizontalLayout {
-                            spacing: 8px;
+                            spacing: 10px;
 
                             Glyph {
-                                glyph: Glyphs.volume-low;
-                                font-size: 12px;
-                                color: Tokens.secondary-text;
+                                glyph: Glyphs.volume-high;
+                                color: Tokens.teal-text;
+                                width: 20px;
                             }
 
-                            VolumeSlider {
-                                volume: root.master-volume;
-                                label: Strings.master-volume;
-                                changed(value) => {
-                                    root.master-volume-changed(value);
-                                }
+                            SectionTitle {
+                                text: Strings.master-volume-title;
+                            }
+                        }
+
+                        VolumeSlider {
+                            volume: root.master-volume;
+                            label: Strings.master-volume;
+                            changed(value) => {
+                                root.master-volume-changed(value);
                             }
                         }
                     }
@@ -448,6 +488,10 @@ export component MainWindow inherits Window {
                     SpeakerSection {
                         title: Strings.this-pc-section;
                         speakers: root.this-pc;
+                        forget-pairing(id) => {
+                            root.forget-pairing-requested(id);
+                        }
+                        compact: root.compact;
                         note: root.this-pc.length == 0 ? Strings.this-pc-none : "";
                         toggled(id) => {
                             root.speaker-toggled(id);
@@ -470,7 +514,7 @@ export component MainWindow inherits Window {
                     }
 
                     if root.groups.length > 0: VerticalLayout {
-                        spacing: 6px;
+                        spacing: 8px;
                         accessible-role: groupbox;
                         accessible-label: Strings.groups;
 
@@ -483,7 +527,8 @@ export component MainWindow inherits Window {
 
                             for group[index] in root.groups: VerticalLayout {
                                 if index > 0: HorizontalLayout {
-                                    padding-left: 52px;
+                                    padding-left: Fluent.name-inset;
+                                    padding-right: 8px;
                                     Divider { }
                                 }
 
@@ -506,6 +551,10 @@ export component MainWindow inherits Window {
                     SpeakerSection {
                         title: Strings.connected-section;
                         speakers: root.connected;
+                        forget-pairing(id) => {
+                            root.forget-pairing-requested(id);
+                        }
+                        compact: root.compact;
                         note: root.connected.length == 0 ? Strings.connected-none : "";
                         toggled(id) => {
                             root.speaker-toggled(id);

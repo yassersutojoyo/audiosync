@@ -1,15 +1,17 @@
 //! The interface between the UI and the audio backend.
 //!
 //! The UI owns one [`AudioBackend`] and calls it from its own thread: it lists
-//! sources and outputs, starts and stops playback, changes output settings,
-//! and calls [`AudioBackend::poll`] about twice a second to learn about device
-//! changes. Which speakers to turn on, and when playback should start or stop
+//! sources, outputs and AirPlay speakers, starts and stops playback, changes
+//! their settings, and calls [`AudioBackend::poll`] about twice a second to
+//! learn about device changes and AirPlay speakers coming and going. Which speakers to turn on, and when playback should start or stop
 //! because of them, stays the UI's decision (the session rules in
 //! `audiosync_core::policy::session`).
 
 use std::fmt;
 
 use audiosync_core::eq::EqSettings;
+
+use super::routing::DirectPath;
 
 /// What AudioSync captures.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -81,6 +83,131 @@ pub struct OutputInfo {
     pub playing: bool,
 }
 
+/// Whether an AirPlay speaker can play from AudioSync.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AirPlayAvailability {
+    /// It can.
+    Open,
+    /// It asks for a password; AudioSync can't send one yet.
+    PasswordNotYet,
+    /// An Apple TV that asks for a PIN once: switching it on pairs it, and
+    /// its credentials are kept from then on.
+    NeedsPin,
+    /// It needs another kind of pairing with a PIN, which AudioSync can't do
+    /// yet.
+    PairingNotYet,
+    /// Only AirPlay 2 can play it; AudioSync speaks AirPlay 1 only so far.
+    AirPlay2NotYet,
+    /// It wants an encryption, codec, transport or format AudioSync can't
+    /// send.
+    Unsupported,
+}
+
+/// An AirPlay speaker on the network, and its settings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AirPlayInfo {
+    /// Its ID: the device ID the speaker announces, the same across
+    /// restarts.
+    pub id: String,
+    /// The name it announces.
+    pub name: String,
+    /// Whether it can play from AudioSync.
+    pub availability: AirPlayAvailability,
+    /// Whether the user turned it on.
+    pub enabled: bool,
+    /// The volume slider position, 0 to 100.
+    pub volume: f64,
+    /// Its own delay d_s in milliseconds, 0 to 3000.
+    pub delay_ms: f64,
+    /// Whether it plays right now.
+    pub playing: bool,
+    /// Whether AudioSync keeps credentials from pairing with it.
+    pub paired: bool,
+    /// Whether a pairing with it is running.
+    pub pairing: bool,
+}
+
+/// The PIN prompt of a running pairing: the Apple TV shows a PIN for the
+/// user to type, or will again after a wrong one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AirPlayPinPrompt {
+    /// The speaker's ID.
+    pub id: String,
+    /// The name it announces.
+    pub name: String,
+    /// Where the pairing is.
+    pub phase: PairingPhase,
+    /// The Apple TV turned the last PIN down; it shows a new one.
+    pub wrong_pin: bool,
+}
+
+/// Where a pairing is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PairingPhase {
+    /// Asking the Apple TV to show a PIN.
+    Starting,
+    /// The Apple TV shows a PIN; waiting for the user to type it.
+    WaitingForPin,
+    /// The PIN went to the Apple TV; waiting for its answer.
+    Checking,
+}
+
+/// What went wrong with an AirPlay speaker, for a notice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AirPlayProblem {
+    /// It didn't answer; AudioSync keeps trying.
+    NotResponding,
+    /// The connection died or the speaker went silent; AudioSync keeps
+    /// trying.
+    ConnectionLost,
+    /// Another sender seems to be playing to it; AudioSync keeps trying.
+    Busy,
+    /// It turned the stream down, or answered in a way AudioSync doesn't
+    /// understand; AudioSync keeps trying.
+    Refused,
+    /// It asks for a password, which AudioSync can't send yet.
+    PasswordNotYet,
+    /// An Apple TV that needs pairing with a PIN first (or again, after it
+    /// stopped accepting AudioSync's credentials). Switching it on pairs it.
+    NeedsPin,
+    /// The pairing with an Apple TV failed, so it is off.
+    PairingFailed,
+    /// It needs another kind of pairing, which AudioSync can't do yet.
+    PairingNotYet,
+    /// Only AirPlay 2 can play it.
+    AirPlay2NotYet,
+    /// AudioSync can't play to it at all.
+    Unsupported,
+}
+
+impl AirPlayProblem {
+    /// Whether AudioSync keeps trying by itself; otherwise the speaker is
+    /// turned off.
+    pub fn retried(self) -> bool {
+        matches!(
+            self,
+            AirPlayProblem::NotResponding
+                | AirPlayProblem::ConnectionLost
+                | AirPlayProblem::Busy
+                | AirPlayProblem::Refused
+        )
+    }
+}
+
+impl AirPlayAvailability {
+    /// Why a speaker that isn't open can't play, or `None` when it can.
+    pub fn problem(self) -> Option<AirPlayProblem> {
+        match self {
+            AirPlayAvailability::Open => None,
+            AirPlayAvailability::PasswordNotYet => Some(AirPlayProblem::PasswordNotYet),
+            AirPlayAvailability::NeedsPin => Some(AirPlayProblem::NeedsPin),
+            AirPlayAvailability::PairingNotYet => Some(AirPlayProblem::PairingNotYet),
+            AirPlayAvailability::AirPlay2NotYet => Some(AirPlayProblem::AirPlay2NotYet),
+            AirPlayAvailability::Unsupported => Some(AirPlayProblem::Unsupported),
+        }
+    }
+}
+
 /// Something the UI should know about, from [`AudioBackend::poll`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BackendEvent {
@@ -104,6 +231,43 @@ pub enum BackendEvent {
     Stopped {
         /// Why it stopped.
         reason: StopReason,
+    },
+    /// Whether the source is heard twice: straight from Windows, undelayed,
+    /// as well as through AudioSync's delayed copies. Checked every few
+    /// seconds while streaming and reported when the answer changes.
+    HeardTwice {
+        /// The endpoints the source is heard from straight, by endpoint ID;
+        /// empty once it is heard only through AudioSync again, or streaming
+        /// stopped.
+        paths: Vec<DirectPath>,
+    },
+    /// AirPlay speakers appeared, changed, went away, or started or stopped
+    /// playing: list them again.
+    AirPlayChanged,
+    /// An AirPlay speaker plays (again).
+    AirPlayPlaying {
+        /// The speaker's ID.
+        id: String,
+    },
+    /// An AirPlay speaker stopped playing, and AudioSync keeps trying to
+    /// reach it. It stays on.
+    AirPlayTrouble {
+        /// The speaker's ID.
+        id: String,
+        /// What went wrong.
+        problem: AirPlayProblem,
+    },
+    /// An AirPlay speaker can't play from AudioSync, so it was turned off.
+    AirPlayFailed {
+        /// The speaker's ID.
+        id: String,
+        /// Why.
+        problem: AirPlayProblem,
+    },
+    /// An Apple TV the user switched on was paired, and is on now.
+    AirPlayPaired {
+        /// The speaker's ID.
+        id: String,
     },
 }
 
@@ -227,7 +391,8 @@ pub trait AudioBackend {
     fn set_output_volume(&mut self, id: &str, position: f64);
 
     /// Sets the master volume slider position (0 to 100), which scales every
-    /// output, live. A value that isn't finite is ignored.
+    /// output and AirPlay speaker, live. A value that isn't finite is
+    /// ignored.
     fn set_master_volume(&mut self, position: f64);
 
     /// The master volume slider position.
@@ -238,8 +403,51 @@ pub trait AudioBackend {
     /// settings are kept for the next start.
     fn set_equalizer(&mut self, settings: EqSettings);
 
-    /// Handles device changes, lost outputs and the end of capture, and
-    /// returns what the UI should know. Call it about twice a second.
+    /// The AirPlay speakers on the network, by name, with their settings;
+    /// empty while there is no AirPlay sender.
+    fn airplay_speakers(&self) -> Vec<AirPlayInfo>;
+
+    /// The IDs of the AirPlay speakers turned on, listed or not, sorted.
+    fn enabled_airplay(&self) -> Vec<String>;
+
+    /// Turns an AirPlay speaker on or off. While playing, a speaker turned on
+    /// starts at once. One that can't play from AudioSync stays off, with the
+    /// reason returned: [`AirPlayProblem::NeedsPin`] for an Apple TV to pair
+    /// first ([`AudioBackend::start_airplay_pairing`]). Turning a speaker off
+    /// also stops its pairing.
+    fn set_airplay_enabled(&mut self, id: &str, enabled: bool) -> Result<(), AirPlayProblem>;
+
+    /// Starts pairing with an Apple TV that asks for a PIN: it shows one, and
+    /// [`AudioBackend::airplay_pin_prompt`] asks the UI for it. Paired, the
+    /// speaker is turned on ([`BackendEvent::AirPlayPaired`]); a failure
+    /// leaves it off with [`BackendEvent::AirPlayFailed`].
+    fn start_airplay_pairing(&mut self, id: &str) -> Result<(), AirPlayProblem>;
+
+    /// The PIN the user typed for the speaker's pairing. Returns whether it
+    /// went to the Apple TV: only digits, while the pairing waits for one.
+    fn submit_airplay_pin(&mut self, id: &str, pin: &str) -> bool;
+
+    /// Stops the speaker's pairing; the speaker stays off.
+    fn cancel_airplay_pairing(&mut self, id: &str);
+
+    /// Forgets the speaker's pairing credentials: it is turned off, and asks
+    /// for a PIN again the next time it is switched on.
+    fn forget_airplay_pairing(&mut self, id: &str);
+
+    /// The PIN prompt to show, if a pairing has one.
+    fn airplay_pin_prompt(&self) -> Option<AirPlayPinPrompt>;
+
+    /// Sets an AirPlay speaker's volume slider position (0 to 100), live. A
+    /// value that isn't finite is ignored.
+    fn set_airplay_volume(&mut self, id: &str, position: f64);
+
+    /// Sets an AirPlay speaker's own delay d_s in milliseconds, live. A value
+    /// that isn't finite is ignored; others are clamped to 0 to 3000.
+    fn set_airplay_delay(&mut self, id: &str, delay_ms: f64);
+
+    /// Handles device changes, lost outputs, the end of capture and what the
+    /// AirPlay sender reports, and returns what the UI should know. Call it
+    /// about twice a second.
     fn poll(&mut self) -> Vec<BackendEvent>;
 }
 
