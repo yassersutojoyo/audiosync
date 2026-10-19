@@ -23,10 +23,11 @@
 #
 # That code includes parts of the Rust standard library, so licenses/rust/ next
 # to the library receives its copyright notices and license texts from the
-# toolchain that built it; build.sh ships them in the app.
+# toolchain that built it, and, in crates.txt, those of the crates compiled in
+# with the core (scripts/core_notices.py); build.sh ships them in the app.
 #
 # Needs a Rust toolchain (https://rustup.rs) with the standard library for both
-# macOS targets; with rustup, a missing target is added here.
+# macOS targets, and python3; with rustup, a missing target is added here.
 # Usage: scripts/build_core.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -155,5 +156,9 @@ for notice in COPYRIGHT-library.html licenses/MIT.txt licenses/Apache-2.0.txt; d
   fi
 done
 rustc --version > "$licenses/rustc-version.txt"
+# The crates compiled into the library (AudioSync's AirPlay sender and the
+# crates it uses): each one's license and notice texts, from core/Cargo.lock.
+# Fails when a crate's license isn't on core/deny.toml's list.
+python3 -I "$root/scripts/core_notices.py" --output "$licenses/crates.txt" "$arm" "$intel"
 
 echo "   ${out#"$root"/}/$lib ($(xcrun lipo -archs "$out/$lib"))"

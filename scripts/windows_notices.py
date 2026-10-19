@@ -898,13 +898,25 @@ def find_package(packages, name):
     raise NoticeError("{} isn't in the dependency graph".format(name))
 
 
-def build(target):
-    policy = LicensePolicy()
-    packages, graph = dependency_packages(target)
-    local =[p for p in packages if p.get("source") is None]
+def deny_label():
+    """The deny.toml the policy comes from, as the repository names it."""
+    return os.path.relpath(os.path.join(WINDOWS, "deny.toml"), REPO).replace(os.sep, "/")
+
+
+def split_packages(packages):
+    """AudioSync's own packages (from this repository) and the registry
+    crates, the crates sorted by name and version."""
+    local = [p for p in packages if p.get("source") is None]
     crates = sorted((p for p in packages if p.get("source") is not None),
                     key=lambda p: (p["name"], [int(n) if n.isdigit() else n for n in re.split(r"[.+-]", p["version"])]))
+    return local, crates
 
+
+def check_packages(policy, local, crates):
+    """Each crate's parsed license expression and the supplements its
+    sources need, by package ID. Raises NoticeError listing every problem: an
+    own package that isn't MIT, a license deny.toml doesn't cover, or code from
+    another project whose notice is missing."""
     problems = []
     for package in local:
         if package.get("license") != "MIT":
@@ -916,8 +928,8 @@ def build(target):
             continue
         expression = Expression(package["license"])
         if not expression.covered_by(policy.for_package(package)):
-            problems.append("{} {}: '{}' isn't covered by windows/deny.toml".format(
-                package["name"], package["version"], package["license"]))
+            problems.append("{} {}: '{}' isn't covered by {}".format(
+                package["name"], package["version"], package["license"], deny_label()))
         expressions[package["id"]] = expression
         references, shipped = source_references(package)
         for reference, paths in sorted(references.items()):
@@ -933,6 +945,45 @@ def build(target):
                                     package["name"], package["version"], paths[0], reference))
     if problems:
         raise NoticeError("\n  ".join(["license problems:"] + problems))
+    return expressions, supplements
+
+
+def write_crates(out, policy, crates, expressions, supplements):
+    """One entry per crate: name, version, license and repository, then the
+    text of every license or notice file it ships (or its license's standard
+    text), and the supplements its sources need."""
+    for package in crates:
+        expression = expressions[package["id"]]
+        license_line = package["license"]
+        if SLINT_ELECTED in expression.ids:
+            license_line += " (used under {})".format(SLINT_ELECTED)
+        out.add("", THIN_RULE, "{} {}".format(package["name"], package["version"]),
+                "License: {}".format(license_line),
+                "Repository: {}".format(package.get("repository") or package.get("homepage") or "not given"))
+        owner = "{} {}".format(package["name"], package["version"])
+        files = notice_files(package, expression)
+        for label, path in files:
+            out.text(label, read_text(path), owner)
+        if not files:
+            allowed = policy.for_package(package)
+            ids = [i for i in dict.fromkeys(expression.ids) if i in TEMPLATES and i in allowed]
+            # Every license the crate needs (all sides of an AND) must have a text.
+            if not expression.covered_by(set(ids)):
+                raise NoticeError("{} has no license file and no standard text for '{}'".format(owner, package["license"]))
+            out.add("", "The package has no license file; the standard text of its license",
+                    "follows, with the crate's authors as copyright holders.")
+            for spdx in ids:
+                out.text("{} (standard text)".format(spdx), TEMPLATES[spdx].format(holders=holders(package)), owner)
+        for supplement, paths in supplements.get(package["id"], []):
+            for label, text in supplement(package, paths):
+                out.text(label, text, owner)
+
+
+def build(target):
+    policy = LicensePolicy()
+    packages, graph = dependency_packages(target)
+    local, crates = split_packages(packages)
+    expressions, supplements = check_packages(policy, local, crates)
 
     slint = find_package(crates, "slint")
     slint_license = os.path.join(os.path.dirname(slint["manifest_path"]), "LICENSES", SLINT_ELECTED + ".md")
@@ -1014,31 +1065,7 @@ def build(target):
             "include it.")
 
     out.heading("5. Rust crates ({})".format(len(crates)))
-    for package in crates:
-        expression = expressions[package["id"]]
-        license_line = package["license"]
-        if SLINT_ELECTED in expression.ids:
-            license_line += " (used under {})".format(SLINT_ELECTED)
-        out.add("", THIN_RULE, "{} {}".format(package["name"], package["version"]),
-                "License: {}".format(license_line),
-                "Repository: {}".format(package.get("repository") or package.get("homepage") or "not given"))
-        owner = "{} {}".format(package["name"], package["version"])
-        files = notice_files(package, expression)
-        for label, path in files:
-            out.text(label, read_text(path), owner)
-        if not files:
-            allowed = policy.for_package(package)
-            ids = [i for i in dict.fromkeys(expression.ids) if i in TEMPLATES and i in allowed]
-            # Every license the crate needs (all sides of an AND) must have a text.
-            if not expression.covered_by(set(ids)):
-                raise NoticeError("{} has no license file and no standard text for '{}'".format(owner, package["license"]))
-            out.add("", "The package has no license file; the standard text of its license",
-                    "follows, with the crate's authors as copyright holders.")
-            for spdx in ids:
-                out.text("{} (standard text)".format(spdx), TEMPLATES[spdx].format(holders=holders(package)), owner)
-        for supplement, paths in supplements.get(package["id"], []):
-            for label, text in supplement(package, paths):
-                out.text(label, text, owner)
+    write_crates(out, policy, crates, expressions, supplements)
     out.add("")
     return out.lines, len(crates)
 
