@@ -412,8 +412,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         localNetworkProbe.onChange = { _ in }
         stopEngine()
         nativeAirPlay?.shutdown()   // AudioSync's own sender: every speaker gets its TEARDOWN
-        nowPlaying.stop()
-        localNetworkProbe.stop()
+        nowPlaying.stopWatching()
+        localNetworkProbe.stopBrowsing()
         deviceVolumes.stopFollowing()   // removes the listeners, writes nothing (S192, S195)
     }
 }

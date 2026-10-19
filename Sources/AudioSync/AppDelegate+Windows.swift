@@ -203,7 +203,7 @@ extension AppDelegate {
         publish(\.airplaySenderFailed, nativeStarts.stopped)
         // The sender is up once it and its discovery started.
         publish(\.localNetworkHint, LocalNetworkHint.decide(
-            access: localNetworkProbe.access, senderUp: nativeStarts.running,
+            access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
             emptySince: airplayEmptySince, now: Date()))
         if let equalizerModel { publish(\.equalizerOn, equalizerModel.settings.enabled) }
         publish(\.groups, groupSnapshot())
