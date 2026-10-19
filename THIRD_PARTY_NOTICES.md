@@ -9,9 +9,9 @@ inside `AudioSync.app`:
 
 Every build also ships the Poppins font (`Contents/Resources/Fonts/`), see
 [Fonts](#fonts). The app binary also contains AudioSync's audio core (`core/`,
-written in Rust and MIT-licensed like the rest of AudioSync; its only
-third-party crates are test and benchmark tools that never reach the app) and,
-compiled in with it, parts of the Rust standard library, see
+written in Rust and MIT-licensed like the rest of AudioSync) with AudioSync's
+own AirPlay sender (`airplay/`, MIT), and, compiled in with them, parts of the
+Rust standard library and the third-party crates the sender uses, see
 [App frameworks and libraries](#app-frameworks-and-libraries).
 
 The engine runs as a separate process that AudioSync talks to over named
@@ -23,7 +23,9 @@ app also carries, in `Contents/Resources/ThirdParty/`:
 - the exact library versions it was built with (`versions.txt`)
 - each library's own license files (`licenses/<library>/`)
 - the Poppins font license (`licenses/poppins/OFL.txt`)
-- the Rust standard library's copyright notices and license texts (`licenses/rust/`)
+- the copyright notices and license texts of the Rust standard library and of
+  the Rust crates compiled into the audio core (`licenses/rust/`, the crates in
+  `crates.txt`)
 
 The engine as distributed is covered by OwnTone's license, the GNU GPL
 version 2 or later. The libraries it links keep their own licenses, all of them
@@ -128,6 +130,29 @@ above are attached to each release, as described above.
 |---|---|
 | [Sparkle](https://sparkle-project.org) 2.9.5 (update framework, currently disabled; license in `licenses/sparkle/`) | MIT |
 | [Rust standard library](https://github.com/rust-lang/rust), © The Rust Project Developers (the parts the audio core uses, compiled into the app binary; its copyright notices, which also cover the crates it is built from, its license texts and the Rust version in `licenses/rust/`) | MIT OR Apache-2.0 |
+
+The audio core carries AudioSync's own AirPlay sender (`airplay/`, MIT), the
+one the Windows app uses, which brings these crates into the app binary:
+`mdns-sd` to find receivers on the network, with `flume`, `spin` (MIT),
+`lock_api`, `scopeguard`, `mio` (MIT), `socket2`, `socket-pktinfo` (MIT),
+`if-addrs` (MIT OR BSD-3-Clause), `fastrand`, `log` and `libc`; `md-5` with
+`digest`, `block-buffer`, `crypto-common`, `hybrid-array` and `typenum` for
+password digests; `getrandom` with `cfg-if` for random identifiers; for Apple
+TV pairing, RustCrypto's `sha1`, `sha2`, `aes`, `aes-gcm`, `ctr` and
+`crypto-bigint` with `aead`, `cipher`, `ghash`, `polyval`, `universal-hash`,
+`inout`, `cpufeatures`, `cpubits`, `cmov`, `ctutils` and `rand_core`;
+`ed25519-dalek`, `x25519-dalek` and `curve25519-dalek` (BSD-3-Clause) with
+`ed25519`, `signature` and `subtle` (BSD-3-Clause); `zeroize`; and `plist`
+(MIT) for the pairing's property lists, with `quick-xml` (MIT), `time`,
+`time-core`, `deranged`, `powerfmt`, `num-conv`, `num-traits`, `base64`,
+`indexmap`, `equivalent`, `hashbrown` and `memchr` (Unlicense OR MIT). The
+others are under MIT OR Apache-2.0. CI checks every crate in the core's build
+with `cargo deny check licenses` against `core/deny.toml`, and
+`scripts/build_core.sh` writes each compiled crate's version, license and full
+license and notice texts to `licenses/rust/crates.txt`, from `core/Cargo.lock`
+(`scripts/core_notices.py`). So far the app uses only the sender's discovery,
+behind a hidden debug option; the bundled engine above still plays to AirPlay
+speakers.
 
 ## Fonts
 
