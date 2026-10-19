@@ -11,6 +11,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Changed
 
+- Delays now work with local speakers alone. The Mac's built-in speakers are the reference and have no delay of their own; every other local speaker's delay is relative to them and always applies, so you can line a Bluetooth speaker up with the built-in speakers (it usually needs about −150 to −300 ms) without any AirPlay speaker on. Lining the Mac up with AirPlay speakers happens in one place now, the AirPlay delay under Connected Speakers. Delays from an earlier version are carried over once, so a setup tuned for AirPlay sounds the same.
 - Building from source now needs a Rust toolchain, since the app links a small Rust library.
 
 ### Fixed

@@ -15,6 +15,7 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use audiosync_core::eq::{self, EqSettings};
+use audiosync_core::policy::device_volume::Hint;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
 use crate::backdrop::Frame;
@@ -25,9 +26,9 @@ use crate::ui_model::{
     ViewSettings, WindowFrame,
 };
 use crate::{
-    AboutDialog, AirPlayProblem, Availability, EqualizerWindow, GroupItem, GroupNameDialog,
-    GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, Palette, PinDialog, PinPhase,
-    RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
+    AboutDialog, AirPlayProblem, Availability, DeviceVolumeHint, EqualizerWindow, GroupItem,
+    GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, Palette,
+    PinDialog, PinPhase, RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
 };
 
 /// The digits the PIN field keeps of what was typed: four at most.
@@ -621,6 +622,10 @@ impl App {
         let w = weak.clone();
         main.on_forget_pairing_requested(move |id| {
             with_app(&w, |app| app.update(|b| b.forget_pairing(&id)))
+        });
+        let w = weak.clone();
+        main.on_device_volume_fix_requested(move |id| {
+            with_app(&w, |app| app.update(|b| b.fix_device_volume(&id)))
         });
         let w = weak.clone();
         main.on_group_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_group(&id))));
@@ -1416,6 +1421,18 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
     }
 }
 
+/// A device-volume hint as a row shows it, with the whole percent it names
+/// (spec S198, S199).
+fn device_volume_hint(hint: Option<Hint>) -> (DeviceVolumeHint, i32) {
+    let percent = |percent: u32| i32::try_from(percent).unwrap_or(i32::MAX);
+    match hint {
+        None => (DeviceVolumeHint::None, 0),
+        Some(Hint::Low { percent: n }) => (DeviceVolumeHint::Low, percent(n)),
+        Some(Hint::Muted) => (DeviceVolumeHint::Muted, 0),
+        Some(Hint::MutedAndLow { percent: n }) => (DeviceVolumeHint::MutedLow, percent(n)),
+    }
+}
+
 fn pin_phase(phase: ui_model::PinPhase) -> PinPhase {
     match phase {
         ui_model::PinPhase::Starting => PinPhase::Starting,
@@ -1433,6 +1450,7 @@ pub fn speaker_item(
     draft: Option<&str>,
 ) -> SpeakerItem {
     let delay = speaker.delay_ms.unwrap_or(0.0);
+    let (device_volume, device_volume_percent) = device_volume_hint(speaker.device_volume);
     SpeakerItem {
         id: speaker.id.as_str().into(),
         name: speaker.name.as_str().into(),
@@ -1450,6 +1468,8 @@ pub fn speaker_item(
         auto_connect: speaker.auto_connect,
         availability: availability(speaker.availability),
         paired: speaker.paired,
+        device_volume,
+        device_volume_percent,
     }
 }
 

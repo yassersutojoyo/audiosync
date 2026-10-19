@@ -11,10 +11,16 @@
 //! For the double-audio check, each mock output has a mute, a volume and the
 //! processes with an active session on it; an output AudioSync plays to has
 //! an active session of AudioSync's own, as on Windows.
+//!
+//! The same mute and volume are each output's own volume in Windows, which
+//! the backend follows for the outputs that are on (spec S192 to S202): the
+//! mock records which outputs have a change listener and every write, and a
+//! change made through [`MockBackend`] notifies a followed output, as Windows
+//! does.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::reader::Reader;
@@ -54,6 +60,60 @@ const FULL_VOLUME: EndpointVolume = EndpointVolume {
     muted: false,
     level: 1.0,
 };
+
+/// A write to an output's own volume, as the mock driver records it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum VolumeWrite {
+    /// `SetMasterVolumeLevelScalar`, 0 to 1.
+    Level { id: String, level: f32 },
+    /// `SetMute(false)`.
+    Unmute { id: String },
+}
+
+/// What the mock driver records of the outputs' own volumes: the outputs
+/// with a change listener, and every write. Shared, so a test can still read
+/// it once the backend is gone.
+#[derive(Clone, Debug, Default)]
+pub struct VolumeRecord(Arc<Mutex<Recorded>>);
+
+#[derive(Debug, Default)]
+struct Recorded {
+    watched: BTreeSet<String>,
+    writes: Vec<VolumeWrite>,
+}
+
+impl VolumeRecord {
+    /// The outputs with a change listener now, sorted.
+    pub fn watched(&self) -> Vec<String> {
+        self.lock().watched.iter().cloned().collect()
+    }
+
+    /// Every write so far, in order.
+    pub fn writes(&self) -> Vec<VolumeWrite> {
+        self.lock().writes.clone()
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Recorded> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// The outputs' own volumes, besides their mute and volume themselves.
+#[derive(Default)]
+struct DeviceVolumes {
+    record: VolumeRecord,
+    /// The followed outputs whose mute or volume changed since the backend
+    /// last asked.
+    changed: BTreeSet<String>,
+    /// Writes work but change nothing, as on a device that ignores them.
+    ignore_writes: bool,
+    /// Writes fail with this error.
+    write_error: Option<BackendError>,
+    /// Notifications wait in `held` until a test lets them through, as
+    /// Windows' come some time after the change.
+    hold: bool,
+    held: BTreeSet<String>,
+}
 
 /// What a mock capture shares with the driver.
 struct CaptureLink {
@@ -162,6 +222,8 @@ pub struct MockDriver {
     /// The mute and volume of the outputs set otherwise than unmuted at full
     /// volume; `None` when they can't be read.
     volumes: BTreeMap<String, Option<EndpointVolume>>,
+    /// The listeners, notifications and writes of the outputs' own volumes.
+    device_volumes: DeviceVolumes,
     endpoint_audio_error: Option<BackendError>,
     faded: Arc<AtomicUsize>,
     captures_started: Vec<Activation>,
@@ -204,6 +266,7 @@ impl MockDriver {
             renderers: Vec::new(),
             active_sessions: BTreeMap::new(),
             volumes: BTreeMap::new(),
+            device_volumes: DeviceVolumes::default(),
             endpoint_audio_error: None,
             faded: Arc::new(AtomicUsize::new(0)),
             captures_started: Vec::new(),
@@ -244,6 +307,49 @@ impl MockDriver {
     /// The mute and volume of output `id`.
     fn volume_of(&self, id: &str) -> Option<EndpointVolume> {
         self.volumes.get(id).copied().unwrap_or(Some(FULL_VOLUME))
+    }
+
+    fn is_connected(&self, id: &str) -> bool {
+        self.outputs.iter().any(|output| output.id == id)
+    }
+
+    /// Output `id`'s mute or volume changed: Windows notifies its listener,
+    /// now or once a test lets held notifications through.
+    fn notify_volume(&mut self, id: &str) {
+        if self.device_volumes.record.lock().watched.contains(id) {
+            let volumes = &mut self.device_volumes;
+            let queue = if volumes.hold {
+                &mut volumes.held
+            } else {
+                &mut volumes.changed
+            };
+            queue.insert(id.to_owned());
+        }
+    }
+
+    /// Records a write to output `id`'s own volume, and makes it unless the
+    /// writes fail or are ignored.
+    fn write_volume(
+        &mut self,
+        write: VolumeWrite,
+        change: impl FnOnce(Option<EndpointVolume>) -> EndpointVolume,
+    ) -> Result<(), BackendError> {
+        let id = match &write {
+            VolumeWrite::Level { id, .. } | VolumeWrite::Unmute { id } => id.clone(),
+        };
+        self.device_volumes.record.lock().writes.push(write);
+        if let Some(error) = &self.device_volumes.write_error {
+            return Err(error.clone());
+        }
+        if !self.is_connected(&id) {
+            return Err(BackendError::DeviceGone);
+        }
+        if !self.device_volumes.ignore_writes {
+            let volume = change(self.volume_of(&id));
+            self.volumes.insert(id.clone(), Some(volume));
+            self.notify_volume(&id);
+        }
+        Ok(())
     }
 }
 
@@ -306,6 +412,56 @@ impl Driver for MockDriver {
                 }
             })
             .collect())
+    }
+
+    fn watch_endpoint_volume(&mut self, id: &str) -> Result<(), BackendError> {
+        if !self.is_connected(id) {
+            return Err(BackendError::DeviceGone);
+        }
+        self.device_volumes
+            .record
+            .lock()
+            .watched
+            .insert(id.to_owned());
+        Ok(())
+    }
+
+    fn unwatch_endpoint_volume(&mut self, id: &str) {
+        self.device_volumes.record.lock().watched.remove(id);
+        self.device_volumes.changed.remove(id);
+        self.device_volumes.held.remove(id);
+    }
+
+    fn endpoint_volume_changes(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.device_volumes.changed)
+            .into_iter()
+            .collect()
+    }
+
+    fn endpoint_volume(&mut self, id: &str) -> Option<EndpointVolume> {
+        if !self.is_connected(id) {
+            return None;
+        }
+        self.volume_of(id)
+    }
+
+    fn set_endpoint_level(&mut self, id: &str, level: f32) -> Result<(), BackendError> {
+        let write = VolumeWrite::Level {
+            id: id.to_owned(),
+            level,
+        };
+        self.write_volume(write, |volume| EndpointVolume {
+            muted: volume.is_some_and(|volume| volume.muted),
+            level,
+        })
+    }
+
+    fn unmute_endpoint(&mut self, id: &str) -> Result<(), BackendError> {
+        let write = VolumeWrite::Unmute { id: id.to_owned() };
+        self.write_volume(write, |volume| EndpointVolume {
+            muted: false,
+            level: volume.map_or(1.0, |volume| volume.level),
+        })
     }
 
     fn start_capture(
@@ -487,6 +643,12 @@ impl Controller<MockDriver> {
         let driver = self.driver_mut();
         driver.outputs.retain(|output| output.id != id);
         driver.changed = true;
+        // Its volume control goes with it, and its listener is never called
+        // again, even once the device is back.
+        let volumes = &mut driver.device_volumes;
+        volumes.record.lock().watched.remove(id);
+        volumes.changed.remove(id);
+        volumes.held.remove(id);
     }
 
     /// Adds an endpoint as Windows would describe it, which the listing
@@ -572,22 +734,62 @@ impl Controller<MockDriver> {
         self.play_on(pid, to);
     }
 
-    /// Mutes or unmutes output `id`.
+    /// Mutes or unmutes output `id`, as Windows' Sound settings do: a
+    /// followed output is notified.
     pub fn mute_output(&mut self, id: &str, muted: bool) {
         let driver = self.driver_mut();
         let level = driver.volume_of(id).map_or(1.0, |volume| volume.level);
         driver
             .volumes
             .insert(id.to_owned(), Some(EndpointVolume { muted, level }));
+        driver.notify_volume(id);
     }
 
-    /// Sets the master volume of output `id`, 0 to 1.
+    /// Sets the master volume of output `id`, 0 to 1, as Windows' Sound
+    /// settings do: a followed output is notified.
     pub fn set_output_level(&mut self, id: &str, level: f32) {
         let driver = self.driver_mut();
         let muted = driver.volume_of(id).is_some_and(|volume| volume.muted);
         driver
             .volumes
             .insert(id.to_owned(), Some(EndpointVolume { muted, level }));
+        driver.notify_volume(id);
+    }
+
+    /// Notifies output `id`'s volume listener without changing anything, as
+    /// Windows does for a change AudioSync doesn't show (a channel's volume).
+    pub fn notify_volume(&mut self, id: &str) {
+        self.driver_mut().notify_volume(id);
+    }
+
+    /// Makes later writes to the outputs' own volumes work without changing
+    /// anything (`true`), as on a device that ignores them, or work again.
+    pub fn ignore_volume_writes(&mut self, ignore: bool) {
+        self.driver_mut().device_volumes.ignore_writes = ignore;
+    }
+
+    /// Holds the volume notifications back (`true`) until this is called
+    /// with `false`, which lets them through, as Windows sends them some
+    /// time after a change.
+    pub fn hold_volume_notifications(&mut self, hold: bool) {
+        let volumes = &mut self.driver_mut().device_volumes;
+        volumes.hold = hold;
+        if !hold {
+            let held = std::mem::take(&mut volumes.held);
+            volumes.changed.extend(held);
+        }
+    }
+
+    /// Makes later writes to the outputs' own volumes fail with `error`, or
+    /// work again with `None`.
+    pub fn refuse_volume_writes(&mut self, error: Option<BackendError>) {
+        self.driver_mut().device_volumes.write_error = error;
+    }
+
+    /// The outputs with a volume listener and the writes to their volumes,
+    /// readable after the backend is gone.
+    pub fn volume_record(&self) -> VolumeRecord {
+        self.driver().device_volumes.record.clone()
     }
 
     /// Makes the mute and volume of output `id` unreadable.

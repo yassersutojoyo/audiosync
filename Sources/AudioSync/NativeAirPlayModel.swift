@@ -584,21 +584,3 @@ struct NativeSenderStarts {
         return news
     }
 }
-
-/// The delay a local speaker plays with while AudioSync's own sender is the
-/// AirPlay sender (AirPlay spec P114, the Windows app's rule): while a native
-/// speaker is chosen, exactly L + d_local, with d_local the stored delay
-/// (S77, 2000 ms by default) read as P114 migrates it, clamp(configured − L,
-/// 0, 3000), so a delay tuned for the bundled engine still lines up; with
-/// none chosen, 0 (S78). The stored setting is left as it is, so the bundled
-/// engine finds it unchanged; the one-time migration P114 describes comes
-/// when the native sender becomes the default.
-enum NativeLocalDelay {
-    /// The largest d_local, the sender's d_s range (P99).
-    static let maxTrimMs = 3000.0
-
-    static func effectiveMs(configuredMs: Double, latencyMs: Double, airPlayChosen: Bool) -> Double {
-        guard airPlayChosen else { return 0 }
-        return latencyMs + min(max(configuredMs - latencyMs, 0), maxTrimMs)
-    }
-}

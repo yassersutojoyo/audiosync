@@ -167,7 +167,7 @@ S182 to S191 take the click out of starts, stops, source changes and re-timings.
 
 ### Output devices' own volume
 
-S192 to S202 make a turned-down or muted output device visible. Every local output also has its own volume and mute, kept by the operating system per device and applied after AudioSync's renderer gain (S71), so what is heard is AudioSync's gain times the device's. On a Mac only the default output's volume is in the Sound menu and on the volume keys; the others are reached only through Audio MIDI Setup, so a device left at a low volume stays out of sight: at a test on a MacBook, its speakers sounded very quiet with AudioSync's slider at 100 because their own volume was 13 %. Windows keeps a volume and a mute per endpoint the same way. Today neither app reads or sets an output device's volume or mute (the Windows app reads them only for the double-audio check, `windows/src/audio/wasapi/routing.rs`). These clauses are design requirements, kept small for the feature freeze: AudioSync reads and shows, and writes only when the user clicks the fix.
+S192 to S202 make a turned-down or muted output device visible. Every local output also has its own volume and mute, kept by the operating system per device and applied after AudioSync's renderer gain (S71), so what is heard is AudioSync's gain times the device's. On a Mac only the default output's volume is in the Sound menu and on the volume keys; the others are reached only through Audio MIDI Setup, so a device left at a low volume stays out of sight: at a test on a MacBook, its speakers sounded very quiet with AudioSync's slider at 100 because their own volume was 13 %. Windows keeps a volume and a mute per endpoint the same way. Before these clauses neither app read or set an output device's volume or mute (the Windows app read them only for the double-audio check, `windows/src/audio/wasapi/routing.rs`); the Windows app follows them now (`windows/src/audio/controller/device_volume.rs`), the Mac app doesn't yet. These clauses are design requirements, kept small for the feature freeze: AudioSync reads and shows, and writes only when the user clicks the fix.
 
 - **S192** *Required.* Scope. The *device volume* of a local output is its operating system volume as a scalar from 0 to 1 (the position of the system's own slider for that device) and its mute. AudioSync reads both for every local output row that is switched on, whether or not a session runs, and for no other device: not for AirPlay speakers (whose volume is S73), not for outputs switched off, not for the capture source. It never sets a device volume or mute by itself: not at launch, at a start or stop, when an output is switched on or plugged in, on a source change, at quit, nor to restore an earlier value. The only write is the fix the user clicks (S197). The device volume never changes AudioSync's own volumes, its stored settings or the renderer gain (S70 to S76), and has no part in delay or sync.
 - **S193** *Required.* Reading on the Mac (Apple's Core Audio documentation). In the output scope of the device: the volume is `kAudioDevicePropertyVolumeScalar` of the main element when the device has it there; otherwise the mean of that property over the device's preferred stereo channels (`kAudioDevicePropertyPreferredChannelsForStereo`, channels 1 and 2 when the device doesn't say) that have it. The mute is `kAudioDevicePropertyMute` of the main element when the device has it; otherwise the device counts as muted only when every one of those channels that has a mute is muted. Each part counts as *known* only when its property is present and settable (`AudioObjectIsPropertySettable`): a volume that can't be set can't be fixed, so it is treated as absent. Many HDMI and DisplayPort outputs, some USB devices, and aggregate and multi-output devices have neither; S196 then shows nothing. Reading happens on the control or main thread, never on an audio thread.
@@ -175,7 +175,7 @@ S192 to S202 make a turned-down or muted output device visible. Every local outp
 - **S195** *Required.* Following changes. When an output's row is switched on (including the rows switched on at launch) or its device appears again (S137, S161), the host reads its device volume once and registers for changes: on the Mac a property listener on each address S193 read (`AudioObjectAddPropertyListenerBlock`, on a serial queue, results passed to the main thread); on Windows `IAudioEndpointVolume::RegisterControlChangeNotify`, whose callback runs on a system thread and passes the new mute and level to the UI thread. The row then shows the latest value; several notifications before the UI thread runs collapse into one update. The host removes the listener or unregisters the callback when the row is switched off, its device goes away, or the app quits, and holds no listener for any other device. A notification never touches an audio thread or the renderer.
 - **S196** *Required.* The decision, a pure function of the two parts. A known volume v becomes the whole percent `round(100 × clamp(v, 0, 1))` (half away from zero); a NaN or infinite reading makes the volume unknown. The output is *muted* when the mute is known and set, *low* when the volume is known and below 25 %, both when both hold, and *fine* otherwise; with both parts unknown it is *unknown*. Muted, low, and muted and low show a hint (S198); fine and unknown show nothing. Reason for 25 %: it catches a device left near the bottom (13 % in the case above, which sounded very quiet at AudioSync's 100) and leaves alone users who keep a device moderately low on purpose, such as a laptop at a third of its volume at night. A volume of 0 % without mute counts as low. The hint stays for as long as the decision does: it has no dismiss button and doesn't time out, and it goes only when the volume or the mute changes (or the row is switched off). This is intended: a user who keeps headphones at 15 % on purpose keeps seeing it, and it is small enough to live with.
 - **S197** *Required.* The fix. One click writes, once each: the volume, set to 0.75 only when the output is low; and the mute, cleared only when it is muted. The fix never lowers a volume, so unmuting a device at 90 % leaves it at 90 %. On the Mac it sets the same addresses S193 read: the main element's scalar, or each preferred stereo channel's scalar to 0.75 (a channel balance set on such a device is lost, which is rare and stated here), and the main mute or each channel's mute to 0; on Windows `SetMasterVolumeLevelScalar(0.75)` and `SetMute(false)`. The row is then updated from the change notification (S195), not from the values written, so a write the device ignores or refuses leaves the hint and the button exactly as they were, and only the log says so (S201). This is intended: the row always shows what the device reports, and a second click simply tries again. No dialog, alert or confirmation is shown. Reason for 75 % rather than 100 %: it is loud enough that AudioSync's own slider spans its useful range again, and short of the device's maximum, so one click doesn't put headphones or a nearby speaker at full scale; anyone who wants more raises it in the system's settings or with AudioSync's slider.
-- **S198** *Required.* Where the hint shows. In the main window's row of a switched-on local output (Mac `SpeakerRow`, Windows `SpeakerRow` in `widgets.slint`), on its own line under the volume slider: a small speaker glyph (decorative, hidden from VoiceOver and Narrator), the hint text in the secondary text style with at least 4.5:1 contrast in light and dark appearance, and the fix as a borderless, link-style button after it. It appears and disappears with the decision (S196) without moving focus, raising a window or showing a notice, and never on an AirPlay row or a row switched off. The Mac's compact menu bar panel (`CompactRow`) and the Windows tray flyout (`FlyoutRow`) have no per-output slider, so their row of a switched-on local output shows the state as a small glyph only, in the slot at the row's right where the availability note sits (a speaker with a slash when muted, a speaker with one wave when low), with no button: the hint text of S199 is its tooltip on the Mac and is added to the row's VoiceOver hint (Mac) or accessible description (Windows), and the fix is in the main window. The glyph uses the secondary text color, not a warning color, so it reads as information. On the Mac the main window's hint text carries a tooltip that explains it (S199).
+- **S198** *Required.* Where the hint shows. In the main window's row of a switched-on local output (Mac `SpeakerRow`, Windows `SpeakerRow` in `widgets.slint`), on its own line under the volume slider: a small speaker glyph (decorative, hidden from VoiceOver and Narrator), the hint text in the secondary text style with at least 4.5:1 contrast in light and dark appearance, and the fix as a borderless, link-style button after it. It appears and disappears with the decision (S196) without moving focus, raising a window or showing a notice, and never on an AirPlay row or a row switched off. The Mac's compact menu bar panel (`CompactRow`) and the Windows tray flyout (`FlyoutRow`) have no per-output slider, so their row of a switched-on local output shows the state as a small glyph only, in the slot at the row's right where the availability note sits (the platform's mute glyph when muted, on the Mac a speaker with a slash and on Windows the Segoe Fluent Icons Mute glyph, a speaker with a cross; a speaker with one wave when low), with no button: the hint text of S199 is its tooltip on the Mac and is added to the row's VoiceOver hint (Mac) or accessible description (Windows), and the fix is in the main window. The glyph uses the secondary text color, not a warning color, so it reads as information. On the Mac the main window's hint text carries a tooltip that explains it (S199).
 - **S199** *Required.* Wording, through `AppText` on the Mac and `strings.slint` on Windows; n is the whole percent of S196:
 
   | Case | Mac hint | Mac button | Windows hint | Windows button |
@@ -199,7 +199,7 @@ S192 to S202 make a turned-down or muted output device visible. Every local outp
 
 ### Local delay model (offsets relative to a reference output)
 
-S172 to S181 replace the rule that local outputs play at once unless an AirPlay speaker is chosen (S77, S78, S80). Under that rule the delay fields did nothing with only local outputs, although a Bluetooth speaker sounds some 150 to 300 ms behind a wired one, and every row, the built-in speakers included, carried an absolute delay of about two seconds that only meant something next to AirPlay. In this model the built-in speakers are the reference and have no delay setting; every other local output has an offset relative to them that always applies; the host turns the offsets of the outputs taking part into hold-backs and adds the AirPlay latency while an AirPlay speaker is chosen. These clauses are design requirements: until the Rust core, the Mac app and the Windows app follow them, the code behaves as the superseded clauses say. S79 (what "an AirPlay speaker is chosen" means) and S81 still apply.
+S172 to S181 replace the rule that local outputs play at once unless an AirPlay speaker is chosen (S77, S78, S80). Under that rule the delay fields did nothing with only local outputs, although a Bluetooth speaker sounds some 150 to 300 ms behind a wired one, and every row, the built-in speakers included, carried an absolute delay of about two seconds that only meant something next to AirPlay. In this model the built-in speakers are the reference and have no delay setting; every other local output has an offset relative to them that always applies; the host turns the offsets of the outputs taking part into hold-backs and adds the AirPlay latency while an AirPlay speaker is chosen. The Rust core, the Mac app and the Windows app follow these clauses; builds before them behave as the superseded clauses say. S79 (what "an AirPlay speaker is chosen" means) and S81 still apply.
 
 - **S172** *Required.* Terms used by S173 to S181:
   - A *local output* is an output the host renders to itself (S60), keyed by device UID on the Mac and by endpoint ID on Windows.
@@ -238,7 +238,7 @@ S172 to S181 replace the rule that local outputs play at once unless an AirPlay 
   - the native sender's adjustment A (S178) = 0: L_s isn't known at this moment, and no stored delay was ever read for that sender except through P114's clamp;
   - nothing for R: its old delay became the AirPlay delay, or is dropped when below 1000 ms.
 
-  The new values go under new keys, whose presence also marks the migration as done; the old keys are left as they are, so an older build still finds its own values and a newer one never reads them again. Effect, with the bundled engine: with an AirPlay speaker chosen and D_R ≥ 1000, every output with a stored delay, and every switched-on or listed output that played at D0, plays exactly as before as long as its offset needed no clamping (h = D_R + D_x − D_R = D_x, with D_x = D0 for one without a stored delay, S176); without AirPlay, outputs now line up by their offsets where they all used to play at once. Under the native sender (the Mac's hidden option) the offsets apply with the reported L_s (S178) instead of P114's clamp. Worked examples, in ms, hold-backs listed in the order of the first column:
+  The new values go under new keys (`localOffsetMsByUID`, `airPlayDelayMs`, `nativeAirPlayAdjustmentMs`), and the migration counts as done once a separate flag, `localDelayModelMigrated`, is set; it is written last, so a migration cut short runs again from the same old values. The old keys are left as they are, so an older build still finds its own values and a newer one never reads them again. Effect, with the bundled engine: with an AirPlay speaker chosen and D_R ≥ 1000, every output with a stored delay, and every switched-on or listed output that played at D0, plays exactly as before as long as its offset needed no clamping (h = D_R + D_x − D_R = D_x, with D_x = D0 for one without a stored delay, S176); without AirPlay, outputs now line up by their offsets where they all used to play at once. Under the native sender (the Mac's hidden option) the offsets apply with the reported L_s (S178) instead of P114's clamp. Worked examples, in ms, hold-backs listed in the order of the first column:
 
   | Stored before | D0 | Stored after | h with AirPlay chosen | h without AirPlay, all on |
   |---|---|---|---|---|
@@ -805,6 +805,33 @@ Removed on 2026-10-19 with the Swift engine's ring (`Tests/ringtest.swift`). Wha
 | EC12 network loss: a speaker back in the list is selected again | S104, S148, S167 |
 | EC12 network loss: a listed speaker the engine dropped is turned off with a notice | S104, S106, S109, S148, S167 |
 | EC12 network loss: an empty list with Local Network allowed shows no permission hint | S154, S167 |
+| local delay: with only local outputs, a speaker's delay is applied | S176 |
+| local delay: a Bluetooth speaker at −250 ms makes the built-in speakers wait 250 ms | S176 |
+| local delay: the built-in speakers are the reference | S173 |
+| local delay: the built-in headphone output doesn't take the reference from the built-in speakers | S173 |
+| local delay: a lone built-in output that reports no speaker terminal is the reference | S173 |
+| local delay: no built-in output, no reference | S173 |
+| local delay: a switched-off reference is still the reference | S173 |
+| local delay: AirPlay chosen adds the AirPlay delay on top | S176, S178 |
+| local delay: the native sender adds the latency it reports plus the AirPlay adjustment | S176, S178 |
+| local delay: a new AirPlay delay re-times the local speakers | S177, S178 |
+| local delay: a late speaker switched on or off re-times the running others | S177 |
+| local delay: editing the lowest offset re-times the others | S177 |
+| AirPlay delay: the bundled engine's field edits the stored value, 0 to 20 000 ms | S178, S181 |
+| AirPlay delay: the native sender's field shows L + A, follows a new L and an edit stores the difference | S178, S181 |
+| migration: a setup tuned for AirPlay sounds the same with AirPlay | S179 |
+| migration: the reference's old delay becomes the AirPlay delay | S179 |
+| migration: R without a stored delay uses D0 | S179 |
+| migration: an untuned output that played at D0 sounds the same with AirPlay | S179 |
+| migration: with a legacy delay below 1000 ms, untuned outputs keep playing together | S179 |
+| migration: the native sender's adjustment starts at 0 | S179 |
+| migration: small values keep their alignment and take the default AirPlay delay | S179 |
+| migration: an offset below −2000 ms is clamped | S179 |
+| migration: runs once and leaves the old values in place | S179 |
+| settings: offsets are kept in −2000…20 000 ms and the AirPlay delays in their ranges (S175, S178) | S175, S178 |
+| offset text: +150 ms, −250 ms and 0 ms | S181 |
+| offset text: a leading + or − (a hyphen too) is read and other text is ignored | S175, S181 |
+| speaker row: the reference has no delay field | S181 |
 
 ### fifo
 
@@ -862,9 +889,6 @@ Since 2026-10-19 the suite runs the app's pipe feed, `CoreFifoFeed`, and checks 
 | delay: lagFrames reads the lag after each change (S56) | S56 |
 | delay: one prime, then one resync per delay change (S158) | S158 |
 | delay: the counters survive resetPrime (S159) | S159 |
-| delay: AirPlay chosen → configured delay | S78 |
-| delay: no AirPlay → plays at once | S78 |
-| delay: zero stays zero | S78 |
 | delay: a chosen speaker not listed today doesn't count | S79 |
 | delay: chosen and listed counts | S79 |
 | delay: listed but not chosen doesn't count | S79 |
@@ -973,39 +997,9 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | the_reference_row_has_no_delay_and_the_others_show_a_signed_offset | S181 |
 | an_offset_takes_a_leading_plus_or_minus_and_other_text_is_ignored | S175, S181 |
 
-### local delay model: Mac (to be written first, failing)
+### local delay model: Mac
 
-The Mac's checks for S172 to S181. None exists yet: each is written first and fails against today's Mac code (the first row reproduces the reported bug), then the Mac app follows the clauses through the core's C interface. Once a check exists, its row moves to the logic table.
-
-Mac (`Tests/logictest.swift`):
-
-| Check | Clauses |
-|---|---|
-| local delay: with only local outputs, a speaker's delay is applied | S176 |
-| local delay: a Bluetooth speaker at −250 ms makes the built-in speakers wait 250 ms | S176 |
-| local delay: the built-in speakers are the reference | S173 |
-| local delay: the built-in headphone output doesn't take the reference from the built-in speakers | S173 |
-| local delay: a lone built-in output that reports no speaker terminal is the reference | S173 |
-| local delay: no built-in output, no reference | S173 |
-| local delay: a switched-off reference is still the reference | S173 |
-| local delay: AirPlay chosen adds the AirPlay delay on top | S176, S178 |
-| local delay: the native sender adds the latency it reports plus the AirPlay adjustment | S176, S178 |
-| local delay: a new AirPlay delay re-times the local speakers | S177, S178 |
-| local delay: a late speaker switched on or off re-times the running others | S177 |
-| local delay: editing the lowest offset re-times the others | S177 |
-| AirPlay delay: the native sender's field shows L + A, follows a new L and an edit stores the difference | S178, S181 |
-| migration: a setup tuned for AirPlay sounds the same with AirPlay | S179 |
-| migration: the reference's old delay becomes the AirPlay delay | S179 |
-| migration: R without a stored delay uses D0 | S179 |
-| migration: an untuned output that played at D0 sounds the same with AirPlay | S179 |
-| migration: with a legacy delay below 1000 ms, untuned outputs keep playing together | S179 |
-| migration: the native sender's adjustment starts at 0 | S179 |
-| migration: small values keep their alignment and take the default AirPlay delay | S179 |
-| migration: an offset below −2000 ms is clamped | S179 |
-| migration: runs once and leaves the old values in place | S179 |
-| offset text: +150 ms, −250 ms and 0 ms | S181 |
-| offset text: a leading + or − (a hyphen too) is read and other text is ignored | S175, S181 |
-| speaker row: the reference has no delay field | S181 |
+The Mac's checks for S172 to S181 were written first and failed against the Mac code of that day (the first one reproduced the reported bug); they pass now and are listed in the logic table, as "local delay", "AirPlay delay", "migration", "offset text" and "speaker row", with the settings check for the new keys.
 
 ### fades (to be written first, failing)
 
@@ -1081,11 +1075,9 @@ Windows (`cargo test` in `windows/`):
 
 By ear on real AirPlay receivers, outside these suites: with a speaker playing, a stop and a source change make no click on the speaker when the engine stops or the native sender flushes it, and the first sound after a start or a source change fades in (S189).
 
-### device volume (to be written first, failing)
+### device volume: core (`cargo test` in `core/`)
 
-The checks for S192 to S202. None exists yet: each is written first and fails against today's code (the first row of each host table reproduces the quiet MacBook speakers at 13 %), then the code follows the clauses. Once a check exists, its row moves to the table of the suite that runs it. The host checks drive the host's device-volume access through a fake that stands in for Core Audio or `IAudioEndpointVolume` (the Windows mock backend already keeps a volume and a mute per output), so no real device is read or written.
-
-Core (`cargo test` in `core/`, test functions with `// covers:` markers):
+The checks for S196, S197 and S201 in the Rust core, test functions with `// covers:` markers (`core/tests/policy_device_volume.rs`). The first row reproduces the quiet MacBook speakers at 13 %.
 
 | Test | Clauses |
 |---|---|
@@ -1095,6 +1087,28 @@ Core (`cargo test` in `core/`, test functions with `// covers:` markers):
 | the_fix_raises_to_75_percent_only_below_25_and_never_lowers | S197 |
 | the_fix_unmutes_without_touching_a_fine_volume | S197 |
 | a_reading_logs_only_when_its_decision_changes | S201 |
+
+### device volume: Windows (`cargo test` in `windows/`)
+
+The Windows checks for S192 to S202 (`windows/src/audio/controller/device_volume.rs`, `windows/src/adapter/device_volume_tests.rs` and, for the windows' sources, `windows/src/contrast.rs`). They drive `IAudioEndpointVolume` through the mock driver, which keeps a volume and a mute per output, records the listeners and every write, and notifies a followed output when a test changes its volume, so no real device is read or written. The first row reproduces the quiet speakers at 13 %.
+
+| Test | Clauses |
+|---|---|
+| a_switched_on_output_at_13_percent_shows_the_low_hint | S196, S198 |
+| a_muted_output_shows_the_unmute_fix | S196, S198 |
+| the_fix_sets_75_percent_and_unmutes_once_each | S197 |
+| nothing_is_written_without_a_click | S192, S197 |
+| an_endpoint_whose_volume_cannot_be_read_shows_nothing | S194, S196 |
+| an_endpoint_volume_notification_updates_the_row | S195, S202 |
+| the_hint_and_the_fix_name_the_output_for_narrator | S199, S200 |
+| the_flyout_row_shows_the_glyph_and_the_hint_in_its_description | S198, S199 |
+| a_volume_change_logs_only_when_its_decision_changes | S201 |
+
+Outside these suites, `cargo test real_endpoint_volumes -- --ignored --nocapture` in `windows/` reads the PC's own endpoint volumes and registers and unregisters a listener on each, changing nothing (S194, S195).
+
+### device volume: Mac (to be written first, failing)
+
+The Mac's checks for S192 to S202. None exists yet: each is written first and fails against today's Mac code (the first row reproduces the quiet MacBook speakers at 13 %), then the Mac app follows the clauses, deciding through the core (S196, S197, S201). Once a check exists, its row moves to the logic table. The checks drive the host's device-volume access through a fake that stands in for Core Audio, so no real device is read or written.
 
 Mac (`Tests/logictest.swift`):
 
@@ -1112,19 +1126,5 @@ Mac (`Tests/logictest.swift`):
 | device volume: the compact panel's row shows the glyph with the hint as tooltip and VoiceOver hint, without a button | S198, S199 |
 | device volume: a write the device ignores leaves the hint and the fix as they were and logs it | S197, S201 |
 | device volume: dragging the system volume across 25% logs one line | S201 |
-
-Windows (`cargo test` in `windows/`):
-
-| Test | Clauses |
-|---|---|
-| a_switched_on_output_at_13_percent_shows_the_low_hint | S196, S198 |
-| a_muted_output_shows_the_unmute_fix | S196, S198 |
-| the_fix_sets_75_percent_and_unmutes_once_each | S197 |
-| nothing_is_written_without_a_click | S192, S197 |
-| an_endpoint_whose_volume_cannot_be_read_shows_nothing | S194, S196 |
-| an_endpoint_volume_notification_updates_the_row | S195, S202 |
-| the_hint_and_the_fix_name_the_output_for_narrator | S199, S200 |
-| the_flyout_row_shows_the_glyph_and_the_hint_in_its_description | S198, S199 |
-| a_volume_change_logs_only_when_its_decision_changes | S201 |
 
 By hand on the Mac, outside these suites: set the built-in speakers to 13 % in Audio MIDI Setup, switch them on in AudioSync and see the hint; click Set to 75% and hear the level rise, with the hint gone and the system volume at 75 %; check the hint and the button in light and dark appearance and with VoiceOver (S193, S198, S200).

@@ -396,20 +396,12 @@ final class NativeAirPlay {
     }
 }
 
-/// The AirPlay sync rule while AudioSync's own sender is the AirPlay sender
-/// (`NativeLocalDelay`, AirPlay spec P114): a chosen speaker is one switched
-/// on and listed as able to play, or playing (`NativeAirPlayModel.soundingIDs`
-/// is the list it is checked against), and local outputs then play at L +
-/// d_local.
+/// What "an AirPlay speaker is chosen" means while AudioSync's own sender is
+/// the AirPlay sender (S79): one switched on and listed as able to play, or
+/// playing (`NativeAirPlayModel.soundingIDs` is the list it is checked
+/// against). Local outputs then wait L = L_s + A for it (S178, `AirPlayDelay`).
 struct NativeSyncRule: SyncRule {
-    /// L in ms.
-    let latencyMs: Double
-
     func airPlayChosen(enabled: Set<String>, listed: [String]) -> Bool {
         listed.contains(where: enabled.contains)
-    }
-
-    func effectiveDelayMs(configuredMs: Double, airPlayChosen: Bool) -> Double {
-        NativeLocalDelay.effectiveMs(configuredMs: configuredMs, latencyMs: latencyMs, airPlayChosen: airPlayChosen)
     }
 }
