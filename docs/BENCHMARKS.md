@@ -11,7 +11,7 @@ The part of the engine that runs all the time while you listen:
 
 Capture itself isn't in it (a process tap needs the recording permission and real audio), and neither is OwnTone or a real AirPlay speaker. A producer thread stands in for the tap: it writes 512-frame blocks paced by the system's uptime clock, into a ring buffer the same size as the app's. A paced reader on the pipe stands in for the engine.
 
-Both scripts run either engine: the Swift one (the default) or, with `--engine rust`, the Rust core, whose ring, delay readers, gain stages and pipe feed then take the place of the Swift ones, as they do in the app with `engineImpl` set to `rust` (see [DEVELOPMENT.md](DEVELOPMENT.md)). The output units and the harness are the same, so the two sets of numbers compare directly.
+Both scripts run either engine: the Swift one (the default) or, with `--engine rust`, the Rust core, whose ring, delay readers, gain stages and pipe feed then take the place of the Swift ones, as they do in the app, where the core is the default (see [DEVELOPMENT.md](DEVELOPMENT.md)). The output units and the harness are the same, so the two sets of numbers compare directly.
 
 ## Staying silent
 
