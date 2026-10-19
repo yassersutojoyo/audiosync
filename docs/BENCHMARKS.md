@@ -9,7 +9,7 @@ The part of the engine that runs all the time while you listen:
 - the delay ring buffer and the `OutputRenderer`s that play it on local outputs, each at its own delay with drift correction;
 - the pipe feed (`CoreFifoFeed`) that streams PCM16 at 48 kHz into the named pipe the AirPlay engine reads.
 
-Capture itself isn't in it (a process tap needs the recording permission and real audio), and neither is OwnTone or a real AirPlay speaker. A producer thread stands in for the tap: it writes 512-frame blocks paced by the system's uptime clock, into a ring buffer the same size as the app's. A paced reader on the pipe stands in for the engine.
+Capture itself isn't in it (a process tap needs the recording permission and real audio), and neither is the AirPlay sender or a real AirPlay speaker. A producer thread stands in for the tap: it writes 512-frame blocks paced by the system's uptime clock, into a ring buffer the same size as the app's. A paced reader on the pipe stands in for a reader of the core's PCM pipe feed, which the app itself no longer uses.
 
 The ring, the delay readers, the gain stages and the pipe feed are the Rust core's (`core/`), made the way a session in the app makes them (see [DEVELOPMENT.md](DEVELOPMENT.md)). Until 2026-10-19 the scripts could also run the Swift engine the core replaced; its last baseline, from 2026-10-17, is in the git history of `Tests/baseline/swift.json`.
 
