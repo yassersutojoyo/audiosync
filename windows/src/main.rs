@@ -314,8 +314,9 @@ mod tests {
         );
     }
 
-    /// Slint's royalty-free license asks for the AboutSlint widget in an About
-    /// dialog that the top-level menu opens; a UI change must not drop it.
+    /// The About dialog, opened from the top-level menu, names AudioSync's
+    /// copyright and license and credits Slint with its AboutSlint widget; a
+    /// UI change must not drop them.
     #[test]
     fn the_about_dialog_keeps_the_slint_attribution() {
         let about = include_str!("../ui/about.slint");
@@ -323,6 +324,11 @@ mod tests {
         assert!(
             about.contains("AboutSlint {"),
             "the About dialog shows AboutSlint"
+        );
+        assert!(
+            about.contains("text: Strings.about-copyright;")
+                && about.contains("text: Strings.about-license;"),
+            "the About dialog shows the copyright and the license"
         );
         assert!(
             main.contains("MenuBar {") && main.contains("root.about-requested();"),

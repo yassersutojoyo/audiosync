@@ -156,6 +156,8 @@ x86_64-pc-windows-msvc`; the file lands next to `audiosync.exe` in
 
 ## License
 
-MIT, like the rest of AudioSync. Slint is used under its royalty-free license,
-whose attribution is the `AboutSlint` widget in the About dialog, so keep it
-there. See [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+Copyright (C) 2026 Yasser Sutojoyo Kusumo. GPL-3.0-or-later, like the rest of
+AudioSync. Slint offers its crates under GPL-3.0-only or its own royalty-free
+and commercial licenses; public builds use them under GPL-3.0-only. The About
+dialog still shows Slint's `AboutSlint` widget as a credit. See
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).

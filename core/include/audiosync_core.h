@@ -1,6 +1,9 @@
 /*
  * audiosync_core.h: the C interface of audiosync-core, AudioSync's
- * platform-independent audio core (MIT).
+ * platform-independent audio core.
+ *
+ * Copyright (C) 2026 Yasser Sutojoyo Kusumo
+ * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Audio crosses this interface one whole buffer at a time: a pointer to
  * interleaved stereo float32 frames (L, R) plus a frame count, never one

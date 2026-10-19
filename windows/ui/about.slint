@@ -1,7 +1,7 @@
 // The About dialog, opened from Help > About AudioSync.
 //
-// Slint is used under its royalty-free license, which asks for the AboutSlint
-// widget in an About dialog reachable from the top-level menu. Keep it here.
+// It names AudioSync's copyright holder and license (GPL-3.0-or-later, no
+// warranty), and credits Slint with its AboutSlint widget. Keep both.
 
 import { AboutSlint, StandardButton, VerticalBox } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
@@ -40,6 +40,22 @@ export component AboutDialog inherits Dialog {
             font-size: Tokens.font-size-caption;
             color: Tokens.secondary-text;
             horizontal-alignment: center;
+        }
+
+        Text {
+            text: Strings.about-copyright;
+            font-size: Tokens.font-size-caption;
+            color: Tokens.secondary-text;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+
+        Text {
+            text: Strings.about-license;
+            font-size: Tokens.font-size-caption;
+            color: Tokens.secondary-text;
+            horizontal-alignment: center;
+            wrap: word-wrap;
         }
 
         AboutSlint { }
