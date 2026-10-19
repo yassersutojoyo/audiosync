@@ -213,6 +213,11 @@ to `base64`, `indexmap` and `memchr`, which the app already contained.
 compiles are the ones in `windows/Cargo.lock`, which that build's
 `THIRD-PARTY-NOTICES.txt` names.
 
+The Windows app reads and writes its settings file with `serde` and
+`serde_json` (MIT OR Apache-2.0), which bring in `serde_core`, `serde_derive`
+and `itoa` (MIT OR Apache-2.0) and `zmij` (MIT), next to `memchr`, which the
+app already contained.
+
 The Windows app's other Rust dependencies are under permissive licenses. CI
 checks them with `cargo deny check licenses` against the list in
 `windows/deny.toml`. Each Windows test build CI uploads comes with a
