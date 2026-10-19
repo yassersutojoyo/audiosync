@@ -6,7 +6,7 @@
 // English only for now. @tr marks each string for Slint's gettext translation
 // when a second language is added.
 
-import { SpeakerKind, Availability, GuidePage, RowState } from "types.slint";
+import { SpeakerKind, Availability, AirPlayProblem, GuidePage, RowState } from "types.slint";
 
 export global Strings {
     // Main window
@@ -155,6 +155,34 @@ export global Strings {
         return @tr("{} was disconnected. It plays again as soon as it's back.", speaker);
     }
 
+    // An AirPlay speaker stopped playing or can't play. For the first four
+    // problems it stays on and AudioSync keeps trying; for the others it is
+    // off, because AudioSync for Windows can't play to it (yet).
+    public pure function notice-airplay(problem: AirPlayProblem, speaker: string) -> string {
+        if problem == AirPlayProblem.not-responding {
+            return @tr("{} isn't responding. AudioSync keeps trying to reach it.", speaker);
+        }
+        if problem == AirPlayProblem.connection-lost {
+            return @tr("{} lost its connection. AudioSync keeps trying to reconnect.", speaker);
+        }
+        if problem == AirPlayProblem.busy {
+            return @tr("{} seems to be playing from another device. AudioSync keeps trying.", speaker);
+        }
+        if problem == AirPlayProblem.refused {
+            return @tr("{} turned the stream down. AudioSync tries again shortly.", speaker);
+        }
+        if problem == AirPlayProblem.password-not-yet {
+            return @tr("{} asks for a password, which AudioSync for Windows can't send yet, so it's off.", speaker);
+        }
+        if problem == AirPlayProblem.pairing-not-yet {
+            return @tr("{} needs pairing with a code, which AudioSync for Windows can't do yet, so it's off.", speaker);
+        }
+        if problem == AirPlayProblem.airplay2-not-yet {
+            return @tr("{} plays only AirPlay 2, which AudioSync for Windows doesn't support yet, so it's off.", speaker);
+        }
+        return @tr("AudioSync can't play to {}, so it's off.", speaker);
+    }
+
     // Windows can't mute the captured app, so it also plays straight from
     // some outputs, undelayed, next to AudioSync's delayed copies. `mute`
     // names the ones AudioSync doesn't play to (muting them helps), `shared`
@@ -277,8 +305,17 @@ export global Strings {
         if a == Availability.needs-code {
             return @tr("Asks for a code");
         }
-        if a == Availability.password-unsupported {
-            return @tr("Password not supported");
+        if a == Availability.password-not-yet {
+            return @tr("Password not supported yet");
+        }
+        if a == Availability.pairing-not-yet {
+            return @tr("Pairing not supported yet");
+        }
+        if a == Availability.airplay2-not-yet {
+            return @tr("AirPlay 2 not supported yet");
+        }
+        if a == Availability.unsupported {
+            return @tr("Not supported");
         }
         return "";
     }

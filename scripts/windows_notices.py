@@ -4,10 +4,10 @@
     python3 -I scripts/windows_notices.py <target triple> [--output <file>]
 
 The file covers everything compiled into audiosync.exe for that target:
-AudioSync's own MIT code (the app and audiosync-core), the Rust standard
-library, Slint (used under its royalty-free license), the fonts and icons the
-interface embeds, and every crate in the app's normal dependency graph, read
-from windows/Cargo.lock. For each crate it gives the name, version, license
+AudioSync's own MIT code (the app, audiosync-core and audiosync-airplay), the
+Rust standard library, Slint (used under its royalty-free license), the fonts
+and icons the interface embeds, and every crate in the app's normal dependency
+graph, read from windows/Cargo.lock. For each crate it gives the name, version, license
 expression and repository, then the full text of every license or notice file
 in the crate's package (LICENSE*, LICENCE*, COPYING*, NOTICE*, COPYRIGHT*).
 A crate without such a file gets the standard text of its license with the

@@ -166,6 +166,7 @@ export component QuietText inherits HorizontalLayout {
     in property <TextHorizontalAlignment> horizontal-alignment: left;
     in property <TextVerticalAlignment> vertical-alignment: top;
     in property <TextWrap> wrap: word-wrap;
+    in property <TextOverflow> overflow: clip;
 
     Text {
         text: root.text;
@@ -174,6 +175,7 @@ export component QuietText inherits HorizontalLayout {
         horizontal-alignment: root.horizontal-alignment;
         vertical-alignment: root.vertical-alignment;
         wrap: root.wrap;
+        overflow: root.overflow;
         accessible-role: none;
     }
 }
@@ -548,9 +550,13 @@ export component SpeakerRow inherits Rectangle {
                         }
                     }
 
+                    // An AirPlay speaker's note can be long; it ends in "…"
+                    // rather than run into the delay column (Narrator reads
+                    // the whole note from the toggle).
                     if root.caption != "": QuietText {
                         text: root.caption;
                         wrap: no-wrap;
+                        overflow: elide;
                     }
                 }
 

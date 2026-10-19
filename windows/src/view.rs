@@ -22,8 +22,8 @@ use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::ui_model::{self, AppState, Backend, NoticeMessage, SourceKind, SpeakerState};
 use crate::{
-    AboutDialog, Availability, EqualizerWindow, GroupItem, GroupNameDialog, GuidePage,
-    GuideStepItem, GuideWindow, MainWindow, NoticeItem, Palette, RowState, SpeakerItem,
+    AboutDialog, AirPlayProblem, Availability, EqualizerWindow, GroupItem, GroupNameDialog,
+    GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, Palette, RowState, SpeakerItem,
     SpeakerKind, Strings, TrayFlyout,
 };
 
@@ -1015,7 +1015,24 @@ fn availability(a: ui_model::Availability) -> Availability {
     match a {
         ui_model::Availability::Open => Availability::Open,
         ui_model::Availability::NeedsCode => Availability::NeedsCode,
-        ui_model::Availability::PasswordUnsupported => Availability::PasswordUnsupported,
+        ui_model::Availability::PasswordNotYet => Availability::PasswordNotYet,
+        ui_model::Availability::PairingNotYet => Availability::PairingNotYet,
+        ui_model::Availability::AirPlay2NotYet => Availability::Airplay2NotYet,
+        ui_model::Availability::Unsupported => Availability::Unsupported,
+    }
+}
+
+fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
+    use ui_model::AirPlayProblem as P;
+    match problem {
+        P::NotResponding => AirPlayProblem::NotResponding,
+        P::ConnectionLost => AirPlayProblem::ConnectionLost,
+        P::Busy => AirPlayProblem::Busy,
+        P::Refused => AirPlayProblem::Refused,
+        P::PasswordNotYet => AirPlayProblem::PasswordNotYet,
+        P::PairingNotYet => AirPlayProblem::PairingNotYet,
+        P::AirPlay2NotYet => AirPlayProblem::Airplay2NotYet,
+        P::Unsupported => AirPlayProblem::Unsupported,
     }
 }
 
@@ -1155,6 +1172,10 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         }
         NoticeMessage::SpeakerLost { speaker } => {
             strings.invoke_notice_speaker_lost(speaker.as_str().into())
+        }
+        NoticeMessage::AirPlayRetrying { speaker, problem }
+        | NoticeMessage::AirPlayCantPlay { speaker, problem } => {
+            strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
         }
         NoticeMessage::HeardTwice {
             source,

@@ -14,6 +14,9 @@ path = "src/main.rs"
 
 [dependencies]
 audiosync-core = { path = "../core" }
+# AudioSync's own AirPlay sender: discovery, one session per speaker and the
+# stream they share, on the crate's own threads.
+audiosync-airplay = { path = "../airplay" }
 # Used under the Slint Royalty-free Desktop, Mobile, and Web Applications
 # License 2.0, checked for the 1.18 line; see THIRD_PARTY_NOTICES.md.
 # unstable-winit-030: the winit window behind a Slint window, to focus it and
@@ -40,6 +43,9 @@ windows = { version = "0.62", features = [
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Diagnostics_ToolHelp",
+    # QueryPerformanceCounter: the capture loop's clock while loopback
+    # delivers nothing, in the time base of the packets' positions.
+    "Win32_System_Performance",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",

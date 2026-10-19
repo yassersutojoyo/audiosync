@@ -127,18 +127,41 @@ impl From<slint::PlatformError> for StartError {
     }
 }
 
-/// What the windows show and drive: the Windows audio backend, through the
-/// adapter that keeps the UI's own state. Both log to `log`.
+/// What the windows show and drive: the Windows audio backend, with the
+/// AirPlay sender, through the adapter that keeps the UI's own state. Both
+/// log to `log`.
 #[cfg(windows)]
 fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
     let mut audio = audio::wasapi::open().map_err(StartError::Audio)?;
     log.log(|| "audio: the WASAPI backend is open".to_owned());
     audio.set_debug_log(log.clone());
+    start_airplay(&mut audio, log);
     Ok(Box::new(adapter::AudioAdapter::new(
         audio,
         platform::notice_time,
         log.clone(),
     )))
+}
+
+/// Starts the AirPlay sender and its discovery, and hands both to the audio
+/// backend. Without a sender the app runs on with local outputs only;
+/// without discovery no AirPlay speaker is listed.
+#[cfg(windows)]
+fn start_airplay(audio: &mut audio::wasapi::WasapiBackend, log: &DebugLog) {
+    use audio::airplay::{FeedSlot, SenderLink};
+    let (link, input) = match SenderLink::start() {
+        Ok(started) => started,
+        Err(error) => {
+            log.log(|| format!("AirPlay: the sender couldn't start: {error}"));
+            return;
+        }
+    };
+    let discovery = link.start_discovery();
+    audio.set_airplay(Box::new(link), Some(FeedSlot::new(input)));
+    match discovery {
+        Ok(()) => log.log(|| "AirPlay: browsing for receivers".to_owned()),
+        Err(error) => log.log(|| format!("AirPlay: discovery couldn't start: {error}")),
+    }
 }
 
 /// Off Windows, example speakers to work on the UI with.
