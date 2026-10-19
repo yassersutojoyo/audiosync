@@ -1086,6 +1086,7 @@ mod tests {
             copied: 8,
             starved: 9,
             rejected: true,
+            due: Correction::None,
         });
         assert_eq!(
             report,

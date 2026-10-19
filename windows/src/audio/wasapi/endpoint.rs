@@ -1,6 +1,13 @@
 //! Rendering to one endpoint: a shared-mode, event-driven stream in the
 //! endpoint's own float format, fed by a [`RenderPipeline`] on a thread of
 //! its own, in the multithreaded apartment and registered with MMCSS.
+//!
+//! A stop fades the output out over 20 ms (S185) and keeps the stream
+//! running, rendering zeros, until the endpoint has played the fade: it holds
+//! nothing but zeros and its stream latency has passed since. Only then does
+//! the thread stop the stream and mark the output faded, so the end of the
+//! fade is never cut; it stops anyway after [`STOP_FADE_CAP`] of audio, or
+//! at once when the output is dropped (S186).
 
 use std::slice;
 use std::sync::Arc;
@@ -8,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
 use audiosync_core::reader::Reader;
+use audiosync_core::render::{RendererControl, STOP_FADE_CAP};
 use audiosync_core::volume::SharedGain;
 use windows::Win32::Foundation::{WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
@@ -42,16 +50,16 @@ const WAIT_MS: u32 = 500;
 
 /// How long the render loop waits for the device while fading out, in ms; a
 /// device that stops asking for audio then just stops.
-const FADE_WAIT_MS: u32 = 200;
-
-/// The most device periods a fade-out may take before the stream stops
-/// anyway.
-const FADE_MAX_PERIODS: u32 = 50;
+const FADE_WAIT_MS: u32 = 100;
 
 /// A running output.
 pub struct EndpointRenderer {
     stop: Arc<Event>,
+    /// Set when the output is dropped: the render thread stops at once,
+    /// faded or not.
+    abort: Arc<AtomicBool>,
     ended: Arc<AtomicBool>,
+    control: RendererControl,
     thread: Option<JoinHandle<()>>,
     /// How the render thread set up its stream.
     setup: StreamSetup,
@@ -59,11 +67,20 @@ pub struct EndpointRenderer {
 
 impl RendererHandle for EndpointRenderer {
     fn request_stop(&mut self) {
+        self.control.request_fade_out();
         self.stop.set();
     }
 
     fn has_ended(&self) -> bool {
         self.ended.load(Ordering::Acquire)
+    }
+
+    fn is_faded(&self) -> bool {
+        self.control.is_faded()
+            || self
+                .thread
+                .as_ref()
+                .is_none_or(|thread| thread.is_finished())
     }
 
     fn setup(&self) -> Option<StreamSetup> {
@@ -73,6 +90,7 @@ impl RendererHandle for EndpointRenderer {
 
 impl Drop for EndpointRenderer {
     fn drop(&mut self) {
+        self.abort.store(true, Ordering::Release);
         self.stop.set();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -80,38 +98,60 @@ impl Drop for EndpointRenderer {
     }
 }
 
-/// Starts rendering to the endpoint `endpoint_id` through `reader`, at the
-/// gain in `gain`. Returns once it plays.
+/// Starts rendering to the endpoint `endpoint_id` through `reader`,
+/// controlled through `control`, at the gain in `gain`. Returns once it
+/// plays.
 pub(super) fn start(
     endpoint_id: &str,
     reader: Reader,
+    control: RendererControl,
     gain: Arc<SharedGain>,
 ) -> Result<EndpointRenderer, BackendError> {
     let id = endpoint_id.to_owned();
     let stop = Arc::new(Event::manual_reset()?);
+    let abort = Arc::new(AtomicBool::new(false));
     let ended = Arc::new(AtomicBool::new(false));
     let (thread, setup) = {
         let stop = Arc::clone(&stop);
+        let abort = Arc::clone(&abort);
         let ended = Arc::clone(&ended);
+        let control = control.clone();
         spawn_ready("audiosync-output", move |ready| {
-            run(&id, reader, gain, &stop, &ended, ready);
+            let signals = Signals {
+                stop: &stop,
+                abort: &abort,
+                ended: &ended,
+            };
+            run(&id, reader, &control, gain, &signals, ready);
         })?
     };
     Ok(EndpointRenderer {
         stop,
+        abort,
         ended,
+        control,
         thread: Some(thread),
         setup,
     })
+}
+
+/// What the render thread shares with its [`EndpointRenderer`].
+struct Signals<'a> {
+    /// Set by a stop request, and by the drop.
+    stop: &'a Event,
+    /// Set by the drop.
+    abort: &'a AtomicBool,
+    /// Set by the thread when the stream failed.
+    ended: &'a AtomicBool,
 }
 
 /// The render thread.
 fn run(
     id: &str,
     reader: Reader,
+    control: &RendererControl,
     gain: Arc<SharedGain>,
-    stop: &Event,
-    ended: &AtomicBool,
+    signals: &Signals,
     ready: Ready<StreamSetup>,
 ) {
     let _apartment = match Apartment::enter() {
@@ -124,10 +164,11 @@ fn run(
     };
     let channels = usize::from(stream.format.channels);
     // Every buffer the loop uses is allocated here, before it starts.
-    let mut pipeline = match RenderPipeline::new(reader, gain, stream.format.rate, channels) {
-        Ok(pipeline) => pipeline,
-        Err(error) => return ready.fail(error),
-    };
+    let mut pipeline =
+        match RenderPipeline::new(reader, control, gain, stream.format.rate, channels) {
+            Ok(pipeline) => pipeline,
+            Err(error) => return ready.fail(error),
+        };
     if let Err(error) = prefill_silence(&stream) {
         return ready.fail(error);
     }
@@ -140,11 +181,11 @@ fn run(
         format: stream.format,
         buffer_frames: stream.buffer_frames,
     });
-    let lost = render_loop(&stream, &mut pipeline, stop);
+    let lost = render_loop(&stream, &mut pipeline, signals);
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };
     if lost {
-        ended.store(true, Ordering::Release);
+        signals.ended.store(true, Ordering::Release);
     }
 }
 
@@ -158,6 +199,8 @@ struct RenderStream {
     format: RenderFormat,
     /// The stream buffer, in device frames.
     buffer_frames: u32,
+    /// The stream latency Windows reports, in device frames.
+    latency_frames: u32,
 }
 
 /// Opens a shared-mode, event-driven stream on the endpoint `id`, in its
@@ -216,12 +259,17 @@ fn open_stream(id: &str) -> Result<RenderStream, BackendError> {
         let buffer_frames = client
             .GetBufferSize()
             .map_err(|error| device_error("IAudioClient::GetBufferSize", &error))?;
+        // In 100 ns units; a stream that can't tell counts as having none.
+        let latency = client.GetStreamLatency().unwrap_or(0).max(0) as u64;
+        let latency_frames =
+            (latency * u64::from(format.rate) / 10_000_000).min(u64::from(u32::MAX)) as u32;
         Ok(RenderStream {
             client,
             render,
             event,
             format,
             buffer_frames,
+            latency_frames,
         })
     }
 }
@@ -246,29 +294,35 @@ fn prefill_silence(stream: &RenderStream) -> Result<(), BackendError> {
 /// Renders until stopped (`false`) or until the stream fails (`true`: the
 /// output was lost, usually because its device went away).
 ///
-/// After a stop request it renders a fade-out, then silence, until two whole
-/// buffers were written: everything still queued in the device is then
-/// silent, and the stream stops without a click. A stream that no longer
-/// works has nothing to fade out, so it ends at once.
+/// After a stop request the pipeline fades out from its next callback and
+/// renders zeros after it; the loop goes on until the endpoint has played
+/// the fade (S185), marks the output faded and stops. It stops anyway once
+/// [`STOP_FADE_CAP`] of audio was written since the request, when the device
+/// stops asking for audio, or at once when the output is dropped (S186). A
+/// stream that no longer works has nothing to fade out, so it ends at once.
 ///
 /// Real-time: waits for the device's event, then fills the free part of the
 /// buffer. When the device hasn't asked for [`WAIT_MS`], it does the same:
 /// the padding call fails once Windows invalidated the stream, which ends the
 /// loop as lost. Never allocates, locks or logs.
-fn render_loop(stream: &RenderStream, pipeline: &mut RenderPipeline, stop: &Event) -> bool {
-    let both = [stop.raw(), stream.event.raw()];
+fn render_loop(stream: &RenderStream, pipeline: &mut RenderPipeline, signals: &Signals) -> bool {
+    let both = [signals.stop.raw(), stream.event.raw()];
     let device_ready = WAIT_EVENT(WAIT_OBJECT_0.0 + 1);
     let channels = pipeline.channels();
-    // Frames written and periods waited since the stop request.
-    let mut fading: Option<(u32, u32)> = None;
+    let cap_frames = (u128::from(stream.format.rate) * STOP_FADE_CAP.as_millis() / 1000) as u32;
+    // Frames written since the stop request.
+    let mut stopping: Option<u32> = None;
     loop {
-        let wait = match fading {
+        let wait = match stopping {
             // SAFETY: both handles live as long as this loop.
             None => unsafe { WaitForMultipleObjects(&both, false, WAIT_MS) },
             // SAFETY: as above.
             Some(_) => unsafe { WaitForSingleObject(stream.event.raw(), FADE_WAIT_MS) },
         };
-        match fading {
+        if signals.abort.load(Ordering::Acquire) {
+            return false;
+        }
+        match stopping {
             None if wait == WAIT_OBJECT_0 => {
                 // A stream Windows invalidated may never ask for the
                 // fade-out, so it ends now rather than after FADE_WAIT_MS.
@@ -276,7 +330,8 @@ fn render_loop(stream: &RenderStream, pipeline: &mut RenderPipeline, stop: &Even
                 if unsafe { stream.client.GetCurrentPadding() }.is_err() {
                     return true;
                 }
-                fading = Some((0, 0));
+                // The pipeline takes the request at its next callback.
+                stopping = Some(0);
                 continue;
             }
             None if wait == device_ready || wait == WAIT_TIMEOUT => {}
@@ -288,6 +343,10 @@ fn render_loop(stream: &RenderStream, pipeline: &mut RenderPipeline, stop: &Even
         let Ok(padding) = (unsafe { stream.client.GetCurrentPadding() }) else {
             return true;
         };
+        if stopping.is_some() && pipeline.has_played_its_fade(padding, stream.latency_frames) {
+            pipeline.mark_faded();
+            return false;
+        }
         let available = stream.buffer_frames.saturating_sub(padding);
         if available > 0 {
             // SAFETY: as above; `available` frames are free.
@@ -303,11 +362,7 @@ fn render_loop(stream: &RenderStream, pipeline: &mut RenderPipeline, stop: &Even
                 let out = unsafe {
                     slice::from_raw_parts_mut(data.cast::<f32>(), available as usize * channels)
                 };
-                if fading.is_some() {
-                    pipeline.render_fade_out(out);
-                } else {
-                    pipeline.render(out);
-                }
+                pipeline.render(out);
                 0
             };
             // SAFETY: releases the frames GetBuffer handed out.
@@ -315,10 +370,9 @@ fn render_loop(stream: &RenderStream, pipeline: &mut RenderPipeline, stop: &Even
                 return true;
             }
         }
-        if let Some((written, periods)) = fading.as_mut() {
+        if let Some(written) = stopping.as_mut() {
             *written = written.saturating_add(available);
-            *periods += 1;
-            if *written >= stream.buffer_frames.saturating_mul(2) || *periods >= FADE_MAX_PERIODS {
+            if *written >= cap_frames {
                 return false;
             }
         }

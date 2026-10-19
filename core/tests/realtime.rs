@@ -20,10 +20,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use audiosync_core::convert;
+use audiosync_core::fade::InputFade;
 use audiosync_core::fifo::{FifoFeed, OpenError, PipeSink, Step, WriteError};
 use audiosync_core::reader::{Reader, ReaderControl, tolerance_frames};
+use audiosync_core::render::{Renderer, RendererControl};
 use audiosync_core::resample::Resampler;
 use audiosync_core::ring::{Ring, RingWriter};
+use audiosync_core::volume::SharedGain;
 
 struct Counting;
 
@@ -265,6 +268,90 @@ impl PipeSink for ScriptedPipe {
     }
 }
 
+// covers: S190, S126, S127
+#[test]
+fn fading_allocates_and_locks_nothing_on_the_audio_thread() {
+    // Setup may allocate: a renderer converting to 44.1 kHz, the pipe feed
+    // and its writer, and the native input's fade.
+    let ring = Ring::for_rate(48_000).unwrap();
+    let mut writer = ring.writer().unwrap();
+    let reader = Reader::new(Arc::clone(&ring), 48_000);
+    let control = RendererControl::new(&reader);
+    control.set_delay_frames(4096);
+    let gain = Arc::new(SharedGain::new(0.8));
+    let mut renderer =
+        Renderer::new(reader, &control, Arc::clone(&gain), 48_000, 44_100, 2).unwrap();
+    let feed = FifoFeed::new(1).unwrap();
+    let mut producer = feed.producer().unwrap();
+    let mut pipe_writer = feed.writer().unwrap();
+    let mut pipe = ScriptedPipe {
+        script: [Ok(512); 8],
+        call: 0,
+        open: false,
+        opens: 0,
+        bytes: 0,
+    };
+    let mut input = InputFade::new(48_000, 256);
+    let block = noisy_block(512, 9);
+    let burst = noisy_block(3000, 10);
+    let mut out = vec![0.0f32; 1500 * 2];
+    let mut handed = 0usize;
+    let count = allocations_in(|| {
+        for round in 0..3000usize {
+            // The capture: steady blocks, a burst (a held skip forward) and
+            // a stall (a held step back).
+            match round % 500 {
+                200 => writer.write(&burst, 3000),
+                300..=320 => {}
+                _ => writer.write(&block, 512),
+            }
+            // The control thread: delay changes and a stop, then a new
+            // session's rate sets.
+            match round % 500 {
+                50 => control.set_delay_frames(8000),
+                120 => control.set_delay_frames(2048),
+                121 => control.set_delay_frames(3000),
+                250 => feed.request_fade_out(),
+                260 => {
+                    producer
+                        .set_input_rate([48_000, 44_100][round / 500 % 2])
+                        .unwrap();
+                }
+                400 => input.fade_out(),
+                450 => input.restart([48_000, 96_000][round / 500 % 2]),
+                _ => {}
+            }
+            if round == 2600 {
+                control.request_fade_out();
+            }
+            // The output, in callbacks of changing sizes, with and without
+            // an output time.
+            let frames = [512usize, 441, 1500, 97][round % 4];
+            if round % 2 == 0 {
+                renderer.render(&mut out[..frames * 2]);
+            } else {
+                renderer.render_timed(&mut out[..frames * 2], round as u64 * 10_000_000);
+            }
+            std::hint::black_box(renderer.frames_after_fade());
+            std::hint::black_box(control.faded_by_time(1_000_000, round as u64));
+            // The pipe feed and its writer, and the native input.
+            producer.feed(&block, 512);
+            for _ in 0..3 {
+                std::hint::black_box(pipe_writer.step(&mut pipe));
+            }
+            input.process(&block, |piece| handed += piece.len());
+        }
+    });
+    assert_eq!(count, 0, "a fade allocated or freed memory");
+    let counters = control.counters();
+    assert!(
+        counters.drift_skips > 0 && counters.drift_silences > 0,
+        "{counters:?}"
+    );
+    assert!(control.fade_rendered());
+    assert!(handed > 0 && pipe.bytes > 0);
+}
+
 // covers: S129, S90, S93
 #[test]
 fn fifo_writer_step_does_not_allocate() {
@@ -380,6 +467,8 @@ fn audio_path_modules_use_only_atomics() {
         ("convert.rs", "none"),
         ("channels.rs", "none"),
         ("volume.rs", "none"),
+        ("fade.rs", "none"),
+        ("render.rs", "none"),
         ("eq.rs", "yield"),
         ("fifo.rs", "park"),
     ];
@@ -456,7 +545,10 @@ fn shared_types_are_send_and_sync() {
     fn send<T: Send>() {}
     send_sync::<Ring>();
     send_sync::<ReaderControl>();
+    send_sync::<RendererControl>();
     send_sync::<FifoFeed>();
+    send::<Renderer>();
+    send::<InputFade>();
     send::<RingWriter>();
     send::<Reader>();
     send::<Resampler>();
