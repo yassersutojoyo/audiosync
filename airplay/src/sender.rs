@@ -540,6 +540,16 @@ impl Sender {
         self.events.recv_timeout(timeout).ok()
     }
 
+    /// False once the driver thread has ended while this sender still
+    /// exists, which only a bug does (a panic, in a build that unwinds):
+    /// the sender then no longer lists, plays or reports anything, and a
+    /// host drops it and starts a new one. Read without locks or waiting.
+    pub fn is_running(&self) -> bool {
+        self.driver
+            .as_ref()
+            .is_some_and(|driver| !driver.is_finished())
+    }
+
     /// Stops everything: every speaker is torn down in parallel (TEARDOWN,
     /// then close after the answer, or by force 1.75 s after this call),
     /// pairings stop, discovery stops, and the driver's threads end (P129).
