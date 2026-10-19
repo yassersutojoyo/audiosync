@@ -281,10 +281,10 @@ impl InputReader {
             }
         }
         let end = start + out.len() as i64;
-        if let Ok(end) = u64::try_from(end) {
-            if end > floor {
-                shared.floor.store(end, Ordering::Release);
-            }
+        if let Ok(end) = u64::try_from(end)
+            && end > floor
+        {
+            shared.floor.store(end, Ordering::Release);
         }
         silent
     }

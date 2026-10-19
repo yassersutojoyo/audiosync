@@ -653,7 +653,7 @@ impl HostAudio {
             let start = Instant::now();
             let mut block = vec![0i16; BLOCK_FRAMES * 2];
             while !flag.load(Ordering::SeqCst) {
-                for (index, pair) in block.chunks_exact_mut(2).enumerate() {
+                for (index, pair) in block.as_chunks_mut::<2>().0.iter_mut().enumerate() {
                     pair.copy_from_slice(&host_samples(written + index as u64));
                 }
                 writer.write_i16(&block, Instant::now());

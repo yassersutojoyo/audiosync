@@ -146,7 +146,10 @@ fn parse_hex(digits: &str) -> Option<u64> {
 
 fn parse_hex_bytes(text: &str) -> Option<Vec<u8>> {
     let text = text.trim();
-    if text.is_empty() || text.len() % 2 != 0 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if text.is_empty()
+        || !text.len().is_multiple_of(2)
+        || !text.bytes().all(|b| b.is_ascii_hexdigit())
+    {
         return None;
     }
     (0..text.len())
