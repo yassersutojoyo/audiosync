@@ -20,6 +20,11 @@ example) that rule is skipped and the script says so.
                                           caught
 
 Placeholders such as `C:\\Users\\<you>`, `/Users/%USER%` or `/Users/Shared` pass.
+A single-label host (`name.local`) is a leak unless it's one of the generic
+examples in `_EXAMPLE_HOSTS`; mDNS service names such as `_airplay._tcp.local`
+pass. Files are read as UTF-8, or as UTF-16 when they start with its byte
+order mark or show its NUL-every-other-byte pattern; other files with NUL
+bytes are skipped as binary.
 Outside CI the machine's own hostname is checked too. This file itself isn't
 scanned (its patterns would match). Exit status 1 lists each hit as
 `path:line: reason`.
@@ -37,6 +42,18 @@ import tempfile
 # environment variable, or a shared profile.
 _PLACEHOLDER = r"(?![<%{$]|(?:Shared|Public|Default)(?![\w.-]))"
 _SEP = r"(?:\\{1,4}|/)"
+
+# Single-label names that may stand in front of `.local`: the generic speaker
+# hosts used in tests and code reading a field named `local`. Any other bare
+# `<label>.local`, `<label>.lan` or `<label>.home.arpa` counts as a real host.
+# The label must start the name, so mDNS service names (`_airplay._tcp.local`),
+# placeholders (`<name>.local`, `$HOST.local`) and member chains
+# (`self.local.addr`) pass.
+_EXAMPLE_HOSTS = ("c", "den", "kitchen", "living", "livingroom", "loopback", "model", "speaker")
+
+# Characters that never occur in text: bytes that decode to them as UTF-16 are
+# binary after all.
+_BINARY_CHARS = re.compile(r"[\x00-\x08\x0e-\x1a\x1c-\x1f]")
 
 PATTERNS = [
     ("home path (/Users/...)", re.compile(r"/Users/" + _PLACEHOLDER + r"[^\s/\"'`)\]]+")),
@@ -62,6 +79,14 @@ PATTERNS = [
     (
         "LAN hostname",
         re.compile(r"\b[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+\.(?:local|lan|home\.arpa)\b|\b\w+\.localdomain\b"),
+    ),
+    (
+        "LAN hostname (single label)",
+        re.compile(
+            r"(?<![\w.$-])(?!(?:" + "|".join(_EXAMPLE_HOSTS) + r")\.)[A-Za-z0-9]+"
+            r"\.(?:local|lan|home\.arpa)(?!\.?[\w-])",
+            re.IGNORECASE,
+        ),
     ),
     ("default Windows hostname", re.compile(r"\b(?:DESKTOP|LAPTOP)-[A-Z0-9]{7}\b")),
     ("internal plan ID", re.compile(r"\bPLAN (?:v\d+|[A-F]\d{1,2})\b", re.IGNORECASE)),
@@ -95,16 +120,50 @@ def name_patterns(path):
     ]
 
 
+def text_of(data):
+    """The text in a file's bytes, or None when they look binary.
+
+    UTF-8 is the default and its byte order mark is dropped. UTF-16 is
+    recognized by its byte order mark or, without one, by mostly-ASCII text
+    leaving a NUL in every other byte. Anything else with a NUL is binary.
+    """
+    if data.startswith(codecs.BOM_UTF8):
+        return data[len(codecs.BOM_UTF8):].decode("utf-8", "replace")
+    head = data[:8192]
+    if data.startswith(codecs.BOM_UTF16_LE):
+        encoding, data = "utf-16-le", data[len(codecs.BOM_UTF16_LE):]
+    elif data.startswith(codecs.BOM_UTF16_BE):
+        encoding, data = "utf-16-be", data[len(codecs.BOM_UTF16_BE):]
+    elif b"\0" not in head:
+        return data.decode("utf-8", "replace")
+    else:
+        # Most high bytes of mostly-ASCII UTF-16 are NUL, and hardly any low
+        # byte is (U+0100, U+4E00 and the like have one).
+        even, odd = head[0::2].count(0), head[1::2].count(0)
+        if odd > len(head) // 4 and even * 16 <= odd:
+            encoding = "utf-16-le"
+        elif even > len(head) // 4 and odd * 16 <= even:
+            encoding = "utf-16-be"
+        else:
+            return None
+    try:
+        text = data.decode(encoding)
+    except UnicodeDecodeError:
+        return None
+    return None if _BINARY_CHARS.search(text) else text
+
+
 def check_file(root, path, names, hostname, explicit):
     try:
         with open(os.path.join(root, path), "rb") as handle:
             data = handle.read()
     except OSError:
         return [f"{path}: can't be read"] if explicit else []
-    if b"\0" in data[:8192]:
+    text = text_of(data)
+    if text is None:
         return []
     hits = []
-    for number, line in enumerate(data.decode("utf-8", "replace").splitlines(), 1):
+    for number, line in enumerate(text.splitlines(), 1):
         for reason, pattern in PATTERNS:
             if pattern.search(line):
                 hits.append(f"{path}:{number}: {reason}")
@@ -146,6 +205,7 @@ def self_test():
         "utf16be-bom.txt": codecs.BOM_UTF16_BE + "Built on name.local.\n".encode("utf-16-be"),
         "utf16le.txt": "Logs are in C:\\Users\\someone\\AppData.\r\n".encode("utf-16-le"),
         "utf16be.txt": "Try 10.1.2.3 then.\n".encode("utf-16-be"),
+        "utf16le-cjk.txt": "一 Logs: /Users/someone/Library/Logs.\n".encode("utf-16-le"),
         "utf8-bom.md": codecs.BOM_UTF8 + "Built on name.local yesterday.\n".encode(),
         "winhost.md": "Runner DESKTOP-AB12CD3 passed.",
         "planid.md": "Done for Plan A1.",
