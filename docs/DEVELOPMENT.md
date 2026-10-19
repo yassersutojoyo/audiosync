@@ -63,7 +63,7 @@ For a debug log, quit AudioSync and start it from Terminal:
 AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync
 ```
 
-It writes to `/tmp/audiosync-debug.log`.
+It writes to `/tmp/audiosync-debug.log`, which starts over at every launch and stops at 50 MB with a line that says so. Each line starts with the time in UTC, like the Windows log; the first one names the app and macOS versions and the Mac's local time.
 
 The Windows app has the same switch. Exit it from the tray icon's menu, then start it from PowerShell in the folder that holds `audiosync.exe`:
 
