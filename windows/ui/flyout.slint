@@ -7,10 +7,13 @@
 import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { GroupItem, NoticeItem, RowState, SpeakerItem } from "types.slint";
-import { BrandMark, Divider, Fluent, Glyphs, NoticeStack, SecondaryText, SectionTitle, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { DeviceVolumeHint, GroupItem, NoticeItem, RowState, SpeakerItem } from "types.slint";
+import { BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, SecondaryText, SectionTitle, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
-// A compact row: the toggle and the name.
+// A compact row: the toggle and the name, and at the right a small glyph
+// when a switched-on output's own volume in Windows is low or muted (spec
+// S198). The flyout has no volume sliders, so the fix is in the main window;
+// the hint itself is in the toggle's description.
 component FlyoutRow inherits HorizontalLayout {
     in property <string> glyph;
     in property <string> name;
@@ -18,6 +21,7 @@ component FlyoutRow inherits HorizontalLayout {
     in property <string> description;
     in property <RowState> state;
     in property <bool> enabled: true;
+    in property <DeviceVolumeHint> device-volume;
     callback toggled();
     // The toggle gained (true) or lost (false) keyboard focus.
     callback focus-changed(bool);
@@ -49,6 +53,12 @@ component FlyoutRow inherits HorizontalLayout {
         overflow: elide;
         horizontal-stretch: 1;
         accessible-role: none;
+    }
+
+    if root.device-volume != DeviceVolumeHint.none: Glyph {
+        glyph: Glyphs.device-volume(root.device-volume);
+        font-size: 12px;
+        color: Tokens.secondary-text;
     }
 }
 
@@ -263,8 +273,10 @@ export component TrayFlyout inherits Window {
                         glyph: Glyphs.speaker(speaker.kind);
                         name: speaker.name;
                         label: Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind);
-                        description: Strings.help(speaker.state);
+                        description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
                         state: speaker.state;
+                        device-volume: speaker.device-volume;
+
                         toggled => {
                             root.speaker-toggled(speaker.id);
                         }

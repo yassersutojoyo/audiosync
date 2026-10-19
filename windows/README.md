@@ -61,6 +61,13 @@ output you don't listen to, and turn the others on in AudioSync.
 [docs/WINDOWS_AUDIO_ROUTING.md](../docs/WINDOWS_AUDIO_ROUTING.md) explains why
 and lists the tests worth running on a real PC.
 
+A speaker that sounds quiet even with AudioSync's slider at 100 is probably
+turned down in Windows itself, since AudioSync plays through that volume too.
+When a speaker that's on is below 25 % or muted in Windows, its row says so
+under the slider ("Windows volume is 13%", "Muted in Windows"), and one click
+on Set to 75% or Unmute fixes it. AudioSync never touches that volume unless
+you click.
+
 ### AirPlay
 
 AirPlay speakers that the sender can play are listed like any other speaker:

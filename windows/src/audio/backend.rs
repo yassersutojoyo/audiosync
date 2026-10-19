@@ -10,6 +10,7 @@
 use std::fmt;
 
 use audiosync_core::eq::EqSettings;
+use audiosync_core::policy::device_volume::DeviceVolume;
 
 use super::routing::DirectPath;
 
@@ -85,6 +86,10 @@ pub struct OutputInfo {
     pub volume: f64,
     /// Whether it plays right now.
     pub playing: bool,
+    /// The device's own volume and mute in Windows (spec S192, S194): read
+    /// while the output is on, and `None` while it is off. Each part is
+    /// `None` when Windows can't tell.
+    pub device_volume: Option<DeviceVolume>,
 }
 
 /// Whether an AirPlay speaker can play from AudioSync.
@@ -273,6 +278,12 @@ pub enum BackendEvent {
         /// The speaker's ID.
         id: String,
     },
+    /// An output's own volume or mute changed in Windows (spec S195): show
+    /// it again.
+    DeviceVolumeChanged {
+        /// The endpoint ID.
+        id: String,
+    },
     /// The AirPlay sender stopped after an internal error, so no AirPlay
     /// speaker is listed or plays, or its discovery did, so none is listed;
     /// [`AudioBackend::retry_airplay`] starts a new sender.
@@ -399,6 +410,12 @@ pub trait AudioBackend {
     /// Sets an output's volume slider position (0 to 100, on a cubic curve),
     /// live. A value that isn't finite is ignored.
     fn set_output_volume(&mut self, id: &str, position: f64);
+
+    /// The fix under an output whose own volume in Windows is low or muted
+    /// (spec S197): sets that volume to 75 % when it is low and unmutes it
+    /// when it is muted, once each. Nothing else ever writes a device volume.
+    /// The output shows the result once Windows reports the change.
+    fn fix_device_volume(&mut self, id: &str);
 
     /// Sets the master volume slider position (0 to 100), which scales every
     /// output and AirPlay speaker, live. A value that isn't finite is
