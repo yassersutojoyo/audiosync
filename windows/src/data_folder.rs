@@ -21,21 +21,35 @@ pub fn folder() -> Option<PathBuf> {
     local.is_absolute().then(|| local.join(FOLDER_NAME))
 }
 
-/// The temporary file `path` is written through: the same name with the
-/// extension `tmp`, in the same folder, so the rename never crosses volumes.
+/// The temporary file `path` is written through: the same name with this
+/// process's ID and the extension `tmp` (`settings.1234.tmp`), in the same
+/// folder, so the rename never crosses volumes and two copies of the app
+/// never write through the same file.
 pub fn temporary_path(path: &Path) -> PathBuf {
-    path.with_extension("tmp")
+    path.with_extension(format!("{}.tmp", std::process::id()))
 }
 
 /// Replaces the file at `path` with `bytes`, creating its folder if needed.
 /// The bytes go to a temporary file, flushed to disk before it is renamed
 /// over `path`; a temporary file left by a failed write is removed.
+///
+/// A leftover at the temporary path (from a crash, or a link someone put
+/// there) is removed first, and the temporary file is then created new, so
+/// the bytes never go through a file or link that was already there.
 pub fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(folder) = path.parent() {
         fs::create_dir_all(folder)?;
     }
     let temporary = temporary_path(path);
-    let replaced = fs::File::create(&temporary)
+    match fs::remove_file(&temporary) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let replaced = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
         .and_then(|mut file| {
             file.write_all(bytes)?;
             file.sync_all()
