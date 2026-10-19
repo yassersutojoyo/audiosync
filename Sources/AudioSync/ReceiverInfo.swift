@@ -11,8 +11,10 @@ struct ReceiverInfo: Equatable {
         /// The engine can't clear artwork, so this replaces the last track's.
         case neutral
         /// The player's artwork is on its way (Spotify's comes a moment after
-        /// the track): leave what is shown until it arrives, for at most
-        /// `artworkWait` (see `waited`).
+        /// the track): send no artwork until it arrives, for at most
+        /// `artworkWait` (see `waited`). Meanwhile the bundled engine's
+        /// receivers keep the last cover, AudioSync's own sender's show none
+        /// (`NativeNowPlaying`).
         case wait
     }
 
@@ -48,15 +50,15 @@ struct ReceiverInfo: Equatable {
         return ReceiverInfo(fields: fields, artwork: .neutral)
     }
 
-    /// How long receivers keep the last cover while a player's own artwork is
-    /// on its way. Then AudioSync's icon replaces it.
+    /// How long receivers wait for a player's own artwork that is on its way.
+    /// Then AudioSync's icon takes its place.
     static let artworkWait: TimeInterval = 5
     /// How long track info waits for Now Playing's first reading once it
     /// starts polling.
     static let readingWait: TimeInterval = 3
 
     /// After `seconds` of showing these fields, a wait for artwork that hasn't
-    /// come is over: AudioSync's icon replaces the last track's cover.
+    /// come is over: AudioSync's icon takes its place.
     func waited(_ seconds: TimeInterval) -> ReceiverInfo {
         artwork == .wait && seconds >= Self.artworkWait ? ReceiverInfo(fields: fields, artwork: .neutral) : self
     }

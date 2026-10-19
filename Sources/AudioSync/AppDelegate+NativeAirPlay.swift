@@ -2,11 +2,13 @@ import AppKit
 
 // AudioSync's own AirPlay sender as this run's AirPlay sender
 // (`AirPlayImpl.forThisRun`): the bundled engine stays stopped, the AirPlay
-// rows come from the native sender's discovery (under `NativeAirPlayID`s, so
-// the bundled engine's saved per-speaker settings stay apart), the switches,
-// volumes and master reach its speakers, the user's click pairs an Apple TV
-// or asks for a password, and their errors become notices. The
-// OwnTone code paths check `usesNativeAirPlay` and hand over to these.
+// rows come from the native sender's discovery under `NativeAirPlayID`s
+// (what was saved under a receiver's bundled-engine ID, switched on, its
+// volume, its groups and auto-connect, moves to its native ID when discovery
+// first reports it, S204), the switches, volumes and master reach its
+// speakers, the user's click pairs an Apple TV or asks for a password, and
+// their errors become notices. The OwnTone code paths check
+// `usesNativeAirPlay` and hand over to these.
 
 extension AppDelegate {
 
@@ -54,9 +56,15 @@ extension AppDelegate {
         let news = nativeStarts.finished(started: started, at: Date())
         if started {
             clearNotices([Notice.airplaySender])
+            resendTrackInfo()   // a new sender knows nothing of what plays
+            // Its discovery raised the Local Network prompt, if any: the
+            // probe may ask now, and an empty list counts from here.
+            airplayEmptySince = native.model.rows.isEmpty ? Date() : nil
+            updateLocalNetworkProbe(engine: .running)
         } else if nativeAirPlay === native {
             nativeAirPlay = nil
             if news { notify(text.nativeAirPlayCouldNotStart, origin: .automatic, subject: Notice.airplaySender) }
+            stopNativeLocalNetworkProbe()
             retimeLocalOutputs()   // no native speaker is chosen any more
         }
         retimeLocalOutputs()   // L is known now
@@ -65,7 +73,30 @@ extension AppDelegate {
 
     private func nativeReceiverChanged(_ change: NativeReceiverChange) {
         DBG.log(change.logLine)
+        switch change {
+        case .appeared(let receiver), .changed(let receiver): migrateSavedSpeakerIDs(to: receiver)
+        case .gone: break
+        }
         refreshNativeRows()
+    }
+
+    /// What was saved under the bundled engine's output ID of `receiver`
+    /// (switched on, its volume, its groups, auto-connect) moves to its
+    /// native ID, before its row appears (S204). Nothing is left to move
+    /// afterwards, so this runs for every receiver discovery reports.
+    private func migrateSavedSpeakerIDs(to receiver: NativeReceiver) {
+        let saved = SpeakerIDMigration.Saved(enabledAirPlay: enabledAirPlay, airplayVolumes: airplayVolume,
+                                             groups: groups, autoConnect: autoConnect)
+        let renames = SpeakerIDMigration.renames(saved, receivers: [receiver.id])
+        guard !renames.isEmpty else { return }
+        for old in renames.keys.sorted() {
+            DBG.log("[AudioSync] native AirPlay: settings saved under the bundled engine's ID \(old) now belong to \(receiver.name) (\(receiver.id))")
+        }
+        let migrated = SpeakerIDMigration.apply(renames, to: saved)
+        airplayVolume = migrated.airplayVolumes
+        groups = migrated.groups
+        autoConnect = migrated.autoConnect
+        enabledAirPlay = migrated.enabledAirPlay
     }
 
     private func nativeSpeakerEvent(_ event: NativeSpeakerEvent, _ outcome: NativeAirPlayOutcome?) {
@@ -204,9 +235,16 @@ extension AppDelegate {
         nativeStarts.senderFailed()
         native.discard()
         airplayOrder = []
+        stopNativeLocalNetworkProbe()
         notify(text.nativeAirPlayStopped, origin: .automatic, subject: Notice.airplaySender)
         retimeLocalOutputs()   // no native speaker is chosen any more
         pushModel()
+    }
+
+    /// No sender runs: the Local Network probe stops, and no empty list counts.
+    private func stopNativeLocalNetworkProbe() {
+        airplayEmptySince = nil
+        updateLocalNetworkProbe(engine: .stopped)
     }
 
     /// Retry after the sender stopped: a new one starts now.
@@ -231,6 +269,7 @@ extension AppDelegate {
         }
         let appeared = rows.filter { !known.contains($0) }
         airplayOrder = rows
+        airplayEmptySince = rows.isEmpty ? (airplayEmptySince ?? Date()) : nil
         retimeLocalOutputs()   // also when only a speaker's playing state changed
         syncNativeSpeakers()
         let joinable = appeared.filter { id in

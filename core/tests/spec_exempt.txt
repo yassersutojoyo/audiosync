@@ -38,3 +38,4 @@ S198 Where the device-volume hint shows: the main window's speaker rows, and a g
 S199 The hint's wording in AppText (Mac) and strings.slint (Windows).
 S200 VoiceOver and Narrator labels of the hint and its fix button.
 S202 Host re-reads when a device goes away, comes back or its row is switched on again.
+S204 Mac host only: settings the Mac app saved under the bundled engine's output IDs move to the native sender's receiver IDs; its logic suite checks it.

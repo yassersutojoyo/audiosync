@@ -989,6 +989,19 @@ double asc_airplay_latency_ms(const AscAirPlay *airplay);
 void asc_airplay_restart_timeline(AscAirPlay *airplay);
 
 /*
+ * Sets what is playing, for the receivers that show it: the track's title,
+ * artist and album as UTF-8 text, and its artwork as a JPEG of at most
+ * 512 KiB. Every speaker that lists the type gets it now, and every speaker
+ * that starts or restarts later gets it too. A NULL text is an empty one,
+ * and three NULL texts send no track information; NULL artwork, or a length
+ * of 0, sends none. Returns false, changing nothing, for a NULL or dead
+ * handle, a text that isn't UTF-8, a NULL artwork with a length, or artwork
+ * the sender refuses (not a JPEG, or too large).
+ */
+bool asc_airplay_set_now_playing(AscAirPlay *airplay, const char *title, const char *artist,
+                                 const char *album, const uint8_t *artwork, size_t artwork_len);
+
+/*
  * Opens the pairing store kept in the file at `path` (UTF-8), meant for
  * once, before discovery starts: an Apple TV it holds credentials for is
  * listed as available and verifies with them; one it doesn't is listed as
