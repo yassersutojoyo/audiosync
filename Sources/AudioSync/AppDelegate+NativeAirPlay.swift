@@ -56,9 +56,9 @@ extension AppDelegate {
         } else if nativeAirPlay === native {
             nativeAirPlay = nil
             if news { notify(text.nativeAirPlayCouldNotStart, origin: .automatic, subject: Notice.airplaySender) }
-            refreshLocalDelays()   // no native speaker is chosen any more
+            retimeLocalOutputs()   // no native speaker is chosen any more
         }
-        applyLocalDelays()   // L is known now
+        retimeLocalOutputs()   // L is known now
         pushModel()
     }
 
@@ -77,7 +77,8 @@ extension AppDelegate {
         case .turnOff(let id, let reason)?:
             turnOffNativeSpeaker(id, reason: reason, origin: .automatic)
         case .latencyChanged?:
-            applyLocalDelays()   // local outputs follow the new L (P114)
+            retimeLocalOutputs()   // L = L_s + A follows the new L_s (S178)
+            pushModel()   // and so does the AirPlay delay field (S181)
         case .senderFailed?:
             nativeSenderFailed()
         case nil:
@@ -97,7 +98,7 @@ extension AppDelegate {
         native.discard()
         airplayOrder = []
         notify(text.nativeAirPlayStopped, origin: .automatic, subject: Notice.airplaySender)
-        refreshLocalDelays()   // no native speaker is chosen any more
+        retimeLocalOutputs()   // no native speaker is chosen any more
         pushModel()
     }
 
@@ -123,7 +124,7 @@ extension AppDelegate {
         }
         let appeared = rows.filter { !known.contains($0) }
         airplayOrder = rows
-        refreshLocalDelays()   // also when only a speaker's playing state changed
+        retimeLocalOutputs()   // also when only a speaker's playing state changed
         syncNativeSpeakers()
         let joinable = appeared.filter { id in
             guard let receiver = NativeAirPlayID.receiver(id) else { return false }
@@ -148,7 +149,7 @@ extension AppDelegate {
             native.add(id, volume: volume)
             DBG.log("[AudioSync] native AirPlay: added \(nativeLabel(id)) at volume \(Int(volume.rounded())), master \(Int(masterVolume.rounded()))")
         }
-        refreshLocalDelays()
+        retimeLocalOutputs()
         for off in plan.turnOff {
             turnOffNativeSpeaker(NativeAirPlayID.app(off.id), reason: off.reason, origin: .automatic)
         }

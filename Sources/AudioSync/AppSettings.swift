@@ -8,8 +8,9 @@ import Foundation
 ///
 /// Every value is checked as it is read, so a damaged or hand-edited setting
 /// never reaches the engine: a number that isn't finite is dropped, volumes
-/// are clamped to 0…100 and delays to 0…20 000 ms (spec S76, S77, S124).
-/// Clause numbers refer to docs/ENGINE_SPEC.md.
+/// are clamped to 0…100, offsets to −2000…20 000 ms and the AirPlay delays
+/// to their ranges (spec S76, S175, S178). Clause numbers refer to
+/// docs/ENGINE_SPEC.md.
 struct AppSettings: Equatable {
 
     /// The UserDefaults keys. Every key AudioSync stores lives here, and
@@ -25,7 +26,9 @@ struct AppSettings: Equatable {
         static let master = "masterVolume"
         /// Each local speaker's slider position (0…100), by device UID.
         static let localVolumes = "localVolumePosByUID"
-        /// Each local speaker's configured delay in ms, by device UID.
+        /// Each local speaker's absolute delay in ms, by device UID, from
+        /// before the local delay model (S77). Read once by the migration
+        /// (S179), never written; left in place for older builds.
         static let localDelays = "localDelayMsByUID"
         /// Each AirPlay speaker's own slider position (0…100), by output ID (S73).
         static let airplayVolumes = "airPlayVolumeByID"
@@ -39,7 +42,8 @@ struct AppSettings: Equatable {
         /// `Equalizer.Settings` as JSON (S24, `StoredEqualizer`).
         static let equalizer = "equalizerSettings"
         /// One delay in ms for every local speaker, from before delays were
-        /// per speaker: where a speaker without its own delay starts (S77).
+        /// per speaker: where a speaker without its own delay started (S77).
+        /// Read once by the migration (S179), never written.
         static let legacyDelayMs = "delayMs"
         /// Local volumes as linear gain in percent (0…150), from before the
         /// volume curve. Converted to `localVolumes` once, then removed (S75).
@@ -48,21 +52,25 @@ struct AppSettings: Equatable {
         /// engine. Never written now; a value left there has no effect
         /// (`RetiredEngineChoice`).
         static let retiredEngineChoice = "engineImpl"
-        /// Each local speaker's offset in ms relative to the reference, by device UID (S175).
+        /// Each local speaker's offset in ms relative to the reference
+        /// (−2000…20 000), by device UID (S175). Missing is 0.
         static let localOffsets = "localOffsetMsByUID"
-        /// The bundled AirPlay engine's AirPlay delay in ms (S178).
+        /// The bundled AirPlay engine's AirPlay delay, L itself, in ms
+        /// (0…20 000, 2000 when missing; S178).
         static let airPlayDelay = "airPlayDelayMs"
-        /// AudioSync's own sender's AirPlay delay adjustment in ms (S178).
+        /// AudioSync's own sender's AirPlay delay, an adjustment on top of
+        /// the latency it reports, in ms (−2000…20 000, 0 when missing; S178).
         static let nativeAirPlayAdjustment = "nativeAirPlayAdjustmentMs"
-        /// True once the delays were migrated to offsets (S179).
+        /// True once the delays of `localDelays` and `legacyDelayMs` were
+        /// migrated to offsets and the AirPlay delays (S179); written last.
         static let localDelaysMigrated = "localDelayModelMigrated"
     }
 
     /// Where a speaker without a volume of its own starts (S71, S105).
     static let defaultVolume: Double = 60
     static let defaultMaster: Double = 100
-    /// Where a local speaker without a delay of its own starts, unless an
-    /// older single delay is stored (S77).
+    /// Where a local speaker without a delay of its own started before the
+    /// local delay model, unless an older single delay was stored (S77).
     static let standardDelayMs: Double = 2000
     static let maxDelayMs: Double = 20_000
 
@@ -71,16 +79,21 @@ struct AppSettings: Equatable {
     var enabledLocal: Set<String> = []
     var master = AppSettings.defaultMaster
     var localVolumes: [String: Double] = [:]
+    /// The absolute delays from before the local delay model (S77), as the
+    /// migration reads them.
     var localDelays: [String: Double] = [:]
     var airplayVolumes: [String: Double] = [:]
     var groups: [SpeakerGroup] = []
     var autoConnect: Set<String> = []
     var showVirtualDevices = false
     var appearance = AppAppearance.system
-    /// The delay a local speaker plays with until it gets one of its own.
+    /// D0 of the migration: what a local speaker without a delay of its own
+    /// played with before the local delay model (S77, S179).
     var defaultDelayMs = AppSettings.standardDelayMs
+    /// Offsets relative to the reference, by device UID (S175).
     var localOffsets: [String: Double] = [:]
     var airPlayDelay = AirPlayDelay()
+    /// The migration to offsets ran (S179).
     var localDelaysMigrated = false
 
     /// Reads every setting through `read`, which returns what is stored for a
@@ -95,6 +108,12 @@ struct AppSettings: Equatable {
         s.localVolumes = levels(read(Keys.localVolumes), volume)
         s.localDelays = levels(read(Keys.localDelays), delay)
         s.defaultDelayMs = read(Keys.legacyDelayMs).flatMap(number).map(delay) ?? standardDelayMs
+        s.localOffsets = levels(read(Keys.localOffsets)) { LocalDelay.sanitizedOffset($0) ?? 0 }
+        s.airPlayDelay.bundledMs = read(Keys.airPlayDelay).flatMap(number).flatMap(LocalDelay.sanitizedAirPlayDelay)
+            ?? LocalDelay.defaultAirPlayDelayMs
+        s.airPlayDelay.nativeAdjustmentMs = read(Keys.nativeAirPlayAdjustment).flatMap(number)
+            .flatMap(LocalDelay.sanitizedAdjustment) ?? 0
+        s.localDelaysMigrated = read(Keys.localDelaysMigrated) as? Bool ?? false
         s.airplayVolumes = levels(read(Keys.airplayVolumes), volume)
         s.groups = decodeGroups(read(Keys.groups) as? Data)
         s.showVirtualDevices = read(Keys.showVirtualDevices) as? Bool ?? false
@@ -201,7 +220,34 @@ struct SettingsStore {
 
     func save(appearance: AppAppearance) { write(appearance.defaultsValue, Keys.appearance) }
 
-    func migrateLocalDelays(listed: [String], reference: String?) -> LocalDelay.Migration? { nil }
+    /// Both senders' AirPlay delays (S178).
+    func save(airPlayDelay: AirPlayDelay) {
+        write(airPlayDelay.bundledMs, Keys.airPlayDelay)
+        write(airPlayDelay.nativeAdjustmentMs, Keys.nativeAirPlayAdjustment)
+    }
+
+    /// The one-time migration of the absolute delays to offsets (S179), the
+    /// first time a device list is in: `listed` holds its UIDs, `reference`
+    /// the reference chosen from it (S173). It reads the old delays, the
+    /// older single delay and the speakers that are on, stores the offsets
+    /// and the AirPlay delays under their own keys and then the mark, and
+    /// returns what it stored. The old keys stay as they are, for older
+    /// builds. Nil, changing nothing, once the mark is set; a migration cut
+    /// short before the mark runs again from the same old values.
+    @discardableResult
+    func migrateLocalDelays(listed: [String], reference: String?) -> LocalDelay.Migration? {
+        guard read(Keys.localDelaysMigrated) as? Bool != true else { return nil }
+        guard let migration = LocalDelay.migrate(
+            storedDelays: AppSettings.levels(read(Keys.localDelays), AppSettings.delay),
+            legacyDelayMs: read(Keys.legacyDelayMs).flatMap(AppSettings.number),
+            enabled: AppSettings.ids(read(Keys.enabledLocal)), listed: listed, reference: reference)
+        else { return nil }
+        save(levels: migration.offsets, forKey: Keys.localOffsets)
+        save(airPlayDelay: AirPlayDelay(bundledMs: migration.airPlayDelayMs,
+                                        nativeAdjustmentMs: migration.nativeAdjustmentMs))
+        write(true, Keys.localDelaysMigrated)
+        return migration
+    }
 }
 
 /// The audio engine choice of older builds: the `engineImpl` setting and the
