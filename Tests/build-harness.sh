@@ -1,6 +1,6 @@
 #!/bin/bash
 # Compiles the soak/benchmark harness (Tests/soaktest.swift) with the engine
-# sources it exercises, on both engines, linked with the Rust core that
+# sources it exercises, linked with the Rust core that
 # scripts/build_core.sh builds (run it first). Used by Tests/soak.sh,
 # Tests/bench.sh and, compile only, by Tests/run-tests.sh.
 # Usage: Tests/build-harness.sh OUTPUT_BINARY
@@ -17,9 +17,8 @@ trap 'rm -rf "$work"' EXIT
 cp Tests/soaktest.swift "$work/main.swift"
 SRC=Sources/AudioSync
 swiftc -O -swift-version 5 "$work/main.swift" \
-  "$SRC/EngineImpl.swift" "$SRC/EngineParts.swift" "$SRC/CoreEngine.swift" \
-  "$SRC/OutputRenderer.swift" "$SRC/RingBuffer.swift" "$SRC/AudioDevices.swift" \
-  "$SRC/Diagnostics.swift" "$SRC/Volume.swift" "$SRC/FifoFeed.swift" "$SRC/Equalizer.swift" \
-  "$SRC/SpeakerState.swift" "$SRC/AirPlayPairing.swift" "$SRC/NativeAirPlayTap.swift" \
+  "$SRC/EngineParts.swift" "$SRC/CoreEngine.swift" "$SRC/OutputRenderer.swift" \
+  "$SRC/AudioDevices.swift" "$SRC/Diagnostics.swift" "$SRC/Equalizer.swift" \
+  "$SRC/NativeAirPlayTap.swift" \
   -I Sources/CAudioSyncCore -L "$core_lib" -laudiosync_core \
   -o "$dest"

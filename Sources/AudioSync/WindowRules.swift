@@ -85,13 +85,12 @@ enum StoredEqualizer {
     }
 }
 
-/// The hidden engine options in the AudioSync menu (the audio engine and the
-/// AirPlay sender).
+/// The hidden engine option in the AudioSync menu (the AirPlay sender).
 enum EngineMenu {
     /// Only a choice that comes from the setting or the default can be changed
-    /// there: while `AUDIOSYNC_ENGINE` (or `AUDIOSYNC_AIRPLAY`) decides, a
-    /// stored setting has no effect, so the item is disabled.
-    static func canChoose(origin: EngineImpl.Origin) -> Bool {
+    /// there: while `AUDIOSYNC_AIRPLAY` decides, a stored setting has no
+    /// effect, so the item is disabled.
+    static func canChoose(origin: AirPlayImpl.Origin) -> Bool {
         origin != .environment
     }
 }

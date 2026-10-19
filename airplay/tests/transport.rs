@@ -44,6 +44,11 @@ const PCM_TXT: &[&str] = &[
 /// Long enough for anything a CI runner does.
 const LONG: Duration = Duration::from_secs(15);
 
+/// Resend requests the loopback test sends, each for a newer packet, and
+/// how long it waits for each reply.
+const RESEND_ATTEMPTS: usize = 5;
+const RESEND_WAIT: Duration = Duration::from_secs(3);
+
 fn start() -> (Sender, HostAudio) {
     let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
     (sender, HostAudio::start(writer))
@@ -152,18 +157,48 @@ fn a_session_plays_takes_volume_and_metadata_and_tears_down_over_loopback() {
         }
     }
 
-    // A resend request gets the packet exactly as first sent (P87).
-    let original = receiver.log().audio.last().cloned().expect("a packet");
-    receiver.request_resend(original.header.seq, 1);
-    assert!(
-        wait_until(LONG, || {
+    // A resend request gets the packet exactly as first sent (P87). The
+    // request and the reply are single UDP datagrams, and a loaded Windows
+    // runner once lost one (no reply in 15 s; a timed-out receive there
+    // can cancel a datagram that was arriving at that moment), so the test
+    // asks again, each time for the newest packet, which is well inside the
+    // history (P88) and not yet resent. A reply to any request counts, but
+    // only when it carries that packet byte for byte.
+    let mut requested = Vec::new();
+    let mut resent = false;
+    for attempt in 1..=RESEND_ATTEMPTS {
+        let original = receiver.log().audio.last().cloned().expect("a packet");
+        receiver.request_resend(original.header.seq, 1);
+        requested.push(original);
+        resent = wait_until(RESEND_WAIT, || {
             receiver.log().resends.iter().any(|(_, bytes)| {
-                bytes[2..4] == original.header.seq.to_be_bytes()
-                    && bytes[4..16] == original.header.encode()
-                    && bytes[16..] == original.payload[..]
+                requested.iter().any(|original| {
+                    bytes[2..4] == original.header.seq.to_be_bytes()
+                        && bytes[4..16] == original.header.encode()
+                        && bytes[16..] == original.payload[..]
+                })
             })
-        }),
-        "the resend arrives"
+        });
+        if resent {
+            break;
+        }
+        eprintln!(
+            "resend attempt {attempt} missed: requests {} resent {} not held {} replies {}",
+            counters.resend_requests(),
+            counters.packets_resent(),
+            counters.not_held(),
+            receiver.log().resends.len()
+        );
+    }
+    assert!(
+        resent,
+        "the resend arrives: requests {} resent {} not held {} setups {} replies {} events {:?}",
+        counters.resend_requests(),
+        counters.packets_resent(),
+        counters.not_held(),
+        receiver.log().setups.len(),
+        receiver.log().resends.len(),
+        events.of(&key)
     );
     assert!(counters.packets_resent() >= 1);
     assert!(counters.packets_sent() >= 100);
