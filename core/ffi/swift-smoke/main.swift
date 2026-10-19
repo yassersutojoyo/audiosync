@@ -303,6 +303,23 @@ func airPlaySender() {
           "the first event is the timeline, L = \(event.latency_ms) ms")
     check(!asc_airplay_next_event(handle, &event), "a working sender reports nothing more, no failure")
     check(!asc_airplay_add_speaker(handle, "02005E005301", 50), "only a listed receiver can be added")
+    // Pairing: the store opens from a path with no file yet (and writes none
+    // until a pairing), only a listed receiver pairs, and a password is
+    // handed over and forgotten.
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-smoke-\(getpid())")
+    let pairings = folder.appendingPathComponent("airplay-pairings.dat").path
+    check(asc_airplay_open_pairings(handle, pairings) == 0, "an empty pairing store opens")
+    check(asc_airplay_open_pairings(nil, pairings) == ASC_AIRPLAY_PAIRINGS_FAILED
+              && asc_airplay_open_pairings(handle, nil) == ASC_AIRPLAY_PAIRINGS_FAILED,
+          "a NULL sender or path opens no store")
+    check(!asc_airplay_start_pairing(handle, "02005E005301") && !asc_airplay_submit_pin(handle, "02005E005301", "1234"),
+          "only a listed receiver pairs")
+    asc_airplay_cancel_pairing(handle, "02005E005301")
+    check(asc_airplay_set_password(handle, "02005E005301", "secret") && asc_airplay_set_password(handle, "02005E005301", nil),
+          "a password is handed over and forgotten")
+    check(!asc_airplay_forget_pairing(handle, "02005E005301") && !FileManager.default.fileExists(atPath: pairings),
+          "nothing to forget, no file until a pairing")
+    try? FileManager.default.removeItem(at: folder)
     asc_airplay_set_master(handle, 80)
     // The capture's input: handed over once, silent until it has a rate,
     // then 10 ms at 48 kHz become 441 frames at 44.1 kHz.
@@ -319,7 +336,8 @@ func airPlaySender() {
     check(handle == nil, "destroy sets the host's pointer to NULL")
     asc_airplay_destroy(&handle)
     asc_airplay_destroy(nil)
-    check(Int(ASC_AIRPLAY_FLAG_AIRPLAY2) == 128 && ASC_AIRPLAY_GONE == 3 && ASC_AIRPLAY_EVENT_FAILED == 5,
+    check(Int(ASC_AIRPLAY_FLAG_AIRPLAY2) == 128 && ASC_AIRPLAY_GONE == 3 && ASC_AIRPLAY_EVENT_FAILED == 5
+              && ASC_AIRPLAY_EVENT_PAIRED == 9 && ASC_AIRPLAY_ERROR_WRONG_PIN == 10 && ASC_AIRPLAY_PAIRINGS_NEWER == -3,
           "the AirPlay constants cross the header")
 }
 

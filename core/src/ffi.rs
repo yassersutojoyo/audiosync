@@ -1008,6 +1008,35 @@ mod tests {
                 "ASC_AIRPLAY_ERROR_UNSUPPORTED",
                 AIRPLAY_ERROR_UNSUPPORTED.to_string(),
             ),
+            (
+                "ASC_AIRPLAY_ERROR_WRONG_PIN",
+                AIRPLAY_ERROR_WRONG_PIN.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_EVENT_PIN_NEEDED",
+                AIRPLAY_EVENT_PIN_NEEDED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_EVENT_PASSWORD_NEEDED",
+                AIRPLAY_EVENT_PASSWORD_NEEDED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_EVENT_PAIRING_FAILED",
+                AIRPLAY_EVENT_PAIRING_FAILED.to_string(),
+            ),
+            ("ASC_AIRPLAY_EVENT_PAIRED", AIRPLAY_EVENT_PAIRED.to_string()),
+            (
+                "ASC_AIRPLAY_PAIRINGS_FAILED",
+                AIRPLAY_PAIRINGS_FAILED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_PAIRINGS_IGNORED",
+                AIRPLAY_PAIRINGS_IGNORED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_PAIRINGS_NEWER",
+                AIRPLAY_PAIRINGS_NEWER.to_string(),
+            ),
         ]
         .into_iter()
         .map(|(name, value)| (name.to_owned(), value))

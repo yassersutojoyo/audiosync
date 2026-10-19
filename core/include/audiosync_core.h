@@ -129,6 +129,10 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_LATENCY 3  /* a speaker's latencies: .latency_ms, .receiver_latency_frames */
 #define ASC_AIRPLAY_EVENT_TIMELINE 4 /* the base latency L or the timeline changed: .latency_ms */
 #define ASC_AIRPLAY_EVENT_FAILED 5   /* the sender or its discovery stopped working (a bug); destroy it, create a new one */
+#define ASC_AIRPLAY_EVENT_PIN_NEEDED 6      /* a pairing's Apple TV shows a PIN: ask the user, then asc_airplay_submit_pin */
+#define ASC_AIRPLAY_EVENT_PASSWORD_NEEDED 7 /* a pairing needs the password (.error PASSWORD_REQUIRED) or got a wrong one (WRONG_PASSWORD, forgotten) */
+#define ASC_AIRPLAY_EVENT_PAIRING_FAILED 8  /* a pairing ended without credentials: .error (WRONG_PIN, NOT_RESPONDING, ...) */
+#define ASC_AIRPLAY_EVENT_PAIRED 9          /* paired, credentials stored; .detail "" or why they last this run only */
 
 /* A speaker's state (AscAirPlayEvent.state). */
 #define ASC_AIRPLAY_STATE_CONNECTING 1 /* a session is starting */
@@ -147,6 +151,12 @@ extern "C" {
 #define ASC_AIRPLAY_ERROR_WRONG_PASSWORD 7    /* it rejected the password */
 #define ASC_AIRPLAY_ERROR_PAIRING_REQUIRED 8  /* it needs pairing, or rejected or cancelled it */
 #define ASC_AIRPLAY_ERROR_UNSUPPORTED 9       /* the sender can't drive it; .unsupported says why */
+#define ASC_AIRPLAY_ERROR_WRONG_PIN 10        /* a pairing's Apple TV turned the PIN down; a new pairing shows a new one */
+
+/* What asc_airplay_open_pairings returns when the store holds nothing it found. */
+#define ASC_AIRPLAY_PAIRINGS_FAILED -1  /* NULL or dead handle, or NULL, empty or non-UTF-8 path */
+#define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* unreadable or not in the format: ignored, the next pairing replaces it */
+#define ASC_AIRPLAY_PAIRINGS_NEWER -3   /* a newer AudioSync wrote it: ignored and left as it is */
 
 /* ---- Version and volume ------------------------------------------------- */
 
@@ -640,7 +650,8 @@ bool asc_delay_ms_to_frames(double delay_ms, uint32_t rate, int64_t *frames);
  * AudioSync's own AirPlay sender: discovery, speakers added by the IDs
  * discovery reports, their volume and the master, their events, and the
  * capture's audio through an input handle. Nothing secret crosses this
- * interface (no password, PIN, key or credential); PIN pairing comes later.
+ * interface outward: PINs and passwords go in only, credentials never leave
+ * the core (it keeps them in the pairing store, asc_airplay_open_pairings).
  * Every asc_airplay_* call on a sender handle runs on one control thread at
  * a time, never an audio thread; the sender runs its own threads and
  * sockets. An input handle (AscAirPlayInput) has its own rules, below.
@@ -752,7 +763,9 @@ bool asc_airplay_next_event(AscAirPlay *airplay, AscAirPlayEvent *event);
  * Adds the receiver discovery lists under `id` as a speaker, at slider
  * position `volume` (0 to 100) times the master, with no delay of its own: a
  * session starts at once, and its state, errors and latency come as events.
- * Adding one already added applies the volume and, if it failed or waits for
+ * It uses the password handed over for `id` and the stored credentials, if
+ * any. Adding one already added applies the volume, the password and the
+ * credentials and, if it failed or waits for
  * a retry, starts a new session now. Returns false, adding nothing, when the
  * handle or id is NULL, id isn't a listed receiver, or volume isn't finite.
  */
@@ -792,6 +805,56 @@ double asc_airplay_latency_ms(const AscAirPlay *airplay);
  * starts over; a timeline event follows.
  */
 void asc_airplay_restart_timeline(AscAirPlay *airplay);
+
+/*
+ * Opens the pairing store kept in the file at `path` (UTF-8), meant for
+ * once, before discovery starts: an Apple TV it holds credentials for is
+ * listed as available and verifies with them; one it doesn't is listed as
+ * ASC_AIRPLAY_NEEDS_PIN. The file is versioned, mode 0600, written through a
+ * temporary file created new and renamed over it, and removed once nothing
+ * is paired; it never holds a password. Listed receivers are reported again
+ * as changed. Returns how many receivers it holds credentials for, or an
+ * ASC_AIRPLAY_PAIRINGS_* code.
+ */
+int32_t asc_airplay_open_pairings(AscAirPlay *airplay, const char *path);
+
+/*
+ * Starts a PIN pairing with the listed receiver `id` (one listed as
+ * ASC_AIRPLAY_NEEDS_PIN that the user turned on; never on the app's own): it
+ * is asked to show a PIN, and ASC_AIRPLAY_EVENT_PIN_NEEDED follows, or how
+ * the pairing ended. It uses the password handed over for `id`, if any. A
+ * pairing already running for it is replaced. Returns false, starting
+ * nothing, when the handle or id is NULL or id isn't listed.
+ */
+bool asc_airplay_start_pairing(AscAirPlay *airplay, const char *id);
+
+/*
+ * Hands the PIN the user typed to the pairing with `id`; the outcome comes as
+ * an event (ASC_AIRPLAY_EVENT_PAIRED, or _PAIRING_FAILED with
+ * ASC_AIRPLAY_ERROR_WRONG_PIN). Returns false, sending nothing, when a
+ * pointer is NULL, no pairing runs for id, or pin isn't digits only. Never
+ * kept or logged.
+ */
+bool asc_airplay_submit_pin(AscAirPlay *airplay, const char *id, const char *pin);
+
+/* Stops the pairing with `id`, if one runs; nothing more is reported for it. */
+void asc_airplay_cancel_pairing(AscAirPlay *airplay, const char *id);
+
+/*
+ * Hands over the password of receiver `id` for its next sessions
+ * (asc_airplay_add_speaker adds or restarts one) and pairings, until the
+ * handle is destroyed; NULL or "" forgets it. Kept in memory only and wiped
+ * when dropped, never stored or logged, and forgotten when the receiver turns
+ * it down. Returns false when the handle or id is NULL.
+ */
+bool asc_airplay_set_password(AscAirPlay *airplay, const char *id, const char *password);
+
+/*
+ * Forgets the stored credentials of `id` and rewrites the pairings file; the
+ * receiver is reported again as ASC_AIRPLAY_NEEDS_PIN. Returns whether it was
+ * paired. The core also forgets credentials a receiver turns down by itself.
+ */
+bool asc_airplay_forget_pairing(AscAirPlay *airplay, const char *id);
 
 /*
  * The sender's audio input, for the capture thread: the first call hands it
