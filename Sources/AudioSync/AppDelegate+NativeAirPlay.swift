@@ -20,11 +20,12 @@ extension AppDelegate {
     }
 
     /// From every AirPlay reconcile (at launch, every 3 s, after a wake): the
-    /// first one starts the sender and its discovery; later ones make its
-    /// speakers match the switches.
+    /// first one starts the sender and its discovery, and starts it again
+    /// after a start failed (`NativeSenderStarts`); later ones make its
+    /// speakers match the switches. On quit, `shutdown` tears it down.
     func reconcileNativeAirPlay() {
         guard nativeAirPlay != nil else {
-            startNativeAirPlay()
+            if nativeStarts.mayStart(at: Date()) { startNativeAirPlay() }
             return
         }
         syncNativeSpeakers()
@@ -36,16 +37,28 @@ extension AppDelegate {
         let native = NativeAirPlay(
             onChange: { [weak self] change in self?.nativeReceiverChanged(change) },
             onEvent: { [weak self] event, outcome in self?.nativeSpeakerEvent(event, outcome) })
-        nativeAirPlay = native
+        nativeAirPlay = native   // reconciles meanwhile don't start a second one
         native.start(master: masterVolume) { [weak self] started in
             DBG.log("[AudioSync] native AirPlay (\(choice.origin.rawValue)): "
                 + (started ? "the sender and its discovery started" : "the sender or its discovery could not start"))
-            self?.applyLocalDelays()   // L is known now
+            self?.nativeStartFinished(native, started: started)
         }
-        // On quit: every speaker gets its TEARDOWN before the process ends.
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
-        ) { _ in native.shutdown() }
+    }
+
+    /// A failed start left nothing running: the sender goes, the user hears
+    /// about it once, and a later reconcile starts it again. A start that
+    /// works clears that notice.
+    private func nativeStartFinished(_ native: NativeAirPlay, started: Bool) {
+        let news = nativeStarts.finished(started: started, at: Date())
+        if started {
+            clearNotices([Notice.airplaySender])
+        } else if nativeAirPlay === native {
+            nativeAirPlay = nil
+            if news { notify(text.nativeAirPlayCouldNotStart, origin: .automatic, subject: Notice.airplaySender) }
+            refreshLocalDelays()   // no native speaker is chosen any more
+        }
+        applyLocalDelays()   // L is known now
+        pushModel()
     }
 
     private func nativeReceiverChanged(_ change: NativeReceiverChange) {
@@ -166,7 +179,7 @@ extension AppDelegate {
         let name = airplayNames[id].map(text.deviceName) ?? text.unknownDevice
         switch reason {
         case .needsCode: return text.nativeAirPlayNeedsCode(name: name)
-        case .needsPassword: return text.airPlayTurnedOff(name: name, reason: .legacyPassword)
+        case .needsPassword: return text.nativeAirPlayNeedsPassword(name: name)
         case .unreachable: return text.airPlayTurnedOff(name: name, reason: .unreachable)
         case .cantPlay: return text.nativeAirPlayCantPlay(name: name)
         }

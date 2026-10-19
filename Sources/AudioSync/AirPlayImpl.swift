@@ -41,6 +41,13 @@ enum AirPlayImpl: String, CaseIterable {
         return (defaultImpl, .default)
     }
 
+    /// Whether a session feeds the bundled engine's PCM pipe
+    /// (`AirPlayEngine.fifoPath`): only the bundled engine reads it.
+    /// AudioSync's own sender takes the audio from the capture path
+    /// (`NativeAirPlayTap`), so with it no pipe feed runs, none keeps trying
+    /// to open the pipe, and a leftover engine process gets no audio.
+    var feedsPipe: Bool { self == .owntone }
+
     /// The choice for a session starting now (main thread).
     static func current(defaults: UserDefaults = .standard,
                         environment: [String: String] = ProcessInfo.processInfo.environment)
