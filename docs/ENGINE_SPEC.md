@@ -846,6 +846,7 @@ Removed on 2026-10-19 with the Swift engine's ring (`Tests/ringtest.swift`). Wha
 | offset text: a leading + or − (a hyphen too) is read and other text is ignored | S175, S181 |
 | speaker row: the reference has no delay field | S181 |
 | fade: a stop asks every output and the AirPlay input to fade out before capture stops | S186 |
+| fade: with only AirPlay speakers on, a stop keeps capturing until the AirPlay inputs have faded | S186, S189 |
 | fade: a stop waits for the slowest output, never more than 500 ms | S186 |
 | fade: an output is faded once the host clock passes its last faded frame's output time plus its latency | S185 |
 | fade: a source change fades out on the old source before the new one starts | S186 |

@@ -76,12 +76,20 @@ final class OutputRetirement {
         let stopCapture: (() -> Void)?
         /// Runs after the outputs stopped (a session's pipe writer, the caller's completion).
         var after: [() -> Void]
+        /// A session's stop: whether capture has given the AirPlay inputs
+        /// their fade-out's frames, and how long to wait for that when it
+        /// gives nothing.
+        let inputsFaded: () -> Bool
+        let inputsFallbackNs: UInt64
 
-        init(outputs: [FadingOutput], askedNs: UInt64, stopCapture: (() -> Void)?, after: [() -> Void]) {
+        init(outputs: [FadingOutput], askedNs: UInt64, stopCapture: (() -> Void)?, after: [() -> Void],
+             inputsFaded: @escaping () -> Bool = { true }, inputsFallbackNs: UInt64 = 0) {
             self.outputs = outputs
             self.askedNs = askedNs
             self.stopCapture = stopCapture
             self.after = after
+            self.inputsFaded = inputsFaded
+            self.inputsFallbackNs = inputsFallbackNs
         }
 
         var isSession: Bool { stopCapture != nil }
@@ -120,14 +128,21 @@ final class OutputRetirement {
     /// out and every one of `outputs` is asked to fade out, all at once.
     /// Once they have faded (or the cap passed), and the switch-offs asked
     /// for before have finished, `stopCapture` runs, then every output
-    /// stops, then `stopWriter`, then `completion`.
-    func stopSession(_ outputs: [FadingOutput], fadeInputs: () -> Void, stopCapture: @escaping () -> Void,
-                     stopWriter: @escaping () -> Void, then completion: (() -> Void)? = nil) {
+    /// stops, then `stopWriter`, then `completion`. Capture also keeps
+    /// running until the AirPlay inputs have had their fade-out's frames
+    /// (S189), also with no local output on: until `inputsFaded` says so,
+    /// or for `inputsFallbackNs` while capture gives nothing, never past the
+    /// cap.
+    func stopSession(_ outputs: [FadingOutput], fadeInputs: () -> Void,
+                     inputsFaded: @escaping () -> Bool = { true }, inputsFallbackNs: UInt64 = 0,
+                     stopCapture: @escaping () -> Void, stopWriter: @escaping () -> Void,
+                     then completion: (() -> Void)? = nil) {
         fadeInputs()
         for output in outputs { output.requestFadeOut() }
         var after: [() -> Void] = [stopWriter]
         if let completion { after.append(completion) }
-        batches.append(Batch(outputs: outputs, askedNs: clock(), stopCapture: stopCapture, after: after))
+        batches.append(Batch(outputs: outputs, askedNs: clock(), stopCapture: stopCapture, after: after,
+                             inputsFaded: inputsFaded, inputsFallbackNs: inputsFallbackNs))
         poll()
     }
 
@@ -179,8 +194,11 @@ final class OutputRetirement {
     private func finishable() -> Int? {
         let now = clock()
         for (index, batch) in batches.enumerated() {
-            let capped = now &- batch.askedNs >= Self.capNs
-            let faded = batch.outputs.allSatisfy { $0.hasFaded(nowNs: now) }
+            let waited = now &- batch.askedNs
+            let capped = waited >= Self.capNs
+            // The inputs' check goes first: it notes capture's progress.
+            let inputs = batch.inputsFaded() || waited >= batch.inputsFallbackNs
+            let faded = inputs && batch.outputs.allSatisfy { $0.hasFaded(nowNs: now) }
             guard capped || faded else { continue }
             // A session's stop waits for every batch asked for before it.
             if batch.isSession && index > 0 { continue }
