@@ -57,6 +57,7 @@ use audiosync_airplay::stream::SpeakerLatency;
 use audiosync_airplay::volume::{MIN_DB, Volume};
 
 use super::{host_slice, stereo_samples};
+use crate::fade::InputFade;
 use crate::resample::Resampler;
 use crate::ring::is_supported_rate;
 
@@ -615,12 +616,15 @@ unsafe fn live<T: Copy>(
 }
 
 /// The capture side of an [`AscAirPlayInput`]: the sender's input, the
-/// resampler from the capture rate to 44.1 kHz and its output buffer.
+/// resampler from the capture rate to 44.1 kHz and its output buffer, and
+/// the input's fade at the capture rate (S189).
 struct Feed {
     writer: InputWriter,
     resampler: Resampler,
     /// Resampler output, stereo.
     resampled: Box<[f32]>,
+    /// Fades in after each rate set and out after a stop request (S189).
+    fade: InputFade,
     /// The last rate request taken in (see [`AscAirPlayInput::requested`]).
     applied: u64,
     /// The resampler runs at a supported rate the host asked for.
@@ -629,41 +633,64 @@ struct Feed {
 
 impl Feed {
     /// Resamples `block` and hands it to the sender as audio that arrived
-    /// now; takes in a new rate request first. Returns the 44.1 kHz frames
-    /// handed over. Never allocates, locks, blocks or logs (P6).
-    fn write(&mut self, block: &[f32], requested: u64) -> usize {
+    /// now; takes in a new rate request first, which starts a fade-in, and
+    /// fades out while `closing` (S189). Returns the 44.1 kHz frames handed
+    /// over. Never allocates, locks, blocks or logs (P6).
+    fn write(&mut self, block: &[f32], requested: u64, closing: bool) -> usize {
         if requested != self.applied {
             self.applied = requested;
             // Low half: the rate; a new request, even for the same rate,
             // starts the resampler afresh.
             self.ready = self.resampler.set_input_rate(requested as u32).is_ok();
+            if self.ready {
+                self.fade.restart(requested as u32);
+            }
         }
         if !self.ready {
             return 0;
         }
-        let at = Instant::now();
-        let frames = block.len() / 2;
-        let (mut consumed, mut handed) = (0, 0);
-        // Until the input is used up and nothing more comes out: the
-        // resampler may take in the whole block while the buffer holds only
-        // part of its output, and keeps the rest for the next call.
-        loop {
-            let (used, produced) = self
-                .resampler
-                .process(&block[consumed * 2..frames * 2], &mut self.resampled);
-            if produced > 0 {
-                // Frames that come too late or don't fit are dropped there
-                // and counted (P112, P144).
-                self.writer.write_f32(&self.resampled[..produced * 2], at);
-                handed += produced;
-            }
-            consumed += used;
-            if used == 0 && produced == 0 {
-                break;
-            }
+        if closing {
+            self.fade.fade_out();
         }
+        let at = Instant::now();
+        let mut handed = 0;
+        let (resampler, resampled, writer) =
+            (&mut self.resampler, &mut self.resampled, &mut self.writer);
+        self.fade.process(block, |piece| {
+            handed += resample_into(resampler, resampled, writer, piece, at);
+        });
         handed
     }
+}
+
+/// Resamples `block` into `resampled` and hands it to `writer` as audio that
+/// arrived `at`; returns the 44.1 kHz frames handed over.
+fn resample_into(
+    resampler: &mut Resampler,
+    resampled: &mut [f32],
+    writer: &mut InputWriter,
+    block: &[f32],
+    at: Instant,
+) -> usize {
+    let frames = block.len() / 2;
+    let (mut consumed, mut handed) = (0, 0);
+    // Until the input is used up and nothing more comes out: the resampler
+    // may take in the whole block while the buffer holds only part of its
+    // output, and keeps the rest for the next call.
+    loop {
+        let (used, produced) = resampler.process(&block[consumed * 2..frames * 2], resampled);
+        if produced > 0 {
+            // Frames that come too late or don't fit are dropped there and
+            // counted (P112, P144).
+            writer.write_f32(&resampled[..produced * 2], at);
+            handed += produced;
+        }
+        consumed += used;
+        if used == 0 && produced == 0 {
+            break;
+        }
+    }
+    handed
 }
 
 /// The capture thread's way into a sender behind an opaque C pointer. The
@@ -675,6 +702,9 @@ pub struct AscAirPlayInput {
     /// every request, and the rate in Hz in the low 32 bits; 0 before the
     /// first.
     requested: AtomicU64,
+    /// A stop asked the input to fade out (S189); cleared by the next rate
+    /// request.
+    closing: AtomicBool,
     /// Its sender's dead flag: set by a panic in a write, which then
     /// writes nothing more.
     dead: Arc<AtomicBool>,
@@ -1050,10 +1080,12 @@ pub unsafe extern "C" fn asc_airplay_take_input(airplay: *mut AscAirPlay) -> *mu
                     writer,
                     resampler,
                     resampled: vec![0.0; INPUT_CHUNK_FRAMES * 2].into_boxed_slice(),
+                    fade: InputFade::new(SAMPLE_RATE, INPUT_CHUNK_FRAMES),
                     applied: 0,
                     ready: false,
                 },
                 requested: AtomicU64::new(0),
+                closing: AtomicBool::new(false),
                 dead: airplay.dead.clone(),
             }))
         })
@@ -1062,7 +1094,8 @@ pub unsafe extern "C" fn asc_airplay_take_input(airplay: *mut AscAirPlay) -> *mu
 
 /// Any thread: the rate in Hz of the audio the capture writes from now on,
 /// rounded to whole hertz. The next write takes it in and starts the
-/// resampler afresh, so a host calls it at each capture start, even at an
+/// resampler afresh, with a fade-in from silence over F capture-rate frames
+/// (S189), so a host calls it at each capture start, even at an
 /// unchanged rate. False, changing nothing, for a null handle or a rate
 /// outside 8000 to 384 000 Hz. Real-time safe.
 ///
@@ -1083,9 +1116,12 @@ pub unsafe extern "C" fn asc_airplay_input_set_rate(
     }
     // SAFETY: the handle is live; this call borrows only the atomics, which
     // writes read but never borrow mutably.
-    let (requested, dead) = unsafe { (&(*input).requested, &(*input).dead) };
+    let (requested, closing, dead) =
+        unsafe { (&(*input).requested, &(*input).closing, &(*input).dead) };
     let set = panic::catch_unwind(|| {
         injected_panic();
+        // A new capture: open again after a stop's fade-out (S189).
+        closing.store(false, Ordering::Release);
         let mut old = requested.load(Ordering::Relaxed);
         loop {
             let new = ((old >> 32).wrapping_add(1) << 32) | u64::from(rate as u32);
@@ -1133,21 +1169,42 @@ pub unsafe extern "C" fn asc_airplay_input_write(
     };
     // SAFETY: the handle is live; writes run on one thread at a time and
     // borrow only the `feed` field, which rate requests never touch.
-    let (requested, dead) = unsafe { (&(*input).requested, &(*input).dead) };
+    let (requested, closing, dead) =
+        unsafe { (&(*input).requested, &(*input).closing, &(*input).dead) };
     if dead.load(Ordering::Acquire) {
         return 0;
     }
     let requested = requested.load(Ordering::Acquire);
+    let closing = closing.load(Ordering::Acquire);
     // SAFETY: as above.
     let feed = unsafe { &mut (*input).feed };
     let written = panic::catch_unwind(AssertUnwindSafe(|| {
         injected_panic();
-        feed.write(block, requested)
+        feed.write(block, requested, closing)
     }));
     written.unwrap_or_else(|_| {
         dead.store(true, Ordering::Release);
         0
     })
+}
+
+/// Any thread, at a session stop: asks the input to fade out over the next
+/// F capture-rate frames written and to hand zeros after them, until the
+/// next [`asc_airplay_input_set_rate`] fades it in again (S186, S189). Does
+/// nothing for a null handle. Real-time safe.
+///
+/// # Safety
+///
+/// `input` is null or a live input handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_input_request_fade_out(input: *mut AscAirPlayInput) {
+    if input.is_null() {
+        return;
+    }
+    // SAFETY: the handle is live; this call borrows only an atomic, which
+    // writes read but never borrow mutably.
+    let closing = unsafe { &(*input).closing };
+    closing.store(true, Ordering::Release);
 }
 
 /// Frees an input handle. Sets `*input` to null, so destroying through the
