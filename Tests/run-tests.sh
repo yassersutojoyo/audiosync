@@ -16,7 +16,22 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 SRC=Sources/AudioSync
 OUT=$(mktemp -d "${TMPDIR:-/tmp}/audiosync-tests-XXXXXX")
-trap 'rm -rf "$OUT"' EXIT
+# A run passes only by reaching the last line. macOS's bash 3.2 can end a
+# run that set -u stopped (an unbound variable) with status 0 once an EXIT
+# trap has run, which once let CI pass with suites left unrun, so any exit
+# before the end fails.
+finished=0
+# shellcheck disable=SC2329 # runs from the EXIT trap below, not by name
+cleanup() {
+  local rc=$?
+  rm -rf "$OUT"
+  if [ "$finished" != 1 ] && [ "$rc" = 0 ]; then
+    echo "❌ Tests/run-tests.sh stopped before its last suite" >&2
+    rc=1
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
 
 # The core's C interface and the static library scripts/build_core.sh makes.
 CORE=(-I Sources/CAudioSyncCore -L core/target/universal-apple-darwin/release -laudiosync_core)
@@ -31,7 +46,8 @@ build() {   # build <name> <test file> <source files…> [-- <more swiftc argume
   local srcs=() extra=()
   while [ $# -gt 0 ] && [ "$1" != "--" ]; do srcs+=("$SRC/$1"); shift; done
   if [ $# -gt 0 ]; then shift; extra=("$@"); fi
-  swiftc -O -swift-version 5 "$OUT/$name/main.swift" "${srcs[@]}" ${extra[@]+"${extra[@]}"} -o "$OUT/$name/run"
+  swiftc -O -swift-version 5 "$OUT/$name/main.swift" ${srcs[@]+"${srcs[@]}"} ${extra[@]+"${extra[@]}"} \
+    -o "$OUT/$name/run"
 }
 
 status=0
@@ -153,6 +169,10 @@ else
   status=1
 fi
 
+echo "▶ soak rules (the harness's memory check on recorded series)"
+build soakrules Tests/soakrulestest.swift -- Tests/soakrules.swift
+"$OUT/soakrules/run" || status=1
+
 echo "▶ soak harness (compile only; Tests/soak.sh and Tests/bench.sh run it)"
 Tests/build-harness.sh "$OUT/soaktest" || status=1
 
@@ -165,4 +185,5 @@ if [ "${1:-}" = "--hardware" ]; then
   "$OUT/pipestart/run" "$PWD/.build/scratch-pipestart" || status=1
 fi
 
+finished=1
 exit $status
