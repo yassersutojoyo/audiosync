@@ -777,6 +777,9 @@ impl<D: Driver> Controller<D> {
         self.refresh_if_needed(false);
         let failures = self.sync_outputs();
         self.report_failures(failures);
+        // An output that couldn't start was turned off: the others no
+        // longer wait for it (S177).
+        self.retime();
         self.airplay_streaming(true);
         Ok(())
     }

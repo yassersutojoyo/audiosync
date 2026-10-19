@@ -535,12 +535,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn list_devices(&mut self) {
         // A failed listing keeps the last list; the backend tries again at
         // its next poll.
-        let listed = self.audio.list_outputs().is_ok();
-        self.take_events();
-        self.outputs_listed();
-        if listed {
+        // An older file's delays are migrated before auto-connect outputs
+        // start, so they start at their migrated hold-backs.
+        if self.audio.list_outputs().is_ok() {
             self.migrate_delays_if_due();
         }
+        self.take_events();
+        self.outputs_listed();
         self.airplay_listed();
         self.refresh_sources();
     }
@@ -931,8 +932,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn handle(&mut self, event: BackendEvent) {
         match event {
             BackendEvent::OutputsChanged => {
-                self.outputs_listed();
                 self.migrate_delays_if_due();
+                self.outputs_listed();
             }
             // It stays on, and plays again once its device is back. A device
             // still listed only lost its stream (after a format change, say):
