@@ -199,7 +199,7 @@ S192 to S202 make a turned-down or muted output device visible. Every local outp
 
 ### Local delay model (offsets relative to a reference output)
 
-S172 to S181 replace the rule that local outputs play at once unless an AirPlay speaker is chosen (S77, S78, S80). Under that rule the delay fields did nothing with only local outputs, although a Bluetooth speaker sounds some 150 to 300 ms behind a wired one, and every row, the built-in speakers included, carried an absolute delay of about two seconds that only meant something next to AirPlay. In this model the built-in speakers are the reference and have no delay setting; every other local output has an offset relative to them that always applies; the host turns the offsets of the outputs taking part into hold-backs and adds the AirPlay latency while an AirPlay speaker is chosen. These clauses are design requirements: until the Rust core, the Mac app and the Windows app follow them, the code behaves as the superseded clauses say. S79 (what "an AirPlay speaker is chosen" means) and S81 still apply.
+S172 to S181 replace the rule that local outputs play at once unless an AirPlay speaker is chosen (S77, S78, S80). Under that rule the delay fields did nothing with only local outputs, although a Bluetooth speaker sounds some 150 to 300 ms behind a wired one, and every row, the built-in speakers included, carried an absolute delay of about two seconds that only meant something next to AirPlay. In this model the built-in speakers are the reference and have no delay setting; every other local output has an offset relative to them that always applies; the host turns the offsets of the outputs taking part into hold-backs and adds the AirPlay latency while an AirPlay speaker is chosen. The Rust core, the Mac app and the Windows app follow these clauses; builds before them behave as the superseded clauses say. S79 (what "an AirPlay speaker is chosen" means) and S81 still apply.
 
 - **S172** *Required.* Terms used by S173 to S181:
   - A *local output* is an output the host renders to itself (S60), keyed by device UID on the Mac and by endpoint ID on Windows.
@@ -805,6 +805,33 @@ Removed on 2026-10-19 with the Swift engine's ring (`Tests/ringtest.swift`). Wha
 | EC12 network loss: a speaker back in the list is selected again | S104, S148, S167 |
 | EC12 network loss: a listed speaker the engine dropped is turned off with a notice | S104, S106, S109, S148, S167 |
 | EC12 network loss: an empty list with Local Network allowed shows no permission hint | S154, S167 |
+| local delay: with only local outputs, a speaker's delay is applied | S176 |
+| local delay: a Bluetooth speaker at −250 ms makes the built-in speakers wait 250 ms | S176 |
+| local delay: the built-in speakers are the reference | S173 |
+| local delay: the built-in headphone output doesn't take the reference from the built-in speakers | S173 |
+| local delay: a lone built-in output that reports no speaker terminal is the reference | S173 |
+| local delay: no built-in output, no reference | S173 |
+| local delay: a switched-off reference is still the reference | S173 |
+| local delay: AirPlay chosen adds the AirPlay delay on top | S176, S178 |
+| local delay: the native sender adds the latency it reports plus the AirPlay adjustment | S176, S178 |
+| local delay: a new AirPlay delay re-times the local speakers | S177, S178 |
+| local delay: a late speaker switched on or off re-times the running others | S177 |
+| local delay: editing the lowest offset re-times the others | S177 |
+| AirPlay delay: the bundled engine's field edits the stored value, 0 to 20 000 ms | S178, S181 |
+| AirPlay delay: the native sender's field shows L + A, follows a new L and an edit stores the difference | S178, S181 |
+| migration: a setup tuned for AirPlay sounds the same with AirPlay | S179 |
+| migration: the reference's old delay becomes the AirPlay delay | S179 |
+| migration: R without a stored delay uses D0 | S179 |
+| migration: an untuned output that played at D0 sounds the same with AirPlay | S179 |
+| migration: with a legacy delay below 1000 ms, untuned outputs keep playing together | S179 |
+| migration: the native sender's adjustment starts at 0 | S179 |
+| migration: small values keep their alignment and take the default AirPlay delay | S179 |
+| migration: an offset below −2000 ms is clamped | S179 |
+| migration: runs once and leaves the old values in place | S179 |
+| settings: offsets are kept in −2000…20 000 ms and the AirPlay delays in their ranges (S175, S178) | S175, S178 |
+| offset text: +150 ms, −250 ms and 0 ms | S181 |
+| offset text: a leading + or − (a hyphen too) is read and other text is ignored | S175, S181 |
+| speaker row: the reference has no delay field | S181 |
 
 ### fifo
 
@@ -862,9 +889,6 @@ Since 2026-10-19 the suite runs the app's pipe feed, `CoreFifoFeed`, and checks 
 | delay: lagFrames reads the lag after each change (S56) | S56 |
 | delay: one prime, then one resync per delay change (S158) | S158 |
 | delay: the counters survive resetPrime (S159) | S159 |
-| delay: AirPlay chosen → configured delay | S78 |
-| delay: no AirPlay → plays at once | S78 |
-| delay: zero stays zero | S78 |
 | delay: a chosen speaker not listed today doesn't count | S79 |
 | delay: chosen and listed counts | S79 |
 | delay: listed but not chosen doesn't count | S79 |
@@ -973,39 +997,9 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | the_reference_row_has_no_delay_and_the_others_show_a_signed_offset | S181 |
 | an_offset_takes_a_leading_plus_or_minus_and_other_text_is_ignored | S175, S181 |
 
-### local delay model: Mac (to be written first, failing)
+### local delay model: Mac
 
-The Mac's checks for S172 to S181. None exists yet: each is written first and fails against today's Mac code (the first row reproduces the reported bug), then the Mac app follows the clauses through the core's C interface. Once a check exists, its row moves to the logic table.
-
-Mac (`Tests/logictest.swift`):
-
-| Check | Clauses |
-|---|---|
-| local delay: with only local outputs, a speaker's delay is applied | S176 |
-| local delay: a Bluetooth speaker at −250 ms makes the built-in speakers wait 250 ms | S176 |
-| local delay: the built-in speakers are the reference | S173 |
-| local delay: the built-in headphone output doesn't take the reference from the built-in speakers | S173 |
-| local delay: a lone built-in output that reports no speaker terminal is the reference | S173 |
-| local delay: no built-in output, no reference | S173 |
-| local delay: a switched-off reference is still the reference | S173 |
-| local delay: AirPlay chosen adds the AirPlay delay on top | S176, S178 |
-| local delay: the native sender adds the latency it reports plus the AirPlay adjustment | S176, S178 |
-| local delay: a new AirPlay delay re-times the local speakers | S177, S178 |
-| local delay: a late speaker switched on or off re-times the running others | S177 |
-| local delay: editing the lowest offset re-times the others | S177 |
-| AirPlay delay: the native sender's field shows L + A, follows a new L and an edit stores the difference | S178, S181 |
-| migration: a setup tuned for AirPlay sounds the same with AirPlay | S179 |
-| migration: the reference's old delay becomes the AirPlay delay | S179 |
-| migration: R without a stored delay uses D0 | S179 |
-| migration: an untuned output that played at D0 sounds the same with AirPlay | S179 |
-| migration: with a legacy delay below 1000 ms, untuned outputs keep playing together | S179 |
-| migration: the native sender's adjustment starts at 0 | S179 |
-| migration: small values keep their alignment and take the default AirPlay delay | S179 |
-| migration: an offset below −2000 ms is clamped | S179 |
-| migration: runs once and leaves the old values in place | S179 |
-| offset text: +150 ms, −250 ms and 0 ms | S181 |
-| offset text: a leading + or − (a hyphen too) is read and other text is ignored | S175, S181 |
-| speaker row: the reference has no delay field | S181 |
+The Mac's checks for S172 to S181 were written first and failed against the Mac code of that day (the first one reproduced the reported bug); they pass now and are listed in the logic table, as "local delay", "AirPlay delay", "migration", "offset text" and "speaker row", with the settings check for the new keys.
 
 ### fades (to be written first, failing)
 
