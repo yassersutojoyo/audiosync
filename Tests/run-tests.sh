@@ -21,6 +21,7 @@ OUT=$(mktemp -d "${TMPDIR:-/tmp}/audiosync-tests-XXXXXX")
 # trap has run, which once let CI pass with suites left unrun, so any exit
 # before the end fails.
 finished=0
+# shellcheck disable=SC2329 # runs from the EXIT trap below, not by name
 cleanup() {
   local rc=$?
   rm -rf "$OUT"
