@@ -20,7 +20,7 @@ What AudioSync does when the world changes under a running session, where the co
 | EC12 | AirPlay network loss | Automated (logic) and manual |
 | EC13 | Streaming switched off and on while audio plays | Automated (logic) and manual |
 
-The 3-second poll mentioned below is `AppDelegate.startPolling`, which runs `reconcileAirPlay()` (`AppDelegate+AirPlay.swift`) and `reconcileLocal()` (`AppDelegate+Outputs.swift`).
+The 3-second poll mentioned below is `AppDelegate.startReconcileTimer`, which runs `reconcileAirPlaySpeakers()` (`AppDelegate+AirPlay.swift`) and `reconcileLocal()` (`AppDelegate+Outputs.swift`).
 
 ## EC1: Device unplugged and replugged during playback
 
@@ -53,7 +53,7 @@ Manual: stream to Bluetooth headphones and one other speaker. Turn the headphone
 Expected: nothing plays while the Mac sleeps. After wake, streaming is still on and the local speakers continue with fresh audio at their configured delay, never the audio from before the sleep. AirPlay speakers that were on stay on, with no notice: a speaker whose session didn't survive the sleep gets a new one from the sender by itself (after 1, 2, 4, 8 and 16 s, then every 30 s) until it plays. A speaker that was switched off stays off. Devices that disappear across sleep (USB hubs, Bluetooth) follow EC1 and EC2, and an AirPlay speaker that left the network follows EC12.
 
 Code path:
-- `AppDelegate.observeSleepAndWake` (`AppDelegate+AirPlay.swift`) sets `macAsleep` on `NSWorkspace.willSleepNotification` and clears it on `didWakeNotification`; `screensDidWakeNotification` counts as a wake too while AudioSync still thinks the Mac is asleep, in case the wake notification goes missing. While the Mac sleeps, `reconcileAirPlay()` asks the sender nothing; on wake it runs at once, so the sender's speakers match the switches again (`syncNativeSpeakers`).
+- `AppDelegate.observeSleepAndWake` (`AppDelegate+AirPlay.swift`) sets `macAsleep` on `NSWorkspace.willSleepNotification` and clears it on `didWakeNotification`; `screensDidWakeNotification` counts as a wake too while AudioSync still thinks the Mac is asleep, in case the wake notification goes missing. While the Mac sleeps, `reconcileAirPlaySpeakers()` asks the sender nothing; on wake it runs at once, so the sender's speakers match the switches again (`syncNativeSpeakers`).
 - Core Audio stops and resumes the capture IOProc (`ProcessTapCapture.IOLink`, on the tap's aggregate device or the input device) and the renderers; the core's delay reader (`CoreDelayReader`) plays silence while nothing arrives and re-establishes the delay without replaying old audio.
 
 Automated: core `a_writer_stall_above_the_dead_band_holds_silence`, `a_reader_that_ran_dry_plays_new_frames_as_they_arrive` and `stall_resumes_after_the_last_frame_at_the_exact_delay` (`core/src/reader.rs`).
