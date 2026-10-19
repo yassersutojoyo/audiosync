@@ -41,7 +41,7 @@ engine.
 |---|---|---|
 | [OwnTone](https://github.com/owntone/owntone-server) 29.2 | GPL-2.0-or-later | [owntone-29.2.tar.xz](https://github.com/owntone/owntone-server/releases/tag/29.2) |
 
-AudioSync builds OwnTone from that release with eight small source patches.
+AudioSync builds OwnTone from that release with nine small source patches.
 They are the `perl` edits in [`setup.sh`](setup.sh) (step 3), each documented
 inline:
 
@@ -68,6 +68,12 @@ inline:
    don't leave it looking unreachable. A password receiver is marked as needing
    its password again; any other speaker retries transient pairing, and one
    that only pairs with a PIN falls into the stock PIN entry.
+9. `src/player.c`: play a pipe from its live edge. The pipe's input keeps
+   reading while the playback clock waits, for the speakers to set up their
+   sessions after a start or for playback to resume after a suspend, and stock
+   29.2 then plays from the oldest audio it read, so that much stays added to
+   the speakers' latency. On the first clock tick after a start or resume,
+   drop what queued up (logging how many ms).
 
 OwnTone is built with `MACOSX_DEPLOYMENT_TARGET=15.0` against the libraries
 below. Its `configure` sees C library functions the macOS SDK marks as newer
@@ -206,6 +212,11 @@ to `base64`, `indexmap` and `memchr`, which the app already contained.
 `airplay/NOTES.md` lists each with its license; the versions a Windows build
 compiles are the ones in `windows/Cargo.lock`, which that build's
 `THIRD-PARTY-NOTICES.txt` names.
+
+The Windows app reads and writes its settings file with `serde` and
+`serde_json` (MIT OR Apache-2.0), which bring in `serde_core`, `serde_derive`
+and `itoa` (MIT OR Apache-2.0) and `zmij` (MIT), next to `memchr`, which the
+app already contained.
 
 The Windows app's other Rust dependencies are under permissive licenses. CI
 checks them with `cargo deny check licenses` against the list in

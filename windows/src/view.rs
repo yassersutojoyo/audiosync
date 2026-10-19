@@ -21,7 +21,8 @@ use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::ui_model::{
-    self, AppState, Backend, NoticeMessage, PinPrompt, SourceKind, SpeakerState,
+    self, AppState, Backend, MainWindowShows, NoticeMessage, PinPrompt, SourceKind, SpeakerState,
+    ViewSettings, WindowFrame,
 };
 use crate::{
     AboutDialog, AirPlayProblem, Availability, EqualizerWindow, GroupItem, GroupNameDialog,
@@ -72,6 +73,15 @@ const FLYOUT_NOTICE_LIMIT: usize = 1;
 
 /// How often the backend is polled for what happened on its own.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How often, 20 ms apart, the saved main window size waits for the native
+/// window before it gives up (about two seconds).
+const NATIVE_WINDOW_TRIES: u8 = 100;
+
+/// Roughly what the main window's outer frame adds to its inner size, in
+/// logical pixels: the borders, the title bar and the menu bar. Used to fit
+/// a saved size to a monitor, where a little extra room does no harm.
+const MAIN_WINDOW_CHROME: (f64, f64) = (16.0, 64.0);
 
 /// The parts of the tray flyout that a refresh can remove, with the controls
 /// in them: the listed notice, the button for more notices, the group rows
@@ -171,6 +181,72 @@ fn with_app(app: &Weak<App>, action: impl FnOnce(&App)) {
     }
 }
 
+/// Sets the main window's size as soon as its native window exists, checking
+/// every 20 ms up to `tries` times, then maximizes it when `maximized` (a
+/// size set on a maximized window would restore it to normal).
+fn set_size_once_native(
+    main: slint::Weak<MainWindow>,
+    size: slint::LogicalSize,
+    maximized: bool,
+    tries: u8,
+) {
+    use slint::winit_030::WinitWindowAccessor;
+
+    Timer::single_shot(Duration::from_millis(20), move || {
+        let Some(window_owner) = main.upgrade() else {
+            return;
+        };
+        let window = window_owner.window();
+        if window.with_winit_window(|_| ()).is_some() {
+            window.set_size(size);
+            if maximized {
+                window.set_maximized(true);
+            }
+        } else if tries > 1 {
+            set_size_once_native(main, size, maximized, tries - 1);
+        }
+    });
+}
+
+/// The saved main window `frame` as it opens on the monitor with
+/// `work_area` (physical pixels) and `scale`: its inner size (logical
+/// pixels) and outer position (physical pixels), fitted inside the work
+/// area. `keep_place` when the saved place is on that monitor; else the
+/// window opens centered on it.
+fn fitted_main_frame(
+    frame: WindowFrame,
+    work_area: crate::placement::Bounds,
+    scale: f64,
+    keep_place: bool,
+) -> WindowFrame {
+    let outer = crate::placement::Bounds {
+        x: f64::from(frame.x),
+        y: f64::from(frame.y),
+        width: (frame.width + MAIN_WINDOW_CHROME.0) * scale,
+        height: (frame.height + MAIN_WINDOW_CHROME.1) * scale,
+    };
+    let fitted = crate::placement::fit_window(outer, work_area, keep_place);
+    if fitted == outer {
+        return frame;
+    }
+    let (min_width, min_height) = crate::settings::MIN_WINDOW;
+    let inner = |outer: f64, chrome: f64, saved: f64, min: f64| {
+        (outer / scale - chrome).round().clamp(min, saved.max(min))
+    };
+    WindowFrame {
+        x: fitted.x.round() as i32,
+        y: fitted.y.round() as i32,
+        width: inner(fitted.width, MAIN_WINDOW_CHROME.0, frame.width, min_width),
+        height: inner(
+            fitted.height,
+            MAIN_WINDOW_CHROME.1,
+            frame.height,
+            min_height,
+        ),
+        maximized: frame.maximized,
+    }
+}
+
 impl App {
     /// The windows over `backend`; what they do themselves goes to `log`.
     pub fn new(backend: Box<dyn Backend>, log: DebugLog) -> Result<Rc<App>, slint::PlatformError> {
@@ -214,6 +290,7 @@ impl App {
         app.connect_equalizer();
         app.connect_dialogs();
         app.connect_guide();
+        app.restore_view();
         app.refresh();
         let weak = Rc::downgrade(&app);
         app.poll_timer
@@ -935,7 +1012,107 @@ impl App {
 
     fn show_virtual_devices(&self, on: bool) {
         self.ui.borrow_mut().show_virtual = on;
+        self.remember_view();
         self.refresh();
+    }
+
+    /// How the main window shows now, with its place and size.
+    fn main_window_shows(&self) -> MainWindowShows {
+        let window = self.main.window();
+        if !window.is_visible() || window.is_minimized() {
+            return MainWindowShows::Not;
+        }
+        let position = window.position();
+        let size = window.size().to_logical(window.scale_factor());
+        let frame = WindowFrame {
+            x: position.x,
+            y: position.y,
+            width: f64::from(size.width),
+            height: f64::from(size.height),
+            maximized: false,
+        };
+        if window.is_maximized() {
+            MainWindowShows::Maximized(frame)
+        } else {
+            MainWindowShows::Normal(frame)
+        }
+    }
+
+    /// Hands the windows' own settings to the backend, which saves them with
+    /// the rest: View > Show Virtual Devices, and the main window's frame
+    /// (see [`ui_model::frame_to_keep`]).
+    fn remember_view(&self) {
+        let mut backend = self.backend.borrow_mut();
+        let saved = backend.view_settings();
+        let settings = ViewSettings {
+            show_virtual_devices: self.ui.borrow().show_virtual,
+            window: ui_model::frame_to_keep(self.main_window_shows(), saved.window),
+        };
+        if settings != saved {
+            backend.set_view_settings(settings);
+        }
+    }
+
+    /// Shows the windows with the settings saved last time: View > Show
+    /// Virtual Devices, and the main window's size and place, fitted to the
+    /// monitor it opens on (the one at its saved place, else the primary
+    /// one, where it opens centered), maximized when it was.
+    fn restore_view(&self) {
+        let saved = self.backend.borrow().view_settings();
+        self.ui.borrow_mut().show_virtual = saved.show_virtual_devices;
+        let Some(saved_frame) = saved.window else {
+            return;
+        };
+        let on_a_monitor = crate::platform::is_on_a_monitor(saved_frame.x, saved_frame.y);
+        // The primary monitor holds the point (0, 0).
+        let (x, y) = if on_a_monitor {
+            (saved_frame.x, saved_frame.y)
+        } else {
+            (0, 0)
+        };
+        let monitor = crate::platform::monitor_at(f64::from(x), f64::from(y));
+        let frame = monitor.map_or(saved_frame, |(work_area, scale)| {
+            fitted_main_frame(saved_frame, work_area, scale, on_a_monitor)
+        });
+        let window = self.main.window();
+        let size = slint::LogicalSize::new(frame.width as f32, frame.height as f32);
+        window.set_size(size);
+        // The native menu bar is attached when the native window is created
+        // and takes its height out of a size set before that, so the window
+        // would shrink by the menu bar at every restart: set the size again
+        // once the native window exists (and maximize it after that).
+        set_size_once_native(
+            self.main.as_weak(),
+            size,
+            frame.maximized,
+            NATIVE_WINDOW_TRIES,
+        );
+        if on_a_monitor || monitor.is_some() {
+            window.set_position(slint::PhysicalPosition::new(frame.x, frame.y));
+        }
+        let maximized = if frame.maximized { ", maximized" } else { "" };
+        if frame == saved_frame {
+            self.log.log(|| {
+                format!(
+                    "main window: {} x {} as last time{maximized}",
+                    frame.width, frame.height
+                )
+            });
+        } else {
+            self.log.log(|| {
+                format!(
+                    "main window: {} x {}, fitted to the monitor (saved {} x {}){maximized}",
+                    frame.width, frame.height, saved_frame.width, saved_frame.height
+                )
+            });
+        }
+    }
+
+    /// Saves the settings now, with the main window's frame: the app is
+    /// about to quit.
+    pub fn save_settings(&self) {
+        self.remember_view();
+        self.backend.borrow_mut().save_settings();
     }
 
     fn step_delay(&self, id: &str, delta: i32) {
@@ -1058,6 +1235,7 @@ impl App {
     /// Closing the main window keeps AudioSync running in the tray, like the
     /// Mac app in the menu bar. Without a tray icon, it quits.
     fn close_main(&self) {
+        self.remember_view();
         let _ = self.main.hide();
         if !self.tray_available.get() {
             let _ = slint::quit_event_loop();
@@ -1349,6 +1527,65 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
 mod tests {
     use super::*;
     use crate::ui_model::MockBackend;
+
+    #[test]
+    fn a_saved_main_window_is_fitted_to_the_monitor_it_opens_on() {
+        let laptop = crate::placement::Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1366.0,
+            height: 728.0,
+        };
+        let saved = WindowFrame {
+            x: 300,
+            y: 200,
+            width: 2500.0,
+            height: 1400.0,
+            maximized: true,
+        };
+        let fitted = fitted_main_frame(saved, laptop, 1.0, true);
+        assert_eq!(
+            fitted,
+            WindowFrame {
+                x: 0,
+                y: 0,
+                width: 1366.0 - MAIN_WINDOW_CHROME.0,
+                height: 728.0 - MAIN_WINDOW_CHROME.1,
+                maximized: true,
+            }
+        );
+        // At 150 %, the work area holds fewer logical pixels.
+        let full_hd = crate::placement::Bounds {
+            width: 1920.0,
+            height: 1040.0,
+            ..laptop
+        };
+        let fitted = fitted_main_frame(saved, full_hd, 1.5, true);
+        assert_eq!(
+            (fitted.width, fitted.height),
+            (
+                1280.0 - MAIN_WINDOW_CHROME.0,
+                (1040.0 / 1.5 - MAIN_WINDOW_CHROME.1).round()
+            )
+        );
+        // Never below the window's smallest size, never above the saved one.
+        let tiny = crate::placement::Bounds {
+            width: 800.0,
+            height: 500.0,
+            ..laptop
+        };
+        let fitted = fitted_main_frame(saved, tiny, 1.0, true);
+        assert_eq!((fitted.width, fitted.height), crate::settings::MIN_WINDOW);
+        // A window that fits is left exactly as saved.
+        let small = WindowFrame {
+            x: 120,
+            y: 40,
+            width: 1000.5,
+            height: 600.0,
+            maximized: false,
+        };
+        assert_eq!(fitted_main_frame(small, laptop, 1.0, true), small);
+    }
 
     #[test]
     fn rows_show_the_speaker_state_kind_and_delay() {

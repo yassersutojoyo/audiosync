@@ -952,6 +952,11 @@ impl AirPlaySpeakers {
                     let id = speaker_id(&key);
                     changed |= self.pairing_event(&id, event, &mut events);
                 }
+                // The receivers it listed were reported gone just before;
+                // speakers keep playing.
+                SenderEvent::DiscoveryFailed => self
+                    .log
+                    .log(|| "AirPlay: discovery stopped after an internal error".to_owned()),
             }
         }
         if changed {

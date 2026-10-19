@@ -3,7 +3,11 @@
 # just the Command Line Tools). Usage: Tests/run-tests.sh [--hardware]
 #   --hardware  also runs the engine test, which opens real output devices at
 #               zero volume (silent) to check render flow and delay end to end,
-#               once on the Swift engine and once on the Rust core.
+#               once on the Swift engine and once on the Rust core, and the pipe
+#               start test, which runs a private AirPlay engine (the bundled one,
+#               or AUDIOSYNC_PIPESTART_ENGINE) with only its fifo output in
+#               .build/scratch-pipestart and times how late audio leaves the
+#               pipe after streaming pauses, stops and starts again.
 # Also runs shellcheck on the scripts in scripts/shellcheck-files.txt (it fails
 # if shellcheck isn't installed: brew install shellcheck) and the private-reference
 # check, scripts/privacy_check.py. The core parity suite, the soak harness
@@ -19,7 +23,7 @@ trap 'rm -rf "$OUT"' EXIT
 CORE=(-I Sources/CAudioSyncCore -L core/target/universal-apple-darwin/release -laudiosync_core)
 # The engine parts of both implementations, with what they need to compile.
 ENGINE_PARTS=(EngineImpl.swift EngineParts.swift CoreEngine.swift OutputRenderer.swift RingBuffer.swift
-  Equalizer.swift FifoFeed.swift Volume.swift SpeakerState.swift AirPlayPairing.swift Diagnostics.swift)
+  Equalizer.swift FifoFeed.swift Volume.swift SpeakerState.swift AirPlayPairing.swift Diagnostics.swift NativeAirPlayTap.swift)
 
 build() {   # build <name> <test file> <source files…> [-- <more swiftc arguments…>]
   local name=$1 test=$2; shift 2
@@ -46,6 +50,31 @@ if grep -nE 'DBG\.log\(.*\b(perform|send|write|open|close)\(' "$SRC"/*.swift; th
   status=1
 else
   echo "PASSED"
+fi
+
+echo "▶ streaming off stops the pipe writer before the engine"
+# stopEngine must call engine.stop(), which returns once the pipe writer has
+# closed the pipe, before it asks the AirPlay engine to stop. The other way
+# round, audio still coming in makes the engine start the pipe again by itself
+# (pipe_autostart), and that stray start plays the next session late (EC13).
+if awk '
+  /func stopEngine\(/ { inside = 1 }
+  inside {
+    line = $0
+    sub(/\/\/.*/, "", line)
+    if (!writer && line ~ /engine\.stop\(\)/) writer = NR
+    if (!player && line ~ /OwnToneClient\.stopPlayback\(\)/) player = NR
+    depth += gsub(/[{]/, "{", line) - gsub(/[}]/, "}", line)
+    if (depth > 0) opened = 1
+    if (opened && depth == 0) inside = 0
+  }
+  END { exit !(writer && player && writer < player) }
+' "$SRC/AppDelegate+Engine.swift"; then
+  echo "PASSED"
+else
+  echo "FAIL: stopEngine in AppDelegate+Engine.swift must call engine.stop() (the pipe writer)" \
+    "before OwnToneClient.stopPlayback() (the engine's stop request)"
+  status=1
 fi
 
 echo "▶ AirPlay volume requests"
@@ -84,6 +113,25 @@ if [ -z "$select_var" ] \
 fi
 if [ "$requests_ok" = 1 ]; then echo "PASSED"; else status=1; fi
 
+echo "▶ capture IOProc stays real-time safe"
+# The capture IOProc runs CaptureSink (ProcessTapCapture.swift) and the
+# CaptureChannels it builds (CaptureSupport.swift). Neither may log, lock,
+# dispatch or build strings; the debug log is written from the main thread only.
+# Comment lines are dropped first; an empty extract means the check lost track.
+capture_rt=$(awk '/^    final class CaptureSink/ { f = 1 } f { print } f && /^    }$/ { exit }' \
+    "$SRC/ProcessTapCapture.swift"
+  awk '/^struct CaptureChannels/ { f = 1 } f { print } f && /^}$/ { exit }' "$SRC/CaptureSupport.swift")
+capture_rt=$(grep -vE '^[[:space:]]*//' <<< "$capture_rt" || true)
+if ! grep -q 'func consume' <<< "$capture_rt" || ! grep -q 'func copy' <<< "$capture_rt"; then
+  echo "FAIL: the capture IOProc's code (CaptureSink, CaptureChannels) wasn't found"
+  status=1
+elif grep -nE 'DBG|print\(|NSLog|os_log|Logger|DispatchQueue|Lock|Mutex|pthread_|String\(|"' <<< "$capture_rt"; then
+  echo "FAIL: the capture IOProc logs, locks, dispatches or builds strings"
+  status=1
+else
+  echo "PASSED"
+fi
+
 echo "▶ ring buffer"
 build ring Tests/ringtest.swift RingBuffer.swift
 "$OUT/ring/run" > "$OUT/ring.log" || status=1
@@ -91,9 +139,9 @@ grep -E "FAIL|PASSED" "$OUT/ring.log" || true
 
 echo "▶ logic"
 build logic Tests/logictest.swift PipeMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
-  Equalizer.swift FifoFeed.swift RingBuffer.swift Diagnostics.swift AirPlayPairing.swift AirPlayReconcile.swift EngineLifecycle.swift Notices.swift SpeakerState.swift CaptureCheck.swift \
+  Equalizer.swift FifoFeed.swift RingBuffer.swift Diagnostics.swift AirPlayPairing.swift AirPlayReconcile.swift EngineLifecycle.swift Notices.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \
   AudioDevices.swift OwnToneOutputs.swift OwnTonePlayer.swift AirPlayEngineConfig.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift \
-  EngineImpl.swift AirPlayImpl.swift WindowRules.swift AppSettings.swift AppLifecycle.swift
+  EngineImpl.swift AirPlayImpl.swift NativeAirPlayModel.swift WindowRules.swift AppSettings.swift AppLifecycle.swift
 "$OUT/logic/run" || status=1
 
 echo "▶ fifo"
@@ -121,6 +169,9 @@ if [ "${1:-}" = "--hardware" ]; then
   for engine in swift rust; do
     AUDIOSYNC_ENGINE=$engine "$OUT/engine/run" || status=1
   done
+  echo "▶ pipe start latency (a private engine and its fifo output, no audio device), on each pipe feed"
+  build pipestart Tests/pipestart.swift "${ENGINE_PARTS[@]}" AirPlayEngineConfig.swift OwnTonePlayer.swift -- "${CORE[@]}"
+  "$OUT/pipestart/run" "$PWD/.build/scratch-pipestart" || status=1
 fi
 
 exit $status

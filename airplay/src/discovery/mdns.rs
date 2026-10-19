@@ -6,7 +6,9 @@
 //! resolved, so its events become [`BrowseEvent`]s directly, without the
 //! raw-record [`Resolver`](super::Resolver). The daemon runs on its own
 //! thread; [`Browser::poll_event`] only drains its channels and never
-//! blocks.
+//! blocks. A channel whose sending side is gone (the daemon's thread ended,
+//! which only a bug in it does) makes the browser dead
+//! ([`Browser::is_dead`]): it would never report anything again.
 //!
 //! The daemon binds UDP port 5353 with address (and, on Unix, port) reuse,
 //! so it shares the port with the system's own mDNS responder (Bonjour,
@@ -36,11 +38,27 @@ enum Source {
     Channel(mpsc::Receiver<ServiceEvent>),
 }
 
+/// What one look at a source found.
+enum Next {
+    Event(ServiceEvent),
+    Empty,
+    /// The sending side is gone and everything it sent was read.
+    Gone,
+}
+
 impl Source {
-    fn try_next(&self) -> Option<ServiceEvent> {
+    fn try_next(&self) -> Next {
         match self {
-            Source::Daemon(receiver) => receiver.try_recv().ok(),
-            Source::Channel(receiver) => receiver.try_recv().ok(),
+            Source::Daemon(receiver) => match receiver.try_recv() {
+                Ok(event) => Next::Event(event),
+                Err(mdns_sd::TryRecvError::Empty) => Next::Empty,
+                Err(mdns_sd::TryRecvError::Disconnected) => Next::Gone,
+            },
+            Source::Channel(receiver) => match receiver.try_recv() {
+                Ok(event) => Next::Event(event),
+                Err(mpsc::TryRecvError::Empty) => Next::Empty,
+                Err(mpsc::TryRecvError::Disconnected) => Next::Gone,
+            },
         }
     }
 }
@@ -49,6 +67,8 @@ impl Source {
 pub struct MdnsBrowser {
     sources: Vec<Source>,
     daemon: Option<ServiceDaemon>,
+    /// A source's sending side is gone.
+    dead: bool,
 }
 
 impl fmt::Debug for MdnsBrowser {
@@ -56,6 +76,7 @@ impl fmt::Debug for MdnsBrowser {
         f.debug_struct("MdnsBrowser")
             .field("sources", &self.sources.len())
             .field("live", &self.daemon.is_some())
+            .field("dead", &self.dead)
             .finish()
     }
 }
@@ -79,15 +100,18 @@ impl MdnsBrowser {
         Ok(MdnsBrowser {
             sources,
             daemon: Some(daemon),
+            dead: false,
         })
     }
 
     /// A browser that reads `mdns-sd` events from a channel instead of the
-    /// network, for tests and for hosts that run their own daemon.
+    /// network, for tests and for hosts that run their own daemon. It is
+    /// dead once the channel's sender is gone and everything sent was read.
     pub fn from_events(events: mpsc::Receiver<ServiceEvent>) -> MdnsBrowser {
         MdnsBrowser {
             sources: vec![Source::Channel(events)],
             daemon: None,
+            dead: false,
         }
     }
 }
@@ -95,13 +119,26 @@ impl MdnsBrowser {
 impl Browser for MdnsBrowser {
     fn poll_event(&mut self) -> Option<BrowseEvent> {
         for source in &self.sources {
-            while let Some(event) = source.try_next() {
-                if let Some(event) = browse_event(event) {
-                    return Some(event);
+            loop {
+                match source.try_next() {
+                    Next::Event(event) => {
+                        if let Some(event) = browse_event(event) {
+                            return Some(event);
+                        }
+                    }
+                    Next::Empty => break,
+                    Next::Gone => {
+                        self.dead = true;
+                        break;
+                    }
                 }
             }
         }
         None
+    }
+
+    fn is_dead(&self) -> bool {
+        self.dead
     }
 }
 
