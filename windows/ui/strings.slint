@@ -37,8 +37,13 @@ export global Strings {
     out property <string> connected-section: @tr("Connected Speakers");
     out property <string> this-pc-none: @tr("No built-in output");
     out property <string> sync-adjust: @tr("Adjust sync");
-    out property <string> sync-hint: @tr("Heard this speaker first? Raise the value. Heard it late? Lower it.");
+    // Beside the sync controls when no output is the reference.
+    out property <string> sync-hint-no-reference: @tr("The speaker with the lowest value plays first, and the others wait by the difference. Heard this speaker first? Raise the value.");
     out property <string> milliseconds-unit: @tr("ms");
+    // The AirPlay delay (L): how long the local speakers wait for the
+    // AirPlay speakers.
+    out property <string> airplay-delay-title: @tr("AirPlay Delay");
+    out property <string> airplay-delay-hint: @tr("The speakers on this PC wait this long for the AirPlay speakers. Heard the AirPlay speakers late? Raise it.");
     out property <string> auto-connect: @tr("Auto-connect when available");
     out property <string> source-system: @tr("All System Audio");
 
@@ -417,8 +422,24 @@ export global Strings {
         return @tr("{} delay", name);
     }
 
+    // An offset relative to the reference, with its sign: "+150 ms",
+    // "−250 ms", "0 ms".
     public pure function delay-value(ms: int) -> string {
+        if ms > 0 {
+            return @tr("+{} {}", ms, root.milliseconds-unit);
+        }
+        if ms < 0 {
+            return @tr("−{} {}", -ms, root.milliseconds-unit);
+        }
         return @tr("{} {}", ms, root.milliseconds-unit);
+    }
+
+    // The hint beside the sync controls: what the values are relative to.
+    public pure function sync-hint(reference: string) -> string {
+        if reference == "" {
+            return root.sync-hint-no-reference;
+        }
+        return @tr("Relative to {}. Heard this speaker first? Raise the value. Heard it late, like a Bluetooth speaker? Go below 0.", reference);
     }
 
     // The label of a delay step button: "−100", "+10".

@@ -23,19 +23,26 @@
 //! snapshot of the endpoints and the processes, and reports a change as
 //! [`BackendEvent::HeardTwice`].
 //!
+//! Local outputs play at the hold-backs of the local delay model (S172 to
+//! S178, see [`outputs`](super::outputs)): offsets relative to the reference
+//! output, with the AirPlay latency L on top while an AirPlay speaker is
+//! chosen. Whenever an output joins or leaves, an offset or the reference
+//! changes, or the AirPlay condition or L changes, every playing output
+//! whose hold-back changed is re-timed (S177).
+//!
 //! With an AirPlay sender ([`Controller::set_airplay`]), the capture also
-//! feeds the sender, AirPlay speakers that are on join the stream while a
-//! session runs ([`airplay`](super::airplay)), and local outputs follow the
-//! AirPlay sync rule: L + their own delay while an AirPlay speaker is chosen,
-//! their own delay otherwise (see [`outputs`](super::outputs)). A new capture
-//! restarts the sender's timeline (P143); a new L from the sender re-anchors
-//! every playing output.
+//! feeds the sender and AirPlay speakers that are on join the stream while a
+//! session runs ([`airplay`](super::airplay)). L is the sender's base
+//! latency L_s plus the user's adjustment (S178). A new capture restarts the
+//! sender's timeline (P143); a new L_s from the sender re-times every
+//! playing output.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
+use audiosync_core::policy::delay::native_airplay_latency_ms;
 use audiosync_core::reader::{Reader, ReaderControl};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
@@ -280,7 +287,7 @@ impl<D: Driver> Controller<D> {
         let airplay = AirPlaySpeakers::new(link, self.policy.master(), self.log.clone(), store);
         self.log.log(|| {
             format!(
-                "AirPlay: the sender runs, L = {} ms; local outputs play at their own delay \
+                "AirPlay: the sender runs, L = {} ms; local outputs line up with each other \
                  until an AirPlay speaker is chosen",
                 airplay.latency().as_millis()
             )
@@ -304,8 +311,8 @@ impl<D: Driver> Controller<D> {
         self.sync_airplay_rule();
     }
 
-    /// Gives local outputs the delays of the AirPlay sync rule, live, when
-    /// whether an AirPlay speaker is chosen, or L while one is, changed.
+    /// Re-times local outputs, live, when whether an AirPlay speaker is
+    /// chosen, or L_s while one is, changed (S177, S178).
     fn sync_airplay_rule(&mut self) {
         let Some(airplay) = &self.airplay else {
             return;
@@ -322,21 +329,18 @@ impl<D: Driver> Controller<D> {
                 chosen: true,
                 latency,
             } => format!(
-                "local outputs play at L + their own delay (L = {} ms): an AirPlay speaker is chosen",
-                latency.as_millis()
+                "local outputs play at L + their offset (L = {} ms: the sender's {} ms and the \
+                 adjustment {} ms): an AirPlay speaker is chosen",
+                native_airplay_latency_ms(
+                    latency.as_secs_f64() * 1000.0,
+                    self.policy.airplay_adjustment_ms()
+                ),
+                latency.as_millis(),
+                self.policy.airplay_adjustment_ms()
             ),
-            _ => "local outputs play at their own delay: no AirPlay speaker is chosen".to_owned(),
+            _ => "local outputs line up with each other: no AirPlay speaker is chosen".to_owned(),
         });
-        for id in self.playing_ids() {
-            self.apply_delay(&id);
-            self.log.log(|| {
-                format!(
-                    "output {} delay now {} frames",
-                    label(&self.names, &id),
-                    self.policy.params(&id).delay_frames
-                )
-            });
-        }
+        self.retime();
     }
 
     /// The driver.
@@ -432,6 +436,7 @@ impl<D: Driver> Controller<D> {
         }
         self.listing_error = None;
         self.present = listed;
+        self.policy.set_listed(&self.present);
         self.listing_ok = true;
         (changed, Ok(()))
     }
@@ -504,7 +509,7 @@ impl<D: Driver> Controller<D> {
                             "output {} started: {}; delay {} ms, volume {} (gain {:.3})",
                             label(&self.names, &endpoint.id),
                             describe_stream(setup),
-                            settings.delay_ms,
+                            self.policy.hold_back_ms(&endpoint.id),
                             settings.volume,
                             params.gain,
                         )
@@ -660,7 +665,7 @@ impl<D: Driver> Controller<D> {
                      primes {}, resyncs {}, starved reads {} ({} frames), drift skips {} ({} frames), \
                      drift silences {} ({} frames), rejected copies {}",
                     label(&self.names, id),
-                    settings.delay_ms,
+                    self.policy.hold_back_ms(id),
                     playing.control.delay_frames(),
                     settings.volume,
                     playing.gain.get(),
@@ -687,15 +692,37 @@ impl<D: Driver> Controller<D> {
         });
     }
 
-    /// Gives a playing output its current delay; a delay that didn't change
-    /// doesn't re-anchor its reader.
-    fn apply_delay(&self, id: &str) {
+    /// Gives a playing output its current hold-back; one that didn't change
+    /// doesn't re-anchor its reader. Returns whether it changed.
+    fn apply_delay(&self, id: &str) -> bool {
         let Some(playing) = self.session.as_ref().and_then(|s| s.outputs.get(id)) else {
-            return;
+            return false;
         };
         let frames = self.policy.params(id).delay_frames;
-        if playing.control.delay_frames() != frames {
-            playing.control.set_delay_frames(frames);
+        if playing.control.delay_frames() == frames {
+            return false;
+        }
+        playing.control.set_delay_frames(frames);
+        true
+    }
+
+    /// Gives every playing output its current hold-back, after the outputs
+    /// taking part, an offset, the reference, the AirPlay condition or L
+    /// changed (S177): an increase inserts that much silence, a decrease
+    /// skips forward, and an output whose hold-back is unchanged gets no
+    /// call.
+    fn retime(&self) {
+        for id in self.playing_ids() {
+            if self.apply_delay(&id) {
+                self.log.log(|| {
+                    format!(
+                        "output {} delay now {} ms ({} frames)",
+                        label(&self.names, &id),
+                        self.policy.hold_back_ms(&id),
+                        self.policy.params(&id).delay_frames
+                    )
+                });
+            }
         }
     }
 
@@ -906,6 +933,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
                     name: endpoint.name.clone(),
                     kind: endpoint.kind,
                     is_default: endpoint.is_default,
+                    is_reference: self.policy.reference() == Some(endpoint.id.as_str()),
                     enabled: settings.enabled,
                     delay_ms: settings.delay_ms,
                     volume: settings.volume,
@@ -972,23 +1000,28 @@ impl<D: Driver> AudioBackend for Controller<D> {
                     .push(BackendEvent::OutputFailed { id: failed, error });
             }
         }
+        self.retime();
         result
     }
 
     fn set_output_delay(&mut self, id: &str, delay_ms: f64) {
         let before = self.policy.settings(id).delay_ms;
         if self.policy.set_delay_ms(id, delay_ms) {
-            self.apply_delay(id);
             let after = self.policy.settings(id).delay_ms;
             if after != before {
                 self.log.log(|| {
+                    let reference = if self.policy.reference() == Some(id) {
+                        ", the reference: not used"
+                    } else {
+                        ""
+                    };
                     format!(
-                        "output {} delay: {after} ms ({} frames)",
-                        label(&self.names, id),
-                        self.policy.params(id).delay_frames,
+                        "output {} offset: {after} ms{reference}",
+                        label(&self.names, id)
                     )
                 });
             }
+            self.retime();
         }
     }
 
@@ -1113,6 +1146,26 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn airplay_sender_latency_ms(&self) -> Option<f64> {
+        self.policy.sender_latency_ms()
+    }
+
+    fn airplay_adjustment(&self) -> f64 {
+        self.policy.airplay_adjustment_ms()
+    }
+
+    fn set_airplay_adjustment(&mut self, adjustment_ms: f64) {
+        let before = self.policy.airplay_adjustment_ms();
+        if self.policy.set_airplay_adjustment_ms(adjustment_ms) {
+            let after = self.policy.airplay_adjustment_ms();
+            if after != before {
+                self.log
+                    .log(|| format!("AirPlay delay adjustment: {after} ms"));
+            }
+            self.retime();
+        }
+    }
+
     fn poll(&mut self) -> Vec<BackendEvent> {
         // A session whose capture stopped ends first.
         let stop_reason = self
@@ -1166,6 +1219,8 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // not its stream noticed.
         ended.extend(self.stop_unlisted_outputs());
         let failures = self.sync_outputs();
+        // An output that left or joined moves the others (S177).
+        self.retime();
         for id in ended {
             // An output whose device is still there plays again at once
             // (after a format change, say); one that isn't is lost.
@@ -1919,13 +1974,16 @@ mod tests {
     #[test]
     fn settings_made_while_stopped_are_kept_for_the_start() {
         let mut backend = MockBackend::empty();
+        backend.connect_output("first", "First");
+        backend.set_output_enabled("first", true).unwrap();
         backend.set_output_enabled("later", true).unwrap();
         backend.set_output_delay("later", 40.0);
         backend.start(&SourceId::WholeSystem).unwrap();
-        assert!(playing(&backend).is_empty(), "not connected yet");
+        assert_eq!(playing(&backend), ["first"], "later isn't connected yet");
         backend.connect_output("later", "Later");
         backend.poll();
-        assert_eq!(playing(&backend), ["later"]);
+        assert_eq!(playing(&backend), ["first", "later"]);
+        // 40 ms after the output at 0.
         assert_eq!(backend.playing_params("later").unwrap().delay_frames, 1_920);
     }
 
@@ -2151,7 +2209,7 @@ mod tests {
         assert_eq!(
             messages[..3],
             [
-                "output \"Speakers\" (speakers) delay: 120 ms (5760 frames)".to_owned(),
+                "output \"Speakers\" (speakers) offset: 120 ms".to_owned(),
                 format!("output \"Headphones\" (headphones) volume: 50 (gain {gain:.3})"),
                 "master volume: 80".to_owned(),
             ]
@@ -2674,7 +2732,7 @@ mod tests {
         fake.take_calls();
 
         backend.set_airplay_enabled(&id, true).unwrap();
-        // L + d_local (P114): 1750 + 150 ms and 1750 + 0 ms at 48 kHz.
+        // L + offset (S176): 1750 + 150 ms and 1750 + 0 ms at 48 kHz.
         assert_eq!(delay_frames(&backend, SPEAKERS), 91_200);
         assert_eq!(delay_frames(&backend, HEADPHONES), 84_000);
         assert_eq!(
@@ -2793,7 +2851,7 @@ mod tests {
                 "AirPlay: the sender runs, L = 1750 ms",
                 "AirPlay receiver found: \"Kitchen\" (02005E005301), can play",
                 "AirPlay speaker \"Kitchen\" (02005E005301) switched on",
-                "local outputs play at L + their own delay (L = 1750 ms)",
+                "local outputs play at L + their offset (L = 1750 ms",
                 "capture started:",
                 "AirPlay speaker \"Kitchen\" (02005E005301) added: volume 60 (-12.0 dB), delay 0 ms",
                 "AirPlay speaker \"Kitchen\" (02005E005301): playing",

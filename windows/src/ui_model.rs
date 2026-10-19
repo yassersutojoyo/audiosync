@@ -11,9 +11,13 @@ use audiosync_core::eq::{self, EqSettings};
 #[cfg(any(not(windows), test))]
 use audiosync_core::volume;
 
-/// The longest per-speaker delay the sync controls accept, in milliseconds
-/// (the macOS app's limit too).
+/// The largest offset the sync controls accept, in milliseconds (the macOS
+/// app's limit too).
 pub const MAX_DELAY_MS: f64 = 20_000.0;
+
+/// The smallest offset the sync controls accept, in milliseconds: a speaker
+/// that sounds up to two seconds late.
+pub const MIN_DELAY_MS: f64 = -2000.0;
 
 /// The most notices kept at once; the oldest drops off past it.
 #[cfg(test)]
@@ -140,8 +144,9 @@ pub struct Speaker {
     pub enabled: bool,
     /// 0 to 100.
     pub volume: f64,
-    /// The sync delay of a local output; AirPlay speakers have none (the
-    /// AirPlay sender keeps them in sync, and local outputs follow it).
+    /// The offset of a local output relative to the reference; the
+    /// reference has none, and neither do AirPlay speakers (the AirPlay
+    /// sender keeps them in sync, and local outputs follow it).
     pub delay_ms: Option<f64>,
     pub auto_connect: bool,
     pub availability: Availability,
@@ -301,6 +306,12 @@ pub struct AppState {
     pub notices: Vec<Notice>,
     /// The PIN prompt to show, while a pairing asks for a PIN.
     pub pin_prompt: Option<PinPrompt>,
+    /// The name of the reference output, which the other outputs' offsets
+    /// are relative to; `None` without one (spec S174, S181).
+    pub reference_name: Option<String>,
+    /// The AirPlay delay field's value L in milliseconds, while an AirPlay
+    /// sender runs (spec S178, S181).
+    pub airplay_delay_ms: Option<f64>,
 }
 
 impl AppState {
@@ -371,6 +382,8 @@ pub trait Backend {
     fn set_speaker_enabled(&mut self, id: &str, on: bool);
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
     fn set_speaker_delay(&mut self, id: &str, ms: f64);
+    /// The user entered `ms` in the AirPlay delay field.
+    fn set_airplay_delay(&mut self, ms: f64);
     fn set_auto_connect(&mut self, id: &str, on: bool);
     /// Turns every present member on, or all of them off when the group is on.
     fn toggle_group(&mut self, id: &str);
@@ -467,20 +480,33 @@ pub struct ViewSettings {
     pub window: Option<WindowFrame>,
 }
 
-/// Clamps a typed or stepped delay to what the sync controls accept.
+/// Clamps a typed or stepped offset to what the sync controls accept, in
+/// whole milliseconds.
 pub fn clamp_delay_ms(ms: f64) -> f64 {
     if ms.is_nan() {
         0.0
     } else {
-        ms.clamp(0.0, MAX_DELAY_MS).round()
+        ms.clamp(MIN_DELAY_MS, MAX_DELAY_MS).round()
     }
 }
 
-/// Parses what the user typed in a delay field ("120", "120,5"); `None`
-/// while it isn't a number yet.
+/// Parses what the user typed in a milliseconds field ("120", "+120",
+/// "−250", "-250", "120,5"), rounded to whole milliseconds; `None` while it
+/// isn't a number yet.
+pub fn parse_ms(text: &str) -> Option<f64> {
+    let value: f64 = text
+        .trim()
+        .replace(',', ".")
+        .replace('\u{2212}', "-")
+        .parse()
+        .ok()?;
+    value.is_finite().then(|| value.round())
+}
+
+/// Parses what the user typed in an offset field, clamped to what the sync
+/// controls accept; `None` while it isn't a number yet.
 pub fn parse_delay_ms(text: &str) -> Option<f64> {
-    let value: f64 = text.trim().replace(',', ".").parse().ok()?;
-    value.is_finite().then(|| clamp_delay_ms(value))
+    parse_ms(text).map(clamp_delay_ms)
 }
 
 /// Example data for UI work and tests: no device is opened, nothing plays.
@@ -517,12 +543,13 @@ impl MockBackend {
             paired: false,
         };
         let mut speakers = vec![
+            // The reference: no delay of its own.
             speaker(
                 "local:speakers",
                 "Speakers",
                 SpeakerKind::BuiltIn,
                 true,
-                Some(0.0),
+                None,
             ),
             speaker(
                 "local:headphones",
@@ -557,7 +584,7 @@ impl MockBackend {
                 "Headset",
                 SpeakerKind::Bluetooth,
                 false,
-                Some(250.0),
+                Some(-250.0),
             ),
             speaker(
                 "airplay:bedroom",
@@ -589,6 +616,8 @@ impl MockBackend {
             equalizer: EqSettings::default(),
             notices: Vec::new(),
             pin_prompt: None,
+            reference_name: Some("Speakers".into()),
+            airplay_delay_ms: Some(1750.0),
         };
         MockBackend { state, next_id: 1 }
     }
@@ -656,6 +685,12 @@ impl Backend for MockBackend {
             && speaker.delay_ms.is_some()
         {
             speaker.delay_ms = Some(clamp_delay_ms(ms));
+        }
+    }
+
+    fn set_airplay_delay(&mut self, ms: f64) {
+        if !ms.is_nan() && self.state.airplay_delay_ms.is_some() {
+            self.state.airplay_delay_ms = Some(ms.clamp(0.0, MAX_DELAY_MS).round());
         }
     }
 
@@ -872,7 +907,7 @@ mod tests {
     fn delays_are_whole_milliseconds_within_the_limit() {
         assert_eq!(parse_delay_ms("120"), Some(120.0));
         assert_eq!(parse_delay_ms(" 99,6 "), Some(100.0));
-        assert_eq!(parse_delay_ms("-5"), Some(0.0));
+        assert_eq!(parse_delay_ms("-5"), Some(-5.0));
         assert_eq!(parse_delay_ms("999999"), Some(MAX_DELAY_MS));
         assert_eq!(parse_delay_ms(""), None);
         assert_eq!(parse_delay_ms("12a"), None);

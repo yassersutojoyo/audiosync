@@ -5,7 +5,8 @@
 //! the source (the whole system, or an app by its executable's file name,
 //! since its process ID changes every time it starts), each output's and
 //! AirPlay speaker's switch, volume and delay (outputs by endpoint ID,
-//! AirPlay speakers by the ID they announce), the master volume, the
+//! AirPlay speakers by the ID they announce), the AirPlay delay adjustment,
+//! the master volume, the
 //! auto-connect marks, the groups, the equalizer, View > Show Virtual
 //! Devices, and the main window's place and size.
 //!
@@ -29,7 +30,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use audiosync_core::eq::{BAND_COUNT, EqSettings};
-use audiosync_core::policy::delay::MAX_DELAY_MS;
+use audiosync_core::policy::delay::{
+    MAX_DELAY_MS, MAX_OFFSET_MS, MIN_OFFSET_MS, sanitize_airplay_adjustment_ms,
+};
 use audiosync_core::policy::speakers::SpeakerKey;
 use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, sanitize_position};
 use serde::{Deserialize, Serialize};
@@ -45,7 +48,16 @@ pub const FILE_NAME: &str = "settings.json";
 pub const NEWER_FILE_NAME: &str = "settings.newer.json";
 
 /// The format version this build writes, and the newest it reads.
-pub const VERSION: u32 = 1;
+///
+/// Version 2 (the local delay model, spec S180): an output's `delay_ms` is
+/// its offset relative to the reference output, −2000 to +20 000 ms, and
+/// `airplay_adjustment_ms` is the AirPlay delay adjustment. In version 1 an
+/// output's `delay_ms` was its own trim, 0 to 20 000 ms, and
+/// [`migrate_delays`] turns it into an offset once.
+pub const VERSION: u32 = 2;
+
+/// The first format version with offsets relative to the reference.
+pub const OFFSETS_VERSION: u32 = 2;
 
 /// The longest own delay an AirPlay speaker takes, in milliseconds (the
 /// sender's limit).
@@ -94,8 +106,9 @@ pub struct SavedSpeaker {
     pub enabled: bool,
     /// The volume slider position, 0 to 100.
     pub volume: f64,
-    /// The delay in milliseconds: 0 to 20 000 for an output, 0 to 3000 for
-    /// an AirPlay speaker's own delay.
+    /// The delay in milliseconds: for an output its offset relative to the
+    /// reference, −2000 to +20 000 (0 to 20 000 in format 1, where it was
+    /// the output's own trim); 0 to 3000 for an AirPlay speaker's own delay.
     pub delay_ms: f64,
 }
 
@@ -115,12 +128,12 @@ impl SavedSpeaker {
         *self == SavedSpeaker::default()
     }
 
-    fn clamped(self, max_delay_ms: f64) -> SavedSpeaker {
+    fn clamped(self, (min_delay_ms, max_delay_ms): (f64, f64)) -> SavedSpeaker {
         SavedSpeaker {
             enabled: self.enabled,
             volume: sanitize_position(self.volume).unwrap_or(DEFAULT_LOCAL_POSITION),
             delay_ms: if self.delay_ms.is_finite() {
-                self.delay_ms.clamp(0.0, max_delay_ms)
+                self.delay_ms.clamp(min_delay_ms, max_delay_ms)
             } else {
                 0.0
             },
@@ -217,6 +230,10 @@ pub struct Settings {
     pub show_virtual_devices: bool,
     /// The main window's place and size, once it has been shown.
     pub window: Option<WindowFrame>,
+    /// The AirPlay delay adjustment A in milliseconds, −2000 to +20 000: the
+    /// AirPlay speakers are taken to sound L = L_s + A after a frame reaches
+    /// the sender (spec S178).
+    pub airplay_adjustment_ms: f64,
 }
 
 impl Default for Settings {
@@ -232,21 +249,48 @@ impl Default for Settings {
             equalizer: SavedEqualizer::default(),
             show_virtual_devices: false,
             window: None,
+            airplay_adjustment_ms: 0.0,
         }
     }
 }
 
-/// Keeps the first [`MAX_ENTRIES`] speakers whose ID is usable, clamped.
+/// Keeps the first [`MAX_ENTRIES`] speakers whose ID is usable, with their
+/// delays clamped to `delays` (smallest, largest).
 fn clamp_speakers(
     speakers: BTreeMap<String, SavedSpeaker>,
-    max_delay_ms: f64,
+    delays: (f64, f64),
 ) -> BTreeMap<String, SavedSpeaker> {
     speakers
         .into_iter()
         .filter(|(id, _)| usable_id(id))
         .take(MAX_ENTRIES)
-        .map(|(id, speaker)| (id, speaker.clamped(max_delay_ms)))
+        .map(|(id, speaker)| (id, speaker.clamped(delays)))
         .collect()
+}
+
+/// The one-time migration of a format 1 file's output delays to offsets
+/// relative to the reference output (spec S180), given the reference among
+/// the outputs listed when it runs (S174), or `None` without one.
+///
+/// With t_R the reference's stored trim (0 when it has none or there is no
+/// reference), every other output with a stored trim t_x gets the offset
+/// t_x − t_R, clamped to −2000 to +20 000 ms; the AirPlay delay adjustment
+/// becomes t_R, so the reference keeps sounding t_R after the sender's
+/// latency; the reference gets no offset of its own (0), and every AirPlay
+/// speaker's own delay stays as it is. The caller saves the result in the
+/// new format.
+pub fn migrate_delays(settings: &mut Settings, reference: Option<&str>) {
+    let reference_trim = reference
+        .and_then(|id| settings.outputs.get(id))
+        .map_or(0.0, |speaker| speaker.delay_ms);
+    for (id, speaker) in settings.outputs.iter_mut() {
+        speaker.delay_ms = if Some(id.as_str()) == reference {
+            0.0
+        } else {
+            (speaker.delay_ms - reference_trim).clamp(MIN_OFFSET_MS, MAX_OFFSET_MS)
+        };
+    }
+    settings.airplay_adjustment_ms = reference_trim;
 }
 
 fn usable_id(id: &str) -> bool {
@@ -303,12 +347,19 @@ impl Settings {
             })
             .take(MAX_ENTRIES)
             .collect();
+        // A format 1 file kept trims, 0 to 20 000 ms; [`migrate_delays`]
+        // turns them into offsets.
+        let output_delays = if self.version < OFFSETS_VERSION {
+            (0.0, MAX_DELAY_MS)
+        } else {
+            (MIN_OFFSET_MS, MAX_OFFSET_MS)
+        };
         Settings {
             version: VERSION,
             source,
             master_volume: sanitize_position(self.master_volume).unwrap_or(DEFAULT_MASTER_POSITION),
-            outputs: clamp_speakers(self.outputs, MAX_DELAY_MS),
-            airplay: clamp_speakers(self.airplay, MAX_AIRPLAY_DELAY_MS),
+            outputs: clamp_speakers(self.outputs, output_delays),
+            airplay: clamp_speakers(self.airplay, (0.0, MAX_AIRPLAY_DELAY_MS)),
             auto_connect: self
                 .auto_connect
                 .into_iter()
@@ -319,6 +370,8 @@ impl Settings {
             equalizer: SavedEqualizer::from(self.equalizer.settings()),
             show_virtual_devices: self.show_virtual_devices,
             window: self.window.and_then(clamp_window),
+            airplay_adjustment_ms: sanitize_airplay_adjustment_ms(self.airplay_adjustment_ms)
+                .unwrap_or(0.0),
         }
     }
 
