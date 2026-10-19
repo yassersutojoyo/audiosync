@@ -13,7 +13,7 @@
 #                  over to the running one and exits.
 #   --signer NAME  every signature must be NAME's: the certificate's name, as
 #                  in "AudioSync Local Code Signing", or adhoc
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")/.."
 
 usage() {

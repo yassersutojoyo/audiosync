@@ -8,7 +8,7 @@
 # check, scripts/privacy_check.py. The logic and core suites, the soak harness
 # and the engine test link the Rust core, so this builds it first with
 # scripts/build_core.sh (which needs a Rust toolchain).
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")/.."
 SRC=Sources/AudioSync
 OUT=$(mktemp -d "${TMPDIR:-/tmp}/audiosync-tests-XXXXXX")
