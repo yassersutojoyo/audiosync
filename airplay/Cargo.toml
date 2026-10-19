@@ -2,7 +2,7 @@
 name = "audiosync-airplay"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MIT"
 description = "AudioSync's own AirPlay sender: discovery, RTSP, SDP, digest authentication, Apple TV PIN pairing, the AirPlay 1 session, and the audio, RTP and timing of one stream to many speakers, as sans-I/O state machines driven on std threads and sockets behind a small host API."
 repository = "https://github.com/yassersutojoyo/audiosync"

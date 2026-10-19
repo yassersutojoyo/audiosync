@@ -63,7 +63,7 @@ For a debug log, quit AudioSync and start it from Terminal:
 AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync
 ```
 
-It writes to `/tmp/audiosync-debug.log`.
+It writes to `/tmp/audiosync-debug.log`, which starts over at every launch and stops at 50 MB with a line that says so. Each line starts with the time in UTC, like the Windows log; the first one names the app and macOS versions and the Mac's local time.
 
 The Windows app has the same switch. Exit it from the tray icon's menu, then start it from PowerShell in the folder that holds `audiosync.exe`:
 
@@ -75,7 +75,7 @@ The log lands in `%TEMP%\audiosync-debug.log` and starts over at every launch; i
 
 The double-audio notice only shows up while streaming. To look at its guide without playing anything, also set `$env:AUDIOSYNC_PREVIEW_GUIDE="app"` (one app captured) or `"system"` (the whole system) before starting it: with the debug log on, the guide opens at launch for a made-up notice.
 
-To check the windows in the other appearance without changing the Windows setting, set `$env:AUDIOSYNC_PREVIEW_THEME="light"` or `"dark"` as well: with the debug log on, every window uses that color scheme. The menu bar keeps following Windows. The log also says whether each window got its Windows 11 frame (Mica in the title bar, the flyout's rounded corners).
+To check the windows in the other appearance without changing the Windows setting, set `$env:AUDIOSYNC_PREVIEW_THEME="light"` or `"dark"` as well: with the debug log on, every window uses that color scheme, the tray flyout included. The tray icon itself keeps following the taskbar's light or dark mode. The log also says whether each window got its Windows 11 frame (Mica in the title bar, the flyout's rounded corners).
 
 ## Where things are
 
@@ -111,6 +111,8 @@ cd core && cargo test
 ```
 
 `windows/` is a Windows 11 version of AudioSync in development, written in Rust with a [Slint](https://slint.dev) interface. It gets its audio work from the same core: the ring, the delay readers, the resampler, the volume curve, the equalizer and the session rules. It has its screens (the main window, the equalizer, a tray icon with a flyout, the About dialog), and on Windows they drive a WASAPI backend that captures one app or the whole system through process loopback and plays it on the outputs you turn on; on a Mac the window shows example speakers from a mock backend instead. So far it has only been started on one Windows 11 PC, with nothing playing: it runs and lists the outputs, but nobody has listened to it there yet. CI checks the formatting, runs clippy and the tests, and builds it for x64 and ARM64, each build with the license notices `scripts/windows_notices.py` writes for it. On Windows you need rustup with the stable MSVC toolchain and the Visual Studio Build Tools ("Desktop development with C++"), then `cargo test` and `cargo build --release` in `windows/`. On a Mac, `cargo test` runs its logic tests and `cargo check --target x86_64-pc-windows-msvc` checks the Windows code, but can't link it. [`windows/README.md`](../windows/README.md) has the details, and [`WINDOWS_AUDIO_ROUTING.md`](WINDOWS_AUDIO_ROUTING.md) weighs how it could capture one app without playing it twice.
+
+`airplay/` is `audiosync-airplay`, AudioSync's own AirPlay sender, which the Windows app uses for AirPlay speakers (the Mac app keeps its bundled OwnTone engine). It's written from [`AIRPLAY_SPEC.md`](AIRPLAY_SPEC.md), and [`airplay/NOTES.md`](../airplay/NOTES.md) records its readings of the spec. It covers discovery, the AirPlay 1 session and one stream to many speakers, plus Apple TV PIN pairing, which the Windows app doesn't offer yet. Its CI checks the formatting, runs clippy and `cargo test` (including a check that the tests cover the spec), and lets in only permissive licenses (`cargo deny check licenses` with `airplay/deny.toml`).
 
 ### Running the engine on the Rust core
 
