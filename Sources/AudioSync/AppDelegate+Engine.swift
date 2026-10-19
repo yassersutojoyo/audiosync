@@ -39,7 +39,7 @@ extension AppDelegate {
             try engine.start(source: audioSource)
         } catch {
             DBG.log("[AudioSync] engine start failed: \(error)")   // codes stay in the log
-            failStart(text.startError(error), origin: origin)
+            failStart(text.streamingStartMessage(for: error), origin: origin)
             return
         }
         clearNotices([Notice.start, Notice.source])   // streaming did start, from a working source
