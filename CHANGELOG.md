@@ -21,6 +21,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - An AirPlay engine restart that happened between two status checks no longer switches its speakers off as unreachable; they're selected again.
 - AirPlay speakers get their volume back after an engine restart even when the restarted engine takes a while to find them.
 - The AirPlay stream no longer starts twice when streaming begins. The double start could leave a TV showing the pipe's file name instead of the track, and the track info is now sent again whenever the stream restarts.
+- Switching streaming off and on while music plays no longer keeps the audio the AirPlay engine read during the switch-on as extra delay behind your other speakers: the bundled engine now drops it and plays the stream from its live edge when its playback starts (a ninth small patch; see `THIRD_PARTY_NOTICES.md`). Switching streaming off also closes the audio pipe before the engine is told to stop, so the engine no longer starts the old stream again by itself.
 
 ### Windows (preview, not released yet)
 
