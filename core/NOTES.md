@@ -52,10 +52,10 @@ The core's PCM pipe feed (`fifo.rs`, S82 to S95, S160, S169, S203) went on 2026-
 ### Modules
 
 - `eq`: the ten-band equalizer and preamp (S22 to S34), split into `EqControl` (main thread) and `EqProcessor` (capture thread) that share only atomics.
-- `volume`: the cubic volume curve, host-side volume rules, volume writes coalesced per target (`LatestValues`) and the renderer's gain stage (S64, S65, S70 to S76).
+- `volume`: the cubic volume curve, host-side volume rules and the renderer's gain stage (S64, S65, S70, S71, S75, S76). The bundled engine's volume helpers (`engine_volume`, `adopt_reported_volume`, `LatestValues`, S72 to S74) went with it on 2026-10-20.
 - `channels`: an input device's channels to stereo (S14).
 - `fade` and `render`: the 20 ms fades at stream boundaries and a local output's renderer (S182 to S191, see the last part).
-- `policy`: pure host decisions the Windows app can reuse: delays and the AirPlay sync rule; the capture source, the microphone permission and app quits; the capture check and capture rate changes; sessions, output sync, streaming and source switches; pairing; speaker keys, groups, device lists, layout and notices.
+- `policy`: pure host decisions the Windows app can reuse: delays and the AirPlay sync rule; the capture source, the microphone permission and app quits; the capture check and capture rate changes; sessions, output sync, streaming and source switches; speaker keys, groups, device lists, layout and notices.
 - `ffi`: the C interface, `ffi.rs` plus `ffi/ring.rs`, `ffi/render.rs`, `ffi/sync.rs`, `ffi/device_volume.rs` and `ffi/airplay.rs` (see the last part).
 
 ### C interface
@@ -91,8 +91,8 @@ Contract (also in the header): `asc_eq_process` runs on one capture thread at a 
 
 Where the spec left room, these readings satisfy every Observed clause:
 
-1. S106 access kinds: a PIN flag (`needs_auth_key`) needs a code; so does a password on an AirPlay 2 speaker. The code is asked as a password when the speaker has one. An AirPlay 1 speaker with a password and no PIN flag is a legacy password speaker. This satisfies both "availability: password asks for a code" and "availability: AirPlay 1 password unsupported".
-2. S106 to S108 clicks: the user's click is kept until a code answers it, or a cancel, turn-off or automatic turn-on forgets the speaker. Asking doesn't use it up, so a speaker that vanishes before its prompt is answered gets its prompt again within the 45 s window; once a code was entered, a later refusal gets a notice.
+1. S106 access kinds (a record: `policy::pairing` went with the bundled engine on 2026-10-20): a PIN flag (`needs_auth_key`) needs a code; so does a password on an AirPlay 2 speaker. The code is asked as a password when the speaker has one. An AirPlay 1 speaker with a password and no PIN flag is a legacy password speaker. This satisfies both "availability: password asks for a code" and "availability: AirPlay 1 password unsupported".
+2. S106 to S108 clicks (a record, as 1): the user's click is kept until a code answers it, or a cancel, turn-off or automatic turn-on forgets the speaker. Asking doesn't use it up, so a speaker that vanishes before its prompt is answered gets its prompt again within the 45 s window; once a code was entered, a later refusal gets a notice.
 3. S23: a non-finite band gain or preamp counts as 0 dB; any finite value is applied as given.
 4. S76, S124: a non-finite volume input is ignored, like a non-finite delay; `gain_for_position` treats NaN as 0 (silence). Negative zero counts as 0, so no volume function returns −0.
 5. S64: `GainStage` ramps linearly across the first callback after a gain change (the spec allows a ramp of one callback); its first callback plays at the target. Gain 0 gives positive zeros; negative or non-finite gains count as 0.
@@ -106,7 +106,7 @@ Where the spec left room, these readings satisfy every Observed clause:
 13. S163: two sources are the same when they have the same kind and identifier (bundle ID or device UID). `session::source_pick` answers a pick with `Nothing`, `StoreForNextStart` or `SwitchNow`, listed from the least to the most work; every answer but `Nothing` clears the old source's notices.
 14. S164: the quit rule is read as a dependency. `AudioSource::depends_on_app` holds only for an app source and its own bundle ID; the whole system and input devices depend on no app. A quitting app with an empty bundle ID counts as having none.
 15. S26, S127: after each block, filter state below 1e-30 (600 dB below full scale) is set to 0. Without it, silence after a bass boost leaves the state decaying into subnormal numbers, where it can hold a rounding limit cycle and every biquad step is slow on x86. With it, the Bass Boost preset's state is all zero about 1.3 s after a loud 40 Hz tone stops; a unit test checks that twenty seconds of silence never end a block on subnormal state.
-16. S74: `volume::LatestValues` holds at most one waiting value per target and leaves all timing to the host. `put` reports whether the target had nothing waiting, which is the moment the host queues that target's one flush; any later value rides that flush. The flush takes the latest value with `pop`, and the next value queues a new one.
+16. S74 (a record: `volume::LatestValues` went with the bundled engine on 2026-10-20): `volume::LatestValues` holds at most one waiting value per target and leaves all timing to the host. `put` reports whether the target had nothing waiting, which is the moment the host queues that target's one flush; any later value rides that flush. The flush takes the latest value with `pop`, and the next value queues a new one.
 
 The readings of the bundled engine's clauses (S98 to S100, S102, S103, S168) went with the policy modules that followed them (`policy::engine`, `policy::reconcile`, `policy::track_info`) on 2026-10-20.
 
@@ -132,7 +132,7 @@ Clauses only the host can implement are listed with a reason in `tests/spec_exem
 
 ## The audio engine through the C interface
 
-This part extends the C interface so a host can run its whole audio engine on the core: the ring and its writer, delay readers, the resampler and an output stage, and the AirPlay sync rule's delays (the PCM16 conversion and the FIFO feed it carried at first went with the bundled engine on 2026-10-20). The core still owns no thread, device or file. Adding functions is compatible, so `ASC_ABI_VERSION` stays 1.
+This part extends the C interface so a host can run its whole audio engine on the core: the ring and its writer, delay readers, the resampler and an output stage, and the delays of the local delay model (the PCM16 conversion, the FIFO feed and the old AirPlay sync rule's calls it carried at first went with the bundled engine on 2026-10-20). The core still owns no thread, device or file. Adding functions is compatible, so `ASC_ABI_VERSION` stays 1.
 
 ### Handles and threads
 
@@ -155,7 +155,7 @@ This part extends the C interface so a host can run its whole audio engine on th
 
 ### Sync rule
 
-- S78: `asc_sync_effective_delay_ms` gives each output its delay under the old rule. `asc_sync_decide`, which decided whether an AirPlay speaker is chosen from the engine's listed IDs, went on 2026-10-20: no host called it, and the Mac's own sender decides that itself. `asc_delay_sanitize_ms` (S77, S124) and `asc_delay_ms_to_frames` (S3) are the matching helpers.
+- S78, the old rule: its C calls went on 2026-10-20, since no host called them. `asc_sync_effective_delay_ms` gave each output its delay under that rule, which the local delay model below replaced (`policy::delay::effective_delay_ms` still states it in Rust, checked by `tests/policy_delay.rs`); `asc_sync_decide` decided whether an AirPlay speaker is chosen from the bundled engine's listed IDs, which the Mac's own sender now decides itself. `asc_delay_sanitize_ms` (S77, S124) and `asc_delay_ms_to_frames` (S3) are the delay helpers that stay.
 - S172 to S179, the local delay model that replaces that rule: `asc_local_hold_backs_ms` turns the offsets of the outputs taking part (the reference marked, its offset counting as 0) and L while an AirPlay speaker is chosen into each renderer's hold-back (`policy::delay::hold_backs`); the host re-times a running renderer only when its hold-back changed (`policy::delay::Retimer` does the same bookkeeping in Rust). `asc_local_offset_sanitize_ms`, `asc_local_airplay_delay_sanitize_ms`, `asc_local_native_latency_ms` and `asc_local_native_adjustment_ms` are the settings' helpers (S175, S178, S181), and `asc_local_delay_migrate` is the Mac's one-time migration of its stored absolute delays as a pure function (S179); reading and writing the defaults keys stays in the host. The reference choice (S173, S174) and the windows (S181) stay in the hosts.
 
 ### AirPlay sender (discovery, speakers, events and the capture's input)

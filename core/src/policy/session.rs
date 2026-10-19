@@ -5,7 +5,6 @@
 use std::collections::BTreeSet;
 
 use super::Seconds;
-use super::pairing::DropReason;
 use super::source::AudioSource;
 use super::speakers::{NoticeSubject, SpeakerKey};
 
@@ -42,24 +41,21 @@ pub fn may_start(enabled_speakers: usize) -> bool {
 /// One step the host takes after a successful start (S116).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AfterStart {
-    /// Select the enabled AirPlay speakers in the engine.
+    /// Add the enabled AirPlay speakers to the AirPlay sender.
     ApplyAirPlaySelection,
-    /// Send the master volume to the engine (S72).
+    /// Send the master volume to the AirPlay sender (S72).
     SendMasterVolume,
     /// Add every enabled, present local output (S117).
     AddLocalOutputs,
-    /// Ask the engine to play or stop the pipe (S99).
-    EnsurePipePlayback,
     /// Start the capture check (S18).
     StartCaptureCheck,
 }
 
 /// The steps after a successful start, in order (S116).
-pub const AFTER_START: [AfterStart; 5] = [
+pub const AFTER_START: [AfterStart; 4] = [
     AfterStart::ApplyAirPlaySelection,
     AfterStart::SendMasterVolume,
     AfterStart::AddLocalOutputs,
-    AfterStart::EnsurePipePlayback,
     AfterStart::StartCaptureCheck,
 ];
 
@@ -123,7 +119,7 @@ pub fn sync_outputs<E: AsRef<str>, P: AsRef<str>, A: AsRef<str>>(
 pub enum SpeakerKind {
     /// A local output device.
     Local,
-    /// An AirPlay speaker of the engine.
+    /// An AirPlay speaker of the AirPlay sender.
     AirPlay,
 }
 
@@ -134,7 +130,7 @@ pub enum TurnOn {
     StartSession,
     /// Running, local speaker: sync the outputs in (S117).
     SyncLocalOutputs,
-    /// Running, AirPlay speaker: select it in the engine.
+    /// Running, AirPlay speaker: add it to the AirPlay sender.
     SelectAirPlay,
 }
 
@@ -155,7 +151,7 @@ pub enum TurnOff {
     StopSession,
     /// Remove its renderer (S117).
     SyncLocalOutputs,
-    /// Deselect it in the engine.
+    /// Remove it from the AirPlay sender.
     DeselectAirPlay,
     /// Not running: only the enabled set changes.
     Nothing,
@@ -307,10 +303,10 @@ impl AutoStartGate {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SourceSwitch {
     /// Stop the session without deselecting AirPlay speakers (deselecting would
-    /// race the reselect); the engine's pipe playback stops with the session.
+    /// race the reselect).
     pub stop_keeping_airplay: bool,
     /// Then start a session with this origin (ring reset, renderers added
-    /// again, pipe playback requested again shortly after).
+    /// again).
     pub start: Option<StartOrigin>,
 }
 
@@ -368,6 +364,27 @@ pub fn source_pick(current: &AudioSource, picked: &AudioSource, streaming: bool)
     }
 }
 
+/// Why an AirPlay speaker the user enabled can't play, so the host turns it
+/// off (S136).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DropReason {
+    /// The AirPlay sender can't reach it.
+    Unreachable,
+    /// It wants a password, which AudioSync can't send it.
+    PasswordUnsupported,
+    /// It needs a code that hasn't been entered.
+    NeedsCode,
+    /// It still needs a code after pairing: the code was rejected.
+    CodeRejected,
+}
+
+impl DropReason {
+    /// Only a rejected code also gets an alert; every drop gets a notice (S136).
+    pub fn alerts(self) -> bool {
+        self == DropReason::CodeRejected
+    }
+}
+
 /// Something that went wrong, or might have (S136).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Incident {
@@ -405,13 +422,9 @@ pub enum Incident {
         /// The device UID.
         uid: String,
     },
-    /// The pipe has no reader or lost it (S89, S92).
-    PipeWithoutReader,
-    /// The AirPlay engine is down, crashing or unsupported (S98).
-    EngineTrouble,
-    /// The pairing and reconcile rules dropped an AirPlay speaker (S104 to S109).
+    /// The AirPlay sender can't play an AirPlay speaker the user enabled.
     SpeakerDropped {
-        /// The engine output ID.
+        /// The speaker's receiver ID.
         id: String,
         /// Why.
         reason: DropReason,
@@ -484,9 +497,7 @@ pub fn reaction(incident: &Incident) -> Reaction {
             disable_speaker: true,
             ..Reaction::default()
         },
-        Incident::OutputLost { .. } | Incident::PipeWithoutReader | Incident::EngineTrouble => {
-            Reaction::default()
-        }
+        Incident::OutputLost { .. } => Reaction::default(),
         Incident::SpeakerDropped {
             id,
             reason,

@@ -169,11 +169,8 @@ func ringAndReader() {
         "counters: 1 prime, 2 resyncs, no drift correction, no starved render")
 }
 
-/// The old sync rule's effective delay and the delay helpers.
+/// The delay helpers.
 func delayHelpers() {
-    check(
-        asc_sync_effective_delay_ms(1820, true) == 1820 && asc_sync_effective_delay_ms(1820, false) == 0,
-        "local delays apply only while an AirPlay speaker is chosen")
     var frames: Int64 = 0
     check(asc_delay_ms_to_frames(1820, 48_000, &frames) && frames == 87_360, "1820 ms is \(frames) frames at 48 kHz")
 }

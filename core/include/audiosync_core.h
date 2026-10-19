@@ -424,8 +424,7 @@ size_t asc_resampler_input_frames_for(const AscResampler *resampler, size_t outp
  * frames. Consumes input until it runs out or the output is full; call again
  * with the rest. When the rates differ, non-finite input becomes silence and
  * clears the history. Equal rates pass every sample through unchanged, NaN
- * and infinity included; the output stage and PCM16 conversion deal with
- * those. Real-time safe.
+ * and infinity included; the output stage deals with those. Real-time safe.
  */
 AscResampleCount asc_resampler_process(AscResampler *resampler, const float *input, size_t input_frames,
                                        float *output, size_t output_frames);
@@ -462,10 +461,7 @@ void asc_gain_stage_apply(AscGainStage *stage, float *interleaved, size_t frames
 size_t asc_gain_stage_render(AscGainStage *stage, const float *stereo, size_t frames, float *device,
                              size_t channels);
 
-/* ---- AirPlay sync rule (local output delays) ----------------------------- */
-
-/* A local output's effective delay: its configured delay while an AirPlay speaker is chosen, otherwise 0. */
-double asc_sync_effective_delay_ms(double configured_ms, bool airplay_chosen);
+/* ---- Delay helpers ------------------------------------------------------- */
 
 /*
  * A delay input from the user, ready to store: clamped to 0...20 000 ms into
@@ -484,7 +480,7 @@ bool asc_delay_ms_to_frames(double delay_ms, uint32_t rate, int64_t *frames);
 /* ---- Local delay model (offsets relative to a reference output) ---------- */
 
 /*
- * The local delay model replaces the AirPlay sync rule above: one local
+ * The local delay model replaces the old AirPlay sync rule (S78): one local
  * output, the reference (the built-in speakers on the Mac), defines time 0
  * and has no delay setting; every other local output has an offset relative
  * to it, -2000 to +20 000 ms, that always applies. The host passes the

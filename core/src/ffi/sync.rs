@@ -1,21 +1,14 @@
-//! The AirPlay sync rule's delay, the local delay model and the delay helpers
-//! through the C interface (S3, S77, S78, S124, S172 to S179): pure functions
-//! for the control thread.
+//! The local delay model and the delay helpers through the C interface (S3,
+//! S77, S124, S172 to S179): pure functions for the control thread.
 //!
-//! The rules themselves are in [`delay`]: [`delay::effective_delay_ms`] for
-//! the old rule, [`delay::hold_backs`] and [`delay::migrate_mac_delays`] for
-//! the local delay model; this module only reads the host's C arrays. It may
+//! The rules themselves are in [`delay`]: [`delay::hold_backs`] and
+//! [`delay::migrate_mac_delays`] for the local delay model; this module only
+//! reads the host's C arrays. It may
 //! allocate (the outputs taking part), so it never runs on an audio thread.
 
 use super::{host_slice, host_slice_mut};
 use crate::policy::delay;
 use crate::reader;
-
-/// [`delay::effective_delay_ms`] (S78).
-#[unsafe(no_mangle)]
-pub extern "C" fn asc_sync_effective_delay_ms(configured_ms: f64, airplay_chosen: bool) -> f64 {
-    delay::effective_delay_ms(configured_ms, airplay_chosen)
-}
 
 /// [`delay::sanitize_delay_ms`] (S77, S124): false, writing nothing, for a
 /// non-finite delay or a null `sanitized_ms`.
@@ -280,14 +273,6 @@ pub unsafe extern "C" fn asc_local_delay_migrate(
 mod tests {
     use super::*;
     use std::ptr;
-
-    // covers: S78
-    #[test]
-    fn effective_delays_follow_the_rule() {
-        assert_eq!(asc_sync_effective_delay_ms(1820.0, true), 1820.0);
-        assert_eq!(asc_sync_effective_delay_ms(1820.0, false), 0.0);
-        assert_eq!(asc_sync_effective_delay_ms(0.0, true), 0.0);
-    }
 
     // covers: S77, S124
     #[test]

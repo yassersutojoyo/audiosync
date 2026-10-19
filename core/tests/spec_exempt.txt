@@ -10,6 +10,9 @@ S60 Core Audio output device enumeration and device object IDs.
 S61 The renderer object wraps a Core Audio output unit; its pure parts are S56, S62, S64 and S65.
 S66 A renderer's delay call measured on real hardware; its pure parts are S3 and S46.
 S67 Frames a real output device renders per second.
+S72 Retired in part with the bundled engine: what stands, re-applying every active local output's gain on a master change, is the host's; the gain itself is S71's.
+S73 Retired with the bundled engine: an AirPlay speaker's own volume as the engine reported it; the core's engine_volume and adopt_reported_volume went too.
+S74 Retired with the bundled engine: its coalesced volume writes; the core's LatestValues went too.
 S82 Retired with the bundled engine: its working folder layout and creating the pipe before it launched; the FIFO feed got the path.
 S83 Retired with the FIFO feed: the pipe's wire format.
 S84 Retired with the FIFO feed: its interface.
@@ -32,6 +35,10 @@ S102 Retired with the bundled engine: its reachability and restarts; the core's 
 S103 Retired with the bundled engine: its switch-on tracking; the core's policy::reconcile went too.
 S104 Retired with the bundled engine: its reconcile of each reported speaker; the core's policy::reconcile went too.
 S105 Retired with the bundled engine: its per-speaker volume writes; the core's policy::reconcile went too.
+S106 Retired in part with the bundled engine: the decisions on the engine's reports; what stands, the access kinds, is the Mac host's (AirPlayPairing.Access); the core's policy::pairing went too.
+S107 Retired with the bundled engine: its pairing stages; the core's policy::pairing went too.
+S108 Retired with the bundled engine: its prompt queue; the core's policy::pairing went too.
+S109 Retired with the bundled engine: its drop reaction; the drop reasons and their reaction live on in session::DropReason and S136.
 S110 Retired with the bundled engine: its quit sequence, the API write drain and the engine's process signals.
 S111 The app's SIGTERM and SIGINT handlers: process signals and the exit path.
 S112 Engine control interface of the host's engine wrapper (Core Audio device IDs, callbacks).
