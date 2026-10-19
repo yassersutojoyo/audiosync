@@ -39,7 +39,7 @@ There's a Windows 11 version on the way too, written in Rust. It's built to play
 
 The source can be all system audio, a single app (with its helper processes, like a browser's audio service), or an input device such as a microphone, line-in or audio interface (first two channels). It plays to one or more HomePods, Apple TVs and other AirPlay receivers, plus anything macOS can play to: built-in speakers, the headphone jack, HDMI/DisplayPort, USB DACs and Bluetooth.
 
-Each local speaker gets its own delay (0 to 20 s), and the AirPlay engine keeps the AirPlay speakers in step with each other. On top of that there's per-speaker and master volume, a 10-band equalizer with a preamp and presets, Now Playing for Spotify and Music (also shown on AirPlay TVs and other speakers with a screen), speaker groups, auto-connect, and launch at login. The AirPlay engine (OwnTone) ships inside the app and AudioSync starts and stops it itself, so there's nothing else to install or configure.
+Each local speaker gets its own delay relative to the Mac's built-in speakers (−2 to +20 s), there's one AirPlay delay for lining the Mac up with the AirPlay speakers, and the AirPlay engine keeps the AirPlay speakers in step with each other. On top of that there's per-speaker and master volume, a 10-band equalizer with a preamp and presets, Now Playing for Spotify and Music (also shown on AirPlay TVs and other speakers with a screen), speaker groups, auto-connect, and launch at login. The AirPlay engine (OwnTone) ships inside the app and AudioSync starts and stops it itself, so there's nothing else to install or configure.
 
 ## Coming from Airfoil?
 
@@ -81,7 +81,7 @@ The main window opens when AudioSync starts (not when it launches at login; clic
 
 The switch at the top turns all streaming on or off. Switching it off keeps your speakers chosen (they show as "will play") and they come back when you switch it on again.
 
-To line things up, click the delay next to a local speaker (like ⏱ 2000 ms). If the local speaker plays first and the HomePod echoes behind it, raise the delay; if the HomePod plays first, lower it. Stop when you hear one clean sound; the value is saved for that device. New devices start at 2000 ms and most setups end up around 1500 to 2000. Music with clear claps or drums makes it easier, and so does adding speakers one at a time. Bluetooth headphones have their own lag, so they need a bit less. The delay only applies while an AirPlay speaker is on; local speakers on their own play right away.
+The Mac's built-in speakers are the reference, so they have no delay. Every other local speaker has a delay relative to them (like ⏱ +150 ms), and it always applies, with or without AirPlay. If a speaker plays before the built-in speakers, raise its delay; if it plays after them, lower it, below zero if needed. Bluetooth speakers and headphones run late, so they usually end up around −150 to −300 ms. Then, with an AirPlay speaker on, there's the AirPlay delay under Connected Speakers (2000 ms to start with): if the Mac plays first and the HomePod echoes behind it, raise it; if the HomePod plays first, lower it. Stop when you hear one clean sound; the values are saved. Music with clear claps or drums makes it easier, and so does adding speakers one at a time. Delays you set in an older version are carried over once.
 
 <p align="center">
   <picture>
@@ -96,7 +96,7 @@ A few other things worth knowing:
 
 - Right-click a speaker (or use its ⋯ button) for auto-connect, and a group to rename or delete it.
 - The gear menu has New Group from Active Speakers, Refresh Devices, Show Virtual Devices (loopback drivers, meeting apps and other virtual outputs stay hidden until you turn this on or already use one), Appearance, Launch at Login and the AudioSync Guide.
-- Clicking any speaker while streaming is off starts streaming. Click a local speaker's delay to nudge it by ±10/±100 ms or type a value.
+- Clicking any speaker while streaming is off starts streaming. Click a delay to nudge it by ±10/±100 ms or type a value (a leading − for a negative one).
 - Speakers that want a PIN or password (an Apple TV, or a receiver with Require Password on) are marked "Asks for a code". You get a prompt when you turn one on yourself; after pairing once it connects without a code. Old AirPlay 1 receivers with a password are marked "Password not supported"; turn the password off on the receiver.
 - If the AirPlay engine can't start, or stops after repeated crashes, Connected Speakers says so and offers a Retry button.
 

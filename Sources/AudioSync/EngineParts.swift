@@ -6,14 +6,13 @@ import Foundation
 // callback dispatches through a protocol. Clause numbers (S…) refer to
 // docs/ENGINE_SPEC.md.
 
-/// The AirPlay sync rule: which local delays apply (S78, S79). The core's
-/// (`CoreSyncRule`) serves the bundled AirPlay engine; AudioSync's own sender
-/// has its own (`NativeSyncRule`).
+/// Whether an AirPlay speaker is chosen (S79), which adds the AirPlay delay
+/// on top of every local output's hold-back (S176, `LocalDelay`). The core's
+/// rule (`CoreSyncRule`) serves the bundled AirPlay engine; AudioSync's own
+/// sender has its own (`NativeSyncRule`).
 protocol SyncRule {
     /// Some AirPlay speaker the user enabled is in the engine's latest list.
     func airPlayChosen(enabled: Set<String>, listed: [String]) -> Bool
-    /// The delay a local output plays with: its own while AirPlay is chosen, else 0.
-    func effectiveDelayMs(configuredMs: Double, airPlayChosen: Bool) -> Double
 }
 
 /// The audio parts of one session, made when it starts and dropped when it
