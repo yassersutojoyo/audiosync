@@ -649,7 +649,7 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | app retap: the running tap is changed in place first, and nothing stops | S11, S13 |
 | app retap: a rebuilt tap exists before the old one closes, so the app stays muted | S11, S13 |
 | app retap: a new tap at another rate is discarded and the old one keeps running until the rebuild | S13, S157 |
-| app retap: a tap that can't be made leaves the old capture running | S13, S21 |
+| app retap: a tap that can't be made leaves the old capture to the caller, which ends the session | S13, S21 |
 | app retap: a new tap that can't start reading is discarded | S21 |
 | delay: AirPlay chosen → configured delay | S78 |
 | delay: no AirPlay → plays at once | S78 |
