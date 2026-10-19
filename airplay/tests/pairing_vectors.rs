@@ -150,10 +150,12 @@ fn the_session_key_and_the_nonce_follow_the_spec() {
     assert_eq!(nonce[15], iv[15].wrapping_add(1));
 }
 
-/// The test vector of the Apple TV pairing write-up (its section 10.3, the
-/// spec's [atvpair]): one pairing and one verification. Inputs and outputs
-/// are the published values, used as data.
-mod atvpair {
+/// P145: the test vector of the Apple TV pairing write-up (its section
+/// 10.3, the spec's [atvpair]) as the spec lists it, one pairing and one
+/// verification, with the values the spec derives from it (M2, the IV of
+/// the receiver's sealed answer, the decrypted atv_data). In the spec's
+/// order; `p145_matches_the_spec_text` checks them against the spec itself.
+mod p145 {
     pub const CLIENT_ID: &str = "366B4165DD64AD3A";
     pub const PIN: &str = "1234";
     pub const SALT: &str = "d62c98fe76c77ad445828c33063fc36f";
@@ -161,36 +163,112 @@ mod atvpair {
     pub const SECRET: &str = "a18b940d3e1302e932a64defccf560a0714b3fa2683bbe3cea808b3abfa58b7d";
     pub const A: &str = "47662731cbe1ba0b130dc5e65320dc2a4b60371e086212a7a55ed4a3653b2d1e861569309c97b4f88433564bd47f6de13ecc440db26998478b266eaa8195a81c28f89a989bc538c477be302fd96bb3fa809e9a94b0aac28d6a00aa057892ba26b2b2cad4d8ec6a9e4207754926c985c393feb6e8b7fb82bd8043709866d7b53a592a940d8e44a7d08fbbda51bf5c9091c251988236147364cb75ad5a4efbeed242fd78496f0cda365965255c8214bd264c259fa2f2a8bfec70eecb32d2ded4c5c35e5e802a22bf58f7cd629fb2f3b4a2498b95f63eab37be9fb0f75c3fcbea8c083d0311302ebc2c3bc0a0525ba5bf3fcffe5b5668b4905a8e6cdb70d89f4b1b";
     pub const PUBLIC: &str = "0ceaa63dedd87d2da05ff0bdfbd99b5734911269c70664b9a74e04ae5cdbeca7";
-    pub const M1: &str = "4b4e638bf08526e4229fd079675fedfd329b97ef";
     pub const K: &str =
         "9a689113a76b44583e73f9662eb172e830886ed988f04c6c0030f0e93c68784de27dbf30c5d151fb";
+    pub const M1: &str = "4b4e638bf08526e4229fd079675fedfd329b97ef";
+    pub const M2: &str = "24afff27ec1661f611162f389b7ba309672480f4";
     pub const SETUP_KEY: &str = "a043357cee40a9ae0731dd50859cccfb";
     pub const SETUP_IV: &str = "da36ea69a94d51d881086e9080dbaef8";
     pub const EPK: &str = "5de0f61622b0d41bc098b07f229863f49e1a1c1030908b0ec620386e089a20c4";
     pub const TAG: &str = "3b13d2e85f00555c6a05df5cb03a2105";
-    pub const VERIFY_PUBLIC: &str =
-        "f5078944f29ec2bc3ffe5b04e17772b884ce6d1f88e255582e8b35dda8fa7f35";
+    pub const ANSWER_IV: &str = "da36ea69a94d51d881086e9080dbaef9";
     pub const RECEIVER_PUBLIC: &str =
         "d62c8c9548d836736978ad4d426df3495192407bbbb9466c9970794cdd2fe43a";
     pub const RECEIVER_DATA: &str = "3067a3ea868ade5c9fab43a8d5dc4d53ca1115dbf1c882888f877e85b65c3a82a61583f24c33bf0b9a6ec5c4ab2ecc555a939e7633557453854795e82f2d7ef6";
+    pub const VERIFY_PUBLIC: &str =
+        "f5078944f29ec2bc3ffe5b04e17772b884ce6d1f88e255582e8b35dda8fa7f35";
     pub const SHARED: &str = "b7085ca45bd640d966525cbdbc0745bd1d80aa6e6ee48270b60affba3cccac31";
     pub const VERIFY_KEY: &str = "2556d9ef1780c8283eecf259fc7207af";
     pub const VERIFY_IV: &str = "453404da307f780e6d50e52d7dc62325";
     pub const SIGNATURE: &str = "82a0cf6cdba66df407fdeb51ac3884748e3a47c8de3f681d534299e707428ce19f6822d2bf925c5d197f1042e7c5b7160a764e42f9fbe33ce57b3704821cff0d";
     pub const ENCRYPTED_SIGNATURE: &str = "89dfefdc253147f32f5dc00e4a7042ebccdec663a422c80c1dd5ab69e9cc3304be2de1b0620cdef4749ccdffb4a8f4c4f704124e00f07b6efc3a722f173418a5";
+    pub const RECEIVER_SIGNATURE: &str = "481c206c5b4e5e5610f83d38fec8be5dbb9e058073fbf222c3e3b10881a76308eea820751d27e9f4b2be58ec95f2d425a6f0c6ffa46f56b021b27bab11ac620c";
+
+    /// Every value, in the order P145 lists them.
+    pub const ALL: [&str; 24] = [
+        CLIENT_ID,
+        PIN,
+        SALT,
+        B,
+        SECRET,
+        A,
+        PUBLIC,
+        K,
+        M1,
+        M2,
+        SETUP_KEY,
+        SETUP_IV,
+        EPK,
+        TAG,
+        ANSWER_IV,
+        RECEIVER_PUBLIC,
+        RECEIVER_DATA,
+        VERIFY_PUBLIC,
+        SHARED,
+        VERIFY_KEY,
+        VERIFY_IV,
+        SIGNATURE,
+        ENCRYPTED_SIGNATURE,
+        RECEIVER_SIGNATURE,
+    ];
 }
 
-// covers: P57, P49, P50, P52, P53, P55, P56
+/// The quoted values of clause P145, in order: the last backtick-quoted
+/// token of each list line that has one.
+fn spec_p145_values() -> Vec<String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("docs")
+        .join("AIRPLAY_SPEC.md");
+    let spec = std::fs::read_to_string(&path).expect("the spec is readable");
+    let mut values = Vec::new();
+    let mut inside = false;
+    for line in spec.lines() {
+        if line.starts_with("- **P145**") {
+            inside = true;
+            continue;
+        }
+        if inside && (line.starts_with("- **") || line.starts_with('#')) {
+            break;
+        }
+        if inside && line.trim_start().starts_with("- ") {
+            let quoted: Vec<&str> = line.split('`').collect();
+            if quoted.len() >= 3 {
+                values.push(quoted[quoted.len() - 2].to_owned());
+            }
+        }
+    }
+    values
+}
+
+// covers: P145
+#[test]
+fn p145_matches_the_spec_text() {
+    assert_eq!(spec_p145_values(), p145::ALL);
+}
+
+/// A random source that hands out the given 32-byte values in order.
+struct Scripted(Vec<[u8; 32]>);
+
+impl audiosync_airplay::ids::Entropy for Scripted {
+    fn fill(&mut self, buf: &mut [u8]) -> Result<(), audiosync_airplay::ids::EntropyUnavailable> {
+        let next = self.0.remove(0);
+        buf.copy_from_slice(&next[..buf.len()]);
+        Ok(())
+    }
+}
+
+// covers: P57, P145, P49, P50, P52, P53, P55, P56
 #[test]
 fn legacy_pairing_vector_is_reproduced() {
     use audiosync_airplay::pairing::{Credentials, LegacyVerifier};
     use audiosync_airplay::session::Verifier;
 
     let group = SrpGroup::RFC5054_2048;
-    let identity = atvpair::CLIENT_ID.as_bytes();
-    let salt = hex(atvpair::SALT);
-    let b_pub = hex(atvpair::B);
-    let secret = hex32(atvpair::SECRET);
+    let identity = p145::CLIENT_ID.as_bytes();
+    let salt = hex(p145::SALT);
+    let b_pub = hex(p145::B);
+    let secret = hex32(p145::SECRET);
     assert_eq!(b_pub.len(), 256);
     assert_eq!(salt.len(), 16);
 
@@ -198,67 +276,156 @@ fn legacy_pairing_vector_is_reproduced() {
     let values = srp::client_values(
         &group,
         identity,
-        atvpair::PIN.as_bytes(),
+        p145::PIN.as_bytes(),
         &salt,
         &b_pub,
         &secret,
     )
     .expect("the vector's values");
-    assert_eq!(values.public, hex(atvpair::A), "A");
+    assert_eq!(values.public, hex(p145::A), "A");
     let key = srp::session_key(&values.premaster);
-    assert_eq!(key.to_vec(), hex(atvpair::K), "K");
-    let b_padded = group.pad(&b_pub).expect("B");
-    let m1 = srp::client_proof(&group, identity, &salt, &values.public, &b_padded, &key);
-    assert_eq!(m1.to_vec(), hex(atvpair::M1), "M1");
+    assert_eq!(key.to_vec(), hex(p145::K), "K");
+    let m1 = srp::client_proof(&group, identity, &salt, &values.public, &b_pub, &key);
+    assert_eq!(m1.to_vec(), hex(p145::M1), "M1");
+    // M2 as RFC 2945 defines it (P52), derived.
+    assert_eq!(
+        srp::server_proof(&values.public, &m1, &key).to_vec(),
+        hex(p145::M2),
+        "M2"
+    );
     let public = keys::public_key(&secret);
-    assert_eq!(public.to_vec(), hex(atvpair::PUBLIC), "a_pub");
+    assert_eq!(public.to_vec(), hex(p145::PUBLIC), "a_pub");
 
-    // The sealed public key (P53), with the 16-byte GCM nonce.
+    // The sealed public key (P53), with the 16-byte GCM nonce, and the IV
+    // of the receiver's sealed answer (derived).
     assert_eq!(
         keys::setup_key(&key).to_vec(),
-        hex(atvpair::SETUP_KEY),
+        hex(p145::SETUP_KEY),
         "AES key"
     );
     assert_eq!(
         keys::setup_nonce(&key).to_vec(),
-        hex(atvpair::SETUP_IV),
+        hex(p145::SETUP_IV),
         "AES IV"
     );
     let (epk, tag) = keys::seal_public_key(&key, &public);
-    assert_eq!(epk.to_vec(), hex(atvpair::EPK), "epk");
-    assert_eq!(tag.to_vec(), hex(atvpair::TAG), "authTag");
+    assert_eq!(epk.to_vec(), hex(p145::EPK), "epk");
+    assert_eq!(tag.to_vec(), hex(p145::TAG), "authTag");
+    assert_eq!(
+        keys::answer_nonce(&key).to_vec(),
+        hex(p145::ANSWER_IV),
+        "IV of the receiver's sealed answer"
+    );
 
-    // Verification, from the published shared secret onward (P56).
-    let shared = hex32(atvpair::SHARED);
-    let verify_public = hex32(atvpair::VERIFY_PUBLIC);
-    let receiver_public = hex32(atvpair::RECEIVER_PUBLIC);
-    let receiver_data: [u8; 64] = hex(atvpair::RECEIVER_DATA).try_into().expect("64 bytes");
+    // Verification with a as v_priv (P57): v_pub and the shared secret
+    // follow, and from them everything else (P55, P56).
+    let receiver_public = hex32(p145::RECEIVER_PUBLIC);
+    let receiver_data: [u8; 64] = hex(p145::RECEIVER_DATA).try_into().expect("64 bytes");
+    let verify_public = keys::x25519_public(&secret);
+    assert_eq!(verify_public.to_vec(), hex(p145::VERIFY_PUBLIC), "v_pub");
+    let shared = keys::shared_secret(&secret, &receiver_public).expect("a shared secret");
+    assert_eq!(shared.to_vec(), hex(p145::SHARED), "shared secret");
     assert_eq!(
         keys::verify_key(&shared).to_vec(),
-        hex(atvpair::VERIFY_KEY),
+        hex(p145::VERIFY_KEY),
         "AES key"
     );
     assert_eq!(
         keys::verify_iv(&shared).to_vec(),
-        hex(atvpair::VERIFY_IV),
+        hex(p145::VERIFY_IV),
         "AES IV"
     );
     let signature = keys::verify_signature(&secret, &verify_public, &receiver_public);
-    assert_eq!(signature.to_vec(), hex(atvpair::SIGNATURE), "signature");
+    assert_eq!(signature.to_vec(), hex(p145::SIGNATURE), "signature");
     let encrypted = keys::encrypt_signature(&shared, &receiver_data, &signature);
     assert_eq!(
         encrypted.to_vec(),
-        hex(atvpair::ENCRYPTED_SIGNATURE),
+        hex(p145::ENCRYPTED_SIGNATURE),
         "encrypted signature"
     );
+    assert_eq!(
+        keys::decrypt_receiver_data(&shared, &receiver_data).to_vec(),
+        hex(p145::RECEIVER_SIGNATURE),
+        "atv_data decrypted"
+    );
 
-    // The sender's first verify body carries the same a_pub after its v_pub
-    // (P55). v_priv isn't published, so the second body is checked through
-    // its parts above.
-    let credentials = Credentials::new(atvpair::CLIENT_ID, secret).expect("credentials");
-    assert_eq!(credentials.public_key().to_vec(), hex(atvpair::PUBLIC));
-    let mut entropy = audiosync_airplay::ids::OsEntropy;
+    // The verifier's two bodies, with a as v_priv: 01 00 00 00 | v_pub |
+    // a_pub, then 00 00 00 00 | the encrypted signature.
+    let credentials = Credentials::new(p145::CLIENT_ID, secret).expect("credentials");
+    assert_eq!(credentials.public_key().to_vec(), hex(p145::PUBLIC));
+    let mut entropy = Scripted(vec![secret, [0x11; 32]]);
     let mut verifier = LegacyVerifier::new(&credentials, &mut entropy).expect("a verifier");
     let first = verifier.first_request();
+    assert_eq!(first[..4], [1, 0, 0, 0]);
+    assert_eq!(first[4..36], hex(p145::VERIFY_PUBLIC)[..]);
     assert_eq!(&first[36..], public.as_slice());
+    let mut answer = receiver_public.to_vec();
+    answer.extend_from_slice(&receiver_data);
+    let second = verifier.second_request(&answer).expect("a second body");
+    assert_eq!(second[..4], [0, 0, 0, 0]);
+    assert_eq!(second[4..], hex(p145::ENCRYPTED_SIGNATURE)[..]);
+    assert_eq!(verifier.take_warning(), None, "no receiver key to check");
+}
+
+// covers: P50
+#[test]
+fn m1_m2_and_k_hash_a_b_and_s_in_their_shortest_form() {
+    // A, B and S with a leading zero byte, as 256 padded bytes: M1, M2 and
+    // K hash them without it, while s goes in as received (P50, P52). The
+    // expected values are computed here from the clause's formulas.
+    use sha1::{Digest, Sha1};
+    let sha1 = |parts: &[&[u8]]| -> Vec<u8> {
+        let mut hasher = Sha1::new();
+        for part in parts {
+            hasher.update(part);
+        }
+        hasher.finalize().to_vec()
+    };
+    let group = SrpGroup::RFC5054_2048;
+    let identity = p145::CLIENT_ID.as_bytes();
+    let salt = hex(p145::SALT);
+    let short = |seed: u8| -> Vec<u8> { (0..255u8).map(|i| i.wrapping_mul(seed) | 1).collect() };
+    let padded = |value: &[u8]| -> Vec<u8> { [&[0u8][..], value].concat() };
+    let (a_short, b_short, s_short) = (short(7), short(13), short(29));
+    let (a_padded, b_padded, s_padded) = (padded(&a_short), padded(&b_short), padded(&s_short));
+    assert_eq!(a_padded.len(), 256);
+    assert_eq!(a_padded[0], 0);
+
+    let key = srp::session_key(&s_padded);
+    let expected_key = [
+        sha1(&[&s_short, &[0, 0, 0, 0]]),
+        sha1(&[&s_short, &[0, 0, 0, 1]]),
+    ]
+    .concat();
+    assert_eq!(key.to_vec(), expected_key, "K");
+    assert_eq!(srp::session_key(&s_short), key);
+
+    let hash_n = sha1(&[group.prime()]);
+    let hash_g = sha1(&[&[group.generator()]]);
+    let mixed: Vec<u8> = hash_n.iter().zip(&hash_g).map(|(n, g)| n ^ g).collect();
+    let expected_m1 = sha1(&[&mixed, &sha1(&[identity]), &salt, &a_short, &b_short, &key]);
+    let m1 = srp::client_proof(&group, identity, &salt, &a_padded, &b_padded, &key);
+    assert_eq!(m1.to_vec(), expected_m1, "M1");
+    assert_eq!(
+        srp::client_proof(&group, identity, &salt, &a_short, &b_short, &key),
+        m1
+    );
+    // Hashing the padded forms would give another M1.
+    let padded_m1 = sha1(&[
+        &mixed,
+        &sha1(&[identity]),
+        &salt,
+        &a_padded,
+        &b_padded,
+        &key,
+    ]);
+    assert_ne!(m1.to_vec(), padded_m1);
+    // Only B padded: still the shortest form in M1.
+    assert_eq!(
+        srp::client_proof(&group, identity, &salt, &a_short, &b_padded, &key),
+        m1
+    );
+
+    let m2 = srp::server_proof(&a_padded, &m1, &key);
+    assert_eq!(m2.to_vec(), sha1(&[&a_short, &m1, &key]), "M2");
 }

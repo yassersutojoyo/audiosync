@@ -11,10 +11,12 @@
 //! to write, events for the host and the order to close, and through
 //! [`Session::poll_timeout`] with the next time it wants to be woken.
 //!
-//! Request order (P26): OPTIONS, `POST /auth-setup` when the receiver needs it
-//! (P60), the legacy pair-verify when the speaker is paired (P55, through the
-//! [`Verifier`] seam), ANNOUNCE, SETUP, RECORD, then SET_PARAMETER with the
-//! initial volume (P119). One request is in flight at a time (P20). Audio,
+//! Request order (P26): the legacy pair-verify first when the session has
+//! credentials (P55, through the [`Verifier`] seam), OPTIONS, `POST
+//! /auth-setup` when the receiver needs it (P60), ANNOUNCE, SETUP, RECORD,
+//! then SET_PARAMETER with the initial volume (P119). A speaker that needs
+//! the legacy pairing and has no credentials stops after OPTIONS with
+//! PairingRequired (P46). One request is in flight at a time (P20). Audio,
 //! sync and retransmission packets may flow only while
 //! [`Session::media_allowed`] says so: after RECORD was answered with 200
 //! and until teardown starts.
@@ -49,17 +51,37 @@ pub const TIMING_SILENCE: Duration = Duration::from_secs(10);
 /// Smallest gap between two volume requests: at most 10 per second (P120).
 pub const VOLUME_INTERVAL: Duration = Duration::from_millis(100);
 
-/// The legacy pair-verify of a paired Apple TV (P55, P56), run on every new
-/// connection before ANNOUNCE. [`LegacyVerifier`](crate::pairing::LegacyVerifier)
+/// The legacy pair-verify of a paired Apple TV (P55, P56), the first request
+/// on every new connection, before OPTIONS (P26). [`LegacyVerifier`](crate::pairing::LegacyVerifier)
 /// implements it; the session only carries its two `POST /pair-verify`
 /// exchanges, both with `Content-Type: application/octet-stream`.
 pub trait Verifier: Send {
     /// The body of the first request.
     fn first_request(&mut self) -> Vec<u8>;
     /// The body of the second request, computed from the first response's
-    /// body; `None` when that body is malformed.
+    /// body (96 bytes, P55); `None` when that body is malformed.
     fn second_request(&mut self, first_response: &[u8]) -> Option<Vec<u8>>;
+    /// Something the last [`Verifier::second_request`] found worth a
+    /// warning without failing the verification, such as a receiver
+    /// signature that didn't check out (P56).
+    fn take_warning(&mut self) -> Option<Warning> {
+        None
+    }
+    /// Gets ready for one more connection of the same session (P58's
+    /// reconnect after a close right behind a verification): a fresh key
+    /// pair where the verification uses one. `false` when it can't, which
+    /// the session reports as PairingRequired.
+    fn renew(&mut self) -> bool {
+        true
+    }
 }
+
+/// Bytes of the first pair-verify answer: atv_pub (32) and atv_data (64)
+/// (P55).
+pub const VERIFY_ANSWER_BYTES: usize = 96;
+/// The status a receiver busy with another sender answers with (409
+/// Conflict): Busy for any request before RECORD is answered (P137).
+pub const STATUS_CONFLICT: u16 = 409;
 
 /// What a session needs to know before it starts.
 pub struct SessionConfig {
@@ -77,6 +99,11 @@ pub struct SessionConfig {
     /// An Apple TV without stored credentials: a refused ANNOUNCE means
     /// PairingRequired, not Refused (P46).
     pub apple_tv_without_credentials: bool,
+    /// The receiver's flags call for the legacy pairing and the host has no
+    /// credentials (P46): the session asks OPTIONS and then ends with
+    /// PairingRequired, unless the answer shows a receiver that can't take
+    /// AirPlay 1 audio (Unsupported, P27) or is busy (P137).
+    pub needs_pairing: bool,
     /// The speaker's password, if the host has one (P39). Never logged: the
     /// `Debug` output hides it.
     pub password: Option<String>,
@@ -107,6 +134,7 @@ impl SessionConfig {
             codec: Codec::Alac,
             alac_fallback: false,
             apple_tv_without_credentials: false,
+            needs_pairing: false,
             password: None,
             auth_setup_key: None,
             verifier: None,
@@ -128,6 +156,7 @@ impl fmt::Debug for SessionConfig {
                 "apple_tv_without_credentials",
                 &self.apple_tv_without_credentials,
             )
+            .field("needs_pairing", &self.needs_pairing)
             .field("password", &self.password.as_ref().map(|_| "<hidden>"))
             .field("auth_setup_key", &self.auth_setup_key.is_some())
             .field("verifier", &self.verifier.is_some())
@@ -353,6 +382,11 @@ pub struct Session {
     server: Option<String>,
     jack: Option<JackStatus>,
     methods: Option<Vec<String>>,
+    /// A verification was answered 200 and the next request isn't answered
+    /// yet: a close now gets one reconnect (P58).
+    verified_unconfirmed: bool,
+    /// That reconnect was used (P58).
+    reverified: bool,
 }
 
 impl Session {
@@ -385,6 +419,8 @@ impl Session {
             server: None,
             jack: None,
             methods: None,
+            verified_unconfirmed: false,
+            reverified: false,
         };
         match session.config.addresses.first() {
             Some(&address) => session.outputs.push_back(Output::Connect(address)),
@@ -491,9 +527,10 @@ impl Session {
     }
 
     /// The TCP connect to the address of the last [`Output::Connect`]
-    /// succeeded, and the session's UDP sockets are open: OPTIONS goes out.
-    /// The URI, the SDP and the UDP destinations follow this connection
-    /// (P17, P23, P28).
+    /// succeeded, and the session's UDP sockets are open: the pair-verify
+    /// goes out first when the session has credentials, OPTIONS otherwise
+    /// (P26, P55). The URI, the SDP and the UDP destinations follow this
+    /// connection (P17, P23, P28).
     pub fn handle_connected(&mut self, connection: Connection, now: Instant) {
         if self.state != State::Connecting {
             return;
@@ -502,7 +539,13 @@ impl Session {
             return;
         };
         self.connected = Some(Connected { remote, connection });
-        self.send(Kind::Options { keepalive: false }, now, false);
+        match self.config.verifier.as_mut() {
+            Some(verifier) => {
+                let body = verifier.first_request();
+                self.send(Kind::VerifyFirst(body), now, false);
+            }
+            None => self.send(Kind::Options { keepalive: false }, now, false),
+        }
     }
 
     /// The TCP connect was refused or found no route: the next address is
@@ -525,14 +568,57 @@ impl Session {
         }
     }
 
-    /// The receiver closed or reset the connection (P141).
-    pub fn handle_connection_closed(&mut self, _now: Instant) {
+    /// The receiver closed or reset the connection (P141). Right after a
+    /// verification was answered 200, before the next answer, the session
+    /// connects once more at once and verifies again; the same close a
+    /// second time is PairingRequired (P58).
+    pub fn handle_connection_closed(&mut self, now: Instant) {
         match self.state {
             State::Closed => {}
             State::TearingDown => self.finish(),
             State::Connecting => self.fail(ErrorKind::Unreachable, None, None, None),
+            _ if self.verified_unconfirmed && self.reverified => self.fail(
+                ErrorKind::PairingRequired,
+                Some(Method::Post),
+                None,
+                Some("connection closed right after pair-verify, twice"),
+            ),
+            _ if self.verified_unconfirmed => self.reconnect_to_verify(now),
             _ => self.fail(ErrorKind::Lost, None, None, Some("connection closed")),
         }
+    }
+
+    /// One new connection to the same address, with a fresh pair-verify
+    /// (P58). The connection starts like any other: CSeq from 0 (P21), no
+    /// `Authorization` until a challenge (P38), new UDP sockets from the
+    /// driver.
+    fn reconnect_to_verify(&mut self, now: Instant) {
+        self.reverified = true;
+        self.verified_unconfirmed = false;
+        let renewed = self
+            .config
+            .verifier
+            .as_mut()
+            .is_some_and(|verifier| verifier.renew());
+        let address = self.config.addresses.get(self.attempt).copied();
+        let (true, Some(address)) = (renewed, address) else {
+            self.fail(
+                ErrorKind::PairingRequired,
+                Some(Method::Post),
+                None,
+                Some("connection closed right after pair-verify"),
+            );
+            return;
+        };
+        self.outputs.push_back(Output::Close);
+        self.state = State::Connecting;
+        self.connected = None;
+        self.parser = Parser::new();
+        self.next_cseq = 0;
+        self.in_flight = None;
+        self.auth = None;
+        self.attempt_started = now;
+        self.outputs.push_back(Output::Connect(address));
     }
 
     /// A timing request arrived on the session's timing socket (P131).
@@ -963,12 +1049,22 @@ impl Session {
             return;
         }
         self.note_receiver_headers(&response);
+        // The answer to the request after a verification confirms it (P58).
+        if !matches!(in_flight.kind, Kind::VerifySecond(_)) {
+            self.verified_unconfirmed = false;
+        }
         if self.state == State::TearingDown {
             // The answer to TEARDOWN ends the session; the answer to a request
             // sent before the teardown only clears the way for TEARDOWN.
             if in_flight.kind == Kind::Teardown {
                 self.finish();
             }
+            return;
+        }
+        if response.code == STATUS_CONFLICT && self.state != State::Playing {
+            // Any request before RECORD is answered, pairing and
+            // verification included, ahead of P58 and P136 (P137).
+            self.fail(ErrorKind::Busy, Some(method), Some(response.code), None);
             return;
         }
         if response.code == 401 && in_flight.kind != Kind::AuthSetup {
@@ -979,7 +1075,17 @@ impl Session {
         let success = response.is_success();
         match in_flight.kind {
             Kind::Options { keepalive } => {
-                if !success {
+                if code == 403 && !keepalive {
+                    // An Apple TV that wants verification first (P46, P138).
+                    // The keep-alive's 403 stays Refused: a playing speaker
+                    // never asks the user for a new PIN on it.
+                    self.fail(ErrorKind::PairingRequired, Some(method), Some(code), None);
+                } else if code == 501 {
+                    // Taken as an answer without `Public` (P27, P138).
+                    if !keepalive {
+                        self.after_options(now);
+                    }
+                } else if !success {
                     self.fail(ErrorKind::Refused, Some(method), Some(code), None);
                 } else if !keepalive {
                     self.on_options(&response, now);
@@ -1000,11 +1106,28 @@ impl Session {
                     self.fail(ErrorKind::PairingRequired, Some(method), Some(code), None);
                     return;
                 }
-                let second = self
-                    .config
-                    .verifier
-                    .as_mut()
-                    .and_then(|verifier| verifier.second_request(&response.body));
+                if response.body.len() != VERIFY_ANSWER_BYTES {
+                    // A 200 whose body isn't atv_pub | atv_data is a failed
+                    // verification, such as the empty 200 of a receiver
+                    // that doesn't know the client's key (P55, P58).
+                    self.fail(
+                        ErrorKind::PairingRequired,
+                        Some(method),
+                        Some(code),
+                        Some("pair-verify answer is not 96 bytes"),
+                    );
+                    return;
+                }
+                let (second, warning) = match self.config.verifier.as_mut() {
+                    Some(verifier) => {
+                        let second = verifier.second_request(&response.body);
+                        (second, verifier.take_warning())
+                    }
+                    None => (None, None),
+                };
+                if let Some(warning) = warning {
+                    self.event(SessionEvent::Warning(warning));
+                }
                 match second {
                     Some(body) => self.send(Kind::VerifySecond(body), now, false),
                     None => self.fail(
@@ -1017,7 +1140,8 @@ impl Session {
             }
             Kind::VerifySecond(_) => {
                 if code == 200 {
-                    self.send(Kind::Announce, now, false);
+                    self.verified_unconfirmed = true;
+                    self.send(Kind::Options { keepalive: false }, now, false);
                 } else {
                     self.fail(ErrorKind::PairingRequired, Some(method), Some(code), None);
                 }
@@ -1151,7 +1275,21 @@ impl Session {
                 return;
             }
         }
-        if self.config.auth_setup_key.is_some() {
+        self.after_options(now);
+    }
+
+    /// OPTIONS passed (P27): a speaker that needs the legacy pairing ends
+    /// here with PairingRequired (P46); otherwise `POST /auth-setup` when
+    /// the receiver needs it (P60), then ANNOUNCE.
+    fn after_options(&mut self, now: Instant) {
+        if self.config.needs_pairing {
+            self.fail(
+                ErrorKind::PairingRequired,
+                Some(Method::Options),
+                None,
+                Some("the receiver needs the PIN pairing"),
+            );
+        } else if self.config.auth_setup_key.is_some() {
             self.send(Kind::AuthSetup, now, false);
         } else {
             self.after_auth_setup(now);
@@ -1159,18 +1297,14 @@ impl Session {
     }
 
     fn after_auth_setup(&mut self, now: Instant) {
-        match self.config.verifier.as_mut() {
-            Some(verifier) => {
-                let body = verifier.first_request();
-                self.send(Kind::VerifyFirst(body), now, false);
-            }
-            None => self.send(Kind::Announce, now, false),
-        }
+        self.send(Kind::Announce, now, false);
     }
 
-    /// A refused ANNOUNCE (P46, P74, P137, P138).
+    /// A refused ANNOUNCE (P46, P74, P137, P138). A 409 never gets here
+    /// (Busy, P137).
     fn on_announce_refused(&mut self, code: u16) {
-        let client_error = (400..500).contains(&code) && code != 401 && code != 453;
+        let client_error =
+            (400..500).contains(&code) && code != 401 && code != STATUS_CONFLICT && code != 453;
         let mut error = SessionError::new(ErrorKind::Refused);
         error.method = Some(Method::Announce);
         error.status = Some(code);

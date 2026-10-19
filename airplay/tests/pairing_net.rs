@@ -120,8 +120,9 @@ fn the_host_pairs_an_apple_tv_and_plays_to_it_with_the_stored_credentials() {
     let device = receiver.device(21, ATV_TXT);
     let key = device.key.clone();
 
-    // Without credentials the Apple TV needs pairing, before any connect
-    // (P46).
+    // Without credentials discovery's verdict says the Apple TV needs
+    // pairing; added as a speaker, it is asked OPTIONS first, and only then
+    // reported as PairingRequired (P46).
     assert_eq!(
         ReceiverInfo::new(device.clone()).plan,
         Err(ErrorKind::PairingRequired)
@@ -133,7 +134,8 @@ fn the_host_pairs_an_apple_tv_and_plays_to_it_with_the_stored_credentials() {
             .is_some()
     );
     assert_eq!(speaker_errors(&events, &key), [ErrorKind::PairingRequired]);
-    assert_eq!(receiver.log().connections.len(), 0);
+    assert_eq!(receiver.log().connections.len(), 1);
+    assert_eq!(receiver.log().keys(), ["OPTIONS"]);
 
     // The host pairs: a PIN prompt, digits only, then the credentials.
     sender.start_pairing(device.clone());
@@ -151,22 +153,19 @@ fn the_host_pairs_an_apple_tv_and_plays_to_it_with_the_stored_credentials() {
         other => panic!("not paired: {other:?}"),
     };
     assert_eq!(atv.paired(), [credentials.public_key()]);
-    let pairing_requests: Vec<String> = receiver
-        .log()
-        .requests
-        .iter()
-        .map(|(_, request)| common::key(request))
-        .collect();
+    assert_eq!(credentials.receiver_key(), Some(atv.receiver_key()));
+    let pairing_requests: Vec<String> = receiver.log().keys()[1..].to_vec();
     assert_eq!(
         pairing_requests,
         [
+            "OPTIONS",
             "POST /pair-pin-start",
             "POST /pair-setup-pin",
             "POST /pair-setup-pin",
             "POST /pair-setup-pin"
         ]
     );
-    assert_eq!(receiver.log().connections.len(), 1, "one connection (P47)");
+    assert_eq!(receiver.log().connections.len(), 2, "one connection (P47)");
 
     // What the host stores comes back as the same credentials, and the
     // speaker plays with them, verifying first (P54, P55).
@@ -181,19 +180,87 @@ fn the_host_pairs_an_apple_tv_and_plays_to_it_with_the_stored_credentials() {
         "plays with the credentials: {:?}",
         events.of(&key)
     );
-    let session_requests: Vec<String> = receiver.log().requests[4..]
-        .iter()
-        .map(|(_, request)| common::key(request))
-        .collect();
+    let session_requests: Vec<String> = receiver.log().keys()[6..].to_vec();
     assert_eq!(
         session_requests[..4],
         [
+            "POST /pair-verify",
+            "POST /pair-verify",
             "OPTIONS",
-            "POST /pair-verify",
-            "POST /pair-verify",
             "ANNOUNCE"
         ]
     );
+    sender.shutdown();
+}
+
+// covers: P58
+#[test]
+fn a_close_right_after_verification_gets_one_reconnect_over_loopback() {
+    let _serial = serial();
+    let atv = FakeAppleTv::new(PIN);
+    let receiver = NetReceiver::start(Behavior {
+        apple_tv: Some(atv.clone()),
+        ..Behavior::default()
+    });
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let device = receiver.device(23, ATV_TXT);
+    let key = device.key.clone();
+    let credentials = pair(&mut events, &sender, &key, &device, 1);
+    let paired_at = receiver.log().connections.len();
+
+    // Once: the sender connects again at once, verifies and plays.
+    receiver.behavior().close_after_verify = 1;
+    let mut options = SpeakerOptions::new(Volume::Db(-20.0));
+    options.credentials = Some(credentials.clone());
+    sender.add_speaker(device.clone(), options);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?}",
+        events.of(&key)
+    );
+    assert!(speaker_errors(&events, &key).is_empty());
+    assert_eq!(receiver.log().connections.len(), paired_at + 2);
+    let keys = receiver.log().keys();
+    let verify_at = keys
+        .iter()
+        .position(|key| key == "POST /pair-verify")
+        .expect("a verify");
+    assert_eq!(
+        keys[verify_at..verify_at + 5],
+        [
+            "POST /pair-verify",
+            "POST /pair-verify",
+            "POST /pair-verify",
+            "POST /pair-verify",
+            "OPTIONS"
+        ]
+    );
+    sender.remove_speaker(&key);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
+
+    // Twice in a row: PairingRequired, and no retry.
+    receiver.behavior().close_after_verify = 2;
+    let mut options = SpeakerOptions::new(Volume::Db(-20.0));
+    options.credentials = Some(credentials);
+    sender.add_speaker(device.clone(), options);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Failed)
+            .is_some(),
+        "{:?}",
+        events.of(&key)
+    );
+    assert_eq!(speaker_errors(&events, &key), [ErrorKind::PairingRequired]);
+    let connections = receiver.log().connections.len();
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(receiver.log().connections.len(), connections, "no retry");
     sender.shutdown();
 }
 
