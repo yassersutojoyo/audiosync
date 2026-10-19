@@ -13,16 +13,16 @@
 //! challenge and every later request carries `Authorization`, pairing
 //! requests included (P36, P38); without one the pairing ends with
 //! PasswordRequired before `/pair-pin-start`, so the Apple TV never shows
-//! a PIN for a pairing that can't go on (P39, P46). A 401 to a pairing
-//! request, also with no challenge before it, is the same password
-//! challenge: the request goes again with `Authorization`, or the pairing
-//! ends with PasswordRequired (P58). Then it sends
+//! a PIN for a pairing that can't go on (P39, P46). Then it sends
 //! `POST /pair-pin-start` (the Apple TV shows a PIN, P48), the first
 //! `POST /pair-setup-pin` with the client ID (P49), waits without a timeout
 //! for the host's PIN (P51), sends A and M1 (P50, P52), checks M2, sends
 //! the sealed public key (P53), opens the receiver's sealed key when its
 //! answer carries one, and hands the host the [`Credentials`] (P54). The
-//! host stores them; the crate never writes them anywhere.
+//! host stores them; the crate never writes them anywhere. A 401 to any of
+//! these pairing requests, also with no challenge before it, is the same
+//! password challenge: the request goes again with `Authorization`, or the
+//! pairing ends with PasswordRequired (P58).
 //!
 //! [`LegacyVerifier`] runs the pair-verify on every later connection
 //! (P55, P56), through the session's [`Verifier`] seam, and checks the
