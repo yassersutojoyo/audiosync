@@ -74,6 +74,10 @@ const FLYOUT_NOTICE_LIMIT: usize = 1;
 /// How often the backend is polled for what happened on its own.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
+/// How often, 20 ms apart, the saved main window size waits for the native
+/// window before it gives up (about two seconds).
+const NATIVE_WINDOW_TRIES: u8 = 100;
+
 /// The parts of the tray flyout that a refresh can remove, with the controls
 /// in them: the listed notice, the button for more notices, the group rows
 /// and the speaker rows.
@@ -170,6 +174,24 @@ fn with_app(app: &Weak<App>, action: impl FnOnce(&App)) {
     if let Some(app) = app.upgrade() {
         action(&app);
     }
+}
+
+/// Sets the main window's size as soon as its native window exists, checking
+/// every 20 ms up to `tries` times.
+fn set_size_once_native(main: slint::Weak<MainWindow>, size: slint::LogicalSize, tries: u8) {
+    use slint::winit_030::WinitWindowAccessor;
+
+    Timer::single_shot(Duration::from_millis(20), move || {
+        let Some(window_owner) = main.upgrade() else {
+            return;
+        };
+        let window = window_owner.window();
+        if window.with_winit_window(|_| ()).is_some() {
+            window.set_size(size);
+        } else if tries > 1 {
+            set_size_once_native(main, size, tries - 1);
+        }
+    });
 }
 
 impl App {
@@ -983,10 +1005,13 @@ impl App {
             return;
         };
         let window = self.main.window();
-        window.set_size(slint::LogicalSize::new(
-            frame.width as f32,
-            frame.height as f32,
-        ));
+        let size = slint::LogicalSize::new(frame.width as f32, frame.height as f32);
+        window.set_size(size);
+        // The native menu bar is attached when the native window is created
+        // and takes its height out of a size set before that, so the window
+        // would shrink by the menu bar at every restart: set the size again
+        // once the native window exists.
+        set_size_once_native(self.main.as_weak(), size, NATIVE_WINDOW_TRIES);
         if crate::platform::is_on_a_monitor(frame.x, frame.y) {
             window.set_position(slint::PhysicalPosition::new(frame.x, frame.y));
         }
