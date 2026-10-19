@@ -1,7 +1,7 @@
-//! The driver thread: it owns the stream, every speaker's session and the
-//! discovery directory, feeds them the time, the host's commands and what
-//! the I/O threads read, and carries out what they ask (P3, P6, P129,
-//! P141, P142).
+//! The driver thread: it owns the stream, every speaker's session, the
+//! pairings in progress and the discovery directory, feeds them the time,
+//! the host's commands and what the I/O threads read, and carries out what
+//! they ask (P3, P6, P47, P129, P141, P142).
 //!
 //! One loop does it all. Each turn runs the timers that are due (the
 //! stream's cuts and sends, the sessions' timeouts, retries, discovery),
@@ -24,11 +24,12 @@ use crate::discovery::{BrowseEvent, Browser, Device, DeviceKey, Directory, Direc
 use crate::error::{ErrorKind, SessionError};
 use crate::ids::{Entropy, OsEntropy, SessionIds};
 use crate::metadata::Metadata;
+use crate::pairing::{self, LegacyVerifier, Pairing, PairingEvent, PairingState};
 use crate::reconnect::Backoff;
 use crate::sdp::Codec;
 use crate::session::{Output, Session, SessionConfig, SessionEvent, State, TEARDOWN_TIMEOUT};
 use crate::stream::{self, SpeakerConfig, SpeakerCounters, Stream, StreamEvent, Transmit};
-use crate::transport::{self, IoEvent, SessionIo, SessionKey};
+use crate::transport::{self, IoEvent, RtspIo, SessionIo, SessionKey};
 use crate::volume::Volume;
 
 use super::{
@@ -74,6 +75,9 @@ pub(crate) enum Command {
     StartDiscovery(Box<dyn Browser + Send>),
     StopDiscovery,
     ArrivalTime(i64, mpsc::SyncSender<Instant>),
+    StartPairing(Box<Device>),
+    SubmitPin(DeviceKey, String),
+    CancelPairing(DeviceKey),
     Shutdown,
 }
 
@@ -107,6 +111,16 @@ enum Phase {
     Idle,
 }
 
+/// A pairing in progress, on a connection of its own (P47).
+struct PairingRun {
+    key: SessionKey,
+    pairing: Pairing,
+    /// The connect attempt in progress, so a late result of an earlier one
+    /// is dropped.
+    attempt: u32,
+    io: Option<RtspIo>,
+}
+
 /// A speaker the host added.
 struct Speaker {
     device: Device,
@@ -127,6 +141,8 @@ pub(crate) struct Driver {
     latency_frames: Arc<AtomicU32>,
     speakers: BTreeMap<DeviceKey, Speaker>,
     sessions: HashMap<SessionKey, DeviceKey>,
+    pairings: BTreeMap<DeviceKey, PairingRun>,
+    pairing_sessions: HashMap<SessionKey, DeviceKey>,
     stream_ids: HashMap<stream::SpeakerId, DeviceKey>,
     next_session: u64,
     directory: Directory,
@@ -154,6 +170,8 @@ impl Driver {
             latency_frames,
             speakers: BTreeMap::new(),
             sessions: HashMap::new(),
+            pairings: BTreeMap::new(),
+            pairing_sessions: HashMap::new(),
             stream_ids: HashMap::new(),
             next_session: 0,
             directory: Directory::new(),
@@ -272,6 +290,11 @@ impl Driver {
                 Phase::Failed | Phase::Idle => {}
             }
         }
+        for run in self.pairings.values() {
+            if let Some(at) = run.pairing.poll_timeout() {
+                next = next.min(at);
+            }
+        }
         if self.browser.is_some() {
             next = next.min(now + DISCOVERY_POLL);
         }
@@ -313,6 +336,11 @@ impl Driver {
         for key in due {
             self.start_session(&key, now);
         }
+        for run in self.pairings.values_mut() {
+            if run.pairing.poll_timeout().is_some_and(|at| at <= now) {
+                run.pairing.handle_timeout(now);
+            }
+        }
         self.poll_discovery();
         let (done, running): (Vec<_>, Vec<_>) = self
             .retired
@@ -338,6 +366,24 @@ impl Driver {
                 while let Some(output) = self.next_output(&key) {
                     progressed = true;
                     self.apply_output(&key, output, now);
+                }
+            }
+            let pairings: Vec<DeviceKey> = self.pairings.keys().cloned().collect();
+            for key in pairings {
+                while let Some(output) = self
+                    .pairings
+                    .get_mut(&key)
+                    .and_then(|run| run.pairing.poll_output())
+                {
+                    progressed = true;
+                    self.apply_pairing_output(&key, output, now);
+                }
+                if self
+                    .pairings
+                    .get(&key)
+                    .is_some_and(|run| run.pairing.state() == PairingState::Closed)
+                {
+                    self.end_pairing(&key);
                 }
             }
             while let Some(transmit) = self.stream.poll_transmit() {
@@ -393,6 +439,122 @@ impl Driver {
         if let Some(id) = stopped {
             self.stream.remove_speaker(id);
             self.stream_ids.remove(&id);
+        }
+    }
+
+    fn apply_pairing_output(&mut self, key: &DeviceKey, output: pairing::Output, now: Instant) {
+        let notify = self.notify();
+        let Some(run) = self.pairings.get_mut(key) else {
+            return;
+        };
+        match output {
+            pairing::Output::Connect(address) => {
+                run.attempt += 1;
+                if transport::connect(run.key, run.attempt, address, notify).is_err() {
+                    run.pairing.handle_connect_failed(now);
+                }
+            }
+            pairing::Output::Send(bytes) => {
+                if let Some(io) = &run.io {
+                    io.write(bytes);
+                }
+            }
+            pairing::Output::Close => {
+                if let Some(io) = run.io.take() {
+                    self.retired.extend(io.close());
+                }
+            }
+            pairing::Output::Event(event) => self.emit(SenderEvent::Pairing {
+                key: key.clone(),
+                event,
+            }),
+        }
+    }
+
+    /// Forgets a pairing, closing its connection if it is still open.
+    fn end_pairing(&mut self, key: &DeviceKey) {
+        if let Some(mut run) = self.pairings.remove(key) {
+            self.pairing_sessions.remove(&run.key);
+            if let Some(io) = run.io.take() {
+                self.retired.extend(io.close());
+            }
+        }
+    }
+
+    /// Starts a pairing with a device on a connection of its own (P47); one
+    /// already running for it is dropped.
+    fn start_pairing(&mut self, device: Device, now: Instant) {
+        if self.stopping.is_some() {
+            return;
+        }
+        let key = device.key.clone();
+        self.end_pairing(&key);
+        let mut entropy = OsEntropy;
+        let mut client = [0u8; 8];
+        let ids = SessionIds::generate(&mut entropy);
+        let (Ok(ids), Ok(())) = (ids, entropy.fill(&mut client)) else {
+            let mut error = SessionError::new(ErrorKind::PairingFailed);
+            error.detail = Some("the random number source is unavailable");
+            self.emit(SenderEvent::Pairing {
+                key,
+                event: PairingEvent::Failed {
+                    error,
+                    wrong_pin: false,
+                },
+            });
+            return;
+        };
+        let session_key = SessionKey(self.next_session);
+        self.next_session += 1;
+        let pairing = Pairing::new(
+            device.connect_socket_addrs(),
+            ids,
+            u64::from_be_bytes(client),
+            now,
+        );
+        self.pairing_sessions.insert(session_key, key.clone());
+        self.pairings.insert(
+            key,
+            PairingRun {
+                key: session_key,
+                pairing,
+                attempt: 0,
+                io: None,
+            },
+        );
+    }
+
+    /// What a pairing's I/O threads report.
+    fn pairing_io_event(&mut self, key: &DeviceKey, event: IoEvent, now: Instant) {
+        let notify = self.notify();
+        let Some(run) = self.pairings.get_mut(key) else {
+            return;
+        };
+        match event {
+            IoEvent::Connected {
+                session,
+                attempt,
+                stream,
+            } => {
+                if attempt != run.attempt || run.pairing.state() != PairingState::Connecting {
+                    return;
+                }
+                match RtspIo::open(session, stream, notify) {
+                    Ok(io) => {
+                        run.io = Some(io);
+                        run.pairing.handle_connected(now);
+                    }
+                    Err(_) => run.pairing.handle_connect_failed(now),
+                }
+            }
+            IoEvent::ConnectFailed { attempt, .. } => {
+                if attempt == run.attempt {
+                    run.pairing.handle_connect_failed(now);
+                }
+            }
+            IoEvent::Rtsp { bytes, .. } => run.pairing.handle_input(&bytes, now),
+            IoEvent::RtspClosed { .. } => run.pairing.handle_connection_closed(now),
+            IoEvent::Control { .. } | IoEvent::TimingRequest { .. } => {}
         }
     }
 
@@ -628,6 +790,9 @@ impl Driver {
             | IoEvent::Control { session, .. }
             | IoEvent::TimingRequest { session, .. } => *session,
         };
+        if let Some(key) = self.pairing_sessions.get(&session).cloned() {
+            return self.pairing_io_event(&key, event, now);
+        }
         let Some(key) = self.sessions.get(&session).cloned() else {
             return;
         };
@@ -687,10 +852,10 @@ impl Driver {
                     return;
                 };
                 speaker.options.delay = delay;
-                if let Phase::Active(active) = &speaker.phase {
-                    if let Some(id) = active.stream_id {
-                        self.stream.set_delay(id, delay, now);
-                    }
+                if let Phase::Active(active) = &speaker.phase
+                    && let Some(id) = active.stream_id
+                {
+                    self.stream.set_delay(id, delay, now);
                 }
             }
             Command::SetVolume(key, volume) => self.set_volume(&key, volume, now),
@@ -715,6 +880,18 @@ impl Driver {
             Command::StopDiscovery => self.stop_discovery(),
             Command::ArrivalTime(n, reply) => {
                 let _ = reply.try_send(self.stream.arrival_time(n));
+            }
+            Command::StartPairing(device) => self.start_pairing(*device, now),
+            Command::SubmitPin(key, pin) => {
+                if let Some(run) = self.pairings.get_mut(&key) {
+                    // A PIN while none is awaited is ignored (Sender::submit_pin).
+                    let _ = run.pairing.submit_pin(&pin, &mut OsEntropy, now);
+                }
+            }
+            Command::CancelPairing(key) => {
+                if let Some(run) = self.pairings.get_mut(&key) {
+                    run.pairing.cancel();
+                }
             }
             Command::Shutdown => self.shutdown(now),
         }
@@ -786,10 +963,10 @@ impl Driver {
             return;
         };
         active.session.set_volume(volume, now);
-        if active.software_volume || active.software_mute {
-            if let Some(id) = active.stream_id {
-                self.stream.set_software_volume(id, volume);
-            }
+        if (active.software_volume || active.software_mute)
+            && let Some(id) = active.stream_id
+        {
+            self.stream.set_software_volume(id, volume);
         }
     }
 
@@ -805,7 +982,7 @@ impl Driver {
             }
             let pcm = speaker.options.pcm && !self.directory.pcm_refused(key);
             let device = &speaker.device;
-            super::plan(device)
+            super::plan_with(device, speaker.options.credentials.is_some())
                 .and_then(|()| device.choose_codec(pcm).map_err(ErrorKind::Unsupported))
         };
         let codec = match planned {
@@ -817,6 +994,23 @@ impl Driver {
             let mut error = SessionError::new(ErrorKind::Unreachable);
             error.detail = Some("the random number source is unavailable");
             return self.refuse(key, error, now);
+        };
+        // The pair-verify of a paired Apple TV, with a fresh X25519 key for
+        // this connection (P55).
+        let verifier = match self
+            .speakers
+            .get(key)
+            .and_then(|speaker| speaker.options.credentials.as_ref())
+        {
+            Some(credentials) => match LegacyVerifier::new(credentials, &mut entropy) {
+                Ok(verifier) => Some(verifier),
+                Err(_) => {
+                    let mut error = SessionError::new(ErrorKind::Unreachable);
+                    error.detail = Some("the random number source is unavailable");
+                    return self.refuse(key, error, now);
+                }
+            },
+            None => None,
         };
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
@@ -830,19 +1024,16 @@ impl Driver {
         let mut config = SessionConfig::new(device.connect_socket_addrs(), options.volume);
         config.codec = codec;
         config.alac_fallback = device.alac_fallback();
-        config.apple_tv_without_credentials = device.is_apple_tv();
+        config.apple_tv_without_credentials = device.is_apple_tv() && options.credentials.is_none();
+        config.verifier = verifier.map(|verifier| Box::new(verifier) as _);
         config.password = options.password.clone();
         config.software_volume = software_volume;
         config.software_mute = software_mute;
         config.metadata = device.metadata_support();
         if device.needs_auth_setup() {
-            // Until pairing brings X25519, a fresh random value stands in
-            // for the throwaway public key; the answer is discarded either
-            // way (P60).
-            let mut key_bytes = [0u8; 32];
-            if entropy.fill(&mut key_bytes).is_ok() {
-                config.auth_setup_key = Some(key_bytes);
-            }
+            // A fresh X25519 public key whose secret is thrown away; the
+            // answer is discarded either way (P60).
+            config.auth_setup_key = pairing::auth_setup_key(&mut entropy).ok();
         }
         let session_key = SessionKey(self.next_session);
         self.next_session += 1;
@@ -991,6 +1182,9 @@ impl Driver {
         }
         self.stopping = Some(now + TEARDOWN_TIMEOUT - SHUTDOWN_RESERVE);
         self.browser = None;
+        for run in self.pairings.values_mut() {
+            run.pairing.cancel();
+        }
         let keys: Vec<DeviceKey> = self.speakers.keys().cloned().collect();
         for key in keys {
             let Some(speaker) = self.speakers.get_mut(&key) else {
@@ -1008,6 +1202,10 @@ impl Driver {
 
     /// Closes whatever is still open when the loop ends.
     fn close_all(&mut self) {
+        let pairings: Vec<DeviceKey> = self.pairings.keys().cloned().collect();
+        for key in pairings {
+            self.end_pairing(&key);
+        }
         let keys: Vec<DeviceKey> = self.speakers.keys().cloned().collect();
         for key in keys {
             if self

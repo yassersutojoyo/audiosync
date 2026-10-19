@@ -271,6 +271,9 @@ fn show_flyout(app: &App, icon: Bounds) {
         use slint::winit_030::winit::platform::windows::WindowExtWindows;
         window.set_skip_taskbar(true);
     });
+    // With the system's rounded frame, the flyout leaves out its own edge.
+    let rounded = app.apply_frame(flyout, "tray flyout", crate::backdrop::Frame::Flyout);
+    app.flyout.set_rounded(rounded);
     let scale = f64::from(flyout.scale_factor());
     let size = flyout.size();
     let work_area = platform::work_area_at(icon.x, icon.y).unwrap_or(Bounds {

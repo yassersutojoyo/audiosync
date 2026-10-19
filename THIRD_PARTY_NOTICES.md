@@ -167,7 +167,20 @@ OR MIT) to find receivers on the network, with the crates it builds on
 `windows-sys`, `windows-link`), `md-5` (MIT OR Apache-2.0) with `digest`,
 `block-buffer`, `crypto-common`, `hybrid-array` and `typenum` for password
 digests, and `getrandom` with `cfg-if` for random session identifiers.
-`airplay/NOTES.md` lists each with its version and license.
+
+For Apple TV pairing the sender also brings in RustCrypto's `sha1`, `sha2`,
+`aes`, `aes-gcm`, `ctr` and `crypto-bigint` with the crates they build on
+(`aead`, `cipher`, `ghash`, `polyval`, `universal-hash`, `inout`,
+`cpufeatures`, `cpubits`, `cmov`, `ctutils`, `rand_core`), all MIT OR
+Apache-2.0; `ed25519-dalek`, `x25519-dalek` and `curve25519-dalek`
+(BSD-3-Clause) with `ed25519` and `signature` (Apache-2.0 OR MIT) and
+`subtle` (BSD-3-Clause); `zeroize` (Apache-2.0 OR MIT); and `plist` (MIT) for
+the pairing's property lists, with `quick-xml` (MIT) and `time`,
+`time-core`, `deranged`, `powerfmt` and `num-conv` (MIT OR Apache-2.0), next
+to `base64`, `indexmap` and `memchr`, which the app already contained.
+`airplay/NOTES.md` lists each with its license; the versions a Windows build
+compiles are the ones in `windows/Cargo.lock`, which that build's
+`THIRD-PARTY-NOTICES.txt` names.
 
 The Windows app's other Rust dependencies are under permissive licenses. CI
 checks them with `cargo deny check licenses` against the list in
