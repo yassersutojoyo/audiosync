@@ -1,15 +1,17 @@
 import Foundation
 
-/// Which implementation runs the audio engine's DSP and timing: the Swift
-/// modules (the default) or the Rust core in `core/` (through CAudioSyncCore).
-/// Either way Swift keeps capture (the process tap or input device) and the
-/// Core Audio output units. The choice is read once per session start, so a
-/// change applies the next time streaming starts.
+/// Which implementation runs the audio engine's DSP and timing: the Rust core
+/// in `core/` (through CAudioSyncCore, the default) or the Swift modules, kept
+/// as a fallback. Either way Swift keeps capture (the process tap or input
+/// device) and the Core Audio output units. The choice is read once per session
+/// start, so a change applies the next time streaming starts.
 enum EngineImpl: String, CaseIterable {
     case swift, rust
 
-    /// UserDefaults key of the setting, "swift" or "rust" (the hidden debug
-    /// option in the AudioSync menu writes it).
+    /// UserDefaults key of the setting, "swift" or "rust". Only an explicit
+    /// choice writes it (the hidden debug option in the AudioSync menu, or
+    /// `defaults write`); the app never registers or stores a default, so an
+    /// absent key means the user never chose.
     static let defaultsKey = "engineImpl"
     /// Environment override, "swift" or "rust", for tests and harnesses.
     static let environmentKey = "AUDIOSYNC_ENGINE"
@@ -19,13 +21,17 @@ enum EngineImpl: String, CaseIterable {
         case environment, setting, `default`
     }
 
-    /// The environment override wins over the stored setting. A value that
-    /// names neither implementation counts as absent, so an unknown or missing
-    /// setting means `swift`.
+    /// The implementation for someone who never chose one.
+    static let defaultImpl: EngineImpl = .rust
+
+    /// The environment override wins over the stored setting, and a stored
+    /// "swift" (an explicit choice) is kept. A value that names neither
+    /// implementation counts as absent, so an unknown or missing setting means
+    /// `defaultImpl`.
     static func resolve(environment: String?, stored: String?) -> (impl: EngineImpl, origin: Origin) {
         if let value = environment, let impl = EngineImpl(rawValue: value) { return (impl, .environment) }
         if let value = stored, let impl = EngineImpl(rawValue: value) { return (impl, .setting) }
-        return (.swift, .default)
+        return (defaultImpl, .default)
     }
 
     /// The choice for a session starting now (control thread).
