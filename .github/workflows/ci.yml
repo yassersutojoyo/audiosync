@@ -35,7 +35,7 @@ jobs:
           scripts/shellcheck.sh --install "$RUNNER_TEMP/shellcheck"
           echo "$RUNNER_TEMP/shellcheck" >> "$GITHUB_PATH"
 
-      - name: Tests (shellcheck, ring buffer, logic, FIFO, core parity)
+      - name: Tests (shellcheck, logic, FIFO and the core's app-side parts)
         run: Tests/run-tests.sh
 
       - name: make-dmg.sh packages a signed bundle into an image that mounts with the app, an Applications link and the README
@@ -160,8 +160,9 @@ jobs:
       - name: Build the app (./build.sh --no-install, with the local identity make-local-cert.sh creates)
         run: |
           security list-keychains -d user > "$RUNNER_TEMP/keychains-before"
-          # The app's engine switch in the environment must not be taken for
-          # the engine binary: the default engine is still bundled (--engine below).
+          # A value of the app's retired engine switch in the environment must not
+          # be taken for the engine binary: the default engine is still bundled
+          # (--engine below).
           AUDIOSYNC_ENGINE=rust ./build.sh --no-install
           security list-keychains -d user > "$RUNNER_TEMP/keychains-after"
           # The signing keychain was in the search list only while signing.

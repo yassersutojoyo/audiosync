@@ -4,11 +4,13 @@ A behavioral specification of AudioSync's audio engine: capture, equalizer, the 
 
 It describes AudioSync 0.4.1 plus the unreleased changes on `main` as of 2026-10-18. It was written from observable behavior only: the public docs (`README.md`, `docs/DEVELOPMENT.md`, `docs/BENCHMARKS.md` for the diagnostic counters, `CHANGELOG.md`, `SECURITY.md`, `THIRD_PARTY_NOTICES.md`), the names, values and assertions of the test suites (`Tests/logictest.swift`, `Tests/fifotest.swift`, `Tests/enginetest.swift`, and the printed checks of the ring buffer suite), black-box runs of the delay reader and the FIFO feed through the same calls those suites make (only their output was read), AudioSync's own policy sources outside the core audio modules (`Volume.swift`, `Equalizer.swift`, `AudioSource.swift`, `CaptureCheck.swift`, `SpeakerState.swift`, `SpeakerLayout.swift`, `AirPlayReconcile.swift`, `AirPlayPairing.swift`, `EngineLifecycle.swift`, `AirPlayEngine.swift`, `AirPlayEngineConfig.swift`, `OwnToneClient.swift`, `OwnTonePlayer.swift`, `PipeMetadata.swift`, `Notices.swift`, `main.swift`, the `AppDelegate*.swift` files, `EqualizerWindow.swift`), and Apple's public Core Audio documentation. The implementation of the capture, ring buffer, renderer, sync engine, FIFO feed, device and diagnostics modules was not consulted.
 
+Since 2026-10-19 the Mac app has one audio engine, the Rust core in `core/`: the Swift engine it replaced (`RingBuffer.swift`, `FifoFeed.swift`, the equalizer's filters in `Equalizer.swift`, the Swift paths of `OutputRenderer.swift` and `SyncEngine.swift`, the sync rule in `SpeakerState.swift`) and its suites (`Tests/ringtest.swift`, `Tests/paritytest.swift`, and the logic suite's checks of those files) are gone. Citations of them below record the evidence each clause was written from, at the 2026-10-18 snapshot; every clause they back still stands and is now covered by the core, whose tests name the clauses they cover (`core/tests/spec_coverage.rs`). Those clauses are marked *Now covered by the core.*
+
 ## Conventions
 
 - **S1** The words MUST, MUST NOT, SHOULD and MAY are normative. Every clause carries a tag; a few carry both, with the Observed part citing its evidence. **Observed** clauses state behavior shown by a test, a doc or an allowed source (cited as `file:line`, a test check name in quotes, or a doc section). **Required** clauses are design requirements where the allowed sources do not show the behavior; an implementation MUST meet them, and where a Required clause gives a concrete algorithm or number, it is the reference choice that satisfies every Observed clause.
 - **S2** *Required.* A *frame* is one sample per channel at a given rate. The internal pipeline format is interleaved stereo, 32-bit IEEE float, channel order L, R, nominal range [−1.0, +1.0]. Frame indices are signed 64-bit integers counted from 0 at the start of a session. *Observed:* stereo interleaved float buffers of `frames × 2` (`logictest.swift:164-166`, `fifotest.swift:21-22`, `enginetest.swift:22-23`).
-- **S3** *Observed* (`logictest.swift:234`). A delay of `ms` milliseconds at rate `R` is `floor(ms × R / 1000)` frames (2000 ms at 48 kHz = 96 000 frames; 1820 ms = 87 360 frames).
+- **S3** *Observed* (`logictest.swift:234`). A delay of `ms` milliseconds at rate `R` is `floor(ms × R / 1000)` frames (2000 ms at 48 kHz = 96 000 frames; 1820 ms = 87 360 frames). *Now covered by the core.*
 - **S4** *Required.* Rates: the *capture rate* Rc is the rate of the captured stream for the whole session; the *device rate* is an output device's nominal rate; the *pipe rate* is fixed at 48 000 Hz (S83). Delays, ring indices and lag are always in Rc frames.
 - **S5** *Required.* A *session* is the span from a successful engine `start` to the matching `stop`. Every session has its own ring history, reader positions and frame counter.
 
@@ -19,7 +21,7 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
 ## 1. Data flow
 
 - **S6** *Observed* (`README.md` "How it works, briefly"; `docs/DEVELOPMENT.md` "Where things are"). Components: one capture stage, one 10-band equalizer, one shared delay ring buffer, one delay reader plus one output renderer per enabled local output, and one FIFO feed that writes 48 kHz PCM16 into a named pipe read by the bundled AirPlay engine (OwnTone), which speaks AirPlay and AirPlay 2 to the speakers.
-- **S7** *Observed* (`Equalizer.swift:4-5`, `README.md`). Each captured block is equalized once, in place; the same equalized samples are (a) written to the ring buffer and (b) fed to the FIFO feed. Every output, local and AirPlay, therefore hears identical audio. *Required:* (a) and (b) see bit-identical input; their order within one capture callback is free.
+- **S7** *Observed* (`Equalizer.swift:4-5`, `README.md`). Each captured block is equalized once, in place; the same equalized samples are (a) written to the ring buffer and (b) fed to the FIFO feed. Every output, local and AirPlay, therefore hears identical audio. *Required:* (a) and (b) see bit-identical input; their order within one capture callback is free. *Now covered by the core.*
 - **S8** *Observed* (`README.md` intro and "Using it"; `SpeakerState.swift:45-48`). The AirPlay path gets no delay from AudioSync. AirPlay speakers play about two seconds late because of the AirPlay engine's buffer; local outputs are delayed to line up with them.
 - **S9** *Observed* (`README.md`; ring suite "F readers independent (different positions)"). Each local output reads the shared buffer through its own reader, at its own delay, with its own drift correction.
 - **S10** *Observed* (`AudioSource.swift:16-18`, `:233-252`). The engine never captures its own output: the system source excludes AudioSync's own process, otherwise the delayed local copies would be captured again and echo.
@@ -46,13 +48,13 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
 - **S24** *Observed* (`Equalizer.swift:15-19`; `AppSettings.swift:40`). Settings: `enabled` (default false), `preamp` in dB (default 0), `gains[10]` in dB (default all 0). The host persists them as JSON.
 - **S25** *Observed* (`Equalizer.swift:106-122`). Each band is an RBJ-cookbook peaking biquad with Q = 1.41 (about one octave). With fs = Rc, G = band gain in dB and f = min(center, 0.45 × fs):
   `A = 10^(G/40)`, `w0 = 2π f / fs`, `alpha = sin(w0) / (2 × 1.41)`, `a0 = 1 + alpha/A`;
-  `b0 = (1 + alpha·A)/a0`, `b1 = −2·cos(w0)/a0`, `b2 = (1 − alpha·A)/a0`, `a1 = −2·cos(w0)/a0`, `a2 = (1 − alpha/A)/a0`.
-- **S26** *Observed* (`Equalizer.swift:149-169`). Processing, per channel (L and R keep separate filter state) and per sample, in float64: `x = in × 10^(preamp/20)`; then the 10 bands in series in ascending frequency, each in transposed direct form II (`y = b0·x + z1; z1 = b1·x − a1·y + z2; z2 = b2·x − a2·y`); the output sample is `clamp(y, −1, +1)` stored as float32.
-- **S27** *Observed* (`Equalizer.swift:140-143`; "eq: disabled is bypassed"). Disabled, the buffer is left untouched: no preamp, no filtering, no clamping.
-- **S28** *Observed* (`Equalizer.swift:144-148`). On the first enabled block after being disabled, all filter state is zeroed first (stale state would click).
-- **S29** *Observed* (`Equalizer.swift:161-168`; "eq: recovers from a NaN sample (silence stays silent)"). If a channel's cascade output is NaN or ±infinity, that channel's state in all ten bands is zeroed and the output sample is 0. Silence that follows a NaN stays exactly 0.
-- **S30** *Observed* (`Equalizer.swift:65`, `:88-95`). The design rate defaults to 48 000 Hz. On a rate change (only while capture is stopped) the coefficients are recomputed for the new rate and all state is zeroed; setting the same rate again is a no-op.
-- **S31** *Observed* (`Equalizer.swift:7-9`, `:49-58`, `:97-104`, `:128-137`). A settings change takes effect at a block boundary, atomically for all ten bands, the preamp and the enabled flag together (two coefficient sets, the control thread fills the idle one and flips an atomic index; the audio thread publishes which set it is reading so the control side never rewrites a set in use). Filter state is kept across coefficient changes. The audio thread never waits; the control thread MAY yield briefly until the audio thread leaves the set it needs.
+  `b0 = (1 + alpha·A)/a0`, `b1 = −2·cos(w0)/a0`, `b2 = (1 − alpha·A)/a0`, `a1 = −2·cos(w0)/a0`, `a2 = (1 − alpha/A)/a0`. *Now covered by the core.*
+- **S26** *Observed* (`Equalizer.swift:149-169`). Processing, per channel (L and R keep separate filter state) and per sample, in float64: `x = in × 10^(preamp/20)`; then the 10 bands in series in ascending frequency, each in transposed direct form II (`y = b0·x + z1; z1 = b1·x − a1·y + z2; z2 = b2·x − a2·y`); the output sample is `clamp(y, −1, +1)` stored as float32. *Now covered by the core.*
+- **S27** *Observed* (`Equalizer.swift:140-143`; "eq: disabled is bypassed"). Disabled, the buffer is left untouched: no preamp, no filtering, no clamping. *Now covered by the core.*
+- **S28** *Observed* (`Equalizer.swift:144-148`). On the first enabled block after being disabled, all filter state is zeroed first (stale state would click). *Now covered by the core.*
+- **S29** *Observed* (`Equalizer.swift:161-168`; "eq: recovers from a NaN sample (silence stays silent)"). If a channel's cascade output is NaN or ±infinity, that channel's state in all ten bands is zeroed and the output sample is 0. Silence that follows a NaN stays exactly 0. *Now covered by the core.*
+- **S30** *Observed* (`Equalizer.swift:65`, `:88-95`). The design rate defaults to 48 000 Hz. On a rate change (only while capture is stopped) the coefficients are recomputed for the new rate and all state is zeroed; setting the same rate again is a no-op. *Now covered by the core.*
+- **S31** *Observed* (`Equalizer.swift:7-9`, `:49-58`, `:97-104`, `:128-137`). A settings change takes effect at a block boundary, atomically for all ten bands, the preamp and the enabled flag together (two coefficient sets, the control thread fills the idle one and flips an atomic index; the audio thread publishes which set it is reading so the control side never rewrites a set in use). Filter state is kept across coefficient changes. The audio thread never waits; the control thread MAY yield briefly until the audio thread leaves the set it needs. *Now covered by the core.*
 - **S32** *Observed* (tests "eq: …", sine at amplitude 0.25, RMS over the settled second half of 1 s, 512-frame blocks). Enabled and flat: 0 ± 0.05 dB at 1 kHz. Band 5 (1 kHz) at +6 dB: +6 ± 0.2 dB at 1 kHz at 48 kHz (measured 6.00) and at 44.1 kHz; 0 ± 0.5 dB at 8 kHz (measured 0.04). Bass Boost: more than +5 dB at 40 Hz (measured 6.26). Preamp −6 dB with flat bands: −6 ± 0.1 dB. Disabled: 0 ± 0.01 dB.
 - **S33** *Observed* (`Equalizer.swift:22-45`, `:187-189`; "eq: every preset has 10 bands", "eq: one preset per id, in menu order"). Presets, in menu order, as band gains in dB from 32 Hz to 16 kHz. A preset sets the gains only; the settings "match" a preset when all ten gains are exactly equal.
 
@@ -71,21 +73,21 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
   | loudness | 6 | 4 | 0 | 0 | −2 | 0 | −1 | −2 | 4 | 2 |
   | smallSpeakers | −4 | −2 | 2 | 3 | 2 | 1 | 1 | 2 | 2 | 1 |
 
-- **S34** *Observed* (`Equalizer.swift:4-5`; `docs/DEVELOPMENT.md`). The equalizer runs once, on the capture thread, before the ring buffer and the FIFO feed (S7).
+- **S34** *Observed* (`Equalizer.swift:4-5`; `docs/DEVELOPMENT.md`). The equalizer runs once, on the capture thread, before the ring buffer and the FIFO feed (S7). *Now covered by the core.*
 
 ## 4. Delay ring buffer
 
 - **S35** *Observed* (`docs/DEVELOPMENT.md`; `enginetest.swift:16`; ring suite "F …"). One ring per engine, holding interleaved stereo float32 frames, with a capacity C fixed at creation. Exactly one writer (the capture thread) and any number of readers. *Required:* the writer never waits for or checks on readers; once full, each write overwrites the oldest frames.
-- **S36** *Observed* (`logictest.swift:219`, `enginetest.swift:16`). The suites create rings of 24 s of audio (48 000 × 24 = 1 152 000 frames; 192 000 × 24 = 4 608 000 frames). *Required:* C ≥ 24 s × Rc, which covers the 20 s maximum delay (S77) plus headroom for blocks and drift correction. Since Rc is known only when capture starts, the ring is either allocated per session once Rc is known (C = 24 s × Rc), or sized for the highest supported rate; a 4 608 000-frame ring (about 37 MB) covers Rc up to 192 kHz, and higher capture rates are then rejected at session start.
-- **S37** *Observed* (`logictest.swift:243`). `framesWritten` is the total number of frames written since the last reset, a monotonically increasing 64-bit count (W below). *Required:* it is published only after the frames it counts are in the buffer (release store), and readers load it with acquire ordering. After publishing W and before storing any sample of the next block, the writer issues a release fence, so a reader that sees a sample of a later block also sees a W at least as large as that block's start (S40).
+- **S36** *Observed* (`logictest.swift:219`, `enginetest.swift:16`). The suites create rings of 24 s of audio (48 000 × 24 = 1 152 000 frames; 192 000 × 24 = 4 608 000 frames). *Required:* C ≥ 24 s × Rc, which covers the 20 s maximum delay (S77) plus headroom for blocks and drift correction. Since Rc is known only when capture starts, the ring is either allocated per session once Rc is known (C = 24 s × Rc), or sized for the highest supported rate; a 4 608 000-frame ring (about 37 MB) covers Rc up to 192 kHz, and higher capture rates are then rejected at session start. *Now covered by the core.*
+- **S37** *Observed* (`logictest.swift:243`). `framesWritten` is the total number of frames written since the last reset, a monotonically increasing 64-bit count (W below). *Required:* it is published only after the frames it counts are in the buffer (release store), and readers load it with acquire ordering. After publishing W and before storing any sample of the next block, the writer issues a release fence, so a reader that sees a sample of a later block also sees a W at least as large as that block's start (S40). *Now covered by the core.*
 - **S38** *Required.* `write(interleaved, frames)` accepts any count; when `frames > C` only the last C frames are kept, and W still grows by `frames`.
-- **S39** *Observed* (`logictest.swift:241-243`, "ring: reset clears history"; `AppDelegate+Engine.swift:120-121`). `reset()` sets W to 0 and makes all history unreadable. Every session starts with a reset, so a new session never plays the previous session's audio. *Required:* reset is called only while no writer is running and no reader exists.
+- **S39** *Observed* (`logictest.swift:241-243`, "ring: reset clears history"; `AppDelegate+Engine.swift:120-121`). `reset()` sets W to 0 and makes all history unreadable. Every session starts with a reset, so a new session never plays the previous session's audio. *Required:* reset is called only while no writer is running and no reader exists. *Now covered by the core.*
 - **S40** *Required.* Frame k is readable iff `max(0, W − C + M) ≤ k < W`, where M is a safety margin at least the largest block the writer can write in one call (M ≥ 8192 frames). The writer may be storing up to M frames beyond W at any moment, into the slots of frames `[W − C, W − C + M)`. After copying, a reader issues an acquire fence, re-loads W as W2, and keeps the copy only if its lowest copied index is at least `W2 − C + M`; otherwise the copied frames MUST be replaced by silence and the read handled as an overrun (S55). A reader paused mid-copy for a long time therefore never plays audio from a later block.
 
 ## 5. Delay reader
 
-- **S41** *Observed* (`logictest.swift:220-237`). Reader interface: `read(into: dst, frames: N, delayFrames: D, toleranceFrames: T)` fills `dst` with exactly N stereo frames; `requestResync()` asks the reader to re-anchor to the requested delay, which the next `read` with unread frames does (S46). A reader is bound to one ring.
-- **S42** *Observed* (`logictest.swift:238`, lag of the block's last frame is `max(D, 512) − 512`; ring suite "B delay=0 not silent (floored to one block)", "B delay=0 near-live, not silent — measured=0"). The effective delay is `De = max(D, N)`: in steady state the first frame of each block is exactly De frames behind W as loaded at the start of the read. A delay shorter than one block is floored to one block. *Required:* De is also capped at `C − M − N`.
+- **S41** *Observed* (`logictest.swift:220-237`). Reader interface: `read(into: dst, frames: N, delayFrames: D, toleranceFrames: T)` fills `dst` with exactly N stereo frames; `requestResync()` asks the reader to re-anchor to the requested delay, which the next `read` with unread frames does (S46). A reader is bound to one ring. *Now covered by the core.*
+- **S42** *Observed* (`logictest.swift:238`, lag of the block's last frame is `max(D, 512) − 512`; ring suite "B delay=0 not silent (floored to one block)", "B delay=0 near-live, not silent — measured=0"). The effective delay is `De = max(D, N)`: in steady state the first frame of each block is exactly De frames behind W as loaded at the start of the read. A delay shorter than one block is floored to one block. *Required:* De is also capped at `C − M − N`. *Now covered by the core.*
 - **S43** *Required.* Reader state: `P`, the index of the next frame to read (initially 0); `F`, one past the highest frame index ever emitted (initially 0); `anchored` (initially false); an atomic resync flag; atomic `D` written by the control thread.
 - **S44** *Required* (normative algorithm; it satisfies every Observed clause in this section). One `read(N, D, T)`:
   1. `W = framesWritten` (acquire); `De = min(max(D, N), C − M − N)`; `oldest = max(0, W − C + M)`.
@@ -103,16 +105,16 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
   - *The reader still has unread frames* (`P < W`, for example on the first read after the writer stops whenever the old De is above N). The read applies the change at once against the frozen W, and the reads that follow are an ordinary writer stall from that anchor (S53): each moves P on by N frames (masked below F, buffered frames above it) while W stands still, a step back re-anchors at `W − De` when the error passes −T, and a reader that reaches W is dry. When the writer resumes, the reader keeps the error the stall left; it is inside the dead band, so it is never corrected (S50), and the change lands short: by j × N frames after j more stalled reads without a step back (a step back starts the count again), or by `De − N` (so `lagFrames = 0`) once the reader ran dry. The change is exact in this case only if the writer writes again before the reader's next read.
   - *L, worked through* (N = 512, T = 1680). The ring is filled with 48 000 frames, then 50 times 512 frames are written and 512 read at D = 0. The first read primes at P = 48 000 and every read ends at W, so after the 50th read W = P = F = 73 600 and `lagFrames = 0`. The writer freezes. The 5 reads at D = 0 are dry. After `requestResync`, the 5 reads at D = 1200 are dry as well, so the change waits: 10 starved renders (5120 frames) in all, no resync, no correction, `lagFrames = 0`. The writer resumes: with W = 74 112 the next read finds P < W and applies the change, P = 74 112 − 1200 = 72 912; all 512 frames are below F, so the block is silent, P = 73 424, `lagFrames = 688`, one resync. The next block (W = 74 624, e = 0) holds 176 masked frames (73 424 … 73 599), then frames 73 600 … 73 935. From then on every block is contiguous and the lag, W − 1 minus the index of the last frame read, is exactly 1200 − 512 = 688: 688 frames of silence after the resume, no frame repeated or skipped, no drift correction. With a change to 24 000 frames instead, the first read after the resume anchors at 74 112 − 24 000 = 50 112; 23 488 masked frames follow, audio returns with frame 73 600 in the 46th block, and the lag is exactly 23 488, again with one resync and no drift correction. A reader that took either change during the freeze would anchor at 73 600 − De and play its masked range toward W while frozen; with 1200 it reaches W and resumes with e = 512 − 1200 = −688, inside the dead band, so its lag stays 0 and the change is lost.
   - *A change on the first read after the writer stops*, worked through: steady at D = 4096 (W = 150 400, P = F = 146 816, `lagFrames = 3584`), the writer stops and the next read comes with `requestResync` and D = 5296. P < W, so that read anchors at once at 150 400 − 5296 = 145 104 (a masked block, `lagFrames = 4784`, one resync). Two more reads with the writer stopped move P to 146 640 (`lagFrames` 4272, then 3760). On the first read after the writer resumes (W = 150 912), e = 4272 − 5296 = −1024, inside the dead band: the reader plays 176 more masked frames and then frame 146 816 onward, and `lagFrames` stays 3760, 1024 short of 4784. Had the writer resumed before the second of those reads, the lag would be exactly 4784.
-- **S47** *Observed* (ring suite "E increase: never replays audio", "E increase: delay 24000 reached"; comment at `logictest.swift:237`, "let an increase finish its silence"). A delay increase by Δ frames inserts exactly Δ frames of silence (the masked range of S44 step 3), then playback continues contiguously from the frame after the last one emitted.
+- **S47** *Observed* (ring suite "E increase: never replays audio", "E increase: delay 24000 reached"; comment at `logictest.swift:237`, "let an increase finish its silence"). A delay increase by Δ frames inserts exactly Δ frames of silence (the masked range of S44 step 3), then playback continues contiguously from the frame after the last one emitted. *Now covered by the core.*
 - **S48** *Observed* (ring suite "E decrease: applied on the next block"). A delay decrease by Δ frames is applied on the next block by skipping Δ frames forward.
 - **S49** *Observed* (ring suite "E increase: never replays audio", "C no replay loop (stays silent once drained)", "D plays FRESH frames (not replayed old)", "G gap: no replayed audio", "H stall: never replays audio", "I faster output: never replays audio", "I slower output: never replays audio", "J up-then-down: never replays audio"). Invariant: over a reader's life, the indices of the frames it emits are strictly increasing. No delay change, drift correction, underrun, stall or overrun ever repeats audio that was already played.
-- **S50** *Observed* (`logictest.swift:227`, T = 1680 at 48 kHz; ring suite "K after a stall, drift is still held within ~35 ms"). Drift tolerance (dead band): T = 35 ms, i.e. 1680 frames at 48 kHz. *Required:* at other rates `T = round(0.035 × Rc)`. While |e| ≤ T nothing is corrected.
+- **S50** *Observed* (`logictest.swift:227`, T = 1680 at 48 kHz; ring suite "K after a stall, drift is still held within ~35 ms"). Drift tolerance (dead band): T = 35 ms, i.e. 1680 frames at 48 kHz. *Required:* at other rates `T = round(0.035 × Rc)`. While |e| ≤ T nothing is corrected. *Now covered by the core.*
 - **S51** *Observed* (ring suite "H stall: resumes after the last frame it had", "H stall: delay restored — measured=23488", "I slower output: lag stays within tolerance"). When the reader is behind by more than T (output clock slower than the capture clock, a stalled output callback, or a long freeze), it skips forward to exactly `W − De`. The first frame after the skip is later than the last frame emitted before it.
 - **S52** *Observed* (ring suite "I faster output: lag stays within tolerance", "M stall above the dead band: silence held, no underrun"); *Required* mechanism (S44 step 2). When the reader is ahead by more than T (output clock faster than the capture clock, or a writer stall, S53), it steps back to exactly `W − De`; the frames it already played are masked, so the correction is |e| frames of silence, never a repeat. A dry reader (at W, S44 step 2) makes no correction until the writer writes again (black-box runs: with De = 2048 and the writer stopped, the reader reaches W after three blocks and then outputs starved blocks without a step back).
 - **S53** *Observed* (ring suite "C underrun eventually emits silence", "C no replay loop (stays silent once drained)", "M stall above the dead band: silence held, no underrun", which prints 25 drift silences totalling 51 200 frames and no starved render, and "M stall inside the dead band counts underruns", which prints 19 starved renders). Writer stall: when the writer stops, the reader plays buffered frames only while its error stays within the dead band. Once it is more than T ahead of its target, it steps back to `W − De` (S52) although W does not move, and again each time it gets more than T ahead, so it holds silence instead of draining the buffer; with `De > T + N` it never reaches W. A reader that reaches W first (always when `De ≤ T`) underruns: it emits every frame up to W and then silence for the rest of the block (a starved render, S158); P never passes W, and every later block is silent while W does not move. No frame is repeated either way (S49).
 - **S54** *Observed* (ring suite "D resumes with audio", "D plays FRESH frames (not replayed old) — first=29696 maxOld=13311", "D delay re-established ≈ 4096 — measured=3584"). When the writer resumes after a stall, the reader gets back to its delay without repeating anything. In D, a block played after the resume starts at frame 29 696, past the last frame written before the stall (13 311), and the lag is exactly `De − N` (3584 for De = 4096). *Required* (S44): a reader more than T behind by its next read skips forward to `W − De` (S51); a reader that was holding silence (S53) plays out the rest of its masked range and then continues with the first frame it never played; a reader that ran dry plays the new frames as they arrive; in the last two cases its error stays within the dead band until a correction or resync.
 - **S55** *Required.* Overrun: if `P < oldest` (the reader fell more than the ring's history behind, e.g. after a very long stall), the frames it needed are gone; it skips forward as in S51.
-- **S56** *Observed* (`enginetest.swift:55-59`, "Lag ≈ delay − one device buffer"; `logictest.swift:223-229`). After each read the reader publishes `lagFrames = W − P` (W from the start of the read, P after it). In steady state `lagFrames = De − N`. It is an atomic 64-bit value readable from any thread.
+- **S56** *Observed* (`enginetest.swift:55-59`, "Lag ≈ delay − one device buffer"; `logictest.swift:223-229`). After each read the reader publishes `lagFrames = W − P` (W from the start of the read, P after it). In steady state `lagFrames = De − N`. It is an atomic 64-bit value readable from any thread. *Now covered by the core.*
 - **S57** *Observed* (ring suite, "G gap: delay restored to 1 s (within the dead band) — measured=45952" for a 48 000-frame delay; "I faster output … worst error=2192 frames", "I slower output … worst error=1168 frames", "K … worst error=2192 frames", all with 512-frame blocks at 48 kHz). Acceptance: the worst deviation of the measured lag from `De − N` is at most T + N (2192 = 1680 + 512) under clock drift in either direction and after a stall; a writer gap shorter than T leaves a residual error inside the dead band (45 952 vs 47 488 exact).
 - **S58** *Observed* (ring suite "F reader1 contiguous", "F reader2 contiguous", "F reader1 delay ≈ 4096", "F reader2 delay ≈ 12000", "F readers independent (different positions)"). Readers share no state except the ring: each has its own P, F, delay and corrections, and any number of them can read the same ring at different delays.
 - **S59** *Required.* N may differ from call to call (device buffer sizes change); every rule above uses the N of the current call.
@@ -190,8 +192,8 @@ S192 to S202 make a turned-down or muted output device visible. Every local outp
 ## 8. AirPlay sync rule (local delay policy)
 
 - **S77** *Superseded by S175 and S178* (local delay model, below). *Observed* (`AppSettings.swift:41-43`, `:54-55`, `:81-82`, `:106-107`; `AppDelegate.swift:129-130`; `AppDelegate+Outputs.swift:100-106`; `README.md` "Using it"). Each local output has a configured delay in ms, range 0…20 000, default 2000 (seeded from a legacy single delay when present, clamped to the range). Non-finite input is ignored; other input is clamped.
-- **S78** *Superseded by S176.* *Observed* (`SpeakerState.swift:49-52`; tests "delay: AirPlay chosen → configured delay", "delay: no AirPlay → plays at once", "delay: zero stays zero"). Effective delay = the configured delay while an AirPlay speaker is chosen, otherwise 0. The configured value is kept either way.
-- **S79** *Observed* (`SpeakerState.swift:54-58`; tests "delay: a chosen speaker not listed today doesn't count", "delay: chosen and listed counts", "delay: listed but not chosen doesn't count"). "An AirPlay speaker is chosen" means at least one AirPlay output ID is both enabled by the user and present in the AirPlay engine's latest output list (this Mac's own receiver is never in that list, S100).
+- **S78** *Superseded by S176.* *Observed* (`SpeakerState.swift:49-52`; tests "delay: AirPlay chosen → configured delay", "delay: no AirPlay → plays at once", "delay: zero stays zero"). Effective delay = the configured delay while an AirPlay speaker is chosen, otherwise 0. The configured value is kept either way. *Now covered by the core.*
+- **S79** *Observed* (`SpeakerState.swift:54-58`; tests "delay: a chosen speaker not listed today doesn't count", "delay: chosen and listed counts", "delay: listed but not chosen doesn't count"). "An AirPlay speaker is chosen" means at least one AirPlay output ID is both enabled by the user and present in the AirPlay engine's latest output list (this Mac's own receiver is never in that list, S100). *Now covered by the core.*
 - **S80** *Superseded by S177.* *Observed* (`AppDelegate+Outputs.swift:110-136`; `AppDelegate.swift:83-88`, `:136-138`). Whenever that condition flips (the enabled set or the listed set changed), every running local output gets its new effective delay live through S66: a flip to 0 skips forward (S48), a flip back inserts silence (S47).
 - **S81** *Observed* (`AppDelegate+AirPlay.swift:24-29`). A poll that finds the AirPlay engine unreachable leaves the listed set unchanged, so an engine restart doesn't flap local delays.
 
@@ -264,10 +266,10 @@ S172 to S181 replace the rule that local outputs play at once unless an AirPlay 
 
 - **S82** *Observed* (`AirPlayEngine.swift:39-40`, `:156-164`, `:232-241`; metadata pipe: `AirPlayEngine.swift:42-50`, `:125`, `:164-178`; `PipeMetadata.swift:167-171`, `:215-238`). The pipe is a POSIX FIFO named `audiosync.pipe` in the `media` folder of the engine's working directory (`~/Library/Application Support/AudioSync/AirPlay`), mode 0600, created before the engine is launched; a regular file in its place is replaced by a FIFO. Beside it, `audiosync.pipe.metadata` (the engine reads `<pipe>.metadata` while it plays the pipe) carries the track info of S168. It is made the same way before every launch, and the host holds a read end and a write end open on it (both non-blocking) until the engine stops or is launched again, so the engine never reads end-of-file from it. It is optional: one the host can't open is removed, and the PCM pipe works without it.
 - **S83** *Observed* (`AirPlayEngineConfig.swift:41-42`; tests "config: pipe at 48000 Hz", "config: pipe at 16-bit"; `fifotest.swift:64`, two bytes per sample). Wire format: raw PCM, no header, 48 000 Hz, signed 16-bit, 2 channels interleaved L, R. *Required:* little-endian (native on every supported Mac). One frame is 4 bytes; one second is 192 000 bytes.
-- **S84** *Observed* (`fifotest.swift:18-19`, `:60-61`, `:91`; `logictest.swift:203-210`). Interface: create with the pipe path and a queue length in seconds; `setInputRate(Rc)`; `feed(interleaved, frames)` from the capture thread; `start()`; `stop()`; `samplesQueued`, a monotonic 64-bit count of 16-bit samples accepted into the queue (frames × 2).
+- **S84** *Observed* (`fifotest.swift:18-19`, `:60-61`, `:91`; `logictest.swift:203-210`). Interface: create with the pipe path and a queue length in seconds; `setInputRate(Rc)`; `feed(interleaved, frames)` from the capture thread; `start()`; `stop()`; `samplesQueued`, a monotonic 64-bit count of 16-bit samples accepted into the queue (frames × 2). *Now covered by the core.*
 - **S85** *Observed* (tests "fifo: 48000 / 44100 / 96000 / 32000 Hz → 48 kHz frame count": 95 697 vs 95 697, 95 999 vs 96 000, 95 917 vs 95 917, 95 916 vs 95 917, from 2 s fed in 441-frame blocks). Input at Rc is resampled to 48 000 Hz with phase carried across blocks: over any run, output frames are within ±2 of `fed × 48000 / Rc`. At Rc = 48 000 the samples pass through unchanged. *Required:* at least linear interpolation; a band-limited resampler is RECOMMENDED; no allocation (S126).
 - **S86** *Observed* ("fifo: NaN/±inf samples do not crash"). Float → int16 conversion never traps. *Required* mapping: NaN → 0; otherwise `round(clamp(x, −1, +1) × 32767)` (ties away from zero), so +∞ → 32767 and −∞ → −32767.
-- **S87** *Required; Observed* sizing (`logictest.swift:203`, 4 s). Between `feed` and the writer thread is a lock-free single-producer, single-consumer queue of `seconds × 48 000` frames (default 4 s). When it is full, `feed` drops the frames that don't fit; dropped frames are not counted in `samplesQueued`. `feed` works whether or not the writer runs.
+- **S87** *Required; Observed* sizing (`logictest.swift:203`, 4 s). Between `feed` and the writer thread is a lock-free single-producer, single-consumer queue of `seconds × 48 000` frames (default 4 s). When it is full, `feed` drops the frames that don't fit; dropped frames are not counted in `samplesQueued`. `feed` works whether or not the writer runs. *Now covered by the core.*
 - **S88** *Observed* ("fifo: stop/start leaves one writer thread — 1 writers", "fifo: stop closes the writer — 0 writers"). `start()` runs exactly one writer thread holding at most one write descriptor; five back-to-back `stop()`/`start()` pairs still leave exactly one. Within 300 ms of `stop()`, the writer thread has exited and closed its descriptor. *Required:* `start()` while started is a no-op; `start()` begins with an empty queue; `stop()` returns only after the writer thread has closed its descriptor and exited, so a `stop()` followed at once by `start()` (every source switch) never has two writers, two descriptors or two consumers of the queue; this wait is bounded by the writer's polling intervals (S89, S93) and stays under 300 ms.
 - **S89** *Required.* The writer opens the pipe write-only in non-blocking mode; per POSIX `open(2)`, that fails with `ENXIO` while the FIFO has no reader instead of waiting for one. The open is retried at least every 100 ms; meanwhile the backlog rule (S90) keeps the queue short.
 - **S90** *Observed* (`fifotest.swift:65-68`). Backlog cap: the writer never lets more than 250 ms (12 000 frames, 48 000 bytes) of unwritten audio pile up; when it falls behind it discards the oldest audio beyond that cap, in whole frames only. Everything else is delivered in order, never duplicated. A new open of the pipe goes further and starts at the live edge (S169), and so does the end of a stall, when the open pipe took nothing for longer than the cap (S203).
@@ -278,7 +280,7 @@ S172 to S181 replace the rule that local outputs play at once unless an AirPlay 
 - **S95** *Required.* No write to the pipe ever happens on the capture thread; `feed` only converts and enqueues (S126).
 - **S160** *Observed* (`fifotest.swift:69-71`, `:84`; `docs/BENCHMARKS.md`, counter definitions; checks "fifo: counters see one open and the bytes written", "fifo: counters see the vanished reader", and the `Counters(…)` values they print). The feed keeps read-only diagnostic counters, read together as `counters`: `opens` (successful opens of the pipe for writing, S89), `writeErrors` (writes that failed with an error other than `EAGAIN`, such as `EPIPE` when the reader went away, S92), `backlogSkips` and `backlogSkipSamples` (discards by the backlog cap, S90, at an open of the pipe, S169, or by a stall of the open pipe, S203, which counts once however many steps it drops audio in, and the 16-bit samples they dropped), `pipeFullWaits` (waits on `EAGAIN`, S93), `shortWrites` (partial writes, S93) and `bytesWritten` (bytes the pipe accepted). After one second with a reader that was there from the start: one open, no write error, and `bytesWritten` at least what the reader received (145 408 bytes for both in one run). After five `stop()`/`start()` pairs, another second and the reader closing: `writeErrors` 1 (at least 1 is asserted), `opens` 2 although the writer keeps retrying the open while no reader exists (S89), and `bytesWritten` 290 816 in the same run, more than the 192 000 bytes that one second of audio makes at 48 kHz (S83); the test feeds a second second after the reader closed, which nothing can write, so the extra bytes come from before the last `start()`. So failed opens count as neither opens nor write errors, and `stop()` and `start()` reset nothing. *Required:* each counter is a monotonic 64-bit count over the feed's life, incremented only by the writer thread with relaxed atomic adds and readable from any thread without blocking it; a snapshot need not be consistent across counters; `backlogSkipSamples` counts two samples per frame, like `samplesQueued` (S84).
 - **S169** *Observed* (FIFO check "EC7 engine restart: the reopened pipe starts as close to live as a fresh start", which printed "first frame 20 ms behind live after a fresh start, 20 ms after the reopen"; `docs/EDGE_CASES.md` EC7; `CHANGELOG.md` Unreleased, Fixed: after an engine restart AirPlay comes back with the latency it had before, where each restart could leave it up to a quarter of a second later; parity check "rust: fifo reopen resumes at the live edge (S169)", a known gap on the core until its writer followed this clause: it printed 10 ms after a fresh start and 200 ms after the reopen; now a plain check). *Live edge on every open.* Each time the writer opens the pipe (S89), whether it is the first open after `start()` or a reopen after the reader went away (S92, an engine crash or restart, S143), it starts at the live edge, the newest audio fed so far. The audio that queued while nobody read the pipe, up to the 250 ms that S90 lets pile up, is dropped, never written late, and the drop counts as a backlog skip (S160). The first frame written after a reopen is therefore about as close to live as the first frame after a fresh start, however long the reader was gone (20 ms for both in one run); allowing for timing noise, no more than 50 ms further behind live than a fresh start, far below the backlog cap of S90. Without this rule every reopen would deliver the capped backlog first, so the AirPlay leg would come back up to 250 ms later after each engine restart and fall out of step with the local outputs at their saved delays (S80); with it, AirPlay comes back with the latency it had before. While a reader stays connected, S90 governs a writer that falls behind, and S203 a pipe that takes nothing for longer than the cap. *Required:* at each successful open, before its first write, the writer discards every frame queued at that moment; one or more frames dropped this way count as one backlog skip, with two samples per frame in `backlogSkipSamples` (S160); the audio fed after the open is delivered in order and never duplicated (S90), and a frame left partly written when the reader went away is not resumed (S93).
-- **S203** *Required* (`docs/EDGE_CASES.md` EC3; maintainer's ear test of 2026-10-18: an AirPlay TV and the Mac's speakers were in step at a 500 ms delay before a sleep, and after the wake the delay still read 500 ms but AirPlay was far behind; core test "after_a_stall_the_open_pipe_resumes_as_close_to_live_as_a_fresh_start", which failed with "first frame 250 ms behind live after the stall, 10 ms after a fresh start" before the core's writer followed this clause; parity check "rust: fifo resumes at the live edge after a stall (S203)"). *Live edge after a stall.* The pipe *stalls* when its reader keeps it open but stops reading (the engine pauses its player, for instance while its speakers reconnect after a wake), so the pipe fills, writes are refused (`EAGAIN`, or a write that takes nothing, S93) and the unwritten audio grows past the backlog cap: the pipe took nothing for longer than the 250 ms of S90. No reopen follows, so S169 never fires, and S90 alone would leave the newest 250 ms waiting for the reader, which would then play them first: AirPlay would come back up to 250 ms later than before the stall and stay that far out of step with the local outputs at their saved delays (S80). So from the step where a stall begins until the pipe takes data again, the writer keeps only the newest audio, at most one write's worth (128 frames, under 3 ms, S93), and drops everything older: one backlog skip for the whole stall, however long it lasts, with every frame it drops in `backlogSkipSamples` (S160); the first frame the pipe takes after the stall is then as close to live as after an open (S169), no more than 50 ms further behind live than after a fresh start (in the core test: 2.7 ms after the stall, 10 ms after a fresh start). Audio dropped: what waited when the stall began, up to the cap's 250 ms, and what is fed during it, except the newest write's worth; the rest of a partly written frame is still completed (S93), and nothing is written twice or out of order (S90). A pipe that takes nothing while less than the cap piles up (a short stall the cap absorbs) loses nothing: the audio that waited follows on without a gap. A backlog past the cap while the pipe keeps taking data (a writer that wasn't scheduled for a while) is not a stall: S90 alone governs it. The audio already in the kernel's pipe buffer when the writes began to fail (up to 64 KiB, about a third of a second, on macOS, S93) is beyond the writer's reach and reaches the reader first. *Required* detail: a stall begins at a step that finds the last write refused and more than `BACKLOG_CAP_FRAMES` frames unwritten (counting a partly written frame as one), and ends once the pipe has taken a whole write's worth (512 bytes) since it began, or at a disconnect (S92) or an open (S169). A pipe its reader left nearly full can still take a few shorter writes, less than 512 bytes in all, and they must not end the stall: the backlog would grow back towards the cap before the next refusal began a new one. A write interrupted by a signal changes nothing. The writer thread does this with no allocation (S129), and the capture side is unchanged (S95, S126). *Unverified risk* (review of 2026-10-19): an engine that kept the pipe full during normal playback, refusing writes now and then, would let clock drift push the backlog slowly past the cap; S90 alone trimmed a few frames there, and this rule drops about 250 ms at once. The 60-minute soak (`Tests/soak.sh`) reports the backlog skip counter, which should stay flat during steady playback; one that climbs points here.
+- **S203** *Required* (`docs/EDGE_CASES.md` EC3; maintainer's ear test of 2026-10-18: an AirPlay TV and the Mac's speakers were in step at a 500 ms delay before a sleep, and after the wake the delay still read 500 ms but AirPlay was far behind; core test "after_a_stall_the_open_pipe_resumes_as_close_to_live_as_a_fresh_start", which failed with "first frame 250 ms behind live after the stall, 10 ms after a fresh start" before the core's writer followed this clause; FIFO check "fifo: resumes at the live edge after a stall (S203)"). *Live edge after a stall.* The pipe *stalls* when its reader keeps it open but stops reading (the engine pauses its player, for instance while its speakers reconnect after a wake), so the pipe fills, writes are refused (`EAGAIN`, or a write that takes nothing, S93) and the unwritten audio grows past the backlog cap: the pipe took nothing for longer than the 250 ms of S90. No reopen follows, so S169 never fires, and S90 alone would leave the newest 250 ms waiting for the reader, which would then play them first: AirPlay would come back up to 250 ms later than before the stall and stay that far out of step with the local outputs at their saved delays (S80). So from the step where a stall begins until the pipe takes data again, the writer keeps only the newest audio, at most one write's worth (128 frames, under 3 ms, S93), and drops everything older: one backlog skip for the whole stall, however long it lasts, with every frame it drops in `backlogSkipSamples` (S160); the first frame the pipe takes after the stall is then as close to live as after an open (S169), no more than 50 ms further behind live than after a fresh start (in the core test: 2.7 ms after the stall, 10 ms after a fresh start). Audio dropped: what waited when the stall began, up to the cap's 250 ms, and what is fed during it, except the newest write's worth; the rest of a partly written frame is still completed (S93), and nothing is written twice or out of order (S90). A pipe that takes nothing while less than the cap piles up (a short stall the cap absorbs) loses nothing: the audio that waited follows on without a gap. A backlog past the cap while the pipe keeps taking data (a writer that wasn't scheduled for a while) is not a stall: S90 alone governs it. The audio already in the kernel's pipe buffer when the writes began to fail (up to 64 KiB, about a third of a second, on macOS, S93) is beyond the writer's reach and reaches the reader first. *Required* detail: a stall begins at a step that finds the last write refused and more than `BACKLOG_CAP_FRAMES` frames unwritten (counting a partly written frame as one), and ends once the pipe has taken a whole write's worth (512 bytes) since it began, or at a disconnect (S92) or an open (S169). A pipe its reader left nearly full can still take a few shorter writes, less than 512 bytes in all, and they must not end the stall: the backlog would grow back towards the cap before the next refusal began a new one. A write interrupted by a signal changes nothing. The writer thread does this with no allocation (S129), and the capture side is unchanged (S95, S126). *Unverified risk* (review of 2026-10-19): an engine that kept the pipe full during normal playback, refusing writes now and then, would let clock drift push the backlog slowly past the cap; S90 alone trimmed a few frames there, and this rule drops about 250 ms at once. The 60-minute soak (`Tests/soak.sh`) reports the backlog skip counter, which should stay flat during steady playback; one that climbs points here.
 
 ## 10. AirPlay engine coupling
 
@@ -324,11 +326,11 @@ S172 to S181 replace the rule that local outputs play at once unless an AirPlay 
 
 ## 13. Real-time constraints
 
-- **S126** *Required* (project rule; the equalizer's design follows it, `Equalizer.swift:7-9`). The audio path is the capture callback (equalizer, ring write, FIFO `feed`) and every renderer callback (reader, conversion, gain). On it, nothing may allocate or free memory, take a lock (mutex, read-write lock, semaphore, dispatch sync, runtime calls that may lock), block or sleep, make a system call, log or build strings, or touch the file system.
+- **S126** *Required* (project rule; the equalizer's design follows it, `Equalizer.swift:7-9`). The audio path is the capture callback (equalizer, ring write, FIFO `feed`) and every renderer callback (reader, conversion, gain). On it, nothing may allocate or free memory, take a lock (mutex, read-write lock, semaphore, dispatch sync, runtime calls that may lock), block or sleep, make a system call, log or build strings, or touch the file system. *Now covered by the core.*
 - **S127** *Required.* Work per callback is bounded and linear in the block size: O(N) per reader, O(20·N) biquad steps for the equalizer, O(N) for conversion.
 - **S128** *Required.* Values shared with audio threads are lock-free atomics only (an implementation SHOULD enforce this at compile time where its language allows); all buffers (ring, FIFO queue, equalizer state, converter buffers sized for the largest device buffer, at least 8192 frames) are allocated before the audio threads start and freed only after they stopped.
 - **S129** *Required.* The FIFO writer thread does not allocate after `start`, shares no lock with the audio path, does no logging inside its loop, and performs only `open`, `write`, `close` and short sleeps.
-- **S130** *Observed* (`Equalizer.swift:97-104`, `:128-137`). Control-to-audio updates never make the audio thread wait: scalars are atomic stores; multi-value updates are double-buffered and flipped atomically; the control side MAY spin or yield briefly.
+- **S130** *Observed* (`Equalizer.swift:97-104`, `:128-137`). Control-to-audio updates never make the audio thread wait: scalars are atomic stores; multi-value updates are double-buffered and flipped atomically; the control side MAY spin or yield briefly. *Now covered by the core.*
 - **S131** *Required.* Logging about audio-path events (underruns, corrections, drops) happens only from non-real-time threads, from counters the audio path increments atomically. The debug log (`AUDIOSYNC_DEBUG=1`, `docs/DEVELOPMENT.md`) is never written from the audio path.
 
 ## 14. Threading
@@ -404,7 +406,7 @@ These run in the host application, not the audio engine core, but the logic suit
 
 ## 18. Test map
 
-Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints only its summary line through `run-tests.sh`; its individual checks are listed as its own binary prints them. Checks printed more than once are listed once. `run-tests.sh` also compiles the soak and benchmark harness (`Tests/soak.sh`, `Tests/bench.sh`) without running it; those long runs are outside this map.
+Check names as `Tests/run-tests.sh` prints them. Checks printed more than once are listed once. `run-tests.sh` also compiles the soak and benchmark harness (`Tests/soak.sh`, `Tests/bench.sh`) without running it; those long runs are outside this map.
 
 ### shellcheck
 
@@ -414,46 +416,7 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 
 ### ring buffer
 
-| Check | Clauses |
-|---|---|
-| A delay=4096 not silent | S44, S45 |
-| A delay=4096 contiguous (no clicks) | S44 |
-| A measured delay ≈ 4096 | S42, S56 |
-| B delay=0 not silent (floored to one block) | S42, S45 |
-| B delay=0 contiguous | S44 |
-| B delay=0 near-live, not silent | S42, S56 |
-| C underrun eventually emits silence | S53 |
-| C no replay loop (stays silent once drained) | S49, S53 |
-| D resumes with audio | S54 |
-| D plays FRESH frames (not replayed old) | S49, S54 |
-| D delay re-established ≈ 4096 | S54, S56 |
-| E increase: never replays audio | S47, S49 |
-| E increase: delay 24000 reached | S46, S47 |
-| E decrease: applied on the next block | S46, S48 |
-| F reader1 contiguous | S44, S58 |
-| F reader2 contiguous | S44, S58 |
-| F reader1 delay ≈ 4096 | S42, S58 |
-| F reader2 delay ≈ 12000 | S42, S58 |
-| F readers independent (different positions) | S9, S58 |
-| G gap: no replayed audio | S49 |
-| G gap: delay restored to 1 s (within the dead band) | S50, S57 |
-| H stall: never replays audio | S49, S51 |
-| H stall: resumes after the last frame it had | S51 |
-| H stall: delay restored | S51, S55 |
-| I faster output: never replays audio | S49, S52 |
-| I faster output: lag stays within tolerance | S50, S52, S57 |
-| I slower output: never replays audio | S49, S51 |
-| I slower output: lag stays within tolerance | S50, S51, S57 |
-| J up-then-down: never replays audio | S47, S49 |
-| J up-then-down: lands on the new delay | S46, S48 |
-| K after a stall, drift is still held within ~35 ms | S50, S51, S52, S57 |
-| L change while frozen: applied after resume | S44, S46 |
-| M steady state: primed once, no corrections, no underruns | S44, S158 |
-| M delay change counts one resync, not a drift correction | S46, S158 |
-| M lag too long counts a skip | S51, S158 |
-| M stall above the dead band: silence held, no underrun | S44, S52, S53, S158 |
-| M stall inside the dead band counts underruns | S53, S158 |
-| M counters survive resetPrime | S158, S159 |
+Removed on 2026-10-19 with the Swift engine's ring (`Tests/ringtest.swift`). What it checked, the steady delay, the floor at one block, stalls, live delay changes, two readers, short gaps, drift both ways and the event counters, is the core's reader tests now: `core/src/reader.rs`, `core/tests/drift.rs` and `core/tests/reader_props.rs`, which name the clauses they cover (S41 to S59, S158, S159).
 
 ### logic
 
@@ -560,26 +523,8 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | layout: connected speakers sort by name, ignoring case, numbers in order, ties stable | S152, S147 |
 | layout: AirPlay and local speakers share one list | S152 |
 | layout: no speakers, empty lists | S152 |
-| eq: flat is transparent | S25, S26, S32 |
-| eq: +6 dB band at 1 kHz | S22, S25, S32 |
-| eq: 1 kHz band leaves 8 kHz alone | S25, S32 |
-| eq: same response at 44.1 kHz | S30, S32 |
-| eq: Bass Boost lifts 40 Hz | S32, S33 |
-| eq: preamp −6 dB | S26, S32 |
-| eq: disabled is bypassed | S27 |
-| eq: recovers from a NaN sample (silence stays silent) | S29, S123 |
 | eq: every preset has 10 bands | S33 |
 | eq: one preset per id, in menu order | S33 |
-| fifo: 48000 Hz → 48 kHz frame count | S85 |
-| fifo: 44100 Hz → 48 kHz frame count | S85 |
-| fifo: 96000 Hz → 48 kHz frame count | S85 |
-| fifo: 32000 Hz → 48 kHz frame count | S85 |
-| delay: 2.0 s holds (last frame of the block) | S3, S42, S44, S56 |
-| delay: change to 500 ms is exact | S46, S48 |
-| delay: change to 3000 ms is exact | S46, S47 |
-| delay: change to 1820 ms is exact | S3, S46, S48 |
-| delay: change to 0 ms is exact | S42, S46, S48 |
-| ring: reset clears history | S39 |
 | pairing: unreachable speaker is turned off | S106 |
 | pairing: unreachable speaker isn't tracked | S106 |
 | pairing: AirPlay 1 password is turned off with its own reason | S106 |
@@ -783,12 +728,6 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | app retap: a new tap at another rate is discarded and the old one keeps running until the rebuild | S13, S157 |
 | app retap: a tap that can't be made leaves the old capture to the caller, which ends the session | S13, S21 |
 | app retap: a new tap that can't start reading is discarded | S21 |
-| delay: AirPlay chosen → configured delay | S78 |
-| delay: no AirPlay → plays at once | S78 |
-| delay: zero stays zero | S78 |
-| delay: a chosen speaker not listed today doesn't count | S79 |
-| delay: chosen and listed counts | S79 |
-| delay: listed but not chosen doesn't count | S79 |
 | devices: macOS's own AirPlay output is hidden by default | S145, S151 |
 | EC1 unplug: a playing speaker that is still present is left alone | S117, S161 |
 | EC1 unplug: a lost speaker stays on and waits while its device is missing | S68, S137, S161 |
@@ -863,12 +802,13 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | EC11 long names: names that differ only at the end still sort and stay whole | S147, S152, S166 |
 | EC11 long names: the engine's long, non-ASCII name is read unchanged | S100, S147, S166 |
 | EC12 network loss: a speaker missing from the engine's list stays on, with nothing to do | S104, S148, S167 |
-| EC12 network loss: local speakers stop waiting for an AirPlay speaker that is gone | S79, S80, S148, S167 |
 | EC12 network loss: a speaker back in the list is selected again | S104, S148, S167 |
 | EC12 network loss: a listed speaker the engine dropped is turned off with a notice | S104, S106, S109, S148, S167 |
 | EC12 network loss: an empty list with Local Network allowed shows no permission hint | S154, S167 |
 
 ### fifo
+
+Since 2026-10-19 the suite runs the app's pipe feed, `CoreFifoFeed`, and checks the app's other wrappers of the core; the equalizer, frame count, delay and sync rule rows came from the logic suite, where they ran on the Swift engine. "ring: reset clears history" went with the Swift ring: every session gets a new core ring (S39, `core/src/ring.rs`). The check of a stop inside a chunk's last frame went too: the core writes at most 512 bytes at a time, which a pipe takes whole, and its tests drive that case with a fake pipe (S93).
 
 | Check | Clauses |
 |---|---|
@@ -881,7 +821,6 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | fifo: stop closes the writer | S88 |
 | fifo: stop returns once the writer closed the pipe, with a reader that never reads (S88) | S88, S93 |
 | fifo: stop returns once the writer closed the pipe, with a reader that reads slowly (S88) | S88, S93 |
-| fifo: a stop inside a chunk's last frame finishes that frame, then the reader sees the end (S88, S93) | S88, S93 |
 | metadata pipe: an empty pipe takes a whole message in one write | S82, S168 |
 | metadata pipe: FIONREAD on a read end counts what waits | S82 |
 | metadata pipe: the writer opens it | S82 |
@@ -899,16 +838,51 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | metadata pipe: a pipe nobody reads stops being retried | S82, S168 |
 | metadata pipe: the next message starts the retries again | S168 |
 | EC7 engine restart: the reopened pipe starts as close to live as a fresh start | S89, S92, S143, S169 |
+| fifo: a stalled pipe stays open and its backlog is dropped | S160, S203 |
+| fifo: resumes at the live edge after a stall (S203) | S90, S203 |
+| eq: flat is transparent | S25, S26, S32 |
+| eq: +6 dB band at 1 kHz | S22, S25, S32 |
+| eq: 1 kHz band leaves 8 kHz alone | S25, S32 |
+| eq: same response at 44.1 kHz | S30, S32 |
+| eq: Bass Boost lifts 40 Hz | S32, S33 |
+| eq: preamp −6 dB | S26, S32 |
+| eq: disabled is bypassed | S27 |
+| eq: recovers from a NaN sample (silence stays silent) | S29, S123 |
+| fifo: 48000 Hz → 48 kHz frame count | S85 |
+| fifo: 44100 Hz → 48 kHz frame count | S85 |
+| fifo: 96000 Hz → 48 kHz frame count | S85 |
+| fifo: 32000 Hz → 48 kHz frame count | S85 |
+| delay: 2.0 s holds (last frame of the block) | S3, S42, S44, S56 |
+| delay: change to 500 ms is exact | S46, S48 |
+| delay: change to 3000 ms is exact | S46, S47 |
+| delay: change to 1820 ms is exact | S3, S46, S48 |
+| delay: change to 0 ms is exact | S42, S46, S48 |
+| delay: change to 150 ms is exact | S3, S46, S48 |
+| delay: live changes never replay audio (S49) | S49 |
+| delay: lagFrames reads the lag after each change (S56) | S56 |
+| delay: one prime, then one resync per delay change (S158) | S158 |
+| delay: the counters survive resetPrime (S159) | S159 |
+| delay: AirPlay chosen → configured delay | S78 |
+| delay: no AirPlay → plays at once | S78 |
+| delay: zero stays zero | S78 |
+| delay: a chosen speaker not listed today doesn't count | S79 |
+| delay: chosen and listed counts | S79 |
+| delay: listed but not chosen doesn't count | S79 |
+| EC12 network loss: local speakers stop waiting for an AirPlay speaker that is gone | S79, S80, S148, S167 |
+| session: a captured block reaches the ring and the pipe feed (S7) | S7, S34 |
+| session: a renderer can be made on the session's ring | S61 |
+| session: no pipe feed without a pipe | S82 |
+| core volume: the curve matches the reference table (S70) | S70 |
+| core volume: position↔gain round-trip | S70 |
+| core volume: a legacy 3.49% migrates to ≈33 (S75) | S75 |
+| core volume: a local output's gain is its own times the master's (S71) | S71 |
+| core gain: 0 is exact silence from the first buffer (S64) | S64 |
+| core gain: 0.5 halves the signal once the change has ramped | S64 |
+| core gain: NaN and ±inf never reach a device (S65) | S65 |
 
 ### core parity
 
-The parity suite runs the ring buffer, logic and FIFO suites' checks on the Rust core's parts as well (`docs/DEVELOPMENT.md`). A check the core doesn't meet yet prints as KNOWN and doesn't fail the run.
-
-| Check | Clauses |
-|---|---|
-| rust: fifo reopen resumes at the live edge (S169) | S169 |
-| rust: fifo a stalled pipe stays open and its backlog is dropped | S160, S203 |
-| rust: fifo resumes at the live edge after a stall (S203) | S90, S203 |
+Removed on 2026-10-19 with the Swift engine (`Tests/paritytest.swift`): with one engine there is nothing to compare. Its checks of the core's parts through the app's wrappers are in the fifo suite: "rust: fifo reopen resumes at the live edge (S169)" is the fifo suite's EC7 check, and the two pipe stall checks moved there with the "rust: " prefix dropped from their names.
 
 ### engine (`--hardware`)
 

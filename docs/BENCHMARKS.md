@@ -7,11 +7,11 @@ Two scripts keep an eye on the engine's own audio path over long runs: `Tests/be
 The part of the engine that runs all the time while you listen:
 
 - the delay ring buffer and the `OutputRenderer`s that play it on local outputs, each at its own delay with drift correction;
-- the `FifoFeed` that streams PCM16 at 48 kHz into the named pipe the AirPlay engine reads.
+- the pipe feed (`CoreFifoFeed`) that streams PCM16 at 48 kHz into the named pipe the AirPlay engine reads.
 
 Capture itself isn't in it (a process tap needs the recording permission and real audio), and neither is OwnTone or a real AirPlay speaker. A producer thread stands in for the tap: it writes 512-frame blocks paced by the system's uptime clock, into a ring buffer the same size as the app's. A paced reader on the pipe stands in for the engine.
 
-Both scripts run either engine: the Swift one (the default) or, with `--engine rust`, the Rust core, whose ring, delay readers, gain stages and pipe feed then take the place of the Swift ones, as they do in the app, where the core is the default (see [DEVELOPMENT.md](DEVELOPMENT.md)). The output units and the harness are the same, so the two sets of numbers compare directly.
+The ring, the delay readers, the gain stages and the pipe feed are the Rust core's (`core/`), made the way a session in the app makes them (see [DEVELOPMENT.md](DEVELOPMENT.md)). Until 2026-10-19 the scripts could also run the Swift engine the core replaced; its last baseline, from 2026-10-17, is in the git history of `Tests/baseline/swift.json`.
 
 ## Staying silent
 
@@ -31,7 +31,7 @@ Every 10 seconds the harness writes one record to `windows.jsonl` and `windows.c
 - FIFO path: reader underruns (the reader keeps 200 ms read-ahead and plays at 48 kHz; an underrun is that buffer running dry, after which it rebuffers), gaps in the decoded counter, latency (newest frame produced minus newest frame received), and the writer's pipe-full waits, short writes, backlog skips and write errors.
 - CPU % of the harness (from `getrusage`), its memory footprint, and how late the producer ran.
 
-The counters come from read-only atomics in `DelayReader` and `FifoFeed`, or in the core's readers and FIFO feed, which keep the same ones. They're relaxed atomic adds, so the render callback and the FIFO writer don't allocate, lock or log because of them, and they don't change what gets played. The lag is measured the same way on both: the newest frame written when it's sampled, minus the next frame the output will read.
+The counters come from read-only atomics in the core's delay readers and FIFO feed. They're relaxed atomic adds, so the render callback and the FIFO writer don't allocate, lock or log because of them, and they don't change what gets played. The lag is the newest frame written when it's sampled, minus the next frame the output will read.
 
 `bench.sh` runs two configurations, `--minutes` each (60 by default, so a plain run takes two hours and the drift between two outputs is measured over a full hour):
 
@@ -45,13 +45,11 @@ At the end of a run the harness checks that each output rendered at least 95% of
 ## Running it
 
 ```bash
-Tests/bench.sh                 # 2 × 60 min: writes Tests/baseline/swift.json and the Swift results below
-Tests/bench.sh --engine rust   # the same on the Rust core: Tests/baseline/rust.json and the Rust results
-Tests/soak.sh                  # 60 min, judged against the Swift baseline
-Tests/soak.sh --engine rust    # 60 min on the Rust core, judged against its own baseline
+Tests/bench.sh   # 2 × 60 min: writes Tests/baseline/rust.json and the results below
+Tests/soak.sh    # 60 min, judged against that baseline
 ```
 
-Both take `--engine swift|rust` (`swift` by default), `--minutes N` and `--out DIR` (by default the logs go to a new folder under `$TMPDIR`), and both build the Rust core first, since the harness links it. Each engine has its own baseline, `Tests/baseline/<engine>.json`. For `bench.sh`, N is per configuration, at least 1. `soak.sh` also takes `--baseline FILE`, for example the Swift baseline for a Rust run (it then warns that the engines differ), and `--device NAME` (AirPlay, aggregate and multi-output devices are refused). `bench.sh` takes `--baseline-out FILE` and `--no-doc`; without `--no-doc` it rewrites the results between the marker comments below from the baselines, one column per engine, so the table always matches them. `--doc-only` just rewrites that table. It needs `python3`, which comes with the Command Line Tools.
+Both take `--minutes N` and `--out DIR` (by default the logs go to a new folder under `$TMPDIR`), and both build the Rust core first, since the harness links it. For `bench.sh`, N is per configuration, at least 1. `soak.sh` also takes `--baseline FILE` (it warns when that baseline names another engine) and `--device NAME` (AirPlay, aggregate and multi-output devices are refused). `bench.sh` takes `--baseline-out FILE` and `--no-doc`; without `--no-doc` it rewrites the results between the marker comments below from the baseline, so the table always matches it. `--doc-only` just rewrites that table. It needs `python3`, which comes with the Command Line Tools.
 
 `summary.txt` in the output folder has the verdict. `soak.sh` exits 0 on PASS, 1 on FAIL, 2 when it can't start (the harness doesn't compile, fewer than two usable outputs, or a baseline that lacks a metric the run is judged on) and 3 when there's no baseline file. It warns, on stderr and in the summary, when the baseline came from another Mac model, another macOS version or other outputs. Ctrl-C stops the harness too.
 
@@ -70,33 +68,27 @@ Both take `--engine swift|rust` (`swift` by default), `--minutes N` and `--out D
 
 The release baseline is a full `Tests/bench.sh` run (60 minutes per configuration).
 
-The Rust column is the Rust core (`core/`) measured the same way, with `--engine rust`; it stays empty until `Tests/baseline/rust.json` exists.
-
 <!-- bench:results:begin -->
-Swift: 60 min per configuration, 2026-10-17, on 3f7069d.
+60 min per configuration, 2026-10-19, on cdc11c1.
 
 Machine: MacBook Air (Mac16,12), Apple M4, 16 GB, macOS 26.6.2 (25G83). Outputs: Microsoft Teams Audio, MacBook Air Speakers; local + FIFO used Microsoft Teams Audio.
 
-Rust: 60 min per configuration, 2026-10-19, on cdc11c1.
-
-Machine: MacBook Air (Mac16,12), Apple M4, 16 GB, macOS 26.6.2 (25G83). Outputs: Microsoft Teams Audio, MacBook Air Speakers; local + FIFO used Microsoft Teams Audio.
-
-| Metric | Swift | Rust |
-|---|---|---|
-| Delay error at 150 / 500 / 2000 / 3000 ms (ms, per output) | (-2.7, -5.9) / (-1.1, -4.8) / (-1.6, -4.8) / (-2.7, -4.3) | (-10.7, -4.3) / (-11.2, -4.3) / (-10.7, -4.8) / (+0.5, -1.6) |
-| Two local: dropouts per hour (worst output) | 0 | 0 |
-| Two local: starved renders per hour (worst output) | 0 | 0 |
-| Two local: drift corrections per hour (worst output) | 0 | 6 |
-| Two local: worst lag error, 10 s mean (ms) | 10.208 | 9.319 |
-| Two local: inter-output drift, mean / worst (ms) | 5.84 / 8.511 | 6.605 / 9.432 |
-| Two local: inter-output drift change, first to last window (ms) | 4.085 | 3.758 |
-| Two local: CPU % mean (harness / ps) | 0.73 / 0.27 | 0.822 / 0.31 |
-| Two local: memory footprint max / RSS max (MB) | 42.454 / 52.6 | 42.516 / 53.2 |
-| Local + FIFO: FIFO underruns per hour | 0 | 0 |
-| Local + FIFO: FIFO gaps per hour | 0 | 0 |
-| Local + FIFO: FIFO latency mean / max (ms) | 17.207 / 53.333 | 14.968 / 25.521 |
-| Local + FIFO: pipe-full waits, short writes, backlog skips | 6, 1, 0 | 0, 0, 0 |
-| Local + FIFO: local dropouts per hour | 0 | 0 |
-| Local + FIFO: CPU % mean (harness / ps) | 1.405 / 0.87 | 1.486 / 1 |
-| Real AirPlay | not available | not available |
+| Metric | Result |
+|---|---|
+| Delay error at 150 / 500 / 2000 / 3000 ms (ms, per output) | (-10.7, -4.3) / (-11.2, -4.3) / (-10.7, -4.8) / (+0.5, -1.6) |
+| Two local: dropouts per hour (worst output) | 0 |
+| Two local: starved renders per hour (worst output) | 0 |
+| Two local: drift corrections per hour (worst output) | 6 |
+| Two local: worst lag error, 10 s mean (ms) | 9.319 |
+| Two local: inter-output drift, mean / worst (ms) | 6.605 / 9.432 |
+| Two local: inter-output drift change, first to last window (ms) | 3.758 |
+| Two local: CPU % mean (harness / ps) | 0.822 / 0.31 |
+| Two local: memory footprint max / RSS max (MB) | 42.516 / 53.2 |
+| Local + FIFO: FIFO underruns per hour | 0 |
+| Local + FIFO: FIFO gaps per hour | 0 |
+| Local + FIFO: FIFO latency mean / max (ms) | 14.968 / 25.521 |
+| Local + FIFO: pipe-full waits, short writes, backlog skips | 0, 0, 0 |
+| Local + FIFO: local dropouts per hour | 0 |
+| Local + FIFO: CPU % mean (harness / ps) | 1.486 / 1 |
+| Real AirPlay | not available |
 <!-- bench:results:end -->
