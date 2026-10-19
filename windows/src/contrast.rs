@@ -448,8 +448,10 @@ fn keyboard_shortcuts_are_declared() {
 
 /// AirPlay on Windows is new and not yet checked against a real receiver,
 /// so no text promises it: the translatable strings naming AirPlay are the
-/// speaker kind and what a listed speaker can't do yet, and an empty
-/// Connected Speakers list says just that it's empty.
+/// speaker kind, what a listed speaker can't do yet, the AirPlay delay field
+/// (spec S181), which shows only while the AirPlay sender runs, and the notice
+/// that the sender stopped after an internal error with its Retry button; an
+/// empty Connected Speakers list says just that it's empty.
 #[test]
 fn no_text_promises_airplay() {
     let strings = include_str!("../ui/strings.slint");
@@ -458,7 +460,12 @@ fn no_text_promises_airplay() {
             !line.contains("AirPlay")
                 || line.contains("@tr(\"AirPlay\")")
                 || line.contains("not supported yet")
-                || line.contains("doesn't support yet"),
+                || line.contains("doesn't support yet")
+                || line.contains("property <string> airplay-delay-")
+                || line.contains(
+                    "notice-airplay-stopped: @tr(\"AirPlay stopped working after an internal error"
+                )
+                || line.contains("notice-retry-label: @tr(\"Retry starting AirPlay\")"),
             "strings.slint: {}",
             line.trim()
         );
@@ -503,6 +510,47 @@ fn accessible_names_have_no_private_use_characters() {
     let strings = include_str!("../ui/strings.slint");
     for line in strings.lines() {
         assert!(!has_private_use(line), "strings.slint: `{}`", line.trim());
+    }
+}
+
+/// Retry on the notice that AirPlay stopped: the button shows only on a
+/// notice that offers it, both windows pass it on to the backend, and its
+/// words are translatable strings.
+#[test]
+fn the_airplay_retry_button_is_wired_and_worded_in_strings() {
+    let widgets = include_str!("../ui/widgets.slint");
+    let stack = component_body(widgets, "NoticeStack");
+    assert!(
+        stack.contains("if notice.has-retry:"),
+        "Retry only when offered"
+    );
+    assert!(stack.contains("root.retry-requested(notice.id);"));
+    for (file, source) in [
+        ("main.slint", include_str!("../ui/main.slint")),
+        ("flyout.slint", include_str!("../ui/flyout.slint")),
+    ] {
+        assert!(
+            source.contains("root.notice-retry-requested(id);"),
+            "{file} passes Retry on"
+        );
+    }
+    let view = include_str!("view.rs");
+    assert_eq!(
+        view.matches("_retry_requested(move |_| {").count(),
+        2,
+        "both windows' Retry reaches the backend"
+    );
+    let strings = include_str!("../ui/strings.slint");
+    for name in [
+        "notice-retry",
+        "notice-retry-label",
+        "notice-airplay-stopped",
+    ] {
+        let line = strings
+            .lines()
+            .find(|line| line.contains(&format!("out property <string> {name}:")))
+            .unwrap_or_else(|| panic!("strings.slint has {name}"));
+        assert!(line.contains("@tr(\""), "{name} is translatable");
     }
 }
 

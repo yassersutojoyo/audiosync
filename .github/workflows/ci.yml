@@ -35,7 +35,7 @@ jobs:
           scripts/shellcheck.sh --install "$RUNNER_TEMP/shellcheck"
           echo "$RUNNER_TEMP/shellcheck" >> "$GITHUB_PATH"
 
-      - name: Tests (shellcheck, ring buffer, logic, FIFO, core parity)
+      - name: Tests (shellcheck, logic, FIFO and the core's app-side parts)
         run: Tests/run-tests.sh
 
       - name: make-dmg.sh packages a signed bundle into an image that mounts with the app, an Applications link and the README
@@ -112,6 +112,85 @@ jobs:
 
       - name: Whitespace / conflict markers (whole tree)
         run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
+
+  app-bundle:
+    # build.sh end to end, without touching /Applications or quitting anything:
+    # the AirPlay engine from setup.sh (cached until setup.sh or the library pins
+    # change), the core, Sparkle, signing with the local identity
+    # make-local-cert.sh creates, then the bundle is checked and started once,
+    # and a local identity that can't sign must stop the build.
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Rust toolchain (stable, with the Apple silicon and Intel targets)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Restore the AirPlay engine build
+        id: engine-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.audiosync-build/deps
+            ~/.audiosync-build/engine
+            ~/.audiosync-build/owntone.tar.xz
+          key: engine-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('setup.sh', 'scripts/engine_deps.sh') }}
+
+      - name: AirPlay engine and its libraries (./setup.sh, engine only)
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        run: AUDIOSYNC_ENGINE_ONLY=1 ./setup.sh
+
+      - name: Save the AirPlay engine build
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.audiosync-build/deps
+            ~/.audiosync-build/engine
+            ~/.audiosync-build/owntone.tar.xz
+          key: ${{ steps.engine-cache.outputs.cache-primary-key }}
+
+      - name: Build the app (./build.sh --no-install, with the local identity make-local-cert.sh creates)
+        run: |
+          security list-keychains -d user > "$RUNNER_TEMP/keychains-before"
+          # A value of the app's retired engine switch in the environment must not
+          # be taken for the engine binary: the default engine is still bundled
+          # (--engine below).
+          AUDIOSYNC_ENGINE=rust ./build.sh --no-install
+          security list-keychains -d user > "$RUNNER_TEMP/keychains-after"
+          # The signing keychain was in the search list only while signing.
+          diff "$RUNNER_TEMP/keychains-before" "$RUNNER_TEMP/keychains-after"
+
+      - name: Check the bundle and start it once
+        run: Tests/check-app-bundle.sh --engine --launch --signer "AudioSync Local Code Signing" .build/app/AudioSync.app
+
+      - name: Nothing was installed
+        run: test ! -e /Applications/AudioSync.app && test ! -e "$HOME/Applications/AudioSync.app"
+
+      - name: A local identity that can't sign stops the build before anything is installed
+        run: |
+          pass="$HOME/Library/Application Support/AudioSync/signing-keychain.pass"
+          cp "$pass" "$RUNNER_TEMP/pass"
+          echo wrong > "$pass"
+          security lock-keychain "$HOME/Library/Keychains/audiosync-signing.keychain-db"
+          security list-keychains -d user > "$RUNNER_TEMP/keychains-before"
+          status=0
+          AUDIOSYNC_INSTALL_DIR="$RUNNER_TEMP/apps" ./build.sh > "$RUNNER_TEMP/broken.log" 2>&1 || status=$?
+          cp "$RUNNER_TEMP/pass" "$pass"
+          tail -n 5 "$RUNNER_TEMP/broken.log"
+          test "$status" != 0
+          grep -q 'Nothing was quit or installed' "$RUNNER_TEMP/broken.log"
+          if grep -q 'SIGNING AD-HOC' "$RUNNER_TEMP/broken.log"; then exit 1; fi
+          test ! -e "$RUNNER_TEMP/apps/AudioSync.app"
+          security list-keychains -d user > "$RUNNER_TEMP/keychains-after"
+          diff "$RUNNER_TEMP/keychains-before" "$RUNNER_TEMP/keychains-after"
 
   shellcheck:
     runs-on: ubuntu-latest

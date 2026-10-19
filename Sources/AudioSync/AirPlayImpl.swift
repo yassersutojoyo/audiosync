@@ -25,9 +25,10 @@ enum AirPlayImpl: String, CaseIterable {
     /// Environment override, "owntone" or "native", for tests and harnesses.
     static let environmentKey = "AUDIOSYNC_AIRPLAY"
 
-    /// Where a choice came from, for the debug log and the debug option: the
-    /// same three origins as the engine option's.
-    typealias Origin = EngineImpl.Origin
+    /// Where a choice came from, for the debug log and the debug option.
+    enum Origin: String {
+        case environment, setting, `default`
+    }
 
     /// The sender for someone who never chose one: the bundled engine, until
     /// the native sender streams.

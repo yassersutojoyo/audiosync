@@ -45,6 +45,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use audiosync_core::eq::EqSettings;
+use audiosync_core::policy::delay::{native_airplay_adjustment_ms, native_airplay_latency_ms};
 use audiosync_core::policy::pairing::DropReason;
 use audiosync_core::policy::session::{
     AutoStartGate, Incident, SpeakerEvent, StartOrigin, StreamingAction, may_start, reaction,
@@ -177,6 +178,13 @@ pub struct AudioAdapter<A: AudioBackend> {
     settings_file: SettingsFile,
     /// The settings as last read or written: the file holds them.
     saved: Settings,
+    /// The settings file is of a format older than the local delay model:
+    /// its delays are migrated once an output list is in (spec S180), and
+    /// nothing is saved before.
+    delays_to_migrate: bool,
+    /// Save the settings at the next chance even if they look unchanged:
+    /// the file is in an older format.
+    must_save: bool,
     /// AirPlay speakers saved as on that the backend couldn't switch on at
     /// launch (no AirPlay sender): their saved settings stay as they are.
     airplay_unrestored: BTreeSet<String>,
@@ -235,6 +243,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
             log,
             settings_file,
             saved: Settings::default(),
+            delays_to_migrate: matches!(
+                loaded,
+                settings::Loaded::Read { version, .. } if version < settings::OFFSETS_VERSION
+            ),
+            must_save: false,
             airplay_unrestored: BTreeSet::new(),
             view: ViewSettings::default(),
         };
@@ -255,8 +268,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// speakers do once the first listing finds them.
     fn restore(&mut self, saved: Settings) {
         self.audio.set_master_volume(saved.master_volume);
+        if !self.delays_to_migrate {
+            self.audio
+                .set_airplay_adjustment(saved.airplay_adjustment_ms);
+        }
         for (id, speaker) in &saved.outputs {
-            self.audio.set_output_delay(id, speaker.delay_ms);
+            // An older file's trims become offsets once the reference is
+            // known ([`AudioAdapter::migrate_delays_if_due`]).
+            if !self.delays_to_migrate {
+                self.audio.set_output_delay(id, speaker.delay_ms);
+            }
             self.audio.set_output_volume(id, speaker.volume);
             if speaker.enabled {
                 // Nothing streams yet, so this only marks it on.
@@ -396,18 +417,24 @@ impl<A: AudioBackend> AudioAdapter<A> {
             equalizer: SavedEqualizer::from(self.equalizer),
             show_virtual_devices: self.view.show_virtual_devices,
             window: self.view.window,
+            airplay_adjustment_ms: self.audio.airplay_adjustment(),
         }
         .clamped()
     }
 
     /// Writes the settings file if anything changed since it was last read
     /// or written. A failed write is logged and tried again at the next
-    /// change; the settings stay in effect for this run.
+    /// change; the settings stay in effect for this run. Nothing is written
+    /// while an older file's delays wait for their migration.
     fn persist(&mut self) {
-        let current = self.current_settings();
-        if current == self.saved {
+        if self.delays_to_migrate {
             return;
         }
+        let current = self.current_settings();
+        if current == self.saved && !self.must_save {
+            return;
+        }
+        self.must_save = false;
         match self.settings_file.save(&current) {
             Ok(kept) if self.settings_file.path().is_some() => {
                 if kept.is_some() {
@@ -508,7 +535,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn list_devices(&mut self) {
         // A failed listing keeps the last list; the backend tries again at
         // its next poll.
-        let _ = self.audio.list_outputs();
+        // An older file's delays are migrated before auto-connect outputs
+        // start, so they start at their migrated hold-backs.
+        if self.audio.list_outputs().is_ok() {
+            self.migrate_delays_if_due();
+        }
         self.take_events();
         self.outputs_listed();
         self.airplay_listed();
@@ -900,7 +931,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     fn handle(&mut self, event: BackendEvent) {
         match event {
-            BackendEvent::OutputsChanged => self.outputs_listed(),
+            BackendEvent::OutputsChanged => {
+                self.migrate_delays_if_due();
+                self.outputs_listed();
+            }
             // It stays on, and plays again once its device is back. A device
             // still listed only lost its stream (after a format change, say):
             // the next poll opens it again, so that needs no notice.
@@ -949,6 +983,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     .log(|| format!("{} is paired and on", self.airplay_name(&id)));
                 self.notices.clear(&[airplay_subject(&id)]);
                 self.start_if_switched_on();
+            }
+            // Its Retry starts a new sender (`retry_airplay`).
+            BackendEvent::AirPlayStopped => {
+                self.post(NoticeSubject::AirPlay, NoticeMessage::AirPlayStopped);
             }
         }
     }
@@ -1111,16 +1149,71 @@ impl<A: AudioBackend> AudioAdapter<A> {
             kind: speaker_kind(output.kind),
             enabled: output.enabled,
             volume: output.volume,
-            delay_ms: Some(output.delay_ms),
+            // The reference has no delay setting (spec S181).
+            delay_ms: (!output.is_reference).then_some(output.delay_ms),
             availability: Availability::Open,
             paired: false,
         }
+    }
+
+    /// The AirPlay delay field's value: L = L_s + A, while an AirPlay sender
+    /// runs (spec S178, S181).
+    fn airplay_delay_ms(&self) -> Option<f64> {
+        self.audio
+            .airplay_sender_latency_ms()
+            .map(|sender| native_airplay_latency_ms(sender, self.audio.airplay_adjustment()))
+    }
+
+    /// The one-time migration of a format 1 settings file's delays (spec
+    /// S180), once an output list is in: the saved trims become offsets
+    /// relative to the reference, the reference's trim becomes the AirPlay
+    /// delay adjustment, and the file is saved in the new format.
+    fn migrate_delays_if_due(&mut self) {
+        if !self.delays_to_migrate {
+            return;
+        }
+        self.delays_to_migrate = false;
+        let reference = self
+            .audio
+            .outputs()
+            .into_iter()
+            .find(|output| output.is_reference);
+        let mut migrated = self.saved.clone();
+        settings::migrate_delays(&mut migrated, reference.as_ref().map(|r| r.id.as_str()));
+        for (id, speaker) in &migrated.outputs {
+            self.audio.set_output_delay(id, speaker.delay_ms);
+        }
+        self.audio
+            .set_airplay_adjustment(migrated.airplay_adjustment_ms);
+        self.log.log(|| {
+            let relative_to = reference.as_ref().map_or_else(
+                || "no reference output".to_owned(),
+                |r| format!("{} ({})", r.name, r.id),
+            );
+            format!(
+                "settings: {} output delay(s) migrated to offsets relative to {relative_to}; \
+                 AirPlay delay adjustment {} ms",
+                migrated.outputs.len(),
+                migrated.airplay_adjustment_ms
+            )
+        });
+        self.saved = migrated;
+        self.must_save = true;
+        self.persist();
     }
 }
 
 impl<A: AudioBackend> Backend for AudioAdapter<A> {
     fn snapshot(&self) -> AppState {
+        let reference_name = self
+            .audio
+            .outputs()
+            .into_iter()
+            .find(|output| output.is_reference)
+            .map(|output| output.name);
         AppState {
+            reference_name,
+            airplay_delay_ms: self.airplay_delay_ms(),
             running: self.running(),
             sources: self.source_rows(),
             source_id: self.chosen.key(),
@@ -1278,6 +1371,17 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         }
     }
 
+    /// Stores the adjustment that makes L what the user entered, with the
+    /// sender's latency of this moment (spec S178, S181).
+    fn set_airplay_delay(&mut self, ms: f64) {
+        let Some(sender) = self.audio.airplay_sender_latency_ms() else {
+            return;
+        };
+        if let Some(adjustment) = native_airplay_adjustment_ms(ms, sender) {
+            self.audio.set_airplay_adjustment(adjustment);
+        }
+    }
+
     fn set_auto_connect(&mut self, id: &str, on: bool) {
         self.log.log(|| {
             let state = if on { "on" } else { "off" };
@@ -1423,6 +1527,17 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.log
             .log(|| "the user asked to list the devices again".to_owned());
         self.list_devices();
+    }
+
+    /// The speakers that were on come back as they do after a launch: the
+    /// backend kept their settings, and the auto-connect ones switch on as
+    /// the new sender lists them.
+    fn retry_airplay(&mut self) {
+        self.log
+            .log(|| "the user asked to start AirPlay again (Retry)".to_owned());
+        self.notices.clear(&[NoticeSubject::AirPlay]);
+        self.audio.retry_airplay();
+        self.take_events();
     }
 
     /// The PIN itself is never logged.
@@ -1590,7 +1705,7 @@ mod tests {
     use audiosync_airplay::discovery::Device;
     use audiosync_airplay::error::{ErrorKind, SessionError};
     use audiosync_airplay::pairing::PairingEvent;
-    use audiosync_airplay::sender::SpeakerState as AirPlayState;
+    use audiosync_airplay::sender::{SenderEvent, SpeakerState as AirPlayState};
 
     use super::*;
     use crate::audio::airplay::tests::{APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, device, id_of};
@@ -1599,7 +1714,7 @@ mod tests {
     use crate::audio::pairings::tests::credentials;
     use crate::audio::routing::HOLD_CHECKS;
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
-    use crate::ui_model::{MAX_DELAY_MS, SpeakerState};
+    use crate::ui_model::{MAX_DELAY_MS, MIN_DELAY_MS, SpeakerState};
 
     const SPEAKERS: &str = "speakers";
     const HEADPHONES: &str = "headphones";
@@ -1774,6 +1889,7 @@ mod tests {
     fn volumes_delays_and_the_master_reach_the_audio_backend() {
         let mut adapter = adapter();
         turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
         adapter.set_speaker_volume(&key(SPEAKERS), 30.0);
         adapter.set_speaker_delay(&key(SPEAKERS), 120.4);
         adapter.set_master_volume(50.0);
@@ -1783,15 +1899,26 @@ mod tests {
         assert_eq!(speaker.delay_ms, Some(120.0), "whole milliseconds");
         assert_eq!(state.master_volume, 50.0);
         let params = adapter.audio.playing_params(SPEAKERS).unwrap();
-        assert_eq!(params.delay_frames, 5_760, "120 ms at 48 kHz");
+        assert_eq!(
+            params.delay_frames, 5_760,
+            "120 ms after the headphones at 0, at 48 kHz"
+        );
         assert_eq!(params.gain, output_gain(30.0, 50.0) as f32);
 
+        adapter.set_speaker_enabled(&key(HEADPHONES), false);
         adapter.set_speaker_delay(&key(HEADPHONES), 99_999.0);
         let state = adapter.snapshot();
         assert_eq!(
             state.speaker(&key(HEADPHONES)).unwrap().delay_ms,
             Some(MAX_DELAY_MS),
             "a delay set while off is kept, within the limit"
+        );
+        adapter.set_speaker_delay(&key(HEADPHONES), -99_999.0);
+        let state = adapter.snapshot();
+        assert_eq!(
+            state.speaker(&key(HEADPHONES)).unwrap().delay_ms,
+            Some(MIN_DELAY_MS),
+            "and down to −2000 ms for a speaker that sounds late"
         );
     }
 
@@ -2572,9 +2699,10 @@ mod tests {
     fn turning_an_airplay_speaker_on_and_off_lines_local_outputs_up_and_back() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
         turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
         adapter.set_speaker_delay(&key(SPEAKERS), 150.0);
         assert!(adapter.snapshot().running);
-        assert_eq!(local_delay(&adapter, SPEAKERS), 7_200);
+        assert_eq!(local_delay(&adapter, SPEAKERS), 7_200, "150 ms after");
         fake.take_calls();
 
         adapter.set_speaker_enabled(&ap(&kitchen), true);
@@ -2819,6 +2947,104 @@ mod tests {
     }
 
     #[test]
+    fn a_sender_that_stops_running_leaves_a_notice() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+        fake.stop_running();
+        adapter.poll();
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayStopped],
+            "AirPlay must not go silent without a hint"
+        );
+        // Nothing it listed is there anymore, and the notice comes once.
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_none());
+        adapter.dismiss_all_notices();
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+    }
+
+    #[test]
+    fn a_discovery_failure_leaves_a_notice() {
+        let (mut adapter, fake, kitchen, study) = airplay_adapter();
+        // The sender reports every receiver gone just before.
+        fake.gone(&kitchen);
+        fake.gone(&study);
+        fake.push(SenderEvent::DiscoveryFailed);
+        adapter.poll();
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayStopped],
+            "a speaker list that empties for good needs a hint"
+        );
+    }
+
+    #[test]
+    fn retry_starts_a_new_sender_and_the_speakers_that_were_on_come_back() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let next = FakeAirPlay::new();
+        let started = next.clone();
+        adapter
+            .audio
+            .set_airplay_starter(Box::new(move || Some((started.link(), None))));
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.set_speaker_volume(&ap(&kitchen), 30.0);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        fake.stop_running();
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+
+        adapter.retry_airplay();
+        assert!(messages(&adapter).is_empty(), "Retry clears the notice");
+        assert!(adapter.snapshot().running, "streaming goes on");
+        assert_eq!(
+            next.take_calls(),
+            [Call::RestartTimeline],
+            "the capture feeds the new sender"
+        );
+        next.appear(&kitchen);
+        adapter.poll();
+        let speaker = speaker_of(&adapter, &ap(&kitchen));
+        assert!(speaker.enabled, "on again, as after a launch");
+        assert_eq!(speaker.volume, 30.0);
+        assert!(matches!(
+            next.take_calls().as_slice(),
+            [Call::Add { id, .. }] if *id == id_of(&kitchen)
+        ));
+    }
+
+    #[test]
+    fn a_late_retry_leaves_a_working_sender_alone() {
+        let (mut adapter, _fake, _, _) = airplay_adapter();
+        let starts = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = starts.clone();
+        adapter.audio.set_airplay_starter(Box::new(move || {
+            counted.set(counted.get() + 1);
+            None
+        }));
+        adapter.retry_airplay();
+        assert_eq!(
+            starts.get(),
+            0,
+            "a Retry while the sender runs doesn't replace it"
+        );
+    }
+
+    #[test]
+    fn a_retry_whose_sender_cant_start_keeps_the_notice() {
+        let (mut adapter, fake, _, _) = airplay_adapter();
+        adapter.audio.set_airplay_starter(Box::new(|| None));
+        fake.stop_running();
+        adapter.poll();
+        adapter.retry_airplay();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+    }
+
+    #[test]
     fn a_source_switch_keeps_airplay_speakers_in_the_stream() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
         adapter.set_speaker_enabled(&ap(&kitchen), true);
@@ -2939,6 +3165,153 @@ mod tests {
         adapter.set_running(true);
         assert_eq!(playing(&adapter), [SPEAKERS]);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The PC's own speakers (the reference), a Bluetooth speaker and a TV,
+    /// as at a launch.
+    fn reference_audio() -> MockBackend {
+        let mut audio = MockBackend::empty();
+        audio.connect_output_as("builtin", "Speakers", OutputKind::BuiltIn);
+        audio.connect_output_as("bluetooth", "Earbuds", OutputKind::Bluetooth);
+        audio.connect_output_as("tv", "TV", OutputKind::Hdmi);
+        audio
+    }
+
+    #[test]
+    fn an_older_settings_file_is_migrated_once_and_saved_in_the_new_version() {
+        let dir = test_dir("adapter-settings-delay-migration");
+        let path = dir.join(settings::FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"{
+                "version": 1,
+                "outputs": {
+                    "builtin": {"enabled": true, "delay_ms": 250},
+                    "bluetooth": {"enabled": true, "delay_ms": 0},
+                    "tv": {"delay_ms": 120}
+                }
+            }"#,
+        )
+        .expect("written");
+        let adapter = launch(reference_audio(), &path);
+        let state = adapter.snapshot();
+        assert_eq!(state.reference_name.as_deref(), Some("Speakers"));
+        assert_eq!(speaker_of(&adapter, &key("builtin")).delay_ms, None);
+        assert_eq!(
+            speaker_of(&adapter, &key("bluetooth")).delay_ms,
+            Some(-250.0)
+        );
+        assert_eq!(speaker_of(&adapter, &key("tv")).delay_ms, Some(-130.0));
+        assert_eq!(adapter.audio.airplay_adjustment(), 250.0);
+        let (saved, found) = SettingsFile::at(path.clone()).load();
+        assert_eq!(
+            found,
+            settings::Loaded::Read {
+                version: settings::VERSION,
+                adjusted: false
+            }
+        );
+        assert_eq!(settings::VERSION, 2);
+        assert_eq!(saved.outputs["bluetooth"].delay_ms, -250.0);
+        assert_eq!(saved.outputs["tv"].delay_ms, -130.0);
+        assert_eq!(saved.outputs["builtin"].delay_ms, 0.0);
+        assert!(saved.outputs["builtin"].enabled);
+        assert_eq!(saved.airplay_adjustment_ms, 250.0);
+
+        // The next launch reads the new format and migrates nothing again.
+        let adapter = launch(reference_audio(), &path);
+        assert_eq!(
+            speaker_of(&adapter, &key("bluetooth")).delay_ms,
+            Some(-250.0)
+        );
+        assert_eq!(adapter.audio.airplay_adjustment(), 250.0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn auto_connect_at_the_first_launch_after_the_upgrade_starts_at_the_migrated_delays() {
+        let dir = test_dir("adapter-settings-delay-migration-auto-connect");
+        let path = dir.join(settings::FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"{
+                "version": 1,
+                "outputs": {
+                    "builtin": {"enabled": true, "delay_ms": 250},
+                    "bluetooth": {"enabled": true, "delay_ms": 0}
+                },
+                "auto_connect": ["lc:bluetooth"]
+            }"#,
+        )
+        .expect("written");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let mut audio = reference_audio();
+        audio.set_debug_log(log.clone());
+        let file = SettingsFile::at(path.clone());
+        let adapter = AudioAdapter::with_settings(audio, || "09.41".to_owned(), log.clone(), file);
+        assert!(
+            adapter.snapshot().running,
+            "the auto-connect speaker starts"
+        );
+        assert_eq!(local_delay(&adapter, "builtin"), 12_000, "250 ms at 48 kHz");
+        assert_eq!(local_delay(&adapter, "bluetooth"), 0);
+        assert!(log.flush(TEST_FLUSH));
+        let messages = read_messages(&dir.join(FILE_NAME));
+        assert!(
+            !messages.iter().any(|message| message.contains("delay now")),
+            "the outputs start at their migrated hold-backs, not re-timed: {messages:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_older_file_waits_for_an_output_list_before_it_is_migrated() {
+        let dir = test_dir("adapter-settings-delay-migration-wait");
+        let path = dir.join(settings::FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"{"version": 1, "outputs": {"builtin": {"delay_ms": 250}, "tv": {"delay_ms": 120}}}"#,
+        )
+        .expect("written");
+        let mut audio = reference_audio();
+        audio.fail_listing(Some(BackendError::System {
+            call: "IMMDeviceEnumerator::EnumAudioEndpoints",
+            code: -1,
+        }));
+        let mut adapter = launch(audio, &path);
+        adapter.poll();
+        let (saved, found) = SettingsFile::at(path.clone()).load();
+        assert!(
+            matches!(found, settings::Loaded::Read { version: 1, .. }),
+            "not saved before the migration: {found}"
+        );
+        assert_eq!(saved.outputs["tv"].delay_ms, 120.0);
+        adapter.audio_mut().fail_listing(None);
+        adapter.poll();
+        assert_eq!(speaker_of(&adapter, &key("tv")).delay_ms, Some(-130.0));
+        let (saved, _) = SettingsFile::at(path.clone()).load();
+        assert_eq!(saved.outputs["tv"].delay_ms, -130.0);
+        assert_eq!(saved.airplay_adjustment_ms, 250.0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_airplay_delay_field_shows_l_plus_a_and_follows_a_new_l() {
+        let (mut with_sender, fake, _, _) = airplay_adapter();
+        let shown = |adapter: &AudioAdapter<MockBackend>| adapter.snapshot().airplay_delay_ms;
+        assert_eq!(shown(&with_sender), Some(1750.0), "L_s + 0");
+        with_sender.set_airplay_delay(2000.0);
+        assert_eq!(shown(&with_sender), Some(2000.0));
+        assert_eq!(with_sender.audio.airplay_adjustment(), 250.0);
+        fake.set_latency(std::time::Duration::from_secs(1));
+        with_sender.poll();
+        assert_eq!(shown(&with_sender), Some(1250.0));
+        with_sender.set_airplay_delay(f64::NAN);
+        assert_eq!(shown(&with_sender), Some(1250.0));
+        with_sender.set_airplay_delay(-500.0);
+        assert_eq!(shown(&with_sender), Some(0.0), "clamped");
+        // Without an AirPlay sender there is no field.
+        assert_eq!(shown(&adapter()), None);
     }
 
     #[test]
@@ -3086,7 +3459,7 @@ mod tests {
             &[
                 "settings: ignored: it isn't valid (",
                 "settings: saved",
-                "settings: read (format version 1)",
+                "settings: read (format version 2)",
             ],
         );
         let _ = std::fs::remove_dir_all(dir);

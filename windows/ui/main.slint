@@ -8,7 +8,7 @@ import { ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { GroupItem, NoticeItem, RowState, SpeakerItem } from "types.slint";
-import { BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, NoticeStack, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { AirPlayDelayControls, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, NoticeStack, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -194,6 +194,10 @@ export component MainWindow inherits Window {
     in property <[NoticeItem]> notices;
     // View > Show Virtual Devices: virtual outputs are listed even while off.
     in property <bool> show-virtual-devices;
+    // The AirPlay delay, shown while an AirPlay sender runs: what its field
+    // shows (the applied value, or what is being typed).
+    in property <bool> airplay-delay-shown;
+    in property <string> airplay-delay-text;
 
     callback power-toggled(bool);
     callback source-selected(int);
@@ -204,6 +208,8 @@ export component MainWindow inherits Window {
     callback sync-toggled(string);
     callback delay-stepped(string, int);
     callback delay-edited(string, string);
+    callback airplay-delay-stepped(int);
+    callback airplay-delay-edited(string);
     callback auto-connect-toggled(string, bool);
     callback forget-pairing-requested(string);
     callback group-toggled(string);
@@ -216,6 +222,8 @@ export component MainWindow inherits Window {
     callback notices-dismissed-all();
     // Show How on a notice: open its guide.
     callback notice-guide-requested(int);
+    // Retry on a notice: start AirPlay again.
+    callback notice-retry-requested(int);
     callback close-requested();
     callback exit-requested();
     callback about-requested();
@@ -395,6 +403,9 @@ export component MainWindow inherits Window {
             guide-requested(id) => {
                 root.notice-guide-requested(id);
             }
+            retry-requested(id) => {
+                root.notice-retry-requested(id);
+            }
         }
 
         HorizontalLayout {
@@ -573,6 +584,16 @@ export component MainWindow inherits Window {
                         }
                         auto-connect-toggled(id, on) => {
                             root.auto-connect-toggled(id, on);
+                        }
+                    }
+
+                    if root.airplay-delay-shown: AirPlayDelayControls {
+                        delay-text: root.airplay-delay-text;
+                        stepped(delta) => {
+                            root.airplay-delay-stepped(delta);
+                        }
+                        edited(text) => {
+                            root.airplay-delay-edited(text);
                         }
                     }
                 }

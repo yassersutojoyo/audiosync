@@ -23,7 +23,8 @@ extension AppDelegate {
     /// From every AirPlay reconcile (at launch, every 3 s, after a wake): the
     /// first one starts the sender and its discovery, and starts it again
     /// after a start failed (`NativeSenderStarts`); later ones make its
-    /// speakers match the switches. On quit, `shutdown` tears it down.
+    /// speakers match the switches. On quit, `applicationWillTerminate`
+    /// tears it down (`NativeAirPlay.shutdown`).
     func reconcileNativeAirPlay() {
         guard nativeAirPlay != nil else {
             if nativeStarts.mayStart(at: Date()) { startNativeAirPlay() }

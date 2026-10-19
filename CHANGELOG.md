@@ -7,7 +7,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Added
 
 - AirPlay speakers with a screen, such as a TV, show the track that's playing in Spotify or Music: title, artist, album and artwork. When nothing is playing there, or with any other source, they show "AudioSync", the source's name (such as the app or input device) and "From your Mac" instead of a file name. It uses the same Automation access to Spotify or Music as Now Playing in the window.
-- A new audio engine written in Rust, which now plays your audio. The previous engine is still there as a fallback: hold Option while opening the AudioSync menu and choose "Use Swift Audio Engine (Next Start)", and it takes over the next time streaming starts. Choosing the item again goes back to the new engine.
+- A new audio engine written in Rust, which now plays your audio. It replaces the previous engine completely, so the hidden "Use Swift Audio Engine (Next Start)" option from the test builds is gone.
 
 ### Changed
 
@@ -18,6 +18,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - An AirPlay speaker no longer jumps to full volume when streaming starts or after the AirPlay engine restarts. Each AirPlay speaker keeps its own volume, and the master slider scales it too, never above its own slider. After the update each AirPlay speaker starts at 60% or lower the first time, so set its slider once.
 - After the Mac wakes from sleep, AirPlay speakers that were playing are selected again instead of being switched off with a "couldn't be reached" notice. Only a speaker that's still off about 20 seconds after wake is turned off.
 - After the AirPlay engine restarts, AirPlay comes back with the same latency as before, so local speakers stay in sync at their saved delay. Before, each restart could leave AirPlay up to a quarter of a second later.
+- When the AirPlay engine stops reading the audio for a moment without closing it, as it can around a sleep and wake, AudioSync now skips what piled up on its side and carries on with live audio. That takes up to a quarter of a second off the extra lag AirPlay could come back with. A little audio that was already waiting for the engine still plays first, so some lag can remain.
 - An AirPlay engine restart that happened between two status checks no longer switches its speakers off as unreachable; they're selected again.
 - AirPlay speakers get their volume back after an engine restart even when the restarted engine takes a while to find them.
 - The AirPlay stream no longer starts twice when streaming begins. The double start could leave a TV showing the pipe's file name instead of the track, and the track info is now sent again whenever the stream restarts.

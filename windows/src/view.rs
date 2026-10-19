@@ -50,6 +50,9 @@ enum DialogPurpose {
 struct UiState {
     sync_open: HashSet<String>,
     delay_drafts: HashMap<String, String>,
+    /// What is being typed in the AirPlay delay field, and the value shown
+    /// then: the field follows a new value (a new sender latency) instead.
+    airplay_delay_draft: Option<(String, Option<f64>)>,
     /// View > Show Virtual Devices; off at launch, like the Mac's default.
     show_virtual: bool,
 }
@@ -515,6 +518,19 @@ impl App {
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
         self.main.set_show_virtual_devices(ui.show_virtual);
+        self.main
+            .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
+        let airplay_delay = state.airplay_delay_ms.unwrap_or(0.0);
+        let airplay_draft = ui
+            .airplay_delay_draft
+            .as_ref()
+            .filter(|(_, shown)| *shown == state.airplay_delay_ms)
+            .map(|(text, _)| text.clone());
+        self.main.set_airplay_delay_text(
+            airplay_draft
+                .unwrap_or_else(|| format_ms(airplay_delay))
+                .into(),
+        );
 
         self.show_equalizer_state(&state.equalizer);
         drop(ui);
@@ -593,6 +609,12 @@ impl App {
         let w = weak.clone();
         main.on_delay_edited(move |id, text| with_app(&w, |app| app.edit_delay(&id, &text)));
         let w = weak.clone();
+        main.on_airplay_delay_stepped(move |delta| {
+            with_app(&w, |app| app.step_airplay_delay(delta))
+        });
+        let w = weak.clone();
+        main.on_airplay_delay_edited(move |text| with_app(&w, |app| app.edit_airplay_delay(&text)));
+        let w = weak.clone();
         main.on_auto_connect_toggled(move |id, on| {
             with_app(&w, |app| app.update(|b| b.set_auto_connect(&id, on)))
         });
@@ -624,6 +646,10 @@ impl App {
         });
         let w = weak.clone();
         main.on_notice_guide_requested(move |id| with_app(&w, |app| app.show_guide(id)));
+        let w = weak.clone();
+        main.on_notice_retry_requested(move |_| {
+            with_app(&w, |app| app.update(|b| b.retry_airplay()))
+        });
         let w = weak.clone();
         main.on_close_requested(move || with_app(&w, App::close_main));
         main.on_exit_requested(|| {
@@ -682,6 +708,10 @@ impl App {
                 app.hide_flyout();
                 app.show_guide(id);
             })
+        });
+        let w = weak.clone();
+        flyout.on_notice_retry_requested(move |_| {
+            with_app(&w, |app| app.update(|b| b.retry_airplay()))
         });
         let w = weak.clone();
         flyout.on_open_app(move || {
@@ -1124,17 +1154,16 @@ impl App {
         self.update(|b| b.set_speaker_delay(id, current + f64::from(delta)));
     }
 
-    /// Applies the typed delay as soon as it is a number. Out of range, the
-    /// field shows the value that was applied.
+    /// Applies the typed offset as soon as it is a number ("+150", "−250").
+    /// Out of range, the field shows the value that was applied.
     fn edit_delay(&self, id: &str, text: &str) {
         let draft = match ui_model::parse_delay_ms(text) {
             Some(ms) => {
                 self.backend.borrow_mut().set_speaker_delay(id, ms);
-                let typed: f64 = text.trim().replace(',', ".").parse().unwrap_or(ms);
-                if typed == ms {
+                if ui_model::parse_ms(text) == Some(ms) {
                     text.to_string()
                 } else {
-                    format_ms(ms)
+                    format_offset_ms(ms)
                 }
             }
             None => text.to_string(),
@@ -1143,6 +1172,29 @@ impl App {
             .borrow_mut()
             .delay_drafts
             .insert(id.to_string(), draft);
+        self.refresh();
+    }
+
+    fn step_airplay_delay(&self, delta: i32) {
+        let Some(current) = self.snapshot().airplay_delay_ms else {
+            return;
+        };
+        self.ui.borrow_mut().airplay_delay_draft = None;
+        self.update(|b| b.set_airplay_delay(current + f64::from(delta)));
+    }
+
+    /// Applies the typed AirPlay delay as soon as it is a number. Clamped,
+    /// the field shows the value that was applied.
+    fn edit_airplay_delay(&self, text: &str) {
+        if let Some(ms) = ui_model::parse_ms(text) {
+            self.backend.borrow_mut().set_airplay_delay(ms);
+        }
+        let applied = self.snapshot().airplay_delay_ms;
+        let draft = match ui_model::parse_ms(text) {
+            Some(ms) if applied != Some(ms) => format_ms(applied.unwrap_or(0.0)),
+            _ => text.to_string(),
+        };
+        self.ui.borrow_mut().airplay_delay_draft = Some((draft, applied));
         self.refresh();
     }
 
@@ -1304,6 +1356,15 @@ fn format_ms(ms: f64) -> String {
     format!("{}", ms.round() as i64)
 }
 
+/// An offset as its field shows it, with its sign: "+150", "−250", "0".
+fn format_offset_ms(ms: f64) -> String {
+    match ms.round() as i64 {
+        whole if whole > 0 => format!("+{whole}"),
+        whole if whole < 0 => format!("\u{2212}{}", whole.unsigned_abs()),
+        _ => "0".to_owned(),
+    }
+}
+
 pub fn row_state(state: SpeakerState) -> RowState {
     match state {
         SpeakerState::Off => RowState::Off,
@@ -1382,8 +1443,9 @@ pub fn speaker_item(
         has_delay: speaker.delay_ms.is_some(),
         delay_ms: delay.round() as i32,
         delay_text: draft
-            .map_or_else(|| format_ms(delay), str::to_string)
+            .map_or_else(|| format_offset_ms(delay), str::to_string)
             .into(),
+        reference_name: state.reference_name.as_deref().unwrap_or_default().into(),
         sync_open: sync_open && speaker.delay_ms.is_some(),
         auto_connect: speaker.auto_connect,
         availability: availability(speaker.availability),
@@ -1407,6 +1469,7 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
         message: notice_text(strings, &notice.message),
         time: notice.time.as_str().into(),
         has_guide: guide::guide(&notice.message).is_some(),
+        has_retry: notice.message == NoticeMessage::AirPlayStopped,
     }
 }
 
@@ -1505,6 +1568,7 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         | NoticeMessage::AirPlayCantPlay { speaker, problem } => {
             strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
         }
+        NoticeMessage::AirPlayStopped => strings.get_notice_airplay_stopped(),
         NoticeMessage::HeardTwice {
             source,
             mute,
@@ -1597,7 +1661,7 @@ mod tests {
         assert_eq!(row.state, RowState::Off);
         assert_eq!(row.kind, SpeakerKind::Usb);
         assert!(row.has_delay && row.sync_open);
-        assert_eq!((row.delay_ms, row.delay_text.as_str()), (120, "120"));
+        assert_eq!((row.delay_ms, row.delay_text.as_str()), (120, "+120"));
 
         let kitchen = state.speaker("airplay:kitchen").unwrap();
         let row = speaker_item(&state, kitchen, true, true, None);
@@ -1605,6 +1669,30 @@ mod tests {
         assert!(
             !row.has_delay && !row.sync_open,
             "AirPlay rows have no sync controls"
+        );
+    }
+
+    #[test]
+    fn the_reference_row_has_no_delay_and_the_others_show_a_signed_offset() {
+        let state = MockBackend::new().snapshot();
+        let row = |id: &str| speaker_item(&state, state.speaker(id).unwrap(), true, true, None);
+        let reference = row("local:speakers");
+        assert!(
+            !reference.has_delay && !reference.sync_open,
+            "the reference has no delay field"
+        );
+        let desk = row("local:desk");
+        assert_eq!((desk.delay_ms, desk.delay_text.as_str()), (120, "+120"));
+        assert_eq!(desk.reference_name.as_str(), "Speakers");
+        let headset = row("local:bt");
+        assert_eq!(
+            (headset.delay_ms, headset.delay_text.as_str()),
+            (-250, "−250")
+        );
+        let headphones = row("local:headphones");
+        assert_eq!(
+            (headphones.delay_ms, headphones.delay_text.as_str()),
+            (0, "0")
         );
     }
 

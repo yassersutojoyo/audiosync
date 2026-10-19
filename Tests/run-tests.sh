@@ -3,15 +3,14 @@
 # just the Command Line Tools). Usage: Tests/run-tests.sh [--hardware]
 #   --hardware  also runs the engine test, which opens real output devices at
 #               zero volume (silent) to check render flow and delay end to end,
-#               once on the Swift engine and once on the Rust core, and the pipe
-#               start test, which runs a private AirPlay engine (the bundled one,
-#               or AUDIOSYNC_PIPESTART_ENGINE) with only its fifo output in
-#               .build/scratch-pipestart and times how late audio leaves the
-#               pipe after streaming pauses, stops and starts again.
+#               and the pipe start test, which runs a private AirPlay engine (the
+#               bundled one, or AUDIOSYNC_PIPESTART_ENGINE) with only its fifo
+#               output in .build/scratch-pipestart and times how late audio
+#               leaves the pipe after streaming pauses, stops and starts again.
 # Also runs shellcheck on the scripts in scripts/shellcheck-files.txt (it fails
 # if shellcheck isn't installed: brew install shellcheck) and the private-reference
-# check, scripts/privacy_check.py. The core parity suite, the soak harness
-# and the engine test link the Rust core, so this builds it first with
+# check, scripts/privacy_check.py. The FIFO suite, the soak harness and the
+# engine test link the Rust core, so this builds it first with
 # scripts/build_core.sh (which needs a Rust toolchain).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -21,9 +20,9 @@ trap 'rm -rf "$OUT"' EXIT
 
 # The core's C interface and the static library scripts/build_core.sh makes.
 CORE=(-I Sources/CAudioSyncCore -L core/target/universal-apple-darwin/release -laudiosync_core)
-# The engine parts of both implementations, with what they need to compile.
-ENGINE_PARTS=(EngineImpl.swift EngineParts.swift CoreEngine.swift OutputRenderer.swift RingBuffer.swift
-  Equalizer.swift FifoFeed.swift Volume.swift SpeakerState.swift AirPlayPairing.swift Diagnostics.swift NativeAirPlayTap.swift)
+# The engine's parts on the core, with what they need to compile.
+ENGINE_PARTS=(EngineParts.swift CoreEngine.swift OutputRenderer.swift Equalizer.swift Diagnostics.swift
+  NativeAirPlayTap.swift)
 
 build() {   # build <name> <test file> <source files…> [-- <more swiftc arguments…>]
   local name=$1 test=$2; shift 2
@@ -132,28 +131,18 @@ else
   echo "PASSED"
 fi
 
-echo "▶ ring buffer"
-build ring Tests/ringtest.swift RingBuffer.swift
-"$OUT/ring/run" > "$OUT/ring.log" || status=1
-grep -E "FAIL|PASSED" "$OUT/ring.log" || true
-
 echo "▶ logic"
 build logic Tests/logictest.swift PipeMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
-  Equalizer.swift FifoFeed.swift RingBuffer.swift Diagnostics.swift AirPlayPairing.swift AirPlayReconcile.swift EngineLifecycle.swift Notices.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \
+  Equalizer.swift Diagnostics.swift AirPlayPairing.swift AirPlayReconcile.swift EngineLifecycle.swift Notices.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \
   AudioDevices.swift OwnToneOutputs.swift OwnTonePlayer.swift AirPlayEngineConfig.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift \
-  EngineImpl.swift AirPlayImpl.swift NativeAirPlayModel.swift WindowRules.swift
+  AirPlayImpl.swift NativeAirPlayModel.swift WindowRules.swift AppSettings.swift AppLifecycle.swift
 "$OUT/logic/run" || status=1
-
-echo "▶ fifo"
-build fifo Tests/fifotest.swift FifoFeed.swift PipeMetadata.swift Diagnostics.swift
-"$OUT/fifo/run" || status=1
 
 echo "▶ Rust core (scripts/build_core.sh)"
 if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
-  echo "▶ core parity (the Swift suites' checks on both engines' parts)"
-  build parity Tests/paritytest.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
-  "$OUT/parity/run" > "$OUT/parity.log" || status=1
-  grep -E "FAIL|KNOWN|PASSED|^core " "$OUT/parity.log" || true
+  echo "▶ fifo and the core's app-side parts"
+  build fifo Tests/fifotest.swift "${ENGINE_PARTS[@]}" PipeMetadata.swift -- "${CORE[@]}"
+  "$OUT/fifo/run" || status=1
 else
   tail -n 20 "$OUT/core.log"
   echo "❌ the Rust core did not build, so the suites that link it can't run"
@@ -164,12 +153,10 @@ echo "▶ soak harness (compile only; Tests/soak.sh and Tests/bench.sh run it)"
 Tests/build-harness.sh "$OUT/soaktest" || status=1
 
 if [ "${1:-}" = "--hardware" ]; then
-  echo "▶ engine (real output devices, silent), on each engine"
+  echo "▶ engine (real output devices, silent)"
   build engine Tests/enginetest.swift "${ENGINE_PARTS[@]}" AudioDevices.swift -- "${CORE[@]}"
-  for engine in swift rust; do
-    AUDIOSYNC_ENGINE=$engine "$OUT/engine/run" || status=1
-  done
-  echo "▶ pipe start latency (a private engine and its fifo output, no audio device), on each pipe feed"
+  "$OUT/engine/run" || status=1
+  echo "▶ pipe start latency (a private engine and its fifo output, no audio device)"
   build pipestart Tests/pipestart.swift "${ENGINE_PARTS[@]}" AirPlayEngineConfig.swift OwnTonePlayer.swift -- "${CORE[@]}"
   "$OUT/pipestart/run" "$PWD/.build/scratch-pipestart" || status=1
 fi
