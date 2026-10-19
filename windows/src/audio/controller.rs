@@ -43,7 +43,8 @@ use audiosync_core::volume::SharedGain;
 use super::SESSION_RATE;
 use super::airplay::{AirPlayLink, AirPlaySpeakers, FeedLease, FeedSlot};
 use super::backend::{
-    AirPlayInfo, AirPlayProblem, AudioBackend, BackendError, BackendEvent, OutputInfo, SourceId,
+    AirPlayInfo, AirPlayPinPrompt, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
+    OutputInfo, SourceId,
     SourceInfo, StopReason,
 };
 use super::capture::{
@@ -53,6 +54,7 @@ use super::capture::{
 #[cfg(test)]
 use super::outputs::OutputParams;
 use super::outputs::{AirPlay, Endpoint, Listing, ListingNote, OutputPolicy, StreamSetup};
+use super::pairings::PairingStore;
 use super::process::ProcessTable;
 use super::routing::{
     self, Captured, DirectPath, DirectReason, EndpointAudio, EndpointVolume, PlayedOn,
@@ -261,9 +263,22 @@ impl<D: Driver> Controller<D> {
     }
 
     /// Plays to AirPlay speakers through `link`, fed by the capture through
-    /// `feed`: local outputs follow the AirPlay sync rule from now on.
+    /// `feed`: local outputs follow the AirPlay sync rule from now on. Apple
+    /// TV pairings are kept for this run only.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the app keeps its pairings"))]
     pub fn set_airplay(&mut self, link: Box<dyn AirPlayLink>, feed: Option<FeedSlot>) {
-        let airplay = AirPlaySpeakers::new(link, self.policy.master(), self.log.clone());
+        self.set_airplay_with_pairings(link, feed, PairingStore::in_memory());
+    }
+
+    /// [`Controller::set_airplay`], with the paired Apple TVs' credentials
+    /// in `store`.
+    pub fn set_airplay_with_pairings(
+        &mut self,
+        link: Box<dyn AirPlayLink>,
+        feed: Option<FeedSlot>,
+        store: PairingStore,
+    ) {
+        let airplay = AirPlaySpeakers::new(link, self.policy.master(), self.log.clone(), store);
         self.log.log(|| {
             format!(
                 "AirPlay: the sender runs, L = {} ms; local outputs play at their own delay \
@@ -1055,6 +1070,36 @@ impl<D: Driver> AudioBackend for Controller<D> {
         let result = airplay.set_enabled(id, enabled);
         self.sync_airplay_rule();
         result
+    }
+
+    fn start_airplay_pairing(&mut self, id: &str) -> Result<(), AirPlayProblem> {
+        match self.airplay.as_mut() {
+            Some(airplay) => airplay.start_pairing(id),
+            None => Err(AirPlayProblem::Unsupported),
+        }
+    }
+
+    fn submit_airplay_pin(&mut self, id: &str, pin: &str) -> bool {
+        self.airplay
+            .as_mut()
+            .is_some_and(|airplay| airplay.submit_pin(id, pin))
+    }
+
+    fn cancel_airplay_pairing(&mut self, id: &str) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.cancel_pairing(id);
+        }
+    }
+
+    fn forget_airplay_pairing(&mut self, id: &str) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.forget_pairing(id);
+        }
+        self.sync_airplay_rule();
+    }
+
+    fn airplay_pin_prompt(&self) -> Option<AirPlayPinPrompt> {
+        self.airplay.as_ref().and_then(AirPlaySpeakers::pin_prompt)
     }
 
     fn set_airplay_volume(&mut self, id: &str, position: f64) {

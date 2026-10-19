@@ -90,7 +90,11 @@ pub enum AirPlayAvailability {
     Open,
     /// It asks for a password; AudioSync can't send one yet.
     PasswordNotYet,
-    /// It needs pairing with a PIN; AudioSync can't pair yet.
+    /// An Apple TV that asks for a PIN once: switching it on pairs it, and
+    /// its credentials are kept from then on.
+    NeedsPin,
+    /// It needs another kind of pairing with a PIN, which AudioSync can't do
+    /// yet.
     PairingNotYet,
     /// Only AirPlay 2 can play it; AudioSync speaks AirPlay 1 only so far.
     AirPlay2NotYet,
@@ -117,6 +121,35 @@ pub struct AirPlayInfo {
     pub delay_ms: f64,
     /// Whether it plays right now.
     pub playing: bool,
+    /// Whether AudioSync keeps credentials from pairing with it.
+    pub paired: bool,
+    /// Whether a pairing with it is running.
+    pub pairing: bool,
+}
+
+/// The PIN prompt of a running pairing: the Apple TV shows a PIN for the
+/// user to type, or will again after a wrong one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AirPlayPinPrompt {
+    /// The speaker's ID.
+    pub id: String,
+    /// The name it announces.
+    pub name: String,
+    /// Where the pairing is.
+    pub phase: PairingPhase,
+    /// The Apple TV turned the last PIN down; it shows a new one.
+    pub wrong_pin: bool,
+}
+
+/// Where a pairing is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PairingPhase {
+    /// Asking the Apple TV to show a PIN.
+    Starting,
+    /// The Apple TV shows a PIN; waiting for the user to type it.
+    WaitingForPin,
+    /// The PIN went to the Apple TV; waiting for its answer.
+    Checking,
 }
 
 /// What went wrong with an AirPlay speaker, for a notice.
@@ -134,7 +167,12 @@ pub enum AirPlayProblem {
     Refused,
     /// It asks for a password, which AudioSync can't send yet.
     PasswordNotYet,
-    /// It needs pairing, which AudioSync can't do yet.
+    /// An Apple TV that needs pairing with a PIN first (or again, after it
+    /// stopped accepting AudioSync's credentials). Switching it on pairs it.
+    NeedsPin,
+    /// The pairing with an Apple TV failed, so it is off.
+    PairingFailed,
+    /// It needs another kind of pairing, which AudioSync can't do yet.
     PairingNotYet,
     /// Only AirPlay 2 can play it.
     AirPlay2NotYet,
@@ -162,6 +200,7 @@ impl AirPlayAvailability {
         match self {
             AirPlayAvailability::Open => None,
             AirPlayAvailability::PasswordNotYet => Some(AirPlayProblem::PasswordNotYet),
+            AirPlayAvailability::NeedsPin => Some(AirPlayProblem::NeedsPin),
             AirPlayAvailability::PairingNotYet => Some(AirPlayProblem::PairingNotYet),
             AirPlayAvailability::AirPlay2NotYet => Some(AirPlayProblem::AirPlay2NotYet),
             AirPlayAvailability::Unsupported => Some(AirPlayProblem::Unsupported),
@@ -224,6 +263,11 @@ pub enum BackendEvent {
         id: String,
         /// Why.
         problem: AirPlayProblem,
+    },
+    /// An Apple TV the user switched on was paired, and is on now.
+    AirPlayPaired {
+        /// The speaker's ID.
+        id: String,
     },
 }
 
@@ -368,8 +412,30 @@ pub trait AudioBackend {
 
     /// Turns an AirPlay speaker on or off. While playing, a speaker turned on
     /// starts at once. One that can't play from AudioSync stays off, with the
-    /// reason returned.
+    /// reason returned: [`AirPlayProblem::NeedsPin`] for an Apple TV to pair
+    /// first ([`AudioBackend::start_airplay_pairing`]). Turning a speaker off
+    /// also stops its pairing.
     fn set_airplay_enabled(&mut self, id: &str, enabled: bool) -> Result<(), AirPlayProblem>;
+
+    /// Starts pairing with an Apple TV that asks for a PIN: it shows one, and
+    /// [`AudioBackend::airplay_pin_prompt`] asks the UI for it. Paired, the
+    /// speaker is turned on ([`BackendEvent::AirPlayPaired`]); a failure
+    /// leaves it off with [`BackendEvent::AirPlayFailed`].
+    fn start_airplay_pairing(&mut self, id: &str) -> Result<(), AirPlayProblem>;
+
+    /// The PIN the user typed for the speaker's pairing. Returns whether it
+    /// went to the Apple TV: only digits, while the pairing waits for one.
+    fn submit_airplay_pin(&mut self, id: &str, pin: &str) -> bool;
+
+    /// Stops the speaker's pairing; the speaker stays off.
+    fn cancel_airplay_pairing(&mut self, id: &str);
+
+    /// Forgets the speaker's pairing credentials: it is turned off, and asks
+    /// for a PIN again the next time it is switched on.
+    fn forget_airplay_pairing(&mut self, id: &str);
+
+    /// The PIN prompt to show, if a pairing has one.
+    fn airplay_pin_prompt(&self) -> Option<AirPlayPinPrompt>;
 
     /// Sets an AirPlay speaker's volume slider position (0 to 100), live. A
     /// value that isn't finite is ignored.
