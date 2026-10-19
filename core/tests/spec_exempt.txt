@@ -32,3 +32,4 @@ S178 Which AirPlay latency the host hands the hold-back policy: its stored AirPl
 S179 One-time migration of the Mac app's stored delays (its defaults keys).
 S180 One-time migration of the Windows app's settings file.
 S181 What the Mac and Windows windows show for offsets and the AirPlay delay.
+S186 Session stop and source change order in the host's engine wrapper (fade requests, the bounded wait, then stopping Core Audio or WASAPI IO); the core's parts are S185 and S189.
