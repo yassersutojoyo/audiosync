@@ -15,7 +15,7 @@ use audiosync_airplay::pairing::{
 };
 use audiosync_airplay::rtsp::{Method, Request};
 use audiosync_airplay::session::{SessionEvent, State, Verifier};
-use common::atv::{CLIENT, FakeAppleTv, PairLink, TestEntropy, public_of};
+use common::atv::{CLIENT, FakeAppleTv, PairLink, SealAnswer, TestEntropy, public_of};
 use common::{FakeReceiver, Link, key};
 use plist::Value;
 
@@ -60,10 +60,14 @@ fn pairing_runs_on_one_connection_waits_for_the_pin_and_hands_over_credentials()
     let mut link = PairLink::new(apple_tv_receiver(&atv));
     link.connect();
 
-    // P48, P49: pin-start without a body, then the client ID in a plist.
+    // P46, P48, P49: OPTIONS, pin-start without a body, then the client ID
+    // in a plist.
     let keys: Vec<String> = link.receiver.requests.iter().map(key).collect();
-    assert_eq!(keys, ["POST /pair-pin-start", "POST /pair-setup-pin"]);
-    let start: &Request = &link.receiver.requests[0];
+    assert_eq!(
+        keys,
+        ["OPTIONS", "POST /pair-pin-start", "POST /pair-setup-pin"]
+    );
+    let start: &Request = &link.receiver.requests[1];
     assert_eq!(start.method, Method::Post);
     assert!(start.body.is_empty());
     assert!(start.headers.get("Content-Type").is_none());
@@ -78,7 +82,7 @@ fn pairing_runs_on_one_connection_waits_for_the_pin_and_hands_over_credentials()
             assert!(request.headers.get(header).is_some(), "{header}");
         }
     }
-    let first = &link.receiver.requests[1];
+    let first = &link.receiver.requests[2];
     assert_eq!(
         first.headers.get("Content-Type"),
         Some("application/x-apple-binary-plist")
@@ -108,6 +112,7 @@ fn pairing_runs_on_one_connection_waits_for_the_pin_and_hands_over_credentials()
     assert_eq!(
         keys,
         [
+            "OPTIONS",
             "POST /pair-pin-start",
             "POST /pair-setup-pin",
             "POST /pair-setup-pin",
@@ -124,15 +129,27 @@ fn pairing_runs_on_one_connection_waits_for_the_pin_and_hands_over_credentials()
     let credentials = link.paired().expect("paired");
     assert_eq!(credentials.client_id(), client_id);
     assert_eq!(atv.paired(), [credentials.public_key()]);
-    let proof = plist(&link.receiver.requests[2].body);
+    let proof = plist(&link.receiver.requests[3].body);
     let sent_a = proof.get("pk").and_then(Value::as_data).expect("pk");
     assert_eq!(sent_a, public_of(credentials.secret()).as_slice());
+    // P53, P54: the receiver's key from its sealed answer.
+    assert_eq!(credentials.receiver_key(), Some(atv.receiver_key()));
 
-    // The blob a host stores round-trips, and nothing prints the secret.
+    // The blob a host stores round-trips, and nothing prints the secret:
+    // version 2 with the receiver's key, 81 bytes, version 1 without, 49.
     let blob = credentials.to_bytes();
-    assert_eq!(blob.len(), 49);
+    assert_eq!(blob.len(), 81);
+    assert_eq!(blob[0], 2);
     assert_eq!(Credentials::from_bytes(&blob), Ok(credentials.clone()));
+    assert!(Credentials::from_bytes(&blob[..80]).is_err());
+    let without_key = Credentials::new(&client_id, *credentials.secret()).expect("credentials");
+    assert_ne!(without_key, credentials);
+    let blob = without_key.to_bytes();
+    assert_eq!(blob.len(), 49);
+    assert_eq!(blob[0], 1);
+    assert_eq!(Credentials::from_bytes(&blob), Ok(without_key.clone()));
     assert!(Credentials::from_bytes(&blob[..48]).is_err());
+    assert_eq!(without_key.receiver_key(), None);
     let mut other = *credentials.secret();
     other[31] ^= 1;
     assert_ne!(
@@ -239,8 +256,8 @@ fn a_is_drawn_again_when_s_would_start_with_a_zero_byte() {
     );
 }
 
-// Part of P50: the same redraw when A would start with a zero byte, so
-// PAD(A) and A are the same bytes in M1 and M2.
+// Part of P50: the same redraw when A would start with a zero byte, which
+// P50 asks for along with S's.
 #[test]
 fn a_is_drawn_again_when_a_would_start_with_a_zero_byte() {
     // An a whose A = g^a mod N starts with a zero byte, found the
@@ -272,6 +289,165 @@ fn a_is_drawn_again_when_a_would_start_with_a_zero_byte() {
         proof.get("pk").and_then(Value::as_data),
         Some(public_of(&good).as_slice())
     );
+}
+
+// covers: P50
+#[test]
+fn a_b_with_a_leading_zero_byte_is_hashed_in_its_shortest_form() {
+    // The fake hashes B without its leading zero byte in M1, as P50 says,
+    // so a sender that padded B would get a 470 here.
+    let user = format!("{CLIENT:016X}");
+    let atv = FakeAppleTv::with_zero_led_b(PIN, &user);
+    let b_pub = atv.b_of(&user);
+    assert_eq!(b_pub.len(), 256, "B goes out as 256 bytes (P49)");
+    assert_eq!(b_pub[0], 0, "B starts with a zero byte");
+    let credentials = pair(&atv);
+    assert_eq!(atv.paired(), [credentials.public_key()]);
+}
+
+// covers: P52
+#[test]
+fn after_a_470_to_the_proof_no_proof_is_sent_again() {
+    let atv = FakeAppleTv::new(PIN);
+    let mut link = PairLink::new(apple_tv_receiver(&atv));
+    link.connect();
+    link.submit("0000", &mut TestEntropy::new());
+    let (error, wrong_pin) = link.failure().expect("failed");
+    assert_eq!(error.kind, ErrorKind::PairingFailed);
+    assert!(wrong_pin);
+    assert!(link.closed);
+    assert_eq!(link.pairing.state(), PairingState::Closed);
+    // A corrected PIN can't go after it on this pairing.
+    assert_eq!(
+        link.pairing
+            .submit_pin(PIN, &mut TestEntropy::new(), link.now),
+        Err(PinError::NotWaiting)
+    );
+    link.pump();
+    assert_eq!(atv.bodies("/pair-setup-pin").len(), 2, "one proof only");
+    // The host starts again from /pair-pin-start.
+    let mut link = PairLink::new(apple_tv_receiver(&atv));
+    link.connect();
+    let keys: Vec<String> = link.receiver.requests.iter().map(key).collect();
+    assert_eq!(
+        keys,
+        ["OPTIONS", "POST /pair-pin-start", "POST /pair-setup-pin"]
+    );
+    link.submit(PIN, &mut TestEntropy::new());
+    assert!(link.paired().is_some());
+}
+
+// covers: P46, P53, P54
+#[test]
+fn options_goes_first_and_the_receivers_sealed_key_is_kept_when_it_opens() {
+    // A 200 whose `Public` lacks ANNOUNCE: Unsupported, no PIN asked.
+    let atv = FakeAppleTv::new(PIN);
+    let mut receiver = apple_tv_receiver(&atv);
+    receiver.public = Some("OPTIONS, SETUP, RECORD, GET_PARAMETER, POST, GET".to_owned());
+    let mut link = PairLink::new(receiver);
+    link.connect();
+    let (error, _) = link.failure().expect("failed");
+    assert_eq!(
+        error.kind,
+        ErrorKind::Unsupported(audiosync_airplay::error::UnsupportedReason::Methods)
+    );
+    assert_eq!(error.method, Some(Method::Options));
+    assert!(!link.events.contains(&PairingEvent::PinRequested));
+    assert!(
+        !atv.paths().iter().any(|path| path == "/pair-pin-start"),
+        "no pin-start"
+    );
+    assert!(link.closed);
+
+    // A 403, a 501 or no `Public` goes on to pin-start.
+    for (status, public) in [(Some(403), None), (Some(501), None), (None, None)] {
+        let atv = FakeAppleTv::new(PIN);
+        let mut receiver = apple_tv_receiver(&atv);
+        receiver.public = public;
+        if let Some(status) = status {
+            receiver.status.insert("OPTIONS".to_owned(), status);
+        }
+        let mut link = PairLink::new(receiver);
+        link.connect();
+        assert_eq!(link.events, [PairingEvent::PinRequested], "{status:?}");
+    }
+    // A 403 that means access restricted: pin-start fails, PairingFailed.
+    let atv = FakeAppleTv::new(PIN);
+    let mut receiver = apple_tv_receiver(&atv);
+    receiver.status.insert("OPTIONS".to_owned(), 403);
+    receiver
+        .status
+        .insert("POST /pair-pin-start".to_owned(), 403);
+    let mut link = PairLink::new(receiver);
+    link.connect();
+    let (error, _) = link.failure().expect("failed");
+    assert_eq!(error.kind, ErrorKind::PairingFailed);
+    assert_eq!(error.status, Some(403));
+
+    // The sealed answer: kept when it opens, ignored when it is missing or
+    // doesn't open; pairing completes either way.
+    for (answer, kept) in [
+        (SealAnswer::Sealed, true),
+        (SealAnswer::Empty, false),
+        (SealAnswer::Tampered, false),
+    ] {
+        let atv = FakeAppleTv::new(PIN);
+        atv.answer_seal_with(answer);
+        let credentials = pair(&atv);
+        assert_eq!(atv.paired(), [credentials.public_key()], "{answer:?}");
+        assert_eq!(
+            credentials.receiver_key(),
+            kept.then(|| atv.receiver_key()),
+            "{answer:?}"
+        );
+    }
+}
+
+// covers: P58, P136, P137
+#[test]
+fn a_409_at_a_pairing_step_is_busy_and_other_failures_are_pairing_failed() {
+    for (status_key, setup) in [
+        (Some("OPTIONS"), vec![]),
+        (Some("POST /pair-pin-start"), vec![]),
+        (None, vec![Some(409)]),
+        (None, vec![None, Some(409)]),
+    ] {
+        let atv = FakeAppleTv::new(PIN);
+        let mut receiver = apple_tv_receiver(&atv);
+        if let Some(status_key) = status_key {
+            receiver.status.insert(status_key.to_owned(), 409);
+        }
+        for status in setup.iter().copied() {
+            atv.queue_setup_status(status);
+        }
+        let mut link = PairLink::new(receiver);
+        link.connect();
+        if link.pairing.state() == PairingState::WaitingForPin {
+            link.submit(PIN, &mut TestEntropy::new());
+        }
+        let (error, wrong_pin) = link.failure().expect("failed");
+        assert_eq!(error.kind, ErrorKind::Busy, "{status_key:?} {setup:?}");
+        assert_eq!(error.status, Some(409));
+        assert!(!wrong_pin);
+    }
+    // Any other non-200 to a pairing request: PairingFailed (P58).
+    for status in [400, 403, 500, 503] {
+        let atv = FakeAppleTv::new(PIN);
+        let mut receiver = apple_tv_receiver(&atv);
+        receiver
+            .status
+            .insert("POST /pair-pin-start".to_owned(), status);
+        let mut link = PairLink::new(receiver);
+        link.connect();
+        let (error, _) = link.failure().expect("failed");
+        assert_eq!(error.kind, ErrorKind::PairingFailed, "{status}");
+        let atv = FakeAppleTv::new(PIN);
+        atv.queue_setup_status(Some(status));
+        let mut link = PairLink::new(apple_tv_receiver(&atv));
+        link.connect();
+        let (error, _) = link.failure().expect("failed");
+        assert_eq!(error.kind, ErrorKind::PairingFailed, "{status}");
+    }
 }
 
 // covers: P58, P136
@@ -370,9 +546,9 @@ fn a_silent_apple_tv_times_out_but_the_pin_wait_does_not() {
     assert_eq!(error.kind, ErrorKind::Timeout);
 }
 
-// covers: P55, P56
+// covers: P55, P56, P26
 #[test]
-fn stored_credentials_verify_before_announce_on_every_connection() {
+fn stored_credentials_verify_first_on_every_connection() {
     let atv = FakeAppleTv::new(PIN);
     let credentials = pair(&atv);
     let mut entropy = TestEntropy::new();
@@ -387,9 +563,9 @@ fn stored_credentials_verify_before_announce_on_every_connection() {
         assert_eq!(
             link.keys(),
             [
+                "POST /pair-verify",
+                "POST /pair-verify",
                 "OPTIONS",
-                "POST /pair-verify",
-                "POST /pair-verify",
                 "ANNOUNCE",
                 "SETUP",
                 "RECORD",
@@ -399,15 +575,24 @@ fn stored_credentials_verify_before_announce_on_every_connection() {
             link.events
         );
         assert_eq!(link.session.state(), State::Playing);
+        // The receiver's signature checked out against its key (P56).
+        assert!(
+            !link
+                .events
+                .iter()
+                .any(|event| matches!(event, SessionEvent::Warning(_))),
+            "{:?}",
+            link.events
+        );
         // P55: 01 00 00 00 | v_pub | a_pub, raw bytes.
-        let first = &link.receiver.requests[1];
+        let first = &link.receiver.requests[0];
         assert_eq!(first.body.len(), 68);
         assert_eq!(&first.body[..4], &[1, 0, 0, 0]);
         assert_eq!(&first.body[4..36], &verify_keys[round]);
         assert_eq!(&first.body[36..], &credentials.public_key());
         // P56: 00 00 00 00 | the encrypted signature, which the fake
         // decrypted and checked against a_pub before its 200.
-        let second = &link.receiver.requests[2];
+        let second = &link.receiver.requests[1];
         assert_eq!(second.body.len(), 68);
         assert_eq!(&second.body[..4], &[0, 0, 0, 0]);
         link.session.teardown(link.now);
@@ -417,10 +602,60 @@ fn stored_credentials_verify_before_announce_on_every_connection() {
     // A fresh X25519 key on each connection (P55).
     assert_ne!(verify_keys[0], verify_keys[1]);
 
-    // A malformed first answer is a protocol error, not a verification.
+    // The verifier refuses a first answer of another length (which the
+    // session reports as a failed verification, P55) and an atv_pub that
+    // gives an all-zero shared secret.
     let mut verifier = LegacyVerifier::new(&credentials, &mut entropy).expect("a verifier");
     assert_eq!(verifier.second_request(&[0x5A; 95]), None);
     assert_eq!(verifier.second_request(&[0; 96]), None);
+
+    // A spare key pair for the one reconnect of P58, and only one.
+    let before = verifier.verify_public();
+    assert!(verifier.renew());
+    assert_ne!(verifier.verify_public(), before);
+    assert!(!verifier.renew());
+}
+
+// covers: P56
+#[test]
+fn a_receiver_signature_that_fails_the_check_is_a_warning_only() {
+    let atv = FakeAppleTv::new(PIN);
+    let credentials = pair(&atv);
+    assert!(credentials.receiver_key().is_some());
+    atv.sign_with_another_key();
+    let mut config = common::config();
+    config.verifier = Some(Box::new(
+        LegacyVerifier::new(&credentials, &mut TestEntropy::new()).expect("verifier"),
+    ));
+    let mut link = Link::new(config, apple_tv_receiver(&atv));
+    link.connect();
+    assert_eq!(link.session.state(), State::Playing, "{:?}", link.events);
+    let warnings: Vec<&Warning> = link
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            SessionEvent::Warning(warning) => Some(warning),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(warnings, [&Warning::ReceiverSignatureInvalid]);
+
+    // Without the receiver's key there is nothing to check.
+    let without_key =
+        Credentials::new(credentials.client_id(), *credentials.secret()).expect("credentials");
+    let mut config = common::config();
+    config.verifier = Some(Box::new(
+        LegacyVerifier::new(&without_key, &mut TestEntropy::new()).expect("verifier"),
+    ));
+    let mut link = Link::new(config, apple_tv_receiver(&atv));
+    link.connect();
+    assert_eq!(link.session.state(), State::Playing);
+    assert!(
+        !link
+            .events
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Warning(_)))
+    );
 }
 
 // covers: P58, P136

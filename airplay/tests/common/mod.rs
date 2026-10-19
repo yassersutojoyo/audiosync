@@ -108,6 +108,10 @@ pub struct FakeReceiver {
     pub transport: String,
     pub session: Option<String>,
     pub audio_latency: Option<u32>,
+    /// `Audio-Latency` as raw text, in place of `audio_latency` (P110).
+    pub audio_latency_text: Option<String>,
+    /// The body of a 200 to the first pair-verify request (P55).
+    pub verify_body: Vec<u8>,
     pub jack: Option<String>,
     pub server: Option<String>,
     pub volume_answer: String,
@@ -139,6 +143,8 @@ impl Default for FakeReceiver {
                 .to_owned(),
             session: Some("1".to_owned()),
             audio_latency: Some(2205),
+            audio_latency_text: None,
+            verify_body: vec![0x5A; 96],
             jack: Some("connected; type=analog".to_owned()),
             server: Some("FakeReceiver/1.0".to_owned()),
             volume_answer: "volume: -20.000000\r\n".to_owned(),
@@ -273,7 +279,9 @@ impl FakeReceiver {
                 }
             }
             Method::Record => {
-                if let Some(latency) = self.audio_latency {
+                if let Some(text) = &self.audio_latency_text {
+                    headers.push("Audio-Latency", text.clone());
+                } else if let Some(latency) = self.audio_latency {
                     headers.push("Audio-Latency", latency.to_string());
                 }
             }
@@ -283,7 +291,7 @@ impl FakeReceiver {
             }
             Method::Flush => headers.push("RTP-Info", "rtptime=1"),
             Method::Post if request.uri == "/pair-verify" => {
-                response.body = vec![0x5A; 96];
+                response.body = self.verify_body.clone();
             }
             Method::Post if request.uri == "/auth-setup" => {
                 response.body = vec![0xA5; 64];

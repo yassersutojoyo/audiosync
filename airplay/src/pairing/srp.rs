@@ -9,7 +9,9 @@
 //!
 //! The pairing's two departures from common SRP libraries (P50) live in
 //! [`session_key`] and [`client_proof`]: K is 40 bytes, H(S | 00 00 00 00) |
-//! H(S | 00 00 00 01), and M1 hashes g without padding.
+//! H(S | 00 00 00 01), and M1 hashes g without padding. In M1, M2 and K the
+//! values A, B and S are hashed in their shortest big-endian form, without
+//! leading zero bytes; only k and u pad them to the length of N.
 
 use crypto_bigint::modular::{FixedMontyForm, FixedMontyParams};
 use crypto_bigint::{Odd, U2048};
@@ -292,22 +294,26 @@ pub fn client_values(
 }
 
 /// The pairing's session key (P50): K = H(S | 00 00 00 00) |
-/// H(S | 00 00 00 01), 40 bytes, with S as given (padded to N).
+/// H(S | 00 00 00 01), 40 bytes, with S in its shortest big-endian form
+/// (leading zero bytes dropped, so a padded S gives the same K).
 pub fn session_key(premaster: &[u8]) -> [u8; 2 * HASH_BYTES] {
+    let premaster = trim_leading_zeros(premaster);
     let mut key = [0u8; 2 * HASH_BYTES];
     key[..HASH_BYTES].copy_from_slice(&sha1(&[premaster, &[0, 0, 0, 0]]));
     key[HASH_BYTES..].copy_from_slice(&sha1(&[premaster, &[0, 0, 0, 1]]));
     key
 }
 
-/// The client's proof (P50): M1 = H(H(N) XOR H(g) | H(I) | s | PAD(A) |
-/// PAD(B) | K), with g hashed as its single byte, not padded.
+/// The client's proof (P50): M1 = H(H(N) XOR H(g) | H(I) | s | A | B | K),
+/// with g hashed as its single byte, A and B in their shortest big-endian
+/// form (leading zero bytes dropped, so padded values give the same M1) and
+/// s as received.
 pub fn client_proof(
     group: &SrpGroup,
     identity: &[u8],
     salt: &[u8],
-    a_padded: &[u8],
-    b_padded: &[u8],
+    client_public: &[u8],
+    server_public: &[u8],
     key: &[u8],
 ) -> [u8; HASH_BYTES] {
     let hash_n = sha1(&[group.prime]);
@@ -316,13 +322,20 @@ pub fn client_proof(
     for (out, (n, g)) in mixed.iter_mut().zip(hash_n.iter().zip(hash_g.iter())) {
         *out = n ^ g;
     }
-    sha1(&[&mixed, &sha1(&[identity]), salt, a_padded, b_padded, key])
+    sha1(&[
+        &mixed,
+        &sha1(&[identity]),
+        salt,
+        trim_leading_zeros(client_public),
+        trim_leading_zeros(server_public),
+        key,
+    ])
 }
 
 /// The server's proof as RFC 2945 §3 defines it, M2 = H(A | M1 | K), with A
-/// padded to N (P52).
-pub fn server_proof(a_padded: &[u8], client_proof: &[u8], key: &[u8]) -> [u8; HASH_BYTES] {
-    sha1(&[a_padded, client_proof, key])
+/// in its shortest big-endian form (P52).
+pub fn server_proof(client_public: &[u8], client_proof: &[u8], key: &[u8]) -> [u8; HASH_BYTES] {
+    sha1(&[trim_leading_zeros(client_public), client_proof, key])
 }
 
 #[cfg(test)]

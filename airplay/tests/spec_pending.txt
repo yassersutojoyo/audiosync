@@ -6,7 +6,7 @@
 # AirPlay 2 (behind its flag, blocked by the gaps of section 11).
 P41 GET /info and binary-plist bodies: AirPlay 2 stage.
 P42 AirPlay 2 request order: AirPlay 2 stage.
-P43 Session SETUP body: AirPlay 2 stage.
+P43 Session SETUP body (et 0 without ekey and eiv; Unsupported, not Lost, when the stream SETUP then fails): AirPlay 2 stage.
 P44 Stream SETUP body: AirPlay 2 stage.
 P61 Transient or PIN pairing choice: AirPlay 2 stage.
 P62 TLV8: AirPlay 2 stage.
@@ -25,4 +25,3 @@ P106 SETPEERS: AirPlay 2 stage (G2).
 P107 Time announce packets: AirPlay 2 stage (G1).
 P108 Asking for NTP timing on the AirPlay 2 path: AirPlay 2 stage.
 P132 POST /feedback keep-alive: AirPlay 2 stage.
-P145 The published pairing test vector as data: pairing stage.
