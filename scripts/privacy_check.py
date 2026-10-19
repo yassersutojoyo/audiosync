@@ -25,6 +25,7 @@ scanned (its patterns would match). Exit status 1 lists each hit as
 `path:line: reason`.
 """
 
+import codecs
 import os
 import re
 import socket
@@ -137,7 +138,15 @@ def self_test():
         "iplink.md": "It fell back to 169.254.10.20.",
         "ipv6.md": "Listening on fd12:3456:789a::1 now.",
         "host.md": "Built on Someones-MacBook-Pro.local yesterday.",
+        "barehost.md": "Built on name.local yesterday.",
+        "barehost-dot.md": "Reached (name.local.)",
+        "barelan.md": "The share is on nas.lan now.",
         "hostdomain.md": "Reached box.localdomain.",
+        "utf16le-bom.txt": codecs.BOM_UTF16_LE + "See /Users/someone/Library/Logs.\n".encode("utf-16-le"),
+        "utf16be-bom.txt": codecs.BOM_UTF16_BE + "Built on name.local.\n".encode("utf-16-be"),
+        "utf16le.txt": "Logs are in C:\\Users\\someone\\AppData.\r\n".encode("utf-16-le"),
+        "utf16be.txt": "Try 10.1.2.3 then.\n".encode("utf-16-be"),
+        "utf8-bom.md": codecs.BOM_UTF8 + "Built on name.local yesterday.\n".encode(),
         "winhost.md": "Runner DESKTOP-AB12CD3 passed.",
         "planid.md": "Done for Plan A1.",
         "name.md": f"Ask {marker.capitalize()} about it.",
@@ -148,26 +157,44 @@ def self_test():
         "Logs: C:\\Users\\<you>\\AppData, /Users/<you>/Library, %USERPROFILE%, "
         "/Users/Shared, C:\\Users\\Public\\Music, 127.0.0.1, Windows 10.0.26200.1, "
         "version 1.10.2.3.4, model.local = [], _raop._tcp.local, the plan of record, "
+        "_airplay._tcp.local., Den._raop._tcp.local., LivingRoom.local., map(|c| c.local), "
+        "self.local.addr, $HOST.local, <name>.local, Bundle.localized, "
         "a feed: 0xfd12, zebracorns.\n"
     )
+    # Binary files are skipped even when they carry a leak, including bytes
+    # that only look like UTF-16 until they decode to control characters.
+    binary = {
+        "image.png": b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR /Users/someone/x \x00\x01",
+        "words.bin": b"\x01\x00\x02\x00" + "/Users/someone/x".encode("utf-16-le"),
+    }
+    samples = {
+        **leaks,
+        **binary,
+        "clean.md": clean,
+        "clean16.txt": clean.encode("utf-16"),
+        "clean16be.txt": clean.encode("utf-16-be"),
+    }
     failures = []
     with tempfile.TemporaryDirectory() as root:
         git(root, "init", "-q")
-        for name, text in leaks.items():
-            with open(os.path.join(root, name), "w", encoding="utf-8") as handle:
-                handle.write(text + "\n")
-        with open(os.path.join(root, "clean.md"), "w", encoding="utf-8") as handle:
-            handle.write(clean)
+        for name, content in samples.items():
+            if isinstance(content, str):
+                content = (content if content.endswith("\n") else content + "\n").encode()
+            with open(os.path.join(root, name), "wb") as handle:
+                handle.write(content)
         listing = os.path.join(root, "names.txt")
         with open(listing, "w", encoding="utf-8") as handle:
             handle.write("# sample list\n" + marker + "\nzebrafolder/\n")
         names = name_patterns(listing)
-        git(root, "add", "--", *leaks, "clean.md")
+        git(root, "add", "--", *samples)
         files = git(root, "ls-files").split()
         for name in leaks:
             if name not in files or not check(root, [name], names):
                 failures.append(f"not caught: {name}")
-        failures += [f"false positive: {hit}" for hit in check(root, ["clean.md"], names)]
+        for name in ("clean.md", "clean16.txt", "clean16be.txt"):
+            failures += [f"false positive: {hit}" for hit in check(root, [name], names)]
+        for name in binary:
+            failures += [f"binary file scanned: {hit}" for hit in check(root, [name], names)]
         if not check(root, ["missing.md"], names, explicit=True):
             failures.append("a missing file argument passed")
     for failure in failures:
