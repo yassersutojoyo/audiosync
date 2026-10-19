@@ -29,11 +29,19 @@ if otherRunningCopy() != nil {
     let limit = Date().addingTimeInterval(EngineShutdown.drainTimeout + EngineShutdown.gracefulStop + 1)
     var stillThere = true
     while !flag.received && Date() < limit {
-        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        // With no input source attached the run loop returns at once; pause
+        // so the wait never spins the CPU.
+        if !RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05)) {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
         if otherRunningCopy() == nil {
             stillThere = false
             break
         }
+    }
+    // The other copy may have gone away during the last tick before the deadline.
+    if stillThere && !flag.received && otherRunningCopy() == nil {
+        stillThere = false
     }
 
     // Answered, or alive but silent: that copy owns the speakers, so leave
