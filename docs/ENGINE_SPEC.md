@@ -171,7 +171,7 @@ S172 to S181 replace the rule that local outputs play at once unless an AirPlay 
 - **S175** *Required.* Offsets. An offset is a finite number of ms from −2000 to +20 000; an output that never had one set has offset 0. Input that isn't finite is ignored and other input is clamped to that range (for local outputs this replaces the 0 to 20 000 ms of S77 and S124). Offsets are stored per output (device UID or endpoint ID) and kept across launches whether the output is connected, switched on or the reference at the moment; a stored offset of the reference is kept but not used while it is the reference (S172). The window edits whole ms (S181). The lower bound covers Bluetooth and other wireless outputs that sound up to two seconds late; the upper bound is S77's maximum.
 - **S176** *Required.* Hold-backs. With o′(x) = 0 for the reference and o(x) for every other output, the base is
   `m = min({ o′(y) : y ∈ T } ∪ { −L, only while an AirPlay speaker is chosen (S79) })`,
-  and every x in T gets `h(x) = min(o′(x) − m, 20 000)` ms, with L from S178. No hold-back is negative. Without AirPlay, the output with the smallest offset among those taking part plays at once (one device buffer late, S42) and the others wait for it by the difference, so adding the same number to every offset changes nothing, and a lone output plays at once whatever its offset, since there is nothing to line it up with. With an AirPlay speaker chosen, in the usual case where no offset in T is below −L (L is about two seconds, a Bluetooth offset a few hundred ms), m = −L and h(x) = L + o′(x): the reference sounds with the AirPlay speakers (under the native sender, with those whose own delay d_s is 0, AirPlay spec P99) and every other output by its offset. An output taking part whose offset is below −L sounds later than the AirPlay speakers themselves; it then sets m, the local outputs still line up with each other, and the AirPlay speakers lead them by −m − L ms, because AudioSync never holds the AirPlay path back (S8); under the native sender, raising every AirPlay speaker's d_s by that much makes up for it. The cap at 20 000 ms (S77's maximum, which the ring covers, S36) only bites when a large offset meets a large L or a negative base; that output then plays early by the excess. Examples with the built-in speakers R, a USB speaker at +150, a Bluetooth speaker at −250 and L = 2000 (hold-backs in ms):
+  and every x in T gets `h(x) = min(o′(x) − m, 20 000)` ms, with L from S178. No hold-back is negative. Without AirPlay, the output with the smallest offset among those taking part plays at once (one device buffer late, S42) and the others wait for it by the difference, so adding the same number to every offset changes nothing, and a lone output plays at once whatever its offset, since there is nothing to line it up with. With an AirPlay speaker chosen, in the usual case where no offset in T is below −L (L is about two seconds, a Bluetooth offset a few hundred ms), m = −L and h(x) = L + o′(x): the reference sounds when the AirPlay speakers are taken to sound (S178) and every other output by its offset. An output taking part whose offset is below −L sounds later than the AirPlay speakers themselves; it then sets m, the local outputs still line up with each other, and the AirPlay speakers lead them by −m − L ms, because AudioSync never holds the AirPlay path back (S8); under the native sender, raising every AirPlay speaker's d_s by that much, where the window offers d_s, makes up for it. The cap at 20 000 ms (S77's maximum, which the ring covers, S36) only bites when a large offset meets a large L or a negative base; that output then plays early by the excess. Examples with the built-in speakers R, a USB speaker at +150, a Bluetooth speaker at −250 and L = 2000 (hold-backs in ms):
 
   | Taking part | AirPlay chosen | m | h(R) | h(USB) | h(Bluetooth) |
   |---|---|---|---|---|---|
@@ -185,35 +185,39 @@ S172 to S181 replace the rule that local outputs play at once unless an AirPlay 
 
   The first row is the reported bug: under S78, with no AirPlay speaker chosen, the USB speaker plays at 0 like the built-in speakers and its delay does nothing.
 - **S177** *Required.* Re-timing. The host recomputes every hold-back whenever T changes (a speaker switched on or off, a device listed again or lost, S161, S68), the offset of an output taking part changes, the reference changes (S173, S174), the AirPlay condition flips (S79), or L changes (S178). Each running renderer whose hold-back changed gets the new one through `setDelay` (S66): an increase inserts exactly that much silence (S47), a decrease skips forward (S48), and nothing is ever played twice (S49). A renderer whose hold-back is unchanged gets no call, so it gets no resync. An output being attached starts at its current hold-back (S117, S45). When m changes, the hold-back of every output already taking part whose own offset didn't change moves by that same change: a Bluetooth speaker at −250 switched on next to the built-in speakers and a USB speaker at +150 makes those two wait 250 ms longer (250 ms of silence each, then in step with it), and switched off again, they skip 250 ms forward; editing that Bluetooth speaker's offset to −300 leaves its own hold-back at 0 and moves the other two 50 ms later. A poll that finds the AirPlay engine unreachable leaves the listed set as it was (S81), so it re-times nothing. This replaces S80, where only the AirPlay flip re-timed outputs and every hold-back went to 0 or came back from it.
-- **S178** *Required.* The AirPlay latency L of S176 depends on the AirPlay sender, and only counts while an AirPlay speaker is chosen:
-  - *Bundled engine (OwnTone, the Mac's default).* The engine reports no latency, so L is a stored host setting, the *AirPlay delay*: 0 to 20 000 ms (input that isn't finite is ignored, other input clamped), 2000 by default (S77's default; `README.md`: AirPlay speakers play about two seconds late). It is the one value the user tunes to line the reference up with the AirPlay speakers (S181), and it takes over the role the reference's own delay had under S77 (S179). In the usual case h(x) = L + o′(x), which is S78's "configured delay" with configured = L + offset.
-  - *Native sender* (AirPlay spec P98, P113, P114). L is the base latency the sender reports, counted on the sender clock from c(n) as P114 says; before its first report, the configured Lf (P98, 1750 ms by default). The stored AirPlay delay is kept, but not used or shown. This replaces P114's L + d_local with d_local = clamp(configured − L, 0, 3000): the trim is now the offset, which may be negative down to −L and isn't capped at 3000 ms (only h is capped, S176); P114's one-time migration is replaced by S179 and S180.
-  - A change of L (the user edits the AirPlay delay; the sender reports a new L after an Lf change or a timeline restart, P98, P143; the user switches between the senders) re-times every output taking part (S177).
+- **S178** *Required.* The AirPlay latency L of S176, the time from a frame's arrival to the moment the AirPlay speakers are taken to sound it, depends on the AirPlay sender and only counts while an AirPlay speaker is chosen. Each sender has one stored host setting for it, kept across launches, which the window shows as the *AirPlay delay* (S181); the user tunes it to line the reference up with the AirPlay speakers. Input that isn't finite is ignored and other input is clamped.
+  - *Bundled engine (OwnTone, the Mac's default).* The engine reports no latency, so the setting is absolute: L is the stored AirPlay delay, 0 to 20 000 ms, 2000 by default (S77's default; `README.md`: AirPlay speakers play about two seconds late). It takes over the role the reference's own delay had under S77 (S179). In the usual case h(x) = L + o′(x), which is S78's "configured delay" with configured = L + offset.
+  - *Native sender* (AirPlay spec P98, P113, P114). The sender reports its base latency L_s, counted on the sender clock from c(n) as P114 says (before its first report, the configured Lf, P98, 1750 ms by default), and the setting is an adjustment A on top of it: −2000 to +20 000 ms, 0 by default, with `L = clamp(L_s + A, 0, 20 000)`. A is relative, so it stays right when L_s changes; no absolute latency is ever stored for this sender, since it would go stale with the next Lf change or timeline restart. A covers receivers that sound later (or earlier) than L_s says. This replaces P114's L + d_local with d_local = clamp(configured − L, 0, 3000): the trim is now the offset, which may be negative down to −L and isn't capped at 3000 ms (only h is capped, S176), and P114's one-time migration is replaced by S179 and S180. An AirPlay speaker's own delay d_s (P99) is unaffected and still moves that speaker alone.
+  - The two settings are separate. The Mac, which can use either sender, keeps both, and switching senders switches settings; neither is ever converted into the other.
+  - A change of L (the user edits the AirPlay delay; the native sender reports a new L_s after an Lf change or a timeline restart, P98, P143; the user switches between the senders) re-times every output taking part (S177).
 - **S179** *Required.* Mac migration, once. Before this model the Mac stored an absolute delay per device UID (S77, the `localDelayMsByUID` defaults key) that applied only while an AirPlay speaker was chosen, and played outputs without one at D0: the legacy single delay (the `delayMs` key) clamped to 0 to 20 000, else 2000. The first time a build with this model has both its stored values and a device list, it takes R from S173 and D_R, the reference's stored delay, or D0 when it has none or there is no reference, and stores:
-  - the AirPlay delay (S178) = D_R when D_R ≥ 1000 ms, a value tuned against AirPlay; else 2000 ms, since a smaller value can only have been meant to line local outputs up with each other;
+  - the bundled engine's AirPlay delay (S178), L_new = D_R when D_R ≥ 1000 ms, a value tuned against AirPlay; else 2000 ms, since a smaller value can only have been meant to line local outputs up with each other;
   - for every other UID x with a stored delay D_x: o(x) = clamp(D_x − D_R, −2000, 20 000);
-  - nothing for UIDs without a stored delay (offset 0; with AirPlay they now play at the AirPlay delay instead of D0, which differs from D0 only when the reference had a stored delay of its own or D0 is below 1000 ms), and nothing for R: its old delay became the AirPlay delay, or is dropped when below 1000 ms.
+  - for every other UID without a stored delay that is switched on (the `enabledLocalUIDs` key) or in the device list of that moment (S171): o(x) = clamp(D0 − L_new, −2000, 20 000), since it played at D0 (with D_R ≥ 1000 that is D0 − D_R); nothing for any other UID (offset 0);
+  - the native sender's adjustment A (S178) = 0: L_s isn't known at this moment, and no stored delay was ever read for that sender except through P114's clamp;
+  - nothing for R: its old delay became the AirPlay delay, or is dropped when below 1000 ms.
 
-  The new values go under new keys, whose presence also marks the migration as done; the old keys are left as they are, so an older build still finds its own values and a newer one never reads them again. Effect, with the bundled engine: with an AirPlay speaker chosen and D_R ≥ 1000, every output with a stored delay whose offset needed no clamping plays exactly as before (h = D_R + D_x − D_R = D_x, S176); without AirPlay, outputs now line up by their offsets where they all used to play at once. Under the native sender (the Mac's hidden option) the offsets apply with the reported L (S178) instead of P114's clamp. Worked examples, in ms, hold-backs listed in the order of the first column:
+  The new values go under new keys, whose presence also marks the migration as done; the old keys are left as they are, so an older build still finds its own values and a newer one never reads them again. Effect, with the bundled engine: with an AirPlay speaker chosen and D_R ≥ 1000, every output with a stored delay, and every switched-on or listed output that played at D0, plays exactly as before as long as its offset needed no clamping (h = D_R + D_x − D_R = D_x, with D_x = D0 for one without a stored delay, S176); without AirPlay, outputs now line up by their offsets where they all used to play at once. Under the native sender (the Mac's hidden option) the offsets apply with the reported L_s (S178) instead of P114's clamp. Worked examples, in ms, hold-backs listed in the order of the first column:
 
   | Stored before | D0 | Stored after | h with AirPlay chosen | h without AirPlay, all on |
   |---|---|---|---|---|
   | R 2000, USB 2100, Bluetooth 1800 | 2000 | AirPlay delay 2000; USB +100, Bluetooth −200 | 2000, 2100, 1800 (as before) | 200, 300, 0 (before: 0, 0, 0) |
   | R none, HDMI TV 2400 | 2000 | AirPlay delay 2000; TV +400 | 2000, 2400 (as before) | 0, 400 |
+  | R 2300, USB none (listed) | 2000 | AirPlay delay 2300; USB −300 | 2300, 2000 (as before) | 300, 0 |
   | R 2500, Bluetooth 2250 | 2000 | AirPlay delay 2500; Bluetooth −250 | 2500, 2250 (as before) | 250, 0 |
   | R 250, Bluetooth 0, USB 400 | 2000 | AirPlay delay 2000; Bluetooth −250, USB +150 | 2000, 1750, 2150 (before: 250, 0, 400, about two seconds ahead of AirPlay) | 250, 0, 400 |
   | R 2500, USB 0 | 2000 | AirPlay delay 2500; USB −2000 (clamped from −2500) | 2500, 500 (before: 2500, 0) | 2000, 0 |
-- **S180** *Required.* Windows migration, once. Before this model the Windows app stored per output a trim from 0 to 20 000 ms (`delay_ms` in its settings file, 0 by default) that applied with or without AirPlay, as L + min(trim, 3000) while an AirPlay speaker was chosen, and per AirPlay speaker its own delay d_s from 0 to 3000 ms (P99). When it loads a settings file of an older format version, the first time it has both that file and an output list, it takes R from S174 and t_R, the reference's stored trim (0 when it has none or there is no reference), and stores:
+- **S180** *Required.* Windows migration, once. Before this model the Windows app stored per output a trim from 0 to 20 000 ms (`delay_ms` in its settings file, 0 by default) that applied with or without AirPlay, as L_s + min(trim, 3000) while an AirPlay speaker was chosen (L_s as in S178), and per AirPlay speaker its own delay d_s from 0 to 3000 ms (P99). When it loads a settings file of an older format version, the first time it has both that file and an output list, it takes R from S174 and t_R, the reference's stored trim (0 when it has none or there is no reference), and stores:
   - for every other output x with a stored trim t_x: o(x) = clamp(t_x − t_R, −2000, 20 000);
-  - for every AirPlay speaker with a stored delay: d_s′ = clamp(d_s − t_R, 0, 3000);
-  - nothing for R.
+  - the native sender's adjustment A (S178) = t_R, so the reference keeps sounding t_R after L_s;
+  - nothing for R; every AirPlay speaker's own delay d_s stays as it is.
 
-  It then writes the file in the new format version (an older build keeps a newer file aside, as it does today). Without AirPlay the outputs keep their alignment (S176 subtracts the smallest offset taking part, so only a delay common to all of them goes); with AirPlay everything sounds t_R earlier than before, the AirPlay speakers too as long as d_s ≥ t_R, so they stay in step. Where t_R is 0, the default, every offset equals the old trim. Example: R 250, Bluetooth 0, TV 120 and an AirPlay speaker with d_s 250 become Bluetooth −250, TV −130 and d_s 0; without AirPlay, all on, the hold-backs stay 250, 0 and 120; with AirPlay and L = 1750 they are 1750, 1500 and 1620 with the AirPlay speaker at L + 0 = 1750, where before they were 2000, 1750 and 1870 with the speaker at L + 250 = 2000.
+  It then writes the file in the new format version (an older build keeps a newer file aside, as it does today). Without AirPlay the outputs keep their alignment (S176 subtracts the smallest offset taking part, so only a delay common to all of them goes). With AirPlay every local output plays exactly as before, h = L_s + t_R + t_x − t_R = L_s + t_x, as long as its old trim was at most 3000 ms (the old cap) and its offset needed no clamping, and the AirPlay speakers keep L_s + d_s, so a user who lined a late AirPlay speaker up by giving R a trim keeps that alignment, now in the AirPlay delay. Where t_R is 0, the default, every offset equals the old trim and A is 0. Example: R 250, Bluetooth 0, TV 120 and an AirPlay speaker with d_s 0 become Bluetooth −250, TV −130 and A = 250; without AirPlay, all on, the hold-backs stay 250, 0 and 120; with AirPlay and L_s = 1750, L = 2000 and they are 2000, 1750 and 1870 with the AirPlay speaker at L_s + 0 = 1750, all as before, and the window shows an AirPlay delay of 2000 (S181).
 - **S181** *Required.* What the windows show (UI facts; the wording goes through `AppText` on the Mac and the Windows app's own strings):
   - The reference's row has no delay field, whether the reference is on or off.
   - Every other local output's row shows its offset with its sign: "+150 ms", "−250 ms", and "0 ms" for zero. The field takes whole ms with an optional leading "+" or "−" (a hyphen-minus counts as "−"), clamped to S175's range; other input is ignored and the field shows the stored value again.
   - One short hint beside the delay fields says what they are relative to, naming the reference (the built-in speakers on the Mac, the reference's name on Windows), and that a negative value is for a speaker that sounds late, such as Bluetooth. With no reference, it says that the speaker with the lowest value plays first and the others wait by the difference.
-  - With the bundled engine (the Mac), the AirPlay delay (S178) is one field in the AirPlay part of the window, not on any local row, with a hint that the speakers on this Mac wait that long for the AirPlay speakers. Under the native sender there is no such field; an AirPlay speaker's own delay d_s (P99), where a window offers it, stays a plain 0 to 3000 ms value.
+  - The AirPlay delay (S178) is one field in the AirPlay part of the window, not on any local row, with a hint that the local speakers wait that long for the AirPlay speakers. With the bundled engine it shows and edits the stored value. With the native sender it shows L = clamp(L_s + A, 0, 20 000) in whole ms and follows L_s when that changes; entering v stores A = clamp(v − L_s, −2000, 20 000) with the L_s of that moment, so the field then shows v (unless clamped). An AirPlay speaker's own delay d_s (P99), where a window offers it (the Windows app doesn't today), stays a plain 0 to 3000 ms value.
   - Hold-backs (S176) are not shown.
 
 ## 9. FIFO feed (PCM into the AirPlay engine)
@@ -274,7 +278,7 @@ S172 to S181 replace the rule that local outputs play at once unless an AirPlay 
 ## 12. Non-finite values
 
 - **S123** *Observed* ("eq: recovers from a NaN sample (silence stays silent)", "fifo: NaN/±inf samples do not crash"). NaN and ±infinity can arrive from capture. No stage may trap, crash or abort on them: the enabled equalizer zeroes them (S29); a disabled equalizer passes them into the ring unchanged; the renderer zeroes them at its output (S65); the FIFO conversion maps them (S86).
-- **S124** *Superseded in part by S175 and S178*: a local output's offset ranges from −2000 to +20 000 ms, and the AirPlay delay from 0 to 20 000 ms. *Observed* (`AppDelegate+Outputs.swift:51-106`). Host-side numeric inputs are sanitized before reaching the engine: non-finite delays are ignored, delays are clamped to 0…20 000 ms, volumes to 0…100.
+- **S124** *Superseded in part by S175 and S178*: a local output's offset ranges from −2000 to +20 000 ms, the bundled engine's AirPlay delay from 0 to 20 000 ms and the native sender's adjustment from −2000 to +20 000 ms. *Observed* (`AppDelegate+Outputs.swift:51-106`). Host-side numeric inputs are sanitized before reaching the engine: non-finite delays are ignored, delays are clamped to 0…20 000 ms, volumes to 0…100.
 - **S125** *Required.* A non-finite value never persists in any stateful stage: once finite input resumes, every output is finite within one block (the resampler of S85 resets its history if it sees a non-finite sample).
 
 ## 13. Real-time constraints
@@ -838,7 +842,7 @@ Core (`cargo test` in `core/`, test functions with `// covers:` markers):
 | the_smallest_offset_taking_part_plays_at_once_and_no_hold_back_is_negative | S176 |
 | a_switched_off_reference_doesnt_take_part | S172, S176 |
 | a_lone_output_plays_at_once_whatever_its_offset | S176 |
-| an_airplay_speaker_chosen_adds_l_on_top | S176, S178 |
+| an_airplay_speaker_chosen_adds_l_on_top | S176 |
 | an_output_later_than_airplay_sets_the_base | S176 |
 | hold_backs_are_capped_at_20000_ms | S176 |
 | offsets_are_clamped_to_minus_2000_to_20000_and_non_finite_input_is_ignored | S175 |
@@ -846,7 +850,7 @@ Core (`cargo test` in `core/`, test functions with `// covers:` markers):
 | a_joining_output_with_a_lower_offset_retimes_the_others | S177 |
 | a_leaving_output_retimes_the_others_back | S177 |
 | only_outputs_whose_hold_back_changed_are_retimed | S177 |
-| an_airplay_flip_or_a_new_l_retimes_every_output_taking_part | S177, S178 |
+| an_airplay_flip_or_a_new_l_retimes_every_output_taking_part | S177 |
 | an_unreachable_engine_retimes_nothing | S81, S177 |
 
 Mac (`Tests/logictest.swift`):
@@ -861,10 +865,16 @@ Mac (`Tests/logictest.swift`):
 | local delay: no built-in output, no reference | S173 |
 | local delay: a switched-off reference is still the reference | S173 |
 | local delay: AirPlay chosen adds the AirPlay delay on top | S176, S178 |
-| local delay: the native sender adds the latency it reports | S178 |
+| local delay: the native sender adds the latency it reports plus the AirPlay adjustment | S176, S178 |
 | local delay: a new AirPlay delay re-times the local speakers | S177, S178 |
+| local delay: a late speaker switched on or off re-times the running others | S177 |
+| local delay: editing the lowest offset re-times the others | S177 |
+| AirPlay delay: the native sender's field shows L + A, follows a new L and an edit stores the difference | S178, S181 |
 | migration: a setup tuned for AirPlay sounds the same with AirPlay | S179 |
 | migration: the reference's old delay becomes the AirPlay delay | S179 |
+| migration: R without a stored delay uses D0 | S179 |
+| migration: an untuned output that played at D0 sounds the same with AirPlay | S179 |
+| migration: the native sender's adjustment starts at 0 | S179 |
 | migration: small values keep their alignment and take the default AirPlay delay | S179 |
 | migration: an offset below −2000 ms is clamped | S179 |
 | migration: runs once and leaves the old values in place | S179 |
@@ -881,7 +891,12 @@ Windows (`cargo test` in `windows/`):
 | headphones_on_the_pc_jack_are_not_the_reference | S174 |
 | no_built_in_output_means_no_reference | S174 |
 | an_airplay_speaker_chosen_adds_the_sender_latency_on_top | S176, S178 |
+| the_airplay_delay_is_an_adjustment_on_top_of_the_sender_latency | S178 |
+| the_airplay_delay_field_shows_l_plus_a_and_follows_a_new_l | S178, S181 |
+| a_late_speaker_switched_on_or_off_retimes_the_running_others | S177 |
+| editing_the_lowest_offset_retimes_the_others | S177 |
 | old_trims_become_offsets_relative_to_the_reference | S180 |
-| airplay_speaker_delays_drop_by_the_references_old_trim | S180 |
+| the_references_old_trim_becomes_the_airplay_adjustment_and_airplay_delays_stay | S180 |
+| a_late_airplay_speaker_lined_up_by_the_references_trim_stays_lined_up | S180 |
 | an_older_settings_file_is_migrated_once_and_saved_in_the_new_version | S180 |
 | the_reference_row_has_no_delay_and_the_others_show_a_signed_offset | S181 |
