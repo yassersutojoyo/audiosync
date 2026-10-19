@@ -489,14 +489,14 @@ impl JackStatus {
         };
         let mut kind = None;
         for part in parts {
-            if let Some((key, value)) = part.split_once('=') {
-                if key.trim().eq_ignore_ascii_case("type") {
-                    kind = match value.trim().to_ascii_lowercase().as_str() {
-                        "analog" => Some(JackKind::Analog),
-                        "digital" => Some(JackKind::Digital),
-                        _ => None,
-                    };
-                }
+            if let Some((key, value)) = part.split_once('=')
+                && key.trim().eq_ignore_ascii_case("type")
+            {
+                kind = match value.trim().to_ascii_lowercase().as_str() {
+                    "analog" => Some(JackKind::Analog),
+                    "digital" => Some(JackKind::Digital),
+                    _ => None,
+                };
             }
         }
         Some(JackStatus { connected, kind })
