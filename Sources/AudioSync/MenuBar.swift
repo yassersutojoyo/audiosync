@@ -80,6 +80,8 @@ final class AppModel: ObservableObject {
         var transport: (NowPlayingMonitor.Command) -> Void = { _ in }
         var quit: () -> Void = {}
         var retryAirPlay: () -> Void = {}
+        /// The device volume fix the user clicked under a local output (S197).
+        var fixDeviceVolume: (String) -> Void = { _ in }
     }
 
     @Published var running = false
@@ -105,6 +107,9 @@ final class AppModel: ObservableObject {
     /// newest first; shown in the window and the menu bar panel instead of a
     /// modal alert, until dismissed or their cause is gone.
     @Published var notices = NoticeList()
+    /// The device volume hints of the switched-on local outputs, by device
+    /// UID: only outputs whose macOS volume is low or muted (S196).
+    @Published var deviceVolumes: [String: DeviceVolumeHint] = [:]
     @Published var groups: [Group] = []
     @Published var launchAtLogin = false
     @Published var showVirtualDevices = false
@@ -132,6 +137,12 @@ final class AppModel: ObservableObject {
     /// How a row shows `speaker`: playing only while streaming is on.
     func state(of speaker: Speaker) -> SpeakerState {
         SpeakerState(enabled: speaker.enabled, streaming: running)
+    }
+
+    /// The device volume hint `speaker`'s row shows: none on an AirPlay row
+    /// or a row switched off (S198).
+    func deviceVolume(of speaker: Speaker) -> DeviceVolumeHint? {
+        DeviceVolumes.hint(for: speaker.id, airPlay: speaker.isAirPlay, enabled: speaker.enabled, in: deviceVolumes)
     }
 
     /// A group is on when all its present members are.
@@ -565,7 +576,8 @@ struct MenuBarView: View {
             VStack(spacing: 0) {
                 ForEach(thisMac) { speaker in
                     CompactRow(name: speaker.name, symbol: speaker.tag.symbol, state: model.state(of: speaker),
-                               text: t, height: rowHeight) {
+                               text: t, height: rowHeight,
+                               deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
                         model.actions.setLocalEnabled(speaker.id, model.state(of: speaker).clickTurnsOn)
                     }
                 }
@@ -592,7 +604,8 @@ struct MenuBarView: View {
             ForEach(layout.connected) { speaker in
                 CompactRow(name: speaker.name, symbol: speaker.tag.symbol, state: model.state(of: speaker),
                            text: t, height: rowHeight, kind: speaker.tag,
-                           availability: speaker.availability) {
+                           availability: speaker.availability,
+                           deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
                     let on = model.state(of: speaker).clickTurnsOn
                     if speaker.isAirPlay {
                         model.actions.setAirPlayEnabled(speaker.id, on)
@@ -617,6 +630,9 @@ private struct CompactRow: View {
     /// The kind of output, shown as a small icon after the name.
     var kind: SpeakerTag? = nil
     var availability: SpeakerAvailability = .open
+    /// A switched-on local output's device volume hint: a glyph, with the
+    /// hint as its tooltip and in the VoiceOver hint (S198).
+    var deviceVolume: DeviceVolumeGlyph? = nil
     let toggle: () -> Void
     @StateObject private var hover = HoverState()
     @Environment(\.isEnabled) private var isEnabled
@@ -633,6 +649,7 @@ private struct CompactRow: View {
                 }
                 Spacer(minLength: 4)
                 AvailabilityNote(availability: availability, text: text)
+                if let deviceVolume { DeviceVolumeBadge(glyph: deviceVolume) }
             }
             .padding(.horizontal, 6)
             .frame(height: height)
@@ -645,7 +662,8 @@ private struct CompactRow: View {
         .onHover { hover.isHovered = $0 }
         .accessibilityLabel(text.speakerLabel(name: name, tag: kind.map(text.speakerTag)))
         .accessibilityValue(text.value(state))
-        .accessibilityHint(text.rowHint(state, note: hint ?? text.availability(availability)))
+        .accessibilityHint(text.rowHint(state, note: hint ?? deviceVolume?.accessibilityNote
+                                            ?? text.availability(availability)))
         .help(text.help(state))
     }
 }

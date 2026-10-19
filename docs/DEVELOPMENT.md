@@ -65,6 +65,8 @@ AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync
 
 It writes to `/tmp/audiosync-debug.log`, which starts over at every launch and stops at 50 MB with a line that says so. Each line starts with the time in UTC, like the Windows log; the first one names the app and macOS versions and the Mac's local time.
 
+Every local output that's switched on has its own macOS volume and mute read through Core Audio (`DeviceVolume.swift`), and followed with property listeners until it's switched off or unplugged. The log gets one line when an output is first read (`output <UID> device volume: 13%, not muted; volume settable on the main element, …`), one when what its row shows changes (`fine → low`), and one per click on the fix, with what was written, how each write went and what the device reports afterwards. The only write is that click; nothing else touches a device's own volume.
+
 The Windows app has the same switch. Exit it from the tray icon's menu, then start it from PowerShell in the folder that holds `audiosync.exe`:
 
 ```powershell

@@ -158,6 +158,13 @@ extern "C" {
 #define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* unreadable or not in the format: ignored, the next pairing replaces it */
 #define ASC_AIRPLAY_PAIRINGS_NEWER -3   /* a newer AudioSync wrote it: ignored and left as it is */
 
+/* What an output device's own volume and mute mean for its row (AscDeviceVolumeDecision.decision). */
+#define ASC_DEVICE_VOLUME_UNKNOWN 0       /* neither part is known: no hint */
+#define ASC_DEVICE_VOLUME_FINE 1          /* not muted, not low: no hint */
+#define ASC_DEVICE_VOLUME_LOW 2           /* the volume is below 25 % */
+#define ASC_DEVICE_VOLUME_MUTED 3         /* muted, at a volume that isn't low or isn't known */
+#define ASC_DEVICE_VOLUME_MUTED_AND_LOW 4 /* muted, and below 25 % too */
+
 /* ---- Version and volume ------------------------------------------------- */
 
 /* The crate version, for example "0.1.0" (static string, never freed). */
@@ -765,6 +772,59 @@ typedef struct AscDelayMigration {
  * with a nonzero count or a NULL result.
  */
 bool asc_local_delay_migrate(const AscStoredDelay *entries, size_t count, bool has_legacy_delay, double legacy_delay_ms, AscMigratedOffset *offsets, AscDelayMigration *result);
+
+/* ---- Output device volume (the operating system's own, per device) ------- */
+
+/*
+ * The operating system keeps a volume and a mute for every output device and
+ * applies them after AudioSync's gain, so a device left at 13 % sounds very
+ * quiet whatever AudioSync's slider says. The host reads both for each local
+ * output that is switched on (on the Mac through Core Audio, only the parts
+ * that are present and settable), asks here what the reading means and what
+ * the one-click fix writes, and writes only when the user clicks that fix.
+ * Pure functions for the control thread.
+ */
+
+/* One reading. A part the host couldn't read, or can't set, has its has_ flag false. */
+typedef struct AscDeviceVolume {
+    bool has_volume;  /* the volume is known */
+    double volume;    /* the volume, 0 to 1 (as the system's slider for the device shows it) */
+    bool has_mute;    /* the mute is known */
+    bool muted;       /* the device is muted */
+} AscDeviceVolume;
+
+/* What a reading means for the row, and what one click on its fix writes. */
+typedef struct AscDeviceVolumeDecision {
+    uint32_t decision;     /* ASC_DEVICE_VOLUME_... */
+    bool shows_hint;       /* LOW, MUTED or MUTED_AND_LOW: the row shows a hint and the fix */
+    bool has_percent;      /* the volume is known and finite */
+    uint32_t percent;      /* round(100 x clamp(volume, 0, 1)), half away from zero */
+    bool fix_sets_volume;  /* the fix sets the volume to fix_volume: only when LOW or MUTED_AND_LOW */
+    double fix_volume;     /* 0.75; never lower than a volume that isn't low */
+    bool fix_unmutes;      /* the fix clears the mute: only when muted */
+} AscDeviceVolumeDecision;
+
+/*
+ * What `reading` means: MUTED when the mute is known and set, LOW when the
+ * volume is known and below 25 %, MUTED_AND_LOW when both hold, UNKNOWN when
+ * neither part is known, FINE otherwise; a volume that isn't finite counts as
+ * unknown. The fix writes each part at most once.
+ */
+AscDeviceVolumeDecision asc_device_volume_decide(AscDeviceVolume reading);
+
+/*
+ * Whether a new reading whose decision is `now` gets a debug log line after
+ * one whose decision was `previous`: only when they differ. The first reading
+ * (has_previous false) logs a line of its own, so it is no change here; a
+ * value that is no ASC_DEVICE_VOLUME_ decision gives false.
+ */
+bool asc_device_volume_decision_changed(bool has_previous, uint32_t previous, uint32_t now);
+
+/*
+ * A decision's name in the debug log ("unknown", "fine", "low", "muted",
+ * "muted and low") as a static string; NULL for a value that is no decision.
+ */
+const char *asc_device_volume_decision_name(uint32_t decision_code);
 
 /* ---- AirPlay sender (AudioSync's own, airplay/) ----------------------------- */
 

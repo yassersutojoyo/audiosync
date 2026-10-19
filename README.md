@@ -41,6 +41,8 @@ The source can be all system audio, a single app (with its helper processes, lik
 
 Each local speaker gets its own delay relative to the Mac's built-in speakers (−2 to +20 s), there's one AirPlay delay for lining the Mac up with the AirPlay speakers, and the AirPlay engine keeps the AirPlay speakers in step with each other. On top of that there's per-speaker and master volume, a 10-band equalizer with a preamp and presets, Now Playing for Spotify and Music (also shown on AirPlay TVs and other speakers with a screen), speaker groups, auto-connect, and launch at login. The AirPlay engine (OwnTone) ships inside the app and AudioSync starts and stops it itself, so there's nothing else to install or configure.
 
+macOS also keeps its own volume for every output, and only the default one is in the Sound menu. If a speaker you switched on sits very low or muted there, its row tells you and offers a one-click fix.
+
 ## Coming from Airfoil?
 
 If you've used Airfoil, the idea will feel familiar: send the whole system's audio, or just one app, to AirPlay speakers and the Mac's own outputs at the same time, with each local speaker lined up so nothing echoes. AudioSync is free and open source, but it does less. It only streams to AirPlay receivers and outputs macOS already knows about, so there's no Chromecast or other kinds of network speakers. It needs macOS 15 or later, everything runs about two seconds behind, and it's still an alpha.

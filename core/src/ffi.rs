@@ -13,6 +13,8 @@
 //! - [`fifo`]: PCM16 conversion and the FIFO feed, whose writer the host's
 //!   thread steps through C callbacks for the pipe (S83-S95, S160).
 //! - [`sync`]: the AirPlay sync rule and the delay helpers (S3, S77-S80).
+//! - [`device_volume`]: what an output device's own volume and mute mean for
+//!   its row, and what the one-click fix writes (S192-S202).
 //! - [`airplay`]: AudioSync's own AirPlay sender: discovery, speakers, their
 //!   events and the capture's input, the one part of this interface that
 //!   runs threads and sockets of its own.
@@ -39,12 +41,14 @@ use crate::eq::{
 use crate::volume;
 
 pub mod airplay;
+pub mod device_volume;
 pub mod fifo;
 pub mod render;
 pub mod ring;
 pub mod sync;
 
 pub use self::airplay::*;
+pub use self::device_volume::*;
 pub use self::fifo::*;
 pub use self::render::*;
 pub use self::ring::*;
@@ -368,9 +372,10 @@ mod tests {
     const HEADER: &str = include_str!("../include/audiosync_core.h");
 
     /// Every source file of the C interface, by its path under `src/`.
-    const SOURCES: [(&str, &str); 6] = [
+    const SOURCES: [(&str, &str); 7] = [
         ("ffi.rs", include_str!("ffi.rs")),
         ("ffi/airplay.rs", include_str!("ffi/airplay.rs")),
+        ("ffi/device_volume.rs", include_str!("ffi/device_volume.rs")),
         ("ffi/fifo.rs", include_str!("ffi/fifo.rs")),
         ("ffi/render.rs", include_str!("ffi/render.rs")),
         ("ffi/ring.rs", include_str!("ffi/ring.rs")),
@@ -1036,6 +1041,17 @@ mod tests {
             (
                 "ASC_AIRPLAY_PAIRINGS_NEWER",
                 AIRPLAY_PAIRINGS_NEWER.to_string(),
+            ),
+            (
+                "ASC_DEVICE_VOLUME_UNKNOWN",
+                DEVICE_VOLUME_UNKNOWN.to_string(),
+            ),
+            ("ASC_DEVICE_VOLUME_FINE", DEVICE_VOLUME_FINE.to_string()),
+            ("ASC_DEVICE_VOLUME_LOW", DEVICE_VOLUME_LOW.to_string()),
+            ("ASC_DEVICE_VOLUME_MUTED", DEVICE_VOLUME_MUTED.to_string()),
+            (
+                "ASC_DEVICE_VOLUME_MUTED_AND_LOW",
+                DEVICE_VOLUME_MUTED_AND_LOW.to_string(),
             ),
         ]
         .into_iter()
