@@ -106,9 +106,10 @@ pub trait AirPlayLink {
     /// The next event, if one is waiting; never blocks.
     fn poll_event(&mut self) -> Option<SenderEvent>;
 
-    /// Starts pairing with an Apple TV that asks for a PIN; a pairing
-    /// already running for it is replaced.
-    fn start_pairing(&mut self, device: &Device);
+    /// Starts pairing with an Apple TV that asks for a PIN, with the
+    /// speaker's password when AudioSync has one (an Apple TV can ask for
+    /// both); a pairing already running for it is replaced.
+    fn start_pairing(&mut self, device: &Device, password: Option<String>);
 
     /// The PIN the user typed: digits only.
     fn submit_pin(&mut self, key: &DeviceKey, pin: &str) -> Result<(), PinError>;
@@ -173,8 +174,9 @@ impl AirPlayLink for SenderLink {
         self.sender.poll_event()
     }
 
-    fn start_pairing(&mut self, device: &Device) {
-        self.sender.start_pairing(device.clone());
+    fn start_pairing(&mut self, device: &Device, password: Option<String>) {
+        self.sender
+            .start_pairing_with_password(device.clone(), password);
     }
 
     fn submit_pin(&mut self, key: &DeviceKey, pin: &str) -> Result<(), PinError> {
@@ -332,24 +334,22 @@ pub fn pairing_summary(event: &PairingEvent) -> String {
 
 /// Whether a receiver can play from this sender: AirPlay 1, without a
 /// password, and for an Apple TV that asks for a PIN, once `paired`.
+/// Discovery only hints at pairing (its verdict's flags); the sender
+/// reports PairingRequired only from a connection.
 pub fn availability(info: &ReceiverInfo, paired: bool) -> AirPlayAvailability {
+    let verdict = &info.device.verdict;
     match info.plan {
         Err(ErrorKind::Unsupported(UnsupportedReason::AirPlay2Only)) => {
             AirPlayAvailability::AirPlay2NotYet
         }
+        Err(_) => AirPlayAvailability::Unsupported,
         // The legacy pairing's status flags stay set once paired, so they
         // don't count then.
-        Err(ErrorKind::PairingRequired) if paired => {
-            if info.device.verdict.needs_password {
-                AirPlayAvailability::PasswordNotYet
-            } else {
-                AirPlayAvailability::Open
-            }
+        Ok(()) if verdict.legacy_pairing && !paired => AirPlayAvailability::NeedsPin,
+        Ok(()) if verdict.needs_password => AirPlayAvailability::PasswordNotYet,
+        Ok(()) if verdict.needs_pairing && !verdict.legacy_pairing => {
+            AirPlayAvailability::PairingNotYet
         }
-        Err(ErrorKind::PairingRequired) => AirPlayAvailability::NeedsPin,
-        Err(_) => AirPlayAvailability::Unsupported,
-        Ok(()) if info.device.verdict.needs_password => AirPlayAvailability::PasswordNotYet,
-        Ok(()) if info.device.verdict.needs_pairing => AirPlayAvailability::PairingNotYet,
         Ok(()) => AirPlayAvailability::Open,
     }
 }
@@ -671,7 +671,8 @@ impl AirPlaySpeakers {
                 self.label(id)
             )
         });
-        self.link.start_pairing(&device);
+        let password = self.password(id);
+        self.link.start_pairing(&device, password);
         self.pairings.insert(
             id.to_owned(),
             PairingRun {
@@ -828,6 +829,13 @@ impl AirPlaySpeakers {
     /// A new capture started (P143).
     pub fn restart_timeline(&mut self) {
         self.link.restart_timeline();
+    }
+
+    /// The speaker's password, the one its sessions get too, for a pairing
+    /// with an Apple TV that asks for both. AudioSync asks for no AirPlay
+    /// password yet, so this is `None` for now.
+    fn password(&self, id: &str) -> Option<String> {
+        self.options(id).password
     }
 
     /// The options a speaker joins with.
@@ -1017,7 +1025,8 @@ impl AirPlaySpeakers {
                 run.phase = PairingPhase::Starting;
                 run.wrong_pin = true;
                 let device = run.device.clone();
-                self.link.start_pairing(&device);
+                let password = self.password(id);
+                self.link.start_pairing(&device, password);
                 self.log.log(|| {
                     format!(
                         "AirPlay pairing {}: wrong PIN, started again for a new PIN",
@@ -1524,7 +1533,8 @@ pub mod tests {
             self.0.borrow_mut().events.pop_front()
         }
 
-        fn start_pairing(&mut self, device: &Device) {
+        fn start_pairing(&mut self, device: &Device, password: Option<String>) {
+            assert_eq!(password, None, "AudioSync has no AirPlay passwords yet");
             self.0
                 .borrow_mut()
                 .calls

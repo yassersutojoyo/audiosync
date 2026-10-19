@@ -75,7 +75,11 @@ pub(crate) enum Command {
     StartDiscovery(Box<dyn Browser + Send>),
     StopDiscovery,
     ArrivalTime(i64, mpsc::SyncSender<Instant>),
-    StartPairing(Box<Device>),
+    StartPairing {
+        device: Box<Device>,
+        /// The speaker's password, if the host has one (P39, P46).
+        password: Option<String>,
+    },
     SubmitPin(DeviceKey, String),
     CancelPairing(DeviceKey),
     Shutdown,
@@ -481,9 +485,10 @@ impl Driver {
         }
     }
 
-    /// Starts a pairing with a device on a connection of its own (P47); one
-    /// already running for it is dropped.
-    fn start_pairing(&mut self, device: Device, now: Instant) {
+    /// Starts a pairing with a device on a connection of its own (P47), with
+    /// the speaker's password when the host gave one (P46); one already
+    /// running for it is dropped.
+    fn start_pairing(&mut self, device: Device, password: Option<String>, now: Instant) {
         if self.stopping.is_some() {
             return;
         }
@@ -511,7 +516,8 @@ impl Driver {
             ids,
             u64::from_be_bytes(client),
             now,
-        );
+        )
+        .with_password(password);
         self.pairing_sessions.insert(session_key, key.clone());
         self.pairings.insert(
             key,
@@ -902,7 +908,9 @@ impl Driver {
             Command::ArrivalTime(n, reply) => {
                 let _ = reply.try_send(self.stream.arrival_time(n));
             }
-            Command::StartPairing(device) => self.start_pairing(*device, now),
+            Command::StartPairing { device, password } => {
+                self.start_pairing(*device, password, now);
+            }
             Command::SubmitPin(key, pin) => {
                 if let Some(run) = self.pairings.get_mut(&key) {
                     // A PIN while none is awaited is ignored (Sender::submit_pin).

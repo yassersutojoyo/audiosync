@@ -187,8 +187,9 @@ pub enum Warning {
     JackDisconnected,
     /// `POST /auth-setup` failed; the session continues (P60).
     AuthSetupFailed { status: u16 },
-    /// A failure status to SET_PARAMETER, GET_PARAMETER or FLUSH (P138); a
-    /// failed metadata request lands here too (P127).
+    /// A failure status to SET_PARAMETER, GET_PARAMETER or FLUSH, or to the
+    /// keep-alive OPTIONS of a running session other than a 401 (P131,
+    /// P138); a failed metadata request lands here too (P127).
     RequestFailed { method: Method, status: u16 },
     /// The receiver's signature in its first pair-verify answer didn't
     /// check out against the Ed25519 key it gave at pairing; the

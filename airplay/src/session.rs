@@ -1074,20 +1074,31 @@ impl Session {
         let code = response.code;
         let success = response.is_success();
         match in_flight.kind {
-            Kind::Options { keepalive } => {
-                if code == 403 && !keepalive {
-                    // An Apple TV that wants verification first (P46, P138).
-                    // The keep-alive's 403 stays Refused: a playing speaker
-                    // never asks the user for a new PIN on it.
+            Kind::Options { keepalive: true } => {
+                // The keep-alive checks the connection, not the session's
+                // rights: any answer shows it alive, and a failure status,
+                // 403 included, is a warning only. The session goes on with
+                // its credentials, neither Refused nor PairingRequired
+                // (P131, P138); a 401 went to `on_unauthorized` above (P38).
+                if !success {
+                    self.event(SessionEvent::Warning(Warning::RequestFailed {
+                        method,
+                        status: code,
+                    }));
+                }
+            }
+            Kind::Options { keepalive: false } => {
+                if code == 403 {
+                    // The OPTIONS that sets up a connection, also when it is
+                    // resent after a 401: an Apple TV that wants
+                    // verification first (P46, P138).
                     self.fail(ErrorKind::PairingRequired, Some(method), Some(code), None);
                 } else if code == 501 {
                     // Taken as an answer without `Public` (P27, P138).
-                    if !keepalive {
-                        self.after_options(now);
-                    }
+                    self.after_options(now);
                 } else if !success {
                     self.fail(ErrorKind::Refused, Some(method), Some(code), None);
-                } else if !keepalive {
+                } else {
                     self.on_options(&response, now);
                 }
             }
