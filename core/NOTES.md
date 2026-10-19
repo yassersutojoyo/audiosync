@@ -138,7 +138,7 @@ Some clauses are covered here only in their pure part:
 - S7 and S34: `EqProcessor::equalize_and_deliver` fixes the order; the host wires the ring and the FIFO feed to it.
 - S167: the Local Network hint for an empty list is the host's (S154).
 
-Clauses only the host can implement are listed with a reason in `tests/spec_exempt.txt` (Core Audio, the OwnTone process, its config file and password, and its HTTP API, macOS privacy and appearance settings, shell tooling). S96 and S97 are there by design: the engine's config file and its per-run password belong to the host that launches the engine. The core never launches the engine or calls its API, and it reaches even the pipe only through the host's `PipeSink`, so taking over just the config text would split one host job across two places.
+Clauses only the host can implement are listed with a reason in `tests/spec_exempt.txt` (Core Audio, process signals, macOS privacy and appearance settings, shell tooling, and the clauses of the bundled OwnTone engine, retired on 2026-10-20 with it: its process, its config file and password, and its HTTP API). S96 and S97 were there by design: the engine's config file and its per-run password belonged to the host that launched the engine. The core never launched the engine or called its API, and it reached even the pipe only through the host's `PipeSink`, so taking over just the config text would have split one host job across two places.
 
 ### Where the two parts meet
 
