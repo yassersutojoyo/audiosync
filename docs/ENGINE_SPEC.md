@@ -167,7 +167,7 @@ S182 to S191 take the click out of starts, stops, source changes and re-timings.
 
 ### Output devices' own volume
 
-S192 to S202 make a turned-down or muted output device visible. Every local output also has its own volume and mute, kept by the operating system per device and applied after AudioSync's renderer gain (S71), so what is heard is AudioSync's gain times the device's. On a Mac only the default output's volume is in the Sound menu and on the volume keys; the others are reached only through Audio MIDI Setup, so a device left at a low volume stays out of sight: at a test on a MacBook, its speakers sounded very quiet with AudioSync's slider at 100 because their own volume was 13 %. Windows keeps a volume and a mute per endpoint the same way. Before these clauses neither app read or set an output device's volume or mute (the Windows app read them only for the double-audio check, `windows/src/audio/wasapi/routing.rs`); the Windows app follows them now (`windows/src/audio/controller/device_volume.rs`), the Mac app doesn't yet. These clauses are design requirements, kept small for the feature freeze: AudioSync reads and shows, and writes only when the user clicks the fix.
+S192 to S202 make a turned-down or muted output device visible. Every local output also has its own volume and mute, kept by the operating system per device and applied after AudioSync's renderer gain (S71), so what is heard is AudioSync's gain times the device's. On a Mac only the default output's volume is in the Sound menu and on the volume keys; the others are reached only through Audio MIDI Setup, so a device left at a low volume stays out of sight: at a test on a MacBook, its speakers sounded very quiet with AudioSync's slider at 100 because their own volume was 13 %. Windows keeps a volume and a mute per endpoint the same way. Before these clauses neither app read or set an output device's volume or mute (the Windows app read them only for the double-audio check, `windows/src/audio/wasapi/routing.rs`); both apps follow them now (`windows/src/audio/controller/device_volume.rs` on Windows, `Sources/AudioSync/DeviceVolume.swift` on the Mac). These clauses are design requirements, kept small for the feature freeze: AudioSync reads and shows, and writes only when the user clicks the fix.
 
 - **S192** *Required.* Scope. The *device volume* of a local output is its operating system volume as a scalar from 0 to 1 (the position of the system's own slider for that device) and its mute. AudioSync reads both for every local output row that is switched on, whether or not a session runs, and for no other device: not for AirPlay speakers (whose volume is S73), not for outputs switched off, not for the capture source. It never sets a device volume or mute by itself: not at launch, at a start or stop, when an output is switched on or plugged in, on a source change, at quit, nor to restore an earlier value. The only write is the fix the user clicks (S197). The device volume never changes AudioSync's own volumes, its stored settings or the renderer gain (S70 to S76), and has no part in delay or sync.
 - **S193** *Required.* Reading on the Mac (Apple's Core Audio documentation). In the output scope of the device: the volume is `kAudioDevicePropertyVolumeScalar` of the main element when the device has it there; otherwise the mean of that property over the device's preferred stereo channels (`kAudioDevicePropertyPreferredChannelsForStereo`, channels 1 and 2 when the device doesn't say) that have it. The mute is `kAudioDevicePropertyMute` of the main element when the device has it; otherwise the device counts as muted only when every one of those channels that has a mute is muted. Each part counts as *known* only when its property is present and settable (`AudioObjectIsPropertySettable`): a volume that can't be set can't be fixed, so it is treated as absent. Many HDMI and DisplayPort outputs, some USB devices, and aggregate and multi-output devices have neither; S196 then shows nothing. Reading happens on the control or main thread, never on an audio thread.
@@ -642,6 +642,18 @@ Removed on 2026-10-19 with the Swift engine's ring (`Tests/ringtest.swift`). Wha
 | availability: PIN asks for a code | S106 |
 | availability: password asks for a code | S106 |
 | availability: AirPlay 1 password unsupported | S106 |
+| device volume: a switched-on output at 13% shows the low hint and the fix | S196, S198 |
+| device volume: a muted output shows the unmute fix | S196, S198 |
+| device volume: the fix writes 0.75 and unmute once each, and only on a click | S197 |
+| device volume: nothing is written at launch, start, stop, switch-on, source change or quit | S192, S197 |
+| device volume: a per-channel device reads the mean of its stereo channels and the fix sets each | S193, S197 |
+| device volume: a device without a settable volume or mute shows nothing | S193, S196 |
+| device volume: AirPlay rows and switched-off rows show nothing and hold no listener | S192, S195, S198 |
+| device volume: a change notification updates the row, and switching off removes the listener | S195, S202 |
+| device volume: the hint and the fix name the output for VoiceOver, the fix's label starting with its visible text | S199, S200 |
+| device volume: the compact panel's row shows the glyph with the hint as tooltip and VoiceOver hint, without a button | S198, S199 |
+| device volume: a write the device ignores leaves the hint and the fix as they were and logs it | S197, S201 |
+| device volume: dragging the system volume across 25% logs one line | S201 |
 | outputs: expected speakers parsed (printed only on failure) | S100 |
 | outputs: only AirPlay 1/2 with an id and a name | S100 |
 | outputs: name, type, selected and volume are read | S100 |
@@ -1106,25 +1118,8 @@ The Windows checks for S192 to S202 (`windows/src/audio/controller/device_volume
 
 Outside these suites, `cargo test real_endpoint_volumes -- --ignored --nocapture` in `windows/` reads the PC's own endpoint volumes and registers and unregisters a listener on each, changing nothing (S194, S195).
 
-### device volume: Mac (to be written first, failing)
+### device volume: Mac
 
-The Mac's checks for S192 to S202. None exists yet: each is written first and fails against today's Mac code (the first row reproduces the quiet MacBook speakers at 13 %), then the Mac app follows the clauses, deciding through the core (S196, S197, S201). Once a check exists, its row moves to the logic table. The checks drive the host's device-volume access through a fake that stands in for Core Audio, so no real device is read or written.
-
-Mac (`Tests/logictest.swift`):
-
-| Check | Clauses |
-|---|---|
-| device volume: a switched-on output at 13% shows the low hint and the fix | S196, S198 |
-| device volume: a muted output shows the unmute fix | S196, S198 |
-| device volume: the fix writes 0.75 and unmute once each, and only on a click | S197 |
-| device volume: nothing is written at launch, start, stop, switch-on, source change or quit | S192, S197 |
-| device volume: a per-channel device reads the mean of its stereo channels and the fix sets each | S193, S197 |
-| device volume: a device without a settable volume or mute shows nothing | S193, S196 |
-| device volume: AirPlay rows and switched-off rows show nothing and hold no listener | S192, S195, S198 |
-| device volume: a change notification updates the row, and switching off removes the listener | S195, S202 |
-| device volume: the hint and the fix name the output for VoiceOver, the fix's label starting with its visible text | S199, S200 |
-| device volume: the compact panel's row shows the glyph with the hint as tooltip and VoiceOver hint, without a button | S198, S199 |
-| device volume: a write the device ignores leaves the hint and the fix as they were and logs it | S197, S201 |
-| device volume: dragging the system volume across 25% logs one line | S201 |
+The Mac's checks for S192 to S202 were written first and failed against the Mac code of that day (the first one reproduced the quiet MacBook speakers at 13 %); they pass now and are listed in the logic table as "device volume". They drive the host's Core Audio access through a fake that keeps a volume and a mute per element, records the listeners and every write, and notifies a listened control, so no real device is read or written; the decisions come from the core (`asc_device_volume_decide`, S196, S197, S201).
 
 By hand on the Mac, outside these suites: set the built-in speakers to 13 % in Audio MIDI Setup, switch them on in AudioSync and see the hint; click Set to 75% and hear the level rise, with the hint gone and the system volume at 75 %; check the hint and the button in light and dark appearance and with VoiceOver (S193, S198, S200).
