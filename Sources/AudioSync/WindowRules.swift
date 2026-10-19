@@ -84,3 +84,13 @@ enum StoredEqualizer {
         try? JSONEncoder().encode(settings)
     }
 }
+
+/// The hidden engine option in the AudioSync menu.
+enum EngineMenu {
+    /// Only a choice that comes from the setting or the default can be changed
+    /// there: while `AUDIOSYNC_ENGINE` decides, a stored setting has no effect,
+    /// so the item is disabled.
+    static func canChoose(origin: EngineImpl.Origin) -> Bool {
+        origin != .environment
+    }
+}
