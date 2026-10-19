@@ -77,9 +77,35 @@ extension AppDelegate {
             turnOffNativeSpeaker(id, reason: reason, origin: .automatic)
         case .latencyChanged?:
             applyLocalDelays()   // local outputs follow the new L (P114)
+        case .senderFailed?:
+            nativeSenderFailed()
         case nil:
             break
         }
+    }
+
+    /// The sender stopped after an internal error: it goes (torn down off
+    /// the main queue), its rows with it, and the AirPlay section shows it
+    /// as failed, with Retry, and a notice says so. The switches stay as
+    /// they are, so the speakers rejoin once a new sender runs.
+    private func nativeSenderFailed() {
+        guard let native = nativeAirPlay else { return }
+        DBG.log("[AudioSync] native AirPlay: the sender stopped after an internal error; Retry starts a new one")
+        nativeAirPlay = nil
+        nativeStarts.senderFailed()
+        native.discard()
+        airplayOrder = []
+        notify(text.nativeAirPlayStopped, origin: .automatic, subject: Notice.airplaySender)
+        refreshLocalDelays()   // no native speaker is chosen any more
+        pushModel()
+    }
+
+    /// Retry after the sender stopped: a new one starts now.
+    func retryNativeAirPlay() {
+        DBG.log("[AudioSync] native AirPlay: Retry")
+        nativeStarts.retry()
+        clearNotices([Notice.airplaySender])
+        reconcileNativeAirPlay()
     }
 
     /// Copies the native sender's list into the AirPlay rows, then lets the

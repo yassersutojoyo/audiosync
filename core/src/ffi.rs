@@ -450,11 +450,12 @@ mod tests {
         }
     }
 
-    /// The lines of a source file before its first test module.
+    /// The lines of a source file before its first top-level test item (a
+    /// function may hold a test-only statement of its own).
     fn production_lines(source: &str) -> Vec<&str> {
         source
             .lines()
-            .take_while(|line| line.trim() != "#[cfg(test)]")
+            .take_while(|line| *line != "#[cfg(test)]")
             .collect()
     }
 
@@ -956,6 +957,7 @@ mod tests {
                 "ASC_AIRPLAY_EVENT_TIMELINE",
                 AIRPLAY_EVENT_TIMELINE.to_string(),
             ),
+            ("ASC_AIRPLAY_EVENT_FAILED", AIRPLAY_EVENT_FAILED.to_string()),
             (
                 "ASC_AIRPLAY_STATE_CONNECTING",
                 AIRPLAY_STATE_CONNECTING.to_string(),

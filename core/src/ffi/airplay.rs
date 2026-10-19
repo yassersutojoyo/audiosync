@@ -24,11 +24,25 @@
 //! write can run; it may outlive its sender, whose audio then goes nowhere.
 //! The sender itself runs its own threads and sockets (P6), which this
 //! module never touches.
+//!
+//! Panics: a bug anywhere in the sender must not end the host. Every call
+//! here runs its work behind [`std::panic::catch_unwind`] (the core's
+//! release build unwinds): a panic inside one returns that call's failure
+//! value (null, false or 0) and marks its handle dead, and a panic that
+//! ends the sender's driver thread does the same, as does discovery's
+//! browser dying (its mDNS daemon ended). A dead handle's calls do
+//! nothing and return their failure values, except that
+//! [`asc_airplay_next_event`] reports [`AIRPLAY_EVENT_FAILED`] once; the
+//! host then destroys it and may create a new sender. A panic in an input
+//! write marks the input and its sender dead. Destroying a dead handle
+//! still frees it.
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{CStr, CString, c_char};
+use std::panic::{self, AssertUnwindSafe};
 use std::ptr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::audio::SAMPLE_RATE;
@@ -114,6 +128,10 @@ pub const AIRPLAY_EVENT_LATENCY: i32 = 3;
 /// The base latency L or the timeline changed; local outputs line up with
 /// the new L (P98, P114, P143).
 pub const AIRPLAY_EVENT_TIMELINE: i32 = 4;
+/// The sender stopped working: a bug ended one of its calls, its driver
+/// thread or its discovery. It lists, plays and reports nothing more; the
+/// host destroys it and may create a new one. Reported once, with no ID.
+pub const AIRPLAY_EVENT_FAILED: i32 = 5;
 
 /// A speaker's state ([`AscAirPlayEvent::state`]): a session is starting.
 pub const AIRPLAY_STATE_CONNECTING: i32 = 1;
@@ -208,7 +226,12 @@ struct Added {
 /// A sender event the host hasn't taken yet.
 enum Pending {
     Speaker(String, SpeakerEvent),
-    Timeline { latency: Duration, restarted: bool },
+    Timeline {
+        latency: Duration,
+        restarted: bool,
+    },
+    /// The sender is dead ([`AIRPLAY_EVENT_FAILED`]).
+    Failed,
 }
 
 /// An AirPlay sender behind an opaque C pointer.
@@ -232,6 +255,11 @@ pub struct AscAirPlay {
     added: HashMap<String, Added>,
     /// The master position, 0 to 100.
     master: f64,
+    /// Set when a call on this handle or its input panicked; shared with
+    /// the input.
+    dead: Arc<AtomicBool>,
+    /// [`AIRPLAY_EVENT_FAILED`] was handed out.
+    failure_reported: bool,
 }
 
 /// The ID a receiver goes by, the one the Windows app uses too: its device
@@ -400,6 +428,9 @@ impl AscAirPlay {
                     .events
                     .push_back(Pending::Timeline { latency, restarted }),
                 SenderEvent::Pairing { .. } => {}
+                // Discovery's browser died (a bug in it): the sender no
+                // longer lists anything new, so it counts as dead too.
+                SenderEvent::DiscoveryFailed => self.dead.store(true, Ordering::Release),
             }
         }
     }
@@ -503,11 +534,83 @@ impl AscAirPlay {
                 event.restarted = restarted;
                 (String::new(), String::new())
             }
+            Pending::Failed => {
+                event.kind = AIRPLAY_EVENT_FAILED;
+                (String::new(), String::new())
+            }
         };
         self.event_strings = [c_string(&id), c_string(&detail)];
         event.id = self.event_strings[0].as_ptr();
         event.detail = self.event_strings[1].as_ptr();
         event
+    }
+}
+
+impl AscAirPlay {
+    /// A call panicked, or the driver thread ended (see the module's
+    /// Panics).
+    fn is_dead(&self) -> bool {
+        self.dead.load(Ordering::Acquire) || !self.sender.is_running()
+    }
+}
+
+/// Tests: the panic a test asked for (`tests::panic_in_next_call`);
+/// nothing otherwise.
+#[inline(always)]
+fn injected_panic() {
+    #[cfg(test)]
+    if tests::PANIC_NEXT.with(|next| next.replace(false)) {
+        panic!("a panic injected by a test");
+    }
+}
+
+/// Runs `body` on the handle behind `airplay`, stopping a panic at this
+/// boundary: `failed` for a null handle, and after a panic, which also
+/// marks the handle dead. Catching costs nothing until a panic happens.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading contract.
+unsafe fn catching<T: Copy>(
+    airplay: *mut AscAirPlay,
+    failed: T,
+    body: impl FnOnce(&mut AscAirPlay) -> T,
+) -> T {
+    if airplay.is_null() {
+        return failed;
+    }
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
+        injected_panic();
+        // SAFETY: non-null, and by the caller's contract a live handle that
+        // no other call uses now.
+        body(unsafe { &mut *airplay })
+    }));
+    outcome.unwrap_or_else(|_| {
+        // SAFETY: still live; the closure's borrow ended with it.
+        unsafe { &*airplay }.dead.store(true, Ordering::Release);
+        failed
+    })
+}
+
+/// [`catching`] for a call that does nothing on a dead handle.
+///
+/// # Safety
+///
+/// As [`catching`].
+unsafe fn live<T: Copy>(
+    airplay: *mut AscAirPlay,
+    failed: T,
+    body: impl FnOnce(&mut AscAirPlay) -> T,
+) -> T {
+    // SAFETY: as the caller's.
+    unsafe {
+        catching(airplay, failed, |airplay| {
+            if airplay.is_dead() {
+                failed
+            } else {
+                body(airplay)
+            }
+        })
     }
 }
 
@@ -572,6 +675,9 @@ pub struct AscAirPlayInput {
     /// every request, and the rate in Hz in the low 32 bits; 0 before the
     /// first.
     requested: AtomicU64,
+    /// Its sender's dead flag: set by a panic in a write, which then
+    /// writes nothing more.
+    dead: Arc<AtomicBool>,
 }
 
 /// Starts an AirPlay sender: its stream, silent until audio comes through
@@ -580,20 +686,26 @@ pub struct AscAirPlayInput {
 /// Null when the thread can't start.
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_airplay_create() -> *mut AscAirPlay {
-    match Sender::start(SenderConfig::default()) {
-        Ok((sender, input)) => Box::into_raw(Box::new(AscAirPlay {
-            sender,
-            input: Some(input),
-            receivers: VecDeque::new(),
-            receiver_strings: Default::default(),
-            events: VecDeque::new(),
-            event_strings: Default::default(),
-            listed: HashMap::new(),
-            added: HashMap::new(),
-            master: 100.0,
-        })),
-        Err(_) => ptr::null_mut(),
-    }
+    let created = panic::catch_unwind(|| {
+        injected_panic();
+        match Sender::start(SenderConfig::default()) {
+            Ok((sender, input)) => Box::into_raw(Box::new(AscAirPlay {
+                sender,
+                input: Some(input),
+                receivers: VecDeque::new(),
+                receiver_strings: Default::default(),
+                events: VecDeque::new(),
+                event_strings: Default::default(),
+                listed: HashMap::new(),
+                added: HashMap::new(),
+                master: 100.0,
+                dead: Arc::new(AtomicBool::new(false)),
+                failure_reported: false,
+            })),
+            Err(_) => ptr::null_mut(),
+        }
+    });
+    created.unwrap_or(ptr::null_mut())
 }
 
 /// Stops the sender and frees it: every speaker is torn down, discovery
@@ -621,7 +733,10 @@ pub unsafe extern "C" fn asc_airplay_destroy(airplay: *mut *mut AscAirPlay) {
     // SAFETY: the pointer came from Box::into_raw in asc_airplay_create, and
     // by the caller's contract it is destroyed once (the host's pointer is
     // now null), with no call in progress.
-    drop(unsafe { Box::from_raw(handle) });
+    let freed = panic::catch_unwind(AssertUnwindSafe(|| drop(unsafe { Box::from_raw(handle) })));
+    // A panic while freeing leaves what wasn't freed yet behind; the host's
+    // pointer is null either way.
+    drop(freed);
 }
 
 /// Starts browsing the local network for AirPlay receivers over multicast
@@ -635,10 +750,11 @@ pub unsafe extern "C" fn asc_airplay_destroy(airplay: *mut *mut AscAirPlay) {
 pub unsafe extern "C" fn asc_airplay_start_discovery(airplay: *mut AscAirPlay) -> bool {
     // SAFETY: by the caller's contract null or a live handle that no other
     // call uses now.
-    let Some(airplay) = (unsafe { airplay.as_mut() }) else {
-        return false;
-    };
-    airplay.sender.start_discovery().is_ok()
+    unsafe {
+        live(airplay, false, |airplay| {
+            airplay.sender.start_discovery().is_ok()
+        })
+    }
 }
 
 /// Stops browsing; every receiver discovery listed is then reported gone.
@@ -651,9 +767,7 @@ pub unsafe extern "C" fn asc_airplay_start_discovery(airplay: *mut AscAirPlay) -
 pub unsafe extern "C" fn asc_airplay_stop_discovery(airplay: *mut AscAirPlay) {
     // SAFETY: by the caller's contract null or a live handle that no other
     // call uses now.
-    if let Some(airplay) = unsafe { airplay.as_mut() } {
-        airplay.sender.stop_discovery();
-    }
+    unsafe { live(airplay, (), |airplay| airplay.sender.stop_discovery()) }
 }
 
 /// Takes the next change discovery saw, if one is waiting, into
@@ -674,25 +788,27 @@ pub unsafe extern "C" fn asc_airplay_next_receiver(
     if receiver.is_null() {
         return false;
     }
+    let take = |airplay: &mut AscAirPlay| {
+        airplay.pump();
+        let Some(event) = airplay.receivers.pop_front() else {
+            return false;
+        };
+        let report = airplay.report(event);
+        // SAFETY: non-null, and by the caller's contract writable.
+        unsafe { receiver.write(report) };
+        true
+    };
     // SAFETY: by the caller's contract null or a live handle that no other
     // call uses now.
-    let Some(airplay) = (unsafe { airplay.as_mut() }) else {
-        return false;
-    };
-    airplay.pump();
-    let Some(event) = airplay.receivers.pop_front() else {
-        return false;
-    };
-    let report = airplay.report(event);
-    // SAFETY: non-null, and by the caller's contract writable.
-    unsafe { receiver.write(report) };
-    true
+    unsafe { live(airplay, false, take) }
 }
 
 /// Takes the next speaker or timeline event, if one is waiting, into
 /// `*event` and returns true. Returns false, leaving `*event` as it was,
 /// when none is waiting or either pointer is null. Never waits. Receiver
-/// changes wait for [`asc_airplay_next_receiver`].
+/// changes wait for [`asc_airplay_next_receiver`]. A dead sender (see the
+/// module's Panics) reports [`AIRPLAY_EVENT_FAILED`] once, in place of
+/// whatever still waited, and nothing after it.
 ///
 /// # Safety
 ///
@@ -706,19 +822,37 @@ pub unsafe extern "C" fn asc_airplay_next_event(
     if event.is_null() {
         return false;
     }
+    let take = |airplay: &mut AscAirPlay| {
+        if !airplay.is_dead() {
+            airplay.pump();
+        }
+        let pending = if airplay.is_dead() {
+            if airplay.failure_reported {
+                return false;
+            }
+            airplay.failure_reported = true;
+            airplay.events.clear();
+            Pending::Failed
+        } else {
+            let Some(pending) = airplay.events.pop_front() else {
+                return false;
+            };
+            pending
+        };
+        let described = airplay.describe(pending);
+        // SAFETY: non-null, and by the caller's contract writable.
+        unsafe { event.write(described) };
+        true
+    };
     // SAFETY: by the caller's contract null or a live handle that no other
     // call uses now.
-    let Some(airplay) = (unsafe { airplay.as_mut() }) else {
-        return false;
-    };
-    airplay.pump();
-    let Some(pending) = airplay.events.pop_front() else {
-        return false;
-    };
-    let described = airplay.describe(pending);
-    // SAFETY: non-null, and by the caller's contract writable.
-    unsafe { event.write(described) };
-    true
+    match unsafe { catching(airplay, None, |airplay| Some(take(airplay))) } {
+        Some(taken) => taken,
+        // A null handle, or that call panicked and made the sender dead,
+        // whose failure then comes at once.
+        // SAFETY: as above.
+        None => unsafe { catching(airplay, false, take) },
+    }
 }
 
 /// Adds the receiver discovery lists under `id` as a speaker, at slider
@@ -739,11 +873,6 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
     id: *const c_char,
     volume: f64,
 ) -> bool {
-    // SAFETY: by the caller's contract null or a live handle that no other
-    // call uses now.
-    let Some(airplay) = (unsafe { airplay.as_mut() }) else {
-        return false;
-    };
     // SAFETY: by the caller's contract null or a NUL-terminated string.
     let Some(id) = (unsafe { host_text(id) }) else {
         return false;
@@ -751,16 +880,22 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
     if !volume.is_finite() {
         return false;
     }
-    airplay.pump();
-    let Some(device) = airplay.listed.get(id).cloned() else {
-        return false;
-    };
-    let position = volume.clamp(0.0, 100.0);
-    let key = device.key.clone();
-    let options = SpeakerOptions::new(speaker_volume(position, airplay.master));
-    airplay.sender.add_speaker(device, options);
-    airplay.added.insert(id.to_owned(), Added { key, position });
-    true
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, false, |airplay| {
+            airplay.pump();
+            let Some(device) = airplay.listed.get(id).cloned() else {
+                return false;
+            };
+            let position = volume.clamp(0.0, 100.0);
+            let key = device.key.clone();
+            let options = SpeakerOptions::new(speaker_volume(position, airplay.master));
+            airplay.sender.add_speaker(device, options);
+            airplay.added.insert(id.to_owned(), Added { key, position });
+            true
+        })
+    }
 }
 
 /// Removes the speaker added under `id`: its packets stop, TEARDOWN goes
@@ -777,20 +912,21 @@ pub unsafe extern "C" fn asc_airplay_remove_speaker(
     airplay: *mut AscAirPlay,
     id: *const c_char,
 ) -> bool {
-    // SAFETY: by the caller's contract null or a live handle that no other
-    // call uses now.
-    let Some(airplay) = (unsafe { airplay.as_mut() }) else {
-        return false;
-    };
     // SAFETY: by the caller's contract null or a NUL-terminated string.
     let Some(id) = (unsafe { host_text(id) }) else {
         return false;
     };
-    let Some(added) = airplay.added.remove(id) else {
-        return false;
-    };
-    airplay.sender.remove_speaker(&added.key);
-    true
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, false, |airplay| {
+            let Some(added) = airplay.added.remove(id) else {
+                return false;
+            };
+            airplay.sender.remove_speaker(&added.key);
+            true
+        })
+    }
 }
 
 /// Sets the slider position (0 to 100) of the speaker added under `id`; it
@@ -808,11 +944,6 @@ pub unsafe extern "C" fn asc_airplay_set_volume(
     id: *const c_char,
     volume: f64,
 ) -> bool {
-    // SAFETY: by the caller's contract null or a live handle that no other
-    // call uses now.
-    let Some(airplay) = (unsafe { airplay.as_mut() }) else {
-        return false;
-    };
     // SAFETY: by the caller's contract null or a NUL-terminated string.
     let Some(id) = (unsafe { host_text(id) }) else {
         return false;
@@ -820,15 +951,21 @@ pub unsafe extern "C" fn asc_airplay_set_volume(
     if !volume.is_finite() {
         return false;
     }
-    let master = airplay.master;
-    let Some(added) = airplay.added.get_mut(id) else {
-        return false;
-    };
-    added.position = volume.clamp(0.0, 100.0);
-    airplay
-        .sender
-        .set_volume(&added.key, speaker_volume(added.position, master));
-    true
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, false, |airplay| {
+            let master = airplay.master;
+            let Some(added) = airplay.added.get_mut(id) else {
+                return false;
+            };
+            added.position = volume.clamp(0.0, 100.0);
+            airplay
+                .sender
+                .set_volume(&added.key, speaker_volume(added.position, master));
+            true
+        })
+    }
 }
 
 /// Sets the master position (0 to 100), which scales every speaker's
@@ -840,24 +977,26 @@ pub unsafe extern "C" fn asc_airplay_set_volume(
 /// `airplay` is null or a live handle, called under the threading contract.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_airplay_set_master(airplay: *mut AscAirPlay, master: f64) {
-    // SAFETY: by the caller's contract null or a live handle that no other
-    // call uses now.
-    let Some(airplay) = (unsafe { airplay.as_mut() }) else {
-        return;
-    };
     if !master.is_finite() {
         return;
     }
-    airplay.master = master.clamp(0.0, 100.0);
-    for added in airplay.added.values() {
-        airplay
-            .sender
-            .set_volume(&added.key, speaker_volume(added.position, airplay.master));
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, (), |airplay| {
+            airplay.master = master.clamp(0.0, 100.0);
+            for added in airplay.added.values() {
+                airplay
+                    .sender
+                    .set_volume(&added.key, speaker_volume(added.position, airplay.master));
+            }
+        })
     }
 }
 
 /// The base latency L in milliseconds (P98, P113): a local output lines up
-/// with the speakers at L plus its own delay (P114). 0 for a null handle.
+/// with the speakers at L plus its own delay (P114). 0 for a null or dead
+/// handle.
 ///
 /// # Safety
 ///
@@ -865,8 +1004,12 @@ pub unsafe extern "C" fn asc_airplay_set_master(airplay: *mut AscAirPlay, master
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_airplay_latency_ms(airplay: *const AscAirPlay) -> f64 {
     // SAFETY: by the caller's contract null or a live handle that no other
-    // call uses now.
-    unsafe { airplay.as_ref() }.map_or(0.0, |airplay| millis(airplay.sender.latency()))
+    // call uses now; the call only reads it.
+    unsafe {
+        live(airplay.cast_mut(), 0.0, |airplay| {
+            millis(airplay.sender.latency())
+        })
+    }
 }
 
 /// The host restarted its capture (P143): every speaker is flushed and the
@@ -879,9 +1022,7 @@ pub unsafe extern "C" fn asc_airplay_latency_ms(airplay: *const AscAirPlay) -> f
 pub unsafe extern "C" fn asc_airplay_restart_timeline(airplay: *mut AscAirPlay) {
     // SAFETY: by the caller's contract null or a live handle that no other
     // call uses now.
-    if let Some(airplay) = unsafe { airplay.as_mut() } {
-        airplay.sender.restart_timeline();
-    }
+    unsafe { live(airplay, (), |airplay| airplay.sender.restart_timeline()) }
 }
 
 /// The sender's audio input, for the capture thread: the first call hands
@@ -896,25 +1037,27 @@ pub unsafe extern "C" fn asc_airplay_restart_timeline(airplay: *mut AscAirPlay) 
 pub unsafe extern "C" fn asc_airplay_take_input(airplay: *mut AscAirPlay) -> *mut AscAirPlayInput {
     // SAFETY: by the caller's contract null or a live handle that no other
     // call uses now.
-    let Some(airplay) = (unsafe { airplay.as_mut() }) else {
-        return ptr::null_mut();
-    };
-    let Ok(resampler) = Resampler::new(SAMPLE_RATE, SAMPLE_RATE) else {
-        return ptr::null_mut();
-    };
-    let Some(writer) = airplay.input.take() else {
-        return ptr::null_mut();
-    };
-    Box::into_raw(Box::new(AscAirPlayInput {
-        feed: Feed {
-            writer,
-            resampler,
-            resampled: vec![0.0; INPUT_CHUNK_FRAMES * 2].into_boxed_slice(),
-            applied: 0,
-            ready: false,
-        },
-        requested: AtomicU64::new(0),
-    }))
+    unsafe {
+        live(airplay, ptr::null_mut(), |airplay| {
+            let Ok(resampler) = Resampler::new(SAMPLE_RATE, SAMPLE_RATE) else {
+                return ptr::null_mut();
+            };
+            let Some(writer) = airplay.input.take() else {
+                return ptr::null_mut();
+            };
+            Box::into_raw(Box::new(AscAirPlayInput {
+                feed: Feed {
+                    writer,
+                    resampler,
+                    resampled: vec![0.0; INPUT_CHUNK_FRAMES * 2].into_boxed_slice(),
+                    applied: 0,
+                    ready: false,
+                },
+                requested: AtomicU64::new(0),
+                dead: airplay.dead.clone(),
+            }))
+        })
+    }
 }
 
 /// Any thread: the rate in Hz of the audio the capture writes from now on,
@@ -938,17 +1081,24 @@ pub unsafe extern "C" fn asc_airplay_input_set_rate(
     if !(0.0..=f64::from(u32::MAX)).contains(&rate) || !is_supported_rate(rate as u32) {
         return false;
     }
-    // SAFETY: the handle is live; this call borrows only the atomic, which
+    // SAFETY: the handle is live; this call borrows only the atomics, which
     // writes read but never borrow mutably.
-    let requested = unsafe { &(*input).requested };
-    let mut old = requested.load(Ordering::Relaxed);
-    loop {
-        let new = ((old >> 32).wrapping_add(1) << 32) | u64::from(rate as u32);
-        match requested.compare_exchange_weak(old, new, Ordering::Release, Ordering::Relaxed) {
-            Ok(_) => return true,
-            Err(current) => old = current,
+    let (requested, dead) = unsafe { (&(*input).requested, &(*input).dead) };
+    let set = panic::catch_unwind(|| {
+        injected_panic();
+        let mut old = requested.load(Ordering::Relaxed);
+        loop {
+            let new = ((old >> 32).wrapping_add(1) << 32) | u64::from(rate as u32);
+            match requested.compare_exchange_weak(old, new, Ordering::Release, Ordering::Relaxed) {
+                Ok(_) => return true,
+                Err(current) => old = current,
+            }
         }
-    }
+    });
+    set.unwrap_or_else(|_| {
+        dead.store(true, Ordering::Release);
+        false
+    })
 }
 
 /// Capture thread: hands `frames` interleaved stereo frames at the rate
@@ -956,7 +1106,8 @@ pub unsafe extern "C" fn asc_airplay_input_set_rate(
 /// now (P73, P96). Returns the 44.1 kHz frames handed over, 0 before a
 /// rate is set; the sender drops those that come too late or don't fit
 /// (P112). Never allocates, locks, blocks or logs (P6); it reads the
-/// monotonic clock once. Real-time safe.
+/// monotonic clock once. Real-time safe. 0 once a write panicked (only a
+/// panic itself allocates; see the module's Panics).
 ///
 /// # Safety
 ///
@@ -982,10 +1133,21 @@ pub unsafe extern "C" fn asc_airplay_input_write(
     };
     // SAFETY: the handle is live; writes run on one thread at a time and
     // borrow only the `feed` field, which rate requests never touch.
-    let requested = unsafe { &(*input).requested }.load(Ordering::Acquire);
+    let (requested, dead) = unsafe { (&(*input).requested, &(*input).dead) };
+    if dead.load(Ordering::Acquire) {
+        return 0;
+    }
+    let requested = requested.load(Ordering::Acquire);
     // SAFETY: as above.
     let feed = unsafe { &mut (*input).feed };
-    feed.write(block, requested)
+    let written = panic::catch_unwind(AssertUnwindSafe(|| {
+        injected_panic();
+        feed.write(block, requested)
+    }));
+    written.unwrap_or_else(|_| {
+        dead.store(true, Ordering::Release);
+        0
+    })
 }
 
 /// Frees an input handle. Sets `*input` to null, so destroying through the
@@ -1010,7 +1172,9 @@ pub unsafe extern "C" fn asc_airplay_input_destroy(input: *mut *mut AscAirPlayIn
     // SAFETY: the pointer came from Box::into_raw in asc_airplay_take_input,
     // and by the caller's contract it is destroyed once, with no call in
     // progress.
-    drop(unsafe { Box::from_raw(handle) });
+    let freed = panic::catch_unwind(AssertUnwindSafe(|| drop(unsafe { Box::from_raw(handle) })));
+    // As in asc_airplay_destroy: the host's pointer is null either way.
+    drop(freed);
 }
 
 #[cfg(test)]
@@ -1885,5 +2049,198 @@ mod tests {
         .map(|reason| error_code(reason).0)
         .collect();
         assert_eq!(codes, (1..=9).collect::<Vec<i32>>());
+    }
+
+    /// A browser whose first poll panics on the driver thread, as a bug in
+    /// discovery would.
+    struct Panicking;
+
+    impl Browser for Panicking {
+        fn poll_event(&mut self) -> Option<BrowseEvent> {
+            panic!("a bug in discovery (test)");
+        }
+    }
+
+    thread_local! {
+        /// The next guarded call on this thread panics inside its guard.
+        pub(super) static PANIC_NEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// The next guarded call on this thread panics inside its guard.
+    fn panic_in_next_call() {
+        PANIC_NEXT.with(|next| next.set(true));
+    }
+
+    fn failure_event() -> Event {
+        Event {
+            kind: AIRPLAY_EVENT_FAILED,
+            id: String::new(),
+            state: 0,
+            error: 0,
+            unsupported: AIRPLAY_REASON_NONE,
+            retry_ms: -1,
+            latency_ms: 0.0,
+            receiver_latency_frames: -1,
+            restarted: false,
+            detail: String::new(),
+        }
+    }
+
+    fn failed(events: &[Event]) -> bool {
+        events
+            .iter()
+            .any(|event| event.kind == AIRPLAY_EVENT_FAILED)
+    }
+
+    #[test]
+    fn a_panic_inside_a_call_returns_its_failure_value_and_kills_the_handle() {
+        panic_in_next_call();
+        assert!(asc_airplay_create().is_null(), "a create that panics");
+        let mut handle = asc_airplay_create();
+        assert!(!handle.is_null());
+        let first = events_until(handle, |seen| !seen.is_empty());
+        assert_eq!(first.len(), 1, "{first:?}");
+        assert_eq!(first[0].kind, AIRPLAY_EVENT_TIMELINE);
+        panic_in_next_call();
+        // SAFETY: a live handle, used by this thread only.
+        let latency = unsafe { asc_airplay_latency_ms(handle) };
+        assert_eq!(latency, 0.0, "the call that panicked returns 0");
+        // SAFETY: as above; the handle is dead, not freed.
+        unsafe {
+            assert_eq!(asc_airplay_latency_ms(handle), 0.0);
+            assert!(!asc_airplay_start_discovery(handle));
+            assert!(!asc_airplay_add_speaker(
+                handle,
+                c"02005E005301".as_ptr(),
+                50.0
+            ));
+            assert!(asc_airplay_take_input(handle).is_null());
+            asc_airplay_set_master(handle, 50.0);
+            asc_airplay_restart_timeline(handle);
+            let mut receiver = empty();
+            assert!(!asc_airplay_next_receiver(handle, &mut receiver));
+        }
+        let events = events_until(handle, |seen| !seen.is_empty());
+        assert_eq!(events, [failure_event()], "the failure, once, and only it");
+        let mut raw = blank_event();
+        // SAFETY: as above; a local out struct.
+        let more = unsafe { asc_airplay_next_event(handle, &mut raw) };
+        assert!(!more, "nothing after it");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+        assert!(handle.is_null());
+    }
+
+    #[test]
+    fn a_panic_while_taking_an_event_reports_the_failure_at_once() {
+        let mut handle = asc_airplay_create();
+        panic_in_next_call();
+        let mut raw = blank_event();
+        // SAFETY: a live handle, used by this thread only; a local out struct.
+        unsafe {
+            assert!(asc_airplay_next_event(handle, &mut raw));
+            assert_eq!(raw.kind, AIRPLAY_EVENT_FAILED);
+            assert!(!asc_airplay_next_event(handle, &mut raw));
+            asc_airplay_destroy(&mut handle);
+        }
+    }
+
+    #[test]
+    fn a_panic_in_an_input_write_stops_the_input_and_fails_its_sender() {
+        let mut handle = asc_airplay_create();
+        // SAFETY: a live handle, used by this thread only.
+        let mut input = unsafe { asc_airplay_take_input(handle) };
+        assert!(!input.is_null());
+        let block = vec![0.0f32; 480 * 2];
+        // SAFETY: a live input written by this thread only; a block of 480
+        // stereo frames.
+        unsafe {
+            assert!(asc_airplay_input_set_rate(input, 48_000.0));
+            assert_eq!(asc_airplay_input_write(input, block.as_ptr(), 480), 441);
+            panic_in_next_call();
+            assert_eq!(asc_airplay_input_write(input, block.as_ptr(), 480), 0);
+            assert_eq!(
+                asc_airplay_input_write(input, block.as_ptr(), 480),
+                0,
+                "a dead input writes nothing more"
+            );
+        }
+        let events = events_until(handle, failed);
+        assert_eq!(events.last(), Some(&failure_event()), "{events:?}");
+        // SAFETY: each destroyed once, by this thread.
+        unsafe {
+            asc_airplay_input_destroy(&mut input);
+            asc_airplay_destroy(&mut handle);
+        }
+    }
+
+    #[test]
+    fn a_driver_ended_by_a_panic_reports_the_failure_once() {
+        let mut handle = asc_airplay_create();
+        // SAFETY: a live handle, used by this thread only.
+        unsafe { &*handle }
+            .sender
+            .start_discovery_with(Box::new(Panicking));
+        let events = events_until(handle, failed);
+        assert_eq!(events.last(), Some(&failure_event()), "{events:?}");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.kind == AIRPLAY_EVENT_FAILED)
+                .count(),
+            1
+        );
+        let mut raw = blank_event();
+        // SAFETY: as above; a local out struct.
+        unsafe {
+            assert!(
+                !asc_airplay_next_event(handle, &mut raw),
+                "nothing after it"
+            );
+            assert_eq!(
+                asc_airplay_latency_ms(handle),
+                0.0,
+                "a dead handle's calls fail"
+            );
+        }
+        let started = Instant::now();
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+        assert!(started.elapsed() < Duration::from_secs(1), "destroy waited");
+    }
+
+    /// A browser whose daemon is already gone, as one a bug ended leaves it.
+    struct Dead;
+
+    impl Browser for Dead {
+        fn poll_event(&mut self) -> Option<BrowseEvent> {
+            None
+        }
+
+        fn is_dead(&self) -> bool {
+            true
+        }
+    }
+
+    // Discovery that died is the sender's failure too: the host gets the
+    // same failed state and Retry, not a list that silently stops changing.
+    #[test]
+    fn dead_discovery_reports_the_failure_once() {
+        let mut handle = asc_airplay_create();
+        // SAFETY: a live handle, used by this thread only.
+        unsafe { &*handle }
+            .sender
+            .start_discovery_with(Box::new(Dead));
+        let events = events_until(handle, failed);
+        assert_eq!(events.last(), Some(&failure_event()), "{events:?}");
+        let mut raw = blank_event();
+        // SAFETY: as above; a local out struct.
+        unsafe {
+            assert!(
+                !asc_airplay_next_event(handle, &mut raw),
+                "nothing after it"
+            );
+            asc_airplay_destroy(&mut handle);
+        }
     }
 }

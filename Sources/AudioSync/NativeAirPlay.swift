@@ -116,6 +116,14 @@ final class NativeAirPlay {
         queue.sync { stopOnQueue() }
     }
 
+    /// The same teardown without waiting for it, for a sender that stopped
+    /// working (`NativeSpeakerEvent.failed`): nothing more reaches the
+    /// callbacks, and a new sender may start meanwhile. Main queue.
+    func discard() {
+        active = false
+        queue.async { self.stopOnQueue() }
+    }
+
     deinit {
         // Normally `shutdown` has freed everything. Otherwise free it off the
         // thread that let go of this object, which may be the main thread.
@@ -123,7 +131,7 @@ final class NativeAirPlay {
         let (orphan, orphanInput) = (handle, input)
         guard orphan != nil || orphanInput != nil else { return }
         DispatchQueue.global(qos: .utility).async {
-            if orphanInput != nil { _ = NativeAirPlayTap.uninstall() }
+            if let orphanInput { NativeAirPlayTap.uninstall(orphanInput) }
             var leftoverInput = orphanInput
             asc_airplay_input_destroy(&leftoverInput)
             var leftover = orphan
@@ -158,8 +166,8 @@ final class NativeAirPlay {
     private func stopOnQueue() {
         timer?.cancel()
         timer = nil
-        if input != nil {
-            _ = NativeAirPlayTap.uninstall()   // waits for a block in progress
+        if let installed = input {
+            NativeAirPlayTap.uninstall(installed)   // waits for a block in progress
             asc_airplay_input_destroy(&input)
         }
         asc_airplay_destroy(&handle)   // tears the speakers down, sets handle to nil
@@ -197,7 +205,7 @@ final class NativeAirPlay {
                 onChange(change)
             }
         }
-        for event in events {
+        for event in events where active {   // a failed sender is discarded on its way
             let outcome = model.apply(event)
             onEvent(event, outcome)
         }
@@ -233,6 +241,8 @@ final class NativeAirPlay {
                             receiverFrames: raw.receiver_latency_frames >= 0 ? raw.receiver_latency_frames : nil)
         case ASC_AIRPLAY_EVENT_TIMELINE:
             return .timeline(latencyMs: raw.latency_ms, restarted: raw.restarted)
+        case ASC_AIRPLAY_EVENT_FAILED:
+            return .failed
         default:
             return nil
         }

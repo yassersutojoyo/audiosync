@@ -38,8 +38,21 @@ harness = false
 chunks_exact_to_as_chunks = "allow"
 manual_is_multiple_of = "allow"
 
+# Unwinding, so a bug in AudioSync's own AirPlay sender (a panic on one of
+# its threads, or in a call through its C interface) stops at the
+# asc_airplay_* boundary and becomes a failed sender the app restarts,
+# instead of ending the app (src/ffi/airplay.rs, "Panics"). Every other
+# panic still ends the app, as it did when this profile aborted:
+# - one that reaches any other extern "C" function aborts there: since
+#   Rust 1.81 unwinding out of an extern "C" function aborts the process, so
+#   it never unwinds into the host (rust-version is above that);
+# - a thread the core spawns runs its body under catch_unwind and aborts the
+#   process on a panic (FifoControl's writer in src/fifo.rs), unless the
+#   thread reports its own death to the host the way the sender's threads
+#   do. Unwinding would otherwise end only that thread, silently: a new
+#   thread follows the same rule.
 [profile.release]
-panic = "abort"
+panic = "unwind"
 
 # The drift simulation plays two hours of audio per direction through the
 # ring; opt-level 1 runs it in about a second instead of half a minute and

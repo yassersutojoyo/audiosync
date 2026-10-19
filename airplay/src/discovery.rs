@@ -253,6 +253,17 @@ pub enum BrowseEvent {
 pub trait Browser {
     /// The next event, if one is ready; never blocks.
     fn poll_event(&mut self) -> Option<BrowseEvent>;
+
+    /// True once the browser can never report anything again, such as when
+    /// the daemon behind it ended (only a bug in it does). The sender then
+    /// stops browsing and reports
+    /// [`SenderEvent::DiscoveryFailed`](crate::sender::SenderEvent::DiscoveryFailed),
+    /// so a host never keeps a receiver list
+    /// that silently stopped changing. Read after `poll_event` returned
+    /// `None`; the default is a browser that never dies.
+    fn is_dead(&self) -> bool {
+        false
+    }
 }
 
 /// How the directory identifies a device.
