@@ -21,7 +21,8 @@ use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::ui_model::{
-    self, AppState, Backend, NoticeMessage, PinPrompt, SourceKind, SpeakerState,
+    self, AppState, Backend, NoticeMessage, PinPrompt, SourceKind, SpeakerState, ViewSettings,
+    WindowFrame,
 };
 use crate::{
     AboutDialog, AirPlayProblem, Availability, EqualizerWindow, GroupItem, GroupNameDialog,
@@ -214,6 +215,7 @@ impl App {
         app.connect_equalizer();
         app.connect_dialogs();
         app.connect_guide();
+        app.restore_view();
         app.refresh();
         let weak = Rc::downgrade(&app);
         app.poll_timer
@@ -935,7 +937,72 @@ impl App {
 
     fn show_virtual_devices(&self, on: bool) {
         self.ui.borrow_mut().show_virtual = on;
+        self.remember_view();
         self.refresh();
+    }
+
+    /// The main window's place and size while it shows normally (not
+    /// maximized or minimized).
+    fn main_frame(&self) -> Option<WindowFrame> {
+        let window = self.main.window();
+        if !window.is_visible() || window.is_maximized() || window.is_minimized() {
+            return None;
+        }
+        let position = window.position();
+        let size = window.size().to_logical(window.scale_factor());
+        Some(WindowFrame {
+            x: position.x,
+            y: position.y,
+            width: f64::from(size.width),
+            height: f64::from(size.height),
+        })
+    }
+
+    /// Hands the windows' own settings to the backend, which saves them with
+    /// the rest: View > Show Virtual Devices, and the main window's frame
+    /// when it shows (else the last one).
+    fn remember_view(&self) {
+        let mut backend = self.backend.borrow_mut();
+        let saved = backend.view_settings();
+        let settings = ViewSettings {
+            show_virtual_devices: self.ui.borrow().show_virtual,
+            window: self.main_frame().or(saved.window),
+        };
+        if settings != saved {
+            backend.set_view_settings(settings);
+        }
+    }
+
+    /// Shows the windows with the settings saved last time: View > Show
+    /// Virtual Devices, and the main window's size and, when it is still on
+    /// a monitor, its place.
+    fn restore_view(&self) {
+        let saved = self.backend.borrow().view_settings();
+        self.ui.borrow_mut().show_virtual = saved.show_virtual_devices;
+        let Some(frame) = saved.window else {
+            return;
+        };
+        let window = self.main.window();
+        window.set_size(slint::LogicalSize::new(
+            frame.width as f32,
+            frame.height as f32,
+        ));
+        if crate::platform::is_on_a_monitor(frame.x, frame.y) {
+            window.set_position(slint::PhysicalPosition::new(frame.x, frame.y));
+        }
+        self.log.log(|| {
+            format!(
+                "main window: {} x {} as last time",
+                frame.width, frame.height
+            )
+        });
+    }
+
+    /// Saves the settings now, with the main window's frame: the app is
+    /// about to quit.
+    pub fn save_settings(&self) {
+        self.remember_view();
+        self.backend.borrow_mut().save_settings();
     }
 
     fn step_delay(&self, id: &str, delta: i32) {
@@ -1058,6 +1125,7 @@ impl App {
     /// Closing the main window keeps AudioSync running in the tray, like the
     /// Mac app in the menu bar. Without a tray icon, it quits.
     fn close_main(&self) {
+        self.remember_view();
         let _ = self.main.hide();
         if !self.tray_available.get() {
             let _ = slint::quit_event_loop();

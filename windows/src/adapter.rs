@@ -22,8 +22,15 @@
 //! it is posted when the outputs it names change, changed in place when only
 //! which of them AudioSync plays to changes, and cleared when the cause is
 //! gone. Once dismissed, it stays away for the same source and those outputs
-//! (or fewer of them) until that app quits. Like the speakers' settings they are kept in memory only
-//! for now: AudioSync for Windows doesn't save its settings yet.
+//! (or fewer of them) until that app quits.
+//!
+//! The user's choices outlive a restart (`crate::settings`): the adapter
+//! reads the settings file before the first listing and hands the saved
+//! switches, volumes and delays to the audio backend, which keeps them by ID
+//! for a device that isn't there yet; at each poll it writes the file again
+//! if anything changed. Like the Mac app, a launch doesn't start streaming
+//! by itself, except through an auto-connect speaker that is there. Saved
+//! settings of a device that is gone stay in the file for when it is back.
 //!
 //! Speakers are named by the core's speaker keys: `lc:` and the endpoint ID
 //! for a local output, `ap:` and the speaker's ID for an AirPlay speaker, so
@@ -53,9 +60,12 @@ use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
 use crate::audio::capture::WHOLE_SYSTEM_NAME;
 use crate::audio::routing::{DirectPath, DirectReason};
 use crate::debug_log::DebugLog;
+use crate::settings::{
+    self, SavedEqualizer, SavedGroup, SavedSource, SavedSpeaker, Settings, SettingsFile,
+};
 use crate::ui_model::{
     self, AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, PinPhase,
-    PinPrompt, Source, SourceKind, Speaker, SpeakerKind, clamp_delay_ms,
+    PinPrompt, Source, SourceKind, Speaker, SpeakerKind, ViewSettings, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -163,13 +173,42 @@ pub struct AudioAdapter<A: AudioBackend> {
     clock: fn() -> String,
     /// The debug log; it writes nothing unless `AUDIOSYNC_DEBUG=1`.
     log: DebugLog,
+    /// Where the settings are kept.
+    settings_file: SettingsFile,
+    /// The settings as last read or written: the file holds them.
+    saved: Settings,
+    /// AirPlay speakers saved as on that the backend couldn't switch on at
+    /// launch (no AirPlay sender): their saved settings stay as they are.
+    airplay_unrestored: BTreeSet<String>,
+    /// The windows' own settings.
+    view: ViewSettings,
 }
 
 impl<A: AudioBackend> AudioAdapter<A> {
     /// The adapter over `audio`, stopped, with the sources and outputs listed
-    /// now. `clock` gives the time a notice shows; what happens goes to
-    /// `log`.
+    /// now and nothing saved. `clock` gives the time a notice shows; what
+    /// happens goes to `log`.
+    #[cfg(test)]
     pub fn new(audio: A, clock: fn() -> String, log: DebugLog) -> AudioAdapter<A> {
+        AudioAdapter::with_settings(audio, clock, log, SettingsFile::in_memory())
+    }
+
+    /// The adapter over `audio` with the settings in `settings_file`,
+    /// stopped unless an auto-connect speaker is there, with the sources and
+    /// outputs listed now. `clock` gives the time a notice shows; what
+    /// happens goes to `log`.
+    pub fn with_settings(
+        audio: A,
+        clock: fn() -> String,
+        log: DebugLog,
+        settings_file: SettingsFile,
+    ) -> AudioAdapter<A> {
+        let (saved, loaded) = settings_file.load();
+        if settings_file.path().is_some() {
+            log.log(|| format!("settings: {loaded}"));
+        } else {
+            log.log(|| "settings: no app data folder; kept until AudioSync quits".to_owned());
+        }
         let mut adapter = AudioAdapter {
             audio,
             sources: vec![SourceInfo {
@@ -194,12 +233,191 @@ impl<A: AudioBackend> AudioAdapter<A> {
             polls: 0,
             clock,
             log,
+            settings_file,
+            saved: Settings::default(),
+            airplay_unrestored: BTreeSet::new(),
+            view: ViewSettings::default(),
         };
+        adapter.restore(saved);
         adapter.list_devices();
+        adapter.log.log(|| match &adapter.chosen {
+            Chosen::WholeSystem => format!("source chosen: {WHOLE_SYSTEM_NAME} (the default)"),
+            Chosen::App { name, .. } => {
+                format!("source chosen: {name} ({}), as saved", adapter.chosen.key())
+            }
+        });
         adapter
-            .log
-            .log(|| format!("source chosen: {WHOLE_SYSTEM_NAME} (the default)"));
-        adapter
+    }
+
+    /// Takes in the saved settings before anything is listed: the audio
+    /// backend keeps each speaker's by ID, so one that isn't there yet gets
+    /// them when it appears. Nothing starts streaming here; auto-connect
+    /// speakers do once the first listing finds them.
+    fn restore(&mut self, saved: Settings) {
+        self.audio.set_master_volume(saved.master_volume);
+        for (id, speaker) in &saved.outputs {
+            self.audio.set_output_delay(id, speaker.delay_ms);
+            self.audio.set_output_volume(id, speaker.volume);
+            if speaker.enabled {
+                // Nothing streams yet, so this only marks it on.
+                let _ = self.audio.set_output_enabled(id, true);
+            }
+        }
+        for (id, speaker) in &saved.airplay {
+            self.audio.set_airplay_volume(id, speaker.volume);
+            self.audio.set_airplay_delay(id, speaker.delay_ms);
+            if speaker.enabled && self.audio.set_airplay_enabled(id, true).is_err() {
+                self.airplay_unrestored.insert(id.clone());
+            }
+        }
+        if !self.airplay_unrestored.is_empty() {
+            let count = self.airplay_unrestored.len();
+            self.log.log(|| {
+                format!("settings: {count} AirPlay speaker(s) stay off without an AirPlay sender")
+            });
+        }
+        self.auto_connect = saved.auto_connect.clone();
+        self.groups = saved
+            .groups
+            .iter()
+            .map(|group| Group {
+                id: group.id.clone(),
+                name: group.name.clone(),
+                members: group.members.clone(),
+            })
+            .collect();
+        self.next_group = self
+            .groups
+            .iter()
+            .filter_map(|group| group.id.strip_prefix("group:")?.parse::<u64>().ok())
+            .max()
+            .map_or(1, |last| last.saturating_add(1));
+        self.equalizer = saved.equalizer.settings();
+        self.audio.set_equalizer(self.equalizer);
+        self.chosen = match &saved.source {
+            SavedSource::System => Chosen::WholeSystem,
+            SavedSource::App { executable, name } => Chosen::App {
+                // No process yet: the first listing finds the app if it
+                // runs, by its executable.
+                root_pid: 0,
+                executable: executable.clone(),
+                name: if name.is_empty() {
+                    executable.clone()
+                } else {
+                    name.clone()
+                },
+            },
+        };
+        self.view = ViewSettings {
+            show_virtual_devices: saved.show_virtual_devices,
+            window: saved.window,
+        };
+        self.saved = saved;
+    }
+
+    /// The speakers' settings to save: the saved ones, updated with what the
+    /// backend holds for the speakers listed now; `enabled` from `on` for
+    /// every speaker except the `held` ones. Defaults aren't kept.
+    fn merged_speakers(
+        saved: &BTreeMap<String, SavedSpeaker>,
+        listed: impl IntoIterator<Item = (String, SavedSpeaker)>,
+        on: &[String],
+        held: &BTreeSet<String>,
+    ) -> BTreeMap<String, SavedSpeaker> {
+        let mut speakers = saved.clone();
+        for (id, speaker) in speakers.iter_mut() {
+            if !held.contains(id) {
+                speaker.enabled = on.contains(id);
+            }
+        }
+        speakers.extend(listed);
+        for id in on {
+            speakers.entry(id.clone()).or_insert(SavedSpeaker {
+                enabled: true,
+                ..SavedSpeaker::default()
+            });
+        }
+        speakers.retain(|_, speaker| !speaker.is_default());
+        speakers
+    }
+
+    /// The settings as they are now, to compare with the file.
+    fn current_settings(&self) -> Settings {
+        let outputs = Self::merged_speakers(
+            &self.saved.outputs,
+            self.audio.outputs().into_iter().map(|output| {
+                let speaker = SavedSpeaker {
+                    enabled: output.enabled,
+                    volume: output.volume,
+                    delay_ms: output.delay_ms,
+                };
+                (output.id, speaker)
+            }),
+            &self.audio.enabled_outputs(),
+            &BTreeSet::new(),
+        );
+        let airplay = Self::merged_speakers(
+            &self.saved.airplay,
+            self.audio.airplay_speakers().into_iter().map(|speaker| {
+                let saved = SavedSpeaker {
+                    enabled: speaker.enabled,
+                    volume: speaker.volume,
+                    delay_ms: speaker.delay_ms,
+                };
+                (speaker.id, saved)
+            }),
+            &self.audio.enabled_airplay(),
+            &self.airplay_unrestored,
+        );
+        Settings {
+            version: settings::VERSION,
+            source: match &self.chosen {
+                Chosen::WholeSystem => SavedSource::System,
+                Chosen::App {
+                    executable, name, ..
+                } => SavedSource::App {
+                    executable: executable.clone(),
+                    name: name.clone(),
+                },
+            },
+            master_volume: self.audio.master_volume(),
+            outputs,
+            airplay,
+            auto_connect: self.auto_connect.clone(),
+            groups: self
+                .groups
+                .iter()
+                .map(|group| SavedGroup {
+                    id: group.id.clone(),
+                    name: group.name.clone(),
+                    members: group.members.clone(),
+                })
+                .collect(),
+            equalizer: SavedEqualizer::from(self.equalizer),
+            show_virtual_devices: self.view.show_virtual_devices,
+            window: self.view.window,
+        }
+        .clamped()
+    }
+
+    /// Writes the settings file if anything changed since it was last read
+    /// or written. A failed write is logged and tried again at the next
+    /// change; the settings stay in effect for this run.
+    fn persist(&mut self) {
+        let current = self.current_settings();
+        if current == self.saved {
+            return;
+        }
+        match self.settings_file.save(&current) {
+            Ok(()) if self.settings_file.path().is_some() => {
+                self.log.log(|| "settings: saved".to_owned());
+            }
+            Ok(()) => {}
+            Err(error) => self.log.log(|| {
+                format!("settings: couldn't be saved ({error}); they last until AudioSync quits")
+            }),
+        }
+        self.saved = current;
     }
 
     /// The audio backend, to change the mock's pretend world in tests.
@@ -1244,6 +1462,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.take_events();
     }
 
+    /// Also writes the settings file when anything changed since the last
+    /// poll, so a slider drag is saved about twice a second at most.
     fn poll(&mut self) -> bool {
         let mut changed = self.take_events();
         self.polls += 1;
@@ -1251,7 +1471,20 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             self.polls = 0;
             changed |= self.refresh_sources();
         }
+        self.persist();
         changed
+    }
+
+    fn view_settings(&self) -> ViewSettings {
+        self.view
+    }
+
+    fn set_view_settings(&mut self, settings: ViewSettings) {
+        self.view = settings;
+    }
+
+    fn save_settings(&mut self) {
+        self.persist();
     }
 }
 
@@ -2617,5 +2850,237 @@ mod tests {
         adapter.poll();
         assert!(adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
         assert!(adapter.snapshot().running);
+    }
+
+    /// The mock world at a launch: both outputs and the player app.
+    fn launch_audio() -> MockBackend {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.connect_output(HEADPHONES, "Headphones");
+        audio.add_app(PLAYER_PID, "player.exe");
+        audio
+    }
+
+    /// The adapter at a launch over `audio`, with the settings in `file`.
+    fn launch(audio: MockBackend, file: &std::path::Path) -> AudioAdapter<MockBackend> {
+        let file = SettingsFile::at(file.to_path_buf());
+        AudioAdapter::with_settings(audio, || "09.41".to_owned(), DebugLog::default(), file)
+    }
+
+    fn speaker_of(adapter: &AudioAdapter<MockBackend>, id: &str) -> Speaker {
+        adapter.snapshot().speaker(id).cloned().expect("listed")
+    }
+
+    #[test]
+    fn the_users_choices_survive_a_restart_without_streaming() {
+        let dir = test_dir("adapter-settings-restart");
+        let path = dir.join(settings::FILE_NAME);
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.poll();
+        assert!(!path.exists(), "nothing changed, nothing written");
+
+        adapter.select_source(&player());
+        adapter.set_master_volume(70.0);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_volume(&key(SPEAKERS), 35.0);
+        adapter.set_speaker_delay(&key(SPEAKERS), 240.0);
+        adapter.set_speaker_delay(&key(HEADPHONES), 15.0);
+        adapter.new_group("Desk").expect("made");
+        let mut equalizer = EqSettings {
+            enabled: true,
+            ..EqSettings::default()
+        };
+        equalizer.gains_db[0] = 4.5;
+        adapter.set_equalizer(equalizer);
+        adapter.set_view_settings(ViewSettings {
+            show_virtual_devices: true,
+            window: None,
+        });
+        assert!(adapter.snapshot().running);
+        adapter.poll();
+        let groups = adapter.snapshot().groups;
+
+        // The app quits while streaming, and starts again with the player
+        // running under a new process ID.
+        let mut audio = launch_audio();
+        audio.quit_app(PLAYER_PID);
+        audio.add_app(PLAYER_PID + 7, "player.exe");
+        let mut adapter = launch(audio, &path);
+        let state = adapter.snapshot();
+        assert!(!state.running, "a launch doesn't start streaming by itself");
+        assert_eq!(
+            state.source_id,
+            format!("app:{}:player.exe", PLAYER_PID + 7)
+        );
+        assert_eq!(state.master_volume, 70.0);
+        let speakers = speaker_of(&adapter, &key(SPEAKERS));
+        assert!(speakers.enabled);
+        assert_eq!(speakers.volume, 35.0);
+        assert_eq!(speakers.delay_ms, Some(240.0));
+        let headphones = speaker_of(&adapter, &key(HEADPHONES));
+        assert!(!headphones.enabled);
+        assert_eq!(headphones.delay_ms, Some(15.0));
+        assert_eq!(state.groups, groups);
+        assert_eq!(state.equalizer, equalizer);
+        assert!(adapter.view_settings().show_virtual_devices);
+
+        // A new group gets the next number, and streaming starts from the
+        // saved speakers when the user asks.
+        adapter.new_group("Two").expect("made");
+        assert_eq!(adapter.snapshot().groups[1].id, "group:2");
+        adapter.set_running(true);
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_auto_connect_speaker_that_is_there_at_launch_starts_streaming() {
+        let dir = test_dir("adapter-settings-auto-connect");
+        let path = dir.join(settings::FILE_NAME);
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.set_auto_connect(&key(HEADPHONES), true);
+        adapter.save_settings();
+
+        let adapter = launch(launch_audio(), &path);
+        assert!(adapter.snapshot().running);
+        assert_eq!(playing(&adapter), [HEADPHONES]);
+
+        // Not there at launch: nothing starts until it is plugged in.
+        let mut audio = launch_audio();
+        audio.disconnect_output(HEADPHONES);
+        let mut adapter = launch(audio, &path);
+        assert!(!adapter.snapshot().running);
+        adapter.audio_mut().connect_output(HEADPHONES, "Headphones");
+        adapter.poll();
+        assert_eq!(playing(&adapter), [HEADPHONES]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_device_missing_at_launch_keeps_its_settings_until_it_is_back() {
+        let dir = test_dir("adapter-settings-missing");
+        let path = dir.join(settings::FILE_NAME);
+        let mut adapter = launch(launch_audio(), &path);
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.set_speaker_delay(&key(HEADPHONES), 120.0);
+        adapter.set_speaker_volume(&key(HEADPHONES), 25.0);
+        adapter.set_running(false);
+        adapter.poll();
+
+        let mut audio = launch_audio();
+        audio.disconnect_output(HEADPHONES);
+        let mut adapter = launch(audio, &path);
+        assert!(adapter.snapshot().speaker(&key(HEADPHONES)).is_none());
+        // Other changes are saved; the missing device's settings stay.
+        adapter.set_speaker_volume(&key(SPEAKERS), 80.0);
+        adapter.poll();
+        let (saved, _) = SettingsFile::at(path.clone()).load();
+        assert_eq!(
+            saved.outputs.get(HEADPHONES),
+            Some(&SavedSpeaker {
+                enabled: true,
+                volume: 25.0,
+                delay_ms: 120.0
+            })
+        );
+        assert_eq!(saved.outputs[SPEAKERS].volume, 80.0);
+
+        adapter.audio_mut().connect_output(HEADPHONES, "Headphones");
+        adapter.poll();
+        let headphones = speaker_of(&adapter, &key(HEADPHONES));
+        assert!(headphones.enabled);
+        assert_eq!(headphones.volume, 25.0);
+        assert_eq!(headphones.delay_ms, Some(120.0));
+        assert!(
+            !adapter.snapshot().running,
+            "it isn't an auto-connect speaker"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn airplay_speakers_get_their_settings_back_when_found() {
+        let dir = test_dir("adapter-settings-airplay");
+        let path = dir.join(settings::FILE_NAME);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let with_airplay = |fake: &FakeAirPlay| {
+            let mut audio = launch_audio();
+            audio.set_airplay(fake.link(), None);
+            audio
+        };
+        let fake = FakeAirPlay::new();
+        fake.appear(&kitchen);
+        let mut adapter = launch(with_airplay(&fake), &path);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.set_speaker_volume(&ap(&kitchen), 30.0);
+        adapter.set_running(false);
+        adapter.poll();
+
+        // Found only after the launch, as discovery does.
+        let fake = FakeAirPlay::new();
+        let mut adapter = launch(with_airplay(&fake), &path);
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_none());
+        fake.appear(&kitchen);
+        adapter.poll();
+        let speaker = speaker_of(&adapter, &ap(&kitchen));
+        assert!(speaker.enabled);
+        assert_eq!(speaker.volume, 30.0);
+
+        // Without an AirPlay sender the speaker stays off, and its settings
+        // stay saved for a launch that has one.
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.set_master_volume(50.0);
+        adapter.poll();
+        let (saved, _) = SettingsFile::at(path.clone()).load();
+        assert_eq!(saved.master_volume, 50.0);
+        assert_eq!(
+            saved.airplay.get(&id_of(&kitchen)),
+            Some(&SavedSpeaker {
+                enabled: true,
+                volume: 30.0,
+                delay_ms: 0.0
+            })
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_bad_settings_file_is_logged_and_ignored_then_replaced() {
+        let dir = test_dir("adapter-settings-log");
+        let path = dir.join(settings::FILE_NAME);
+        std::fs::write(&path, "{\"version\": 1, \"outputs\": ").expect("written");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let file = SettingsFile::at(path.clone());
+        let mut adapter =
+            AudioAdapter::with_settings(launch_audio(), || "09.41".to_owned(), log.clone(), file);
+        assert!(!adapter.snapshot().running);
+        assert_eq!(
+            speaker_of(&adapter, &key(SPEAKERS)).volume,
+            DEFAULT_LOCAL_POSITION
+        );
+        adapter.poll();
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("still there")
+                .ends_with(": "),
+            "an ignored file is left alone until something changes"
+        );
+        adapter.set_master_volume(64.0);
+        adapter.poll();
+        assert_eq!(SettingsFile::at(path.clone()).load().0.master_volume, 64.0);
+
+        let file = SettingsFile::at(path.clone());
+        let _adapter =
+            AudioAdapter::with_settings(launch_audio(), || "09.41".to_owned(), log.clone(), file);
+        assert!(log.flush(TEST_FLUSH));
+        assert_in_order(
+            &read_messages(&dir.join(FILE_NAME)),
+            &[
+                "settings: ignored: it isn't valid (",
+                "settings: saved",
+                "settings: read (format version 1)",
+            ],
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

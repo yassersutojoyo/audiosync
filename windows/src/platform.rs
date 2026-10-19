@@ -328,3 +328,29 @@ pub fn work_area_at(x: f64, y: f64) -> Option<crate::placement::Bounds> {
         height: f64::from(work.bottom - work.top),
     })
 }
+
+/// Whether a window whose outer frame starts at `(x, y)`, in physical
+/// pixels, would show its title bar on a monitor: a saved place on a monitor
+/// that is gone would open the window out of sight.
+#[cfg(windows)]
+pub fn is_on_a_monitor(x: i32, y: i32) -> bool {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONULL, MonitorFromRect};
+
+    // The left part of the title bar, where the user can grab it.
+    let title_bar = RECT {
+        left: x,
+        top: y,
+        right: x.saturating_add(200),
+        bottom: y.saturating_add(40),
+    };
+    // SAFETY: MonitorFromRect only reads the rectangle.
+    let monitor = unsafe { MonitorFromRect(&title_bar, MONITOR_DEFAULTTONULL) };
+    !monitor.is_invalid()
+}
+
+/// Elsewhere the window manager places windows itself.
+#[cfg(not(windows))]
+pub fn is_on_a_monitor(_x: i32, _y: i32) -> bool {
+    false
+}

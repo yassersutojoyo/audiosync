@@ -35,10 +35,12 @@ backend (`windows/src/adapter.rs`), which captures and plays for real. On other
 hosts, where the UI is worked on, a mock with example speakers stands in:
 nothing plays and no audio device is opened there.
 
-Settings live in memory for now: the speakers you turned on, their delays and
-volumes, groups, auto-connect marks, the source and the equalizer start over
-at every launch. Only Apple TV pairings are kept (see the pairing prompt
-below).
+Settings are kept across launches in `%LOCALAPPDATA%\AudioSync\settings.json`
+(`windows/src/settings.rs`): the source, each speaker's switch, delay and
+volume, the master volume, auto-connect marks, groups, the equalizer, View >
+Show Virtual Devices and the main window's size and place. As on the Mac, a
+launch starts streaming only through an auto-connect speaker that is there.
+Apple TV pairings have their own file (see the pairing prompt below).
 
 ## Mac main window to Windows
 
@@ -48,8 +50,8 @@ below).
 | Streaming switch | Switch in the header; Speakers > Turn Streaming On/Off; the tray menu | |
 | Options (gear) menu: New Group, Refresh Devices | Speakers menu: New Group from Active Speakers… (Ctrl+N), Refresh Devices (F5) | Windows keeps commands in the menu bar |
 | Options menu: Appearance | Not offered | The app follows the Windows light or dark mode |
-| Options menu: Show Virtual Devices | View > Show Virtual Devices | Off by default, as on the Mac, but the Mac remembers the choice and Windows turns it off again at every launch (nothing is saved yet): a virtual output (a loopback driver, a voice changer) is listed only while this is on or while the output is turned on |
-| Options menu: Launch at Login, Guide, Check for Updates | Later | They need saved settings, the Windows startup-apps setting, a Windows guide and an update channel |
+| Options menu: Show Virtual Devices | View > Show Virtual Devices | Off by default and remembered, as on the Mac: a virtual output (a loopback driver, a voice changer) is listed only while this is on or while the output is turned on |
+| Options menu: Launch at Login, Guide, Check for Updates | Later | They need the Windows startup-apps setting, a Windows guide and an update channel |
 | Notices | Same, each with a dismiss button, plus Dismiss All | The tray flyout shows the newest one and "n more notices…". Windows posts them for streaming turned on with no speaker, an app that quit or isn't running, capture that failed, a speaker that couldn't start, a speaker that was disconnected (that one clears itself once the speaker is back; a speaker whose stream only restarts, after a format change, gets none), and a source you may hear twice because it also plays straight from an output. That last one names the outputs you can mute apart from the ones AudioSync plays to as well, clears itself once the cause is gone, and once dismissed stays away for the same source and outputs ([how it's detected](WINDOWS_AUDIO_ROUTING.md#detection)). Its Show How button opens a short guide that fits the case: for one app, send it to an output you don't listen to in the Volume mixer; for the whole system, make such an output the Windows default (and move any app that plays straight to another output). Muting is offered only when every output named is one AudioSync doesn't play to, and the guide warns that muting the app itself silences AudioSync too. Its buttons open the Volume mixer or Sound settings; AudioSync never changes those settings itself |
 | Audio Source | Same (a drop-down list) | All System Audio (everything but AudioSync), then each app that plays audio, by name. The list is read again every few seconds and with Refresh Devices; the chosen app stays chosen while it's paused or after it quits, and streaming finds it whenever it runs (restarted too), even before it plays again |
 | Now Playing | Later | Needs the Windows media session API |
