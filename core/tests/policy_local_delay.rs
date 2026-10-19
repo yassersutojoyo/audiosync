@@ -12,8 +12,6 @@ use audiosync_core::policy::delay::{
     native_airplay_adjustment_ms, native_airplay_latency_ms, offset_ms, sanitize_airplay_delay_ms,
     sanitize_offset_ms,
 };
-use audiosync_core::policy::pairing::AirPlayVersion;
-use audiosync_core::policy::reconcile::{Poll, Reconciler, Speaker};
 use proptest::prelude::*;
 
 const L: f64 = 2000.0;
@@ -290,48 +288,21 @@ fn an_airplay_flip_or_a_new_l_retimes_every_output_taking_part() {
     );
 }
 
-fn speaker(id: &str) -> Speaker {
-    Speaker {
-        id: id.to_owned(),
-        name: format!("Speaker {id}"),
-        version: AirPlayVersion::AirPlay2,
-        selected: true,
-        volume: 50,
-        needs_pin: false,
-        has_password: false,
-    }
-}
-
 // covers: S81, S177
 #[test]
-fn an_unreachable_engine_retimes_nothing() {
-    let mut reconciler = Reconciler::new();
+fn a_listed_set_kept_through_failed_polls_retimes_nothing() {
+    // A poll that can't read the AirPlay speakers keeps the listed set as it
+    // was (S81), so the AirPlay condition and every hold-back stay put.
     let mut retimer = Retimer::default();
     let all = [r(), usb(), bluetooth()];
-    let speakers = [speaker("7")];
-    let answered = Poll {
-        requested_at: 0.0,
-        run: 1,
-        speakers: Some(&speakers),
-        writes_busy: false,
-    };
-    reconciler.poll(&answered, true, &["7"]);
+    let listed = ["7".to_owned()];
     let latency = |listed: &[String]| airplay_chosen(&["7"], listed).then_some(L);
-    retimer.update(&all, latency(reconciler.listed()));
+    retimer.update(&all, latency(&listed));
     assert_eq!(retimer.hold_back_ms("builtin"), Some(2000.0));
-    for (at, busy) in [(3.0, false), (6.0, true), (9.0, false)] {
-        let failed = Poll {
-            requested_at: at,
-            run: 1,
-            speakers: None,
-            writes_busy: busy,
-        };
-        reconciler.poll(&failed, true, &["7"]);
+    for _ in 0..3 {
         assert!(
-            retimer
-                .update(&all, latency(reconciler.listed()))
-                .is_empty(),
-            "no re-timing while the engine restarts"
+            retimer.update(&all, latency(&listed)).is_empty(),
+            "no re-timing while the speakers can't be read"
         );
     }
 }

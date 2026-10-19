@@ -1,10 +1,9 @@
 // Calls audiosync-core through its C header, the way the macOS app will: the
 // version, the volume curve, the presets, one equalizer pass, a ring with a
-// delay reader, the FIFO feed with its writer stepped through a C pipe sink,
-// the AirPlay sync rule, the local delay model and the AirPlay sender's
-// handle, audio always a whole
-// buffer at a time. Prints one line per check; exits 1 on a failure. Touches
-// no audio device, pipe or network; nothing plays.
+// delay reader, the delay helpers, the local delay model and the AirPlay
+// sender's handle, audio always a whole buffer at a time. Prints one line per
+// check; exits 1 on a failure. Touches no audio device or network; nothing
+// plays.
 
 import AudioSyncCore
 import Foundation
@@ -170,111 +169,8 @@ func ringAndReader() {
         "counters: 1 prime, 2 resyncs, no drift correction, no starved render")
 }
 
-/// What the pipe sink below received.
-final class PipeRecorder {
-    var stream: [UInt8] = []
-    var opens = 0
-    var closes = 0
-}
-
-func recorder(_ context: UnsafeMutableRawPointer?) -> PipeRecorder {
-    Unmanaged<PipeRecorder>.fromOpaque(context!).takeUnretainedValue()
-}
-
-/// The FIFO feed: PCM16 conversion, the writer stepped through C callbacks
-/// that record what a pipe would receive, and 44.1 kHz input converted to the
-/// pipe's 48 kHz.
-func fifoFeed() {
-    let samples: [Float] = [0.5, -0.5, 1, -1, 2, -2, .nan, .infinity, -.infinity, 0.25, 0.75, -0.25]
-    let expected: [Int16] = [16384, -16384, 32767, -32767, 32767, -32767, 0, 32767, -32767, 8192, 24575, -8192]
-    var converted = [Int16](repeating: 99, count: samples.count)
-    let count = asc_convert_to_pcm16(samples, &converted, samples.count)
-    check(count == samples.count && converted == expected, "PCM16: clamped, ties away from zero, NaN to 0")
-
-    guard let feed = asc_fifo_create(UInt32(ASC_FIFO_DEFAULT_QUEUE_SECONDS)) else {
-        check(false, "asc_fifo_create")
-        return
-    }
-    defer { asc_fifo_destroy(feed) }
-    check(asc_fifo_set_input_rate(feed, UInt32(ASC_PIPE_RATE)), "input at the pipe's rate")
-    guard let writer = asc_fifo_writer_create(feed) else {
-        check(false, "asc_fifo_writer_create")
-        return
-    }
-    check(asc_fifo_writer_create(feed) == nil, "a second FIFO writer is refused")
-
-    let pipe = PipeRecorder()
-    var sink = AscPipeSink(
-        context: Unmanaged.passUnretained(pipe).toOpaque(),
-        open: { context in
-            recorder(context).opens += 1
-            return Int32(ASC_PIPE_OK)
-        },
-        write: { context, bytes, length, written in
-            recorder(context).stream.append(contentsOf: UnsafeBufferPointer(start: bytes, count: length))
-            written?.pointee = length
-            return Int32(ASC_PIPE_OK)
-        },
-        close: { context in
-            recorder(context).closes += 1
-        })
-    // The first step opens the pipe, which starts at the live edge: only
-    // audio fed after it is written.
-    check(asc_fifo_writer_step(writer, &sink) == 0 && pipe.opens == 1, "the first step opens the pipe")
-    let queued = asc_fifo_feed(feed, samples, samples.count / 2)
-    check(queued == samples.count / 2, "\(queued) frames queued at 48 kHz pass through")
-    var steps = 0
-    while asc_fifo_writer_step(writer, &sink) == 0 && steps < 100 {
-        steps += 1
-    }
-    var pause: UInt32 = 0
-    while asc_fifo_writer_close_step(writer, &sink, &pause) {}
-    asc_fifo_writer_destroy(writer)
-    let wire = expected.flatMap { value -> [UInt8] in
-        let bits = UInt16(bitPattern: value)
-        return [UInt8(bits & 0xff), UInt8(bits >> 8)]
-    }
-    check(pipe.stream == wire, "the pipe gets \(pipe.stream.count) bytes of little-endian PCM16, L then R")
-    check(pipe.opens == 1 && pipe.closes == 1, "the writer opened and closed the pipe once")
-    let afterWrite = asc_fifo_counters(feed)
-    check(afterWrite.opens == 1 && afterWrite.bytes_written == UInt64(wire.count), "counters: 1 open, \(afterWrite.bytes_written) bytes written")
-
-    check(asc_fifo_set_input_rate(feed, 44_100), "input at 44.1 kHz")
-    let block = [Float](repeating: 0.1, count: 441 * 2)
-    for _ in 0..<200 {
-        asc_fifo_feed(feed, block, 441)
-    }
-    let made = Int((asc_fifo_counters(feed).samples_queued - afterWrite.samples_queued) / 2)
-    check(abs(made - 96_000) <= 2, "2 s at 44.1 kHz become \(made) frames at 48 kHz")
-}
-
-/// Runs `body` with `strings` as a C array of NUL-terminated UTF-8 strings.
-func withCStrings<R>(_ strings: [String], _ body: (UnsafePointer<UnsafePointer<CChar>?>?, Int) -> R) -> R {
-    let copies = strings.map { strdup($0) }
-    defer { copies.forEach { free($0) } }
-    let pointers = copies.map { UnsafePointer($0) }
-    return pointers.withUnsafeBufferPointer { body($0.baseAddress, $0.count) }
-}
-
-/// The AirPlay sync rule over Swift strings, and the delay helpers.
-func syncRule() {
-    func decide(enabled: [String], listed: [String], wasChosen: Bool) -> AscSyncDecision {
-        withCStrings(enabled) { enabledIDs, enabledCount in
-            withCStrings(listed) { listedIDs, listedCount in
-                var input = AscSyncInput(
-                    enabled_ids: enabledIDs, enabled_count: enabledCount, listed_ids: listedIDs,
-                    listed_count: listedCount, was_chosen: wasChosen)
-                return asc_sync_decide(&input)
-            }
-        }
-    }
-    let on = decide(enabled: ["40", "41"], listed: ["12", "40"], wasChosen: false)
-    check(on.airplay_chosen && on.flipped, "an enabled AirPlay speaker the engine lists is chosen, a flip")
-    let gone = decide(enabled: ["41"], listed: ["12", "40"], wasChosen: true)
-    check(!gone.airplay_chosen && gone.flipped, "an enabled speaker the engine doesn't list isn't chosen")
-    check(
-        asc_sync_effective_delay_ms(1820, true) == 1820 && asc_sync_effective_delay_ms(1820, false) == 0,
-        "local delays apply only while an AirPlay speaker is chosen")
+/// The delay helpers.
+func delayHelpers() {
     var frames: Int64 = 0
     check(asc_delay_ms_to_frames(1820, 48_000, &frames) && frames == 87_360, "1820 ms is \(frames) frames at 48 kHz")
 }
@@ -373,8 +269,7 @@ func airPlaySender() {
 
 versionVolumeAndEqualizer()
 ringAndReader()
-fifoFeed()
-syncRule()
+delayHelpers()
 localDelayModel()
 airPlaySender()
 exit(failures == 0 ? 0 : 1)

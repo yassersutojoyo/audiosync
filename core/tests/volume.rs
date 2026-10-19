@@ -3,10 +3,9 @@
 
 use audiosync_core::channels::input_to_stereo;
 use audiosync_core::volume::{
-    DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, GainStage, LatestValues, SharedGain,
-    VolumeTarget, adopt_reported_volume, apply_gain, clamp_position, engine_volume,
-    gain_for_position, gain_to_db, migrate_legacy_percent, output_gain, position_for_gain,
-    sanitize_position,
+    DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, GainStage, SharedGain, apply_gain,
+    clamp_position, gain_for_position, gain_to_db, migrate_legacy_percent, output_gain,
+    position_for_gain, sanitize_position,
 };
 use proptest::prelude::*;
 
@@ -67,66 +66,6 @@ fn a_local_output_plays_at_its_gain_times_the_master_gain() {
     assert_eq!(output_gain(100.0, 0.0), 0.0);
 }
 
-// covers: S72, S73
-#[test]
-fn the_engine_gets_the_rounded_linear_position() {
-    assert_eq!(engine_volume(49.4), 49);
-    assert_eq!(engine_volume(49.5), 50);
-    assert_eq!(engine_volume(100.0), 100);
-    assert_eq!(engine_volume(130.0), 100);
-    assert_eq!(engine_volume(-3.0), 0);
-    assert_eq!(engine_volume(f64::NAN), 0);
-}
-
-// covers: S73
-#[test]
-fn a_reported_volume_is_adopted_except_within_two_seconds_of_the_users_change() {
-    assert!(adopt_reported_volume(10.0, None));
-    assert!(!adopt_reported_volume(10.0, Some(9.0)));
-    assert!(!adopt_reported_volume(10.0, Some(8.5)));
-    assert!(adopt_reported_volume(10.0, Some(8.0)));
-    assert!(adopt_reported_volume(100.0, Some(8.0)));
-}
-
-// covers: S74
-#[test]
-fn each_target_sends_only_its_newest_volume() {
-    let mut pending: LatestValues<VolumeTarget, u8> = LatestValues::new();
-    let kitchen = VolumeTarget::Output("kitchen".to_owned());
-    let den = VolumeTarget::Output("den".to_owned());
-    assert!(
-        pending.put(kitchen.clone(), 10),
-        "the first value schedules a send"
-    );
-    assert!(
-        !pending.put(kitchen.clone(), 20),
-        "later values go with the scheduled send"
-    );
-    assert!(!pending.put(kitchen.clone(), 30));
-    assert!(pending.holds(&kitchen));
-    assert!(
-        pending.put(den.clone(), 70),
-        "another speaker has its own send"
-    );
-    assert!(pending.put(VolumeTarget::Master, 55), "so does the master");
-    assert_eq!(pending.len(), 3);
-    assert_eq!(
-        pending.pop(&kitchen),
-        Some(30),
-        "the send carries the newest"
-    );
-    assert_eq!(pending.pop(&kitchen), None, "one request per send");
-    assert!(!pending.holds(&kitchen));
-    assert!(
-        pending.put(kitchen.clone(), 40),
-        "a value after the send schedules a new one"
-    );
-    assert_eq!(pending.pop(&den), Some(70), "targets keep their own values");
-    assert_eq!(pending.pop(&VolumeTarget::Master), Some(55));
-    assert_eq!(pending.pop(&kitchen), Some(40));
-    assert!(pending.is_empty());
-}
-
 // covers: S70, S76
 #[test]
 fn negative_zero_counts_as_zero() {
@@ -141,7 +80,6 @@ fn negative_zero_counts_as_zero() {
     ] {
         assert_eq!(value.to_bits(), positive_zero);
     }
-    assert_eq!(engine_volume(-0.0), 0);
 }
 
 // covers: S75

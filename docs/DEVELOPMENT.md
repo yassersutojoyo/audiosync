@@ -40,11 +40,11 @@ With an ad-hoc signature the code hash changes on every build, and the permissio
 
 ```bash
 open -a AudioSync
-Tests/run-tests.sh               # shellcheck, private references, logic and FIFO tests (the FIFO suite also checks the app's wrappers of the core), no audio hardware
+Tests/run-tests.sh               # shellcheck, private references, logic tests and the core suite (the app's wrappers of the core), no audio hardware
 Tests/run-tests.sh --hardware    # adds a silent engine test on every real output device
 ```
 
-The tests are standalone Swift files in `Tests/`, no XCTest. Run the `--hardware` variant too when you touch the audio path. The script builds the Rust core (`scripts/build_core.sh`) first, since the logic and FIFO suites link it. The logic suite, `Tests/logictest.swift`, checks the app's decisions, the local delay model among them, and builds `AppText` with them, which brings the capture and the engine's parts along. The FIFO suite, `Tests/fifotest.swift`, runs the core's pipe feed (which only the soak harness uses now) against real named pipes, then checks the app's other wrappers of the core (the session's parts, a local output's delay reader driven the way the renderers drive it, the equalizer, the volume curve and gain stage). The core's own tests (`cd core && cargo test`) cover the DSP, the delay reader and the rules themselves. The soak rules suite, `Tests/soakrulestest.swift`, checks the soak harness's memory-growth rule (`Tests/soakrules.swift`, see `docs/BENCHMARKS.md`) on made-up footprint series: a run that warms up and then stays flat passes, a steady leak fails, and so does a leak after a spike in the warm-up. `--hardware` runs the engine test.
+The tests are standalone Swift files in `Tests/`, no XCTest. Run the `--hardware` variant too when you touch the audio path. The script builds the Rust core (`scripts/build_core.sh`) first, since the logic and core suites link it. The logic suite, `Tests/logictest.swift`, checks the app's decisions, the local delay model among them, and builds `AppText` with them, which brings the capture and the engine's parts along. The core suite, `Tests/coretest.swift`, checks the app's wrappers of the core (the session's parts, a local output's delay reader driven the way the renderers drive it, the equalizer, the volume curve and gain stage). The core's own tests (`cd core && cargo test`) cover the DSP, the delay reader and the rules themselves. The soak rules suite, `Tests/soakrulestest.swift`, checks the soak harness's memory-growth rule (`Tests/soakrules.swift`, see `docs/BENCHMARKS.md`) on made-up footprint series: a run that warms up and then stays flat passes, a steady leak fails, and so does a leak after a spike in the warm-up. `--hardware` runs the engine test.
 
 [EDGE_CASES.md](EDGE_CASES.md) lists what AudioSync does when devices, the source, sleep or the network change mid-session (EC1 to EC13), which checks cover each case, and the manual steps for the rest.
 
@@ -84,7 +84,7 @@ Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) desc
 
 - `AudioSource.swift`, `ProcessTapCapture.swift`, `CaptureSupport.swift`: what to capture (system, one app, an input device) and the capture itself
 - `Equalizer.swift`: the 10-band EQ's settings and presets (`EqualizerWindow.swift` is its window; the core runs the filters)
-- `CoreEngine.swift`: the Rust core's engine parts: the shared delay buffer with one independent reader per speaker, the equalizer, the output gain, and a 48 kHz PCM16 pipe feed that only the soak harness uses
+- `CoreEngine.swift`: the Rust core's engine parts: the shared delay buffer with one independent reader per speaker, the equalizer and the output gain
 - `EngineParts.swift`: one session's set of those parts, and what the capture hands each captured block to
 - `OutputRenderer.swift`: one Core Audio output per local speaker
 - `SyncEngine.swift`: ties capture, local outputs and AudioSync's AirPlay sender together

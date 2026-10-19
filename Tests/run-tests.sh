@@ -5,7 +5,7 @@
 #               zero volume (silent) to check render flow and delay end to end.
 # Also runs shellcheck on the scripts in scripts/shellcheck-files.txt (it fails
 # if shellcheck isn't installed: brew install shellcheck) and the private-reference
-# check, scripts/privacy_check.py. The logic and FIFO suites, the soak harness
+# check, scripts/privacy_check.py. The logic and core suites, the soak harness
 # and the engine test link the Rust core, so this builds it first with
 # scripts/build_core.sh (which needs a Rust toolchain).
 set -euo pipefail
@@ -95,12 +95,12 @@ if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
     NativeReceiver.swift NativeAirPlayModel.swift WindowRules.swift AppSettings.swift AppLifecycle.swift LocalDelay.swift DeviceVolume.swift \
     Localization.swift ProcessTapCapture.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
   "$OUT/logic/run" || status=1
-  echo "▶ fifo and the core's app-side parts"
-  build fifo Tests/fifotest.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
-  "$OUT/fifo/run" || status=1
+  echo "▶ core (the app's wrappers of the core)"
+  build core Tests/coretest.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
+  "$OUT/core/run" || status=1
 else
   tail -n 20 "$OUT/core.log"
-  echo "❌ the Rust core did not build, so the suites that link it (logic, fifo) can't run"
+  echo "❌ the Rust core did not build, so the suites that link it (logic, core) can't run"
   status=1
 fi
 

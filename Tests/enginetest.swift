@@ -14,7 +14,7 @@ func check(_ ok: Bool, _ name: String, _ detail: String = "") {
 }
 
 let rate = 48000.0
-guard let parts = EngineParts.make(fifoPath: nil) else {
+guard let parts = EngineParts.make() else {
     print("❌ FAIL  the core's session parts could not be made")
     exit(1)
 }

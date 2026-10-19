@@ -566,19 +566,19 @@ fn a_block_is_equalized_once_in_place_and_both_consumers_get_the_same_samples() 
     let mut expected = block.clone();
     reference.process(&mut expected);
     let mut to_ring = Vec::new();
-    let mut to_fifo = Vec::new();
+    let mut to_airplay = Vec::new();
     processor.equalize_and_deliver(
         &mut block,
         |samples| to_ring.extend_from_slice(samples),
-        |samples| to_fifo.extend_from_slice(samples),
+        |samples| to_airplay.extend_from_slice(samples),
     );
     assert_eq!(block, expected, "equalized once, in place");
     let bits = |samples: &[f32]| samples.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
     assert_eq!(bits(&to_ring), bits(&block));
     assert_eq!(
-        bits(&to_fifo),
+        bits(&to_airplay),
         bits(&block),
-        "bit-identical for the ring and the FIFO"
+        "bit-identical for the ring and the AirPlay leg"
     );
 }
 

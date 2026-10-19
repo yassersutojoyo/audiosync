@@ -10,8 +10,6 @@
 //!   helpers that turn the host's pointers into slices.
 //! - [`ring`]: the delay ring, its single writer and its readers (S35-S59).
 //! - [`render`]: the resampler and a local output's output stage (S62-S65).
-//! - [`fifo`]: PCM16 conversion and the FIFO feed, whose writer the host's
-//!   thread steps through C callbacks for the pipe (S83-S95, S160).
 //! - [`sync`]: the AirPlay sync rule and the delay helpers (S3, S77-S80).
 //! - [`device_volume`]: what an output device's own volume and mute mean for
 //!   its row, and what the one-click fix writes (S192-S202).
@@ -42,14 +40,12 @@ use crate::volume;
 
 pub mod airplay;
 pub mod device_volume;
-pub mod fifo;
 pub mod render;
 pub mod ring;
 pub mod sync;
 
 pub use self::airplay::*;
 pub use self::device_volume::*;
-pub use self::fifo::*;
 pub use self::render::*;
 pub use self::ring::*;
 pub use self::sync::*;
@@ -372,11 +368,10 @@ mod tests {
     const HEADER: &str = include_str!("../include/audiosync_core.h");
 
     /// Every source file of the C interface, by its path under `src/`.
-    const SOURCES: [(&str, &str); 7] = [
+    const SOURCES: [(&str, &str); 6] = [
         ("ffi.rs", include_str!("ffi.rs")),
         ("ffi/airplay.rs", include_str!("ffi/airplay.rs")),
         ("ffi/device_volume.rs", include_str!("ffi/device_volume.rs")),
-        ("ffi/fifo.rs", include_str!("ffi/fifo.rs")),
         ("ffi/render.rs", include_str!("ffi/render.rs")),
         ("ffi/ring.rs", include_str!("ffi/ring.rs")),
         ("ffi/sync.rs", include_str!("ffi/sync.rs")),
@@ -805,7 +800,14 @@ mod tests {
         );
         assert!(rust.structs.len() >= 7, "found {:?}", rust.structs.keys());
         assert!(rust.handles.len() >= 8, "found {:?}", rust.handles);
-        assert_eq!(rust.callbacks.len(), 3, "found {:?}", rust.callbacks.keys());
+        // No callback type crosses the interface since the FIFO feed's pipe
+        // sink went; the parsers stay for the next one
+        // (`rust_types_have_their_c_spelling` checks them).
+        assert!(
+            rust.callbacks.is_empty(),
+            "found {:?}",
+            rust.callbacks.keys()
+        );
         let header = header_declarations();
         let out_of_date = "include/audiosync_core.h is out of date";
         assert_eq!(header.functions, rust.functions, "{out_of_date}: functions");
@@ -873,25 +875,6 @@ mod tests {
             ),
             ("ASC_CORRECTION_OVERRUN", CORRECTION_OVERRUN.to_string()),
             ("ASC_CORRECTION_STEP_BACK", CORRECTION_STEP_BACK.to_string()),
-            ("ASC_PIPE_RATE", crate::fifo::PIPE_RATE.to_string()),
-            (
-                "ASC_PIPE_FRAME_BYTES",
-                crate::convert::PIPE_FRAME_BYTES.to_string(),
-            ),
-            (
-                "ASC_PIPE_WRITE_MAX_BYTES",
-                crate::fifo::ATOMIC_WRITE_BYTES.to_string(),
-            ),
-            (
-                "ASC_FIFO_DEFAULT_QUEUE_SECONDS",
-                crate::fifo::DEFAULT_QUEUE_SECONDS.to_string(),
-            ),
-            ("ASC_PIPE_OK", PIPE_OK.to_string()),
-            ("ASC_PIPE_NO_READER", PIPE_NO_READER.to_string()),
-            ("ASC_PIPE_INTERRUPTED", PIPE_INTERRUPTED.to_string()),
-            ("ASC_PIPE_WOULD_BLOCK", PIPE_WOULD_BLOCK.to_string()),
-            ("ASC_PIPE_BROKEN", PIPE_BROKEN.to_string()),
-            ("ASC_PIPE_FAILED", PIPE_FAILED.to_string()),
             ("ASC_AIRPLAY_APPEARED", AIRPLAY_APPEARED.to_string()),
             ("ASC_AIRPLAY_CHANGED", AIRPLAY_CHANGED.to_string()),
             ("ASC_AIRPLAY_GONE", AIRPLAY_GONE.to_string()),
@@ -1229,7 +1212,6 @@ mod realtime {
     use crate::volume::{GainStage, SharedGain};
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
-    use std::ffi::c_void;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1366,7 +1348,7 @@ mod realtime {
         let shared_gain = Arc::new(SharedGain::new(0.5));
         let mut stage = GainStage::new();
         let mut ring_sum = 0.0f32;
-        let mut fifo_sum = 0.0f32;
+        let mut airplay_sum = 0.0f32;
 
         // The control thread keeps publishing while the capture thread runs.
         let stop = Arc::new(AtomicBool::new(false));
@@ -1401,7 +1383,7 @@ mod realtime {
                 processor.equalize_and_deliver(
                     &mut block,
                     |samples| ring_sum += samples[0],
-                    |samples| fifo_sum += samples[1],
+                    |samples| airplay_sum += samples[1],
                 );
                 // SAFETY: `handle` is live and `block` holds 512 stereo frames.
                 unsafe { asc_eq_process(handle, block.as_mut_ptr(), 512) };
@@ -1419,61 +1401,7 @@ mod realtime {
         // SAFETY: `handle` is live; it is destroyed once.
         unsafe { asc_eq_destroy(handle) };
         assert_eq!(events, 0, "the audio path allocated or freed memory");
-        assert!(ring_sum.is_finite() && fifo_sum.is_finite());
-    }
-
-    /// A pipe for the real-time proofs: it never allocates, counts the bytes
-    /// it takes and answers from a fixed cycle that includes refused opens,
-    /// a full pipe, short writes, an interrupted call and a broken pipe.
-    #[derive(Default)]
-    struct CyclingPipe {
-        calls: usize,
-        bytes: u64,
-    }
-
-    unsafe extern "C" fn cycling_open(context: *mut c_void) -> i32 {
-        // SAFETY: the proofs pass a live CyclingPipe that only the thread
-        // stepping the writer touches.
-        let pipe = unsafe { &mut *context.cast::<CyclingPipe>() };
-        pipe.calls += 1;
-        if pipe.calls % 5 == 0 {
-            PIPE_NO_READER
-        } else {
-            PIPE_OK
-        }
-    }
-
-    unsafe extern "C" fn cycling_write(
-        context: *mut c_void,
-        _bytes: *const u8,
-        length: usize,
-        written: *mut usize,
-    ) -> i32 {
-        // SAFETY: as in cycling_open.
-        let pipe = unsafe { &mut *context.cast::<CyclingPipe>() };
-        pipe.calls += 1;
-        let taken = match pipe.calls % 11 {
-            3 => return PIPE_WOULD_BLOCK,
-            7 => return PIPE_BROKEN,
-            9 => return PIPE_INTERRUPTED,
-            5 => (length / 2 + 1).min(length),
-            _ => length,
-        };
-        pipe.bytes += taken as u64;
-        // SAFETY: the core passes a writable count.
-        unsafe { written.write(taken) };
-        PIPE_OK
-    }
-
-    unsafe extern "C" fn cycling_close(_context: *mut c_void) {}
-
-    fn cycling_sink(pipe: &mut CyclingPipe) -> AscPipeSink {
-        AscPipeSink {
-            context: (pipe as *mut CyclingPipe).cast(),
-            open: Some(cycling_open),
-            write: Some(cycling_write),
-            close: Some(cycling_close),
-        }
+        assert!(ring_sum.is_finite() && airplay_sum.is_finite());
     }
 
     /// Interleaved stereo test audio: a quiet saw on both channels.
@@ -1483,7 +1411,7 @@ mod realtime {
             .collect()
     }
 
-    // covers: S126, S127, S128, S129, S133
+    // covers: S126, S127, S128, S133
     #[test]
     fn every_real_time_call_of_the_c_interface_never_touches_the_heap() {
         // Setup may allocate: the handles and the buffers.
@@ -1503,11 +1431,6 @@ mod realtime {
         let resampler = asc_resampler_create(48_000, 44_100);
         let stage = asc_gain_stage_create(0.5);
         let eq = asc_eq_create(48_000.0);
-        let feed = asc_fifo_create(1);
-        // SAFETY: `feed` is live.
-        let fifo_writer = unsafe { asc_fifo_writer_create(feed) };
-        let mut pipe = CyclingPipe::default();
-        let sink = cycling_sink(&mut pipe);
         let gains = PRESETS[1].gains_db;
         // SAFETY: `eq` is live and `gains` holds BAND_COUNT doubles.
         unsafe { asc_eq_set_settings(eq, true, -2.0, gains.as_ptr()) };
@@ -1519,7 +1442,6 @@ mod realtime {
         let mut out = vec![0.0f32; 8192 * 2];
         let mut converted = vec![0.0f32; 1024 * 2];
         let mut device = vec![0.0f32; 512 * 6];
-        let mut pcm = vec![0i16; 1024 * 2];
         let mut report = AscReadReport::default();
 
         let events = heap_events(|| {
@@ -1536,11 +1458,6 @@ mod realtime {
                     } else if !(20..25).contains(&(round % 50)) {
                         asc_ring_write(writer, block.as_ptr(), 512);
                     }
-                    if round % 101 == 0 {
-                        let rate = [48_000, 44_100, 96_000][round / 101 % 3];
-                        asc_fifo_set_input_rate(feed, rate);
-                    }
-                    asc_fifo_feed(feed, block.as_ptr(), 512);
                     // Any thread: the atomic control calls and the counters.
                     if round % 37 == 0 {
                         asc_reader_set_delay_frames(near, 4096 + round as i64);
@@ -1560,7 +1477,6 @@ mod realtime {
                         asc_ring_frames_written(ring),
                         asc_ring_capacity(ring),
                         asc_ring_supports_rate(ring, 44_100),
-                        asc_fifo_counters(feed),
                     ));
                     // An output at the capture rate with six channels.
                     asc_reader_read(near, out.as_mut_ptr(), 512, &mut report);
@@ -1589,28 +1505,13 @@ mod realtime {
                     );
                     asc_gain_stage_apply(stage, converted.as_mut_ptr(), made.output_frames, 2);
                     asc_apply_gain(converted.as_mut_ptr(), made.output_frames, 0.5);
-                    asc_convert_to_pcm16(
-                        converted.as_ptr(),
-                        pcm.as_mut_ptr(),
-                        made.output_frames * 2,
-                    );
-                    // The FIFO writer thread.
-                    for _ in 0..3 {
-                        std::hint::black_box(asc_fifo_writer_step(fifo_writer, &sink));
-                    }
                 }
             }
-            // The FIFO writer thread, stopping.
-            let mut pause = 0u32;
-            // SAFETY: the writer and the sink are live.
-            while unsafe { asc_fifo_writer_close_step(fifo_writer, &sink, &mut pause) } {}
         });
 
         // SAFETY: every handle is live; each is destroyed once.
         let (near_counters, far_counters) = unsafe {
             let counters = (asc_reader_counters(near), asc_reader_counters(far));
-            asc_fifo_writer_destroy(fifo_writer);
-            asc_fifo_destroy(feed);
             asc_eq_destroy(eq);
             asc_gain_stage_destroy(stage);
             asc_resampler_destroy(resampler);
@@ -1622,7 +1523,7 @@ mod realtime {
         };
         assert_eq!(reset, 0, "the ring reset allocated or freed memory");
         assert_eq!(events, 0, "a real-time call allocated or freed memory");
-        assert!(report.frames == 512 && pipe.bytes > 0);
+        assert_eq!(report.frames, 512);
         assert!(near_counters.primes > 1 && near_counters.resyncs > 0);
         assert!(far_counters.drift_skips + far_counters.drift_silences > 0);
     }
@@ -1667,11 +1568,6 @@ mod realtime {
         let far_stage = asc_gain_stage_create(1.0);
         let resampler = asc_resampler_create(48_000, 44_100);
         let eq = asc_eq_create(48_000.0);
-        let feed = asc_fifo_create(1);
-        // SAFETY: `feed` is live.
-        let fifo_writer = unsafe { asc_fifo_writer_create(feed) };
-        let mut pipe = CyclingPipe::default();
-        let sink = cycling_sink(&mut pipe);
         let (ring_h, writer_h, near_h, far_h) =
             (Handle(ring), Handle(writer), Handle(near), Handle(far));
         let (near_stage_h, far_stage_h, resampler_h, eq_h) = (
@@ -1680,8 +1576,6 @@ mod realtime {
             Handle(resampler),
             Handle(eq),
         );
-        let (feed_h, fifo_writer_h) = (Handle(feed), Handle(fifo_writer));
-        let sink_h = Handle((&raw const sink).cast_mut());
 
         let events: Vec<usize> = std::thread::scope(|scope| {
             let capture = scope.spawn(move || {
@@ -1693,7 +1587,6 @@ mod realtime {
                         unsafe {
                             asc_eq_process(eq_h.get(), block.as_mut_ptr(), 512);
                             asc_ring_write(writer_h.get(), block.as_ptr(), 512);
-                            asc_fifo_feed(feed_h.get(), block.as_ptr(), 512);
                         }
                     }
                 })
@@ -1759,23 +1652,6 @@ mod realtime {
                     }
                 })
             });
-            let fifo_thread = scope.spawn(move || {
-                heap_events(|| {
-                    // SAFETY: this thread makes every call on the FIFO writer,
-                    // and only it touches the pipe behind the sink.
-                    unsafe {
-                        for _ in 0..ROUNDS {
-                            asc_fifo_writer_step(fifo_writer_h.get(), sink_h.get());
-                        }
-                        let mut pause = 0u32;
-                        while asc_fifo_writer_close_step(
-                            fifo_writer_h.get(),
-                            sink_h.get(),
-                            &mut pause,
-                        ) {}
-                    }
-                })
-            });
             let control = scope.spawn(move || {
                 let gains = PRESETS[4].gains_db;
                 heap_events(|| {
@@ -1806,7 +1682,6 @@ mod realtime {
                                 asc_reader_counters(far_h.get()),
                                 asc_reader_delay_frames(near_h.get()),
                                 asc_ring_frames_written(ring_h.get()),
-                                asc_fifo_counters(feed_h.get()),
                                 asc_gain_stage_gain(far_stage_h.get()),
                                 asc_eq_nan_resets(eq_h.get()),
                             ));
@@ -1814,7 +1689,7 @@ mod realtime {
                     }
                 })
             });
-            [capture, near_output, far_output, fifo_thread, control]
+            [capture, near_output, far_output, control]
                 .into_iter()
                 .map(|thread| thread.join().unwrap())
                 .collect()
@@ -1823,8 +1698,6 @@ mod realtime {
         // SAFETY: every thread has finished; each handle is destroyed once.
         let written = unsafe {
             let written = asc_ring_frames_written(ring);
-            asc_fifo_writer_destroy(fifo_writer);
-            asc_fifo_destroy(feed);
             asc_eq_destroy(eq);
             asc_resampler_destroy(resampler);
             asc_gain_stage_destroy(near_stage);
@@ -1835,8 +1708,7 @@ mod realtime {
             asc_ring_destroy(ring);
             written
         };
-        assert_eq!(events, [0; 5], "a thread allocated or freed memory");
+        assert_eq!(events, [0; 4], "a thread allocated or freed memory");
         assert_eq!(written, (ROUNDS * 512) as u64);
-        assert!(pipe.calls > 0);
     }
 }
