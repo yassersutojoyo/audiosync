@@ -50,6 +50,7 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -64,6 +65,7 @@ use audiosync_airplay::sender::{
 };
 use audiosync_airplay::stream::{MAX_DELAY, SpeakerCounters, StreamCounters};
 use audiosync_airplay::volume::{MIN_DB, Volume};
+use audiosync_core::fade::InputFade;
 use audiosync_core::resample::Resampler;
 use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, sanitize_position};
 
@@ -209,13 +211,16 @@ impl AirPlayLink for SenderLink {
 }
 
 /// The capture's way into the sender: resamples equalized session-rate
-/// audio to 44.1 kHz and hands it to the sender's input. Every buffer is
-/// allocated by [`AirPlayFeed::new`].
+/// audio to 44.1 kHz and hands it to the sender's input, faded in over the
+/// first 20 ms of each capture and out after a stop request (S189). Every
+/// buffer is allocated by [`AirPlayFeed::new`].
 pub struct AirPlayFeed {
     input: InputWriter,
     resampler: Resampler,
     /// Resampler output, stereo.
     resampled: Box<[f32]>,
+    /// The fade at the session rate, before the resampler.
+    fade: InputFade,
 }
 
 impl AirPlayFeed {
@@ -230,27 +235,21 @@ impl AirPlayFeed {
             input,
             resampler,
             resampled: vec![0.0; frames * 2].into_boxed_slice(),
+            fade: InputFade::new(SESSION_RATE, FEED_CHUNK),
         }
     }
 
     /// Hands the first `frames` frames of interleaved stereo `block`, at the
-    /// session rate, to the sender as audio that arrived at `at`. Never
-    /// allocates, locks, blocks or logs (P6).
+    /// session rate, to the sender as audio that arrived at `at`, faded
+    /// (S189); `block` itself stays as it is. Never allocates, locks, blocks
+    /// or logs (P6).
     pub fn push(&mut self, block: &[f32], frames: usize, at: Instant) {
         let input = &block[..(frames * 2).min(block.len())];
-        let mut consumed = 0;
-        while consumed * 2 < input.len() {
-            let (used, produced) = self
-                .resampler
-                .process(&input[consumed * 2..], &mut self.resampled);
-            if produced > 0 {
-                self.input.write_f32(&self.resampled[..produced * 2], at);
-            }
-            consumed += used;
-            if used == 0 && produced == 0 {
-                break;
-            }
-        }
+        let (resampler, resampled, writer) =
+            (&mut self.resampler, &mut self.resampled, &mut self.input);
+        self.fade.process(input, |piece| {
+            resample_into(resampler, resampled, writer, piece, at);
+        });
     }
 
     /// The sender's input position: frames handed over so far.
@@ -260,35 +259,75 @@ impl AirPlayFeed {
     }
 }
 
+/// Resamples `block` into `resampled` and hands it to `writer` as audio that
+/// arrived `at`.
+fn resample_into(
+    resampler: &mut Resampler,
+    resampled: &mut [f32],
+    writer: &mut InputWriter,
+    block: &[f32],
+    at: Instant,
+) {
+    let mut consumed = 0;
+    while consumed * 2 < block.len() {
+        let (used, produced) = resampler.process(&block[consumed * 2..], resampled);
+        if produced > 0 {
+            writer.write_f32(&resampled[..produced * 2], at);
+        }
+        consumed += used;
+        if used == 0 && produced == 0 {
+            break;
+        }
+    }
+}
+
 /// Where the one [`AirPlayFeed`] waits between capture sessions.
 #[derive(Clone)]
-pub struct FeedSlot(Arc<Mutex<Option<AirPlayFeed>>>);
+pub struct FeedSlot {
+    feed: Arc<Mutex<Option<AirPlayFeed>>>,
+    /// A stop asked the capture's feed to fade out (S186, S189); cleared by
+    /// the next lease.
+    closing: Arc<AtomicBool>,
+}
 
 impl FeedSlot {
     /// A slot holding a feed into `input`.
     pub fn new(input: InputWriter) -> FeedSlot {
-        FeedSlot(Arc::new(Mutex::new(Some(AirPlayFeed::new(input)))))
+        FeedSlot {
+            feed: Arc::new(Mutex::new(Some(AirPlayFeed::new(input)))),
+            closing: Arc::new(AtomicBool::new(false)),
+        }
     }
 
-    /// Lends the feed to a capture, starting its resampler afresh; `None`
-    /// while another capture holds it.
+    /// Lends the feed to a capture, starting its resampler afresh and its
+    /// fade-in from silence; `None` while another capture holds it.
     pub fn lease(&self) -> Option<FeedLease> {
         let mut feed = self
-            .0
+            .feed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take()?;
         feed.resampler.reset();
+        feed.fade.restart(SESSION_RATE);
+        self.closing.store(false, Ordering::Release);
         Some(FeedLease {
             feed: Some(feed),
-            slot: Arc::clone(&self.0),
+            slot: Arc::clone(&self.feed),
+            closing: Arc::clone(&self.closing),
         })
+    }
+
+    /// Asks the capture's feed to fade out over the next 20 ms it pushes and
+    /// to hand the sender zeros after that, until the capture ends (S186,
+    /// S189). Any thread; a release store.
+    pub fn request_fade_out(&self) {
+        self.closing.store(true, Ordering::Release);
     }
 
     /// Whether the feed is in the slot, lent to no capture.
     #[cfg(test)]
     pub fn is_free(&self) -> bool {
-        self.0
+        self.feed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .is_some()
@@ -300,12 +339,16 @@ impl FeedSlot {
 pub struct FeedLease {
     feed: Option<AirPlayFeed>,
     slot: Arc<Mutex<Option<AirPlayFeed>>>,
+    closing: Arc<AtomicBool>,
 }
 
 impl FeedLease {
-    /// See [`AirPlayFeed::push`].
+    /// See [`AirPlayFeed::push`]; after a stop request the feed fades out.
     pub fn push(&mut self, block: &[f32], frames: usize, at: Instant) {
         if let Some(feed) = self.feed.as_mut() {
+            if self.closing.load(Ordering::Acquire) {
+                feed.fade.fade_out();
+            }
             feed.push(block, frames, at);
         }
     }

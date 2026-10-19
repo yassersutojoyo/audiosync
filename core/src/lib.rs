@@ -2,17 +2,18 @@
 //!
 //! Written from `docs/ENGINE_SPEC.md`; clause IDs (S1, S2, ...) in comments and
 //! test names refer to that document. No OS audio API is used here: the host
-//! (the macOS app, later the Windows app) owns capture, output devices and the
-//! pipe, and calls into this crate a whole buffer at a time.
+//! (the macOS app or the Windows app) owns capture and output devices, and
+//! calls into this crate a whole buffer at a time.
 
 pub mod airplay_pairings;
 pub mod channels;
 pub mod convert;
 pub mod eq;
+pub mod fade;
 pub mod ffi;
-pub mod fifo;
 pub mod policy;
 pub mod reader;
+pub mod render;
 pub mod resample;
 pub mod ring;
 pub mod volume;

@@ -10,19 +10,51 @@ S60 Core Audio output device enumeration and device object IDs.
 S61 The renderer object wraps a Core Audio output unit; its pure parts are S56, S62, S64 and S65.
 S66 A renderer's delay call measured on real hardware; its pure parts are S3 and S46.
 S67 Frames a real output device renders per second.
-S82 OwnTone working folder layout and creating the pipe before the engine launches; the FIFO feed gets the path.
-S96 Host-side by design: the engine's config file belongs to the host that launches the engine, which writes it before each launch with that run's password.
-S97 Host-side by design: the password and the config file belong to the host that launches the engine; its API client (S101) sees the first answer, and the host rewrites its own file.
-S101 OwnTone HTTP client transport: poll cadence, timeouts, serial write queue, path encoding.
-S110 Quit sequence: OwnTone API write drain and process signals.
-S111 The app's SIGTERM handler stops the OwnTone process.
+S72 Retired in part with the bundled engine: what stands, re-applying every active local output's gain on a master change, is the host's; the gain itself is S71's.
+S73 Retired with the bundled engine: an AirPlay speaker's own volume as the engine reported it; the core's engine_volume and adopt_reported_volume went too.
+S74 Retired with the bundled engine: its coalesced volume writes; the core's LatestValues went too.
+S82 Retired with the bundled engine: its working folder layout and creating the pipe before it launched; the FIFO feed got the path.
+S83 Retired with the FIFO feed: the pipe's wire format.
+S84 Retired with the FIFO feed: its interface.
+S86 Retired with the FIFO feed: its float to PCM16 conversion.
+S87 Retired with the FIFO feed: its queue between the capture thread and the writer.
+S88 Retired with the FIFO feed: its writer thread's start and stop.
+S89 Retired with the FIFO feed: opening the pipe.
+S90 Retired with the FIFO feed: its backlog cap.
+S91 Retired with the FIFO feed: delivery to a reader that drains the pipe.
+S92 Retired with the FIFO feed: a reader that goes away.
+S93 Retired with the FIFO feed: a full pipe, short writes and frame alignment.
+S95 Retired with the FIFO feed: no pipe write on the capture thread.
+S96 Retired with the bundled engine; host-side by design: the engine's config file belonged to the host that launched the engine, which wrote it before each launch with that run's password.
+S97 Retired with the bundled engine; host-side by design: the password and the config file belonged to the host that launched the engine; its API client (S101) saw the first answer, and the host rewrote its own file.
+S98 Retired with the bundled engine: its process lifecycle; the core's policy::engine went too.
+S99 Retired with the bundled engine: its pipe playback; the core's policy::engine went too.
+S100 Retired with the bundled engine: its output list; the core's policy::reconcile went too.
+S101 The host's 3 s poll; the rest, the bundled engine's HTTP client transport (timeouts, serial write queue, path encoding), is retired.
+S102 Retired with the bundled engine: its reachability and restarts; the core's policy::reconcile went too.
+S103 Retired with the bundled engine: its switch-on tracking; the core's policy::reconcile went too.
+S104 Retired with the bundled engine: its reconcile of each reported speaker; the core's policy::reconcile went too.
+S105 Retired with the bundled engine: its per-speaker volume writes; the core's policy::reconcile went too.
+S106 Retired in part with the bundled engine: the decisions on the engine's reports; what stands, the access kinds, is the Mac host's (AirPlayPairing.Access); the core's policy::pairing went too.
+S107 Retired with the bundled engine: its pairing stages; the core's policy::pairing went too.
+S108 Retired with the bundled engine: its prompt queue; the core's policy::pairing went too.
+S109 Retired with the bundled engine: its drop reaction; the drop reasons and their reaction live on in session::DropReason and S136.
+S110 Retired with the bundled engine: its quit sequence, the API write drain and the engine's process signals.
+S111 The app's SIGTERM and SIGINT handlers: process signals and the exit path.
 S112 Engine control interface of the host's engine wrapper (Core Audio device IDs, callbacks).
 S113 Main-thread dispatch of the host's control calls and callbacks.
-S114 Session start orchestration, which starts Core Audio capture after the core's ring, equalizer and FIFO.
+S114 Session start orchestration, which starts Core Audio capture after the core's ring and equalizer.
 S115 Session stop orchestration, which stops Core Audio capture and renderers.
+S129 Retired with the FIFO feed: its writer thread.
+S143 Retired with the bundled engine and the FIFO feed: the engine's restart and the pipe's reopen.
+S148 Retired with the bundled engine and the FIFO feed: a network loss as the engine's reconcile saw it.
 S154 macOS Local Network privacy permission and its Bonjour browser states.
 S155 AppKit appearance setting.
 S156 Repository shell tooling (shellcheck), checked by CI and Tests/run-tests.sh.
+S160 Retired with the FIFO feed: its diagnostic counters.
+S167 Retired in part with the bundled engine: its list and reconcile; what stands, the Local Network hint for an empty list, is the host's (S154).
+S168 Retired with the bundled engine: track info after each start of the pipe; the core's policy::track_info went too.
+S169 Retired with the FIFO feed: the live edge on every open of the pipe.
 S170 The Mac app's debug log file; the Windows app keeps its own log outside the core.
 S171 Core Audio device lists: alive state, channel counts and private aggregate devices.
 S173 The Mac's reference output, from Core Audio transport types and stream terminal types.
@@ -38,3 +70,5 @@ S198 Where the device-volume hint shows: the main window's speaker rows, and a g
 S199 The hint's wording in AppText (Mac) and strings.slint (Windows).
 S200 VoiceOver and Narrator labels of the hint and its fix button.
 S202 Host re-reads when a device goes away, comes back or its row is switched on again.
+S203 Retired with the FIFO feed: the live edge after a stall of the pipe.
+S204 Mac host only: settings the Mac app saved under the bundled engine's output IDs move to the native sender's receiver IDs; its logic suite checks it.

@@ -1,0 +1,234 @@
+import AppKit
+
+// Speaker and source state, the local output list and output sync.
+
+/// The running engine, as the local-output sync drives it.
+extension SyncEngine: LocalOutputEngine {}
+
+extension AppDelegate {
+
+    // MARK: - Speaker / source state (shared by the window and the menu bar panel)
+
+    /// A local speaker's linear gain, through the core's volume curve.
+    private func effectiveGain(_ uid: String) -> Double {
+        engine.gainCurve.outputGain(localPosition: localVolume[uid] ?? defaultVolume, masterPosition: masterVolume)
+    }
+
+    func setLocalEnabled(_ uid: String, _ on: Bool) {
+        if on { clearNotices([SpeakerKey.make(id: uid, airplay: false)]) }   // a new attempt
+        if on { enabledLocal.insert(uid) } else { enabledLocal.remove(uid) }
+        if StreamingPolicy.startsStreaming(turnedOn: on, streaming: engine.running) {
+            startEngine(origin: .user)   // picking a speaker starts streaming to it
+        } else {
+            syncLocalOutputs(origin: .user)
+            stopIfIdle()
+        }
+        pushModel()
+    }
+
+    /// With every speaker switched off there is nothing to stream to.
+    func stopIfIdle() {
+        if StreamingPolicy.isIdle(streaming: engine.running, enabledAirPlay: playableAirPlay,
+                                  enabledLocal: enabledLocal) {
+            stopEngine()
+        }
+    }
+
+    func setLocalVolume(_ uid: String, _ position: Double) {
+        let v = max(0, min(100, position))
+        localVolume[uid] = v
+        engine.setGain(uid: uid, g: effectiveGain(uid))
+        pushModel()
+    }
+
+    /// The master scales every speaker AudioSync plays: a local speaker's
+    /// gain, and each AirPlay speaker's volume, which AudioSync's own sender
+    /// scales by it.
+    func setMasterVolume(_ position: Double) {
+        masterVolume = max(0, min(100, position))
+        LocalOutputSync.reapplyGains(on: engine, gain: { effectiveGain($0) })
+        nativeAirPlay?.setMaster(masterVolume)
+        pushModel()
+    }
+
+    // MARK: - Local delays (the local delay model, LocalDelay.swift, S172 to S181)
+
+    /// The user's offset for local speaker `uid`, relative to the reference
+    /// (S175); it applies at once, and the others follow when it was the
+    /// lowest (S177).
+    func setLocalOffset(_ uid: String, _ rawMs: Double) {
+        guard let ms = LocalDelay.sanitizedOffset(rawMs) else { return }   // not finite: ignored
+        localOffsetMs[uid] = ms
+        retimeLocalOutputs()
+        pushModel()
+    }
+
+    /// The user's AirPlay delay, as the field shows it (S178, S181).
+    func setAirPlayDelay(_ rawMs: Double) {
+        var next = airPlayDelay
+        guard next.enter(rawMs, senderMs: nativeSenderLatencyMs) else { return }
+        airPlayDelay = next
+        retimeLocalOutputs()
+        pushModel()
+    }
+
+    /// The native sender's latency L_s (its configured default until it
+    /// reports one).
+    var nativeSenderLatencyMs: Double {
+        guard let reported = nativeAirPlay?.model.latencyMs, reported > 0 else {
+            return LocalDelay.senderDefaultLatencyMs
+        }
+        return reported
+    }
+
+    /// L, what the AirPlay delay field shows and local speakers wait for
+    /// while an AirPlay speaker is chosen (S178).
+    var airPlayLatencyMs: Double { airPlayDelay.latencyMs(senderMs: nativeSenderLatencyMs) }
+
+    /// An AirPlay speaker is chosen and the sender lists it as able to play,
+    /// or playing (`NativeAirPlayModel.soundingIDs`, `NativeSyncRule`, S79).
+    /// A chosen speaker that is unplugged today has nothing for local
+    /// speakers to wait for.
+    var airPlayChosenAndListed: Bool {
+        let listed = nativeAirPlay?.model.soundingIDs ?? []
+        return NativeSyncRule().airPlayChosen(enabled: enabledAirPlay, listed: listed)
+    }
+
+    /// The hold-back of every local speaker taking part: switched on and
+    /// listed now (S172, S176).
+    func localHoldBackTargets() -> [String: Double] {
+        LocalDelay.holdBacks(takingPart: localListed.filter(enabledLocal.contains), reference: localReference,
+                             offsets: localOffsetMs, airPlayChosen: airPlayChosenAndListed,
+                             latencyMs: airPlayLatencyMs)
+    }
+
+    /// Gives every running local speaker whose hold-back changed its new one
+    /// (S177): called whenever the speakers taking part, an offset, the
+    /// reference, whether an AirPlay speaker is chosen, or L may have changed.
+    /// One whose hold-back is the same gets no call, so it doesn't resync.
+    func retimeLocalOutputs() {
+        guard engine.running else {
+            localHoldBacks = [:]
+            return
+        }
+        let running = Set(engine.activeOutputUIDs)
+        localHoldBacks = localHoldBacks.filter { running.contains($0.key) }
+        let calls = LocalDelay.retimes(applied: localHoldBacks, holdBacks: localHoldBackTargets())
+        guard !calls.isEmpty else { return }
+        for (uid, holdBack) in calls.sorted(by: { $0.key < $1.key }) {
+            engine.setDelay(uid: uid, ms: holdBack)
+            localHoldBacks[uid] = holdBack
+        }
+        DBG.log("[AudioSync] local delays re-timed: "
+            + calls.sorted(by: { $0.key < $1.key }).map { "\($0.key) \(Int($0.value.rounded())) ms" }
+                .joined(separator: ", "))
+    }
+
+    /// A device list came in: the reference and the speakers taking part
+    /// follow it (S173, S172).
+    func noteLocalDeviceList(_ devices: [AudioDevices.Device]) {
+        localListed = devices.map(\.uid).filter { !$0.isEmpty }
+        localReference = LocalDelay.reference(in: devices)
+    }
+
+    /// Whole-system source: follow whichever player is playing. App source: that
+    /// app, if it is scriptable. Input device: nothing to control.
+    func updateNowPlayingTarget() {
+        switch audioSource {
+        case .system: nowPlaying.preferredBundleID = nil
+        case .app(let bundleID): nowPlaying.preferredBundleID = bundleID
+        case .input: nowPlaying.preferredBundleID = ""
+        }
+        nowPlaying.refresh()
+    }
+
+    func setSource(_ source: AudioSource) {
+        let change = SourceSwitch.decide(from: audioSource, to: source, streaming: engine.running)
+        guard change != .none else { return }
+        audioSource = source
+        updateNowPlayingTarget()
+        clearNotices([Notice.source, Notice.capture])   // about the old source
+        // The tap is built for one source; switching means rebuilding it. The
+        // AirPlay selection stays as it is (deselecting would race the reselect).
+        autoStartFailed = false
+        if change == .restart {
+            stopEngine()
+            startEngine(origin: .user)
+        }
+        pushModel()
+    }
+
+    // MARK: - List reconciliation (local outputs)
+
+    /// `keepListed`: a virtual device already in the list stays there, so
+    /// switching it off doesn't make it vanish under the pointer.
+    func reconcileLocal(keepListed: Bool = true) {
+        let outputs = devices.allOutputDevices().filter {
+            !$0.uid.isEmpty && $0.name != SourceCapture.aggregateName   // hide our private aggregate
+        }
+        migrateLocalDelays(listed: outputs)   // once, before auto-connect below (S179)
+        // Virtual devices are hidden unless asked for, or the user chose them:
+        // on, auto-connect, or in a group.
+        var chosen = enabledLocal
+        for key in autoConnect.union(groups.flatMap(\.members)) {
+            if let (id, airplay) = SpeakerKey.parse(key), !airplay { chosen.insert(id) }
+        }
+        if keepListed { chosen.formUnion(localOrder) }
+        let available = AudioDevices.listed(outputs, showVirtual: showVirtualDevices, keep: chosen)
+        var known = Set(localOrder)
+        var appeared: [String] = []
+        for device in available {
+            localDevices[device.uid] = device
+            if known.insert(device.uid).inserted { appeared.append(device.uid) }
+        }
+        localOrder = available.map(\.uid)
+        syncLocalOutputs(available: available, origin: .automatic)
+        autoConnect(appeared.map { SpeakerKey.make(id: $0, airplay: false) })
+        pushModel()
+    }
+
+    // MARK: - Local renderers (the running engine follows the speakers that are on)
+
+    /// Starts a renderer for every local speaker that is on and present, and
+    /// stops the renderers of speakers switched off (`LocalOutputSync.plan`).
+    /// `provided` is a device list the caller has just read; without one the
+    /// devices are read here. A speaker whose renderer won't start is switched
+    /// off and gets a notice, plus an alert when `origin` is the user.
+    func syncLocalOutputs(available provided: [AudioDevices.Device]? = nil, origin: StartOrigin = .user) {
+        let listing = provided ?? devices.allOutputDevices()
+        noteLocalDeviceList(listing)   // the reference follows the list, streaming or not
+        guard engine.running else { return }   // stopped: startEngine syncs them once it runs
+
+        let applied = LocalOutputSync.apply(enabled: enabledLocal, listing: listing, to: engine,
+                                            holdBacks: localHoldBackTargets(), gain: { effectiveGain($0) })
+        for (uid, holdBack) in applied.attached {
+            localHoldBacks[uid] = holdBack
+            clearNotices([SpeakerKey.make(id: uid, airplay: false)])
+        }
+        for uid in applied.detached { localHoldBacks[uid] = nil }
+
+        // A speaker that won't start is switched off: it no longer holds the
+        // others back, and the next poll doesn't try it again.
+        let report = LocalOutputSync.report(applied.failures, enabled: enabledLocal, origin: origin)
+        if let report { enabledLocal = report.enabled }
+        retimeLocalOutputs()   // a joined, left or failed output can move the others' hold-back (S177)
+
+        guard let report else { return }
+        if let names = report.alertNames {
+            let shown = names.map { text.deviceName($0) }.joined(separator: ", ")
+            showAlert(text.outputCouldNotStart(names: shown), style: .warning)
+        }
+        for failure in report.notices {   // one notice per speaker, so each one clears by itself
+            postNotice(text.outputCouldNotStart(names: text.deviceName(failure.deviceName)),
+                       subject: SpeakerKey.make(id: failure.uid, airplay: false))
+        }
+        stopIfIdle()   // the failed speaker may have been the only output
+        pushModel()
+    }
+
+    /// AudioSync's own sender's speakers follow the switches, each at its own
+    /// volume (`syncNativeSpeakers`).
+    func applyAirPlaySelection() {
+        syncNativeSpeakers()
+    }
+}

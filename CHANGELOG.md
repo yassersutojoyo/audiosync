@@ -7,28 +7,26 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Added
 
 - AirPlay speakers with a screen, such as a TV, show the track that's playing in Spotify or Music: title, artist, album and artwork. When nothing is playing there, or with any other source, they show "AudioSync", the source's name (such as the app or input device) and "From your Mac" instead of a file name. It uses the same Automation access to Spotify or Music as Now Playing in the window.
+- When a local speaker you switched on sits below 25% or is muted in macOS (every output has its own volume there, and only the default one is in the Sound menu), its row says so, and one click sets it to 75% or unmutes it. The menu bar panel shows a small speaker icon on that row.
 - A new audio engine written in Rust, which now plays your audio. It replaces the previous engine completely, so the hidden "Use Swift Audio Engine (Next Start)" option from the test builds is gone.
 
 ### Changed
 
+- AirPlay on the Mac now goes through AudioSync's own AirPlay sender, the one the Windows version uses, and the bundled AirPlay engine is gone, so the app is much smaller and runs nothing next to itself. Your AirPlay speakers, their volumes, groups and auto-connect carry over the first time the sender finds them. An Apple TV that asks for a PIN pairs once more, and an AirPlay 1 speaker with a password now works: AudioSync asks for the password when you turn it on. A speaker that only takes AirPlay 2 isn't listed yet, and neither is this Mac's own AirPlay Receiver.
 - Delays now work with local speakers alone. The Mac's built-in speakers are the reference and have no delay of their own; every other local speaker's delay is relative to them and always applies, so you can line a Bluetooth speaker up with the built-in speakers (it usually needs about −150 to −300 ms) without any AirPlay speaker on. Lining the Mac up with AirPlay speakers happens in one place now, the AirPlay delay under Connected Speakers. Delays from an earlier version are carried over once, so a setup tuned for AirPlay sounds the same.
 - Building from source now needs a Rust toolchain, since the app links a small Rust library.
+- The Guide's setup section is now called First Steps, with clearer tips for lining up your speakers.
 
 ### Fixed
 
-- An AirPlay speaker no longer jumps to full volume when streaming starts or after the AirPlay engine restarts. Each AirPlay speaker keeps its own volume, and the master slider scales it too, never above its own slider. After the update each AirPlay speaker starts at 60% or lower the first time, so set its slider once.
-- After the Mac wakes from sleep, AirPlay speakers that were playing are selected again instead of being switched off with a "couldn't be reached" notice. Only a speaker that's still off about 20 seconds after wake is turned off.
-- After the AirPlay engine restarts, AirPlay comes back with the same latency as before, so local speakers stay in sync at their saved delay. Before, each restart could leave AirPlay up to a quarter of a second later.
-- When the AirPlay engine stops reading the audio for a moment without closing it, as it can around a sleep and wake, AudioSync now skips what piled up on its side and carries on with live audio. That takes up to a quarter of a second off the extra lag AirPlay could come back with. A little audio that was already waiting for the engine still plays first, so some lag can remain.
-- An AirPlay engine restart that happened between two status checks no longer switches its speakers off as unreachable; they're selected again.
-- AirPlay speakers get their volume back after an engine restart even when the restarted engine takes a while to find them.
-- The AirPlay stream no longer starts twice when streaming begins. The double start could leave a TV showing the pipe's file name instead of the track, and the track info is now sent again whenever the stream restarts.
-- Switching streaming off and on while music plays no longer keeps the audio the AirPlay engine read during the switch-on as extra delay behind your other speakers: the bundled engine now drops it and plays the stream from its live edge when its playback starts (a ninth small patch; see `THIRD_PARTY_NOTICES.md`). Switching streaming off also closes the audio pipe before the engine is told to stop, so the engine no longer starts the old stream again by itself.
+- An AirPlay speaker no longer jumps to full volume when streaming starts. Each AirPlay speaker keeps its own volume, and the master slider scales it too, never above its own slider. After the update each AirPlay speaker starts at 60% or lower the first time, so set its slider once.
+- After the Mac wakes from sleep, AirPlay speakers that were playing stay on and play again by themselves, instead of being switched off with a "couldn't be reached" notice.
+- Ctrl-C in the Terminal you started AudioSync from now quits it cleanly, the same way a logout does, even while an alert is open.
 
 ### Windows (preview, not released yet)
 
 - A Windows 11 version, written in Rust, for x64 and ARM64 PCs. It's built to play all system audio or one app on the PC's own outputs and Bluetooth speakers, each with its own delay, through the same equalizer. It isn't released: it goes out with a release only as an unsigned preview, and only after I've tried that build on a real Windows 11 PC.
-- AirPlay from Windows, through AudioSync's own AirPlay sender (the Mac keeps using its bundled engine). It plays to receivers that take AirPlay 1, and the PC's own outputs wait for the AirPlay speakers so everything stays in step. An Apple TV that asks for a code gets a PIN prompt, and the pairing is kept for the current Windows user until Forget Pairing. Receivers that ask for a password, or that only play AirPlay 2, are listed with a note and stay off. This part hasn't been tried with a real speaker or Apple TV yet.
+- AirPlay from Windows, through AudioSync's own AirPlay sender. It plays to receivers that take AirPlay 1, and the PC's own outputs wait for the AirPlay speakers so everything stays in step. An Apple TV that asks for a code gets a PIN prompt, and the pairing is kept for the current Windows user until Forget Pairing. Receivers that ask for a password, or that only play AirPlay 2, are listed with a note and stay off. This part hasn't been tried with a real speaker or Apple TV yet.
 - A Windows 11 look: Mica in the title bars, the system's rounded corners and shadow on the tray flyout, and speaker rows that line up.
 - When the source can also be heard straight from an output you listen to, a notice says you may hear it twice, and Show How opens a short guide with the steps and a button for the right Settings page.
 - Bluetooth hands-free endpoints (the call profile) are left out of the speaker list, since they carry mono call audio and opening one puts the headset in call mode. A headset's stereo output is still listed.

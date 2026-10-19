@@ -15,22 +15,3 @@ enum VolumeCurve {
         100 * cbrt(max(0, min(1, gain)))
     }
 }
-
-/// Volume writes waiting to be sent, one per target: a newer value replaces the
-/// one still waiting, so a dragged slider sends one request per flush with the
-/// latest value instead of every step. Not thread-safe; the owner guards it.
-struct CoalescedWrites<Key: Hashable, Value> {
-    private var waiting: [Key: Value] = [:]
-
-    /// Stores `value` as the latest for `key`. True when nothing was waiting for
-    /// `key`, so the caller must queue a flush; false when a queued flush will
-    /// pick up this value.
-    mutating func store(_ value: Value, for key: Key) -> Bool {
-        waiting.updateValue(value, forKey: key) == nil
-    }
-
-    /// The flush: the latest value for `key`, if one is still waiting.
-    mutating func take(_ key: Key) -> Value? {
-        waiting.removeValue(forKey: key)
-    }
-}

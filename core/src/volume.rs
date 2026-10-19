@@ -20,10 +20,6 @@ pub const DEFAULT_LOCAL_POSITION: f64 = 60.0;
 /// Master position until the user sets one (S71).
 pub const DEFAULT_MASTER_POSITION: f64 = 100.0;
 
-/// For this long after the user changes an AirPlay speaker's volume, the volume
-/// the engine reports is not adopted (S73), in seconds.
-pub const USER_CHANGE_HOLD: f64 = 2.0;
-
 /// Clamps a position to 0…100 (S76). NaN and −0 count as 0, so the result is
 /// never negative zero.
 pub fn clamp_position(position: f64) -> f64 {
@@ -67,110 +63,11 @@ pub fn output_gain(local_position: f64, master_position: f64) -> f64 {
     gain_for_position(local_position) * gain_for_position(master_position)
 }
 
-/// A position on the AirPlay engine's own linear 0…100 scale: the master
-/// (S72) and each speaker's volume (S73) are sent as `round(p)`.
-pub fn engine_volume(position: f64) -> u8 {
-    // clamp_position keeps the value in 0…100, so the cast is exact.
-    clamp_position(position).round() as u8
-}
-
-/// Whether to adopt the volume the engine reports for a speaker: always,
-/// except within 2 s of the user's own change (S73).
-pub fn adopt_reported_volume(now: f64, last_user_change: Option<f64>) -> bool {
-    last_user_change.is_none_or(|changed| now - changed >= USER_CHANGE_HOLD)
-}
-
 /// Migrates a legacy linear percentage (0…150) to a position:
 /// `p(pct / 100)`, clamped, so 3.49 % becomes 32.68 and anything from 100 %
 /// up becomes 100 (S75).
 pub fn migrate_legacy_percent(percent: f64) -> f64 {
     position_for_gain(percent / 100.0)
-}
-
-/// Where a volume value goes: the engine's master or one AirPlay speaker
-/// (S72 to S74).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum VolumeTarget {
-    /// The AirPlay engine's master volume.
-    Master,
-    /// One AirPlay speaker, by engine output ID.
-    Output(String),
-}
-
-/// Volume writes waiting for the engine, coalesced per target (S74). `K`
-/// names the target (the host uses [`VolumeTarget`]: the master or one
-/// AirPlay speaker) and `V` is the value to send.
-///
-/// A target has at most one value waiting, so its flush sends the latest
-/// value once, however many values were stored before it ran. Timing stays
-/// with the caller: [`put`](Self::put) tells it when a target had nothing
-/// waiting, which is the only time it queues a flush for that target. Until
-/// the flush runs, later values replace the waiting one. The flush takes the
-/// value with [`pop`](Self::pop), which leaves the target with nothing
-/// waiting, so the next value queues a new flush. Targets are independent
-/// entries: a value for one never replaces another's.
-///
-/// The entries are a short vector searched linearly, holding only the
-/// targets that have a value waiting.
-#[derive(Clone, Debug, PartialEq)]
-pub struct LatestValues<K, V> {
-    waiting: Vec<(K, V)>,
-}
-
-impl<K, V> Default for LatestValues<K, V> {
-    fn default() -> Self {
-        LatestValues {
-            waiting: Vec::new(),
-        }
-    }
-}
-
-impl<K: PartialEq, V: Copy> LatestValues<K, V> {
-    /// Starts with no target having a value waiting.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Makes `value` the one to send for `key`, replacing any value already
-    /// waiting for it. Returns true when nothing was waiting: the caller then
-    /// queues one flush for `key`. Returns false when a value was waiting:
-    /// the new value rides the flush already queued, so the caller queues
-    /// nothing.
-    pub fn put(&mut self, key: K, value: V) -> bool {
-        match self.waiting.iter_mut().find(|(held, _)| *held == key) {
-            Some(entry) => {
-                entry.1 = value;
-                false
-            }
-            None => {
-                self.waiting.push((key, value));
-                true
-            }
-        }
-    }
-
-    /// Takes the value waiting for `key`, as its flush does right before
-    /// sending, and leaves nothing waiting for it. `None` when nothing is
-    /// waiting.
-    pub fn pop(&mut self, key: &K) -> Option<V> {
-        let index = self.waiting.iter().position(|(held, _)| held == key)?;
-        Some(self.waiting.remove(index).1)
-    }
-
-    /// Whether a value is waiting for `key`.
-    pub fn holds(&self, key: &K) -> bool {
-        self.waiting.iter().any(|(held, _)| held == key)
-    }
-
-    /// How many targets have a value waiting.
-    pub fn len(&self) -> usize {
-        self.waiting.len()
-    }
-
-    /// Whether no target has a value waiting.
-    pub fn is_empty(&self) -> bool {
-        self.waiting.is_empty()
-    }
 }
 
 /// A linear gain shared between the control thread and one renderer thread
@@ -234,6 +131,22 @@ impl GainStage {
     /// Applies the gain to an interleaved device buffer with `channels`
     /// channels, in place. Real-time safe (S126).
     pub fn apply(&mut self, buffer: &mut [f32], channels: usize, target: f32) {
+        let frames = buffer.len().checked_div(channels).unwrap_or(0);
+        let ramp = self.begin(target, frames);
+        if channels == 0 {
+            return;
+        }
+        ramp.apply(&mut buffer[..frames * channels], channels, 0);
+        // A trailing partial frame is never handed to a device; keep it silent.
+        let whole = frames * channels;
+        buffer[whole..].fill(0.0);
+    }
+
+    /// Starts a callback of `frames` frames at gain `target`: the ramp that
+    /// [`GainStage::apply`] runs over a whole buffer, for a renderer that
+    /// applies it piece by piece ([`GainRamp::apply`]) with other stages in
+    /// between, such as its fade (S183). Real-time safe (S126).
+    pub fn begin(&mut self, target: f32, frames: usize) -> GainRamp {
         let target = sanitize_gain(target);
         if !self.primed {
             self.current = target;
@@ -241,21 +154,50 @@ impl GainStage {
         }
         let start = self.current;
         self.current = target;
-        if channels == 0 {
-            return;
-        }
-        let frames = buffer.len() / channels;
         let step = if frames == 0 {
             0.0
         } else {
             (target - start) / frames as f32
         };
-        for (index, frame) in buffer.chunks_exact_mut(channels).enumerate() {
-            let gain = if start == target || index + 1 == frames {
-                target
-            } else {
-                start + step * (index + 1) as f32
-            };
+        GainRamp {
+            start,
+            target,
+            step,
+            frames,
+        }
+    }
+}
+
+/// One callback's gain, from [`GainStage::begin`]: the previous gain ramping
+/// linearly to the target across the callback, its last frame at the target.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GainRamp {
+    start: f32,
+    target: f32,
+    step: f32,
+    frames: usize,
+}
+
+impl GainRamp {
+    /// The gain of the callback's frame `index`.
+    pub fn gain_at(&self, index: usize) -> f32 {
+        if self.start == self.target || index + 1 >= self.frames {
+            self.target
+        } else {
+            self.start + self.step * (index + 1) as f32
+        }
+    }
+
+    /// Applies the gains of the callback's frames from `first_frame` on to
+    /// the whole frames of `chunk`, interleaved with `channels` channels: a
+    /// frame whose gain is 0 becomes exact zeros, and NaN or ±infinity
+    /// becomes 0 (S64, S65). Real-time safe (S126).
+    pub fn apply(&self, chunk: &mut [f32], channels: usize, first_frame: usize) {
+        if channels == 0 {
+            return;
+        }
+        for (index, frame) in chunk.chunks_exact_mut(channels).enumerate() {
+            let gain = self.gain_at(first_frame + index);
             for sample in frame {
                 *sample = if gain == 0.0 {
                     0.0
@@ -265,9 +207,6 @@ impl GainStage {
                 };
             }
         }
-        // A trailing partial frame is never handed to a device; keep it silent.
-        let whole = frames * channels;
-        buffer[whole..].fill(0.0);
     }
 }
 

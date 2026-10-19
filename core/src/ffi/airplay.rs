@@ -66,10 +66,11 @@ use audiosync_airplay::audio::SAMPLE_RATE;
 use audiosync_airplay::discovery::{DeviceKey, ServiceKind};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
 use audiosync_airplay::input::InputWriter;
+use audiosync_airplay::metadata::TrackInfo;
 use audiosync_airplay::pairing::PairingEvent;
 use audiosync_airplay::sender::{
-    ReceiverEvent, ReceiverInfo, Sender, SenderConfig, SenderEvent, SpeakerError, SpeakerEvent,
-    SpeakerOptions, SpeakerState,
+    NowPlaying, ReceiverEvent, ReceiverInfo, Sender, SenderConfig, SenderEvent, SpeakerError,
+    SpeakerEvent, SpeakerOptions, SpeakerState,
 };
 use audiosync_airplay::stream::SpeakerLatency;
 use audiosync_airplay::volume::{MIN_DB, Volume};
@@ -77,6 +78,7 @@ use zeroize::Zeroizing;
 
 use super::{host_slice, stereo_samples};
 use crate::airplay_pairings::{Loaded, PairingStore};
+use crate::fade::InputFade;
 use crate::resample::Resampler;
 use crate::ring::is_supported_rate;
 
@@ -803,12 +805,15 @@ unsafe fn live<T: Copy>(
 }
 
 /// The capture side of an [`AscAirPlayInput`]: the sender's input, the
-/// resampler from the capture rate to 44.1 kHz and its output buffer.
+/// resampler from the capture rate to 44.1 kHz and its output buffer, and
+/// the input's fade at the capture rate (S189).
 struct Feed {
     writer: InputWriter,
     resampler: Resampler,
     /// Resampler output, stereo.
     resampled: Box<[f32]>,
+    /// Fades in after each rate set and out after a stop request (S189).
+    fade: InputFade,
     /// The last rate request taken in (see [`AscAirPlayInput::requested`]).
     applied: u64,
     /// The resampler runs at a supported rate the host asked for.
@@ -817,41 +822,64 @@ struct Feed {
 
 impl Feed {
     /// Resamples `block` and hands it to the sender as audio that arrived
-    /// now; takes in a new rate request first. Returns the 44.1 kHz frames
-    /// handed over. Never allocates, locks, blocks or logs (P6).
-    fn write(&mut self, block: &[f32], requested: u64) -> usize {
+    /// now; takes in a new rate request first, which starts a fade-in, and
+    /// fades out while `closing` (S189). Returns the 44.1 kHz frames handed
+    /// over. Never allocates, locks, blocks or logs (P6).
+    fn write(&mut self, block: &[f32], requested: u64, closing: bool) -> usize {
         if requested != self.applied {
             self.applied = requested;
             // Low half: the rate; a new request, even for the same rate,
             // starts the resampler afresh.
             self.ready = self.resampler.set_input_rate(requested as u32).is_ok();
+            if self.ready {
+                self.fade.restart(requested as u32);
+            }
         }
         if !self.ready {
             return 0;
         }
-        let at = Instant::now();
-        let frames = block.len() / 2;
-        let (mut consumed, mut handed) = (0, 0);
-        // Until the input is used up and nothing more comes out: the
-        // resampler may take in the whole block while the buffer holds only
-        // part of its output, and keeps the rest for the next call.
-        loop {
-            let (used, produced) = self
-                .resampler
-                .process(&block[consumed * 2..frames * 2], &mut self.resampled);
-            if produced > 0 {
-                // Frames that come too late or don't fit are dropped there
-                // and counted (P112, P144).
-                self.writer.write_f32(&self.resampled[..produced * 2], at);
-                handed += produced;
-            }
-            consumed += used;
-            if used == 0 && produced == 0 {
-                break;
-            }
+        if closing {
+            self.fade.fade_out();
         }
+        let at = Instant::now();
+        let mut handed = 0;
+        let (resampler, resampled, writer) =
+            (&mut self.resampler, &mut self.resampled, &mut self.writer);
+        self.fade.process(block, |piece| {
+            handed += resample_into(resampler, resampled, writer, piece, at);
+        });
         handed
     }
+}
+
+/// Resamples `block` into `resampled` and hands it to `writer` as audio that
+/// arrived `at`; returns the 44.1 kHz frames handed over.
+fn resample_into(
+    resampler: &mut Resampler,
+    resampled: &mut [f32],
+    writer: &mut InputWriter,
+    block: &[f32],
+    at: Instant,
+) -> usize {
+    let frames = block.len() / 2;
+    let (mut consumed, mut handed) = (0, 0);
+    // Until the input is used up and nothing more comes out: the resampler
+    // may take in the whole block while the buffer holds only part of its
+    // output, and keeps the rest for the next call.
+    loop {
+        let (used, produced) = resampler.process(&block[consumed * 2..frames * 2], resampled);
+        if produced > 0 {
+            // Frames that come too late or don't fit are dropped there and
+            // counted (P112, P144).
+            writer.write_f32(&resampled[..produced * 2], at);
+            handed += produced;
+        }
+        consumed += used;
+        if used == 0 && produced == 0 {
+            break;
+        }
+    }
+    handed
 }
 
 /// The capture thread's way into a sender behind an opaque C pointer. The
@@ -863,6 +891,9 @@ pub struct AscAirPlayInput {
     /// every request, and the rate in Hz in the low 32 bits; 0 before the
     /// first.
     requested: AtomicU64,
+    /// A stop asked the input to fade out (S189); cleared by the next rate
+    /// request.
+    closing: AtomicBool,
     /// Its sender's dead flag: set by a panic in a write, which then
     /// writes nothing more.
     dead: Arc<AtomicBool>,
@@ -1224,6 +1255,64 @@ pub unsafe extern "C" fn asc_airplay_restart_timeline(airplay: *mut AscAirPlay) 
     unsafe { live(airplay, (), |airplay| airplay.sender.restart_timeline()) }
 }
 
+/// Sets what is playing, for the receivers that show it (P123 to P127): the
+/// track's title, artist and album as UTF-8 text, and its artwork as a JPEG
+/// of at most 512 KiB (P125). Every speaker that lists the type gets it now,
+/// and every speaker that starts or restarts later gets it too. A null text
+/// is an empty one, and three null texts send no track information; null
+/// artwork, or a length of 0, sends none. Returns false, changing nothing,
+/// for a null or dead handle, a text that isn't UTF-8, a null `artwork`
+/// with a length, or artwork the sender refuses (not a JPEG, or too large).
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading
+/// contract; each text is null or a NUL-terminated string; `artwork` is
+/// null or points to `artwork_len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_set_now_playing(
+    airplay: *mut AscAirPlay,
+    title: *const c_char,
+    artist: *const c_char,
+    album: *const c_char,
+    artwork: *const u8,
+    artwork_len: usize,
+) -> bool {
+    let mut texts = [None; 3];
+    for (text, pointer) in texts.iter_mut().zip([title, artist, album]) {
+        if pointer.is_null() {
+            continue;
+        }
+        // SAFETY: non-null, and by the caller's contract NUL-terminated.
+        let Some(value) = (unsafe { host_text(pointer) }) else {
+            return false;
+        };
+        *text = Some(value);
+    }
+    // SAFETY: by the caller's contract null or `artwork_len` bytes.
+    let Some(jpeg) = (unsafe { host_slice(artwork, artwork_len) }) else {
+        return false;
+    };
+    let [title, artist, album] = texts;
+    let track = (title.is_some() || artist.is_some() || album.is_some()).then(|| TrackInfo {
+        title: title.unwrap_or_default().to_owned(),
+        artist: artist.unwrap_or_default().to_owned(),
+        album: album.unwrap_or_default().to_owned(),
+    });
+    let now_playing = NowPlaying {
+        track,
+        artwork: (!jpeg.is_empty()).then(|| jpeg.to_vec()),
+        progress: None,
+    };
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, false, |airplay| {
+            airplay.sender.set_now_playing(now_playing).is_ok()
+        })
+    }
+}
+
 /// Opens the pairing store kept in the file at `path` (see
 /// [`crate::airplay_pairings`]) in place of the one in memory, whose
 /// pairings it drops; meant for once, before discovery starts. Listed
@@ -1474,10 +1563,12 @@ pub unsafe extern "C" fn asc_airplay_take_input(airplay: *mut AscAirPlay) -> *mu
                     writer,
                     resampler,
                     resampled: vec![0.0; INPUT_CHUNK_FRAMES * 2].into_boxed_slice(),
+                    fade: InputFade::new(SAMPLE_RATE, INPUT_CHUNK_FRAMES),
                     applied: 0,
                     ready: false,
                 },
                 requested: AtomicU64::new(0),
+                closing: AtomicBool::new(false),
                 dead: airplay.dead.clone(),
             }))
         })
@@ -1486,7 +1577,8 @@ pub unsafe extern "C" fn asc_airplay_take_input(airplay: *mut AscAirPlay) -> *mu
 
 /// Any thread: the rate in Hz of the audio the capture writes from now on,
 /// rounded to whole hertz. The next write takes it in and starts the
-/// resampler afresh, so a host calls it at each capture start, even at an
+/// resampler afresh, with a fade-in from silence over F capture-rate frames
+/// (S189), so a host calls it at each capture start, even at an
 /// unchanged rate. False, changing nothing, for a null handle or a rate
 /// outside 8000 to 384 000 Hz. Real-time safe.
 ///
@@ -1507,9 +1599,12 @@ pub unsafe extern "C" fn asc_airplay_input_set_rate(
     }
     // SAFETY: the handle is live; this call borrows only the atomics, which
     // writes read but never borrow mutably.
-    let (requested, dead) = unsafe { (&(*input).requested, &(*input).dead) };
+    let (requested, closing, dead) =
+        unsafe { (&(*input).requested, &(*input).closing, &(*input).dead) };
     let set = panic::catch_unwind(|| {
         injected_panic();
+        // A new capture: open again after a stop's fade-out (S189).
+        closing.store(false, Ordering::Release);
         let mut old = requested.load(Ordering::Relaxed);
         loop {
             let new = ((old >> 32).wrapping_add(1) << 32) | u64::from(rate as u32);
@@ -1557,21 +1652,42 @@ pub unsafe extern "C" fn asc_airplay_input_write(
     };
     // SAFETY: the handle is live; writes run on one thread at a time and
     // borrow only the `feed` field, which rate requests never touch.
-    let (requested, dead) = unsafe { (&(*input).requested, &(*input).dead) };
+    let (requested, closing, dead) =
+        unsafe { (&(*input).requested, &(*input).closing, &(*input).dead) };
     if dead.load(Ordering::Acquire) {
         return 0;
     }
     let requested = requested.load(Ordering::Acquire);
+    let closing = closing.load(Ordering::Acquire);
     // SAFETY: as above.
     let feed = unsafe { &mut (*input).feed };
     let written = panic::catch_unwind(AssertUnwindSafe(|| {
         injected_panic();
-        feed.write(block, requested)
+        feed.write(block, requested, closing)
     }));
     written.unwrap_or_else(|_| {
         dead.store(true, Ordering::Release);
         0
     })
+}
+
+/// Any thread, at a session stop: asks the input to fade out over the next
+/// F capture-rate frames written and to hand zeros after them, until the
+/// next [`asc_airplay_input_set_rate`] fades it in again (S186, S189). Does
+/// nothing for a null handle. Real-time safe.
+///
+/// # Safety
+///
+/// `input` is null or a live input handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_input_request_fade_out(input: *mut AscAirPlayInput) {
+    if input.is_null() {
+        return;
+    }
+    // SAFETY: the handle is live; this call borrows only an atomic, which
+    // writes read but never borrow mutably.
+    let closing = unsafe { &(*input).closing };
+    closing.store(true, Ordering::Release);
 }
 
 /// Frees an input handle. Sets `*input` to null, so destroying through the
@@ -2385,6 +2501,96 @@ mod tests {
             "{stopped:?}"
         );
         assert!(receiver.methods().contains(&Method::Teardown));
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    #[test]
+    fn now_playing_reaches_a_speaker_that_shows_it_and_bad_input_is_refused() {
+        let jpeg: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        let none = ptr::null::<c_char>();
+        // SAFETY: null handles and pointers are part of the contract.
+        unsafe {
+            assert!(!asc_airplay_set_now_playing(
+                ptr::null_mut(),
+                c"Track One".as_ptr(),
+                none,
+                none,
+                ptr::null(),
+                0
+            ));
+        }
+
+        let receiver = Loopback::start();
+        let id = "02005E005331";
+        let mut txt = OPEN.to_vec();
+        txt.push("md=0,1,2");
+        let record = ServiceRecord {
+            port: receiver.port,
+            addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))],
+            ..raop(id, "Den", &txt)
+        };
+        let mut handle = listing(vec![record]);
+        let c_id = c_string(id);
+        let not_utf8: [u8; 3] = [0xC3, 0x28, 0x00];
+        let mut large = vec![0u8; audiosync_airplay::metadata::MAX_ARTWORK_BYTES + 1];
+        large[..3].copy_from_slice(&[0xFF, 0xD8, 0xFF]);
+        // SAFETY: a live handle, used by this thread only; C strings and
+        // byte buffers of the lengths given.
+        unsafe {
+            assert!(
+                !asc_airplay_set_now_playing(
+                    handle,
+                    not_utf8.as_ptr().cast(),
+                    none,
+                    none,
+                    ptr::null(),
+                    0
+                ),
+                "a title that isn't UTF-8"
+            );
+            assert!(
+                !asc_airplay_set_now_playing(handle, none, none, none, ptr::null(), 4),
+                "a length without artwork"
+            );
+            assert!(
+                !asc_airplay_set_now_playing(handle, none, none, none, b"GIF89a".as_ptr(), 6),
+                "artwork that isn't a JPEG"
+            );
+            assert!(
+                !asc_airplay_set_now_playing(handle, none, none, none, large.as_ptr(), large.len()),
+                "artwork over 512 KiB"
+            );
+            assert!(
+                asc_airplay_set_now_playing(handle, none, none, none, ptr::null(), 0),
+                "nothing playing"
+            );
+            assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 50.0));
+        }
+        let events = events_until(handle, |seen| has_state(seen, id, AIRPLAY_STATE_PLAYING));
+        assert!(has_state(&events, id, AIRPLAY_STATE_PLAYING), "{events:?}");
+        // SAFETY: a live handle, used by this thread only; C strings and a
+        // byte buffer of the length given.
+        unsafe {
+            assert!(asc_airplay_set_now_playing(
+                handle,
+                c"Track One".as_ptr(),
+                c"Some Artist".as_ptr(),
+                c"Some Album".as_ptr(),
+                jpeg.as_ptr(),
+                jpeg.len()
+            ));
+        }
+        assert!(
+            wait_for(|| receiver
+                .bodies(Method::SetParameter)
+                .iter()
+                .any(|body| body.contains("Track One")
+                    && body.contains("Some Artist")
+                    && body.contains("Some Album"))),
+            "{:?}",
+            receiver.bodies(Method::SetParameter)
+        );
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }

@@ -46,10 +46,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use audiosync_core::eq::EqSettings;
 use audiosync_core::policy::delay::{native_airplay_adjustment_ms, native_airplay_latency_ms};
-use audiosync_core::policy::pairing::DropReason;
 use audiosync_core::policy::session::{
-    AutoStartGate, Incident, SpeakerEvent, StartOrigin, StreamingAction, may_start, reaction,
-    source_switch, streaming_after,
+    AutoStartGate, DropReason, Incident, SpeakerEvent, StartOrigin, StreamingAction, may_start,
+    reaction, source_switch, streaming_after,
 };
 use audiosync_core::policy::speakers::{NoticeSubject, Notices, SpeakerKey, renamed_group};
 
@@ -810,7 +809,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// An AirPlay speaker can't play from AudioSync, so it is off: tells the
-    /// user, and stops streaming when nothing else is on (S109, S136).
+    /// user, and stops streaming when nothing else is on (S136).
     fn airplay_cant_play(&mut self, id: &str, problem: AirPlayProblem) {
         let reason = match problem {
             AirPlayProblem::PasswordNotYet => DropReason::PasswordUnsupported,

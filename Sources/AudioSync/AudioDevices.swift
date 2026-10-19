@@ -1,0 +1,195 @@
+import CoreAudio
+import Foundation
+
+/// The audio devices Core Audio offers: outputs AudioSync can play to and
+/// inputs it can capture from.
+///
+/// Every call reads Core Audio afresh and nothing is cached, because devices
+/// come and go at any time; the host lists the outputs on every 3 s poll (spec
+/// S101) and the inputs whenever Core Audio's device list changes. Speakers are
+/// keyed by device UID, which survives unplugging, while a renderer is bound to
+/// the object ID of the moment (S60): a device that returns may get a new one.
+struct AudioDevices: Sendable {
+    /// One device as listed.
+    struct Device: Hashable, Sendable {
+        /// Core Audio's object ID for the device, valid while it is present.
+        let id: AudioDeviceID
+        /// The name macOS shows for it (display only, S147), and the
+        /// persistent identifier speakers, groups and settings use.
+        let name: String, uid: String
+        /// `kAudioDeviceTransportType…`; 0 when the device doesn't say.
+        let transport: UInt32
+        /// The terminal type (`kAudioStreamTerminalType…`) of a built-in
+        /// device's first output stream, which tells the built-in speakers
+        /// from the headphone jack (S173); nil when it couldn't be read and
+        /// for every other device.
+        var outputTerminal: UInt32? = nil
+    }
+
+    /// Devices with at least one output channel, in Core Audio's order.
+    func allOutputDevices() -> [Device] { devices(withChannelsIn: kAudioObjectPropertyScopeOutput) }
+
+    /// Devices with at least one input channel, in Core Audio's order.
+    func allInputDevices() -> [Device] { devices(withChannelsIn: kAudioObjectPropertyScopeInput) }
+
+    /// The output macOS currently plays to, if any. Nothing in a session follows
+    /// it: renderers are bound to their own devices (S145).
+    func defaultOutputDevice() -> Device? {
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        guard let id = HALProperty.uint32(of: system, kAudioHardwarePropertyDefaultOutputDevice),
+              id != kAudioObjectUnknown else { return nil }
+        return describe(id, channelsIn: kAudioObjectPropertyScopeOutput)
+    }
+
+    // MARK: - Which devices the speaker list shows (S151)
+
+    /// Transports the speaker list hides unless asked for: software devices
+    /// (virtual, aggregate and auto-aggregate ones such as a Multi-Output
+    /// Device) and macOS's own AirPlay output, which AudioSync's engine
+    /// replaces. Hardware transports and unknown ones are always shown.
+    static func isVirtual(transport: UInt32) -> Bool { hiddenTransports.contains(transport) }
+
+    private static let hiddenTransports: Set<UInt32> = [
+        kAudioDeviceTransportTypeVirtual, kAudioDeviceTransportTypeAggregate,
+        kAudioDeviceTransportTypeAutoAggregate, kAudioDeviceTransportTypeAirPlay,
+    ]
+
+    /// The outputs the speaker list shows, in the order given. With
+    /// `showVirtual` (the Show Virtual Devices setting) that is every device;
+    /// otherwise the ones `isVirtual` hides are left out, except those whose
+    /// UID is in `keep`: devices the user chose (on, auto-connect, in a group)
+    /// or that are already in the list.
+    static func listed(_ devices: [Device], showVirtual: Bool, keep: Set<String>) -> [Device] {
+        guard !showVirtual else { return devices }
+        return devices.filter { !isVirtual(transport: $0.transport) || keep.contains($0.uid) }
+    }
+
+    /// Whether an aggregate device's composition marks it private: visible only
+    /// to the process that made it, so in AudioSync's own list it is one that
+    /// AudioSync made (its capture tap's) and never a speaker or a source.
+    static func isPrivateAggregate(composition: [String: Any]) -> Bool {
+        (composition[kAudioAggregateDeviceIsPrivateKey] as? NSNumber)?.boolValue ?? false
+    }
+
+    /// What a device's Core Audio answers make of it in a list (S171), or nil
+    /// when it isn't listed. Each answer is nil when it couldn't be read.
+    ///
+    /// Left out: a device that reports it is going away (`alive` 0; one that
+    /// doesn't answer is kept), one with no channels in the listed direction,
+    /// and a private aggregate. A device that just vanished can linger in Core
+    /// Audio's list for a moment; listing it would make its speaker fail to
+    /// start and be switched off, where a missing one stays on and waits (S68,
+    /// S161). A name or UID that can't be read stays empty: the window shows an
+    /// empty name as an unknown device, and callers skip devices without a UID.
+    static func entry(id: AudioDeviceID, alive: UInt32?, channels: Int, transport: UInt32?,
+                      composition: [String: Any]?, uid: String?, name: String?) -> Device? {
+        guard alive != 0, channels > 0 else { return nil }
+        let kind = transport ?? 0
+        if kind == kAudioDeviceTransportTypeAggregate, let composition,
+           isPrivateAggregate(composition: composition) {
+            return nil
+        }
+        return Device(id: id, name: name ?? "", uid: uid ?? "", transport: kind)
+    }
+
+    // MARK: - Reading Core Audio
+
+    private func devices(withChannelsIn scope: AudioObjectPropertyScope) -> [Device] {
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        return HALProperty.objectIDs(of: system, kAudioHardwarePropertyDevices).compactMap {
+            describe($0, channelsIn: scope)
+        }
+    }
+
+    /// Reads what `entry` needs about device `id`, counting its channels in
+    /// `scope`; an aggregate's composition is read only for aggregates.
+    private func describe(_ id: AudioDeviceID, channelsIn scope: AudioObjectPropertyScope) -> Device? {
+        let transport = HALProperty.uint32(of: id, kAudioDevicePropertyTransportType)
+        let composition = transport == kAudioDeviceTransportTypeAggregate
+            ? HALProperty.dictionary(of: id, kAudioAggregateDevicePropertyComposition) : nil
+        var device = Self.entry(id: id,
+                                alive: HALProperty.uint32(of: id, kAudioDevicePropertyDeviceIsAlive),
+                                channels: HALProperty.channelCount(of: id, in: scope),
+                                transport: transport,
+                                composition: composition,
+                                uid: HALProperty.string(of: id, kAudioDevicePropertyDeviceUID),
+                                name: HALProperty.string(of: id, kAudioObjectPropertyName))
+        // Only a built-in output's terminal matters: it tells the built-in
+        // speakers, the reference, from the headphone jack (S173).
+        if scope == kAudioObjectPropertyScopeOutput, transport == kAudioDeviceTransportTypeBuiltIn {
+            device?.outputTerminal = HALProperty.firstStreamTerminal(of: id, in: scope)
+        }
+        return device
+    }
+}
+
+/// Typed reads of Core Audio object properties (main element). Each returns nil,
+/// zero or an empty list when the object doesn't answer, for example because
+/// the device went away between two reads.
+private enum HALProperty {
+    static func address(_ selector: AudioObjectPropertySelector,
+                        _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal)
+        -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+    }
+
+    static func uint32(of object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> UInt32? {
+        var prop = address(selector)
+        var value: UInt32 = 0
+        var dataSize = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(object, &prop, 0, nil, &dataSize, &value) == noErr else { return nil }
+        return value
+    }
+
+    /// A Core Foundation value. Core Audio hands it over retained and the
+    /// caller releases it (the property documentation in `AudioHardware.h`).
+    static func cfObject<T: AnyObject>(of object: AudioObjectID, _ selector: AudioObjectPropertySelector,
+                                       as type: T.Type) -> T? {
+        var prop = address(selector)
+        var value: Unmanaged<T>?
+        var dataSize = UInt32(MemoryLayout<Unmanaged<T>?>.size)
+        guard AudioObjectGetPropertyData(object, &prop, 0, nil, &dataSize, &value) == noErr else { return nil }
+        return value?.takeRetainedValue()
+    }
+
+    static func string(of object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
+        cfObject(of: object, selector, as: CFString.self).map { $0 as String }
+    }
+
+    static func dictionary(of object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> [String: Any]? {
+        cfObject(of: object, selector, as: CFDictionary.self).flatMap { $0 as NSDictionary as? [String: Any] }
+    }
+
+    static func objectIDs(of object: AudioObjectID, _ selector: AudioObjectPropertySelector,
+                          _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> [AudioObjectID] {
+        var prop = address(selector, scope)
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(object, &prop, 0, nil, &dataSize) == noErr, dataSize > 0 else { return [] }
+        let stride = MemoryLayout<AudioObjectID>.stride
+        var ids = [AudioObjectID](repeating: AudioObjectID(kAudioObjectUnknown), count: Int(dataSize) / stride)
+        guard AudioObjectGetPropertyData(object, &prop, 0, nil, &dataSize, &ids) == noErr else { return [] }
+        // The list may have shrunk between the two calls; `dataSize` says how much was filled.
+        return Array(ids.prefix(Int(dataSize) / stride))
+    }
+
+    /// The terminal type (`kAudioStreamPropertyTerminalType`) of the device's
+    /// first stream in `scope`, or nil when it has none or doesn't answer.
+    static func firstStreamTerminal(of device: AudioObjectID, in scope: AudioObjectPropertyScope) -> UInt32? {
+        guard let stream = objectIDs(of: device, kAudioDevicePropertyStreams, scope).first else { return nil }
+        return uint32(of: stream, kAudioStreamPropertyTerminalType)
+    }
+
+    /// The device's channel count in `scope`, summed over its streams.
+    static func channelCount(of device: AudioObjectID, in scope: AudioObjectPropertyScope) -> Int {
+        var prop = address(kAudioDevicePropertyStreamConfiguration, scope)
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(device, &prop, 0, nil, &dataSize) == noErr,
+              dataSize >= UInt32(MemoryLayout<AudioBufferList>.size) else { return 0 }
+        let storage = UnsafeMutableRawPointer.allocate(byteCount: Int(dataSize),
+                                                       alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { storage.deallocate() }
+        guard AudioObjectGetPropertyData(device, &prop, 0, nil, &dataSize, storage) == noErr else { return 0 }
+        let buffers = UnsafeMutableAudioBufferListPointer(storage.bindMemory(to: AudioBufferList.self, capacity: 1))
+        return buffers.reduce(0) { $0 + Int($1.mNumberChannels) }
+    }
+}

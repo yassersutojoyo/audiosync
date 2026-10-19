@@ -9,9 +9,8 @@ import Combine
 final class AppModel: ObservableObject {
 
     struct Speaker: Identifiable, Equatable {
-        let id: String
-        let name: String
-        /// What kind of output it is: always `.airplay` for engine speakers.
+        let id, name: String
+        /// What kind of output it is: always `.airplay` for AirPlay speakers.
         let tag: SpeakerTag
         var enabled: Bool
         var volume: Double          // slider position 0…100
@@ -20,7 +19,7 @@ final class AppModel: ObservableObject {
         /// nothing, and the reference itself (S181).
         var offsetMs: Double?
         var autoConnect = false
-        /// From the AirPlay engine's last report; always `.open` for local speakers.
+        /// From the AirPlay sender's discovery; always `.open` for local speakers.
         var availability: SpeakerAvailability = .open
 
         /// A speaker AudioSync streams to through AirPlay, not a local output.
@@ -30,16 +29,14 @@ final class AppModel: ObservableObject {
     }
 
     struct Group: Identifiable, Equatable {
-        let id: String
-        let name: String
+        let id, name: String
         let memberCount: Int
         let available: Int          // members currently present
         let allOn: Bool
     }
 
     struct Source: Identifiable, Equatable {
-        let id: String              // "" = whole system, else bundle ID
-        let name: String
+        let id, name: String        // id: "" for the whole system, else a bundle ID
         let icon: NSImage?
         let isInput: Bool
         static func == (a: Source, b: Source) -> Bool { a.id == b.id && a.name == b.name }
@@ -80,6 +77,8 @@ final class AppModel: ObservableObject {
         var transport: (NowPlayingMonitor.Command) -> Void = { _ in }
         var quit: () -> Void = {}
         var retryAirPlay: () -> Void = {}
+        /// The device volume fix the user clicked under a local output (S197).
+        var fixDeviceVolume: (String) -> Void = { _ in }
     }
 
     @Published var running = false
@@ -92,12 +91,12 @@ final class AppModel: ObservableObject {
     /// to them (S173, S181).
     @Published var hasLocalReference = true
     /// What the AirPlay delay field shows, L in whole ms (S178, S181).
-    @Published var airPlayDelayMs: Double = LocalDelay.defaultAirPlayDelayMs
-    @Published var airplayReachable = true
-    @Published var airplayEngineBundled = true
-    @Published var airplayEngine: AirPlayEngineState = .stopped
+    @Published var airPlayDelayMs: Double = LocalDelay.senderDefaultLatencyMs
+    /// AudioSync's own AirPlay sender stopped after an internal error
+    /// (`NativeSenderStarts`): the AirPlay section says so, with Retry.
+    @Published var airplaySenderFailed = false
     /// Whether AudioSync is (or may be) kept off the local network, where
-    /// the engine can't see any AirPlay speaker.
+    /// the sender can't see any AirPlay speaker.
     @Published var localNetworkHint: LocalNetworkHint = .none
     @Published var nowPlaying: NowPlayingMonitor.Track?
     @Published var equalizerOn = false
@@ -105,6 +104,9 @@ final class AppModel: ObservableObject {
     /// newest first; shown in the window and the menu bar panel instead of a
     /// modal alert, until dismissed or their cause is gone.
     @Published var notices = NoticeList()
+    /// The device volume hints of the switched-on local outputs, by device
+    /// UID: only outputs whose macOS volume is low or muted (S196).
+    @Published var deviceVolumes: [String: DeviceVolumeHint] = [:]
     @Published var groups: [Group] = []
     @Published var launchAtLogin = false
     @Published var showVirtualDevices = false
@@ -134,6 +136,12 @@ final class AppModel: ObservableObject {
         SpeakerState(enabled: speaker.enabled, streaming: running)
     }
 
+    /// The device volume hint `speaker`'s row shows: none on an AirPlay row
+    /// or a row switched off (S198).
+    func deviceVolume(of speaker: Speaker) -> DeviceVolumeHint? {
+        DeviceVolumes.hint(for: speaker.id, airPlay: speaker.isAirPlay, enabled: speaker.enabled, in: deviceVolumes)
+    }
+
     /// A group is on when all its present members are.
     func state(of group: Group) -> SpeakerState {
         SpeakerState(enabled: group.allOn, streaming: running)
@@ -144,7 +152,7 @@ final class AppModel: ObservableObject {
 
     var statusText: String { running ? text.statusStreaming(speakers: activeSpeakers) : text.statusOff }
 
-    /// AirPlay speakers left over from before the engine stopped can't be
+    /// AirPlay speakers left over from before the sender stopped can't be
     /// switched, so they're hidden while `airPlayProblem` is shown.
     var shownAirPlay: [Speaker] { airPlayProblem == nil ? airplay : [] }
 
@@ -154,23 +162,12 @@ final class AppModel: ObservableObject {
         SpeakerLayout.split(local: local, airplay: shownAirPlay, tag: \.tag, name: \.name)
     }
 
-    var airPlayEmptyText: String {
-        if !airplayEngineBundled { return text.airPlayEngineMissing }
-        if airplayEngine == .starting || airplayEngine == .restarting { return text.airPlayStarting }
-        return airplayReachable ? text.airPlayNoneFound : text.airPlayEmpty
-    }
+    var airPlayEmptyText: String { text.airPlayNoneFound }
 
     /// Why AirPlay can't work right now, shown in place of its speakers; nil
-    /// while the engine runs or is (re)starting.
+    /// while the sender runs or is starting.
     var airPlayProblem: String? {
-        guard airplayEngineBundled else { return nil }
-        switch airplayEngine {
-        case .gaveUp: return text.airPlayEngineGaveUp
-        case .failed(.unsupportedOS(let minimum)): return text.airPlayNeedsNewerMacOS(minimum)
-        case .failed(.nativeSender): return text.nativeAirPlayFailed
-        case .failed: return text.airPlayEngineFailed
-        default: return nil
-        }
+        airplaySenderFailed ? text.nativeAirPlayFailed : nil
     }
 }
 
@@ -453,7 +450,7 @@ struct MenuBarView: View {
             // AirPlay comes last in the list, so what's wrong with AirPlay goes
             // right after it.
             if let problem = model.airPlayProblem {
-                AirPlayProblemView(message: problem, canRetry: model.airplayEngine.canRetry,
+                AirPlayProblemView(message: problem, canRetry: true,
                                    text: t, compact: true) { model.actions.retryAirPlay() }
             } else if let hint = t.localNetworkHint(model.localNetworkHint, short: true) {
                 localNetworkHint(t, caption: hint,
@@ -524,9 +521,7 @@ struct MenuBarView: View {
         if count == 0 && model.airPlayProblem != nil {
             EmptyView()   // the problem below says why
         } else if count == 0 {
-            Text(!model.airplayEngineBundled ? t.airPlayEngineMissing
-                 : model.airplayEngine == .starting || model.airplayEngine == .restarting ? t.airPlayStarting
-                 : model.layout.thisMac.isEmpty ? t.noSpeakers : t.airPlayNoneFound)
+            Text(model.layout.thisMac.isEmpty ? t.noSpeakers : t.airPlayNoneFound)
                 .font(.caption)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -541,7 +536,7 @@ struct MenuBarView: View {
     }
 
     /// The main window's Local Network hint, cut to a caption and a link:
-    /// without that access the engine sees no AirPlay speaker, silently.
+    /// without that access the sender sees no AirPlay speaker, silently.
     private func localNetworkHint(_ t: AppText, caption: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(caption)
@@ -565,7 +560,8 @@ struct MenuBarView: View {
             VStack(spacing: 0) {
                 ForEach(thisMac) { speaker in
                     CompactRow(name: speaker.name, symbol: speaker.tag.symbol, state: model.state(of: speaker),
-                               text: t, height: rowHeight) {
+                               text: t, height: rowHeight,
+                               deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
                         model.actions.setLocalEnabled(speaker.id, model.state(of: speaker).clickTurnsOn)
                     }
                 }
@@ -592,7 +588,8 @@ struct MenuBarView: View {
             ForEach(layout.connected) { speaker in
                 CompactRow(name: speaker.name, symbol: speaker.tag.symbol, state: model.state(of: speaker),
                            text: t, height: rowHeight, kind: speaker.tag,
-                           availability: speaker.availability) {
+                           availability: speaker.availability,
+                           deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
                     let on = model.state(of: speaker).clickTurnsOn
                     if speaker.isAirPlay {
                         model.actions.setAirPlayEnabled(speaker.id, on)
@@ -607,8 +604,7 @@ struct MenuBarView: View {
 
 /// One speaker or group in the panel: the whole row switches it on or off.
 private struct CompactRow: View {
-    let name: String
-    let symbol: String
+    let name, symbol: String
     let state: SpeakerState
     let text: AppText
     let height: CGFloat
@@ -617,6 +613,9 @@ private struct CompactRow: View {
     /// The kind of output, shown as a small icon after the name.
     var kind: SpeakerTag? = nil
     var availability: SpeakerAvailability = .open
+    /// A switched-on local output's device volume hint: a glyph, with the
+    /// hint as its tooltip and in the VoiceOver hint (S198).
+    var deviceVolume: DeviceVolumeGlyph? = nil
     let toggle: () -> Void
     @StateObject private var hover = HoverState()
     @Environment(\.isEnabled) private var isEnabled
@@ -633,6 +632,7 @@ private struct CompactRow: View {
                 }
                 Spacer(minLength: 4)
                 AvailabilityNote(availability: availability, text: text)
+                if let deviceVolume { DeviceVolumeBadge(glyph: deviceVolume) }
             }
             .padding(.horizontal, 6)
             .frame(height: height)
@@ -645,7 +645,8 @@ private struct CompactRow: View {
         .onHover { hover.isHovered = $0 }
         .accessibilityLabel(text.speakerLabel(name: name, tag: kind.map(text.speakerTag)))
         .accessibilityValue(text.value(state))
-        .accessibilityHint(text.rowHint(state, note: hint ?? text.availability(availability)))
+        .accessibilityHint(text.rowHint(state, note: hint ?? deviceVolume?.accessibilityNote
+                                            ?? text.availability(availability)))
         .help(text.help(state))
     }
 }
