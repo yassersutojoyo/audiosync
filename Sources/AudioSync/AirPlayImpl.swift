@@ -1,16 +1,17 @@
 import Foundation
 
-/// Which AirPlay sender the app uses: the bundled engine (OwnTone), the
-/// default, or AudioSync's own sender (`airplay/`, reached through the Rust
-/// core's C interface, `NativeAirPlay`). The move happens in stages; in this
-/// second one, with `native` chosen AudioSync doesn't start the bundled
-/// engine: the AirPlay speakers listed are the ones the native sender's
-/// discovery finds, and AirPlay audio goes through that sender. An Apple TV
+/// Which AirPlay sender the app uses: AudioSync's own sender (`airplay/`,
+/// reached through the Rust core's C interface, `NativeAirPlay`), the
+/// default, or the bundled engine (OwnTone), kept as a fallback until it is
+/// removed. With `native` AudioSync doesn't start the bundled engine: the
+/// AirPlay speakers listed are the ones the native sender's discovery finds,
+/// and AirPlay audio and track info go through that sender. An Apple TV
 /// that asks for a PIN pairs once, when the user turns it on, and its
 /// credentials are kept (`asc_airplay_open_pairings`); a password is asked
-/// for once per run. The bundled engine starts with the app,
-/// so the choice is read once per launch (`forThisRun`), and a change applies
-/// from the next launch.
+/// for once per run. Speakers saved under the bundled engine's IDs move to
+/// the native ones as discovery finds them (`SpeakerIDMigration`). The
+/// bundled engine starts with the app, so the choice is read once per launch
+/// (`forThisRun`), and a change applies from the next launch.
 enum AirPlayImpl: String, CaseIterable {
     case owntone, native
 
@@ -30,9 +31,9 @@ enum AirPlayImpl: String, CaseIterable {
         case environment, setting, `default`
     }
 
-    /// The sender for someone who never chose one: the bundled engine, until
-    /// the native sender streams.
-    static let defaultImpl: AirPlayImpl = .owntone
+    /// The sender for someone who never chose one: AudioSync's own. "owntone"
+    /// in the setting or the environment still picks the bundled engine.
+    static let defaultImpl: AirPlayImpl = .native
 
     /// The environment override wins over the stored setting. A value that
     /// names neither sender counts as absent, so an unknown or missing setting

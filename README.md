@@ -99,8 +99,8 @@ A few other things worth knowing:
 - Right-click a speaker (or use its ⋯ button) for auto-connect, and a group to rename or delete it.
 - The gear menu has New Group from Active Speakers, Refresh Devices, Show Virtual Devices (loopback drivers, meeting apps and other virtual outputs stay hidden until you turn this on or already use one), Appearance, Launch at Login and the AudioSync Guide.
 - Clicking any speaker while streaming is off starts streaming. Click a delay to nudge it by ±10/±100 ms or type a value (a leading − for a negative one).
-- Speakers that want a PIN or password (an Apple TV, or a receiver with Require Password on) are marked "Asks for a code". You get a prompt when you turn one on yourself; after pairing once it connects without a code. Old AirPlay 1 receivers with a password are marked "Password not supported"; turn the password off on the receiver.
-- If the AirPlay engine can't start, or stops after repeated crashes, Connected Speakers says so and offers a Retry button.
+- Speakers that want a PIN or password (an Apple TV, or a receiver with Require Password on) are marked "Asks for a code". You get a prompt when you turn one on yourself. An Apple TV pairs once and then connects without a code; a password is asked for once each time AudioSync starts.
+- If the AirPlay sender can't start, or stops after an error, Connected Speakers says so and offers a Retry button.
 
 <p align="center">
   <picture>
@@ -111,14 +111,14 @@ A few other things worth knowing:
 
 ## How it works, briefly
 
-System or app audio comes in through a Core Audio process tap (which also mutes the original output, so you only hear the synced copies); input devices are read directly. The audio goes through the equalizer into a shared buffer. Each local speaker has its own output unit reading that buffer at its own delay and correcting clock drift. The same audio goes through a named pipe into the bundled [OwnTone](https://github.com/owntone/owntone-server) engine, which speaks AirPlay and AirPlay 2.
+System or app audio comes in through a Core Audio process tap (which also mutes the original output, so you only hear the synced copies); input devices are read directly. The audio goes through the equalizer into a shared buffer. Each local speaker has its own output unit reading that buffer at its own delay and correcting clock drift. The same audio goes to AudioSync's own AirPlay sender (the one the Windows app uses), which streams it to the speakers over AirPlay. For now the app still carries the [OwnTone](https://github.com/owntone/owntone-server) engine as a fallback (hold Option while you open the AudioSync menu to switch); it gets the audio through a named pipe and speaks AirPlay and AirPlay 2.
 
-HomePods can't show a PIN, so AudioSync builds OwnTone with a small patch that tries PIN-less (transient) pairing first, which is why the Allow Speaker & TV Access setting above matters. The engine's API listens on 127.0.0.1 only and needs a password that changes on every start. [`SECURITY.md`](SECURITY.md) goes into the details.
+HomePods can't show a PIN, so AudioSync builds OwnTone with a small patch that tries PIN-less (transient) pairing first, which is why the Allow Speaker & TV Access setting above matters for the fallback engine. The engine's API listens on 127.0.0.1 only and needs a password that changes on every start. [`SECURITY.md`](SECURITY.md) goes into the details.
 
 ## Known limitations
 
 - Everything is about two seconds late because of the AirPlay buffer. Fine for music, not for video or games.
-- AirPlay 2 support in OwnTone is reverse-engineered, so a HomePod or macOS update can break it until OwnTone catches up.
+- AudioSync's own sender streams over classic AirPlay (AirPlay 1), which most AirPlay 2 speakers still take; a speaker that only speaks AirPlay 2 isn't listed yet. With the fallback engine, AirPlay 2 support is reverse-engineered, so a HomePod or macOS update can break it until OwnTone catches up.
 - Now Playing only works with Spotify and Music; macOS doesn't let other apps read the system-wide Now Playing info.
 
 ## License and credits
