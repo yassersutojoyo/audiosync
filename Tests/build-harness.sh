@@ -20,6 +20,6 @@ swiftc -O -swift-version 5 "$work/main.swift" \
   "$SRC/EngineImpl.swift" "$SRC/EngineParts.swift" "$SRC/CoreEngine.swift" \
   "$SRC/OutputRenderer.swift" "$SRC/RingBuffer.swift" "$SRC/AudioDevices.swift" \
   "$SRC/Diagnostics.swift" "$SRC/Volume.swift" "$SRC/FifoFeed.swift" "$SRC/Equalizer.swift" \
-  "$SRC/SpeakerState.swift" "$SRC/AirPlayPairing.swift" \
+  "$SRC/SpeakerState.swift" "$SRC/AirPlayPairing.swift" "$SRC/NativeAirPlayTap.swift" \
   -I Sources/CAudioSyncCore -L "$core_lib" -laudiosync_core \
   -o "$dest"

@@ -279,8 +279,9 @@ func syncRule() {
 }
 
 // AudioSync's own AirPlay sender: created, asked for receivers before any
-// discovery (none), and destroyed twice through the same pointer, the second
-// time doing nothing. No discovery starts, so nothing touches the network.
+// discovery (none), its first event and its input, and destroyed twice
+// through the same pointer, the second time doing nothing. No discovery
+// starts and no speaker is added, so nothing touches the network.
 func airPlaySender() {
     var handle: OpaquePointer? = asc_airplay_create()
     check(handle != nil, "the AirPlay sender starts")
@@ -290,7 +291,30 @@ func airPlaySender() {
           "no receiver before discovery, the out struct untouched")
     check(!asc_airplay_next_receiver(nil, &receiver) && !asc_airplay_start_discovery(nil),
           "a NULL sender does nothing")
+    // Its first event is the timeline, with the base latency L (1.75 s).
+    var event = AscAirPlayEvent()
+    var taken = false
+    for _ in 0..<500 where !taken {
+        taken = asc_airplay_next_event(handle, &event)
+        if !taken { usleep(10_000) }
+    }
+    check(taken && event.kind == ASC_AIRPLAY_EVENT_TIMELINE && abs(event.latency_ms - 1750) < 0.01
+              && abs(asc_airplay_latency_ms(handle) - 1750) < 0.01 && String(cString: event.id).isEmpty,
+          "the first event is the timeline, L = \(event.latency_ms) ms")
+    check(!asc_airplay_add_speaker(handle, "02005E005301", 50), "only a listed receiver can be added")
+    asc_airplay_set_master(handle, 80)
+    // The capture's input: handed over once, silent until it has a rate,
+    // then 10 ms at 48 kHz become 441 frames at 44.1 kHz.
+    var input: OpaquePointer? = asc_airplay_take_input(handle)
+    check(input != nil && asc_airplay_take_input(handle) == nil, "the input is handed over once")
+    let block = [Float](repeating: 0.1, count: 480 * 2)
+    check(asc_airplay_input_write(input, block, 480) == 0, "no audio before a rate")
+    check(asc_airplay_input_set_rate(input, 48_000) && asc_airplay_input_write(input, block, 480) == 441,
+          "10 ms at 48 kHz become 441 frames at 44.1 kHz")
     asc_airplay_destroy(&handle)
+    check(asc_airplay_input_write(input, block, 480) == 441, "the input outlives its sender")
+    asc_airplay_input_destroy(&input)
+    check(input == nil, "the input's destroy sets the host's pointer to NULL")
     check(handle == nil, "destroy sets the host's pointer to NULL")
     asc_airplay_destroy(&handle)
     asc_airplay_destroy(nil)

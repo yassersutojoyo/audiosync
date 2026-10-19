@@ -19,7 +19,7 @@ trap 'rm -rf "$OUT"' EXIT
 CORE=(-I Sources/CAudioSyncCore -L core/target/universal-apple-darwin/release -laudiosync_core)
 # The engine parts of both implementations, with what they need to compile.
 ENGINE_PARTS=(EngineImpl.swift EngineParts.swift CoreEngine.swift OutputRenderer.swift RingBuffer.swift
-  Equalizer.swift FifoFeed.swift Volume.swift SpeakerState.swift AirPlayPairing.swift Diagnostics.swift)
+  Equalizer.swift FifoFeed.swift Volume.swift SpeakerState.swift AirPlayPairing.swift Diagnostics.swift NativeAirPlayTap.swift)
 
 build() {   # build <name> <test file> <source files…> [-- <more swiftc arguments…>]
   local name=$1 test=$2; shift 2
@@ -93,7 +93,7 @@ echo "▶ logic"
 build logic Tests/logictest.swift PipeMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
   Equalizer.swift FifoFeed.swift RingBuffer.swift Diagnostics.swift AirPlayPairing.swift AirPlayReconcile.swift EngineLifecycle.swift Notices.swift SpeakerState.swift CaptureCheck.swift \
   AudioDevices.swift OwnToneOutputs.swift OwnTonePlayer.swift AirPlayEngineConfig.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift \
-  EngineImpl.swift AirPlayImpl.swift WindowRules.swift
+  EngineImpl.swift AirPlayImpl.swift NativeAirPlayModel.swift WindowRules.swift
 "$OUT/logic/run" || status=1
 
 echo "▶ fifo"

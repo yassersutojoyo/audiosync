@@ -3,12 +3,19 @@ import Foundation
 /// Which AirPlay sender the app uses: the bundled engine (OwnTone), the
 /// default, or AudioSync's own sender (`airplay/`, reached through the Rust
 /// core's C interface, `NativeAirPlay`). The move happens in stages; in this
-/// first one, a session with `native` chosen also starts the native sender's
-/// discovery and writes the receivers it finds to the debug log, while the
-/// bundled engine still does all the streaming. The choice is read once per
-/// session start, so a change applies the next time streaming starts.
+/// second one, with `native` chosen AudioSync doesn't start the bundled
+/// engine: the AirPlay speakers listed are the ones the native sender's
+/// discovery finds, and AirPlay audio goes through that sender. PIN pairing
+/// and stored credentials come later, so a receiver that asks for a PIN or a
+/// password is listed but stays off. The bundled engine starts with the app,
+/// so the choice is read once per launch (`forThisRun`), and a change applies
+/// from the next launch.
 enum AirPlayImpl: String, CaseIterable {
     case owntone, native
+
+    /// The sender this run of AudioSync uses, read once, when the app starts
+    /// the bundled engine (or doesn't) at launch.
+    static let forThisRun: (impl: AirPlayImpl, origin: Origin) = current()
 
     /// UserDefaults key of the setting, "owntone" or "native". Only an
     /// explicit choice writes it (the hidden debug option in the AudioSync
@@ -66,6 +73,20 @@ struct NativeReceiver: Equatable {
     let reason: String?
     /// Discovery's hints in a fixed order ("raop", "airplay", "apple-tv", …).
     let hints: [String]
+
+    /// How the speaker list shows it, if at all: one that can play is open;
+    /// one that asks for a PIN needs a code (it stays off until pairing comes
+    /// to this sender); one that asks for a password has one AudioSync can't
+    /// send yet. A receiver that needs another kind of pairing, or that only
+    /// AirPlay 2 or nothing here can play, isn't listed.
+    var access: AirPlayPairing.Access? {
+        switch availability {
+        case .available: return .open
+        case .needsPin: return .code(password: false)
+        case .needsPassword: return .legacyPassword
+        case .needsPairing, .airPlay2Only, .unsupported: return nil
+        }
+    }
 
     /// The receiver for the debug log, on one line.
     var logDescription: String {
