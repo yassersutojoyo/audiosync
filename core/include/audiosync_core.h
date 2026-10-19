@@ -634,6 +634,112 @@ bool asc_delay_sanitize_ms(double delay_ms, double *sanitized_ms);
  */
 bool asc_delay_ms_to_frames(double delay_ms, uint32_t rate, int64_t *frames);
 
+/* ---- Local delay model (offsets relative to a reference output) ---------- */
+
+/*
+ * The local delay model replaces the AirPlay sync rule above: one local
+ * output, the reference (the built-in speakers on the Mac), defines time 0
+ * and has no delay setting; every other local output has an offset relative
+ * to it, -2000 to +20 000 ms, that always applies. The host passes the
+ * outputs taking part (switched on, with their devices listed) and gets each
+ * one's hold-back, the delay its renderer plays at. While an AirPlay speaker
+ * is chosen, the AirPlay latency L comes on top: the bundled engine's stored
+ * AirPlay delay, or the native sender's reported latency plus the user's
+ * adjustment (asc_local_native_latency_ms).
+ *
+ * Re-timing: whenever the outputs taking part, an offset, the reference, the
+ * AirPlay condition or L change, the host computes the hold-backs again and
+ * gives each running renderer whose hold-back changed the new one through
+ * asc_reader_set_delay_frames (more inserts silence, less skips forward);
+ * a renderer whose hold-back is unchanged gets no call. An output being
+ * attached starts at its hold-back.
+ */
+
+/* A local output taking part. */
+typedef struct AscLocalOutput {
+    double offset_ms;   /* its stored offset; ignored for the reference */
+    bool is_reference;  /* the reference: its offset counts as 0 */
+} AscLocalOutput;
+
+/*
+ * The hold-back in ms of each of the `count` outputs taking part, in the same
+ * order, into hold_backs_ms: its offset (0 for the reference) minus the
+ * smallest offset taking part, or minus -L when that is smaller and
+ * airplay_chosen, capped at 20 000 ms; never negative. An offset out of range
+ * counts clamped, one that isn't finite as 0; airplay_latency_ms counts only
+ * when airplay_chosen, clamped to 0...20 000 (not finite: 0). False, writing
+ * nothing, for a NULL array with a nonzero count.
+ */
+bool asc_local_hold_backs_ms(const AscLocalOutput *outputs, size_t count, bool airplay_chosen, double airplay_latency_ms, double *hold_backs_ms);
+
+/*
+ * An offset input from the user, ready to store: clamped to -2000...20 000 ms
+ * into *sanitized_ms. False, writing nothing, for a non-finite value (which
+ * is ignored) or a NULL sanitized_ms.
+ */
+bool asc_local_offset_sanitize_ms(double offset_ms, double *sanitized_ms);
+
+/*
+ * The bundled engine's AirPlay delay input, ready to store: clamped to
+ * 0...20 000 ms into *sanitized_ms (2000 by default). False, writing nothing,
+ * for a non-finite value (which is ignored) or a NULL sanitized_ms.
+ */
+bool asc_local_airplay_delay_sanitize_ms(double delay_ms, double *sanitized_ms);
+
+/*
+ * L under the native sender: its reported base latency plus the user's
+ * adjustment (-2000...20 000 ms, 0 by default; out of range counts clamped,
+ * not finite as 0), clamped to 0...20 000 ms. The window's AirPlay delay
+ * field shows this value.
+ */
+double asc_local_native_latency_ms(double sender_latency_ms, double adjustment_ms);
+
+/*
+ * The adjustment to store when the user enters shown_ms in the AirPlay delay
+ * field under the native sender: shown_ms minus the sender's latency of that
+ * moment, clamped to -2000...20 000 ms, into *adjustment_ms. False, writing
+ * nothing, for a non-finite value or a NULL adjustment_ms.
+ */
+bool asc_local_native_adjustment_ms(double shown_ms, double sender_latency_ms, double *adjustment_ms);
+
+/*
+ * One device UID for the one-time migration of the stored absolute delays:
+ * every UID with a stored delay, and every one without that is switched on
+ * or in the device list of that moment.
+ */
+typedef struct AscStoredDelay {
+    bool is_reference;       /* the reference (the first one marked counts) */
+    bool has_stored_delay;   /* it has a stored absolute delay */
+    double stored_delay_ms;  /* that delay; read clamped to 0...20 000, not finite counts as none */
+} AscStoredDelay;
+
+/* The offset the migration stores for one UID. */
+typedef struct AscMigratedOffset {
+    bool store;        /* store offset_ms; false for the reference, which gets none */
+    double offset_ms;  /* -2000...20 000 */
+} AscMigratedOffset;
+
+/* The AirPlay settings the migration stores. */
+typedef struct AscDelayMigration {
+    double airplay_delay_ms;      /* the bundled engine's AirPlay delay */
+    double native_adjustment_ms;  /* the native sender's adjustment: 0 */
+} AscDelayMigration;
+
+/*
+ * The one-time migration of the stored absolute delays: one offset per
+ * entry into `offsets`, in the same order, and the AirPlay settings into
+ * *result. D0, what an output without a stored delay played at, is the
+ * legacy single delay (when has_legacy_delay) clamped to 0...20 000, else
+ * 2000; D_R is the reference's stored delay, else D0. The AirPlay delay
+ * becomes D_R when it is at least 1000 ms, else 2000; another UID with a
+ * stored delay D gets D - D_R; one without gets D0 - (the new AirPlay delay)
+ * when D0 is at least 1000 ms, else D0 - D_R; each clamped to
+ * -2000...20 000. The host stores the result under new keys, once, and
+ * leaves the old ones in place. False, writing nothing, for a NULL array
+ * with a nonzero count or a NULL result.
+ */
+bool asc_local_delay_migrate(const AscStoredDelay *entries, size_t count, bool has_legacy_delay, double legacy_delay_ms, AscMigratedOffset *offsets, AscDelayMigration *result);
+
 /* ---- AirPlay sender (AudioSync's own, airplay/) ----------------------------- */
 
 /*

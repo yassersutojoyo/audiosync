@@ -3,10 +3,6 @@
 # space, what is missing. tests/spec_coverage.rs fails once a clause listed here
 # gains a `// covers:` test, so the line goes when the core implements it. A
 # clause only the host can implement belongs in tests/spec_exempt.txt instead.
-S172 Terms of the local delay model (reference, offset, outputs taking part, hold-back) as the hold-back policy uses them.
-S175 Local output offsets from -2000 to +20 000 ms: sanitizing and the default of 0.
-S176 Hold-backs from the offsets of the outputs taking part, plus the AirPlay latency while an AirPlay speaker is chosen.
-S177 Re-timing the running outputs whose hold-back changed when the outputs taking part, an offset, the reference, the AirPlay condition or L change.
 S182 The fade itself: a 20 ms raised cosine at the stream's rate, its states, and a reversal midway without a jump.
 S183 Applying a renderer's fade at the device rate after the gain, with a closed output as exact zeros.
 S184 Reads that report their leading silence and copied frames, and the fade-in from the first copied frame after silence.
