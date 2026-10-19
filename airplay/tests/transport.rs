@@ -172,6 +172,8 @@ fn a_session_plays_takes_volume_and_metadata_and_tears_down_over_loopback() {
     let stopped = events.wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Stopped);
     assert!(stopped.is_some(), "stops: {:?}", events.of(&key));
     assert_eq!(receiver.log().count("TEARDOWN"), 1);
+    // Packets already on their way are logged first.
+    std::thread::sleep(Duration::from_millis(300));
     let after = receiver.log().audio.len();
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(receiver.log().audio.len(), after, "no audio after TEARDOWN");
@@ -603,6 +605,7 @@ fn shutdown_tears_every_speaker_down_in_parallel_within_two_seconds() {
         "waited for the answer: {took:?}"
     );
     assert!(took <= Duration::from_millis(3500), "in parallel: {took:?}");
+    std::thread::sleep(Duration::from_millis(300));
     let counts = (a.log().audio.len(), b.log().audio.len());
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!((a.log().audio.len(), b.log().audio.len()), counts);
@@ -803,6 +806,14 @@ fn discovery_reports_receivers_appearing_changing_and_going() {
             .is_some()
     );
     sender.shutdown();
+}
+
+#[test]
+fn the_host_can_move_the_sender_and_the_input_to_its_own_threads() {
+    fn movable<T: Send>() {}
+    movable::<Sender>();
+    movable::<audiosync_airplay::input::InputWriter>();
+    movable::<SenderEvent>();
 }
 
 #[test]

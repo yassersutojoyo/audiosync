@@ -1,6 +1,6 @@
 # audiosync-airplay implementation notes
 
-Everything in this crate is written from `docs/AIRPLAY_SPEC.md`, whose clause IDs (`P1` and up) appear in comments and test names, from the RFCs it cites (2326 RTSP, 2617 digest authentication, 3550 RTP, 3551 the audio profile, 4566 SDP, 5905 NTP timestamps, 6762 and 6763 mDNS and DNS-SD, 5737 and 3849 documentation addresses), from Apple's public description of the ALAC configuration record, from the author's own knowledge of the ALAC frame syntax for the uncompressed frame (see "Audio, RTP and timing"), and from the docs.rs and crates.io pages of the crates below. `docs/AIRPLAY_SURVEY.md` was read to choose crates. No source code of any AirPlay sender or receiver was opened, no ALAC codec source either, and nothing else in this repository was used.
+Everything in this crate is written from `docs/AIRPLAY_SPEC.md`, whose clause IDs (`P1` and up) appear in comments and test names, from the RFCs it cites (2326 RTSP, 2617 digest authentication, 3550 RTP, 3551 the audio profile, 4566 SDP, 5905 NTP timestamps, 6762 and 6763 mDNS and DNS-SD, 5737 and 3849 documentation addresses), from Apple's public description of the ALAC configuration record, from the author's own knowledge of the ALAC frame syntax for the uncompressed frame (see "Audio, RTP and timing"), and from the docs.rs and crates.io pages of the crates below (for `mdns-sd`, its public API and README). `docs/AIRPLAY_SURVEY.md` was read to choose crates. No source code of any AirPlay sender or receiver was opened, no ALAC codec source either, and nothing else in this repository was used.
 
 Where the spec leaves room, the readings below were chosen, each taking the clause's text literally where it has one.
 
@@ -22,7 +22,7 @@ The crate is sans-I/O. The session takes events in (`handle_connected`, `handle_
 
 Seams for later stages:
 
-- `discovery::Browser` and `discovery::Resolver`: a live mDNS browser.
+- `discovery::Browser` and `discovery::Resolver`: a live mDNS browser (now `discovery::mdns::MdnsBrowser`, see the transport section).
 - `session::Verifier`: the legacy pair-verify (P55, P56). The session already runs it in the right place and maps a non-200 answer to PairingRequired.
 - `SessionConfig::auth_setup_key`: the public key of `POST /auth-setup` (P60); the pairing stage generates it.
 - `Output::Connect` and `Connection`: the transport stage connects to the address the session names, opens the control and timing sockets in that family, and hands their ports in with `handle_connected`, which is how P31's "open before SETUP" and P82's family hold.
@@ -111,6 +111,40 @@ Where the frame layout comes from: P77 leaves the bitstream to Apple's codec, an
 - **P144**: a session's silent frames are the silence in the packets sent to it; input frames dropped is the stream's count, shown on every session's counters since they share the input.
 - **P6**: one atomic word per frame keeps both sides in safe Rust; the writer publishes its position with release ordering after storing the frames.
 
+## Transport, discovery and the host API
+
+### Layout
+
+- `transport.rs` (crate-private): a connect attempt on a thread of its own, and `SessionIo`, one session's UDP sockets and threads.
+- `sender.rs`: the host API: `Sender`, `SenderConfig`, `SpeakerOptions`, `NowPlaying`, `ReceiverInfo` and the events.
+- `sender/driver.rs`: the driver loop that owns the stream, the sessions and the directory.
+- `reconnect.rs`: the retry schedule of P142 (`Backoff`).
+- `discovery/mdns.rs`: `MdnsBrowser`, the live browser behind the `Browser` seam, and `browse_event`, the conversion it uses.
+
+### Design
+
+Plain `std::thread` and `std::net`, no async runtime. Per session: a connect thread per attempt (detached; a result nobody waits for is dropped, which closes it), then four threads once connected: the timing thread answers timing requests itself; the control thread forwards retransmission requests; the RTSP reader forwards bytes and the close; the RTSP writer writes the queued requests, so a receiver that stops reading blocks only that thread. The UDP and TCP readers wake every 50 ms to look at their stop flag, so every thread ends within 50 ms of its session's close. The `mdns-sd` daemon runs one thread of its own.
+
+One driver thread owns the `Stream`, every `Session` and the `Directory`. Each turn runs the timers that are due (stream, sessions, retries, discovery every 20 ms), then hands every output where it goes until nothing more comes: `Output::Connect` to a connect thread, `Output::Send` to the writer, `Transmit`s to the session's sockets (with the send result back to `Session::handle_udp_send`), `StreamEvent::Flush` to `Session::flush`, and events to the host. Then it waits for the next deadline: a wait under 20 ms is a plain `thread::sleep`, which is precise to well under a millisecond on every platform (Windows included, where the standard library uses a high-resolution timer); a longer one waits on the message channel first, whose wake-up some platforms round to a coarse tick, and sleeps the rest. The stream's packets are due about every 8 ms, so in practice the driver sleeps precisely; a message waits at most until the next packet. At most 256 messages are handled per turn. Locally on Windows the loopback tests send every packet on time (no late packets).
+
+The host side: `Sender::start` creates the stream on the calling thread (so its buffers exist before audio flows) and gives back the `InputWriter`; every other call sends a message and returns. `Sender::arrival_time` is the one call that waits for an answer, at most 1 s. Events come back on a channel the host drains with `poll_event` or `wait_event`. `add_speaker` returns the speaker's `SpeakerCounters`, which stay valid across its reconnects.
+
+### Spec readings
+
+- **P3, P141**: a failing session releases its sockets and threads and leaves the stream; nothing it does can block the driver (writes go through its writer thread, UDP sends have a 20 ms limit). UDP send errors that say ConnectionRefused, ConnectionReset, HostUnreachable or NetworkUnreachable count as unreachable for P141; other send errors are ignored. Receive errors are not counted, P141 counts sends; the reset Windows reports on the next receive after an ICMP unreachable only pauses that reader for 5 ms.
+- **P6**: the host's capture thread only touches the `InputWriter`; the host's other calls are channel sends. All network work, connects included, runs on the crate's threads.
+- **P7**: `mdns-sd` follows PTR to SRV, TXT and addresses itself, so `MdnsBrowser` turns its resolved services into `BrowseEvent`s directly and the raw-record `Resolver` stays for browsers that hand over records. Addresses are sorted so a repeated resolution with the same set isn't reported as a change; TXT strings are rebuilt from the daemon's properties in their order (it keeps the first of duplicate keys, as P11 does); instance names are unescaped as RFC 6763 §4.3 writes them; an IPv6 link-local address takes the interface index as its scope; a service without an address is skipped until it has one. The daemon binds UDP 5353 with address reuse (and port reuse on Unix), so it shares the port with the system's responder; it only queries. Its channels are bounded and block the daemon when full, so the driver drains them every 20 ms and the browser drops its receivers before it shuts the daemon down.
+- **P31, P82**: the control and timing sockets bind to the connection's own local address (its family and interface, with the IPv6 scope) on port 0, and all four threads run before `Session::handle_connected`, so both sockets answer before OPTIONS, let alone SETUP. A bind failure counts as a failed connect to that address, and the session moves to the next one.
+- **P91**: timing requests are answered on the timing socket's own thread: the receive time is read right after `recv_from`, the transmit time right before `send_to`, and nothing but 32 bytes of formatting sits between them. The driver only hears about it afterwards (for P131), so its work never delays a reply. Requests are answered whatever their source, to that source.
+- **P129**: shutdown calls `Session::teardown` on every session in the same turn; the loop ends when all are closed or 2 s plus 50 ms after the call, closing whatever is left, and then joins the threads. Removing one speaker does the same for it alone.
+- **P142**: the schedule counts the failures since the speaker last played: 1, 2, 4, 8, 16, then 30 s; playing again starts it over. Every failure whose kind doesn't need the user is retried, also for a speaker that never reached RECORD (unreachable when added). A PCM refusal with an ALAC fallback (P74) starts the ALAC session at once and doesn't count. `add_speaker` on a speaker that failed or waits for a retry starts a session at once with a fresh schedule. A speaker whose device can't be driven (P139) or needs the legacy pairing (P46) is reported without connecting, and isn't retried.
+- **P144**: the counters belong to the speaker the host added and run on across its sessions, so the host keeps one handle; the timing thread counts its replies into the same counters.
+- **P46**: the pairing stage isn't here, so the plan reports PairingRequired for an Apple TV that needs the legacy pairing, and every Apple TV gets `apple_tv_without_credentials`.
+- **P60**: until the pairing stage generates a real X25519 key, `POST /auth-setup` carries 32 fresh random bytes in its place. The receiver can't tell them from a public key whose private half was thrown away, and the answer is discarded either way. P60 stays pending.
+- **P18, P19**: a discovery update changes the device the next session of a speaker uses (addresses, codec, TXT), never the running one. Stopping discovery reports every listed receiver gone; the directory keeps what it learned about PCM refusals.
+- **P124 to P126**: what is playing is one value for the stream. Each item applies from the speaker's RTP timestamp of the first frame of the next packet to be cut, the audio arriving now (`Stream::rtptime_now`), and is sent again when a speaker (re)starts. Progress takes the elapsed time and the length and becomes start, current and end around that timestamp.
+- **Tests**: the integration tests run whole sessions over real sockets against a fake receiver on loopback (127.0.0.1, and ::1 where the runner has it), every socket on port 0, the host writing numbered PCM audio in real time. They check play times read back from the sync packets, so being in step is measured end to end. Timeouts are 15 s, timing bounds are wide (teardown 1.9 to 3.5 s, retries 0.9 to 2.5 s and 1.9 to 3.5 s), and the network tests of a binary run one at a time. The live mDNS test is ignored and never runs in CI.
+
 ## Dependencies and licenses
 
 | Crate | Version | License | Why |
@@ -120,11 +154,17 @@ Where the frame layout comes from: P77 leaves the bitstream to Apple's codec, an
 | digest, block-buffer, crypto-common, hybrid-array, typenum | 0.11.3, 0.12.1, 0.2.2, 0.4.15, 1.20.1 | MIT OR Apache-2.0 | md-5's dependencies |
 | cfg-if, libc | 1.0.5, 0.2.191 | MIT OR Apache-2.0 | getrandom's dependencies (libc on Unix) |
 | r-efi | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | getrandom on UEFI targets only, taken under MIT |
+| mdns-sd | 0.21.5 | Apache-2.0 OR MIT | live mDNS browsing (P7): a querier on its own thread, no async runtime; without default features (no async glue, no logging). Maintained (released October 2026), supports Windows, macOS and Linux |
+| flume, spin, lock_api, scopeguard | 0.12.0, 0.9.9, 0.4.14, 1.2.0 | Apache-2.0/MIT, MIT, MIT OR Apache-2.0, MIT OR Apache-2.0 | mdns-sd's channels |
+| mio, socket2, socket-pktinfo, if-addrs | 1.2.4, 0.6.5, 0.4.1, 0.15.0 | MIT, MIT OR Apache-2.0, MIT, MIT OR BSD-3-Clause | mdns-sd's sockets and interface list |
+| fastrand, log | 2.5.0, 0.4.34 | Apache-2.0 OR MIT, MIT OR Apache-2.0 | mdns-sd's query jitter; `log` comes through mio |
+| windows-sys, windows-link | 0.61.2, 0.2.1 | MIT OR Apache-2.0 | mdns-sd's dependencies on Windows |
+| wasi | 0.11.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | mio on WASI targets only, taken under MIT |
 | alac | 0.5.0 | MIT/Apache-2.0 | development only: the reference ALAC decoder of the tests, without default features, so it brings no other crate |
 
 `deny.toml` mirrors core's allow-list (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, Zlib, ISC, Unicode-3.0) with dev and build dependencies included; CI runs cargo-deny 0.20.2. The crate isn't bundled in either app yet, so `THIRD_PARTY_NOTICES.md` doesn't list it; it will when the crate ships.
 
 ## Spec coverage
 
-`tests/spec_coverage.rs` reads the spec and fails unless every clause is named by a `// covers:` line or listed in `tests/spec_pending.txt`, never both. A clause counts as covered only when everything it asks of the sender is done; a test for part of a pending clause says "Part of P6" in a plain comment. After the audio, RTP and timing stage: 144 clauses, 101 covered, 43 pending (stream and transport 8, pairing crypto 14, AirPlay 2 21).
+`tests/spec_coverage.rs` reads the spec and fails unless every clause is named by a `// covers:` line or listed in `tests/spec_pending.txt`, never both. A clause counts as covered only when everything it asks of the sender is done; a test for part of a pending clause says "Part of P6" in a plain comment. After the audio, RTP and timing stage: 144 clauses, 101 covered, 43 pending (stream and transport 8, pairing crypto 14, AirPlay 2 21). After the transport stage: 109 covered, 35 pending (pairing crypto 14, AirPlay 2 21).
  The test also checks that the IDs run P1 to Pn without gaps and that every clause names a source.
