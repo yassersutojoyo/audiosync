@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::reader::Reader;
+use audiosync_core::render::RendererControl;
 use audiosync_core::ring::RingWriter;
 use audiosync_core::volume::SharedGain;
 
@@ -87,9 +88,10 @@ impl Driver for WasapiDriver {
         &mut self,
         endpoint: &Endpoint,
         reader: Reader,
+        control: RendererControl,
         gain: Arc<SharedGain>,
     ) -> Result<endpoint::EndpointRenderer, BackendError> {
-        endpoint::start(&endpoint.id, reader, gain)
+        endpoint::start(&endpoint.id, reader, control, gain)
     }
 }
 

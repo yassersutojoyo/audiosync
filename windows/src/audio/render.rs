@@ -1,84 +1,53 @@
-//! An output's render pipeline: from the shared ring, through the output's
-//! delay reader, to the device's rate, channels and gain.
+//! An output's render pipeline: the core's renderer from the shared ring,
+//! through the output's delay reader, to the device's rate, channels, gain
+//! and fade, plus the endpoint's side of a stop.
 //!
-//! Per device callback the pipeline reads session-rate frames through its
-//! [`Reader`] (at the output's delay, with its own drift correction), converts
-//! them to the device's rate with the core's resampler, sizing each read from
-//! what the resampler needs (S62), maps stereo onto the device's channels
-//! (S63) and applies the output's gain, ramped over one callback when it
-//! changes (S64, S65). Delay and lag stay in session-rate frames.
+//! Per device callback the core's [`Renderer`] reads session-rate frames
+//! through its [`Reader`] (at the output's delay, with its own drift
+//! correction, held while it plays), converts them to the device's rate,
+//! sizing each read from what the resampler needs (S62), maps stereo onto
+//! the device's channels (S63), applies the output's gain, ramped over one
+//! callback when it changes (S64, S65), and then its 20 ms fade at the
+//! device rate (S183): the first audio fades in (S184), a stop fades out over
+//! 20 ms whatever a callback holds (S185), and a delay change fades out, lands
+//! and fades in again (S187). Delay and lag stay in session-rate frames.
+//!
+//! WASAPI keeps up to a whole endpoint buffer queued, so the end of a fade is
+//! heard well after it was rendered: an output counts as faded only once the
+//! endpoint holds nothing but zeros and its stream latency has passed since
+//! ([`RenderPipeline::has_played_its_fade`]).
 
 use std::sync::Arc;
 
-use audiosync_core::convert::map_to_device;
 use audiosync_core::reader::Reader;
-use audiosync_core::resample::Resampler;
-use audiosync_core::volume::{GainStage, SharedGain};
+use audiosync_core::render::{Renderer, RendererControl, endpoint_faded};
+use audiosync_core::volume::SharedGain;
 
 use super::SESSION_RATE;
 use super::backend::BackendError;
-
-/// Device frames rendered per step; bounds the pipeline's buffers.
-pub const RENDER_CHUNK: usize = 512;
-
-/// The most session-rate frames the resampler can ask for to produce
-/// `device_frames` frames at `device_rate`, whatever state it is in: the
-/// frames those outputs span, plus one step and the rounding on each side.
-pub fn reader_frames_bound(device_frames: usize, device_rate: u32) -> usize {
-    if device_rate == SESSION_RATE {
-        return device_frames;
-    }
-    let frames = device_frames as u64;
-    let from = u64::from(SESSION_RATE);
-    let to = u64::from(device_rate.max(1));
-    ((frames * from).div_ceil(to) + from / to + 4) as usize
-}
 
 /// The render pipeline of one output, owned by its render thread.
 ///
 /// All buffers are allocated by [`RenderPipeline::new`];
 /// [`RenderPipeline::render`] never allocates, locks or blocks.
 pub struct RenderPipeline {
-    reader: Reader,
-    resampler: Resampler,
-    stage: GainStage,
-    gain: Arc<SharedGain>,
-    channels: usize,
-    /// Session-rate stereo frames from the reader.
-    stereo: Box<[f32]>,
-    /// Device-rate stereo frames from the resampler.
-    converted: Box<[f32]>,
-    /// Device frames the resampler could not produce and that were played
-    /// as silence. Stays 0 unless [`reader_frames_bound`] is wrong.
-    shortfall_frames: u64,
+    renderer: Renderer,
 }
 
 impl RenderPipeline {
-    /// A pipeline that reads through `reader` and plays at the gain in
-    /// `gain`, for a device running at `device_rate` with `channels`
-    /// interleaved float channels.
+    /// A pipeline that reads through `reader`, controlled through `control`
+    /// (made for that reader), and plays at the gain in `gain`, for a device
+    /// running at `device_rate` with `channels` interleaved float channels.
     pub fn new(
         reader: Reader,
+        control: &RendererControl,
         gain: Arc<SharedGain>,
         device_rate: u32,
         channels: usize,
     ) -> Result<RenderPipeline, BackendError> {
-        if channels == 0 {
-            return Err(BackendError::UnsupportedFormat);
-        }
-        let resampler = Resampler::new(SESSION_RATE, device_rate)
+        let renderer = Renderer::new(reader, control, gain, SESSION_RATE, device_rate, channels)
             .map_err(|_| BackendError::UnsupportedFormat)?;
-        let read_frames = reader_frames_bound(RENDER_CHUNK, device_rate);
-        Ok(RenderPipeline {
-            reader,
-            resampler,
-            stage: GainStage::new(),
-            gain,
-            channels,
-            stereo: vec![0.0; read_frames * 2].into_boxed_slice(),
-            converted: vec![0.0; RENDER_CHUNK * 2].into_boxed_slice(),
-            shortfall_frames: 0,
-        })
+        Ok(RenderPipeline { renderer })
     }
 
     /// Channels per device frame.
@@ -87,66 +56,47 @@ impl RenderPipeline {
         expect(dead_code, reason = "the WASAPI render loop sizes its packets with it")
     )]
     pub fn channels(&self) -> usize {
-        self.channels
+        self.renderer.channels()
     }
 
     /// The device rate.
     #[cfg(test)]
     pub fn device_rate(&self) -> u32 {
-        self.resampler.output_rate()
+        self.renderer.device_rate()
     }
 
     /// Device frames played as silence because the resampler lacked input.
     #[cfg(test)]
     pub fn shortfall_frames(&self) -> u64 {
-        self.shortfall_frames
+        self.renderer.shortfall_frames()
     }
 
-    /// Fills `out`, interleaved with [`RenderPipeline::channels`] channels,
-    /// at the output's gain.
+    /// Fills `out`, interleaved with [`RenderPipeline::channels`] channels.
     pub fn render(&mut self, out: &mut [f32]) {
-        let gain = self.gain.get();
-        self.render_at(out, gain);
+        self.renderer.render(out);
     }
 
-    /// Fills `out` with the gain going to 0: the first call fades out over
-    /// its buffer, later calls are silent. Used before an output stops, so it
-    /// doesn't stop with a click.
-    pub fn render_fade_out(&mut self, out: &mut [f32]) {
-        self.render_at(out, 0.0);
+    /// Whether the endpoint has played the requested fade-out (S185): it
+    /// holds `padding` frames (`GetCurrentPadding`), all of them written
+    /// after the fade's last frame, and at least `latency_frames` more
+    /// (`GetStreamLatency` at the device rate) have played since.
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "the WASAPI render loop asks it")
+    )]
+    pub fn has_played_its_fade(&self, padding: u32, latency_frames: u32) -> bool {
+        self.renderer.frames_after_fade().is_some_and(|after| {
+            endpoint_faded(after, u64::from(padding), u64::from(latency_frames))
+        })
     }
 
-    fn render_at(&mut self, out: &mut [f32], target_gain: f32) {
-        let channels = self.channels;
-        let frames = out.len() / channels;
-        let read_capacity = self.stereo.len() / 2;
-        let mut done = 0;
-        while done < frames {
-            let n = (frames - done).min(RENDER_CHUNK);
-            let need = self.resampler.input_frames_for(n).min(read_capacity);
-            if need > 0 {
-                self.reader.read_target(&mut self.stereo[..need * 2], need);
-            }
-            let (_, produced) = self
-                .resampler
-                .process(&self.stereo[..need * 2], &mut self.converted[..n * 2]);
-            if produced < n {
-                self.converted[produced * 2..n * 2].fill(0.0);
-                self.shortfall_frames += (n - produced) as u64;
-            }
-            map_to_device(
-                &self.converted[..n * 2],
-                n,
-                1.0,
-                &mut out[done * channels..(done + n) * channels],
-                channels,
-            );
-            done += n;
-        }
-        // A trailing partial frame is never played; keep it silent.
-        out[frames * channels..].fill(0.0);
-        self.stage
-            .apply(&mut out[..frames * channels], channels, target_gain);
+    /// Marks the output as faded for the control thread (a release store).
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "the WASAPI render loop calls it")
+    )]
+    pub fn mark_faded(&self) {
+        self.renderer.mark_faded();
     }
 }
 
@@ -164,6 +114,8 @@ mod tests {
         gain: Arc<SharedGain>,
         control: RendererControl,
         pipeline: RenderPipeline,
+        /// Session-rate frames the live capture owes the ring.
+        owed: f64,
     }
 
     /// A ring at the session rate and a pipeline reading it at `delay_frames`.
@@ -182,6 +134,7 @@ mod tests {
             gain,
             control,
             pipeline,
+            owed: 0.0,
         }
     }
 
@@ -207,16 +160,39 @@ mod tests {
             let n = callback.min(frames - played.len());
             let mut out = vec![9.0f32; n * 2];
             s.pipeline.render(&mut out);
-            played.extend(out.chunks_exact(2).map(|frame| frame[0]));
+            played.extend(out.as_chunks::<2>().0.iter().map(|frame| frame[0]));
         }
         played
     }
 
+    /// Like [`play`], with a capture that writes 0.5 at the pace the device
+    /// plays before each callback.
+    fn live(s: &mut Setup, frames: usize, callback: usize) -> Vec<f32> {
+        let mut played = Vec::new();
+        while played.len() < frames {
+            let n = callback.min(frames - played.len());
+            s.owed += n as f64 * f64::from(SESSION_RATE) / f64::from(s.pipeline.device_rate());
+            let write = s.owed.floor();
+            s.owed -= write;
+            let write = write as usize;
+            s.writer.write(&vec![0.5f32; write * 2], write);
+            played.extend(play(s, n, n));
+        }
+        played
+    }
+
+    /// A pipeline at a 100 ms delay whose ring holds those 100 ms, so the
+    /// first live callback primes it.
+    fn primed(device_rate: u32) -> Setup {
+        let mut s = setup(device_rate, 2, 4_800, 1.0);
+        s.writer.write(&vec![0.5f32; 4_800 * 2], 4_800);
+        s
+    }
+
     #[test]
     fn the_first_audio_of_a_session_fades_in_over_20_ms() {
-        let mut s = setup(SESSION_RATE, 2, 1_000, 1.0);
-        s.writer.write(&vec![0.5f32; 20_000 * 2], 20_000);
-        let played = play(&mut s, 4_000, 480);
+        let mut s = primed(SESSION_RATE);
+        let played = live(&mut s, 4_000, 480);
         let len = fade_len(SESSION_RATE);
         for (i, &sample) in played[..len].iter().enumerate() {
             let expected = 0.5 * fade_in(i, len);
@@ -228,25 +204,27 @@ mod tests {
         assert!(played[len - 1..].iter().all(|&sample| sample == 0.5));
 
         // At another device rate the fade counts that rate's frames.
-        let mut s = setup(44_100, 2, 1_000, 1.0);
-        s.writer.write(&vec![0.5f32; 20_000 * 2], 20_000);
-        let played = play(&mut s, 4_000, 441);
+        let mut s = primed(44_100);
+        let played = live(&mut s, 4_000, 441);
         let len = fade_len(44_100);
         assert_eq!(len, 882);
         assert!(played[100].abs() < 0.05, "{}", played[100]);
         assert!((played[len / 2] - 0.25).abs() < 0.02, "{}", played[len / 2]);
-        assert!(played[len + 64..].iter().all(|&sample| (sample - 0.5).abs() < 1e-3));
+        assert!(
+            played[len + 64..]
+                .iter()
+                .all(|&sample| (sample - 0.5).abs() < 1e-3)
+        );
     }
 
     #[test]
     fn a_stop_fades_out_over_20_ms_whatever_the_callback_holds() {
         let len = fade_len(SESSION_RATE);
         for callback in [64usize, 480, 1_056, 4_096] {
-            let mut s = setup(SESSION_RATE, 2, 1_000, 1.0);
-            s.writer.write(&vec![0.5f32; 40_000 * 2], 40_000);
-            play(&mut s, 2_048, callback);
+            let mut s = primed(SESSION_RATE);
+            live(&mut s, 2_048, callback);
             s.control.request_fade_out();
-            let played = play(&mut s, 3_000, callback);
+            let played = live(&mut s, 3_000, callback);
             for (i, &sample) in played[..len].iter().enumerate() {
                 let expected = 0.5 * fade_out(i, len);
                 assert!(
@@ -266,7 +244,7 @@ mod tests {
         let len = fade_len(SESSION_RATE);
         let mut s = setup(SESSION_RATE, 2, 4_800, 1.0);
         let block = vec![0.5f32; 480 * 2];
-        let mut tick = |s: &mut Setup| {
+        let tick = |s: &mut Setup| {
             s.writer.write(&block, 480);
             play(s, 480, 480)
         };
@@ -294,13 +272,15 @@ mod tests {
 
     #[test]
     fn an_output_is_faded_only_when_the_endpoint_holds_nothing_but_zeros() {
-        let mut s = setup(SESSION_RATE, 2, 1_000, 1.0);
-        s.writer.write(&vec![0.5f32; 40_000 * 2], 40_000);
-        play(&mut s, 2_400, 480);
+        let mut s = primed(SESSION_RATE);
+        live(&mut s, 2_400, 480);
         assert!(!s.pipeline.has_played_its_fade(0, 0), "no stop asked for");
         s.control.request_fade_out();
-        play(&mut s, 480, 480);
-        assert!(!s.pipeline.has_played_its_fade(0, 0), "half the fade rendered");
+        live(&mut s, 480, 480);
+        assert!(
+            !s.pipeline.has_played_its_fade(0, 0),
+            "half the fade rendered"
+        );
         // The fade's last frame is this callback's last.
         play(&mut s, 480, 480);
         assert!(s.pipeline.has_played_its_fade(0, 0));
@@ -345,36 +325,49 @@ mod tests {
         writer.write(&samples, frames);
     }
 
+    /// Plays past the first audio's fade-in.
+    fn warm_up(s: &mut Setup) {
+        play(s, 1_024, 512);
+    }
+
     #[test]
     fn at_the_session_rate_frames_play_at_the_delay() {
-        let mut s = setup(SESSION_RATE, 2, 1_000, 1.0);
-        write_ramp(&mut s.writer, 0, 5_000);
+        let mut s = setup(SESSION_RATE, 2, 4_000, 1.0);
+        write_ramp(&mut s.writer, 0, 10_000);
         let mut out = vec![9.0; 480 * 2];
+        // Anchored at W - delay = 6000; the first 960 frames fade in.
         s.pipeline.render(&mut out);
-        // Anchored at W - delay = 4000.
-        assert_eq!(out[0], 4_000.0 / 1e6);
-        assert_eq!(out[1], -4_000.0 / 1e6);
-        assert_eq!(out[479 * 2], 4_479.0 / 1e6);
+        assert!(out[0].abs() < 1e-6, "the fade-in starts from silence");
         s.pipeline.render(&mut out);
-        assert_eq!(out[0], 4_480.0 / 1e6, "the next block follows on");
+        s.pipeline.render(&mut out);
+        assert_eq!(out[0], 6_960.0 / 1e6);
+        assert_eq!(out[1], -6_960.0 / 1e6);
+        assert_eq!(out[479 * 2], 7_439.0 / 1e6);
+        s.pipeline.render(&mut out);
+        assert_eq!(out[0], 7_440.0 / 1e6, "the next block follows on");
         assert_eq!(s.pipeline.shortfall_frames(), 0);
     }
 
     #[test]
     fn stereo_feeds_the_first_two_channels_and_the_rest_stay_silent() {
-        let mut s = setup(SESSION_RATE, 6, 1_000, 1.0);
-        write_ramp(&mut s.writer, 0, 5_000);
+        let mut s = setup(SESSION_RATE, 6, 4_000, 1.0);
+        write_ramp(&mut s.writer, 0, 10_000);
+        let mut out = vec![9.0; 1_024 * 6];
+        s.pipeline.render(&mut out);
         let mut out = vec![9.0; 100 * 6];
         s.pipeline.render(&mut out);
         let first = &out[..6];
-        assert_eq!(first, [0.004, -0.004, 0.0, 0.0, 0.0, 0.0]);
+        let value = 7_024.0 / 1e6;
+        assert_eq!(first, [value, -value, 0.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]
     fn a_mono_device_gets_the_average_of_both_channels() {
-        let mut s = setup(SESSION_RATE, 1, 1_000, 1.0);
+        let mut s = setup(SESSION_RATE, 1, 4_000, 1.0);
         let samples: Vec<f32> = (0..5_000).flat_map(|_| [0.5, 0.25]).collect();
         s.writer.write(&samples, 5_000);
+        let mut out = vec![9.0; 1_024];
+        s.pipeline.render(&mut out);
         let mut out = vec![9.0; 64];
         s.pipeline.render(&mut out);
         assert!(out.iter().all(|&sample| sample == 0.375));
@@ -382,15 +375,13 @@ mod tests {
 
     #[test]
     fn the_gain_is_applied_and_follows_changes_from_the_next_callback() {
-        let mut s = setup(SESSION_RATE, 2, 1_000, 0.5);
+        let mut s = setup(SESSION_RATE, 2, 4_000, 0.5);
         let samples = vec![0.8f32; 20_000];
         s.writer.write(&samples, 10_000);
+        warm_up(&mut s);
         let mut out = vec![0.0; 256 * 2];
         s.pipeline.render(&mut out);
-        assert!(
-            out.iter().all(|&sample| sample == 0.4),
-            "the first callback plays at the gain"
-        );
+        assert!(out.iter().all(|&sample| sample == 0.4), "plays at the gain");
         s.gain.set(0.25);
         s.pipeline.render(&mut out);
         assert!((0.2..0.4).contains(&out[0]), "ramps over one callback");
@@ -400,23 +391,9 @@ mod tests {
     }
 
     #[test]
-    fn a_fade_out_ends_in_exact_silence() {
-        let mut s = setup(SESSION_RATE, 2, 1_000, 1.0);
-        let samples = vec![0.5f32; 40_000];
-        s.writer.write(&samples, 20_000);
-        let mut out = vec![0.0; 256 * 2];
-        s.pipeline.render(&mut out);
-        s.pipeline.render_fade_out(&mut out);
-        assert!(out[0] > 0.4, "starts near the old gain");
-        assert_eq!(out[255 * 2], 0.0);
-        s.pipeline.render_fade_out(&mut out);
-        assert!(out.iter().all(|&sample| sample == 0.0));
-    }
-
-    #[test]
     fn samples_that_are_not_finite_reach_the_device_as_zero() {
-        let mut s = setup(SESSION_RATE, 2, 1_000, 1.0);
-        let samples: Vec<f32> = (0..5_000)
+        let mut s = setup(SESSION_RATE, 2, 4_000, 1.0);
+        let samples: Vec<f32> = (0..10_000)
             .flat_map(|i| {
                 if i % 2 == 0 {
                     [f32::NAN, 0.5]
@@ -425,7 +402,10 @@ mod tests {
                 }
             })
             .collect();
-        s.writer.write(&samples, 5_000);
+        s.writer.write(&samples, 10_000);
+        let mut out = vec![9.0; 1_024 * 2];
+        s.pipeline.render(&mut out);
+        assert!(out.iter().all(|sample| sample.is_finite()), "fading in");
         let mut out = vec![9.0; 128 * 2];
         s.pipeline.render(&mut out);
         assert!(out.iter().all(|sample| sample.is_finite()));
@@ -513,36 +493,19 @@ mod tests {
     }
 
     #[test]
-    fn the_read_bound_covers_what_the_resampler_asks_for() {
-        for device_rate in [
-            8_000, 11_025, 22_050, 44_100, 88_200, 96_000, 176_400, 192_000, 384_000,
-        ] {
-            let mut resampler = Resampler::new(SESSION_RATE, device_rate).unwrap();
-            let bound = reader_frames_bound(RENDER_CHUNK, device_rate);
-            let input = vec![0.25f32; bound * 2];
-            let mut output = vec![0.0f32; RENDER_CHUNK * 2];
-            for step in 0..400 {
-                let n = 1 + (step * 37) % RENDER_CHUNK;
-                let need = resampler.input_frames_for(n);
-                assert!(need <= bound, "{need} > {bound} at {device_rate} Hz");
-                let (used, produced) = resampler.process(&input[..need * 2], &mut output[..n * 2]);
-                assert_eq!((used, produced), (need, n), "at {device_rate} Hz");
-            }
-        }
-    }
-
-    #[test]
     fn a_device_without_channels_or_at_an_unsupported_rate_is_refused() {
         let ring = Ring::for_rate(SESSION_RATE).unwrap();
         let gain = Arc::new(SharedGain::new(1.0));
         let reader = Reader::new(Arc::clone(&ring), SESSION_RATE);
+        let control = RendererControl::new(&reader);
         assert!(matches!(
-            RenderPipeline::new(reader, Arc::clone(&gain), SESSION_RATE, 0),
+            RenderPipeline::new(reader, &control, Arc::clone(&gain), SESSION_RATE, 0),
             Err(BackendError::UnsupportedFormat)
         ));
         let reader = Reader::new(ring, SESSION_RATE);
+        let control = RendererControl::new(&reader);
         assert!(matches!(
-            RenderPipeline::new(reader, gain, 1_000_000, 2),
+            RenderPipeline::new(reader, &control, gain, 1_000_000, 2),
             Err(BackendError::UnsupportedFormat)
         ));
     }

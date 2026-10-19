@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::reader::Reader;
+use audiosync_core::render::RendererControl;
 use audiosync_core::ring::RingWriter;
 use audiosync_core::volume::SharedGain;
 
@@ -95,12 +96,15 @@ impl Drop for MockCapture {
     }
 }
 
-/// A mock output.
+/// A mock output. Its fade-out has played as soon as it was asked for,
+/// unless the driver holds fades.
 pub struct MockRenderer {
     ended: Arc<AtomicBool>,
     /// Set once the backend dropped it.
     dropped: Arc<AtomicBool>,
     faded: Arc<AtomicUsize>,
+    /// While set, no fade-out has played yet.
+    hold_fades: Arc<AtomicBool>,
     stop_requested: bool,
 }
 
@@ -136,6 +140,10 @@ impl RendererHandle for MockRenderer {
         self.ended.load(Ordering::Relaxed)
     }
 
+    fn is_faded(&self) -> bool {
+        self.has_ended() || (self.stop_requested && !self.hold_fades.load(Ordering::Relaxed))
+    }
+
     fn setup(&self) -> Option<StreamSetup> {
         Some(MOCK_STREAM)
     }
@@ -164,6 +172,7 @@ pub struct MockDriver {
     volumes: BTreeMap<String, Option<EndpointVolume>>,
     endpoint_audio_error: Option<BackendError>,
     faded: Arc<AtomicUsize>,
+    hold_fades: Arc<AtomicBool>,
     captures_started: Vec<Activation>,
     renderers_started: Vec<String>,
 }
@@ -206,6 +215,7 @@ impl MockDriver {
             volumes: BTreeMap::new(),
             endpoint_audio_error: None,
             faded: Arc::new(AtomicUsize::new(0)),
+            hold_fades: Arc::new(AtomicBool::new(false)),
             captures_started: Vec::new(),
             renderers_started: Vec::new(),
         }
@@ -231,6 +241,28 @@ impl MockDriver {
     /// How many outputs were asked to fade out and stop.
     pub fn renderers_faded(&self) -> usize {
         self.faded.load(Ordering::Relaxed)
+    }
+
+    /// While `hold` is set, the outputs asked to fade out haven't played
+    /// their fades yet, so the backend keeps them running.
+    pub fn hold_fades(&self, hold: bool) {
+        self.hold_fades.store(hold, Ordering::Relaxed);
+    }
+
+    /// How many outputs started are still running: neither ended by
+    /// themselves nor dropped by the backend.
+    pub fn renderers_running(&self) -> usize {
+        self.renderers
+            .iter()
+            .filter(|renderer| renderer.plays())
+            .count()
+    }
+
+    /// Whether the last capture started still runs.
+    pub fn capture_running(&self) -> bool {
+        self.capture
+            .as_ref()
+            .is_some_and(|link| lock(link).writer.is_some())
     }
 
     fn end_renderers_of(&mut self, id: &str) {
@@ -334,6 +366,7 @@ impl Driver for MockDriver {
         &mut self,
         endpoint: &Endpoint,
         _reader: Reader,
+        _control: RendererControl,
         _gain: Arc<SharedGain>,
     ) -> Result<MockRenderer, BackendError> {
         if !self.outputs.iter().any(|output| output.id == endpoint.id) {
@@ -356,6 +389,7 @@ impl Driver for MockDriver {
             ended,
             dropped,
             faded: Arc::clone(&self.faded),
+            hold_fades: Arc::clone(&self.hold_fades),
             stop_requested: false,
         })
     }
