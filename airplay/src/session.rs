@@ -1075,8 +1075,10 @@ impl Session {
         let success = response.is_success();
         match in_flight.kind {
             Kind::Options { keepalive } => {
-                if code == 403 {
+                if code == 403 && !keepalive {
                     // An Apple TV that wants verification first (P46, P138).
+                    // The keep-alive's 403 stays Refused: a playing speaker
+                    // never asks the user for a new PIN on it.
                     self.fail(ErrorKind::PairingRequired, Some(method), Some(code), None);
                 } else if code == 501 {
                     // Taken as an answer without `Public` (P27, P138).

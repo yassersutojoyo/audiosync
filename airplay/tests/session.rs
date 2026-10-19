@@ -411,6 +411,23 @@ fn a_speaker_that_needs_pairing_is_asked_options_before_pairing_required() {
     assert_eq!(link.keys(), START);
 }
 
+// covers: P46, P138
+#[test]
+fn a_403_to_the_keep_alive_options_stays_refused_and_asks_for_no_pin() {
+    // A verified, playing session: only the connection's first OPTIONS maps
+    // 403 to PairingRequired (P46); the keep-alive's is P138's Refused.
+    let mut link = Link::new(verifying_config(), FakeReceiver::new());
+    link.connect();
+    assert_eq!(link.session.state(), State::Playing);
+    link.receiver.status.insert("OPTIONS".to_owned(), 403);
+    link.advance(Duration::from_secs(31));
+    assert_eq!(link.keys().last().map(String::as_str), Some("OPTIONS"));
+    let error = link.failure().expect("failed");
+    assert_eq!(error.kind, ErrorKind::Refused);
+    assert_eq!(error.status, Some(403));
+    assert!(!error.kind.needs_user(), "no new PIN asked for");
+}
+
 // covers: P110
 #[test]
 fn an_audio_latency_that_is_not_a_non_negative_number_is_unknown() {
