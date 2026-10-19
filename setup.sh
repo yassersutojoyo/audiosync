@@ -26,7 +26,7 @@ cat <<'NEXT_STEPS'
 
   1) Click the AudioSync icon in the menu bar.
   2) Pick an audio source and click a speaker to start. HomePods and other AirPlay
-     speakers appear under "AirPlay".
+     speakers appear under "Connected Speakers".
      For a HomePod, Home app → Home Settings → Speakers & TV → Allow Speaker & TV Access must be
      "Anyone on the Same Network" (recommended) or "Everyone".
   3) The first time, allow "System Audio Recording" when macOS asks.
