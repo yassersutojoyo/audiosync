@@ -129,37 +129,66 @@ impl<D: Driver> Controller<D> {
     /// gets a line in the log, others none (S201).
     pub(super) fn read_device_volume_changes(&mut self) {
         for id in self.driver.endpoint_volume_changes() {
-            let Some(before) = self.device_volumes.reading(&id) else {
-                continue;
-            };
-            let reading = device_volume(self.driver.endpoint_volume(&id));
-            if let Some((from, to)) = decision_change(Some(before.decision()), reading.decision()) {
-                self.log.log(|| {
-                    format!(
-                        "output {} device volume: {from} → {to} ({})",
-                        label(&self.names, &id),
-                        describe(reading)
-                    )
-                });
-            }
-            self.device_volumes.readings.insert(id.clone(), reading);
-            if reading.hint() != before.hint() {
-                self.pending.push(BackendEvent::DeviceVolumeChanged { id });
-            }
+            self.read_device_volume_again(id);
         }
     }
 
-    /// The fix the user clicked under output `id` (S197): writes what the
-    /// core decides for the last reading, once each, and logs what it wrote
-    /// and how each write went (S201). The reading stays as it was until
-    /// Windows reports the change, so a write the device ignores leaves the
-    /// hint and the fix showing. An output that isn't followed, or has
-    /// nothing to fix, writes nothing.
-    pub(super) fn fix_followed_device_volume(&mut self, id: &str) {
-        let Some(reading) = self.device_volumes.reading(id) else {
+    /// Registers every followed output's listener again and reads it afresh,
+    /// after Windows reported a change of the outputs (S202): a device
+    /// unplugged and plugged in again between two listings is listed as
+    /// before, but its old listener went with it.
+    pub(super) fn renew_device_volumes(&mut self) {
+        let followed: Vec<String> = self.device_volumes.readings.keys().cloned().collect();
+        for id in followed {
+            self.driver.unwatch_endpoint_volume(&id);
+            if let Err(error) = self.driver.watch_endpoint_volume(&id) {
+                self.log.log(|| {
+                    format!(
+                        "output {} device volume: its changes aren't followed: {error}",
+                        label(&self.names, &id)
+                    )
+                });
+            }
+            self.read_device_volume_again(id);
+        }
+    }
+
+    /// Reads followed output `id` again, both parts: logs a change of its
+    /// decision (S201), and reports a change of what its row shows.
+    fn read_device_volume_again(&mut self, id: String) {
+        let Some(before) = self.device_volumes.reading(&id) else {
             return;
         };
-        let fix = reading.fix();
+        let reading = device_volume(self.driver.endpoint_volume(&id));
+        if let Some((from, to)) = decision_change(Some(before.decision()), reading.decision()) {
+            self.log.log(|| {
+                format!(
+                    "output {} device volume: {from} → {to} ({})",
+                    label(&self.names, &id),
+                    describe(reading)
+                )
+            });
+        }
+        self.device_volumes.readings.insert(id.clone(), reading);
+        if reading.hint() != before.hint() {
+            self.pending.push(BackendEvent::DeviceVolumeChanged { id });
+        }
+    }
+
+    /// The fix the user clicked under output `id` (S197): reads the device
+    /// again, since its volume may have changed after the row last did (a
+    /// notification not polled yet, or a listener that couldn't register),
+    /// and the fix must never lower it; writes what the core decides for
+    /// that reading, once each, and logs what it wrote and how each write
+    /// went (S201). The row keeps its reading until Windows reports the
+    /// change, so a write the device ignores leaves the hint and the fix
+    /// showing. An output that isn't followed, or has nothing to fix,
+    /// writes nothing.
+    pub(super) fn fix_followed_device_volume(&mut self, id: &str) {
+        if self.device_volumes.reading(id).is_none() {
+            return;
+        }
+        let fix = device_volume(self.driver.endpoint_volume(id)).fix();
         if fix.is_empty() {
             return;
         }

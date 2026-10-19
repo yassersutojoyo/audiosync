@@ -495,9 +495,14 @@ impl<D: Driver> Controller<D> {
                 .log(|| "Windows reported a change of the outputs".to_owned());
         }
         if force || notified || !self.listing_ok {
-            let (changed, _) = self.refresh_outputs();
+            let (changed, listed) = self.refresh_outputs();
             if changed && !self.pending.contains(&BackendEvent::OutputsChanged) {
                 self.pending.push(BackendEvent::OutputsChanged);
+            }
+            // A device unplugged and plugged in again (or whose stream
+            // ended) may be listed as before, without its volume listener.
+            if (force || notified) && listed.is_ok() {
+                self.renew_device_volumes();
             }
         }
     }

@@ -68,7 +68,6 @@ under the slider ("Windows volume is 13%", "Muted in Windows"), and one click
 on Set to 75% or Unmute fixes it. AudioSync never touches that volume unless
 you click.
 
-
 ### AirPlay
 
 AirPlay speakers that the sender can play are listed like any other speaker:

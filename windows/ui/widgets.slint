@@ -260,6 +260,8 @@ export component IconButton inherits Rectangle {
 export component LinkButton inherits Rectangle {
     in property <string> text;
     in property <string> label;
+    // Whether it has the keyboard focus (a click doesn't give it).
+    out property <bool> keyboard-focused: focus.has-focus;
     callback clicked();
 
     min-width: content.min-width;
@@ -453,6 +455,11 @@ export component VolumeSlider inherits HorizontalLayout {
     // A user's drag replaces the slider's binding; keep it in step with the model.
     changed volume => {
         slider.value = root.volume;
+    }
+
+    // Gives the slider the keyboard focus.
+    public function focus-slider() {
+        slider.focus();
     }
 
     slider := Slider {
@@ -795,7 +802,7 @@ export component SpeakerRow inherits Rectangle {
                         alignment: center;
                         spacing: 2px;
 
-                        VolumeSlider {
+                        volume-slider := VolumeSlider {
                             volume: root.item.volume;
                             label: Strings.volume-of(root.item.name);
                             enabled: root.item.state != RowState.off;
@@ -831,10 +838,17 @@ export component SpeakerRow inherits Rectangle {
                                 HorizontalLayout {
                                     alignment: start;
 
-                                    LinkButton {
+                                    fix-button := LinkButton {
                                         text: Strings.device-volume-fix(root.item.device-volume);
                                         label: Strings.device-volume-fix-label(root.item.name, root.item.device-volume);
                                         clicked => {
+                                            // The button goes with the hint once
+                                            // Windows reports the change: hand
+                                            // the keyboard focus to the slider
+                                            // first, so it stays in the row.
+                                            if fix-button.keyboard-focused {
+                                                volume-slider.focus-slider();
+                                            }
                                             root.device-volume-fix();
                                         }
                                     }
@@ -842,7 +856,6 @@ export component SpeakerRow inherits Rectangle {
                             }
                         }
                     }
-
 
                     VerticalLayout {
                         alignment: center;

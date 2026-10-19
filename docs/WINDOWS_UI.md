@@ -109,9 +109,9 @@ The device-volume hint under a speaker's volume slider is one text element
 that names the speaker ("Speakers: Windows volume is 13%"), and its fix is a
 link-style button whose label starts with what it shows ("Set to 75%,
 Speakers"); Narrator reaches both right after the slider, and the hint
-appearing isn't announced. In the tray flyout the hint is part of the
+appearing isn't announced. Pressed from the keyboard, the fix first hands the
+focus to that slider, so it stays in the row when the hint goes. In the tray flyout the hint is part of the
 speaker toggle's description.
-
 
 Text colors meet 4.5:1 on every background they're drawn on, in light and
 dark (the lowest is 5.07:1). The pairs are listed in `brand/tokens.json`, and
