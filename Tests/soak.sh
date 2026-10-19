@@ -16,7 +16,7 @@
 # Exit status: 0 PASS, 1 FAIL, 2 setup error (the core or the harness doesn't
 # build, too few usable outputs, a baseline without a needed metric), 3 no
 # baseline file (numbers only; run Tests/bench.sh first).
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 export LC_ALL=C
 cd "$(dirname "$0")/.."
 

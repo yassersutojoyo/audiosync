@@ -4,7 +4,7 @@
 # with the Rust core that scripts/build_core.sh builds (run it first). Used by
 # Tests/soak.sh, Tests/bench.sh and, compile only, by Tests/run-tests.sh.
 # Usage: Tests/build-harness.sh OUTPUT_BINARY
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")/.."
 dest=${1:?usage: Tests/build-harness.sh OUTPUT_BINARY}
 core_lib=core/target/universal-apple-darwin/release

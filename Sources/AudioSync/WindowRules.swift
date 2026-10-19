@@ -25,10 +25,9 @@ enum WindowPlacement {
 /// The entries of the source picker, in the order it lists them.
 enum SourceList {
     struct Entry: Equatable {
-        /// `AudioSource.defaultsValue`: "" for the whole system, the bundle ID
-        /// for an app, "input:<uid>" for an input device.
-        let id: String
-        let name: String
+        /// `id` is `AudioSource.defaultsValue`: "" for the whole system, the
+        /// bundle ID for an app, "input:<uid>" for an input device.
+        let id, name: String
         let isInput: Bool
     }
 

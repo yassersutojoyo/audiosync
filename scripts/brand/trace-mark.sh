@@ -7,7 +7,7 @@
 # Requires potrace (brew install potrace).
 # Usage: scripts/brand/trace-mark.sh
 #
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")/../.."
 
 command -v potrace >/dev/null || { echo "❌ potrace not found: brew install potrace"; exit 1; }

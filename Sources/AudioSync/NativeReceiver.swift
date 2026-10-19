@@ -14,10 +14,10 @@ struct NativeReceiver: Equatable {
         case unsupported = "not supported"
     }
 
-    /// The 12-hex-digit device ID, or "raop:<instance>" / "airplay:<instance>"
-    /// for a service without one (the Windows app's IDs too).
-    let id: String
-    let name: String
+    /// `id` is the 12-hex-digit device ID, or "raop:<instance>" /
+    /// "airplay:<instance>" for a service without one (the Windows app's IDs
+    /// too); `name` is the name the speaker announces.
+    let id, name: String
     /// "" when it announces none.
     let model: String
     let availability: Availability
@@ -68,13 +68,11 @@ enum NativeReceiverChange: Equatable {
 
     /// The change as a debug log line.
     var logLine: String {
-        switch self {
-        case .appeared(let receiver):
-            return "[AudioSync] native AirPlay: found \(receiver.logDescription)"
-        case .changed(let receiver):
-            return "[AudioSync] native AirPlay: changed \(receiver.logDescription)"
-        case .gone(let id, let name):
-            return "[AudioSync] native AirPlay: gone \(name.map { "\($0) (\(id))" } ?? id)"
+        let event = switch self {
+        case .appeared(let receiver): "found \(receiver.logDescription)"
+        case .changed(let receiver): "changed \(receiver.logDescription)"
+        case .gone(let id, let name): "gone \(name.map { "\($0) (\(id))" } ?? id)"
         }
+        return "[AudioSync] native AirPlay: " + event
     }
 }
