@@ -644,6 +644,8 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | EC4 rate: a higher capture rate rebuilds the session | S20, S140, S157 |
 | EC4 rate: the same rate keeps playing | S157 |
 | EC4 rate: an unreadable rate keeps playing | S157 |
+| EC4 rate: a format change rebuilds a session that still streams | S20 |
+| EC4 rate: a format change reported after streaming stopped starts nothing | S20 |
 | EC5 source: switching while streaming rebuilds the capture | S141, S163 |
 | EC5 source: switching to an input device while streaming rebuilds the capture | S141, S163 |
 | EC5 source: switching while stopped only remembers the choice | S163 |
@@ -653,6 +655,9 @@ Check names as `Tests/run-tests.sh` prints them. The ring buffer suite prints on
 | EC6 app quit: the whole-system source never ends on a quit | S164 |
 | EC6 app quit: an input source never ends on a quit | S164 |
 | EC6 app quit: an app without a bundle ID changes nothing | S164 |
+| EC6 app quit: the source app quitting while streaming stops the session | S142, S164 |
+| EC6 app quit: the source app quitting while stopped changes nothing | S142 |
+| EC6 app quit: another source, or an app without a bundle ID, keeps streaming | S164 |
 | EC7 engine restart: every wanted speaker is selected again, the rest stay off | S104, S105, S143 |
 | EC7 engine restart: a killed engine counts as unreachable | S102, S143 |
 | EC7 engine restart: a killed engine is started again | S98, S143 |

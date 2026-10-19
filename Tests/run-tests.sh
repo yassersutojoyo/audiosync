@@ -93,7 +93,7 @@ echo "▶ logic"
 build logic Tests/logictest.swift PipeMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
   Equalizer.swift FifoFeed.swift RingBuffer.swift Diagnostics.swift AirPlayPairing.swift AirPlayReconcile.swift EngineLifecycle.swift Notices.swift SpeakerState.swift CaptureCheck.swift \
   AudioDevices.swift OwnToneOutputs.swift OwnTonePlayer.swift AirPlayEngineConfig.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift \
-  EngineImpl.swift WindowRules.swift
+  EngineImpl.swift WindowRules.swift AppSettings.swift AppLifecycle.swift
 "$OUT/logic/run" || status=1
 
 echo "▶ fifo"
