@@ -1,14 +1,12 @@
 import AppKit
 
-// AudioSync's own AirPlay sender as this run's AirPlay sender
-// (`AirPlayImpl.forThisRun`): the bundled engine stays stopped, the AirPlay
-// rows come from the native sender's discovery under `NativeAirPlayID`s
-// (what was saved under a receiver's bundled-engine ID, switched on, its
-// volume, its groups and auto-connect, moves to its native ID when discovery
-// first reports it, S204), the switches, volumes and master reach its
-// speakers, the user's click pairs an Apple TV or asks for a password, and
-// their errors become notices. The OwnTone code paths check
-// `usesNativeAirPlay` and hand over to these.
+// The AirPlay sender, AudioSync's own: the AirPlay rows come from its
+// discovery under `NativeAirPlayID`s (what an older version saved under a
+// receiver's bundled-engine ID, switched on, its volume, its groups and
+// auto-connect, moves to its native ID when discovery first reports it,
+// S204), the switches, volumes and master reach its speakers, the user's
+// click pairs an Apple TV or asks for a password, and their errors become
+// notices.
 
 extension AppDelegate {
 

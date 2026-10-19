@@ -94,7 +94,7 @@ final class AppModel: ObservableObject {
     /// to them (S173, S181).
     @Published var hasLocalReference = true
     /// What the AirPlay delay field shows, L in whole ms (S178, S181).
-    @Published var airPlayDelayMs: Double = LocalDelay.defaultAirPlayDelayMs
+    @Published var airPlayDelayMs: Double = LocalDelay.senderDefaultLatencyMs
     /// AudioSync's own AirPlay sender stopped after an internal error
     /// (`NativeSenderStarts`): the AirPlay section says so, with Retry.
     @Published var airplaySenderFailed = false

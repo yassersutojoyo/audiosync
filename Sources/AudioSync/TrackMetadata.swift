@@ -84,7 +84,3 @@ enum TrackMetadata {
         return CGImageDestinationFinalize(destination) ? data as Data : nil
     }
 }
-
-/// The name `NativeAirPlay.swift` still uses for `TrackMetadata`; it goes
-/// once that file switches to the new name.
-typealias PipeMetadata = TrackMetadata

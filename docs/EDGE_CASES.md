@@ -99,7 +99,7 @@ The sender runs inside the app, so there's no separate process to restart. If it
 
 Code path: the core catches a panic at its C interface and reports `ASC_AIRPLAY_EVENT_FAILED` once; `nativeSenderFailed` (`AppDelegate+NativeAirPlay.swift`) drops the sender, and `NativeSenderStarts` (`NativeAirPlayModel.swift`) keeps it from starting again by itself until Retry (`retryNativeAirPlay`). A start that fails is retried by `reconcileNativeAirPlay` after `NativeSenderStarts.retrySpacing`.
 
-Automated: "native airplay: the sender's failure event makes the app drop it and offer Retry", "native airplay: a sender that stopped after an internal error doesn't restart by itself", "native airplay: it shows as failed, with Retry", "native airplay: Retry starts a new sender at once", "native airplay: a failed start is told once", "native airplay: after a failed start, a later reconcile starts it again, not every poll".
+Automated: "EC7 native airplay: the sender's failure event makes the app drop it and offer Retry", "EC7 native airplay: a sender that stopped after an internal error doesn't restart by itself", "EC7 native airplay: it shows as failed, with Retry", "EC7 native airplay: Retry starts a new sender at once", "EC7 native airplay: a failed start is told once", "EC7 native airplay: after a failed start, a later reconcile starts it again, not every poll".
 
 Manual: a release build gives no way to make the sender fail on purpose. If the debug log ever shows "native AirPlay: the sender stopped after an internal error", check that the notice and Retry appear, that local speakers keep playing, and that Retry brings the AirPlay speakers back.
 
@@ -149,7 +149,7 @@ Expected: a speaker whose connection drops or stops answering stays switched on,
 
 Code path: `refreshNativeRows` (`AppDelegate+NativeAirPlay.swift`) rebuilds `airplayOrder` from the sender's list (`NativeAirPlayModel.rows`). `NativeSyncRule`, through `airPlayChosenAndListed` (`AppDelegate+Outputs.swift`), says whether an AirPlay speaker is chosen, counting only speakers the sender lists as able to play or playing (`NativeAirPlayModel.soundingIDs`), and `retimeLocalOutputs()` gives the running local speakers their new hold-backs (`LocalDelay.swift`). `LocalNetworkHint.decide` (`LocalNetworkProbe.swift`) decides the hint.
 
-Automated: "EC12 network loss: an empty list with Local Network allowed shows no permission hint"; logic "native airplay: gone and not playing, it leaves the list and holds nothing back", "native airplay: a speaker that plays on after its announcement lapsed stays listed and chosen".
+Automated: "EC12 network loss: an empty list with Local Network allowed shows no permission hint", "EC12 native airplay: gone and not playing, it leaves the list and holds nothing back", "EC12 native airplay: a speaker that plays on after its announcement lapsed stays listed and chosen".
 
 Manual: stream to an AirPlay speaker and a local speaker. Unplug the AirPlay speaker's power (or turn off the Mac's Wi-Fi). Expected: the local speaker keeps playing, a moment later without the AirPlay delay once the AirPlay row has disappeared, with no notice. Power the speaker back on (or turn Wi-Fi on): it returns switched on and plays again in sync.
 
@@ -159,6 +159,6 @@ Expected: switching streaming off and on again while the source keeps playing, w
 
 Code path: `stopEngine` (`AppDelegate+Engine.swift`) stops the session, and `syncNativeSpeakers` takes every speaker out of the sender while nothing streams (`NativeAirPlayModel.plan`). `startEngine` starts a new capture, gives the sender a new timeline (`restartNativeTimeline`, AirPlay spec P143) and adds the switched-on speakers again, each with a new session.
 
-Automated: "native airplay: a speaker leaves when switched off or when streaming stops".
+Automated: "EC13 native airplay: a speaker leaves when switched off or when streaming stops".
 
 Manual: start AudioSync with the debug log on (`docs/DEVELOPMENT.md`). Stream to an AirPlay speaker and a local speaker with music playing, the local delay set so the two line up. Switch streaming off, wait 5 s and switch it on while the music keeps playing. Expected: the AirPlay speaker plays again within a few seconds and still lines up with the local speaker at the same delay, without retyping it. Repeat three times, once with streaming off for more than 15 s, then once by switching the last speaker off and on again. The debug log shows the speaker removed at each stop and added again at each start ("native AirPlay: removed …", "native AirPlay: added …").

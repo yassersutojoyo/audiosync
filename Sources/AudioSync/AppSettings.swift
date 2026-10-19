@@ -58,11 +58,12 @@ struct AppSettings: Equatable {
         /// Each local speaker's offset in ms relative to the reference
         /// (−2000…20 000), by device UID (S175). Missing is 0.
         static let localOffsets = "localOffsetMsByUID"
-        /// The bundled AirPlay engine's AirPlay delay, L itself, in ms
-        /// (0…20 000, 2000 when missing; S178).
+        /// The AirPlay delay of the older builds that shipped the bundled
+        /// engine, L itself, in ms. Written once by the migration (S179), for
+        /// those builds; never read now.
         static let airPlayDelay = "airPlayDelayMs"
-        /// AudioSync's own sender's AirPlay delay, an adjustment on top of
-        /// the latency it reports, in ms (−2000…20 000, 0 when missing; S178).
+        /// The AirPlay delay, an adjustment on top of the latency the AirPlay
+        /// sender reports, in ms (−2000…20 000, 0 when missing; S178).
         static let nativeAirPlayAdjustment = "nativeAirPlayAdjustmentMs"
         /// True once the delays of `localDelays` and `legacyDelayMs` were
         /// migrated to offsets and the AirPlay delays (S179); written last.
@@ -112,9 +113,7 @@ struct AppSettings: Equatable {
         s.localDelays = levels(read(Keys.localDelays), delay)
         s.defaultDelayMs = read(Keys.legacyDelayMs).flatMap(number).map(delay) ?? standardDelayMs
         s.localOffsets = levels(read(Keys.localOffsets)) { LocalDelay.sanitizedOffset($0) ?? 0 }
-        s.airPlayDelay.bundledMs = read(Keys.airPlayDelay).flatMap(number).flatMap(LocalDelay.sanitizedAirPlayDelay)
-            ?? LocalDelay.defaultAirPlayDelayMs
-        s.airPlayDelay.nativeAdjustmentMs = read(Keys.nativeAirPlayAdjustment).flatMap(number)
+        s.airPlayDelay.adjustmentMs = read(Keys.nativeAirPlayAdjustment).flatMap(number)
             .flatMap(LocalDelay.sanitizedAdjustment) ?? 0
         s.localDelaysMigrated = read(Keys.localDelaysMigrated) as? Bool ?? false
         s.airplayVolumes = levels(read(Keys.airplayVolumes), volume)
@@ -223,10 +222,9 @@ struct SettingsStore {
 
     func save(appearance: AppAppearance) { write(appearance.defaultsValue, Keys.appearance) }
 
-    /// Both senders' AirPlay delays (S178).
+    /// The AirPlay delay (S178).
     func save(airPlayDelay: AirPlayDelay) {
-        write(airPlayDelay.bundledMs, Keys.airPlayDelay)
-        write(airPlayDelay.nativeAdjustmentMs, Keys.nativeAirPlayAdjustment)
+        write(airPlayDelay.adjustmentMs, Keys.nativeAirPlayAdjustment)
     }
 
     /// The one-time migration of the absolute delays to offsets (S179), the
@@ -246,8 +244,8 @@ struct SettingsStore {
             enabled: AppSettings.ids(read(Keys.enabledLocal)), listed: listed, reference: reference)
         else { return nil }
         save(levels: migration.offsets, forKey: Keys.localOffsets)
-        save(airPlayDelay: AirPlayDelay(bundledMs: migration.airPlayDelayMs,
-                                        nativeAdjustmentMs: migration.nativeAdjustmentMs))
+        write(migration.airPlayDelayMs, Keys.airPlayDelay)
+        save(airPlayDelay: AirPlayDelay(adjustmentMs: migration.nativeAdjustmentMs))
         write(true, Keys.localDelaysMigrated)
         return migration
     }
