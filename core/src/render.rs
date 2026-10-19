@@ -42,7 +42,7 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::convert::map_to_device;
@@ -128,6 +128,18 @@ struct Shared {
     fade_rendered: AtomicBool,
     /// The host counted the output as faded (Windows).
     faded: AtomicBool,
+    /// Where the fade was at the end of the latest callback ([`state_code`]).
+    state: AtomicU8,
+}
+
+/// A fade state as the renderer publishes it.
+fn state_code(state: FadeState) -> u8 {
+    match state {
+        FadeState::Closed => 0,
+        FadeState::FadingIn => 1,
+        FadeState::Open => 2,
+        FadeState::FadingOut => 3,
+    }
 }
 
 /// Takes a flag raised with release ordering.
@@ -158,6 +170,7 @@ impl RendererControl {
                 fade_end: AtomicU64::new(NO_TIME),
                 fade_rendered: AtomicBool::new(false),
                 faded: AtomicBool::new(false),
+                state: AtomicU8::new(state_code(FadeState::Closed)),
             }),
             reader,
         }
@@ -221,6 +234,18 @@ impl RendererControl {
     /// ([`Renderer::mark_faded`], S185 on Windows).
     pub fn is_faded(&self) -> bool {
         self.shared.faded.load(Ordering::Acquire)
+    }
+
+    /// Where the renderer's fade was at the end of its latest callback;
+    /// closed before the first one. For diagnostics and checks: it may lag
+    /// the renderer by one callback.
+    pub fn fade_state(&self) -> FadeState {
+        match self.shared.state.load(Ordering::Relaxed) {
+            1 => FadeState::FadingIn,
+            2 => FadeState::Open,
+            3 => FadeState::FadingOut,
+            _ => FadeState::Closed,
+        }
     }
 
     /// The reader's last published `lagFrames` (S56).
@@ -427,6 +452,9 @@ impl Renderer {
         // A trailing partial frame is never played; keep it silent.
         out[frames * channels..].fill(0.0);
         self.finish_callback(frames, time);
+        self.shared
+            .state
+            .store(state_code(self.fade.state()), Ordering::Relaxed);
     }
 
     /// Takes the control's requests at the start of a callback (S190).

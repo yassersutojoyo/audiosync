@@ -9,7 +9,8 @@
 //! - This module: the version, the volume curve and the equalizer, plus the
 //!   helpers that turn the host's pointers into slices.
 //! - [`ring`]: the delay ring, its single writer and its readers (S35-S59).
-//! - [`render`]: the resampler and a local output's output stage (S62-S65).
+//! - [`render`]: the resampler, a local output's output stage (S62-S65) and
+//!   its whole renderer with the fades (S182-S188).
 //! - [`fifo`]: PCM16 conversion and the FIFO feed, whose writer the host's
 //!   thread steps through C callbacks for the pipe (S83-S95, S160).
 //! - [`sync`]: the AirPlay sync rule and the delay helpers (S3, S77-S80).
@@ -868,6 +869,11 @@ mod tests {
             ),
             ("ASC_CORRECTION_OVERRUN", CORRECTION_OVERRUN.to_string()),
             ("ASC_CORRECTION_STEP_BACK", CORRECTION_STEP_BACK.to_string()),
+            ("ASC_STOP_FADE_CAP_MS", STOP_FADE_CAP_MS.to_string()),
+            ("ASC_FADE_CLOSED", FADE_CLOSED.to_string()),
+            ("ASC_FADE_FADING_IN", FADE_FADING_IN.to_string()),
+            ("ASC_FADE_OPEN", FADE_OPEN.to_string()),
+            ("ASC_FADE_FADING_OUT", FADE_FADING_OUT.to_string()),
             ("ASC_PIPE_RATE", crate::fifo::PIPE_RATE.to_string()),
             (
                 "ASC_PIPE_FRAME_BYTES",
@@ -1486,6 +1492,15 @@ mod realtime {
         };
         let resampler = asc_resampler_create(48_000, 44_100);
         let stage = asc_gain_stage_create(0.5);
+        // SAFETY: `ring` is live.
+        let (converting, timed) = unsafe {
+            (
+                asc_renderer_create(ring, 48_000, 44_100, 6, 0.5),
+                asc_renderer_create(ring, 48_000, 48_000, 2, 1.0),
+            )
+        };
+        let mut rendered = vec![0.0f32; 1024 * 6];
+        let mut fade_end = 0u64;
         let eq = asc_eq_create(48_000.0);
         let feed = asc_fifo_create(1);
         // SAFETY: `feed` is live.
@@ -1549,6 +1564,34 @@ mod realtime {
                     // An output at the capture rate with six channels.
                     asc_reader_read(near, out.as_mut_ptr(), 512, &mut report);
                     asc_gain_stage_render(stage, out.as_ptr(), 512, device.as_mut_ptr(), 6);
+                    // Two renderers with their fades: one converting to
+                    // 44.1 kHz with six channels, one timed; delay changes
+                    // fade, and the timed one fades out for a stop.
+                    if round % 41 == 0 {
+                        asc_renderer_set_delay_frames(converting, 2048 + (round % 7) as i64 * 512);
+                        asc_renderer_set_gain(converting, (round % 3) as f32 / 2.0);
+                    }
+                    if round == 400 {
+                        asc_renderer_request_fade_out(timed);
+                    }
+                    asc_renderer_render(converting, rendered.as_mut_ptr(), 441 + round % 300);
+                    asc_renderer_render_timed(
+                        timed,
+                        rendered.as_mut_ptr(),
+                        512,
+                        1_000_000_000 + round as u64 * 10_666_667,
+                    );
+                    std::hint::black_box((
+                        asc_renderer_gain(converting),
+                        asc_renderer_delay_frames(converting),
+                        asc_renderer_fade_rendered(timed),
+                        asc_renderer_fade_end_time_ns(timed, &mut fade_end),
+                        asc_renderer_faded_by_time(timed, 5_000_000, 2_000_000_000),
+                        asc_renderer_fade_state(converting),
+                        asc_renderer_fade_frames(converting),
+                        asc_renderer_lag_frames(timed),
+                        asc_renderer_counters(converting),
+                    ));
                     // An output at 44.1 kHz, fed through the resampler,
                     // which now and then starts a new stream.
                     if round % 89 == 0 {
@@ -1597,6 +1640,8 @@ mod realtime {
             asc_fifo_destroy(feed);
             asc_eq_destroy(eq);
             asc_gain_stage_destroy(stage);
+            asc_renderer_destroy(converting);
+            asc_renderer_destroy(timed);
             asc_resampler_destroy(resampler);
             asc_reader_destroy(near);
             asc_reader_destroy(far);
@@ -1609,6 +1654,10 @@ mod realtime {
         assert!(report.frames == 512 && pipe.bytes > 0);
         assert!(near_counters.primes > 1 && near_counters.resyncs > 0);
         assert!(far_counters.drift_skips + far_counters.drift_silences > 0);
+        assert!(
+            fade_end > 1_000_000_000,
+            "the timed renderer published its fade's end"
+        );
     }
 
     /// A handle that test threads share; each thread makes only the calls
@@ -1649,6 +1698,9 @@ mod realtime {
         };
         let near_stage = asc_gain_stage_create(1.0);
         let far_stage = asc_gain_stage_create(1.0);
+        // SAFETY: `ring` is live.
+        let renderer = unsafe { asc_renderer_create(ring, 48_000, 44_100, 2, 1.0) };
+        let renderer_h = Handle(renderer);
         let resampler = asc_resampler_create(48_000, 44_100);
         let eq = asc_eq_create(48_000.0);
         let feed = asc_fifo_create(1);
@@ -1687,8 +1739,9 @@ mod realtime {
                 let mut device = vec![0.0f32; 512 * 2];
                 heap_events(|| {
                     for _ in 0..ROUNDS {
-                        // SAFETY: this thread makes every read of `near` and
-                        // every output-side call of its stage.
+                        // SAFETY: this thread makes every read of `near`,
+                        // every output-side call of its stage and every render
+                        // of `renderer`.
                         unsafe {
                             asc_reader_read(
                                 near_h.get(),
@@ -1702,6 +1755,12 @@ mod realtime {
                                 512,
                                 device.as_mut_ptr(),
                                 2,
+                            );
+                            asc_renderer_render_timed(
+                                renderer_h.get(),
+                                device.as_mut_ptr(),
+                                512,
+                                2_000_000_000,
                             );
                         }
                     }
@@ -1775,6 +1834,11 @@ mod realtime {
                                     (round % 3) as f32 / 2.0,
                                 );
                                 asc_gain_stage_set_gain(far_stage_h.get(), 0.25);
+                                asc_renderer_set_delay_frames(
+                                    renderer_h.get(),
+                                    1024 + round as i64,
+                                );
+                                asc_renderer_set_gain(renderer_h.get(), (round % 4) as f32 / 4.0);
                                 asc_eq_set_settings(
                                     eq_h.get(),
                                     round % 200 == 0,
@@ -1785,6 +1849,17 @@ mod realtime {
                             if round % 777 == 0 {
                                 asc_reader_reset_prime(far_h.get());
                             }
+                            if round == ROUNDS / 2 {
+                                asc_renderer_request_fade_out(renderer_h.get());
+                            }
+                            let mut end = 0u64;
+                            std::hint::black_box((
+                                asc_renderer_fade_end_time_ns(renderer_h.get(), &mut end),
+                                asc_renderer_faded_by_time(renderer_h.get(), 1_000, 3_000_000_000),
+                                asc_renderer_fade_state(renderer_h.get()),
+                                asc_renderer_lag_frames(renderer_h.get()),
+                                asc_renderer_counters(renderer_h.get()),
+                            ));
                             std::hint::black_box((
                                 asc_reader_lag_frames(near_h.get()),
                                 asc_reader_counters(far_h.get()),
@@ -1813,6 +1888,7 @@ mod realtime {
             asc_resampler_destroy(resampler);
             asc_gain_stage_destroy(near_stage);
             asc_gain_stage_destroy(far_stage);
+            asc_renderer_destroy(renderer);
             asc_reader_destroy(near);
             asc_reader_destroy(far);
             asc_ring_writer_destroy(writer);

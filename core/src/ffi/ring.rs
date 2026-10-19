@@ -138,7 +138,7 @@ impl From<ReaderCounters> for AscReaderCounters {
 /// # Safety
 ///
 /// `ring` is null or a live handle from [`asc_ring_create`].
-unsafe fn ring_of<'a>(ring: *const AscRing) -> Option<&'a Arc<Ring>> {
+pub(super) unsafe fn ring_of<'a>(ring: *const AscRing) -> Option<&'a Arc<Ring>> {
     // SAFETY: by the caller's contract the pointer is null or a live handle,
     // which is only ever borrowed shared.
     unsafe { ring.as_ref() }.map(|handle| &handle.ring)
