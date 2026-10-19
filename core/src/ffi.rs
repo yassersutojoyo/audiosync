@@ -1254,7 +1254,8 @@ mod realtime {
         assert_eq!(events, 2);
     }
 
-    // covers: S126 (and the AirPlay spec's P6)
+    // The AirPlay spec's P6 asks the same of the sender's input.
+    // covers: S126
     #[test]
     fn airplay_input_calls_never_touch_the_heap() {
         // Setup may allocate: the sender, its input, the block.

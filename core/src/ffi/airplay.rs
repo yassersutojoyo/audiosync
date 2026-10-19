@@ -541,7 +541,10 @@ impl Feed {
         let at = Instant::now();
         let frames = block.len() / 2;
         let (mut consumed, mut handed) = (0, 0);
-        while consumed < frames {
+        // Until the input is used up and nothing more comes out: the
+        // resampler may take in the whole block while the buffer holds only
+        // part of its output, and keeps the rest for the next call.
+        loop {
             let (used, produced) = self
                 .resampler
                 .process(&block[consumed * 2..frames * 2], &mut self.resampled);
