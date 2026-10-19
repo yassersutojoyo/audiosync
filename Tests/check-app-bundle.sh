@@ -1,13 +1,12 @@
 #!/bin/bash
 # Checks an AudioSync.app that ./build.sh made: the bundle layout, Info.plist,
 # the license files, the Rust core and Sparkle in the binary, every signature,
-# and the bundled AirPlay engine with its libraries. CI runs it on the app
+# and that nothing else is bundled: AirPlay runs in the app itself, so there
+# are no helper programs and no loose libraries. CI runs it on the app
 # `./build.sh --no-install` leaves in .build/app; it works on an installed copy
 # too.
 #
-# Usage: Tests/check-app-bundle.sh [--engine] [--launch] [--signer NAME] PATH/TO/AudioSync.app
-#   --engine       the AirPlay engine must be bundled (without it, the engine
-#                  is checked only when it's there)
+# Usage: Tests/check-app-bundle.sh [--launch] [--signer NAME] PATH/TO/AudioSync.app
 #   --launch       also starts the app with AUDIOSYNC_DEBUG=1 for a few seconds
 #                  and checks that it keeps running, writes its debug log and
 #                  quits on SIGTERM. Quit AudioSync first: a second copy hands
@@ -18,16 +17,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 usage() {
-  echo "usage: Tests/check-app-bundle.sh [--engine] [--launch] [--signer NAME] PATH/TO/AudioSync.app" >&2
+  echo "usage: Tests/check-app-bundle.sh [--launch] [--signer NAME] PATH/TO/AudioSync.app" >&2
   exit 2
 }
-need_engine=0
 launch=0
 want_signer=""
 app=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --engine) need_engine=1 ;;
     --launch) launch=1 ;;
     --signer) [ $# -gt 1 ] || usage; want_signer=$2; shift ;;
     -*) usage ;;
@@ -133,47 +130,20 @@ case "$app_signer" in
     expect "Hardened Runtime (Developer ID)" runtime ;;
 esac
 
-echo "▶ AirPlay engine"
-if [ -e "$contents/Helpers/owntone" ] || [ "$need_engine" = 1 ]; then
-  owntone="$contents/Helpers/owntone"
-  frameworks="$contents/Frameworks"
-  expect "Contents/Helpers/owntone is executable" test -x "$owntone"
-  engine_id=$(plist CFBundleIdentifier || true).engine
-  identifier() { codesign -dv "$owntone" 2>&1 | grep -x "Identifier=$engine_id" >/dev/null; }
-  expect "the engine's signing identifier is $engine_id" identifier
-  expect "Frameworks/owntone-sqlext.so" test -f "$frameworks/owntone-sqlext.so"
-  libraries=$(find "$frameworks" -maxdepth 1 -name '*.dylib' | wc -l | tr -d ' ')
-  expect "its libraries in Frameworks ($libraries)" test "$libraries" -gt 0
-  expect "owntone finds them through the rpath @executable_path/../Frameworks" \
-    has_rpath "$owntone" @executable_path/../Frameworks
-  # Every dependency is a bundled library or part of the system.
-  resolves() {
-    local f name
-    for f in "$owntone" "$frameworks"/*.dylib "$frameworks/owntone-sqlext.so"; do
-      [ -f "$f" ] || continue
-      for name in $(otool -L "$f" | tail -n +2 | awk '{ print $1 }'); do
-        case "$name" in
-          @rpath/*) [ -f "$frameworks/${name#@rpath/}" ] || { echo "$f: $name" >&2; return 1; } ;;
-          /usr/lib/*|/System/*) ;;
-          *) echo "$f: $name" >&2; return 1 ;;
-        esac
-      done
-    done
-  }
-  expect "every library the engine links is bundled or part of macOS" resolves
-  expect "Resources/engine-minos is macOS $min or older" version_le "$(cat "$resources/engine-minos" 2>/dev/null || echo 999)" "$min"
-  expect "ThirdParty/versions.txt lists the libraries" test "$(wc -l < "$third_party/versions.txt" 2>/dev/null || echo 0)" -gt 1
-  licensed() {
-    local name
-    for name in $(tail -n +2 "$third_party/versions.txt" | awk '{ print $1 }'); do
-      [ -n "$(ls -A "$third_party/licenses/$name" 2>/dev/null)" ] || { echo "no licenses/$name" >&2; return 1; }
-    done
-  }
-  expect "ThirdParty/licenses/<library> for each of them" licensed
-  expect "ThirdParty/OwnTone-COPYING.txt (GPL)" grep -q 'GNU GENERAL PUBLIC LICENSE' "$third_party/OwnTone-COPYING.txt"
-else
-  echo "  (no engine bundled; --engine requires one)"
-fi
+echo "▶ Nothing besides the app and Sparkle"
+# AirPlay goes through the sender inside the app binary (the Rust core), so a
+# helper program, a loose library or an engine's version list would be a
+# leftover of an older build.
+expect "no Contents/Helpers" test ! -e "$contents/Helpers"
+only_sparkle() {
+  local f
+  for f in "$contents/Frameworks"/*; do
+    [ -e "$f" ] || continue
+    [ "$(basename "$f")" = Sparkle.framework ] || { echo "$f" >&2; return 1; }
+  done
+}
+expect "Frameworks holds only Sparkle.framework" only_sparkle
+expect "no ThirdParty/versions.txt" test ! -e "$third_party/versions.txt"
 
 if [ "$launch" = 1 ]; then
   echo "▶ Launch (AUDIOSYNC_DEBUG=1)"
