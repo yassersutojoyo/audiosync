@@ -28,6 +28,9 @@
 //! a blocked send when the socket is shut down, so that one ends at its send
 //! timeout, and nobody waits for it.
 //!
+//! A pairing (P47) needs only the TCP connection: [`RtspIo`] runs the same
+//! RTSP reader and writer threads, without UDP sockets.
+//!
 //! Where an ICMP unreachable is reported matters for P141. Windows reports
 //! it as a reset on the next call on the socket, which is the control
 //! thread's receive, not the send that caused it; the control thread notes
@@ -289,6 +292,77 @@ impl SessionIo {
 }
 
 impl Drop for SessionIo {
+    fn drop(&mut self) {
+        self.stop_all();
+    }
+}
+
+/// The connection of a pairing (P47): an RTSP reader and writer on their
+/// own threads, as in a session, without UDP sockets.
+#[derive(Debug)]
+pub(crate) struct RtspIo {
+    tcp: TcpStream,
+    writer: Option<mpsc::Sender<Vec<u8>>>,
+    stop: Arc<AtomicBool>,
+    threads: Vec<JoinHandle<()>>,
+}
+
+impl RtspIo {
+    /// Starts the reader and writer threads on the connected `tcp`.
+    pub(crate) fn open(
+        session: SessionKey,
+        tcp: TcpStream,
+        notify: impl Notify,
+    ) -> io::Result<RtspIo> {
+        let _ = tcp.set_nodelay(true);
+        tcp.set_write_timeout(Some(RTSP_WRITE_TIMEOUT))?;
+        tcp.set_read_timeout(Some(POLL_INTERVAL))?;
+        let reader = tcp.try_clone()?;
+        let writer_stream = tcp.try_clone()?;
+        let (writer, writes) = mpsc::channel();
+        let mut io = RtspIo {
+            tcp,
+            writer: Some(writer),
+            stop: Arc::new(AtomicBool::new(false)),
+            threads: Vec::new(),
+        };
+        // On a failed spawn, dropping `io` stops the thread already running.
+        let thread = spawn(
+            "airplay-pair-read",
+            read_loop(session, reader, io.stop.clone(), notify.clone()),
+        )?;
+        io.threads.push(thread);
+        let thread = spawn(
+            "airplay-pair-write",
+            write_loop(session, writer_stream, writes, io.stop.clone(), notify),
+        )?;
+        io.threads.push(thread);
+        Ok(io)
+    }
+
+    /// Queues bytes for the connection; the writer thread writes them in
+    /// order.
+    pub(crate) fn write(&self, bytes: Vec<u8>) {
+        if let Some(writer) = &self.writer {
+            let _ = writer.send(bytes);
+        }
+    }
+
+    /// Closes the connection and stops the threads, whose handles come back
+    /// for the caller to join.
+    pub(crate) fn close(mut self) -> Vec<JoinHandle<()>> {
+        self.stop_all();
+        std::mem::take(&mut self.threads)
+    }
+
+    fn stop_all(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        self.writer = None;
+        let _ = self.tcp.shutdown(Shutdown::Both);
+    }
+}
+
+impl Drop for RtspIo {
     fn drop(&mut self) {
         self.stop_all();
     }

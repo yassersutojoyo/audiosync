@@ -4,7 +4,8 @@
 //! spec's test map: a password (with or without `qop`, and a nonce that goes
 //! stale), status codes per request, a silent receiver, `timing_port=0`,
 //! missing headers, and a tampered CSeq. It checks digest responses with its
-//! own MD5 arithmetic, not the crate's.
+//! own MD5 arithmetic, not the crate's, and can hold a fake Apple TV
+//! ([`atv::FakeAppleTv`]) that answers the legacy pairing with its own.
 
 #![allow(dead_code)]
 
@@ -112,6 +113,9 @@ pub struct FakeReceiver {
     pub volume_answer: String,
     /// Added to every CSeq the receiver echoes.
     pub cseq_offset: u32,
+    /// An Apple TV that answers the pairing and pair-verify requests
+    /// (P47 to P56); without one, pair-verify gets a fixed 96-byte answer.
+    pub apple_tv: Option<atv::FakeAppleTv>,
 }
 
 impl Default for FakeReceiver {
@@ -139,6 +143,7 @@ impl Default for FakeReceiver {
             server: Some("FakeReceiver/1.0".to_owned()),
             volume_answer: "volume: -20.000000\r\n".to_owned(),
             cseq_offset: 0,
+            apple_tv: None,
         }
     }
 }
@@ -243,6 +248,9 @@ impl FakeReceiver {
     fn success_or_override(&mut self, request: &Request, key: &str) -> Response {
         if let Some(&code) = self.status.get(key) {
             return Response::new(code, "Status Set By Test");
+        }
+        if let Some(response) = self.apple_tv.as_ref().and_then(|atv| atv.answer(request)) {
+            return response;
         }
         if request.method == Method::Announce {
             if let Some(code) = self.refuse_pcm {
@@ -445,6 +453,8 @@ impl Link {
 
 /// The keys of a normal AirPlay 1 start (P26).
 pub const START: [&str; 5] = ["OPTIONS", "ANNOUNCE", "SETUP", "RECORD", "SET_PARAMETER"];
+
+pub mod atv;
 
 pub mod rig;
 

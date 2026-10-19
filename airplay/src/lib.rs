@@ -16,6 +16,11 @@
 //!   RFC 2617 digest authentication.
 //! - [`session`]: the AirPlay 1 session from OPTIONS to TEARDOWN, with volume,
 //!   metadata and the error classification of section 10.
+//! - [`pairing`]: the Apple TV PIN pairing, the credentials it gives the
+//!   host, the pair-verify on later connections and the key of
+//!   `POST /auth-setup`, with SRP-6a ([`pairing::srp`]) and the AES,
+//!   Ed25519 and X25519 steps ([`pairing::keys`]) built on established
+//!   crypto crates.
 //! - [`stream`]: one audio stream to many speakers: the host's real-time
 //!   input ([`input`]), the format and payloads ([`audio`], [`alac`]), RTP,
 //!   sync, resend and timing packets ([`rtp`]) on the sender clock
@@ -27,9 +32,7 @@
 //!   [`discovery::mdns::MdnsBrowser`], reconnects lost speakers
 //!   ([`reconnect`]) and reports events and counters.
 //!
-//! Pairing crypto and AirPlay 2 come later; the seams they plug into are
-//! named where they sit (for example [`session::Verifier`] and
-//! [`session::SessionConfig::auth_setup_key`]).
+//! AirPlay 2 comes later, behind its flag (P2).
 
 pub mod alac;
 pub mod audio;
@@ -40,6 +43,7 @@ pub mod error;
 pub mod ids;
 pub mod input;
 pub mod metadata;
+pub mod pairing;
 pub mod rate;
 pub mod reconnect;
 pub mod rtp;

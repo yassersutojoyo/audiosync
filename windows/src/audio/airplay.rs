@@ -44,6 +44,7 @@ use audiosync_airplay::discovery::mdns::DiscoveryError;
 use audiosync_airplay::discovery::{Device, DeviceKey, ServiceKind};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
 use audiosync_airplay::input::InputWriter;
+use audiosync_airplay::pairing::PairingEvent;
 use audiosync_airplay::sender::{
     ReceiverEvent, ReceiverInfo, Sender, SenderConfig, SenderEvent, SpeakerError, SpeakerEvent,
     SpeakerOptions, SpeakerState,
@@ -278,6 +279,23 @@ pub fn speaker_id(key: &DeviceKey) -> String {
         DeviceKey::Id(id) => id.to_string(),
         DeviceKey::Instance(ServiceKind::Raop, instance) => format!("raop:{instance}"),
         DeviceKey::Instance(ServiceKind::AirPlay, instance) => format!("airplay:{instance}"),
+    }
+}
+
+/// A pairing event for the debug log. It never carries the PIN, the
+/// credentials' secret or a key: only the client ID, which the pairing sends
+/// in the clear anyway, and the error.
+pub fn pairing_summary(event: &PairingEvent) -> String {
+    match event {
+        PairingEvent::PinRequested => "the Apple TV shows a PIN".to_owned(),
+        PairingEvent::Paired(credentials) => {
+            format!("paired as client {}", credentials.client_id())
+        }
+        PairingEvent::Failed { error, wrong_pin } => {
+            let pin = if *wrong_pin { " (wrong PIN)" } else { "" };
+            format!("failed: {error}{pin}")
+        }
+        PairingEvent::Stopped => "stopped".to_owned(),
     }
 }
 
@@ -699,6 +717,13 @@ impl AirPlaySpeakers {
                     });
                     self.latency = latency;
                 }
+                SenderEvent::Pairing { key, event } => {
+                    // The app starts no pairing yet (a later stage adds the
+                    // PIN prompt), so a pairing event is only logged.
+                    let id = speaker_id(&key);
+                    self.log
+                        .log(|| format!("AirPlay pairing {id}: {}", pairing_summary(&event)));
+                }
             }
         }
         if changed {
@@ -919,6 +944,31 @@ pub mod tests {
     use super::*;
     use crate::audio::backend::{AudioBackend, SourceId};
     use crate::audio::mock::MockBackend;
+
+    #[test]
+    fn pairing_events_are_logged_without_secrets() {
+        use audiosync_airplay::pairing::Credentials;
+
+        let secret = [0xA7u8; 32];
+        let credentials = Credentials::new("0123456789ABCDEF", secret).expect("credentials");
+        let paired = pairing_summary(&PairingEvent::Paired(credentials));
+        assert_eq!(paired, "paired as client 0123456789ABCDEF");
+        assert!(!paired.to_ascii_lowercase().contains("a7a7"));
+        let mut error = SessionError::new(ErrorKind::PairingFailed);
+        error.status = Some(470);
+        let failed = pairing_summary(&PairingEvent::Failed {
+            error,
+            wrong_pin: true,
+        });
+        assert!(
+            failed.contains("PairingFailed") && failed.contains("wrong PIN"),
+            "{failed}"
+        );
+        assert_eq!(
+            pairing_summary(&PairingEvent::PinRequested),
+            "the Apple TV shows a PIN"
+        );
+    }
 
     /// The TXT strings of a receiver this sender can play: AirPlay 1, no
     /// password, unencrypted, PCM or ALAC over UDP.
