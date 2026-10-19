@@ -490,6 +490,9 @@ dependencies = [
 [[package]]
 name = "audiosync-core"
 version = "0.1.0"
+dependencies = [
+ "audiosync-airplay",
+]
 
 [[package]]
 name = "audiosync-windows"

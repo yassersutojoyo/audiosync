@@ -75,7 +75,7 @@ Decision: a plain C ABI (`extern "C"` with `#[unsafe(no_mangle)]`) declared by t
 Why:
 
 - Real time. Audio crosses the boundary a whole buffer at a time, as a pointer plus a frame count, and is processed in place: no copy and no allocation. UniFFI passes buffers through its own serialized `RustBuffer`, which allocates and copies on every call, so it can't sit on a Core Audio callback.
-- No runtime or build dependency. UniFFI needs its crate, generated bindings and a build step; cbindgen needs a tool in CI. The surface was 16 functions at first and is 66 now.
+- No runtime or build dependency. UniFFI needs its crate, generated bindings and a build step; cbindgen needs a tool in CI. The surface was 16 functions at first and is 71 now.
 - Swift imports a C header directly through a module map, and a Windows host can use the same header or link the `rlib`.
 - The header can't drift silently: a unit test in `src/ffi.rs` parses the header and the Rust definitions, maps the types, and fails when any prototype, struct, handle, callback type or `#define` differs. CI runs it with the other tests, so "the header is current" is checked without a generator.
 
@@ -93,7 +93,7 @@ Contract (also in the header): `asc_eq_process` runs on one capture thread at a 
 
 ### Dependencies and licenses
 
-- Runtime dependencies: none.
+- Runtime dependency: `audiosync-airplay` (`airplay/` in this repository, MIT), AudioSync's own AirPlay sender, which the macOS app reaches through this crate's C interface because it links one Rust static library; its third-party crates are listed in `THIRD_PARTY_NOTICES.md`, and `scripts/core_notices.py` writes their license texts next to the library. It raised the minimum Rust from 1.85 to 1.88, the sender's; the two clippy lints that turns on for newer std APIs (`as_chunks`, `is_multiple_of`) are allowed in `Cargo.toml` for the existing audio code.
 - Dev-dependencies: `criterion` 0.7 (benchmarks) and `proptest` 1.11 (property tests). Both are MIT OR Apache-2.0.
 - `deny.toml` allows only MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, Zlib, ISC and Unicode-3.0 (Unicode-DFS-2016 isn't needed). `include-dev` and `include-build` hold test, benchmark and build tools to the same list; without them cargo-deny checks only the crate itself. CI installs cargo-deny 0.20.2, the version checked locally.
 
@@ -179,10 +179,15 @@ This part extends the C interface so a host can run its whole audio engine on th
 
 - S78 to S80: `asc_sync_decide` takes the enabled AirPlay IDs, the engine's listed IDs and the previous decision, and returns whether an AirPlay speaker is chosen and whether that flipped; `asc_sync_effective_delay_ms` gives each output its delay. IDs are UTF-8 C strings; a NULL entry or one that isn't UTF-8 matches nothing. The rule is `policy::delay::airplay_chosen` itself, called with two vectors of IDs, so the call allocates: it belongs on the control thread. `asc_delay_sanitize_ms` (S77, S124) and `asc_delay_ms_to_frames` (S3) are the matching helpers.
 
+### AirPlay sender (first stage: discovery)
+
+- `src/ffi/airplay.rs` is written from the airplay crate's public API and `docs/AIRPLAY_SPEC.md`, not from any AirPlay implementation. `asc_airplay_create` starts a `Sender` (its stream stays silent: nothing writes its input yet), `asc_airplay_start_discovery` and `asc_airplay_stop_discovery` browse, and `asc_airplay_next_receiver` hands over one discovery change at a time without waiting: the receiver's ID (the Windows app's form: 12 hex digits, or `raop:` / `airplay:` and the instance), name, model, availability (the Windows app's order: the plan, then the PIN pairing, a password, another pairing), the unsupported reason and the discovery hints as flag bits. The sender's other events are passed over until audio comes in a later stage. No password, PIN, key or credential crosses.
+- Strings belong to the handle and last until the next `asc_airplay_next_receiver` call or the destroy, so no free function is needed. `asc_airplay_destroy` takes the address of the host's pointer and sets it to NULL, which makes a second destroy through it harmless; it waits for the sender's threads (at most about 2 s), so it belongs off the main thread. Every call on a handle runs on one control thread at a time; none is real-time safe.
+
 ### Checks
 
 - The drift test in `src/ffi.rs` reads every file of the `ffi` module and fails when a file is missing from its list. It compares the prototypes, the `#[repr(C)]` structs field by field, the opaque handles, the callback types and every `#define` with the Rust definitions, and every `Asc` type the header names must be declared in it. It also checks that the header and the Rust docs mark the same functions "Real-time safe", and that the allocation proof calls each of them, since a host reads only the header to learn what its audio threads may call.
 - The counting allocator in `src/ffi.rs` proves that every real-time call of the C interface neither allocates nor frees: the ring write, both reads, the reader's control calls and counters, the resampler (its process, request sizing, reset and latency), the gain stage, PCM16 conversion, the FIFO feed and its rate change, and writer steps and close steps through a pipe sink that refuses opens, fills up, cuts writes short, gets interrupted and breaks. It does so on one thread, and on five threads at once (capture, two outputs, the FIFO writer and a control thread), each counted on its own.
 - `tests/realtime.rs` scans the sources for locks, sleeps, logging and file access: the audio-path modules, which also have to forbid unsafe code, and the production part of `ffi.rs`, `ffi/ring.rs`, `ffi/render.rs` and `ffi/fifo.rs`, which hold the crate's unsafe code and so skip only that check. A lock or a log line added to a C call is caught even when it doesn't allocate.
 - `ffi/smoke.sh` checks from Swift: a ring with a reader at 4096, 8192 and 2048 frames of delay (silent and not anchored until more than 4096 frames are written, then every block starts exactly the delay behind the writer, a longer delay inserts exactly its extra frames of silence, a shorter one skips ahead on the next block, no frame plays twice), PCM16 conversion, the FIFO writer stepped through Swift `@convention(c)` callbacks that record the bytes, 2 s at 44.1 kHz becoming 96 000 frames at 48 kHz, and the sync rule over Swift strings passed as a C array.
-- `scripts/build_core.sh` still prelinks the library and exports exactly the header's functions: 66 global symbols on each architecture.
+- `scripts/build_core.sh` still prelinks the library and exports exactly the header's functions: 71 global symbols on each architecture.
