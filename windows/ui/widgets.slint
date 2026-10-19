@@ -9,7 +9,7 @@
 import { Button, LineEdit, Slider, Switch } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Availability, GroupItem, NoticeItem, RowState, SpeakerItem, SpeakerKind } from "types.slint";
+import { Availability, DeviceVolumeHint, GroupItem, NoticeItem, RowState, SpeakerItem, SpeakerKind } from "types.slint";
 
 import "../../brand/fonts/Poppins-Medium.ttf";
 
@@ -63,7 +63,22 @@ export global Glyphs {
     out property <string> auto-connect: "\u{E945}";
     out property <string> volume-low: "\u{E993}";
     out property <string> volume-high: "\u{E995}";
+    // Windows' own Mute glyph, a speaker with a cross (the icon font has
+    // no speaker with a slash).
+    out property <string> volume-muted: "\u{E74F}";
     out property <string> source: "\u{E8D6}";
+
+    // A switched-on output's own volume in Windows: the muted speaker while
+    // muted, the speaker with one wave while low (spec S198).
+    public pure function device-volume(hint: DeviceVolumeHint) -> string {
+        if hint == DeviceVolumeHint.muted || hint == DeviceVolumeHint.muted-low {
+            return root.volume-muted;
+        }
+        if hint == DeviceVolumeHint.low {
+            return root.volume-low;
+        }
+        return "";
+    }
 
     public pure function speaker(kind: SpeakerKind) -> string {
         if kind == SpeakerKind.airplay {
@@ -240,6 +255,68 @@ export component IconButton inherits Rectangle {
     }
 }
 
+// A borderless, link-style button: small text in the brand teal, for the fix
+// after a device-volume hint. `label` is what Narrator reads.
+export component LinkButton inherits Rectangle {
+    in property <string> text;
+    in property <string> label;
+    // Whether it has the keyboard focus (a click doesn't give it).
+    out property <bool> keyboard-focused: focus.has-focus;
+    callback clicked();
+
+    min-width: content.min-width;
+    min-height: content.min-height;
+    preferred-width: content.preferred-width;
+    preferred-height: content.preferred-height;
+    border-radius: Fluent.radius-control;
+    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
+    animate background { duration: Fluent.fast; }
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    content := HorizontalLayout {
+        padding-left: 2px;
+        padding-right: 2px;
+
+        Text {
+            text: root.text;
+            font-size: Tokens.font-size-caption;
+            font-weight: 600;
+            color: Tokens.teal-text;
+            vertical-alignment: center;
+            opacity: touch.pressed ? 0.75 : 1;
+            accessible-role: none;
+        }
+    }
+
+    FocusRing {
+        visible-focus: focus.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
 // The round toggle at the start of a speaker or group row: filled while it
 // plays, outlined while it waits for streaming, grey while off.
 export component SpeakerBadge inherits Rectangle {
@@ -378,6 +455,11 @@ export component VolumeSlider inherits HorizontalLayout {
     // A user's drag replaces the slider's binding; keep it in step with the model.
     changed volume => {
         slider.value = root.volume;
+    }
+
+    // Gives the slider the keyboard focus.
+    public function focus-slider() {
+        slider.focus();
     }
 
     slider := Slider {
@@ -550,6 +632,8 @@ export component SpeakerRow inherits Rectangle {
     callback delay-edited(string);
     callback auto-connect-toggled(bool);
     callback forget-pairing();
+    // The fix after the device-volume hint.
+    callback device-volume-fix();
 
     // The line under the name: the kind of a connected speaker, and the note
     // of one that can't simply play.
@@ -708,17 +792,67 @@ export component SpeakerRow inherits Rectangle {
                         }
                     }
 
-                    // Volume column
-                    HorizontalLayout {
+                    // Volume column, with the hint under the slider when the
+                    // output's own volume in Windows is low or muted (spec
+                    // S198): a glyph, the hint and its fix, read right after
+                    // the slider.
+                    VerticalLayout {
                         width: root.compact ? Fluent.volume-column-compact : Fluent.volume-column;
                         padding-left: 8px;
+                        alignment: center;
+                        spacing: 2px;
 
-                        VolumeSlider {
+                        volume-slider := VolumeSlider {
                             volume: root.item.volume;
                             label: Strings.volume-of(root.item.name);
                             enabled: root.item.state != RowState.off;
                             changed(value) => {
                                 root.volume-changed(value);
+                            }
+                        }
+
+                        if root.item.device-volume != DeviceVolumeHint.none: HorizontalLayout {
+                            spacing: 4px;
+
+                            Glyph {
+                                glyph: Glyphs.device-volume(root.item.device-volume);
+                                font-size: 12px;
+                                color: Tokens.secondary-text;
+                                vertical-alignment: top;
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: start;
+
+                                Text {
+                                    text: Strings.device-volume-hint(root.item.device-volume, root.item.device-volume-percent);
+                                    font-size: Tokens.font-size-caption;
+                                    color: Tokens.secondary-text;
+                                    wrap: word-wrap;
+                                    min-height: self.preferred-height;
+                                    accessible-role: text;
+                                    accessible-label: Strings.device-volume-hint-label(root.item.name, root.item.device-volume, root.item.device-volume-percent);
+                                }
+
+                                HorizontalLayout {
+                                    alignment: start;
+
+                                    fix-button := LinkButton {
+                                        text: Strings.device-volume-fix(root.item.device-volume);
+                                        label: Strings.device-volume-fix-label(root.item.name, root.item.device-volume);
+                                        clicked => {
+                                            // The button goes with the hint once
+                                            // Windows reports the change: hand
+                                            // the keyboard focus to the slider
+                                            // first, so it stays in the row.
+                                            if fix-button.keyboard-focused {
+                                                volume-slider.focus-slider();
+                                            }
+                                            root.device-volume-fix();
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

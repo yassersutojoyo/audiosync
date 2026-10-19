@@ -6,7 +6,7 @@
 // English only for now. @tr marks each string for Slint's gettext translation
 // when a second language is added.
 
-import { SpeakerKind, Availability, AirPlayProblem, GuidePage, PinPhase, RowState } from "types.slint";
+import { SpeakerKind, Availability, AirPlayProblem, DeviceVolumeHint, GuidePage, PinPhase, RowState } from "types.slint";
 
 export global Strings {
     // Main window
@@ -436,6 +436,68 @@ export global Strings {
             return @tr("−{} {}", -ms, root.milliseconds-unit);
         }
         return @tr("{} {}", ms, root.milliseconds-unit);
+    }
+
+    // A switched-on output's own volume in Windows, under its volume slider
+    // when it is low or muted (spec S199); `percent` is its whole percent.
+    // The fix sets this volume, which the core decides (FIX_VOLUME).
+    out property <int> device-volume-fix-percent: 75;
+
+    public pure function device-volume-hint(hint: DeviceVolumeHint, percent: int) -> string {
+        if hint == DeviceVolumeHint.low {
+            return @tr("Windows volume is {}%", percent);
+        }
+        if hint == DeviceVolumeHint.muted {
+            return @tr("Muted in Windows");
+        }
+        if hint == DeviceVolumeHint.muted-low {
+            return @tr("Muted in Windows, volume {}%", percent);
+        }
+        return "";
+    }
+
+    // The button after the hint that fixes it.
+    public pure function device-volume-fix(hint: DeviceVolumeHint) -> string {
+        if hint == DeviceVolumeHint.low {
+            return @tr("Set to {}%", root.device-volume-fix-percent);
+        }
+        if hint == DeviceVolumeHint.muted {
+            return @tr("Unmute");
+        }
+        if hint == DeviceVolumeHint.muted-low {
+            return @tr("Unmute at {}%", root.device-volume-fix-percent);
+        }
+        return "";
+    }
+
+    // What Narrator reads for the hint: the output, then the hint
+    // ("Speakers: Windows volume is 13%").
+    public pure function device-volume-hint-label(name: string, hint: DeviceVolumeHint, percent: int) -> string {
+        if hint == DeviceVolumeHint.low {
+            return @tr("{0}: Windows volume is {1}%", name, percent);
+        }
+        if hint == DeviceVolumeHint.muted {
+            return @tr("{}: muted in Windows", name);
+        }
+        if hint == DeviceVolumeHint.muted-low {
+            return @tr("{0}: muted in Windows, volume {1}%", name, percent);
+        }
+        return "";
+    }
+
+    // What Narrator reads for the fix: what the button shows, so speech
+    // input finds it by its text, then the output ("Set to 75%, Speakers").
+    public pure function device-volume-fix-label(name: string, hint: DeviceVolumeHint) -> string {
+        return @tr("{0}, {1}", root.device-volume-fix(hint), name);
+    }
+
+    // A speaker row's description in the tray flyout: the device-volume
+    // hint, when there is one, then what selecting the row does.
+    public pure function flyout-speaker-description(help: string, hint: string) -> string {
+        if hint == "" {
+            return help;
+        }
+        return @tr("{0}. {1}", hint, help);
     }
 
     // The hint beside the sync controls: what the values are relative to.
