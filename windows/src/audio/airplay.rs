@@ -38,6 +38,11 @@
 //! lifetime; each capture session borrows it through a [`FeedSlot`] and gives
 //! it back when the capture ends.
 //!
+//! A sender that stopped after an internal error, or whose discovery did,
+//! is reported once as [`BackendEvent::AirPlayStopped`]; the user's Retry
+//! replaces it with a new one from a [`SenderStarter`], and the speakers
+//! that were on keep their settings and play again once listed.
+//!
 //! The sender sits behind [`AirPlayLink`], so the backend logic is tested
 //! with a fake; [`SenderLink`] is the real one.
 
@@ -116,7 +121,16 @@ pub trait AirPlayLink {
 
     /// Stops a pairing.
     fn cancel_pairing(&mut self, key: &DeviceKey);
+
+    /// False once the sender stopped by itself after an internal error (its
+    /// driver thread ended): it lists, plays and reports nothing anymore,
+    /// and only a new sender brings AirPlay back.
+    fn is_running(&self) -> bool;
 }
+
+/// Starts a new sender, with the feed for its input, to replace one that
+/// stopped; `None` when it couldn't start (it logs why).
+pub type SenderStarter = Box<dyn FnMut() -> Option<(Box<dyn AirPlayLink>, Option<FeedSlot>)>>;
 
 /// The real sender.
 pub struct SenderLink {
@@ -185,6 +199,10 @@ impl AirPlayLink for SenderLink {
 
     fn cancel_pairing(&mut self, key: &DeviceKey) {
         self.sender.cancel_pairing(key);
+    }
+
+    fn is_running(&self) -> bool {
+        self.sender.is_running()
     }
 }
 
@@ -481,6 +499,9 @@ pub struct AirPlaySpeakers {
     streaming: bool,
     master: f64,
     latency: Duration,
+    /// The sender stopped after an internal error, or its discovery did;
+    /// reported once, until a new sender replaces it.
+    stopped: bool,
     log: DebugLog,
 }
 
@@ -506,8 +527,55 @@ impl AirPlaySpeakers {
             streaming: false,
             master,
             latency,
+            stopped: false,
             log,
         }
+    }
+
+    /// Replaces the sender with `link`, a new one: what the old one listed,
+    /// played and paired is gone with it, while the user's settings stay, so
+    /// the speakers that were on join again once the new one lists them.
+    /// Whether the sender stopped by itself (see `sender_stopped`); only
+    /// then does a Retry replace it.
+    pub fn is_stopped(&self) -> bool {
+        self.stopped
+    }
+
+    pub fn replace_link(&mut self, link: Box<dyn AirPlayLink>) {
+        // The old sender stops as it is dropped.
+        self.link = link;
+        self.listed.clear();
+        self.added.clear();
+        self.pairings.clear();
+        self.latency = self.link.latency();
+        self.stopped = false;
+        self.log.log(|| {
+            format!(
+                "AirPlay: a new sender runs, L = {} ms; the speakers that were on join once listed",
+                self.latency.as_millis()
+            )
+        });
+    }
+
+    /// The sender stopped by itself: nothing it listed, played or paired is
+    /// there anymore. Returns whether the speaker list changed.
+    fn sender_stopped(&mut self, events: &mut Vec<BackendEvent>) -> bool {
+        let changed =
+            !(self.listed.is_empty() && self.added.is_empty() && self.pairings.is_empty());
+        self.listed.clear();
+        self.added.clear();
+        self.pairings.clear();
+        if changed || !self.stopped {
+            self.log.log(|| {
+                "AirPlay: the sender stopped after an internal error; AirPlay stays silent until Retry"
+                    .to_owned()
+            });
+        }
+        if !self.stopped {
+            self.stopped = true;
+            events.push(BackendEvent::AirPlayStopped);
+        }
+        changed
     }
 
     /// Sends what happens to `log`.
@@ -953,11 +1021,22 @@ impl AirPlaySpeakers {
                     changed |= self.pairing_event(&id, event, &mut events);
                 }
                 // The receivers it listed were reported gone just before;
-                // speakers keep playing.
-                SenderEvent::DiscoveryFailed => self
-                    .log
-                    .log(|| "AirPlay: discovery stopped after an internal error".to_owned()),
+                // speakers keep playing until Retry replaces the sender.
+                SenderEvent::DiscoveryFailed => {
+                    self.log.log(|| {
+                        "AirPlay: discovery stopped after an internal error; Retry starts a new sender"
+                            .to_owned()
+                    });
+                    if !self.stopped {
+                        self.stopped = true;
+                        events.push(BackendEvent::AirPlayStopped);
+                    }
+                }
             }
+        }
+        // Events it sent before it stopped were taken in above.
+        if !self.link.is_running() {
+            changed |= self.sender_stopped(&mut events);
         }
         if changed {
             events.insert(0, BackendEvent::AirPlayChanged);
@@ -1387,6 +1466,8 @@ pub mod tests {
         calls: Vec<Call>,
         events: VecDeque<SenderEvent>,
         latency: Duration,
+        /// The sender stopped after an internal error.
+        stopped: bool,
     }
 
     /// A fake sender: records every call, and hands out the events a test
@@ -1472,6 +1553,11 @@ pub mod tests {
                 key: device.key.clone(),
                 event,
             });
+        }
+
+        /// The sender stops by itself, as after a panic in its driver.
+        pub fn stop_running(&self) {
+            self.0.borrow_mut().stopped = true;
         }
 
         /// The calls so far, and forgets them.
@@ -1560,6 +1646,10 @@ pub mod tests {
                 .borrow_mut()
                 .calls
                 .push(Call::CancelPairing(speaker_id(key)));
+        }
+
+        fn is_running(&self) -> bool {
+            !self.0.borrow().stopped
         }
     }
 

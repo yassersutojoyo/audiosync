@@ -246,6 +246,10 @@ pub enum NoticeMessage {
         speaker: String,
         problem: AirPlayProblem,
     },
+    /// AudioSync's AirPlay sender stopped after an internal error, so
+    /// AirPlay speakers aren't listed or playing. The notice offers Retry
+    /// ([`Backend::retry_airplay`]).
+    AirPlayStopped,
     /// The source also plays straight from these outputs, undelayed, so it
     /// is heard twice. `source` is the app's name, or `None` for the whole
     /// system. `mute` names the outputs AudioSync doesn't play to, which the
@@ -393,6 +397,10 @@ pub trait Backend {
     /// Forgets the pairing with speaker `id`: it asks for a PIN again next
     /// time.
     fn forget_pairing(&mut self, _id: &str) {}
+
+    /// Retry on the notice that AirPlay stopped: starts a new AirPlay
+    /// sender, and the speakers that were on come back once it lists them.
+    fn retry_airplay(&mut self) {}
 
     /// Takes in what happened since the last call (devices that came or went,
     /// a source that quit, an output that failed) and says whether the

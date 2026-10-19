@@ -306,6 +306,9 @@ pub enum NoticeSubject {
     /// The source heard twice: straight from an output as well as through
     /// AudioSync, where capture can't mute the source (Windows).
     DoubleAudio,
+    /// The AirPlay sender as a whole: it stopped after an internal error, or
+    /// its discovery did.
+    AirPlay,
 }
 
 /// A privacy setting a notice can open (S153); the host maps it to its settings app.

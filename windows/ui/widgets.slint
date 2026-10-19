@@ -788,8 +788,8 @@ export component Divider inherits Rectangle {
     background: Tokens.separator;
 }
 
-// The notices, newest first, each with its own dismiss button, and Show How
-// on one that has a guide. It lists every notice in `notices`; a window that
+// The notices, newest first, each with its own dismiss button, Show How
+// on one that has a guide, and Retry on one that offers it. It lists every notice in `notices`; a window that
 // shows only the newest few passes just those (a hidden row would still take
 // its place in the layout), so the Dismiss All row appears only when more
 // than one notice is on screen.
@@ -799,6 +799,8 @@ export component NoticeStack inherits VerticalLayout {
     callback dismissed-all();
     // Show How on a notice: open its guide.
     callback guide-requested(int);
+    // Retry on a notice: start AirPlay again.
+    callback retry-requested(int);
     // Whether one of a notice's buttons has keyboard focus, each time that
     // changes.
     callback button-focus-changed(bool);
@@ -866,6 +868,22 @@ export component NoticeStack inherits VerticalLayout {
                             root.guide-requested(notice.id);
                         }
                         // A standard button reports focus only through has-focus.
+                        changed has-focus => {
+                            row.guide-focused = self.has-focus;
+                        }
+                    }
+                }
+
+                if notice.has-retry: HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        text: Strings.notice-retry;
+                        accessible-label: Strings.notice-retry-label;
+                        clicked => {
+                            root.retry-requested(notice.id);
+                        }
+                        // A notice has no guide and Retry both, so the row's
+                        // second button focus is this one's.
                         changed has-focus => {
                             row.guide-focused = self.has-focus;
                         }
