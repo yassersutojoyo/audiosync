@@ -1,9 +1,9 @@
 # Third-Party Notices
 
-AudioSync's own code is MIT-licensed (see [`LICENSE`](LICENSE)). The app
-binary contains AudioSync's audio core (`core/`, written in Rust and
-MIT-licensed like the rest of AudioSync) with AudioSync's own AirPlay sender
-(`airplay/`, MIT), and, compiled in with them, parts of the Rust standard
+AudioSync's own code is licensed under GPL-3.0-or-later (see
+[`LICENSE`](LICENSE)). The app binary contains AudioSync's audio core (`core/`,
+written in Rust and under GPL-3.0-or-later like the rest of AudioSync) with
+AudioSync's own AirPlay sender (`airplay/`, GPL-3.0-or-later), and, compiled in with them, parts of the Rust standard
 library and the third-party crates the sender uses, see
 [App frameworks and libraries](#app-frameworks-and-libraries). Every build also
 ships the Poppins font (`Contents/Resources/Fonts/`), see [Fonts](#fonts).
@@ -35,7 +35,7 @@ providing the source.
 | [Sparkle](https://sparkle-project.org) 2.9.5 (update framework, currently disabled; license in `licenses/sparkle/`) | MIT |
 | [Rust standard library](https://github.com/rust-lang/rust), © The Rust Project Developers (the parts the audio core uses, compiled into the app binary; its copyright notices, which also cover the crates it is built from, its license texts and the Rust version in `licenses/rust/`) | MIT OR Apache-2.0 |
 
-The audio core carries AudioSync's own AirPlay sender (`airplay/`, MIT), the
+The audio core carries AudioSync's own AirPlay sender (`airplay/`, GPL-3.0-or-later), the
 one the Windows app uses, which brings these crates into the app binary:
 `mdns-sd` to find receivers on the network, with `flume`, `spin` (MIT),
 `lock_api`, `scopeguard`, `mio` (MIT), `socket2`, `socket-pktinfo` (MIT),
@@ -72,13 +72,13 @@ the macOS app, and no Windows build has been released.
 
 | Component | License |
 |---|---|
-| [Slint](https://slint.dev) 1.18, © SixtyFPS GmbH (the user interface toolkit) | GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0; used under the Slint Royalty-free Desktop, Mobile, and Web Applications License 2.0 |
+| [Slint](https://slint.dev) 1.18, © SixtyFPS GmbH (the user interface toolkit) | GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0; public builds of AudioSync use it under GPL-3.0-only |
 | [tray-icon](https://github.com/tauri-apps/tray-icon) 0.26 and [muda](https://github.com/tauri-apps/muda) 0.21, © the Tauri Programme within The Commons Conservancy (the notification-area icon and its menu) | MIT OR Apache-2.0 |
 | [Poppins](https://github.com/itfoundry/Poppins) Medium, © 2020 The Poppins Project Authors (the wordmark typeface, compiled into the executable from `brand/fonts/`) | SIL Open Font License 1.1 |
 
-The Slint Royalty-free License asks for an attribution. The one AudioSync uses
-is the `AboutSlint` widget in the app's About dialog, which the top-level menu opens
-(Help > About AudioSync). The widget shows the Made with Slint logo
+The app's About dialog, which the top-level menu opens (Help > About
+AudioSync), names AudioSync's copyright holder and license and also credits
+Slint with its `AboutSlint` widget. The widget shows the Made with Slint logo
 (CC-BY-ND-4.0, © SixtyFPS GmbH) unchanged, and the compiled interface also
 carries an icon from Microsoft's Fluent UI System Icons (MIT, © Microsoft Corporation), via Slint's Fluent style.
 
@@ -88,7 +88,7 @@ it. The app and tray icons in `windows/res/` are generated from AudioSync's own
 brand mark (`scripts/brand/windows-icons.sh`).
 
 The Windows app also contains AudioSync's own AirPlay sender (`airplay/`,
-MIT), which brings its dependencies into the executable: `mdns-sd` (Apache-2.0
+GPL-3.0-or-later), which brings its dependencies into the executable: `mdns-sd` (Apache-2.0
 OR MIT) to find receivers on the network, with the crates it builds on
 (`flume`, `spin`, `lock_api`, `scopeguard`, `mio`, `socket2`,
 `socket-pktinfo`, `if-addrs` under MIT OR BSD-3-Clause, `fastrand`, `log`,

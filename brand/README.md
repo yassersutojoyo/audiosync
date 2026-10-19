@@ -16,7 +16,7 @@ green of a room full of plants: technical, but calm.
 
 **Origin.** The logo was designed for AudioSync in Adobe Illustrator by a member
 of the maintainer's family, who contributed it to the project under the MIT
-License, like the rest of the repository. `source/mark-reference.png` is a
+License, which lets it ship in this GPL-3.0-or-later project. `source/mark-reference.png` is a
 raster export of that design. The vector mark, `audiosync-mark.svg`, was traced
 from it with potrace through `scripts/brand/trace-mark.sh` (the steps are
 described below), and every other file here is generated from the mark and the

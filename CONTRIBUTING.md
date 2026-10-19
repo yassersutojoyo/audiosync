@@ -21,3 +21,7 @@ CI builds the Rust audio core and the app (`scripts/build_core.sh`, then `swift 
 AudioSync tries to stay focused: capture one source, play it in sync on local and AirPlay speakers, with AudioSync's own AirPlay sender built in. Big new dependencies or features outside that are unlikely to be merged, so open an issue first if you're planning one.
 
 A new dependency needs a license that fits and an entry in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Please don't copy code from other projects into AudioSync.
+
+## Licensing of contributions
+
+AudioSync is licensed under GPL-3.0-or-later, and contributions are accepted under the same license. Before the first outside pull request is merged, contributors will be asked to agree to contributor terms that also allow the maintainer to relicense their contribution. Those terms will be published in this repository first.
