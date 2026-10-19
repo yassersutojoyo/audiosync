@@ -16,7 +16,7 @@ cd audiosync
 
 `setup.sh` installs those build tools with Homebrew, then builds every library the engine links (FFmpeg, libgcrypt, SQLite, libinotify-kqueue and the rest, listed with their versions and checksums in `scripts/engine_deps.sh`) from pinned upstream release tarballs into `~/.audiosync-build/deps`. FFmpeg is an LGPL build without external libraries. Then it downloads OwnTone 29.2 (checksum-pinned), applies AudioSync's patches, builds it against those libraries into `~/.audiosync-build/engine`, and runs `build.sh`. The libraries take about nine minutes the first time; after that they're reused until `scripts/engine_deps.sh` or the target macOS changes. No Homebrew library ends up in the app.
 
-After that, `./build.sh` is all you need day to day. It builds the app, bundles the engine and every library it needs (so the app runs on Macs without Homebrew), signs it, and installs it to `/Applications`, or `~/Applications` if `/Applications` isn't writable. Without an engine the app still builds and runs, just without AirPlay speakers.
+After that, `./build.sh` is all you need day to day. It builds the app, bundles the engine and every library it needs (so the app runs on Macs without Homebrew), signs it, and installs it to `/Applications`, or `~/Applications` if `/Applications` isn't writable, after quitting the running AudioSync. Without an engine the app still builds and runs, just without AirPlay speakers. `./build.sh --no-install` stops before the install: it leaves the signed app in `.build/app/AudioSync.app` and doesn't quit anything. CI builds it that way and checks the bundle with `Tests/check-app-bundle.sh`, which you can also point at an installed copy.
 
 The app links the audio core, the Rust crate in `core/` (see `core/NOTES.md`). `build.sh` first runs `scripts/build_core.sh`, which builds it for Apple silicon and Intel (with rustup, it adds a missing target itself) and joins both into one static library, `core/target/universal-apple-darwin/release/libaudiosync_core.a`. That library exports only the functions in `core/include/audiosync_core.h`, so none of the Rust standard library's own symbols can stand in for the system's. Next to it, `licenses/rust/` gets the notices the app ships for the Rust code inside: the standard library's, and in `crates.txt` those of the crates compiled into the core (`scripts/core_notices.py`, run with `python3`). A plain `swift build`, a scratch build included, links that file: run the script first, or the link stops with "library 'audiosync_core' not found".
 
@@ -25,7 +25,7 @@ Everything is built with `MACOSX_DEPLOYMENT_TARGET=15.0`, the app's `LSMinimumSy
 A few environment variables change what the scripts do:
 
 - `AUDIOSYNC_INSTALL_DIR`: install somewhere other than `/Applications`
-- `AUDIOSYNC_ENGINE`: bundle a different engine binary
+- `AUDIOSYNC_ENGINE_BIN`: bundle a different engine binary (`AUDIOSYNC_ENGINE` with a path still works but is deprecated, since the app reads that name as its `rust` or `swift` engine switch)
 - `AUDIOSYNC_ADHOC=1`: sign ad-hoc instead of with the local identity
 - `AUDIOSYNC_SKIP_BREW=1`: `setup.sh` skips Homebrew (handy offline, once the Rust core has been built at least once)
 - `AUDIOSYNC_ENGINE_ONLY=1`: `setup.sh` stops after building the engine
@@ -39,7 +39,7 @@ A few environment variables change what the scripts do:
 
 On the first build, `build.sh` runs `make-local-cert.sh`, which creates a self-signed "AudioSync Local Code Signing" identity in its own keychain (`~/Library/Keychains/audiosync-signing.keychain-db`), with no password prompt and no trust settings. Every build is signed with it, so macOS sees each rebuild as the same app and the System Audio Recording permission sticks.
 
-With an ad-hoc signature the code hash changes on every build, and the permission quietly stops working: the toggle in System Settings stays on, but capture is silent. That's why ad-hoc is only a fallback.
+With an ad-hoc signature the code hash changes on every build, and the permission quietly stops working: the toggle in System Settings stays on, but capture is silent. That's why `build.sh` signs ad-hoc only with `AUDIOSYNC_ADHOC=1`, or when there's no local identity and `make-local-cert.sh` can't create one, and says so loudly. If the local identity exists but can't sign, the build stops before it quits or replaces the installed app.
 
 ## Running and testing
 
@@ -96,7 +96,7 @@ Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) desc
 - `PipeMetadata.swift`: the track's title, artist, album and artwork, written into the engine's metadata pipe so AirPlay speakers with a screen show them (`ReceiverInfo.swift` decides what they show)
 - `AirPlayPairing.swift`: speakers the engine switched off, and PIN or password pairing
 
-The app side: `AppDelegate.swift` holds app state, persistence, launch and quit, and its extensions split out windows (`+Windows`), groups and auto-connect (`+Groups`), local outputs (`+Outputs`), AirPlay speakers (`+AirPlay`) and streaming and notices (`+Engine`). The UI is SwiftUI in `MainWindow.swift` and `MenuBar.swift`, with the app menus in `MainMenu.swift`. Smaller pieces: `AudioDevices.swift` (Core Audio device helpers), `Volume.swift` (the loudness curve), `SpeakerGroups.swift`, `NowPlaying.swift` (Spotify and Music), `Diagnostics.swift` (the debug log) and `main.swift` (keeps one copy running).
+The app side: `AppDelegate.swift` holds app state, launch and quit (with its decisions in `AppLifecycle.swift` and the saved settings in `AppSettings.swift`), and its extensions split out windows (`+Windows`), groups and auto-connect (`+Groups`), local outputs (`+Outputs`), AirPlay speakers (`+AirPlay`) and streaming and notices (`+Engine`). The UI is SwiftUI in `MainWindow.swift` and `MenuBar.swift`, with the app menus in `MainMenu.swift`. Smaller pieces: `AudioDevices.swift` (Core Audio device helpers), `Volume.swift` (the loudness curve), `SpeakerGroups.swift`, `NowPlaying.swift` (Spotify and Music), `Diagnostics.swift` (the debug log) and `main.swift` (keeps one copy running).
 
 The app's side of the Rust core (`core/`, imported through the `CAudioSyncCore` module in `Sources/CAudioSyncCore`): `CoreEngine.swift` wraps the core's engine parts, `EngineParts.swift` has the protocols both engines' parts implement and picks one engine's set for each session, `EngineImpl.swift` reads the setting that chooses, and `AudioSyncCore.swift` logs the core's version at launch.
 

@@ -23,6 +23,12 @@ S115 Session stop orchestration, which stops Core Audio capture and renderers.
 S154 macOS Local Network privacy permission and its Bonjour browser states.
 S155 AppKit appearance setting.
 S156 Repository shell tooling (shellcheck), checked by CI and Tests/run-tests.sh.
-S168 Host-only track info watcher: polls the engine's player status over its HTTP API and re-sends receiver metadata through the metadata pipe after every pipe start.
 S170 The Mac app's debug log file; the Windows app keeps its own log outside the core.
 S171 Core Audio device lists: alive state, channel counts and private aggregate devices.
+S173 The Mac's reference output, from Core Audio transport types and stream terminal types.
+S174 The Windows app's reference output, from its endpoint kinds and endpoint IDs.
+S178 Which AirPlay latency the host hands the hold-back policy: its stored AirPlay delay for the bundled engine, or the native sender's report plus the stored adjustment.
+S179 One-time migration of the Mac app's stored delays (its defaults keys).
+S180 One-time migration of the Windows app's settings file.
+S181 What the Mac and Windows windows show for offsets and the AirPlay delay.
+S186 Session stop and source change order in the host's engine wrapper (fade requests, the bounded wait, then stopping Core Audio or WASAPI IO); the core's parts are S185 and S189.
