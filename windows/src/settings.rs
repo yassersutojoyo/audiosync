@@ -700,6 +700,142 @@ mod tests {
     }
 
     #[test]
+    fn offsets_and_the_airplay_adjustment_are_kept_in_their_ranges() {
+        let text = r#"{
+            "version": 2,
+            "outputs": {
+                "late": {"delay_ms": -250},
+                "far": {"delay_ms": -9000},
+                "high": {"delay_ms": 99999}
+            },
+            "airplay_adjustment_ms": -7000
+        }"#;
+        let (settings, found) = Settings::from_json(text).expect("read");
+        assert_eq!(
+            found,
+            Loaded::Read {
+                version: 2,
+                adjusted: true
+            }
+        );
+        assert_eq!(settings.outputs["late"].delay_ms, -250.0);
+        assert_eq!(settings.outputs["far"].delay_ms, -2000.0);
+        assert_eq!(settings.outputs["high"].delay_ms, 20_000.0);
+        assert_eq!(settings.airplay_adjustment_ms, -2000.0);
+        let (settings, _) =
+            Settings::from_json(r#"{"version": 2, "airplay_adjustment_ms": 250}"#).expect("read");
+        assert_eq!(settings.airplay_adjustment_ms, 250.0);
+        assert_eq!(Settings::default().airplay_adjustment_ms, 0.0);
+    }
+
+    /// A format 1 file's outputs and AirPlay speaker: the PC's speakers
+    /// (the reference) with a trim of 250 ms, a Bluetooth speaker at 0, a
+    /// TV at 120, a far speaker at 3000 and Kitchen with its own delay.
+    fn trims() -> Settings {
+        let mut settings = Settings {
+            version: 1,
+            ..Settings::default()
+        };
+        for (id, delay_ms) in [
+            ("builtin", 250.0),
+            ("bluetooth", 0.0),
+            ("tv", 120.0),
+            ("far", 3000.0),
+        ] {
+            settings.outputs.insert(
+                id.to_owned(),
+                SavedSpeaker {
+                    enabled: true,
+                    delay_ms,
+                    ..SavedSpeaker::default()
+                },
+            );
+        }
+        settings.airplay.insert(
+            "kitchen".to_owned(),
+            SavedSpeaker {
+                enabled: true,
+                delay_ms: 300.0,
+                ..SavedSpeaker::default()
+            },
+        );
+        settings
+    }
+
+    #[test]
+    fn old_trims_become_offsets_relative_to_the_reference() {
+        let mut settings = trims();
+        migrate_delays(&mut settings, Some("builtin"));
+        let offsets: Vec<(&str, f64)> = settings
+            .outputs
+            .iter()
+            .map(|(id, speaker)| (id.as_str(), speaker.delay_ms))
+            .collect();
+        assert_eq!(
+            offsets,
+            [
+                ("bluetooth", -250.0),
+                ("builtin", 0.0),
+                ("far", 2750.0),
+                ("tv", -130.0)
+            ]
+        );
+        assert!(settings.outputs["builtin"].enabled, "only its delay goes");
+        // Without a reference every offset is the old trim, and A is 0.
+        let mut settings = trims();
+        migrate_delays(&mut settings, None);
+        assert_eq!(settings.outputs["builtin"].delay_ms, 250.0);
+        assert_eq!(settings.outputs["tv"].delay_ms, 120.0);
+        assert_eq!(settings.airplay_adjustment_ms, 0.0);
+        // An offset below −2000 ms is clamped.
+        let mut settings = trims();
+        settings.outputs.get_mut("builtin").unwrap().delay_ms = 2600.0;
+        migrate_delays(&mut settings, Some("builtin"));
+        assert_eq!(settings.outputs["bluetooth"].delay_ms, -2000.0);
+    }
+
+    #[test]
+    fn the_references_old_trim_becomes_the_airplay_adjustment_and_airplay_delays_stay() {
+        let mut settings = trims();
+        migrate_delays(&mut settings, Some("builtin"));
+        assert_eq!(settings.airplay_adjustment_ms, 250.0);
+        assert_eq!(settings.airplay, trims().airplay);
+        // A reference that has no stored trim: A is 0.
+        let mut settings = trims();
+        migrate_delays(&mut settings, Some("hdmi"));
+        assert_eq!(settings.airplay_adjustment_ms, 0.0);
+        assert_eq!(settings.outputs["builtin"].delay_ms, 250.0);
+    }
+
+    #[test]
+    fn a_late_airplay_speaker_lined_up_by_the_references_trim_stays_lined_up() {
+        use audiosync_core::policy::delay::{Participant, hold_backs, native_airplay_latency_ms};
+        let mut settings = trims();
+        migrate_delays(&mut settings, Some("builtin"));
+        let taking_part: Vec<Participant> = ["builtin", "bluetooth", "tv"]
+            .into_iter()
+            .map(|id| Participant {
+                id,
+                offset_ms: settings.outputs[id].delay_ms,
+                is_reference: id == "builtin",
+            })
+            .collect();
+        let held = |airplay: Option<f64>| -> Vec<f64> {
+            hold_backs(&taking_part, airplay)
+                .into_iter()
+                .map(|(_, held)| held)
+                .collect()
+        };
+        // Before, without AirPlay: each output at its own trim.
+        assert_eq!(held(None), [250.0, 0.0, 120.0]);
+        // Before, with AirPlay (L_s = 1750 ms): L_s + trim, and Kitchen at
+        // L_s + 0. Now L = L_s + A, and the window shows 2000.
+        let latency = native_airplay_latency_ms(1750.0, settings.airplay_adjustment_ms);
+        assert_eq!(latency, 2000.0);
+        assert_eq!(held(Some(latency)), [2000.0, 1750.0, 1870.0]);
+    }
+
+    #[test]
     fn a_huge_file_is_cut_to_the_limits() {
         let mut settings = Settings::default();
         for n in 0..(MAX_ENTRIES + 10) {

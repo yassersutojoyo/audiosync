@@ -2547,6 +2547,122 @@ mod tests {
         backend.playing_params(id).expect("it plays").delay_frames
     }
 
+    const BUILT_IN: &str = "builtin";
+    const USB: &str = "usb";
+    const BLUETOOTH: &str = "bluetooth";
+
+    /// A stopped mock with the PC's own speakers (the reference), a USB
+    /// speaker at +150 ms and a Bluetooth speaker at −250 ms, all on and
+    /// listed, and one app.
+    fn local_delay_backend() -> MockBackend {
+        let mut backend = MockBackend::empty();
+        backend.connect_output_as(BUILT_IN, "Speakers", OutputKind::BuiltIn);
+        backend.connect_output_as(USB, "USB Speaker", OutputKind::Usb);
+        backend.connect_output_as(BLUETOOTH, "Earbuds", OutputKind::Bluetooth);
+        backend.add_app(PLAYER_PID, "player.exe");
+        for id in [BUILT_IN, USB, BLUETOOTH] {
+            backend.set_output_enabled(id, true).unwrap();
+        }
+        backend.set_output_delay(USB, 150.0);
+        backend.set_output_delay(BLUETOOTH, -250.0);
+        backend.list_outputs().unwrap();
+        backend
+    }
+
+    /// The hold-backs the three outputs of [`local_delay_backend`] play
+    /// at, in whole ms: the PC's speakers, USB, Bluetooth; `None` for one
+    /// that doesn't play.
+    fn held(backend: &MockBackend) -> [Option<i64>; 3] {
+        [BUILT_IN, USB, BLUETOOTH].map(|id| {
+            backend
+                .playing_params(id)
+                .map(|params| params.delay_frames / 48)
+        })
+    }
+
+    #[test]
+    fn only_local_outputs_a_speakers_offset_is_applied() {
+        let mut backend = local_delay_backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+    }
+
+    #[test]
+    fn a_late_speaker_switched_on_or_off_retimes_the_running_others() {
+        let mut backend = local_delay_backend();
+        backend.set_output_enabled(BLUETOOTH, false).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(held(&backend), [Some(0), Some(150), None]);
+        backend.set_output_enabled(BLUETOOTH, true).unwrap();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+        backend.set_output_enabled(BLUETOOTH, false).unwrap();
+        assert_eq!(held(&backend), [Some(0), Some(150), None]);
+        // A device that goes away leaves too, and joins again when it's back.
+        backend.set_output_enabled(BLUETOOTH, true).unwrap();
+        backend.disconnect_output(BLUETOOTH);
+        backend.poll();
+        assert_eq!(held(&backend), [Some(0), Some(150), None]);
+        backend.connect_output_as(BLUETOOTH, "Earbuds", OutputKind::Bluetooth);
+        backend.poll();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+    }
+
+    #[test]
+    fn editing_the_lowest_offset_retimes_the_others() {
+        let mut backend = local_delay_backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_output_delay(BLUETOOTH, -300.0);
+        assert_eq!(held(&backend), [Some(300), Some(450), Some(0)]);
+        backend.set_output_delay(USB, 200.0);
+        assert_eq!(held(&backend), [Some(300), Some(500), Some(0)]);
+    }
+
+    /// [`local_delay_backend`] with an AirPlay sender (L = 1750 ms) that
+    /// lists Kitchen.
+    fn local_delay_with_airplay() -> (MockBackend, FakeAirPlay, Device) {
+        let mut backend = local_delay_backend();
+        let fake = FakeAirPlay::new();
+        backend.set_airplay(fake.link(), None);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        backend.poll();
+        (backend, fake, kitchen)
+    }
+
+    #[test]
+    fn an_airplay_speaker_chosen_adds_the_sender_latency_on_top() {
+        let (mut backend, _fake, kitchen) = local_delay_with_airplay();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        assert_eq!(held(&backend), [Some(1750), Some(1900), Some(1500)]);
+        backend
+            .set_airplay_enabled(&id_of(&kitchen), false)
+            .unwrap();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+    }
+
+    #[test]
+    fn the_airplay_delay_is_an_adjustment_on_top_of_the_sender_latency() {
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(backend.airplay_sender_latency_ms(), Some(1750.0));
+        backend.set_airplay_adjustment(250.0);
+        assert_eq!(backend.airplay_adjustment(), 250.0);
+        assert_eq!(held(&backend), [Some(2000), Some(2150), Some(1750)]);
+        // A is relative: a new L_s moves L with it.
+        fake.set_latency(Duration::from_secs(1));
+        backend.poll();
+        assert_eq!(backend.airplay_sender_latency_ms(), Some(1000.0));
+        assert_eq!(held(&backend), [Some(1250), Some(1400), Some(1000)]);
+        backend.set_airplay_adjustment(f64::NAN);
+        assert_eq!(backend.airplay_adjustment(), 250.0, "ignored");
+        backend.set_airplay_adjustment(-9000.0);
+        assert_eq!(backend.airplay_adjustment(), -2000.0, "clamped");
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)], "L = 0");
+    }
+
     #[test]
     fn an_airplay_speaker_on_moves_local_outputs_to_l_plus_their_delay_and_off_back() {
         let (mut backend, fake, kitchen) = with_airplay();

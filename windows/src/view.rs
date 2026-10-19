@@ -1609,6 +1609,30 @@ mod tests {
     }
 
     #[test]
+    fn the_reference_row_has_no_delay_and_the_others_show_a_signed_offset() {
+        let state = MockBackend::new().snapshot();
+        let row = |id: &str| speaker_item(&state, state.speaker(id).unwrap(), true, true, None);
+        let reference = row("local:speakers");
+        assert!(
+            !reference.has_delay && !reference.sync_open,
+            "the reference has no delay field"
+        );
+        let desk = row("local:desk");
+        assert_eq!((desk.delay_ms, desk.delay_text.as_str()), (120, "+120"));
+        assert_eq!(desk.reference_name.as_str(), "Speakers");
+        let headset = row("local:bt");
+        assert_eq!(
+            (headset.delay_ms, headset.delay_text.as_str()),
+            (-250, "−250")
+        );
+        let headphones = row("local:headphones");
+        assert_eq!(
+            (headphones.delay_ms, headphones.delay_text.as_str()),
+            (0, "0")
+        );
+    }
+
+    #[test]
     fn a_typed_delay_stays_in_the_field() {
         let state = MockBackend::new().snapshot();
         let desk = state.speaker("local:desk").unwrap();

@@ -274,6 +274,204 @@ mod tests {
         }
     }
 
+    // covers: S172, S176
+    #[test]
+    fn hold_backs_through_the_c_interface_match_the_rust_ones() {
+        let outputs = [
+            AscLocalOutput {
+                offset_ms: 900.0,
+                is_reference: true,
+            },
+            AscLocalOutput {
+                offset_ms: 150.0,
+                is_reference: false,
+            },
+            AscLocalOutput {
+                offset_ms: -250.0,
+                is_reference: false,
+            },
+        ];
+        let mut held = [f64::NAN; 3];
+        // SAFETY: both arrays hold three entries; null is allowed with a
+        // count of 0.
+        unsafe {
+            assert!(asc_local_hold_backs_ms(
+                outputs.as_ptr(),
+                3,
+                false,
+                2000.0,
+                held.as_mut_ptr()
+            ));
+            assert_eq!(held, [250.0, 400.0, 0.0], "only local outputs");
+            assert!(asc_local_hold_backs_ms(
+                outputs.as_ptr(),
+                3,
+                true,
+                2000.0,
+                held.as_mut_ptr()
+            ));
+            assert_eq!(held, [2000.0, 2150.0, 1750.0], "L on top");
+            assert!(asc_local_hold_backs_ms(
+                outputs[1..].as_ptr(),
+                1,
+                false,
+                0.0,
+                held.as_mut_ptr()
+            ));
+            assert_eq!(held[0], 0.0, "a lone output plays at once");
+            assert!(asc_local_hold_backs_ms(
+                ptr::null(),
+                0,
+                true,
+                2000.0,
+                ptr::null_mut()
+            ));
+            held = [-1.0; 3];
+            assert!(!asc_local_hold_backs_ms(
+                ptr::null(),
+                3,
+                false,
+                0.0,
+                held.as_mut_ptr()
+            ));
+            assert!(!asc_local_hold_backs_ms(
+                outputs.as_ptr(),
+                3,
+                false,
+                0.0,
+                ptr::null_mut()
+            ));
+            assert_eq!(held, [-1.0; 3], "a refused call writes nothing");
+        }
+    }
+
+    // covers: S175, S178
+    #[test]
+    fn offsets_and_airplay_settings_are_sanitized() {
+        let mut out = 7.0;
+        // SAFETY: `out` is a live double; null is allowed.
+        unsafe {
+            assert!(asc_local_offset_sanitize_ms(-2500.0, &mut out));
+            assert_eq!(out, -2000.0);
+            assert!(asc_local_offset_sanitize_ms(-250.0, &mut out));
+            assert_eq!(out, -250.0);
+            assert!(!asc_local_offset_sanitize_ms(f64::NAN, &mut out));
+            assert_eq!(out, -250.0, "an ignored input writes nothing");
+            assert!(!asc_local_offset_sanitize_ms(1.0, ptr::null_mut()));
+            assert!(asc_airplay_delay_sanitize_ms(-5.0, &mut out));
+            assert_eq!(out, 0.0);
+            assert!(asc_airplay_delay_sanitize_ms(2300.0, &mut out));
+            assert_eq!(out, 2300.0);
+            assert!(!asc_airplay_delay_sanitize_ms(f64::INFINITY, &mut out));
+            assert!(asc_airplay_adjustment_for_ms(2000.0, 1750.0, &mut out));
+            assert_eq!(out, 250.0);
+            assert!(asc_airplay_adjustment_for_ms(-9000.0, 1750.0, &mut out));
+            assert_eq!(out, -2000.0);
+            assert!(!asc_airplay_adjustment_for_ms(f64::NAN, 1750.0, &mut out));
+            assert!(!asc_airplay_adjustment_for_ms(1.0, 1.0, ptr::null_mut()));
+        }
+        assert_eq!(asc_airplay_native_latency_ms(1750.0, 250.0), 2000.0);
+        assert_eq!(asc_airplay_native_latency_ms(1750.0, -2000.0), 0.0);
+        assert_eq!(asc_airplay_native_latency_ms(19_000.0, 5000.0), 20_000.0);
+    }
+
+    // covers: S179
+    #[test]
+    fn the_mac_migration_through_the_c_interface_matches_the_rust_one() {
+        // R 250, Bluetooth 0, USB 400, an untuned listed output, D0 2000.
+        let entries = [
+            AscStoredDelay {
+                is_reference: true,
+                has_stored_delay: true,
+                stored_delay_ms: 250.0,
+            },
+            AscStoredDelay {
+                is_reference: false,
+                has_stored_delay: true,
+                stored_delay_ms: 0.0,
+            },
+            AscStoredDelay {
+                is_reference: false,
+                has_stored_delay: true,
+                stored_delay_ms: 400.0,
+            },
+            AscStoredDelay {
+                is_reference: false,
+                has_stored_delay: false,
+                stored_delay_ms: 0.0,
+            },
+        ];
+        let mut offsets = [AscMigratedOffset::default(); 4];
+        let mut result = AscDelayMigration::default();
+        // SAFETY: both arrays hold four entries; `result` is live.
+        let done = unsafe {
+            asc_local_delay_migrate(
+                entries.as_ptr(),
+                4,
+                false,
+                0.0,
+                offsets.as_mut_ptr(),
+                &mut result,
+            )
+        };
+        assert!(done);
+        assert_eq!(
+            result,
+            AscDelayMigration {
+                airplay_delay_ms: 2000.0,
+                native_adjustment_ms: 0.0,
+            }
+        );
+        let stored: Vec<Option<f64>> = offsets
+            .iter()
+            .map(|offset| offset.store.then_some(offset.offset_ms))
+            .collect();
+        assert_eq!(stored, [None, Some(-250.0), Some(150.0), Some(0.0)]);
+        // The legacy delay counts when there is one: D0 = 600 keeps the
+        // untuned output with the reference.
+        // SAFETY: as above.
+        unsafe {
+            assert!(asc_local_delay_migrate(
+                entries.as_ptr(),
+                4,
+                true,
+                600.0,
+                offsets.as_mut_ptr(),
+                &mut result,
+            ));
+        }
+        assert_eq!(offsets[3].offset_ms, 350.0);
+        // SAFETY: null arrays are refused unless the count is 0; a null
+        // result is refused.
+        unsafe {
+            assert!(asc_local_delay_migrate(
+                ptr::null(),
+                0,
+                false,
+                0.0,
+                ptr::null_mut(),
+                &mut result
+            ));
+            assert_eq!(result.airplay_delay_ms, 2000.0);
+            assert!(!asc_local_delay_migrate(
+                ptr::null(),
+                4,
+                false,
+                0.0,
+                offsets.as_mut_ptr(),
+                &mut result
+            ));
+            assert!(!asc_local_delay_migrate(
+                entries.as_ptr(),
+                4,
+                false,
+                0.0,
+                offsets.as_mut_ptr(),
+                ptr::null_mut()
+            ));
+        }
+    }
+
     // covers: S3
     #[test]
     fn delays_convert_to_frames_at_the_capture_rate() {

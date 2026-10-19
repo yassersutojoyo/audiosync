@@ -2941,6 +2941,116 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// The PC's own speakers (the reference), a Bluetooth speaker and a TV,
+    /// as at a launch.
+    fn reference_audio() -> MockBackend {
+        let mut audio = MockBackend::empty();
+        audio.connect_output_as("builtin", "Speakers", OutputKind::BuiltIn);
+        audio.connect_output_as("bluetooth", "Earbuds", OutputKind::Bluetooth);
+        audio.connect_output_as("tv", "TV", OutputKind::Hdmi);
+        audio
+    }
+
+    #[test]
+    fn an_older_settings_file_is_migrated_once_and_saved_in_the_new_version() {
+        let dir = test_dir("adapter-settings-delay-migration");
+        let path = dir.join(settings::FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"{
+                "version": 1,
+                "outputs": {
+                    "builtin": {"enabled": true, "delay_ms": 250},
+                    "bluetooth": {"enabled": true, "delay_ms": 0},
+                    "tv": {"delay_ms": 120}
+                }
+            }"#,
+        )
+        .expect("written");
+        let adapter = launch(reference_audio(), &path);
+        let state = adapter.snapshot();
+        assert_eq!(state.reference_name.as_deref(), Some("Speakers"));
+        assert_eq!(speaker_of(&adapter, &key("builtin")).delay_ms, None);
+        assert_eq!(
+            speaker_of(&adapter, &key("bluetooth")).delay_ms,
+            Some(-250.0)
+        );
+        assert_eq!(speaker_of(&adapter, &key("tv")).delay_ms, Some(-130.0));
+        assert_eq!(adapter.audio.airplay_adjustment(), 250.0);
+        let (saved, found) = SettingsFile::at(path.clone()).load();
+        assert_eq!(
+            found,
+            settings::Loaded::Read {
+                version: settings::VERSION,
+                adjusted: false
+            }
+        );
+        assert_eq!(settings::VERSION, 2);
+        assert_eq!(saved.outputs["bluetooth"].delay_ms, -250.0);
+        assert_eq!(saved.outputs["tv"].delay_ms, -130.0);
+        assert_eq!(saved.outputs["builtin"].delay_ms, 0.0);
+        assert!(saved.outputs["builtin"].enabled);
+        assert_eq!(saved.airplay_adjustment_ms, 250.0);
+
+        // The next launch reads the new format and migrates nothing again.
+        let adapter = launch(reference_audio(), &path);
+        assert_eq!(
+            speaker_of(&adapter, &key("bluetooth")).delay_ms,
+            Some(-250.0)
+        );
+        assert_eq!(adapter.audio.airplay_adjustment(), 250.0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_older_file_waits_for_an_output_list_before_it_is_migrated() {
+        let dir = test_dir("adapter-settings-delay-migration-wait");
+        let path = dir.join(settings::FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"{"version": 1, "outputs": {"builtin": {"delay_ms": 250}, "tv": {"delay_ms": 120}}}"#,
+        )
+        .expect("written");
+        let mut audio = reference_audio();
+        audio.fail_listing(Some(BackendError::System {
+            call: "IMMDeviceEnumerator::EnumAudioEndpoints",
+            code: -1,
+        }));
+        let mut adapter = launch(audio, &path);
+        adapter.poll();
+        let (saved, found) = SettingsFile::at(path.clone()).load();
+        assert!(
+            matches!(found, settings::Loaded::Read { version: 1, .. }),
+            "not saved before the migration: {found}"
+        );
+        assert_eq!(saved.outputs["tv"].delay_ms, 120.0);
+        adapter.audio_mut().fail_listing(None);
+        adapter.poll();
+        assert_eq!(speaker_of(&adapter, &key("tv")).delay_ms, Some(-130.0));
+        let (saved, _) = SettingsFile::at(path.clone()).load();
+        assert_eq!(saved.outputs["tv"].delay_ms, -130.0);
+        assert_eq!(saved.airplay_adjustment_ms, 250.0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_airplay_delay_field_shows_l_plus_a_and_follows_a_new_l() {
+        let (mut adapter, fake, _, _) = airplay_adapter();
+        assert_eq!(adapter.snapshot().airplay_delay_ms, Some(1750.0), "L_s + 0");
+        adapter.set_airplay_delay(2000.0);
+        assert_eq!(adapter.snapshot().airplay_delay_ms, Some(2000.0));
+        assert_eq!(adapter.audio.airplay_adjustment(), 250.0);
+        fake.set_latency(std::time::Duration::from_secs(1));
+        adapter.poll();
+        assert_eq!(adapter.snapshot().airplay_delay_ms, Some(1250.0));
+        adapter.set_airplay_delay(f64::NAN);
+        assert_eq!(adapter.snapshot().airplay_delay_ms, Some(1250.0));
+        adapter.set_airplay_delay(-500.0);
+        assert_eq!(adapter.snapshot().airplay_delay_ms, Some(0.0), "clamped");
+        // Without an AirPlay sender there is no field.
+        assert_eq!(adapter().snapshot().airplay_delay_ms, None);
+    }
+
     #[test]
     fn an_auto_connect_speaker_that_is_there_at_launch_starts_streaming() {
         let dir = test_dir("adapter-settings-auto-connect");

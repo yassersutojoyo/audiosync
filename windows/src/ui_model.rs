@@ -884,6 +884,21 @@ mod tests {
     }
 
     #[test]
+    fn an_offset_takes_a_leading_plus_or_minus_and_other_text_is_ignored() {
+        assert_eq!(parse_delay_ms("+150"), Some(150.0));
+        assert_eq!(parse_delay_ms("−250"), Some(-250.0));
+        assert_eq!(parse_delay_ms("-250"), Some(-250.0));
+        assert_eq!(parse_delay_ms(" −99,6 "), Some(-100.0));
+        assert_eq!(parse_delay_ms("−3000"), Some(-2000.0), "clamped");
+        assert_eq!(parse_delay_ms("+"), None);
+        assert_eq!(parse_delay_ms("−"), None);
+        assert_eq!(parse_delay_ms("+-5"), None);
+        assert_eq!(parse_delay_ms("1−2"), None);
+        assert_eq!(clamp_delay_ms(-2400.0), -2000.0);
+        assert_eq!(clamp_delay_ms(25_000.0), 20_000.0);
+    }
+
+    #[test]
     fn a_newer_notice_about_the_same_subject_replaces_the_older_one() {
         let quit = |source: &str| NoticeMessage::SourceQuit {
             source: source.into(),

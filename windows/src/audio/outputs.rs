@@ -754,6 +754,122 @@ mod tests {
         assert!(listing.notes.is_empty());
     }
 
+    fn endpoint_of(id: &str, kind: OutputKind) -> Endpoint {
+        Endpoint {
+            id: id.to_owned(),
+            name: format!("Output {id}"),
+            is_default: false,
+            kind,
+        }
+    }
+
+    #[test]
+    fn the_built_in_output_with_the_smallest_endpoint_id_is_the_reference() {
+        let mut listed = vec![
+            endpoint_of("{0.0.0.00000000}.{b2}", OutputKind::BuiltIn),
+            endpoint_of("{0.0.0.00000000}.{0f}", OutputKind::Usb),
+            endpoint_of("{0.0.0.00000000}.{a7}", OutputKind::BuiltIn),
+        ];
+        assert_eq!(reference_output(&listed), Some("{0.0.0.00000000}.{a7}"));
+        // Windows' default output plays no part: the user changes it freely.
+        listed[0].is_default = true;
+        listed[1].is_default = true;
+        assert_eq!(reference_output(&listed), Some("{0.0.0.00000000}.{a7}"));
+        // Byte order: an uppercase letter sorts before a lowercase one.
+        listed.push(endpoint_of("{0.0.0.00000000}.{B9}", OutputKind::BuiltIn));
+        assert_eq!(reference_output(&listed), Some("{0.0.0.00000000}.{B9}"));
+    }
+
+    #[test]
+    fn headphones_on_the_pc_jack_are_not_the_reference() {
+        let listed = [
+            endpoint_of("a", OutputKind::Headphones),
+            endpoint_of("b", OutputKind::BuiltIn),
+        ];
+        assert_eq!(reference_output(&listed), Some("b"));
+        assert_eq!(
+            reference_output(&[endpoint_of("a", OutputKind::Headphones)]),
+            None
+        );
+    }
+
+    #[test]
+    fn no_built_in_output_means_no_reference() {
+        let listed: Vec<Endpoint> = [
+            OutputKind::Bluetooth,
+            OutputKind::Usb,
+            OutputKind::Hdmi,
+            OutputKind::DisplayPort,
+            OutputKind::Virtual,
+            OutputKind::Other,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, kind)| endpoint_of(&index.to_string(), kind))
+        .collect();
+        assert_eq!(reference_output(&listed), None);
+        assert_eq!(reference_output(&[]), None);
+    }
+
+    /// The PC's own speakers (the reference), a USB speaker at +150 ms and a
+    /// Bluetooth speaker at −250 ms, all listed; `enabled` are on.
+    fn local_delay_policy(airplay: AirPlay, enabled: &[&str]) -> OutputPolicy {
+        let mut policy = OutputPolicy::new(airplay);
+        policy.set_listed(&[
+            endpoint_of("builtin", OutputKind::BuiltIn),
+            endpoint_of("usb", OutputKind::Usb),
+            endpoint_of("bluetooth", OutputKind::Bluetooth),
+        ]);
+        policy.set_delay_ms("usb", 150.0);
+        policy.set_delay_ms("bluetooth", -250.0);
+        for id in enabled {
+            policy.set_enabled(id, true);
+        }
+        policy
+    }
+
+    /// The hold-back of output `id` in whole ms.
+    fn held_ms(policy: &OutputPolicy, id: &str) -> i64 {
+        policy.params(id).delay_frames / 48
+    }
+
+    #[test]
+    fn hold_backs_follow_the_offsets_of_the_outputs_taking_part() {
+        let all = ["builtin", "usb", "bluetooth"];
+        let policy = local_delay_policy(AirPlay::Unavailable, &all);
+        assert_eq!(policy.reference(), Some("builtin"));
+        let held: Vec<i64> = all.iter().map(|id| held_ms(&policy, id)).collect();
+        assert_eq!(held, [250, 400, 0]);
+        let policy = local_delay_policy(AirPlay::Unavailable, &["usb", "bluetooth"]);
+        assert_eq!(held_ms(&policy, "usb"), 400, "a switched-off reference");
+        let policy = local_delay_policy(sender(true, L), &all);
+        let held: Vec<i64> = all.iter().map(|id| held_ms(&policy, id)).collect();
+        assert_eq!(held, [1750, 1900, 1500], "L + o′");
+        let policy = local_delay_policy(sender(false, L), &all);
+        assert_eq!(
+            held_ms(&policy, "builtin"),
+            250,
+            "no AirPlay speaker chosen"
+        );
+    }
+
+    #[test]
+    fn the_airplay_adjustment_moves_l() {
+        let all = ["builtin", "usb", "bluetooth"];
+        let mut policy = local_delay_policy(sender(true, L), &all);
+        assert!(policy.set_airplay_adjustment_ms(250.0));
+        assert_eq!(policy.airplay_adjustment_ms(), 250.0);
+        assert_eq!(held_ms(&policy, "builtin"), 2000);
+        assert!(!policy.set_airplay_adjustment_ms(f64::NAN));
+        assert!(policy.set_airplay_adjustment_ms(-9000.0));
+        assert_eq!(policy.airplay_adjustment_ms(), -2000.0);
+        assert_eq!(
+            held_ms(&policy, "builtin"),
+            250,
+            "L = 0: the Bluetooth speaker sets the base"
+        );
+    }
+
     fn ids(endpoints: &[Endpoint]) -> Vec<&str> {
         endpoints
             .iter()
