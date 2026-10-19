@@ -59,8 +59,24 @@ if grep -nE 'api/player/volume|code: *"pvol"|70766f6c' "$SRC"/*.swift; then
   echo "FAIL: AudioSync writes the AirPlay engine's master volume"
   requests_ok=0
 fi
-if grep -nE '\\"(selected|volume)\\"' "$SRC"/*.swift | grep -v "^$SRC/AirPlayReconcile.swift:"; then
+# A body key in an escaped, raw or dictionary literal ("{\"volume\": 5}",
+# #"{"selected": true}"#, ["volume": 5]), or the engine's bulk switch
+# endpoints, which switch speakers on without a volume.
+if grep -nE '"(selected|volume)\\?" *:|outputs/set|/toggle' "$SRC"/*.swift | grep -v "^$SRC/AirPlayReconcile.swift:"; then
   echo "FAIL: a speaker's volume or switch-on body is built outside AirPlayVolume"
+  requests_ok=0
+fi
+# OwnToneClient.select sends every request of AirPlayVolume.selectRequests in
+# order: a loop over all but the last (the volume), then the last one (the
+# selection), whose answer it waits for. Without the loop the speaker is
+# switched on without its volume first, at the engine's own idea of it.
+select_body=$(awk '/static func select\(/ { f = 1 } f { sub(/\/\/.*/, ""); print } f && /^    }$/ { exit }' \
+  "$SRC/OwnToneClient.swift" | tr '\n' ' ')
+select_var=$(sed -nE 's/.*let +([A-Za-z_][A-Za-z0-9_]*) *= *AirPlayVolume\.selectRequests\(.*/\1/p' <<< "$select_body")
+if [ -z "$select_var" ] \
+  || ! grep -qE "for +[A-Za-z_][A-Za-z0-9_]* +in +$select_var\.dropLast\(\) *\{[^}]*[^A-Za-z0-9_.](enqueue|perform)\(" <<< "$select_body" \
+  || ! grep -qE "[^A-Za-z0-9_.]$select_var\.last([^A-Za-z0-9_]|\$)" <<< "$select_body"; then
+  echo "FAIL: OwnToneClient.select no longer sends every request of AirPlayVolume.selectRequests"
   requests_ok=0
 fi
 if [ "$requests_ok" = 1 ]; then echo "PASSED"; else status=1; fi
