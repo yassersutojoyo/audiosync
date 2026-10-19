@@ -19,15 +19,31 @@ allow = [
     "Unicode-DFS-2016",
     "BSL-1.0",
     "CC0-1.0",
-    # Slint's crates are "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR
-    # LicenseRef-Slint-Software-3.0"; AudioSync takes the royalty-free option,
-    # whose attribution is the AboutSlint widget in the About dialog.
-    "LicenseRef-Slint-Royalty-free-2.0",
 ]
 confidence-threshold = 0.93
 # Anything else needs a per-crate exception with a one-line reason, e.g.
 # { crate = "name", allow = ["MPL-2.0"] }, # why it is acceptable
-exceptions = []
+exceptions = [
+    # AudioSync's own code is GPL-3.0-or-later; the exception names only our
+    # own crates, so no third-party crate may bring a GPL license in.
+    { crate = "audiosync-windows", allow = ["GPL-3.0-or-later"] },
+    { crate = "audiosync-core", allow = ["GPL-3.0-or-later"] },
+    { crate = "audiosync-airplay", allow = ["GPL-3.0-or-later"] },
+    # Slint's crates are "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR
+    # LicenseRef-Slint-Software-3.0"; public builds take them under
+    # GPL-3.0-only, which only Slint's crates may use.
+    { crate = "i-slint-backend-selector", allow = ["GPL-3.0-only"] },
+    { crate = "i-slint-backend-winit", allow = ["GPL-3.0-only"] },
+    { crate = "i-slint-common", allow = ["GPL-3.0-only"] },
+    { crate = "i-slint-compiler", allow = ["GPL-3.0-only"] },
+    { crate = "i-slint-core", allow = ["GPL-3.0-only"] },
+    { crate = "i-slint-core-macros", allow = ["GPL-3.0-only"] },
+    { crate = "i-slint-renderer-femtovg", allow = ["GPL-3.0-only"] },
+    { crate = "i-slint-renderer-software", allow = ["GPL-3.0-only"] },
+    { crate = "slint", allow = ["GPL-3.0-only"] },
+    { crate = "slint-build", allow = ["GPL-3.0-only"] },
+    { crate = "slint-macros", allow = ["GPL-3.0-only"] },
+]
 include-dev = true
 include-build = true
 # The list is a policy, not an inventory: a license nobody uses yet is fine.

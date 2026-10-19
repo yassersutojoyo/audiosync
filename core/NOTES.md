@@ -94,7 +94,7 @@ Contract (also in the header): `asc_eq_process` runs on one capture thread at a 
 
 ### Dependencies and licenses
 
-- Runtime dependency: `audiosync-airplay` (`airplay/` in this repository, MIT), AudioSync's own AirPlay sender, which the macOS app reaches through this crate's C interface because it links one Rust static library; its third-party crates are listed in `THIRD_PARTY_NOTICES.md`, and `scripts/core_notices.py` writes their license texts next to the library. It raised the minimum Rust from 1.85 to 1.88, the sender's; the two clippy lints that turns on for newer std APIs (`as_chunks`, `is_multiple_of`) are allowed in `Cargo.toml` for the existing audio code.
+- Runtime dependency: `audiosync-airplay` (`airplay/` in this repository, GPL-3.0-or-later like the core), AudioSync's own AirPlay sender, which the macOS app reaches through this crate's C interface because it links one Rust static library; its third-party crates are listed in `THIRD_PARTY_NOTICES.md`, and `scripts/core_notices.py` writes their license texts next to the library. It raised the minimum Rust from 1.85 to 1.88, the sender's; the two clippy lints that turns on for newer std APIs (`as_chunks`, `is_multiple_of`) are allowed in `Cargo.toml` for the existing audio code.
 - Dev-dependencies: `criterion` 0.7 (benchmarks) and `proptest` 1.11 (property tests). Both are MIT OR Apache-2.0.
 - `deny.toml` allows only MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, Zlib, ISC and Unicode-3.0 (Unicode-DFS-2016 isn't needed). `include-dev` and `include-build` hold test, benchmark and build tools to the same list; without them cargo-deny checks only the crate itself. CI installs cargo-deny 0.20.2, the version checked locally.
 
