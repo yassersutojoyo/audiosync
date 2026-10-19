@@ -17,7 +17,7 @@ enum StartOrigin: Equatable {
 /// tests can check them. Clause numbers refer to docs/ENGINE_SPEC.md, case IDs
 /// to docs/EDGE_CASES.md.
 enum AppLifecycle {
-    /// How often the AirPlay engine's speaker list and then the local devices
+    /// How often the AirPlay sender's speaker list and then the local devices
     /// are read again (S101).
     static let pollInterval: TimeInterval = 3
 
@@ -43,10 +43,11 @@ enum AppLifecycle {
     static func answersSecondLaunch(exiting: Bool) -> Bool { !exiting }
 
     /// The signals that end AudioSync the clean way (S111): the entry point
-    /// marks the app as quitting, stops the bundled engine and exits. SIGTERM
-    /// comes from `kill` or a logout, SIGINT from Ctrl-C in the terminal that
-    /// launched it; left to their default action, either would end the
-    /// process with the engine still running.
+    /// marks the app as quitting, so a second launch arriving meanwhile waits
+    /// instead of being answered, and exits with status 0, even while a modal
+    /// alert keeps the main queue busy. SIGTERM comes from `kill` or a logout,
+    /// SIGINT from Ctrl-C in the terminal that launched it; left to their
+    /// default action, either would end the process as killed by a signal.
     static let exitSignals: [Int32] = [SIGTERM, SIGINT]
 
     /// A capture format change rebuilds the session at the new rate (S20).

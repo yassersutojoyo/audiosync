@@ -24,9 +24,10 @@ if otherRunningCopy() != nil {
     }
     center.postNotificationName(AppDelegate.showRequest, object: nil, userInfo: nil, deliverImmediately: true)
 
-    // A copy that is quitting stops answering but may need the whole engine
-    // shutdown to disappear, so wait at least that long before giving up.
-    let limit = Date().addingTimeInterval(EngineShutdown.drainTimeout + EngineShutdown.gracefulStop + 1)
+    // A copy that is quitting stops answering but may need its whole shutdown
+    // (the AirPlay sender's teardown takes up to about 2 s) to disappear, so
+    // wait well past that before giving up.
+    let limit = Date().addingTimeInterval(5.5)
     var stillThere = true
     while !flag.received && Date() < limit {
         // With no input source attached the run loop returns at once; pause
@@ -64,9 +65,9 @@ launchApp.setActivationPolicy(.regular)
 signal(SIGPIPE, SIG_IGN)
 
 // The exit signals are handled off the main queue because a modal alert can
-// keep the main queue busy, and the bundled engine must still be stopped on
-// the way out. One serial queue for all of them, so two signals arriving
-// together never run the shutdown twice at once.
+// keep the main queue busy, and the app must still leave at once. One serial
+// queue for all of them, so two signals arriving together never run the
+// shutdown twice at once.
 let exitSignalQueue = DispatchQueue(label: "audiosync.exit-signals", qos: .userInitiated)
 let exitSignalSources = AppLifecycle.exitSignals.map { number -> DispatchSourceSignal in
     signal(number, SIG_IGN)   // the default action would end the process before the source sees it
@@ -74,7 +75,6 @@ let exitSignalSources = AppLifecycle.exitSignals.map { number -> DispatchSourceS
     source.setEventHandler { @Sendable in
         // A launch arriving during the shutdown should not be told we're here.
         AppDelegate.exiting.store(true, ordering: .relaxed)
-        AirPlayEngine.shared.stopForExit()
         exit(0)
     }
     source.resume()

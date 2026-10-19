@@ -35,13 +35,13 @@ jobs:
           scripts/shellcheck.sh --install "$RUNNER_TEMP/shellcheck"
           echo "$RUNNER_TEMP/shellcheck" >> "$GITHUB_PATH"
 
-      - name: Tests (shellcheck, logic, FIFO and the core's app-side parts)
+      - name: Tests (shellcheck, logic and the core's app-side parts)
         run: Tests/run-tests.sh
 
       - name: make-dmg.sh packages a signed bundle into an image that mounts with the app, an Applications link and the README
         run: |
           # A stand-in bundle around the release binary, signed ad hoc: the
-          # real bundle needs the engine build, which CI doesn't do.
+          # real bundle is build.sh's, which the app-bundle job checks.
           work="$RUNNER_TEMP/dmg-check"
           app="$work/AudioSync.app"
           mkdir -p "$app/Contents/MacOS" "$work/mnt"
@@ -95,7 +95,7 @@ jobs:
           rm -f AudioSync.dmg
 
       - name: Python syntax
-        run: python3 -I -m py_compile scripts/bundle_engine.py scripts/brand/compose.py scripts/brand/tidy-svg.py scripts/brand/tokens.py scripts/brand/ico.py scripts/windows_notices.py scripts/core_notices.py scripts/privacy_check.py
+        run: python3 -I -m py_compile scripts/brand/compose.py scripts/brand/tidy-svg.py scripts/brand/tokens.py scripts/brand/ico.py scripts/windows_notices.py scripts/core_notices.py scripts/privacy_check.py
 
       - name: Generated brand files are up to date (SVGs, the SwiftUI mark and the design tokens)
         run: |
@@ -115,15 +115,11 @@ jobs:
 
   app-bundle:
     # build.sh end to end, without touching /Applications or quitting anything:
-    # the AirPlay engine from setup.sh (cached until setup.sh or the library pins
-    # change), the core, Sparkle, signing with the local identity
-    # make-local-cert.sh creates, then the bundle is checked and started once,
-    # and a local identity that can't sign must stop the build.
+    # the core, Sparkle, signing with the local identity make-local-cert.sh
+    # creates, then the bundle is checked and started once, and a local
+    # identity that can't sign must stop the build.
     runs-on: macos-15
-    timeout-minutes: 90
-    env:
-      HOMEBREW_NO_AUTO_UPDATE: '1'
-      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
 
@@ -133,43 +129,16 @@ jobs:
           rustup default stable
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
-      - name: Restore the AirPlay engine build
-        id: engine-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.audiosync-build/deps
-            ~/.audiosync-build/engine
-            ~/.audiosync-build/owntone.tar.xz
-          key: engine-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('setup.sh', 'scripts/engine_deps.sh') }}
-
-      - name: AirPlay engine and its libraries (./setup.sh, engine only)
-        if: steps.engine-cache.outputs.cache-hit != 'true'
-        run: AUDIOSYNC_ENGINE_ONLY=1 ./setup.sh
-
-      - name: Save the AirPlay engine build
-        if: steps.engine-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.audiosync-build/deps
-            ~/.audiosync-build/engine
-            ~/.audiosync-build/owntone.tar.xz
-          key: ${{ steps.engine-cache.outputs.cache-primary-key }}
-
       - name: Build the app (./build.sh --no-install, with the local identity make-local-cert.sh creates)
         run: |
           security list-keychains -d user > "$RUNNER_TEMP/keychains-before"
-          # A value of the app's retired engine switch in the environment must not
-          # be taken for the engine binary: the default engine is still bundled
-          # (--engine below).
-          AUDIOSYNC_ENGINE=rust ./build.sh --no-install
+          ./build.sh --no-install
           security list-keychains -d user > "$RUNNER_TEMP/keychains-after"
           # The signing keychain was in the search list only while signing.
           diff "$RUNNER_TEMP/keychains-before" "$RUNNER_TEMP/keychains-after"
 
       - name: Check the bundle and start it once
-        run: Tests/check-app-bundle.sh --engine --launch --signer "AudioSync Local Code Signing" .build/app/AudioSync.app
+        run: Tests/check-app-bundle.sh --launch --signer "AudioSync Local Code Signing" .build/app/AudioSync.app
 
       - name: Nothing was installed
         run: test ! -e /Applications/AudioSync.app && test ! -e "$HOME/Applications/AudioSync.app"
@@ -212,11 +181,3 @@ jobs:
         run: |
           python3 -I scripts/privacy_check.py --self-test
           python3 -I scripts/privacy_check.py
-
-  engine-patches:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v5
-      - name: OwnTone patches still apply (pinned 29.2 source, checksum-verified)
-        run: ./setup.sh --patches-only "$RUNNER_TEMP/owntone"

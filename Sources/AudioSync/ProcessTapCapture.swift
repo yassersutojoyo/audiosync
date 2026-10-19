@@ -440,7 +440,7 @@ private extension SourceCapture {
         deinit { stereoBlock.deallocate() }
 
         /// IO thread: one callback's input, equalized once and written to the ring
-        /// and the pipe feed block by block (S7, S34–S40). Real-time safe.
+        /// and the AirPlay sender's input block by block (S7, S34–S40). Real-time safe.
         func consume(_ input: UnsafePointer<AudioBufferList>) {
             callbacks.wrappingAdd(1, ordering: .relaxed)
             let channels = CaptureChannels(input)
