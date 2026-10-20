@@ -40,7 +40,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A virtual output you turn off stays in the list for the rest of the session, instead of disappearing from under the keyboard focus.
 - If you switch on a second Apple TV while another one is showing its PIN prompt, it says "Waiting to pair…" and gets its own prompt next.
 - The same pairing fix as on the Mac: switching an AirPlay speaker off and straight back on no longer lets the first pairing's late answer spoil the second one.
-- Opening AudioSync a second time brings the running window forward instead of starting a second copy, also when the first copy runs as administrator. If you open it while the running copy is still quitting, the new one starts once the old one is gone.
+- Opening AudioSync a second time brings the running window forward instead of starting a second copy. When the first copy runs as administrator, a normal launch doesn't start a second copy either, but it can't bring that window forward. If you open it while the running copy is still quitting, the new one starts once the old one is gone, as long as that takes no more than a few seconds.
 - The pairing wording matches the Mac: the dialog is called "Pair with" and the speaker's name, it asks for a PIN, and it says that Cancel turns the speaker off and that it connects without a PIN once paired. A few notices read more clearly too.
 - A debug log for testing: start it with `AUDIOSYNC_DEBUG=1` and it writes `%TEMP%\audiosync-debug.log` (see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)).
 
