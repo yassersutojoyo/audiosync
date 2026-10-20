@@ -34,7 +34,9 @@ use super::com::{
 use super::devices::enumerator;
 use crate::audio::backend::BackendError;
 use crate::audio::controller::RendererHandle;
-use crate::audio::outputs::{RenderFormat, StreamSetup, render_buffer_hns, render_format};
+use crate::audio::outputs::{
+    RenderFormat, StreamSetup, period_frames, render_buffer_hns, render_format,
+};
 use crate::audio::render::RenderPipeline;
 
 /// The flags of every render stream: event-driven, and without volume
@@ -169,6 +171,7 @@ fn run(
             Ok(pipeline) => pipeline,
             Err(error) => return ready.fail(error),
         };
+    pipeline.set_period_frames(stream.period_frames);
     if let Err(error) = prefill_silence(&stream) {
         return ready.fail(error);
     }
@@ -208,6 +211,9 @@ struct RenderStream {
     buffer_frames: u32,
     /// The stream latency Windows reports, in device frames.
     latency_frames: u32,
+    /// The device's default period, in device frames: what each wake
+    /// refills when it is on time.
+    period_frames: usize,
 }
 
 /// Opens a shared-mode, event-driven stream on the endpoint `id`, in its
@@ -277,6 +283,7 @@ fn open_stream(id: &str) -> Result<RenderStream, BackendError> {
             format,
             buffer_frames,
             latency_frames,
+            period_frames: period_frames(default_period, format.rate),
         })
     }
 }

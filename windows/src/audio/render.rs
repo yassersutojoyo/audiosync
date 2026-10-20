@@ -71,6 +71,23 @@ impl RenderPipeline {
         self.renderer.shortfall_frames()
     }
 
+    /// Sets the endpoint's period, in device frames: what each wake refills
+    /// when it is on time, which the output's lead counts rather than a late
+    /// wake's larger fill (S206). Call it before the first render.
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "the WASAPI render loop sets it")
+    )]
+    pub fn set_period_frames(&mut self, frames: usize) {
+        self.renderer.set_period_frames(frames);
+    }
+
+    /// The lead the output's reader got at its last callback (S206).
+    #[cfg(test)]
+    pub fn lead_frames(&self) -> i64 {
+        self.renderer.lead_frames()
+    }
+
     /// Fills `out`, interleaved with [`RenderPipeline::channels`] channels.
     pub fn render(&mut self, out: &mut [f32]) {
         self.renderer.render(out);
@@ -541,6 +558,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// An endpoint whose period the pipeline knows: a late wake's fill of
+    /// two periods gets a lead for two periods, and the next on-time wake is
+    /// back at one (S206).
+    #[test]
+    fn a_late_wake_raises_the_lead_for_its_own_fill_only() {
+        let mut s = setup(44_100, 2, 0, 1.0);
+        s.pipeline.set_period_frames(441);
+        for _ in 0..100 {
+            s.writer.write(&[0.5f32; 960], 480);
+        }
+        play(&mut s, 441, 441);
+        let on_time = s.pipeline.lead_frames();
+        s.writer.write(&[0.5f32; 960], 480);
+        s.writer.write(&[0.5f32; 960], 480);
+        play(&mut s, 882, 882);
+        let late = s.pipeline.lead_frames();
+        s.writer.write(&[0.5f32; 960], 480);
+        play(&mut s, 441, 441);
+        assert!(late > on_time, "{late} after a late wake, {on_time} before");
+        assert_eq!(s.pipeline.lead_frames(), on_time);
+        assert_eq!(s.control.counters().starved_renders, 0);
     }
 
     #[test]
