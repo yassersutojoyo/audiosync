@@ -51,9 +51,9 @@ struct AppSettings: Equatable {
         /// engine. Never written now; a value left there has no effect, is
         /// noted once and removed (`RetiredEngineChoice`).
         static let retiredEngineChoice = "engineImpl"
-        /// "native" or "owntone", from builds that offered a choice of AirPlay
-        /// sender. Never written now; a value left there has no effect, is
-        /// noted once and removed (`RetiredAirPlayChoice`).
+        /// "native" or the old engine's value, from builds that offered a
+        /// choice of AirPlay sender. Never written now; a value left there has
+        /// no effect, is noted once and removed (`RetiredAirPlayChoice`).
         static let retiredAirPlayChoice = "airplayImpl"
         /// Each local speaker's offset in ms relative to the reference
         /// (−2000…20 000), by device UID (S175). Missing is 0.
