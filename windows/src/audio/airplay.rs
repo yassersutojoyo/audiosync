@@ -42,10 +42,12 @@
 //! lifetime; each capture session borrows it through a [`FeedSlot`] and gives
 //! it back when the capture ends.
 //!
-//! A sender that stopped after an internal error, or whose discovery did,
-//! is reported once as [`BackendEvent::AirPlayStopped`]; the user's Retry
-//! replaces it with a new one from a [`SenderStarter`], and the speakers
-//! that were on keep their settings and play again once listed.
+//! A sender that stopped after an internal error, or whose discovery did or
+//! couldn't start, is reported once as [`BackendEvent::AirPlayStopped`]; the
+//! user's Retry replaces it with a new one from a [`SenderStarter`], and the
+//! speakers that were on keep their settings and play again once listed. A
+//! sender that couldn't start at all is reported the same way (by the
+//! controller), and Retry starts one.
 //!
 //! The sender sits behind [`AirPlayLink`], so the backend logic is tested
 //! with a fake; [`SenderLink`] is the real one.
@@ -134,9 +136,32 @@ pub trait AirPlayLink {
     fn is_running(&self) -> bool;
 }
 
-/// Starts a new sender, with the feed for its input, to replace one that
-/// stopped; `None` when it couldn't start (it logs why).
-pub type SenderStarter = Box<dyn FnMut() -> Option<(Box<dyn AirPlayLink>, Option<FeedSlot>)>>;
+/// A sender a [`SenderStarter`] started.
+pub struct StartedSender {
+    /// The sender.
+    pub link: Box<dyn AirPlayLink>,
+    /// The feed for its input.
+    pub feed: Option<FeedSlot>,
+    /// Whether it browses for receivers: false when its discovery couldn't
+    /// start, so it lists nothing.
+    pub browsing: bool,
+}
+
+impl StartedSender {
+    /// A sender that browses for receivers, with `feed` for its input.
+    #[cfg(test)]
+    pub fn browsing(link: Box<dyn AirPlayLink>, feed: Option<FeedSlot>) -> StartedSender {
+        StartedSender {
+            link,
+            feed,
+            browsing: true,
+        }
+    }
+}
+
+/// Starts a sender: at launch, and when the user retries after one stopped
+/// or couldn't start; `None` when it couldn't start (it logs why).
+pub type SenderStarter = Box<dyn FnMut() -> Option<StartedSender>>;
 
 /// The real sender.
 pub struct SenderLink {
@@ -629,11 +654,27 @@ impl AirPlaySpeakers {
                     .to_owned()
             });
         }
+        self.mark_stopped(events);
+        changed
+    }
+
+    /// The sender's discovery couldn't start, so it lists nothing: reported
+    /// as when discovery stops later, so that Retry starts a new sender.
+    pub fn discovery_unavailable(&mut self, events: &mut Vec<BackendEvent>) {
+        self.log.log(|| {
+            "AirPlay: discovery couldn't start, so no receiver is listed; Retry starts a new sender"
+                .to_owned()
+        });
+        self.mark_stopped(events);
+    }
+
+    /// Counts the sender as stopped, reported once until a new one replaces
+    /// it.
+    fn mark_stopped(&mut self, events: &mut Vec<BackendEvent>) {
         if !self.stopped {
             self.stopped = true;
             events.push(BackendEvent::AirPlayStopped);
         }
-        changed
     }
 
     /// Sends what happens to `log`.
@@ -1108,10 +1149,7 @@ impl AirPlaySpeakers {
                         "AirPlay: discovery stopped after an internal error; Retry starts a new sender"
                             .to_owned()
                     });
-                    if !self.stopped {
-                        self.stopped = true;
-                        events.push(BackendEvent::AirPlayStopped);
-                    }
+                    self.mark_stopped(&mut events);
                 }
             }
         }

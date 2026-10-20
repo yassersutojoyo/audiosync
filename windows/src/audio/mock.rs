@@ -237,6 +237,11 @@ pub struct MockDriver {
     hold_fades: Arc<AtomicBool>,
     captures_started: Vec<Activation>,
     renderers_started: Vec<String>,
+    /// Every capture start asked for, refused ones included.
+    capture_attempts: usize,
+    /// The endpoint ID of every output start asked for, refused ones
+    /// included.
+    renderer_attempts: Vec<String>,
 }
 
 impl Default for MockDriver {
@@ -281,6 +286,8 @@ impl MockDriver {
             hold_fades: Arc::new(AtomicBool::new(false)),
             captures_started: Vec::new(),
             renderers_started: Vec::new(),
+            capture_attempts: 0,
+            renderer_attempts: Vec::new(),
         }
     }
 
@@ -299,6 +306,19 @@ impl MockDriver {
     /// The endpoint ID of every output started, in order.
     pub fn renderers_started(&self) -> &[String] {
         &self.renderers_started
+    }
+
+    /// How many capture starts were asked for, refused ones included.
+    pub fn capture_attempts(&self) -> usize {
+        self.capture_attempts
+    }
+
+    /// How many starts of output `id` were asked for, refused ones included.
+    pub fn renderer_attempts(&self, id: &str) -> usize {
+        self.renderer_attempts
+            .iter()
+            .filter(|attempt| *attempt == id)
+            .count()
     }
 
     /// How many outputs were asked to fade out and stop.
@@ -503,6 +523,7 @@ impl Driver for MockDriver {
         equalizer: EqProcessor,
         airplay: Option<FeedLease>,
     ) -> Result<MockCapture, BackendError> {
+        self.capture_attempts += 1;
         if let Some(error) = &self.capture_error {
             return Err(error.clone());
         }
@@ -525,6 +546,7 @@ impl Driver for MockDriver {
         _control: RendererControl,
         _gain: Arc<SharedGain>,
     ) -> Result<MockRenderer, BackendError> {
+        self.renderer_attempts.push(endpoint.id.clone());
         if !self.outputs.iter().any(|output| output.id == endpoint.id) {
             return Err(BackendError::DeviceGone);
         }
