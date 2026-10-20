@@ -689,6 +689,10 @@ impl App {
             let mut ui = self.ui.borrow_mut();
             let show_virtual = ui.show_virtual;
             ui.listed_virtual.note(&state.speakers, show_virtual);
+            // A speaker that went takes what was typed for it along: back,
+            // it shows its saved delay.
+            ui.delay_drafts
+                .retain(|id, _| state.speakers.iter().any(|s| s.id == *id));
         }
         let ui = self.ui.borrow();
         let item = |speaker: &ui_model::Speaker, show_kind: bool| {
@@ -1388,15 +1392,24 @@ impl App {
         }
     }
 
+    /// Opens or closes a speaker's sync controls. Closing applies what was
+    /// typed in its field: the delay button doesn't take the focus, so the
+    /// field goes without losing it first.
     fn toggle_sync(&self, id: &str) {
-        {
+        let closed = {
             let mut ui = self.ui.borrow_mut();
-            if !ui.sync_open.remove(id) {
+            let closed = ui.sync_open.remove(id);
+            if !closed {
                 ui.sync_open.insert(id.to_string());
+                ui.delay_drafts.remove(id);
             }
-            ui.delay_drafts.remove(id);
+            closed
+        };
+        if closed {
+            self.commit_delay(id);
+        } else {
+            self.refresh();
         }
-        self.refresh();
     }
 
     fn show_virtual_devices(&self, on: bool) {
