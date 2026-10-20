@@ -2786,6 +2786,77 @@ mod tests {
         assert_eq!(dac.volume, 35.0);
     }
 
+    /// Plugs a USB device in under `endpoint_id`, listed as `name`, and
+    /// polls.
+    fn plug_named(adapter: &mut AudioAdapter<MockBackend>, endpoint_id: &str, name: &str) {
+        adapter
+            .audio_mut()
+            .connect_output_as(endpoint_id, name, OutputKind::Usb);
+        adapter.poll();
+    }
+
+    #[test]
+    fn a_usb_speaker_windows_numbers_in_another_port_keeps_its_settings() {
+        let mut adapter = adapter();
+        plug_named(&mut adapter, DAC_PORT_1, "Speakers (Thronmax MDrill)");
+        turn_on(&mut adapter, DAC_PORT_1);
+        adapter.set_speaker_volume(&key(DAC_PORT_1), 35.0);
+        adapter.set_speaker_delay(&key(DAC_PORT_1), 120.0);
+
+        // In another port, Windows numbers it: still the same device.
+        unplug(&mut adapter, DAC_PORT_1);
+        plug_named(&mut adapter, DAC_PORT_2, "Speakers (2- Thronmax MDrill)");
+        let dac = speaker_of(&adapter, &key(DAC_PORT_2));
+        assert!(dac.enabled);
+        assert_eq!(dac.volume, 35.0);
+        assert_eq!(dac.delay_ms, Some(120.0));
+        assert_eq!(playing(&adapter), [DAC_PORT_2]);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_2]);
+
+        // Back in the first port without the number, they follow it again.
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_named(&mut adapter, DAC_PORT_1, "Speakers (Thronmax MDrill)");
+        assert!(enabled(&adapter, DAC_PORT_1));
+        assert_eq!(speaker_of(&adapter, &key(DAC_PORT_1)).volume, 35.0);
+    }
+
+    #[test]
+    fn twins_windows_numbers_apart_still_count_as_twins() {
+        let mut adapter = adapter();
+        // Two DACs of the same model: Windows numbers the second one.
+        plug_named(&mut adapter, DAC_PORT_1, "Speakers (USB DAC)");
+        turn_on(&mut adapter, DAC_PORT_1);
+        plug_named(&mut adapter, DAC_PORT_2, "Speakers (2- USB DAC)");
+        assert!(!enabled(&adapter, DAC_PORT_2));
+
+        // Both unplugged, one in a third port could be either: a new
+        // speaker, numbered or not.
+        unplug(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_named(&mut adapter, DAC_PORT_3, "Speakers (USB DAC)");
+        assert!(!enabled(&adapter, DAC_PORT_3));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1]);
+    }
+
+    #[test]
+    fn twins_windows_numbers_apart_that_appear_together_dont_take_settings() {
+        const DAC_PORT_4: &str = "usb-dac-port-4";
+        let mut adapter = adapter();
+        plug_named(&mut adapter, DAC_PORT_1, "Speakers (USB DAC)");
+        turn_on(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_1);
+        // Two of the model appear in one listing, one numbered by Windows:
+        // either could be the one that left.
+        let audio = adapter.audio_mut();
+        audio.connect_output_as(DAC_PORT_3, "Speakers (USB DAC)", OutputKind::Usb);
+        audio.connect_output_as(DAC_PORT_4, "Speakers (2- USB DAC)", OutputKind::Usb);
+        adapter.poll();
+        assert!(!enabled(&adapter, DAC_PORT_3));
+        assert!(!enabled(&adapter, DAC_PORT_4));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1]);
+    }
+
     #[test]
     fn a_port_a_moved_speaker_left_counts_as_new_only_until_it_is_listed_again() {
         let mut adapter = adapter();
