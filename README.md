@@ -65,7 +65,7 @@ The part I'm proudest of: AirPlay on Windows goes out through AudioSync's own Ai
 - Groups, auto-connect, and the same ten-band equalizer with a preamp and presets.
 - The same hint as on the Mac when a speaker you turned on sits very low or muted in Windows, with the same one-click fix.
 - A tray icon with a flyout, like the Mac's menu bar panel. Closing the window keeps it running there.
-- Keyboard shortcuts and Narrator support throughout ([`docs/WINDOWS_UI.md`](docs/WINDOWS_UI.md) lists them).
+- Keyboard shortcuts and Narrator support ([`docs/WINDOWS_UI.md`](docs/WINDOWS_UI.md) lists them).
 - Notices in the window instead of popups, for things like a speaker that went away, an output another app holds for itself, or no working sound output.
 - One copy at a time: opening it again brings the running window forward.
 - Your settings are kept between launches, and a settings or pairing file it can't read is set aside as a copy instead of being overwritten.
@@ -150,7 +150,7 @@ An Apple TV that asks for a PIN pairs once, with the PIN it shows, and a speaker
 ## Known limitations
 
 - Everything is about two seconds late because of the AirPlay buffer. Fine for music, not for video or games.
-- On `main`, AirPlay goes out as classic AirPlay (AirPlay 1), which most AirPlay 2 speakers still take; a speaker that only speaks AirPlay 2 isn't listed yet.
+- AirPlay goes out as classic AirPlay (AirPlay 1), which most AirPlay 2 speakers still take; a speaker that only speaks AirPlay 2 isn't listed yet.
 - Now Playing only works with Spotify and Music; macOS doesn't let other apps read the system-wide Now Playing info.
 
 ## License and credits
