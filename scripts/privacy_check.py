@@ -13,7 +13,7 @@ git directory (shared by every worktree; `#` starts a comment). Each entry is
 matched case-insensitively as a whole word. Without the list (in CI, for
 example) that rule is skipped and the script says so.
 
-Forbidden names (the upstream project's names and those of the projects the
+Forbidden names (names this repository must never spell, such as the projects the
 clean-room specs studied) can't be listed in plain text either, so
 `scripts/forbidden-names.txt` keeps a salt and, per name, the SHA-256 of the
 salt plus the normalized name (ASCII letters and digits, lowercased). Text is
