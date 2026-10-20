@@ -25,7 +25,6 @@ export global Strings {
     out property <string> connected-none-virtual-hidden: @tr("No connected speakers. Virtual devices are hidden; to list them, choose View > Show Virtual Devices.");
     out property <string> master-volume-title: @tr("Master Volume");
     out property <string> master-volume: @tr("Master volume");
-    out property <string> dismiss-notice: @tr("Dismiss Notice");
     out property <string> dismiss-all-notices: @tr("Dismiss All");
     out property <string> notices: @tr("Notices");
     // The button on the double-audio notice that opens its guide.
@@ -323,6 +322,13 @@ export global Strings {
             return @tr("Open Sound Settings");
         }
         return "";
+    }
+
+    // A notice's dismiss button, for Narrator: it names the notice, so the
+    // next notice's button, which takes the focus after a dismiss, says
+    // which notice it closes.
+    public pure function dismiss-notice(message: string) -> string {
+        return @tr("Dismiss: {}", message);
     }
 
     public pure function speaker-options(name: string) -> string {

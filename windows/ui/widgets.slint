@@ -9,7 +9,7 @@
 import { Button, LineEdit, Slider, Switch } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Availability, DeviceVolumeHint, GroupItem, NoticeItem, RowState, SpeakerItem, SpeakerKind } from "types.slint";
+import { Availability, DeviceVolumeHint, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
 
 import "../../brand/fonts/Poppins-Medium.ttf";
 
@@ -534,6 +534,13 @@ export component SyncControls inherits VerticalLayout {
     property <int> focused-controls;
     out property <bool> focus-within: self.focused-controls > 0;
 
+    // Focuses the field with the cursor at the end of its text, to go on
+    // typing. The offset is in bytes; one past the end lands on the end.
+    public function focus-field() {
+        field.focus();
+        field.set-selection-offsets(field.text.character-count * 4, field.text.character-count * 4);
+    }
+
     spacing: 6px;
     // Typing replaces the field's binding; show the applied value after a step.
     changed delay-text => {
@@ -712,13 +719,31 @@ export component SpeakerRow inherits Rectangle {
     callback forget-pairing();
     // The fix after the device-volume hint.
     callback device-volume-fix();
-    // The row gained (true) or lost (false) the keyboard focus.
-    callback focus-changed(bool);
+    // The part of the row with the keyboard focus changed; none: the row
+    // lost it.
+    callback focus-changed(RowPart);
 
-    // Gives the row the keyboard focus, on its toggle.
-    public function take-focus() {
-        badge.focus();
+    // Gives the row the keyboard focus on `part`, or the nearest part that
+    // is there and does no harm on Space or Enter: the sync controls' field,
+    // else the delay button; the volume, else the options.
+    public function take-focus(part: RowPart) {
+        if part == RowPart.sync && root.item.has-delay && root.item.sync-open {
+            // The sync controls take it as they are built.
+            root.pending-focus = RowPart.sync;
+        } else if (part == RowPart.sync || part == RowPart.delay) && root.item.has-delay {
+            root.pending-focus = RowPart.delay;
+        } else if part == RowPart.volume && root.item.state != RowState.off {
+            volume-slider.focus-slider();
+        } else if part == RowPart.toggle {
+            badge.focus();
+        } else {
+            options.focus();
+        }
     }
+
+    // A part inside a condition, which take-focus can't reach: it takes the
+    // focus as it is built.
+    property <RowPart> pending-focus: RowPart.none;
 
     // Which of the row's controls has the keyboard focus. The ones a
     // refresh can take away (the delay button, the fix, the sync controls)
@@ -728,9 +753,9 @@ export component SpeakerRow inherits Rectangle {
     property <bool> fix-focused;
     property <bool> sync-focused;
     property <bool> options-focused;
-    property <bool> focus-within: self.badge-focused || self.delay-focused || volume-slider.slider-focused || self.fix-focused || self.sync-focused || self.options-focused;
-    changed focus-within => {
-        root.focus-changed(self.focus-within);
+    property <RowPart> focused-part: self.sync-focused ? RowPart.sync : self.options-focused ? RowPart.options : self.delay-focused ? RowPart.delay : volume-slider.slider-focused || self.fix-focused ? RowPart.volume : self.badge-focused ? RowPart.toggle : RowPart.none;
+    changed focused-part => {
+        root.focus-changed(self.focused-part);
     }
 
     // The line under the name: the kind of a connected speaker, and the note
@@ -840,6 +865,12 @@ export component SpeakerRow inherits Rectangle {
                             background: delay-touch.pressed ? Fluent.pressed : delay-touch.has-hover ? Fluent.hover : transparent;
                             animate background { duration: Fluent.fast; }
                             forward-focus: delay-focus;
+                            init => {
+                                if root.pending-focus == RowPart.delay {
+                                    root.pending-focus = RowPart.none;
+                                    delay-focus.focus();
+                                }
+                            }
                             accessible-role: button;
                             accessible-label: Strings.delay-of(root.item.name);
                             accessible-value: Strings.delay-value(root.item.delay-ms);
@@ -992,6 +1023,13 @@ export component SpeakerRow inherits Rectangle {
                         name: root.item.name;
                         delay-text: root.item.delay-text;
                         reference-name: root.item.reference-name;
+                        init => {
+                            // The field keeps what was typed (the app's draft).
+                            if root.pending-focus == RowPart.sync {
+                                root.pending-focus = RowPart.none;
+                                self.focus-field();
+                            }
+                        }
                         stepped(delta) => {
                             root.delay-stepped(delta);
                         }
@@ -1015,13 +1053,14 @@ export component GroupRow inherits Rectangle {
     callback toggled();
     callback rename();
     callback delete();
-    // The row gained (true) or lost (false) the keyboard focus.
-    callback focus-changed(bool);
+    // The part of the row with the keyboard focus changed (its toggle or
+    // its options); none: the row lost it.
+    callback focus-changed(RowPart);
 
-    // Gives the row the keyboard focus: its toggle, or its options while
-    // the toggle is off for want of members.
-    public function take-focus() {
-        if root.item.available > 0 {
+    // Gives the row the keyboard focus: its toggle, or its options when
+    // `part` is the options or the toggle is off for want of members.
+    public function take-focus(part: RowPart) {
+        if part == RowPart.toggle && root.item.available > 0 {
             badge.focus();
         } else {
             options.focus();
@@ -1030,9 +1069,9 @@ export component GroupRow inherits Rectangle {
 
     property <bool> badge-focused;
     property <bool> options-focused;
-    property <bool> focus-within: self.badge-focused || self.options-focused;
-    changed focus-within => {
-        root.focus-changed(self.focus-within);
+    property <RowPart> focused-part: self.options-focused ? RowPart.options : self.badge-focused ? RowPart.toggle : RowPart.none;
+    changed focused-part => {
+        root.focus-changed(self.focused-part);
     }
 
     border-radius: Fluent.radius-control;
@@ -1260,7 +1299,7 @@ export component NoticeStack inherits VerticalLayout {
                 dismiss := IconButton {
                     glyph: Glyphs.dismiss;
                     glyph-size: 12px;
-                    label: Strings.dismiss-notice;
+                    label: Strings.dismiss-notice(notice.message);
                     clicked => {
                         root.dismissed(notice.id);
                     }

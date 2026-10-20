@@ -8,7 +8,8 @@
 //! A list whose length changes is rebuilt; when that removes the control that
 //! had the focus in the tray flyout, the flyout takes the focus back so Escape
 //! still closes it, and in the main window the focus goes to the next notice,
-//! the same row rebuilt, or the streaming switch.
+//! the same control of the row rebuilt, a neighbouring row's options, or the
+//! streaming switch.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -29,7 +30,7 @@ use crate::ui_model::{
 use crate::{
     AboutDialog, AirPlayProblem, Availability, DeviceVolumeHint, EqualizerWindow, GroupItem,
     GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, Palette,
-    PinDialog, PinPhase, RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
+    PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
 };
 
 /// The digits the PIN field keeps of what was typed: four at most.
@@ -225,13 +226,13 @@ struct MainFocus {
     notice: Option<i32>,
     /// The notices' Dismiss All button.
     dismiss_all: bool,
-    /// A speaker row's control, by speaker id.
-    speaker: Option<SharedString>,
-    /// A group row's control, by group id.
-    group: Option<SharedString>,
+    /// A speaker row's control: the speaker id and the row's part.
+    speaker: Option<(SharedString, RowPart)>,
+    /// A group row's control: the group id and the row's part.
+    group: Option<(SharedString, RowPart)>,
 }
 
-/// Notes that the row `id` gained or lost the focus.
+/// Notes that the notice `id` gained or lost the focus.
 fn note_focus<T: PartialEq>(slot: &mut Option<T>, id: T, focused: bool) {
     if focused {
         *slot = Some(id);
@@ -241,15 +242,46 @@ fn note_focus<T: PartialEq>(slot: &mut Option<T>, id: T, focused: bool) {
     }
 }
 
+/// Notes that the focus moved to `part` of the row `id`, or left the row
+/// (`RowPart::None`).
+fn note_row_focus(slot: &mut Option<(SharedString, RowPart)>, id: SharedString, part: RowPart) {
+    if part != RowPart::None {
+        *slot = Some((id, part));
+    } else if slot.as_ref().is_some_and(|(held, _)| *held == id) {
+        // Another row may have reported gaining it first.
+        *slot = None;
+    }
+}
+
 /// Where the main window's keyboard focus goes after a refresh rebuilt
 /// the list that had it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 enum MainFocusTarget {
     /// The notice at this index.
     Notice(usize),
-    Speaker(SharedString),
-    Group(SharedString),
+    /// A speaker or group row, by id, on this part (the row falls back to a
+    /// harmless part when it hasn't that one).
+    Speaker(SharedString, RowPart),
+    Group(SharedString, RowPart),
     StreamingSwitch,
+}
+
+/// The row next to `old[at]`, which `new` no longer lists: the next row
+/// that `new` still lists, else the previous one, else the one in its
+/// place; none when `new` is empty.
+fn neighbour<T>(
+    old: &[T],
+    new: &[T],
+    at: usize,
+    id: impl Fn(&T) -> &SharedString,
+) -> Option<SharedString> {
+    let kept = |row: &&T| new.iter().any(|n| id(n) == id(row));
+    old[at + 1..]
+        .iter()
+        .find(kept)
+        .or_else(|| old[..at].iter().rev().find(kept))
+        .or_else(|| new.get(at.min(new.len().saturating_sub(1))))
+        .map(|row| id(row).clone())
 }
 
 impl MainFocus {
@@ -274,31 +306,47 @@ impl MainFocus {
                 len => MainFocusTarget::Notice(index.min(len - 1)),
             });
         }
-        if let Some(id) = &self.speaker {
-            let rebuilt = |old: &[SpeakerItem], new: &[SpeakerItem]| {
-                old.len() != new.len() && old.iter().any(|s| s.id == *id)
-            };
-            if rebuilt(&old.this_pc, &new.this_pc) || rebuilt(&old.connected, &new.connected) {
+        // A row that went hands the focus to a neighbour's options, where
+        // Space or Enter opens a menu rather than toggling a speaker or
+        // streaming; the streaming switch takes it only when the list is
+        // empty.
+        if let Some((id, part)) = &self.speaker {
+            for (old_rows, new_rows) in [
+                (&old.this_pc, &new.this_pc),
+                (&old.connected, &new.connected),
+            ] {
+                let Some(at) = old_rows.iter().position(|s| s.id == *id) else {
+                    continue;
+                };
+                if old_rows.len() == new_rows.len() {
+                    break;
+                }
                 let listed = new
                     .this_pc
                     .iter()
                     .chain(&new.connected)
                     .any(|s| s.id == *id);
                 return Some(if listed {
-                    MainFocusTarget::Speaker(id.clone())
+                    MainFocusTarget::Speaker(id.clone(), *part)
                 } else {
-                    MainFocusTarget::StreamingSwitch
+                    neighbour(old_rows, new_rows, at, |s| &s.id)
+                        .map_or(MainFocusTarget::StreamingSwitch, |next| {
+                            MainFocusTarget::Speaker(next, RowPart::Options)
+                        })
                 });
             }
         }
-        if let Some(id) = &self.group
+        if let Some((id, part)) = &self.group
             && old.groups.len() != new.groups.len()
-            && old.groups.iter().any(|g| g.id == *id)
+            && let Some(at) = old.groups.iter().position(|g| g.id == *id)
         {
             return Some(if new.groups.iter().any(|g| g.id == *id) {
-                MainFocusTarget::Group(id.clone())
+                MainFocusTarget::Group(id.clone(), *part)
             } else {
-                MainFocusTarget::StreamingSwitch
+                neighbour(&old.groups, &new.groups, at, |g| &g.id)
+                    .map_or(MainFocusTarget::StreamingSwitch, |next| {
+                        MainFocusTarget::Group(next, RowPart::Options)
+                    })
             });
         }
         None
@@ -783,12 +831,12 @@ impl App {
                 notice: new.notices.get(*index).map(|n| n.id),
                 ..MainFocus::default()
             },
-            MainFocusTarget::Speaker(id) => MainFocus {
-                speaker: Some(id.clone()),
+            MainFocusTarget::Speaker(id, part) => MainFocus {
+                speaker: Some((id.clone(), *part)),
                 ..MainFocus::default()
             },
-            MainFocusTarget::Group(id) => MainFocus {
-                group: Some(id.clone()),
+            MainFocusTarget::Group(id, part) => MainFocus {
+                group: Some((id.clone(), *part)),
                 ..MainFocus::default()
             },
             MainFocusTarget::StreamingSwitch => MainFocus::default(),
@@ -799,8 +847,14 @@ impl App {
         main.set_focus_group_id(SharedString::new());
         match &target {
             MainFocusTarget::Notice(index) => main.set_focus_notice_index(count(*index)),
-            MainFocusTarget::Speaker(id) => main.set_focus_speaker_id(id.clone()),
-            MainFocusTarget::Group(id) => main.set_focus_group_id(id.clone()),
+            MainFocusTarget::Speaker(id, part) => {
+                main.set_focus_speaker_part(*part);
+                main.set_focus_speaker_id(id.clone());
+            }
+            MainFocusTarget::Group(id, part) => {
+                main.set_focus_group_part(*part);
+                main.set_focus_group_id(id.clone());
+            }
             MainFocusTarget::StreamingSwitch => {}
         }
         Some(target)
@@ -919,15 +973,15 @@ impl App {
             with_app(&w, |app| app.main_focus.borrow_mut().dismiss_all = focused)
         });
         let w = weak.clone();
-        main.on_speaker_focus_changed(move |id, focused| {
+        main.on_speaker_focus_changed(move |id, part| {
             with_app(&w, |app| {
-                note_focus(&mut app.main_focus.borrow_mut().speaker, id, focused)
+                note_row_focus(&mut app.main_focus.borrow_mut().speaker, id, part)
             })
         });
         let w = weak.clone();
-        main.on_group_focus_changed(move |id, focused| {
+        main.on_group_focus_changed(move |id, part| {
             with_app(&w, |app| {
-                note_focus(&mut app.main_focus.borrow_mut().group, id, focused)
+                note_row_focus(&mut app.main_focus.borrow_mut().group, id, part)
             })
         });
         let w = weak.clone();
@@ -2549,7 +2603,11 @@ mod tests {
         tab(window, 24);
         press(window, "5");
         let draft = || app.ui.borrow().delay_drafts.get("local:desk").cloned();
-        assert_eq!(draft().as_deref(), Some("5"), "the desk's field has the focus");
+        assert_eq!(
+            draft().as_deref(),
+            Some("5"),
+            "the desk's field has the focus"
+        );
 
         // The cable row goes, so Connected Speakers is rebuilt.
         app.main.invoke_show_virtual_devices_toggled(false);
@@ -2646,23 +2704,82 @@ mod tests {
             Some(MainFocusTarget::StreamingSwitch)
         );
 
-        let on_group = |id: &str| MainFocus {
-            group: Some(id.into()),
+        let on_group = |id: &str, part| MainFocus {
+            group: Some((id.into(), part)),
             ..MainFocus::default()
         };
         assert_eq!(
-            on_group("a").target(&lists(&[], &["a", "b"]), &lists(&[], &["a"])),
-            Some(MainFocusTarget::Group("a".into()))
+            on_group("a", RowPart::Options).target(&lists(&[], &["a", "b"]), &lists(&[], &["a"])),
+            Some(MainFocusTarget::Group("a".into(), RowPart::Options)),
+            "the same group, on the same part"
         );
         assert_eq!(
-            on_group("b").target(&lists(&[], &["a", "b"]), &lists(&[], &["a"])),
+            on_group("b", RowPart::Toggle).target(&lists(&[], &["a", "b"]), &lists(&[], &["a"])),
+            Some(MainFocusTarget::Group("a".into(), RowPart::Options)),
+            "a deleted group: the options of the one before it"
+        );
+        assert_eq!(
+            on_group("a", RowPart::Toggle).target(&lists(&[], &["a"]), &lists(&[], &[])),
             Some(MainFocusTarget::StreamingSwitch),
-            "a deleted group"
+            "the last group went"
         );
         assert_eq!(
             MainFocus::default().target(&lists(&[1], &["a"]), &lists(&[], &[])),
             None,
             "nothing in the lists had the focus"
+        );
+    }
+
+    #[test]
+    fn a_removed_speaker_row_hands_the_focus_to_a_neighbours_options() {
+        let speakers = |ids: &[&str]| -> Vec<SpeakerItem> {
+            ids.iter()
+                .map(|&id| SpeakerItem {
+                    id: id.into(),
+                    ..SpeakerItem::default()
+                })
+                .collect()
+        };
+        let lists = |this_pc: &[&str], connected: &[&str]| MainLists {
+            this_pc: speakers(this_pc),
+            connected: speakers(connected),
+            ..MainLists::default()
+        };
+        let on = |id: &str, part| MainFocus {
+            speaker: Some((id.into(), part)),
+            ..MainFocus::default()
+        };
+        let options = |id: &str| Some(MainFocusTarget::Speaker(id.into(), RowPart::Options));
+        let before = lists(&["pc"], &["a", "b", "c"]);
+        assert_eq!(
+            on("b", RowPart::Toggle).target(&before, &lists(&["pc"], &["a", "c"])),
+            options("c"),
+            "the next row"
+        );
+        assert_eq!(
+            on("c", RowPart::Volume).target(&before, &lists(&["pc"], &["a", "b"])),
+            options("b"),
+            "the last row went: the one before it"
+        );
+        assert_eq!(
+            on("b", RowPart::Toggle).target(&before, &lists(&["pc"], &["a", "b", "c", "d"])),
+            Some(MainFocusTarget::Speaker("b".into(), RowPart::Toggle)),
+            "a rebuilt row keeps the focus on its part"
+        );
+        assert_eq!(
+            on("b", RowPart::Sync).target(&before, &lists(&["pc"], &["a", "c"])),
+            options("c"),
+            "the sync controls went with their row"
+        );
+        assert_eq!(
+            on("b", RowPart::Sync).target(&before, &lists(&["pc", "x"], &["a", "b", "c"])),
+            None,
+            "only the other list changed"
+        );
+        assert_eq!(
+            on("pc", RowPart::Toggle).target(&before, &lists(&[], &["a", "b", "c"])),
+            Some(MainFocusTarget::StreamingSwitch),
+            "its list is empty now"
         );
     }
 }
