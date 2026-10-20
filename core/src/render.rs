@@ -36,6 +36,12 @@
 //! device's clock runs fast, sped up when it runs slow,
 //! at most 1 / [`TRIM_SHARE`] of a callback's reads at a time.
 //!
+//! Exact differences (S208): each renderer publishes its start lead and
+//! hold-back in its ring's [`SessionLeads`], and gives its reader its
+//! hold-back plus the session lead, less its converter's latency, so every
+//! output sounds its hold-back plus the same session lead after the
+//! capture. When that delay changes, it re-anchors as on a delay change.
+//!
 //! The fade (S184 to S188):
 //!
 //! - The renderer starts closed. A frame its reader fills with silence closes
@@ -75,8 +81,10 @@ use std::time::Duration;
 
 use crate::convert::map_to_device;
 use crate::fade::{Fade, FadeState};
+use crate::lead::SessionLeads;
 use crate::reader::{Correction, NextRead, ReadReport, Reader, ReaderControl, ReaderCounters};
 use crate::resample::Resampler;
+use crate::ring::Ring;
 use crate::volume::{GainStage, SharedGain};
 
 /// Device frames rendered per read; bounds the renderer's buffers.
@@ -229,6 +237,24 @@ struct Shared {
     slowed_frames: AtomicU64,
     /// Capture frames the converter was sped up by in all (S207).
     sped_frames: AtomicU64,
+    /// The ring whose session lead counts this renderer, and its slot
+    /// there, `None` when every slot was taken (S208).
+    ring: Arc<Ring>,
+    slot: Option<usize>,
+}
+
+impl Shared {
+    fn leads(&self) -> &SessionLeads {
+        self.ring.session_leads()
+    }
+}
+
+impl Drop for Shared {
+    fn drop(&mut self) {
+        if let Some(slot) = self.slot {
+            self.ring.session_leads().release(slot);
+        }
+    }
 }
 
 /// A fade state as the renderer publishes it.
@@ -261,7 +287,9 @@ impl RendererControl {
     /// A control for the renderer that `reader` will be given to. The delay
     /// starts at the reader's target.
     pub fn new(reader: &Reader) -> RendererControl {
+        let ring = Arc::clone(reader.ring());
         let reader = reader.control();
+        let slot = ring.session_leads().claim(reader.delay_frames());
         RendererControl {
             shared: Arc::new(Shared {
                 fade_out: AtomicBool::new(false),
@@ -274,6 +302,8 @@ impl RendererControl {
                 shortfall_frames: AtomicU64::new(0),
                 slowed_frames: AtomicU64::new(0),
                 sped_frames: AtomicU64::new(0),
+                ring,
+                slot,
             }),
             reader,
         }
@@ -287,9 +317,13 @@ impl RendererControl {
     /// Asks for a new delay in capture-rate frames (S187). A renderer that
     /// plays fades out first and hands the delay to its reader after the
     /// fade-out's last frame; one that is closed hands it on at its next
-    /// callback. The value is stored before its flag.
+    /// callback. The value is stored before its flag, and counts for the
+    /// session lead at once (S208).
     pub fn set_delay_frames(&self, frames: i64) {
         self.shared.delay.store(frames.max(0), Ordering::Relaxed);
+        if let Some(slot) = self.shared.slot {
+            self.shared.leads().set_hold_back(slot, frames.max(0));
+        }
         self.shared.delay_flag.store(true, Ordering::Release);
     }
 
@@ -301,8 +335,11 @@ impl RendererControl {
 
     /// Asks the renderer to fade out from its next callback and render exact
     /// zeros after it, before its output stops (S185). It stays closed until
-    /// it stops.
+    /// it stops, and no longer counts for the session lead (S208).
     pub fn request_fade_out(&self) {
+        if let Some(slot) = self.shared.slot {
+            self.shared.leads().leave(slot);
+        }
         self.shared.fade_out.store(true, Ordering::Release);
     }
 
@@ -429,7 +466,18 @@ pub struct Renderer {
     fade: Fade,
     stop: Stop,
     /// A delay change that waits for the fade-out (S187).
-    delay_pending: Option<i64>,
+    delay_pending: bool,
+    /// The hold-back the renderer took from its control.
+    hold_back: i64,
+    /// The delay its reader was given last: the hold-back plus the session
+    /// lead, less the converter's latency (S208).
+    reader_delay: i64,
+    /// The converter's fixed latency, in capture frames (S62).
+    latency: i64,
+    /// The start lead is published: the host gave the period, or the
+    /// first callback came. Not before, so a renderer whose hold-back the
+    /// host hasn't set yet never moves the session lead (S208).
+    start_lead_fixed: bool,
     /// A delay went to the reader; closed until the read that applies it.
     awaiting_resync: bool,
     /// A held correction waits for the fade-out; closed until the first
@@ -478,6 +526,7 @@ impl Renderer {
         // callback, so a piece may ask for a frame or two above the bound.
         let bound = reader_frames_bound(RENDER_CHUNK, capture_rate, device_rate);
         let read_frames = bound + bound / TRIM_SHARE + 2;
+        let latency = resampler.latency_frames() as i64;
         Ok(Renderer {
             reader,
             reader_control: control.reader.clone(),
@@ -496,7 +545,11 @@ impl Renderer {
             converted: vec![0.0; RENDER_CHUNK * 2].into_boxed_slice(),
             fade: Fade::new(device_rate),
             stop: Stop::None,
-            delay_pending: None,
+            delay_pending: false,
+            hold_back: control.shared.delay.load(Ordering::Relaxed),
+            reader_delay: control.reader.delay_frames(),
+            latency,
+            start_lead_fixed: false,
             awaiting_resync: false,
             correction_due: false,
             frames_after_fade: None,
@@ -565,6 +618,10 @@ impl Renderer {
     /// callback, on the output's thread.
     pub fn set_period_frames(&mut self, frames: usize) {
         self.period_frames = frames;
+        if frames > 0 {
+            self.publish_start_lead(frames);
+            self.start_lead_fixed = true;
+        }
     }
 
     /// The lead the reader got at the start of the last callback, in
@@ -604,7 +661,12 @@ impl Renderer {
         let channels = self.channels;
         let frames = out.len() / channels;
         self.update_lead(frames);
+        if !self.start_lead_fixed {
+            self.publish_start_lead(frames);
+            self.start_lead_fixed = true;
+        }
         self.take_requests();
+        self.follow_session_lead();
         self.keep_reader_off_w(frames, now);
         let ramp = self.stage.begin(self.gain.get(), frames);
         let read_capacity = self.stereo.len() / 2;
@@ -819,18 +881,69 @@ impl Renderer {
             self.begin_fade_out(None);
         }
         if take(&self.shared.delay_flag) {
-            let delay = self.shared.delay.load(Ordering::Relaxed);
-            if self.fade.is_closed() {
-                // Nothing audible to fade (S187): the reader gets it now.
-                self.reader_control.set_delay_frames(delay);
-                self.awaiting_resync = true;
-            } else {
-                // A newer change replaces a waiting one; the fade-out isn't
-                // restarted.
-                self.delay_pending = Some(delay);
-                self.begin_fade_out(None);
-            }
+            self.hold_back = self.shared.delay.load(Ordering::Relaxed);
+            self.ask_reader_delay();
         }
+    }
+
+    /// Publishes the start lead for a steady callback of `callback` device
+    /// frames (S208): that callback without conversion; with it, the most
+    /// that callback can ask the reader for, plus the cap on the capture's
+    /// block and the converter's latency.
+    fn publish_start_lead(&self, callback: usize) {
+        let Some(slot) = self.shared.slot else {
+            return;
+        };
+        let lead = if self.resampler.is_passthrough() {
+            callback
+        } else {
+            reader_frames_bound(callback, self.capture_rate, self.device_rate)
+                .saturating_add(self.block_cap)
+                .saturating_add(self.latency as usize)
+        };
+        self.shared
+            .leads()
+            .set_lead(slot, i64::try_from(lead).unwrap_or(i64::MAX));
+    }
+
+    /// The delay the reader is to have (S208): the hold-back plus the
+    /// session lead, less the converter's latency.
+    fn wanted_reader_delay(&self) -> i64 {
+        let lead = self.shared.leads().session_lead();
+        self.hold_back
+            .saturating_add(lead)
+            .saturating_sub(self.latency)
+            .max(0)
+    }
+
+    /// Re-anchors the reader when the session lead moved its delay (S208),
+    /// unless the output is stopping or a change already waits.
+    fn follow_session_lead(&mut self) {
+        if self.stop == Stop::None
+            && !self.delay_pending
+            && self.wanted_reader_delay() != self.reader_delay
+        {
+            self.ask_reader_delay();
+        }
+    }
+
+    /// Gives the reader its delay now when nothing is audible (S187), else
+    /// after a fade-out. The delay is worked out when it is given, so the
+    /// changes that come during the fade-out land together; a newer change
+    /// replaces a waiting one, and the fade-out isn't restarted.
+    fn ask_reader_delay(&mut self) {
+        if self.fade.is_closed() {
+            self.give_reader_delay();
+        } else {
+            self.delay_pending = true;
+            self.begin_fade_out(None);
+        }
+    }
+
+    fn give_reader_delay(&mut self) {
+        self.reader_delay = self.wanted_reader_delay();
+        self.reader_control.set_delay_frames(self.reader_delay);
+        self.awaiting_resync = true;
     }
 
     /// One read of `need` frames for the piece that starts at callback frame
@@ -920,10 +1033,7 @@ impl Renderer {
     /// Whether a stop, a delay change or a held correction keeps the
     /// renderer closed (S184).
     fn waiting(&self) -> bool {
-        self.stop != Stop::None
-            || self.delay_pending.is_some()
-            || self.awaiting_resync
-            || self.correction_due
+        self.stop != Stop::None || self.delay_pending || self.awaiting_resync || self.correction_due
     }
 
     /// Starts a fade-out; one that ends at once (nothing audible) ends after
@@ -950,9 +1060,9 @@ impl Renderer {
     /// callback): a waiting delay goes to the reader (S187), and a stop's
     /// fade-out is published at the end of the callback (S185).
     fn fade_out_done(&mut self, last: Option<usize>) {
-        if let Some(delay) = self.delay_pending.take() {
-            self.reader_control.set_delay_frames(delay);
-            self.awaiting_resync = true;
+        if self.delay_pending {
+            self.delay_pending = false;
+            self.give_reader_delay();
         }
         if self.stop == Stop::Fading {
             self.stop = Stop::Ended(last);

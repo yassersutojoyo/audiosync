@@ -34,6 +34,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A delay you type, for a speaker or for AirPlay, now applies when you press Return or leave the field, not at every keystroke, so typing 220 no longer jumps through 2 and 22 ms on the way. Escape drops what you typed.
 - Quitting right after typing a delay, before pressing Return, now applies and saves it, so it's still there next time. Text that isn't a number keeps the delay you had. This goes for the Windows version too.
 - A USB or Bluetooth speaker that came back after being unplugged or disconnected could look like it was playing and still stay silent. It plays again now.
+- Speakers now play as far apart as their delays say, to within about 10 ms. When the speaker with the lowest delay was a Bluetooth speaker, or another one running at 44.1 kHz, the others used to play about 20 ms too early next to it, and a speaker set within a few ms of the lowest delay played a little early too. With an AirPlay speaker on, this didn't happen. If you tuned a delay by ear, you may need to nudge it by about 10 to 20 ms. The speaker with the lowest delay now starts a little later than before: a 44.1 kHz Bluetooth speaker on its own plays about 37 ms behind the source instead of about 22. This goes for the Windows version too.
 
 ### Windows (preview, not released yet)
 
