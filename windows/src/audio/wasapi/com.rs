@@ -4,8 +4,10 @@
 
 use std::ffi::c_void;
 use std::marker::PhantomData;
-use std::sync::mpsc;
+use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use windows::Win32::Foundation::{
     CloseHandle, E_FAIL, ERROR_NOT_FOUND, HANDLE, RPC_E_CHANGED_MODE,
@@ -155,53 +157,101 @@ impl Drop for ProAudioTask {
     }
 }
 
+/// How long a starting thread has to report through its [`Ready`]: an audio
+/// call that hangs (Windows audio still waking up, say) would otherwise hold
+/// the thread that waits, the UI thread, for good. As long as the loopback
+/// capture's own wait for its activation.
+const READY_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// How a starting thread tells the thread that started it that it runs, with
 /// what it set up (`T`), or why it couldn't start.
-pub(super) struct Ready<T = ()>(mpsc::Sender<Result<T, BackendError>>);
+pub(super) struct Ready<T = ()> {
+    sender: mpsc::Sender<Result<T, BackendError>>,
+    /// Set, under its lock, once the starter stopped waiting.
+    given_up: Arc<Mutex<bool>>,
+}
 
 impl<T> Ready<T> {
+    /// Reports that the thread runs, with what it set up. Returns false when
+    /// the starter already gave up waiting ([`READY_TIMEOUT`]): nothing will
+    /// ever use what the thread set up or stop it, so it undoes its start and
+    /// ends at once.
+    #[must_use]
     pub(super) fn ok(self, setup: T) -> bool {
-        self.0.send(Ok(setup)).is_ok()
+        let given_up = lock_flag(&self.given_up);
+        !*given_up && self.sender.send(Ok(setup)).is_ok()
     }
 
     pub(super) fn fail(self, error: BackendError) {
-        let _ = self.0.send(Err(error));
+        let _ = self.sender.send(Err(error));
     }
 }
 
+fn lock_flag(flag: &Mutex<bool>) -> MutexGuard<'_, bool> {
+    flag.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Runs `body` on a new thread named `name` and waits until it reports
-/// through its [`Ready`]; returns the thread and what it set up. A thread
-/// that couldn't start is joined, and its error returned.
+/// through its [`Ready`], for [`READY_TIMEOUT`] at most; returns the thread
+/// and what it set up. A thread that couldn't start is joined, and its error
+/// returned. One that doesn't report in time is left to end by itself
+/// (`Ready::ok` tells it), and [`BackendError::NotResponding`] returned, so
+/// the caller can try again later.
 pub(super) fn spawn_ready<T: Send + 'static>(
     name: &str,
     body: impl FnOnce(Ready<T>) + Send + 'static,
 ) -> Result<(JoinHandle<()>, T), BackendError> {
-    spawn_ready_within(name, std::time::Duration::from_secs(5), body)
+    spawn_ready_within(name, READY_TIMEOUT, body)
 }
 
+/// [`spawn_ready`], waiting `timeout` at most.
 fn spawn_ready_within<T: Send + 'static>(
     name: &str,
-    _timeout: std::time::Duration,
+    timeout: Duration,
     body: impl FnOnce(Ready<T>) + Send + 'static,
 ) -> Result<(JoinHandle<()>, T), BackendError> {
     let (sender, receiver) = mpsc::channel();
+    let given_up = Arc::new(Mutex::new(false));
+    let ready = Ready {
+        sender,
+        given_up: Arc::clone(&given_up),
+    };
     let thread = thread::Builder::new()
         .name(name.to_owned())
-        .spawn(move || body(Ready(sender)))
+        .spawn(move || body(ready))
         .map_err(|error| BackendError::System {
             call: "CreateThread",
             code: error
                 .raw_os_error()
                 .map_or(E_FAIL.0, |code| HRESULT::from_win32(code as u32).0),
         })?;
-    match receiver.recv() {
-        Ok(Ok(setup)) => Ok((thread, setup)),
-        Ok(Err(error)) => {
+    let answer = match receiver.recv_timeout(timeout) {
+        Ok(answer) => Some(answer),
+        Err(RecvTimeoutError::Disconnected) => None,
+        Err(RecvTimeoutError::Timeout) => {
+            // It may have answered just now. Once the flag is set under the
+            // lock, a later answer finds it set.
+            let mut given_up = lock_flag(&given_up);
+            match receiver.try_recv() {
+                Ok(answer) => Some(answer),
+                Err(TryRecvError::Disconnected) => None,
+                Err(TryRecvError::Empty) => {
+                    *given_up = true;
+                    // Detached: it ends by itself once its call returns.
+                    drop(thread);
+                    return Err(BackendError::NotResponding);
+                }
+            }
+        }
+    };
+    match answer {
+        Some(Ok(setup)) => Ok((thread, setup)),
+        Some(Err(error)) => {
             let _ = thread.join();
             Err(error)
         }
         // The thread ended without a word: it panicked.
-        Err(_) => {
+        None => {
             let _ = thread.join();
             Err(BackendError::System {
                 call: "audio thread start",
@@ -362,7 +412,7 @@ pub(super) unsafe fn read_mix_format(format: *const WAVEFORMATEX) -> MixFormat {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     use super::*;
     use crate::audio::capture::CAPTURE_ATTEMPTS;

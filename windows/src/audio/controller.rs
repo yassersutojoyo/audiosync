@@ -113,6 +113,13 @@ const RESTART_TRIES: u32 = 5;
 /// and the user hears it within three seconds once the device is free.
 const BUSY_RETRY_POLLS: u32 = 6;
 
+/// An output whose device didn't answer in time while it started
+/// ([`BackendError::NotResponding`]) is tried again this many polls later:
+/// about every ten seconds at the UI's two polls a second. Each such try
+/// holds the UI thread for up to five seconds, so most of the time the
+/// window stays responsive while Windows audio comes back.
+const STALL_RETRY_POLLS: u32 = 20;
+
 /// A capture that started again counts as working once it has run this many
 /// polls (about five seconds); a loss before then means the restart failed,
 /// and streaming stops. After it, the next loss is restarted again.
@@ -359,6 +366,9 @@ pub struct Controller<D: Driver> {
     /// have just ended). Once the listing drops one, it is lost
     /// ([`BackendEvent::OutputLost`]), as an output that played is.
     unplayable: BTreeSet<String>,
+    /// The outputs whose device didn't answer in time at their last start,
+    /// each with the polls left before its next try ([`STALL_RETRY_POLLS`]).
+    stalled: BTreeMap<String, u32>,
 }
 
 impl<D: Driver> Controller<D> {
@@ -392,6 +402,7 @@ impl<D: Driver> Controller<D> {
             device_volumes: device_volume::Followed::default(),
             busy: BTreeMap::new(),
             unplayable: BTreeSet::new(),
+            stalled: BTreeMap::new(),
         }
     }
 
@@ -705,8 +716,11 @@ impl<D: Driver> Controller<D> {
 
         let mut failures = Vec::new();
         for endpoint in plan.attach {
-            // A busy output waits for its next try.
-            if self.busy.get(&endpoint.id).is_some_and(|&wait| wait > 0) {
+            // A busy or stalled output waits for its next try.
+            let waits = |tries: &BTreeMap<String, u32>| {
+                tries.get(&endpoint.id).is_some_and(|&wait| wait > 0)
+            };
+            if waits(&self.busy) || waits(&self.stalled) {
                 continue;
             }
             let params = self.policy.params(&endpoint.id);
@@ -720,6 +734,7 @@ impl<D: Driver> Controller<D> {
             {
                 Ok(handle) => {
                     self.unplayable.remove(&endpoint.id);
+                    self.stalled.remove(&endpoint.id);
                     if self.busy.remove(&endpoint.id).is_some() {
                         self.log.log(|| {
                             format!(
@@ -767,6 +782,20 @@ impl<D: Driver> Controller<D> {
                             )
                         });
                     }
+                }
+                // Windows audio didn't answer in time (after a wake, say): it
+                // stays on, and is tried again a few seconds later, since
+                // each try may hold the UI thread that long.
+                Err(BackendError::NotResponding) => {
+                    self.unplayable.insert(endpoint.id.clone());
+                    self.stalled.insert(endpoint.id.clone(), STALL_RETRY_POLLS);
+                    self.log.log(|| {
+                        format!(
+                            "output {} didn't answer in time while starting; it stays on and is \
+                             tried again in about ten seconds",
+                            label(&self.names, &endpoint.id)
+                        )
+                    });
                 }
                 // Another app holds the device in exclusive mode: it stays
                 // on, as the user chose, and plays once that app lets go.
@@ -1417,7 +1446,11 @@ impl<D: Driver> AudioBackend for Controller<D> {
             format!("output {} switched {state}", label(&self.names, id))
         });
         self.policy.set_enabled(id, enabled);
-        // Switched off, a busy output no longer waits for its device.
+        // Switched off, a busy or stalled output no longer waits for its
+        // device: switched on again, it is tried at once.
+        if !enabled {
+            self.stalled.remove(id);
+        }
         if !enabled && self.busy.remove(id).is_some() {
             self.pending
                 .push(BackendEvent::OutputFree { id: id.to_owned() });
@@ -1683,8 +1716,8 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn poll(&mut self) -> Vec<BackendEvent> {
-        // A busy output's next try comes a poll closer.
-        for wait in self.busy.values_mut() {
+        // A busy or stalled output's next try comes a poll closer.
+        for wait in self.busy.values_mut().chain(self.stalled.values_mut()) {
             *wait = wait.saturating_sub(1);
         }
         // Outputs that faded out stop, and then an ended session's capture;
@@ -1796,7 +1829,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
 fn may_start_later(error: &BackendError) -> bool {
     matches!(
         error,
-        BackendError::DeviceGone | BackendError::DeviceBusy | BackendError::System { .. }
+        BackendError::DeviceGone
+            | BackendError::DeviceBusy
+            | BackendError::NotResponding
+            | BackendError::System { .. }
     )
 }
 

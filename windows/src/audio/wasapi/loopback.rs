@@ -178,10 +178,17 @@ fn run(
     if let Err(error) = unsafe { stream.client.Start() } {
         return ready.fail(system_error("IAudioClient::Start", &error));
     }
-    ready.ok(CaptureAttempt {
+    let waited = ready.ok(CaptureAttempt {
         format: stream.format,
         autoconvert: stream.autoconvert,
     });
+    if !waited {
+        // Nobody waits for this capture anymore, and nothing would stop it:
+        // it stops at once rather than capture unseen.
+        // SAFETY: stops the stream started above.
+        let _ = unsafe { stream.client.Stop() };
+        return;
+    }
     let result = capture_loop(&stream, &mut converter, stop);
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };
