@@ -151,7 +151,7 @@ An Apple TV that asks for a PIN pairs once, with the PIN it shows, and a speaker
 
 - Everything is about two seconds late because of the AirPlay buffer. Fine for music, not for video or games.
 - AirPlay goes out as classic AirPlay (AirPlay 1), which most AirPlay 2 speakers still take; a speaker that only speaks AirPlay 2 isn't listed yet.
-- I haven't tried the new AirPlay sender in 0.5.0 on a HomePod yet. If your HomePod doesn't show up or doesn't play, please [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with the debug log: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync` in Terminal, make it happen again, and attach `/tmp/audiosync-debug.log`.
+- I haven't tried the new AirPlay sender on a HomePod yet. If your HomePod doesn't show up or doesn't play, please [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with the debug log: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync` in Terminal, make it happen again, and attach `/tmp/audiosync-debug.log`.
 - Now Playing only works with Spotify and Music; macOS doesn't let other apps read the system-wide Now Playing info.
 
 ## License and credits
