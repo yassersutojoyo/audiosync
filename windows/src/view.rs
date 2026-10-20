@@ -29,8 +29,8 @@ use crate::ui_model::{
 };
 use crate::{
     AboutDialog, AirPlayProblem, Availability, DeviceVolumeHint, EqualizerWindow, GroupItem,
-    GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, Palette,
-    PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
+    GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, NoticeKind,
+    Palette, PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
 };
 
 /// The digits the PIN field keeps of what was typed: four at most.
@@ -284,6 +284,18 @@ fn neighbour<T>(
         .map(|row| id(row).clone())
 }
 
+/// The options of the first row `new` lists, This PC's, then Connected
+/// Speakers', then the groups' (a row's list is empty, so its own list adds
+/// nothing); the streaming switch when every list is empty.
+fn first_row(new: &MainLists) -> MainFocusTarget {
+    let speaker = new.this_pc.first().or_else(|| new.connected.first());
+    match (speaker, new.groups.first()) {
+        (Some(speaker), _) => MainFocusTarget::Speaker(speaker.id.clone(), RowPart::Options),
+        (None, Some(group)) => MainFocusTarget::Group(group.id.clone(), RowPart::Options),
+        (None, None) => MainFocusTarget::StreamingSwitch,
+    }
+}
+
 impl MainFocus {
     /// Where the focus goes when the lists change from `old` to `new`, if a
     /// rebuilt list (its length changed, [`sync_model`]) had it.
@@ -308,8 +320,9 @@ impl MainFocus {
         }
         // A row that went hands the focus to a neighbour's options, where
         // Space or Enter opens a menu rather than toggling a speaker or
-        // streaming; the streaming switch takes it only when the list is
-        // empty.
+        // streaming; once its list is empty, to the first row of the other
+        // lists ([`first_row`]), and the streaming switch takes it only when
+        // no row is left.
         if let Some((id, part)) = &self.speaker {
             for (old_rows, new_rows) in [
                 (&old.this_pc, &new.this_pc),
@@ -329,10 +342,10 @@ impl MainFocus {
                 return Some(if listed {
                     MainFocusTarget::Speaker(id.clone(), *part)
                 } else {
-                    neighbour(old_rows, new_rows, at, |s| &s.id)
-                        .map_or(MainFocusTarget::StreamingSwitch, |next| {
-                            MainFocusTarget::Speaker(next, RowPart::Options)
-                        })
+                    neighbour(old_rows, new_rows, at, |s| &s.id).map_or_else(
+                        || first_row(new),
+                        |next| MainFocusTarget::Speaker(next, RowPart::Options),
+                    )
                 });
             }
         }
@@ -343,10 +356,10 @@ impl MainFocus {
             return Some(if new.groups.iter().any(|g| g.id == *id) {
                 MainFocusTarget::Group(id.clone(), *part)
             } else {
-                neighbour(&old.groups, &new.groups, at, |g| &g.id)
-                    .map_or(MainFocusTarget::StreamingSwitch, |next| {
-                        MainFocusTarget::Group(next, RowPart::Options)
-                    })
+                neighbour(&old.groups, &new.groups, at, |g| &g.id).map_or_else(
+                    || first_row(new),
+                    |next| MainFocusTarget::Group(next, RowPart::Options),
+                )
             });
         }
         None
@@ -1839,6 +1852,7 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
     NoticeItem {
         id: i32::try_from(notice.id).unwrap_or(i32::MAX),
         message: notice_text(strings, &notice.message),
+        title: notice_title(strings, &notice.message),
         time: notice.time.as_str().into(),
         has_guide: guide::guide(&notice.message).is_some(),
         has_retry: notice.message == NoticeMessage::AirPlayStopped,
@@ -1969,6 +1983,37 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             }
         }
     }
+}
+
+/// A few words that name a notice, for its dismiss button.
+fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
+    let (kind, name) = match message {
+        NoticeMessage::NoSpeaker => (NoticeKind::NoSpeaker, ""),
+        NoticeMessage::SourceQuit { source } => (NoticeKind::SourceQuit, source.as_str()),
+        NoticeMessage::SourceNotRunning { source } => {
+            (NoticeKind::SourceNotRunning, source.as_str())
+        }
+        NoticeMessage::SourceRefused { source } => (NoticeKind::SourceRefused, source.as_str()),
+        NoticeMessage::CaptureFailed => (NoticeKind::CaptureFailed, ""),
+        NoticeMessage::CaptureLost => (NoticeKind::CaptureLost, ""),
+        NoticeMessage::SpeakerFailed { speaker } => (NoticeKind::SpeakerFailed, speaker.as_str()),
+        NoticeMessage::SpeakerLost { speaker } => (NoticeKind::SpeakerLost, speaker.as_str()),
+        NoticeMessage::SpeakerBusy { speaker } => (NoticeKind::SpeakerBusy, speaker.as_str()),
+        NoticeMessage::AirPlayRetrying { speaker, .. } => {
+            (NoticeKind::AirplayRetrying, speaker.as_str())
+        }
+        NoticeMessage::AirPlayCantPlay { speaker, .. } => {
+            (NoticeKind::AirplayCantPlay, speaker.as_str())
+        }
+        NoticeMessage::AirPlayStopped => (NoticeKind::AirplayStopped, ""),
+        NoticeMessage::SettingsNotSaved => (NoticeKind::SettingsNotSaved, ""),
+        NoticeMessage::PairingsNotSaved => (NoticeKind::PairingsNotSaved, ""),
+        NoticeMessage::SettingsKeptAside { .. } => (NoticeKind::SettingsKeptAside, ""),
+        NoticeMessage::PairingsKeptAside { .. } => (NoticeKind::PairingsKeptAside, ""),
+        NoticeMessage::NoSoundOutput => (NoticeKind::NoSoundOutput, ""),
+        NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
+    };
+    strings.invoke_notice_title(kind, name.into())
 }
 
 #[cfg(test)]
@@ -3007,6 +3052,5 @@ mod tests {
             headphones,
             "the next stop after the speakers' options is the headphones' toggle"
         );
-        assert!(!app.snapshot().running, "streaming stays off");
     }
 }

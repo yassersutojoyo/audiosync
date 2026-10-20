@@ -335,8 +335,8 @@ pub enum SpeakerState {
     /// Chosen, and plays once streaming starts.
     WillPlay,
     Playing,
-    /// On while streaming is on, but it can't play right now (a speaker
-    /// only, never a group).
+    /// On while streaming is on, but it can't play right now (a group:
+    /// none of its present members can).
     #[cfg_attr(
         all(not(windows), not(test)),
         expect(
@@ -410,11 +410,21 @@ impl AppState {
         group.members.iter().filter_map(|id| self.speaker(id))
     }
 
-    /// A group is on when all its present members are.
+    /// A group is on when all its present members are. Playing, it waits
+    /// when every present member waits, as its first present member does.
     pub fn group_state(&self, group: &Group) -> SpeakerState {
         let mut present = self.available_members(group).peekable();
         let all_on = present.peek().is_some() && present.all(|s| s.enabled);
-        SpeakerState::new(all_on, self.running)
+        match SpeakerState::new(all_on, self.running) {
+            SpeakerState::Playing => {
+                let waiting: Option<Vec<Waiting>> =
+                    self.available_members(group).map(|s| s.waiting).collect();
+                waiting
+                    .and_then(|w| w.first().copied())
+                    .map_or(SpeakerState::Playing, SpeakerState::Waiting)
+            }
+            state => state,
+        }
     }
 
     /// Speakers switched on right now.

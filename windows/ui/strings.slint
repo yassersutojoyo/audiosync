@@ -6,7 +6,7 @@
 // English only for now. @tr marks each string for Slint's gettext translation
 // when a second language is added.
 
-import { SpeakerKind, Availability, AirPlayProblem, DeviceVolumeHint, GuidePage, PinPhase, RowState } from "types.slint";
+import { SpeakerKind, Availability, AirPlayProblem, DeviceVolumeHint, GuidePage, NoticeKind, PinPhase, RowState } from "types.slint";
 
 export global Strings {
     // Main window
@@ -361,11 +361,69 @@ export global Strings {
         return "";
     }
 
-    // A notice's dismiss button, for Narrator: it names the notice, so the
-    // next notice's button, which takes the focus after a dismiss, says
-    // which notice it closes.
-    public pure function dismiss-notice(message: string) -> string {
-        return @tr("Dismiss: {}", message);
+    // A notice's dismiss button, for Narrator: it names the notice in a few
+    // words (its title), so the next notice's button, which takes the focus
+    // after a dismiss, says which notice it closes without reading it all
+    // again.
+    public pure function dismiss-notice(title: string) -> string {
+        return @tr("Dismiss: {}", title);
+    }
+
+    // A notice's title: a few words after "Dismiss:", with the app or
+    // speaker it is about as `name`.
+    public pure function notice-title(kind: NoticeKind, name: string) -> string {
+        if kind == NoticeKind.no-speaker {
+            return @tr("no speaker on");
+        }
+        if kind == NoticeKind.source-quit {
+            return @tr("{} quit", name);
+        }
+        if kind == NoticeKind.source-not-running {
+            return @tr("{} not running", name);
+        }
+        if kind == NoticeKind.source-refused {
+            return @tr("can't capture {}", name);
+        }
+        if kind == NoticeKind.capture-failed {
+            return @tr("capture didn't start");
+        }
+        if kind == NoticeKind.capture-lost {
+            return @tr("capture stopped");
+        }
+        if kind == NoticeKind.speaker-failed {
+            return @tr("{} didn't start", name);
+        }
+        if kind == NoticeKind.speaker-lost {
+            return @tr("{} disconnected", name);
+        }
+        if kind == NoticeKind.speaker-busy {
+            return @tr("{} in use", name);
+        }
+        if kind == NoticeKind.airplay-retrying {
+            return @tr("{} reconnecting", name);
+        }
+        if kind == NoticeKind.airplay-cant-play {
+            return @tr("{} can't play", name);
+        }
+        if kind == NoticeKind.airplay-stopped {
+            return @tr("AirPlay stopped");
+        }
+        if kind == NoticeKind.settings-not-saved {
+            return @tr("settings not saved");
+        }
+        if kind == NoticeKind.pairings-not-saved {
+            return @tr("pairings not saved");
+        }
+        if kind == NoticeKind.settings-kept-aside {
+            return @tr("settings not read");
+        }
+        if kind == NoticeKind.pairings-kept-aside {
+            return @tr("pairings not read");
+        }
+        if kind == NoticeKind.no-sound-output {
+            return @tr("no sound output");
+        }
+        return @tr("double audio");
     }
 
     public pure function speaker-options(name: string) -> string {

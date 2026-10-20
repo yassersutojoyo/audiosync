@@ -446,15 +446,16 @@ mod tests {
         );
     }
 
-    /// A dismiss button names its notice: after a dismiss the next notice's
-    /// button takes the focus, and Narrator then says which notice it is.
+    /// A dismiss button names its notice in a few words: after a dismiss the
+    /// next notice's button takes the focus, and Narrator then says which
+    /// notice it is without reading the whole notice again.
     #[test]
     fn a_notice_dismiss_button_names_its_notice() {
         let widgets = include_str!("../ui/widgets.slint");
         let stack = &widgets[widgets
             .find("export component NoticeStack")
             .expect("NoticeStack is there")..];
-        assert!(stack.contains("label: Strings.dismiss-notice(notice.message);"));
+        assert!(stack.contains("label: Strings.dismiss-notice(notice.title);"));
     }
 
     /// Key events go to the focused item: the flyout and the equalizer focus
