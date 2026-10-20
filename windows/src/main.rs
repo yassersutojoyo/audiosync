@@ -77,6 +77,23 @@ fn main() -> ExitCode {
     #[cfg(windows)]
     let (instance, waited_for) = match single_instance::acquire() {
         single_instance::Acquired::First(instance) => (instance, None),
+        single_instance::Acquired::Second
+            if !launch_at_login::hands_over_to_running_copy(
+                launch_at_login::started_in_background(std::env::args_os()),
+            ) =>
+        {
+            let log = DebugLog::appending_from_env();
+            log.log(|| {
+                format!(
+                    "process {}: AudioSync already runs in this session; started with {}, \
+                     so it leaves that copy as it is; exiting",
+                    std::process::id(),
+                    launch_at_login::BACKGROUND_FLAG
+                )
+            });
+            log.flush(LOG_FLUSH_AT_EXIT);
+            return ExitCode::SUCCESS;
+        }
         single_instance::Acquired::Second => {
             // A copy that is quitting doesn't answer; once it's gone, this
             // launch starts instead, as on the Mac.

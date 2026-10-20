@@ -125,6 +125,13 @@ pub fn opens_main_window(background: bool, tray_available: bool) -> bool {
     !background || !tray_available
 }
 
+/// Whether a launch while another copy runs asks that copy to show its main
+/// window. One in the background (Windows starting the Run key's entry, or
+/// reopening apps after a restart) leaves it as it is.
+pub fn hands_over_to_running_copy(background: bool) -> bool {
+    !background
+}
+
 /// What turning the option on or off did, beyond what [`LaunchAtLogin::is_on`]
 /// shows.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -252,7 +259,7 @@ fn settled(message: &NoticeMessage, status: Status) -> bool {
         NoticeMessage::LaunchAtLoginFailed | NoticeMessage::LaunchAtLoginOffInSettings => {
             status == Status::On
         }
-        NoticeMessage::LaunchAtLoginNotRemoved => status == Status::Off,
+        NoticeMessage::LaunchAtLoginNotRemoved => !status.shown_on(),
         _ => false,
     }
 }
@@ -584,6 +591,20 @@ mod tests {
     }
 
     #[test]
+    fn the_refused_removal_notice_goes_once_settings_turns_it_off() {
+        let (store, mut login) = setup(|e| {
+            e.run = Some(run_command(&exe()));
+            e.refuse_writes = true;
+        });
+        login.set(false, time);
+        // The notice's advice: turn AudioSync off in Settings > Apps > Startup.
+        store.entry().approval = Some(vec![3; 12]);
+        assert!(login.reread());
+        assert!(!login.is_on());
+        assert!(login.notice().is_none());
+    }
+
+    #[test]
     fn turning_it_on_while_settings_has_it_off_asks_to_finish_there() {
         let (store, mut login) = setup(|e| e.approval = Some(vec![3; 12]));
         let outcome = login.set(true, time);
@@ -663,5 +684,11 @@ mod tests {
         assert!(opens_main_window(true, false));
         assert!(opens_main_window(false, true));
         assert!(opens_main_window(false, false));
+    }
+
+    #[test]
+    fn a_second_launch_in_the_background_leaves_the_running_copy_alone() {
+        assert!(!hands_over_to_running_copy(true));
+        assert!(hands_over_to_running_copy(false));
     }
 }
