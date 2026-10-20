@@ -33,9 +33,9 @@ I built this because I wanted my Mac's audio on every speaker in the house at on
 
 It's a small Mac app written in Swift, with a main window and a menu bar panel, free and open source under the GPL. It's an early alpha, so expect rough edges. A Windows 11 version is on the way too ([more below](#coming-to-windows)).
 
-## What's in the download, and what's next
+## What's new in 0.5.0
 
-The download today is 0.4.1. Since then I've rebuilt a lot of the insides, and the next version brings that work out of `main`:
+I rebuilt a lot of the insides for this version:
 
 - A new audio engine written in Rust, shared with the Windows version.
 - Delays that work with local speakers alone, with the Mac's built-in speakers as the reference. No AirPlay speaker needed to line up a Bluetooth speaker with your Mac.
@@ -43,7 +43,7 @@ The download today is 0.4.1. Since then I've rebuilt a lot of the insides, and t
 - Short fades when audio starts and stops, so speakers don't click.
 - The track that's playing (title, artist, album, artwork) on AirPlay speakers with a screen, like a TV.
 
-The rest of this README describes the app as it is on `main`, which is what the next version will be. [`CHANGELOG.md`](CHANGELOG.md) has the full list under Unreleased.
+[`CHANGELOG.md`](CHANGELOG.md) has the full list.
 
 ## Multi-room audio on macOS
 
@@ -83,7 +83,7 @@ To be clear: Airfoil is a product of Rogue Amoeba. AudioSync isn't affiliated wi
 
 ## Install
 
-Download `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest) and drag the app to Applications. It runs on macOS 15 (Sequoia) or later, AirPlay included. That's 0.4.1 for now; the changes above come with the next version, or you can build `main` yourself.
+Download `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest) and drag the app to Applications. It runs on macOS 15 (Sequoia) or later, AirPlay included.
 
 I don't have a paid Apple developer account, so releases aren't notarized and macOS blocks the first launch. Open AudioSync once, dismiss the warning, then go to System Settings → Privacy & Security and click Open Anyway next to the message about AudioSync. (Or run `xattr -dr com.apple.quarantine /Applications/AudioSync.app`.) Each release lists SHA-256 checksums for its files.
 
