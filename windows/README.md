@@ -21,11 +21,11 @@ auto-connect marks, groups, the equalizer, View > Show Virtual Devices and
 where the main window was. A launch doesn't start streaming by itself, unless
 an auto-connect speaker is there, as on the Mac; a speaker that's missing
 keeps its settings for when it's back. Starting AudioSync again while it runs
-brings up the running copy's window instead of a second copy, as on the Mac. So far it has only been started on one
-Windows 11 PC, with nothing playing, and nobody has listened to it there yet; CI builds and
-tests it. [docs/WINDOWS_UI.md](../docs/WINDOWS_UI.md) maps each
-part of the Mac main window to its Windows counterpart and lists the keyboard
-shortcuts.
+brings up the running copy's window instead of a second copy, as on the Mac.
+So far it has only been started on one Windows 11 PC, with nothing playing,
+and nobody has listened to it there yet; CI builds and tests it.
+[docs/WINDOWS_UI.md](../docs/WINDOWS_UI.md) maps each part of the Mac main
+window to its Windows counterpart and lists the keyboard shortcuts.
 
 ## What you need
 

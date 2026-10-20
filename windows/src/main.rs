@@ -72,14 +72,31 @@ fn main() -> ExitCode {
     // Before the log, which a launch empties, and before any audio, tray or
     // window: a second launch only hands over to the running copy.
     #[cfg(windows)]
-    let instance = match single_instance::acquire() {
-        single_instance::Acquired::First(instance) => instance,
+    let launched = std::time::Instant::now();
+    #[cfg(windows)]
+    let (instance, waited_for) = match single_instance::acquire() {
+        single_instance::Acquired::First(instance) => (instance, None),
         single_instance::Acquired::Second => {
-            let outcome = single_instance::hand_over();
-            let log = DebugLog::appending_from_env();
-            log.log(|| outcome.log_line(std::process::id()));
-            log.flush(LOG_FLUSH_AT_EXIT);
-            return ExitCode::SUCCESS;
+            // A copy that is quitting doesn't answer; once it's gone, this
+            // launch starts instead, as on the Mac.
+            let (outcome, first) = single_instance::second_launch(
+                single_instance::hand_over,
+                || match single_instance::acquire() {
+                    single_instance::Acquired::First(instance) => Some(instance),
+                    single_instance::Acquired::Second => None,
+                },
+                || launched.elapsed(),
+                std::thread::sleep,
+            );
+            match first {
+                Some(instance) => (instance, Some(outcome)),
+                None => {
+                    let log = DebugLog::appending_from_env();
+                    log.log(|| outcome.log_line(std::process::id()));
+                    log.flush(LOG_FLUSH_AT_EXIT);
+                    return ExitCode::SUCCESS;
+                }
+            }
         }
     };
     let log = DebugLog::from_env();
@@ -99,6 +116,10 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    #[cfg(windows)]
+    if let Some(outcome) = waited_for {
+        log.log(|| outcome.took_over_line());
+    }
     #[cfg(windows)]
     match &instance {
         Ok(_) => log.log(|| "single instance: this is the only copy in the session".to_owned()),

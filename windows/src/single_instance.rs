@@ -13,7 +13,12 @@
 //! second copy lets the first one take the foreground
 //! (`AllowSetForegroundWindow`), since Windows lets only the app the user
 //! just started do that, and waits at most [`ANSWER_WAIT`] for the answer.
-//! Whatever happens, it exits: never two copies.
+//! A second launch holds no handle to the mutex. When no answer comes (the
+//! running copy may be quitting), it checks every [`RELAUNCH_POLL`] whether
+//! the mutex is free and, if it becomes free within [`RELAUNCH_WAIT`] of the
+//! launch, starts as the first copy, as the Mac does; otherwise it exits.
+//! Never two copies: a mutex held by an elevated copy, which a normal launch
+//! may not open, counts as another copy too.
 //!
 //! The decisions are plain Rust and unit-tested; the Win32 calls stay thin.
 
@@ -34,7 +39,29 @@ const ANSWER_NAME: windows::core::PCWSTR =
 /// How long a second launch waits for the running copy to show its window.
 pub const ANSWER_WAIT: Duration = Duration::from_secs(2);
 
-/// What a launch does, given whether another copy holds the mutex.
+/// How long a second launch whose request went unanswered keeps trying to
+/// become the first copy, counted from the launch: a copy that is quitting
+/// stops answering, and its teardown takes a few seconds. As on the Mac.
+pub const RELAUNCH_WAIT: Duration = Duration::from_millis(5500);
+
+/// How often a second launch checks whether the running copy has gone.
+pub const RELAUNCH_POLL: Duration = Duration::from_millis(250);
+
+/// What creating the session's mutex reported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MutexState {
+    /// Created: no other copy holds it.
+    Created,
+    /// Opened: another copy holds it.
+    Existed,
+    /// Access denied: another copy holds it, one with rights this launch
+    /// lacks (an elevated copy's objects can't be opened by a normal launch).
+    AccessDenied,
+    /// Any other failure.
+    Failed,
+}
+
+/// What a launch does, given what creating the mutex reported.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Startup {
     /// No other copy: start the app.
@@ -44,14 +71,41 @@ pub enum Startup {
 }
 
 impl Startup {
-    /// A mutex that can't be created at all counts as no other copy: the
-    /// app still starts rather than refusing to run.
-    pub fn decide(other_copy_runs: bool) -> Startup {
-        if other_copy_runs {
-            Startup::HandOver
-        } else {
-            Startup::Run
+    /// A mutex that can't be created for any reason but denied access
+    /// counts as no other copy: the app still starts rather than refusing to
+    /// run (and logs why). Denied access means the mutex exists, so another
+    /// copy runs.
+    pub fn decide(mutex: MutexState) -> Startup {
+        match mutex {
+            MutexState::Created | MutexState::Failed => Startup::Run,
+            MutexState::Existed | MutexState::AccessDenied => Startup::HandOver,
         }
+    }
+}
+
+/// A second launch: hands over with `hand_over`; when the running copy
+/// didn't show its window (it may be quitting), tries `try_acquire` every
+/// [`RELAUNCH_POLL`] until it returns the first copy's hold or `elapsed`
+/// (time since the launch) reaches [`RELAUNCH_WAIT`]. `None` means exit.
+pub fn second_launch<T>(
+    hand_over: impl FnOnce() -> HandOver,
+    mut try_acquire: impl FnMut() -> Option<T>,
+    elapsed: impl Fn() -> Duration,
+    mut sleep: impl FnMut(Duration),
+) -> (HandOver, Option<T>) {
+    let outcome = hand_over();
+    if outcome == HandOver::Shown {
+        return (outcome, None);
+    }
+    loop {
+        if let Some(first) = try_acquire() {
+            return (outcome, Some(first));
+        }
+        let spent = elapsed();
+        if spent >= RELAUNCH_WAIT {
+            return (outcome, None);
+        }
+        sleep(RELAUNCH_POLL.min(RELAUNCH_WAIT - spent));
     }
 }
 
@@ -86,16 +140,30 @@ impl HandOver {
         }
     }
 
-    /// The second copy's debug line.
-    pub fn log_line(self, process: u32) -> String {
-        let outcome = match self {
+    fn describe(self) -> String {
+        match self {
             HandOver::Shown => "it showed its main window".to_owned(),
             HandOver::NoAnswer => format!("it didn't answer within {} s", ANSWER_WAIT.as_secs()),
             HandOver::NotSent => "the request couldn't be sent".to_owned(),
-        };
+        }
+    }
+
+    /// The second copy's debug line when it exits.
+    pub fn log_line(self, process: u32) -> String {
         format!(
             "process {process}: AudioSync already runs in this session; asked it to show \
-             its main window ({outcome}); exiting"
+             its main window ({}); exiting",
+            self.describe()
+        )
+    }
+
+    /// The debug line of a launch that became the first copy after the
+    /// running one went away.
+    pub fn took_over_line(self) -> String {
+        format!(
+            "single instance: another copy was quitting when this launch asked it to show \
+             its main window ({}); started once it was gone",
+            self.describe()
         )
     }
 }
@@ -144,18 +212,35 @@ pub enum Acquired {
 }
 
 /// Creates the session's mutex and, when this is the first copy, the
-/// hand-over events. A mutex that can't be created counts as the first copy.
+/// hand-over events. A mutex that can't be created counts as the first copy,
+/// unless access to it was denied (see [`Startup::decide`]).
 #[cfg(windows)]
 pub fn acquire() -> Acquired {
-    use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
+    use windows::Win32::Foundation::{
+        CloseHandle, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, GetLastError,
+    };
     use windows::Win32::System::Threading::{CreateEventW, CreateMutexW};
 
     // SAFETY: the name is a NUL-terminated UTF-16 literal; no security
     // attributes. The last error is read right after the call that set it.
     let mutex = unsafe { CreateMutexW(None, false, MUTEX_NAME) };
-    let other_copy_runs = mutex.is_ok() && unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
-    match Startup::decide(other_copy_runs) {
-        Startup::HandOver => Acquired::Second,
+    let state = match &mutex {
+        Ok(_) if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS => MutexState::Existed,
+        Ok(_) => MutexState::Created,
+        Err(error) if error.code() == ERROR_ACCESS_DENIED.to_hresult() => MutexState::AccessDenied,
+        Err(_) => MutexState::Failed,
+    };
+    match Startup::decide(state) {
+        Startup::HandOver => {
+            // A second launch holds no handle: the mutex goes away with the
+            // running copy, so a later try of this launch, or another
+            // launch, can become the first copy.
+            if let Ok(handle) = mutex {
+                // SAFETY: opened above, closed once.
+                let _ = unsafe { CloseHandle(handle) };
+            }
+            Acquired::Second
+        }
         Startup::Run => {
             // The mutex handle is never closed: it stays open until the
             // process ends, and Windows closes it then, also after a crash,
@@ -260,8 +345,93 @@ mod tests {
 
     #[test]
     fn a_launch_runs_unless_another_copy_holds_the_mutex() {
-        assert_eq!(Startup::decide(false), Startup::Run);
-        assert_eq!(Startup::decide(true), Startup::HandOver);
+        assert_eq!(Startup::decide(MutexState::Created), Startup::Run);
+        assert_eq!(Startup::decide(MutexState::Existed), Startup::HandOver);
+    }
+
+    #[test]
+    fn a_mutex_held_by_an_elevated_copy_hands_over_instead_of_running_twice() {
+        assert_eq!(Startup::decide(MutexState::AccessDenied), Startup::HandOver);
+    }
+
+    #[test]
+    fn any_other_mutex_failure_still_runs_the_app() {
+        assert_eq!(Startup::decide(MutexState::Failed), Startup::Run);
+    }
+
+    /// A fake clock: `sleep` advances it; the hand-over takes `hand_over`.
+    fn run_second_launch(
+        outcome: HandOver,
+        hand_over: Duration,
+        free_after: Option<Duration>,
+    ) -> (HandOver, Option<Duration>, u32, Duration) {
+        let now = Cell::new(Duration::ZERO);
+        let tries = Cell::new(0_u32);
+        let (outcome, first) = second_launch(
+            || {
+                now.set(now.get() + hand_over);
+                outcome
+            },
+            || {
+                tries.set(tries.get() + 1);
+                free_after.filter(|at| now.get() >= *at).map(|_| now.get())
+            },
+            || now.get(),
+            |pause| {
+                assert!(
+                    pause <= RELAUNCH_POLL && pause > Duration::ZERO,
+                    "{pause:?}"
+                );
+                now.set(now.get() + pause);
+            },
+        );
+        (outcome, first, tries.get(), now.get())
+    }
+
+    #[test]
+    fn a_shown_window_ends_the_launch_without_retrying() {
+        let (outcome, first, tries, _) = run_second_launch(
+            HandOver::Shown,
+            Duration::from_millis(30),
+            Some(Duration::ZERO),
+        );
+        assert_eq!(outcome, HandOver::Shown);
+        assert_eq!((first, tries), (None, 0));
+    }
+
+    #[test]
+    fn a_launch_during_the_old_copys_teardown_starts_once_it_is_gone() {
+        // The quitting copy no longer answers (2 s) and is gone at 3.5 s.
+        let gone = Duration::from_millis(3500);
+        let (outcome, first, _, _) = run_second_launch(HandOver::NoAnswer, ANSWER_WAIT, Some(gone));
+        assert_eq!(outcome, HandOver::NoAnswer);
+        let started = first.expect("became the first copy");
+        assert!(
+            started >= gone && started < gone + RELAUNCH_POLL,
+            "{started:?}"
+        );
+    }
+
+    #[test]
+    fn a_request_that_cannot_be_sent_also_waits_for_the_old_copy() {
+        let gone = Duration::from_millis(1000);
+        let (_, first, _, _) = run_second_launch(HandOver::NotSent, Duration::ZERO, Some(gone));
+        assert_eq!(first, Some(gone));
+    }
+
+    #[test]
+    fn a_copy_that_never_goes_away_ends_the_launch_after_the_relaunch_wait() {
+        let (_, first, tries, ended) = run_second_launch(HandOver::NoAnswer, ANSWER_WAIT, None);
+        assert_eq!(first, None);
+        assert_eq!(ended, RELAUNCH_WAIT);
+        // Polled every 250 ms from 2 s to 5.5 s, the last try at 5.5 s.
+        assert_eq!(tries, 15);
+    }
+
+    #[test]
+    fn the_relaunch_wait_matches_the_mac() {
+        assert_eq!(RELAUNCH_WAIT, Duration::from_millis(5500));
+        assert_eq!(RELAUNCH_POLL, Duration::from_millis(250));
     }
 
     #[test]
