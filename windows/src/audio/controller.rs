@@ -2763,7 +2763,7 @@ mod tests {
         let busy = BackendEvent::OutputBusy {
             id: HEADPHONES.to_owned(),
         };
-        assert_eq!(backend.poll(), [busy.clone()]);
+        assert_eq!(backend.poll(), std::slice::from_ref(&busy));
         backend.stop();
         assert_eq!(
             backend.poll(),
