@@ -197,9 +197,9 @@ pub struct PinPrompt {
 impl Speaker {
     /// Whether the speaker lists show it. A virtual output (a loopback
     /// driver, a voice changer, a meeting app's device) is listed only while
-    /// Show Virtual Devices is on or while it is turned on. Unlike the Mac,
-    /// which also keeps one listed once it was shown, turning a listed
-    /// virtual output off with Show Virtual Devices off removes its row.
+    /// Show Virtual Devices is on or while it is turned on. The main window
+    /// also keeps one listed once it was shown (`ListedVirtual` in
+    /// src/view.rs), so turning it off doesn't remove its row.
     pub fn is_listed(&self, show_virtual: bool) -> bool {
         show_virtual || self.enabled || self.kind != SpeakerKind::Virtual
     }

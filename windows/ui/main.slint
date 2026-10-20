@@ -218,6 +218,7 @@ export component MainWindow inherits Window {
     callback airplay-delay-stepped(int);
     callback airplay-delay-edited(string);
     callback airplay-delay-committed();
+    callback airplay-delay-cancelled();
     callback auto-connect-toggled(string, bool);
     callback forget-pairing-requested(string);
     // The fix under a speaker's device-volume hint.
@@ -614,6 +615,9 @@ export component MainWindow inherits Window {
                         }
                         committed => {
                             root.airplay-delay-committed();
+                        }
+                        cancelled => {
+                            root.airplay-delay-cancelled();
                         }
                     }
                 }
