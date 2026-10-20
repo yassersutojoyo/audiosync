@@ -123,13 +123,25 @@ final class AppModel: ObservableObject {
     func dropDelayDrafts() {
         for draft in drafts.values { draft.field.drop() }
     }
-    func toggleDelayPanel(_ id: String) { delayPanels.toggle(id) }
-    func closeDelayPanel(_ id: String) { delayPanels.close(id) }
-    /// A click in the window outside every control: each panel applies its
-    /// typing as it goes (`SyncControls`).
+    /// Every way a panel opens or closes animates the same.
+    static let delayPanelAnimation = Animation.easeInOut(duration: 0.15)
+    /// A click on a row's delay value or on its row: the other panels'
+    /// typing applies first, and they stay open.
+    func toggleDelayPanel(_ id: String) {
+        withAnimation(Self.delayPanelAnimation) { applyDelayTyping(in: delayPanels.toggle(id)) }
+    }
+    /// Command-S: every open panel applies its typing and stays open.
+    func applyDelayTyping() { applyDelayTyping(in: delayPanels.open) }
+    /// Some open panel holds typing not yet applied (enables Apply Delay).
+    var hasDelayTyping: Bool { delayPanels.open.contains { drafts[$0]?.field.isEditing == true } }
+    private func applyDelayTyping(in ids: Set<String>) {
+        for id in ids { drafts[id]?.applyRequests += 1 }
+    }
+    /// A click in the window outside every speaker row: each panel applies
+    /// its typing as it goes (`SyncControls`).
     func closeDelayPanels() {
         guard !delayPanels.open.isEmpty else { return }
-        delayPanels.closeAll()
+        withAnimation(Self.delayPanelAnimation) { delayPanels.closeAll() }
     }
     /// Escape in a delay panel.
     func dropDelayTyping() {
@@ -204,6 +216,12 @@ extension SpeakerTag {
 /// half-typed number isn't overwritten on every redraw.
 final class SyncDraft: ObservableObject {
     @Published var field = DelayFieldDraft()
+    /// Bumped to have the panel's controls apply the typing now, the panel
+    /// staying open (Command-S, a click on another row).
+    @Published var applyRequests = 0
+    /// A keystroke the field can't take, shown until the next run of the
+    /// main loop (`SyncControls`).
+    @Published var rejected: String?
     /// The field has the keyboard focus, which its row's delay value takes
     /// back when a click outside closes the panel.
     var fieldFocused = false

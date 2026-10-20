@@ -2454,22 +2454,34 @@ do {
     check(store == ["usb": -270, "hdmi": 40, "dock": 77],
           "delay field quit: a typed delay pending at quit is neither applied nor saved", "store: \(store)")
 
-    // How a panel's typing ends (DelayPanels): a panel applies its typing as
-    // it closes (SyncControls.onDisappear), unless Escape dropped it first.
+    // How a panel's typing ends (DelayPanels): Return and Command-S apply it
+    // and leave the panel open; a panel applies its typing as it closes
+    // (SyncControls.onDisappear), unless Escape dropped it first; a click on
+    // a row's delay or box applies the other panels' typing before its own
+    // panel opens or closes.
     var delays: [String: Double] = ["usb": -270, "dock": 10]
     var typed = ["usb": DelayFieldDraft(), "dock": DelayFieldDraft()]
     var panels = DelayPanels()
     var retimes = 0
+    var order: [String] = []
     func commitTyped(_ id: String) {
         if let v = typed[id]?.commit(saved: delays[id] ?? 0, sanitize: offset, format: signed) {
             delays[id] = v
             retimes += 1
+            order.append(id)
         }
     }
-    func change(_ action: (inout DelayPanels) -> Void) {
+    func change(_ action: (inout DelayPanels) -> Set<String>) {
         let before = panels.open
-        action(&panels)
-        for id in before.subtracting(panels.open) { commitTyped(id) }
+        let first = action(&panels)
+        for id in first.sorted() { commitTyped(id) }
+        for id in before.subtracting(panels.open).sorted() { commitTyped(id) }
+    }
+    func clickOutside() {
+        change { open in
+            open.closeAll()
+            return []
+        }
     }
     func openBoth() {
         for id in ["usb", "dock"] where !panels.isOpen(id) {
@@ -2480,36 +2492,97 @@ do {
 
     openBoth()
     typed["usb"]?.type("400"); typed["dock"]?.type("77")
-    commitTyped("usb"); change { $0.close("usb") }   // Return
-    check(delays == ["usb": 400, "dock": 10] && retimes == 1 && panels.open == ["dock"]
+    commitTyped("usb")   // Return
+    check(delays == ["usb": 400, "dock": 10] && retimes == 1 && panels.open == ["usb", "dock"]
               && typed["dock"]?.isEditing == true,
-          "delay panels: Return applies its row's typing once and closes only its panel", "delays: \(delays)")
+          "delay panels: Return applies its row's typing once and leaves every panel open", "delays: \(delays)")
+    typed["usb"]?.type("410")
+    for id in panels.open.sorted() { commitTyped(id) }   // Command-S
+    check(delays == ["usb": 410, "dock": 77] && retimes == 3 && panels.open == ["usb", "dock"],
+          "delay panels: Command-S applies every open panel's typing and leaves them open", "delays: \(delays)")
     typed["dock"]?.type("-30")   // focus moved on to another control meanwhile
-    check(delays["dock"] == 10, "delay panels: leaving the field applies nothing")
-    change { $0.toggle("dock") }   // its delay value
-    check(delays["dock"] == -30 && retimes == 2 && panels.open.isEmpty,
-          "delay panels: a row's delay value applies its typing and closes its panel", "delays: \(delays)")
+    check(delays["dock"] == 77, "delay panels: leaving the field applies nothing")
+    change { $0.toggle("dock") }   // its delay value, or a click on its row's box
+    check(delays["dock"] == -30 && retimes == 4 && panels.open == ["usb"],
+          "delay panels: a click on a row's delay or box applies its typing and closes its panel",
+          "delays: \(delays)")
+    change { $0.toggle("dock") }
+    check(panels.open == ["usb", "dock"] && retimes == 4,
+          "delay panels: a click on a closed row's box opens its panel and applies nothing")
 
+    typed["usb"]?.type("380"); typed["dock"]?.type("55")
+    order = []
+    change { $0.toggle("dock") }   // typed in both, then a click on the dock's row
+    check(order == ["usb", "dock"] && delays == ["usb": 380, "dock": 55] && panels.open == ["usb"],
+          "delay panels: a click on another row applies the open panel's typing first and leaves that panel open",
+          "order: \(order), delays: \(delays)")
+
+    // The note under Connected Speakers belongs to the last row's box.
+    let noteTargets = [DelayPanels.noteTarget(under: [(id: "usb", hasDelay: true), (id: "dock", hasDelay: true)]),
+                       DelayPanels.noteTarget(under: [(id: "dock", hasDelay: true), (id: "kitchen", hasDelay: false)]),
+                       DelayPanels.noteTarget(under: [])]
+    check(noteTargets == ["dock", nil, nil],
+          "delay panels: a click on the note under a list toggles the last row's panel; under a row without a delay, or alone, it is outside",
+          "targets: \(noteTargets)")
     openBoth()
-    typed["usb"]?.type("380"); typed["dock"]?.type("77")
-    change { $0.toggle("usb") }
-    check(delays == ["usb": 380, "dock": -30] && panels.open == ["dock"] && typed["dock"]?.isEditing == true,
-          "delay panels: a row's delay value leaves the other panels and their typing", "delays: \(delays)")
+    typed["usb"]?.type("390"); typed["dock"]?.type("66")
+    order = []
+    if let target = noteTargets[0] { change { $0.toggle(target) } }   // the note, under the dock's row
+    check(order == ["usb", "dock"] && delays == ["usb": 390, "dock": 66] && panels.open == ["usb"],
+          "delay panels: a click on the note applies the other panel's typing first, then closes the last row's panel",
+          "order: \(order), delays: \(delays)")
 
     openBoth()
     typed["usb"]?.type("-250"); typed["dock"]?.type("abc")
-    change { $0.closeAll() }   // a click outside every control
-    check(delays == ["usb": -250, "dock": -30] && panels.open.isEmpty && typed["dock"]?.text == signed(-30),
-          "delay panels: a click outside applies each readable typing and closes every panel; unreadable text shows the saved delay",
+    clickOutside()   // blank space, the header, the note alone
+    check(delays == ["usb": -250, "dock": 66] && panels.open.isEmpty && typed["dock"]?.text == signed(66),
+          "delay panels: a click outside every speaker row applies each readable typing and closes every panel; unreadable text shows the saved delay",
           "delays: \(delays), dock: \(typed["dock"]?.text ?? "")")
 
     openBoth()
     typed["usb"]?.type("400"); typed["dock"]?.type("77")
     let before = retimes
     for id in typed.keys { typed[id]?.drop() }   // Escape
-    change { $0.closeAll() }
-    check(delays == ["usb": -250, "dock": -30] && retimes == before && panels.open.isEmpty,
+    clickOutside()
+    check(delays == ["usb": -250, "dock": 66] && retimes == before && panels.open.isEmpty,
           "delay panels: Escape drops every typing and closes every panel", "delays: \(delays)")
+}
+
+// MARK: Delay field input — digits after one leading sign; out of range is marked (LocalDelay.fieldText)
+do {
+    let t = UIStrings()
+    let kept: [String: String] = ["12": "12", "+150": "+150", "−250": "−250", "-30": "-30", "1a2": "12",
+                                  "12+": "12", "+-5": "+5", " 40": "40", "abc": "", "++": "+", "": ""]
+    let wrong = kept.filter { LocalDelay.fieldText($0.key) != $0.value }.keys.sorted()
+    check(wrong.isEmpty, "delay field input: only digits after one leading + or − can be typed", "\(wrong)")
+
+    var field = DelayFieldDraft()
+    field.show(0, format: t.offsetNumber)
+    field.type("15x")
+    check(field.text == "15" && field.isEditing, "delay field input: a letter typed after digits doesn't show",
+          "text: \(field.text)")
+
+    let offset = LocalDelay.sanitizedOffset
+    var marked: [String] = []
+    for text in ["-2500", "+20001", "−2000", "+20000", "−", "+", "", "150"] {
+        field.type(text)
+        if field.isOutOfRange(sanitize: offset) { marked.append(text) }
+    }
+    check(marked == ["-2500", "+20001"],
+          "delay field input: only a number out of the offset range gets the red outline", "marked: \(marked)")
+
+    var air = DelayFieldDraft()
+    air.show(1800, format: { String(Int($0.rounded())) })
+    let atRest = air.isOutOfRange(sanitize: LocalDelay.sanitizedAirPlayDelay)
+    air.type("-5")
+    let negative = air.isOutOfRange(sanitize: LocalDelay.sanitizedAirPlayDelay)
+    _ = air.commit(saved: 1800, sanitize: LocalDelay.sanitizedAirPlayDelay, format: { String(Int($0.rounded())) })
+    check(!atRest && negative && !air.isOutOfRange(sanitize: LocalDelay.sanitizedAirPlayDelay) && air.text == "0",
+          "delay field input: a negative AirPlay delay is marked until Return applies 0", "text: \(air.text)")
+
+    check(t.delayOutOfRange(lowest: "−2000", highest: "+20000", applies: "−2000")
+              == "The range is −2000 to +20000 ms. Return applies −2000.",
+          "delay field input: the out-of-range hint names the range and the value Return applies")
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
