@@ -264,6 +264,9 @@ export component MainWindow inherits Window {
     // The AirPlay delay field holds a number out of range: the range and
     // what Enter applies; empty otherwise.
     in property <string> airplay-delay-range-hint;
+    // A delay field, a speaker's or the AirPlay one, holds typing not yet
+    // applied: File > Apply Typed Delay is enabled only then.
+    in property <bool> delay-typing;
 
     callback power-toggled(bool);
     callback source-selected(int);
@@ -364,6 +367,7 @@ export component MainWindow inherits Window {
             MenuItem {
                 title: Strings.menu-apply-delay;
                 shortcut: @keys(Control + S);
+                enabled: root.delay-typing;
                 activated => {
                     root.delay-apply-requested();
                 }

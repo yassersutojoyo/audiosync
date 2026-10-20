@@ -828,6 +828,7 @@ impl App {
             .map(|s| item(s, true))
             .collect();
         let all: Vec<SpeakerItem> = this_pc.iter().chain(&connected).cloned().collect();
+        let rows_typed = all.iter().any(|row| row.delay_pending);
         let mut out_of_range: Vec<(String, SharedString)> = all
             .iter()
             .filter(|row| !row.delay_range_hint.is_empty())
@@ -850,8 +851,13 @@ impl App {
             })
             .collect();
         let announcement = self.notice_announcer.borrow_mut().next(&listed);
+        let mut notice_said = None;
         match announcement {
-            Announcement::Say(title) => self.announce(strings.invoke_notice_announcement(title)),
+            Announcement::Say(title) => {
+                let said = strings.invoke_notice_announcement(title);
+                self.announce(said.clone());
+                notice_said = Some(said);
+            }
             Announcement::Clear => self.clear_announcement(),
             Announcement::Keep => {}
         }
@@ -922,8 +928,9 @@ impl App {
             .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
         let airplay_delay = format_ms(state.airplay_delay_ms.unwrap_or(0.0));
         let typed = ui.airplay_delay_draft.text(state.airplay_delay_ms);
-        self.main
-            .set_airplay_delay_pending(is_draft(typed, &airplay_delay));
+        let airplay_typed = is_draft(typed, &airplay_delay);
+        self.main.set_airplay_delay_pending(airplay_typed);
+        self.main.set_delay_typing(rows_typed || airplay_typed);
         self.main
             .set_airplay_delay_text(typed.map_or(airplay_delay, str::to_owned).into());
         // The range the Mac's field takes too; the sender clamps the stored
@@ -936,7 +943,11 @@ impl App {
         self.main.set_airplay_delay_range_hint(airplay_range_hint);
         let alert = newly_out_of_range(&mut self.out_of_range.borrow_mut(), out_of_range);
         if let Some(hint) = alert {
-            self.announce(hint);
+            // Said alone, the range line would replace the notice's words.
+            self.announce(match notice_said {
+                Some(said) => strings.invoke_announcements(said, hint),
+                None => hint,
+            });
         }
 
         self.show_equalizer_state(&state.equalizer);
@@ -2868,6 +2879,108 @@ mod tests {
         click(app.main.window(), 420.0, 465.0);
         assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0), "it applied");
         assert!(app.ui.borrow().sync_open.is_empty(), "and opened nothing");
+    }
+
+    #[test]
+    fn a_click_on_the_blank_space_of_open_sync_controls_stays_inside_them() {
+        let app = app_with_the_no_airplay_note(true);
+        click(app.main.window(), 420.0, 525.0);
+        app.main
+            .invoke_delay_edited("local:desk".into(), "400".into());
+        // The open controls fill the desk's row from y 480 to 572: right of
+        // the steps, then under them.
+        for (x, y) in [(900.0, 500.0), (600.0, 560.0)] {
+            click(app.main.window(), x, y);
+            assert!(
+                app.ui.borrow().sync_open.contains("local:desk"),
+                "the controls stay open at {x}, {y}"
+            );
+            assert!(desk_row(&app).delay_pending, "with their typing");
+            assert_eq!(delay_of(&app, "local:desk"), Some(120.0));
+        }
+        // The row's own blank space, above them, still closes them.
+        click(app.main.window(), 900.0, 460.0);
+        assert!(app.ui.borrow().sync_open.is_empty());
+        assert_eq!(
+            delay_of(&app, "local:desk"),
+            Some(400.0),
+            "closing applied it"
+        );
+    }
+
+    #[test]
+    fn apply_typed_delay_is_enabled_only_while_a_delay_is_typed() {
+        let app = app_over(MockBackend::new());
+        assert!(!app.main.get_delay_typing(), "nothing is typed");
+        app.main.invoke_sync_toggled("local:desk".into());
+        assert!(!app.main.get_delay_typing(), "open controls alone");
+        app.main
+            .invoke_delay_edited("local:desk".into(), "400".into());
+        assert!(app.main.get_delay_typing());
+        app.main.invoke_delay_apply_requested();
+        assert!(!app.main.get_delay_typing(), "applied");
+        app.main.invoke_airplay_delay_edited("2100".into());
+        assert!(app.main.get_delay_typing(), "the AirPlay field counts too");
+        app.main.invoke_airplay_delay_cancelled();
+        assert!(!app.main.get_delay_typing(), "dropped");
+    }
+
+    #[test]
+    fn closing_the_window_without_a_tray_quits_and_drops_every_typed_delay() {
+        let app = app_over(MockBackend::new());
+        app.set_tray_available(false);
+        app.main.invoke_sync_toggled("local:desk".into());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "400".into());
+        app.main.invoke_airplay_delay_edited("2100".into());
+
+        app.close_main();
+        let ui = app.ui.borrow();
+        assert!(ui.delay_drafts.is_empty() && ui.airplay_delay_draft.draft.is_none());
+        assert!(ui.sync_open.is_empty());
+        let state = app.snapshot();
+        assert_eq!(state.speaker("local:desk").unwrap().delay_ms, Some(120.0));
+        assert_eq!(state.airplay_delay_ms, Some(1750.0));
+    }
+
+    #[test]
+    fn closing_the_window_with_a_tray_applies_every_typed_delay() {
+        let app = app_over(MockBackend::new());
+        app.set_tray_available(true);
+        app.main.invoke_sync_toggled("local:desk".into());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "400".into());
+        app.main.invoke_airplay_delay_edited("2100".into());
+
+        app.close_main();
+        assert!(app.ui.borrow().sync_open.is_empty());
+        let state = app.snapshot();
+        assert_eq!(state.speaker("local:desk").unwrap().delay_ms, Some(400.0));
+        assert_eq!(state.airplay_delay_ms, Some(2100.0));
+    }
+
+    #[test]
+    fn a_range_line_said_with_a_new_notice_keeps_the_notice() {
+        let mut backend = MockBackend::new();
+        backend.post("source", NoticeMessage::CaptureLost, "09.40");
+        backend.post("start", NoticeMessage::NoSpeaker, "09.41");
+        let app = app_over(backend);
+        let strings = app.strings();
+        let notice =
+            strings.invoke_notice_announcement(notice_title(&strings, &NoticeMessage::NoSpeaker));
+        app.main.invoke_sync_toggled("local:desk".into());
+        // As if the second notice came with the keystroke.
+        *app.notice_announcer.borrow_mut() = NoticeAnnouncer {
+            seen: Some(1),
+            ..NoticeAnnouncer::default()
+        };
+        app.main
+            .invoke_delay_edited("local:desk".into(), "+30000".into());
+        let range = "The range is \u{2212}2000 to +20000 ms. Enter applies +20000.";
+        assert_eq!(
+            app.main.get_notice_announcement(),
+            format!("{notice}. {range}")
+        );
     }
 
     #[test]
