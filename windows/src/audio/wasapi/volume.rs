@@ -851,6 +851,29 @@ mod tests {
     }
 
     #[test]
+    fn a_volume_call_given_up_counts_as_stuck_until_it_returns() {
+        let (gate, hold) = mpsc::channel();
+        let done = Done::default();
+        let watcher =
+            VolumeWatcher::start_with(TIMEOUT, hanging(hold, done.clone())).expect("it starts");
+        let (watcher, read) = within(move || {
+            let mut watcher = watcher;
+            let read = watcher.read("speakers");
+            (watcher, read)
+        });
+        assert_eq!(read, Err(BackendError::NotResponding));
+        // Windows audio hangs: the other audio threads' drops wait only a
+        // grace from now on.
+        assert!(
+            super::super::com::WINDOWS_AUDIO.any(),
+            "the call counts as stuck"
+        );
+        gate.send(()).expect("the thread waits");
+        done.wait_for(&["read speakers"]);
+        drop(watcher);
+    }
+
+    #[test]
     fn a_volume_thread_that_doesnt_start_in_time_holds_no_later_start() {
         let (gate, hold) = mpsc::channel();
         // Windows audio hangs while the listener thread sets up: given up

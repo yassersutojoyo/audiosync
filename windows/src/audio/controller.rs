@@ -4576,6 +4576,42 @@ mod tests {
     }
 
     #[test]
+    fn a_capture_started_while_a_hung_one_holds_the_airplay_feed_takes_it_once_its_back() {
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        let feed = FeedSlot::new(input);
+        backend.set_airplay(fake.link(), Some(feed.clone()));
+        // The last capture, let go while Windows audio hung, still holds the
+        // feed: the next one starts without it.
+        let held = feed.lease().expect("the feed is free");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(!backend.driver().capture_feeds_airplay());
+        backend.poll();
+        assert!(!backend.driver().capture_feeds_airplay(), "still held");
+
+        // Windows audio answers: that capture ends and gives the feed back,
+        // and the session starts again to feed the speakers, streaming on.
+        drop(held);
+        let events = backend.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::Stopped { .. })),
+            "{events:?}"
+        );
+        assert!(
+            backend.driver().capture_feeds_airplay(),
+            "the capture feeds the speakers"
+        );
+        assert!(!feed.is_free(), "the new capture holds the feed");
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        backend.poll();
+        assert!(backend.driver().capture_feeds_airplay(), "it starts once");
+    }
+
+    #[test]
     fn a_new_l_from_the_sender_re_anchors_the_playing_outputs() {
         let (mut backend, fake, kitchen) = with_airplay();
         backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
