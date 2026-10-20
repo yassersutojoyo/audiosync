@@ -944,6 +944,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 }
             }
             BackendEvent::OutputFailed { id, .. } => self.output_failed(&id, false),
+            // It stays on, and plays once the other app lets go of its
+            // device; the notice then clears itself.
+            BackendEvent::OutputBusy { id } => {
+                let speaker = self.output_name(&id);
+                self.post(speaker_subject(&id), NoticeMessage::SpeakerBusy { speaker });
+            }
+            BackendEvent::OutputFree { id } => {
+                self.clear_if(speaker_subject(&id), |message| {
+                    matches!(message, NoticeMessage::SpeakerBusy { .. })
+                });
+            }
             BackendEvent::Stopped { reason } => {
                 let message = match reason {
                     StopReason::SourceQuit => {
@@ -2275,6 +2286,46 @@ mod tests {
         adapter.poll();
         assert_eq!(playing(&adapter), [SPEAKERS]);
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    #[test]
+    fn a_speaker_another_app_holds_stays_on_with_a_notice_until_it_is_free() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter
+            .audio_mut()
+            .fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.poll();
+        assert!(enabled(&adapter, HEADPHONES), "it stays on");
+        assert!(adapter.snapshot().running);
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::SpeakerBusy {
+                speaker: "Headphones".into(),
+            }]
+        );
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+
+        adapter.audio_mut().fail_output(HEADPHONES, None);
+        adapter.poll();
+        assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
+        assert!(messages(&adapter).is_empty(), "its cause is gone");
+    }
+
+    #[test]
+    fn the_only_speaker_being_busy_keeps_streaming_on() {
+        let mut adapter = adapter();
+        adapter
+            .audio_mut()
+            .fail_output(SPEAKERS, Some(BackendError::DeviceBusy));
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.poll();
+        assert!(adapter.snapshot().running, "it plays once it's free");
+        assert!(enabled(&adapter, SPEAKERS));
+        adapter.audio_mut().fail_output(SPEAKERS, None);
+        adapter.poll();
+        assert_eq!(playing(&adapter), [SPEAKERS]);
     }
 
     #[test]

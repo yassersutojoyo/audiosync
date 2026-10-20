@@ -10,7 +10,10 @@
 //! output sync (spec S117, S161), keyed by endpoint ID. An output whose
 //! device goes away stops, whether its stream notices or the device list no
 //! longer shows the device, and stays on; it plays again once the device is
-//! listed (S68). An output that can't start is turned off and reported (S69).
+//! listed (S68). An output that can't start is turned off and reported (S69),
+//! except one whose device another app holds in exclusive mode: that one
+//! stays on, as the user chose, is reported once as busy, and is tried again
+//! at every poll until it plays.
 //!
 //! Everything the controller does and reports goes to the debug log
 //! ([`DebugLog`]), from the thread that calls it, never from an audio
@@ -37,7 +40,7 @@
 //! sender's timeline (P143); a new L_s from the sender re-times every
 //! playing output.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -300,6 +303,9 @@ pub struct Controller<D: Driver> {
     /// The own volume and mute of each output that is on and connected
     /// (spec S192 to S202), followed through Windows' notifications.
     device_volumes: device_volume::Followed,
+    /// The outputs reported busy ([`BackendEvent::OutputBusy`]) that
+    /// haven't played since or been switched off.
+    busy: BTreeSet<String>,
 }
 
 impl<D: Driver> Controller<D> {
@@ -328,6 +334,7 @@ impl<D: Driver> Controller<D> {
             retiring: Vec::new(),
             next_start: None,
             device_volumes: device_volume::Followed::default(),
+            busy: BTreeSet::new(),
         }
     }
 
@@ -544,7 +551,8 @@ impl<D: Driver> Controller<D> {
 
     /// Adds and removes renderers so the playing outputs are the enabled,
     /// connected ones. Returns the outputs that couldn't start; they are
-    /// turned off (S69).
+    /// turned off (S69). One whose device is gone, or held by another app,
+    /// stays on and is tried again at the next poll.
     fn sync_outputs(&mut self) -> Vec<(String, BackendError)> {
         let Some(session) = self.session.as_mut() else {
             return Vec::new();
@@ -591,6 +599,17 @@ impl<D: Driver> Controller<D> {
                 .start_renderer(&endpoint, reader, control.clone(), Arc::clone(&gain))
             {
                 Ok(handle) => {
+                    if self.busy.remove(&endpoint.id) {
+                        self.log.log(|| {
+                            format!(
+                                "output {}: the other app let go of its device",
+                                label(&self.names, &endpoint.id)
+                            )
+                        });
+                        self.pending.push(BackendEvent::OutputFree {
+                            id: endpoint.id.clone(),
+                        });
+                    }
                     let setup = handle.setup();
                     if let Some(setup) = setup {
                         self.setups.insert(endpoint.id.clone(), setup);
@@ -622,6 +641,22 @@ impl<D: Driver> Controller<D> {
                             label(&self.names, &endpoint.id)
                         )
                     });
+                }
+                // Another app holds the device in exclusive mode: it stays
+                // on, as the user chose, and plays once that app lets go.
+                // Told once; the next polls try again quietly.
+                Err(BackendError::DeviceBusy) => {
+                    if self.busy.insert(endpoint.id.clone()) {
+                        self.log.log(|| {
+                            format!(
+                                "output {} is busy: another app holds its device in exclusive \
+                                 mode; it stays on and is tried again at every poll",
+                                label(&self.names, &endpoint.id)
+                            )
+                        });
+                        self.pending
+                            .push(BackendEvent::OutputBusy { id: endpoint.id });
+                    }
                 }
                 Err(error) => {
                     self.log.log(|| {
@@ -1157,6 +1192,11 @@ impl<D: Driver> AudioBackend for Controller<D> {
             format!("output {} switched {state}", label(&self.names, id))
         });
         self.policy.set_enabled(id, enabled);
+        // Switched off, a busy output no longer waits for its device.
+        if !enabled && self.busy.remove(id) {
+            self.pending
+                .push(BackendEvent::OutputFree { id: id.to_owned() });
+        }
         if self.session.is_none() {
             self.follow_device_volumes();
             return Ok(());
@@ -1852,6 +1892,15 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::OutputFailed { id, error } => {
             format!("output {} failed: {error}", label(names, id))
         }
+        BackendEvent::OutputBusy { id } => {
+            format!(
+                "output {} busy: another app holds its device",
+                label(names, id)
+            )
+        }
+        BackendEvent::OutputFree { id } => {
+            format!("output {} no longer waits for its device", label(names, id))
+        }
         BackendEvent::Stopped { reason } => format!("stopped: {}", describe_stop(reason)),
         BackendEvent::HeardTwice { paths } if paths.is_empty() => {
             "the source is heard only through AudioSync again".to_owned()
@@ -2386,11 +2435,92 @@ mod tests {
     }
 
     #[test]
+    fn an_output_whose_device_another_app_holds_stays_on_and_plays_once_free() {
+        let mut backend = backend();
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputBusy {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+        assert!(
+            backend.policy().settings(HEADPHONES).enabled,
+            "it stays on, as the user chose"
+        );
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        // Tried again at every poll, and told once.
+        for _ in 0..3 {
+            assert!(backend.poll().is_empty());
+        }
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        backend.fail_output(HEADPHONES, None);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputFree {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert!(backend.poll().is_empty());
+    }
+
+    #[test]
+    fn an_output_taken_over_by_another_app_while_playing_waits_for_it() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        // Windows ends a shared stream when another app takes the device
+        // in exclusive mode; opening it again then finds it in use.
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        backend.end_renderer(HEADPHONES);
+        let events = backend.poll();
+        assert!(
+            events.contains(&BackendEvent::OutputBusy {
+                id: HEADPHONES.to_owned(),
+            }),
+            "{events:?}"
+        );
+        assert!(backend.policy().settings(HEADPHONES).enabled);
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        backend.fail_output(HEADPHONES, None);
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    #[test]
+    fn turning_on_an_output_whose_device_is_busy_keeps_it_on() {
+        let mut backend = backend();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        assert_eq!(backend.set_output_enabled(HEADPHONES, true), Ok(()));
+        assert!(backend.policy().settings(HEADPHONES).enabled);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputBusy {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+        // Switched off while it waits, it no longer does.
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputFree {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+        backend.fail_output(HEADPHONES, None);
+        backend.poll();
+        assert_eq!(playing(&backend), [SPEAKERS]);
+    }
+
+    #[test]
     fn an_output_that_cant_start_is_turned_off_and_reported() {
         let mut backend = backend();
         let error = BackendError::System {
             call: "IAudioClient::Initialize",
-            code: 0x8889_000A_u32 as i32,
+            code: 0x8889_0008_u32 as i32,
         };
         backend.fail_output(HEADPHONES, Some(error.clone()));
         backend.start(&SourceId::WholeSystem).unwrap();
@@ -3248,7 +3378,7 @@ mod tests {
             late,
             Some(BackendError::System {
                 call: "IAudioClient::Initialize",
-                code: 0x8889_000A_u32 as i32,
+                code: 0x8889_0008_u32 as i32,
             }),
         );
         backend.start(&SourceId::WholeSystem).unwrap();

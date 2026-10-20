@@ -251,6 +251,9 @@ pub enum NoticeMessage {
     /// A speaker's device went away while it played. It stays on and plays
     /// again once the device is back.
     SpeakerLost { speaker: String },
+    /// Another app holds a speaker's device for itself (exclusive mode). It
+    /// stays on and plays once that app lets go; the notice then clears.
+    SpeakerBusy { speaker: String },
     /// An AirPlay speaker stopped playing; it stays on while AudioSync keeps
     /// trying to reach it.
     AirPlayRetrying {

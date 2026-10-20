@@ -1689,6 +1689,9 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::SpeakerLost { speaker } => {
             strings.invoke_notice_speaker_lost(speaker.as_str().into())
         }
+        NoticeMessage::SpeakerBusy { speaker } => {
+            strings.invoke_notice_speaker_busy(speaker.as_str().into())
+        }
         NoticeMessage::AirPlayRetrying { speaker, problem }
         | NoticeMessage::AirPlayCantPlay { speaker, problem } => {
             strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
