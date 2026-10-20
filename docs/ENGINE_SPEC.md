@@ -135,7 +135,7 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
 - **S65** *Required.* Any NaN or ±infinity reaching the renderer's output stage is replaced by 0 before it is handed to the device.
 - **S66** *Superseded in part by S187*: a running output hands a new delay to its reader after a fade-out, up to 20 ms plus one device buffer later than its next callback. *Observed* (`enginetest.swift:56-60`, "<device>: delay 2000 / 500 / 3000 / 150 ms"). `setDelay(ms)` stores the new delay (converted per S3 at Rc) and requests a resync (S46); it applies on the next device callback, or, while capture is stalled and the reader has reached W, on the first callback after capture writes again (S46). On real hardware, 0.4 s after each live change the measured lag (`lagFrames / 48000` s) is within 60 ms of the target (the lag is the delay minus one device buffer, ± one 10 ms producer chunk).
 - **S67** *Observed* (`enginetest.swift:51-53`, "<device>: renders audio"). A started renderer renders more than 24 000 frames in its first second (the device's IO cycle runs continuously, even at gain 0 and even while the reader outputs silence).
-- **S68** *Observed* (`AppDelegate.swift:259-263`, `:300-307`; `AppDelegate+Outputs.swift:200-223`). When a device disappears or its IO stops for good, its renderer stops and the engine reports `outputLost(uid)` on the main thread. The UID stays enabled; the host's 3 s reconcile adds the output again, with its current delay and gain, once the device is listed again.
+- **S68** *Observed* (`AppDelegate.swift:259-263`, `:300-307`; `AppDelegate+Outputs.swift:200-223`). When a device disappears or its IO stops for good, its renderer stops and the engine reports `onOutputGone(uid)` on the main thread. The UID stays enabled; the host's 3 s reconcile adds the output again, with its current delay and gain, once the device is listed again.
 - **S69** *Observed* (`AppDelegate+Outputs.swift`, `syncLocalOutputs`; `SpeakerState.swift`, `LocalOutputSync.apply` and `report`; tests "S69 start failure: …"). If adding an output fails, the host removes the UID from the enabled set (so it is not retried every poll), posts one notice per failed speaker (plus an alert when the user caused it), and stops the session if nothing else is enabled.
 
 ### Fades at stream boundaries
@@ -370,7 +370,7 @@ Retired with the bundled engine on 2026-10-20, all but S111 and part of S101 and
   | capture lost | `interrupted(sourceLost)` | stop, deselect AirPlay, "source" notice (S21) |
   | source app quits | none (host watches apps) | stop, deselect AirPlay, notice (`AppDelegate.swift:311-337`; `AppLifecycle.swift:54-56`) |
   | output can't start | `attachOutput` throws | disable, notice per speaker (S69) |
-  | output device lost | `outputLost(uid)` | keep enabled, re-add when back (S68) |
+  | output device lost | `onOutputGone(uid)` | keep enabled, re-add when back (S68) |
   | pipe has no reader / reader gone | none (writer retries) | none (S89, S92) |
   | AirPlay engine down, crashing or unsupported | lifecycle state | restart, give up, Retry (S98) |
   | AirPlay speaker dropped | engine output report | pairing rules, drop with notice (S104–S109) |
