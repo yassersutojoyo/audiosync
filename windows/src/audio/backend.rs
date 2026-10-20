@@ -337,6 +337,9 @@ pub enum BackendError {
     DeviceBusy,
     /// The audio format can't be used, such as a rate outside 8 to 384 kHz.
     UnsupportedFormat,
+    /// Windows audio didn't answer in time: opening a device hung (after a
+    /// wake, say). Worth another try a little later.
+    NotResponding,
     /// A Windows call failed with this HRESULT.
     System {
         /// The call that failed.
@@ -366,6 +369,7 @@ impl fmt::Display for BackendError {
             BackendError::UnsupportedFormat => {
                 f.write_str("The device's audio format isn't supported.")
             }
+            BackendError::NotResponding => f.write_str("Windows audio didn't answer in time."),
             BackendError::System { call, code } => {
                 // `{:08X}` of a negative i32 prints its two's complement, the
                 // way Windows writes HRESULTs.
@@ -562,6 +566,7 @@ mod tests {
             BackendError::DeviceGone,
             BackendError::DeviceBusy,
             BackendError::UnsupportedFormat,
+            BackendError::NotResponding,
             BackendError::System { call: "x", code: 1 },
         ];
         for error in errors {

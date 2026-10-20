@@ -2949,6 +2949,29 @@ mod tests {
     }
 
     #[test]
+    fn an_output_whose_device_doesnt_answer_stays_on_and_is_tried_again_seconds_later() {
+        let mut backend = backend();
+        backend.fail_output(HEADPHONES, Some(BackendError::NotResponding));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(backend.poll().is_empty(), "no notice: it is tried again");
+        assert!(backend.policy().settings(HEADPHONES).enabled, "it stays on");
+        assert_eq!(playing(&backend), [SPEAKERS]);
+
+        backend.fail_output(HEADPHONES, None);
+        backend.poll();
+        assert_eq!(
+            backend.driver().renderer_attempts(HEADPHONES),
+            1,
+            "not at the next poll: a try that hangs holds the window for seconds"
+        );
+        for _ in 0..40 {
+            backend.poll();
+        }
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(backend.driver().renderer_attempts(HEADPHONES), 2);
+    }
+
+    #[test]
     fn a_busy_output_whose_device_goes_away_no_longer_waits() {
         let mut backend = backend();
         backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));

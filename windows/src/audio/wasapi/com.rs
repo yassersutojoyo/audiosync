@@ -160,8 +160,8 @@ impl Drop for ProAudioTask {
 pub(super) struct Ready<T = ()>(mpsc::Sender<Result<T, BackendError>>);
 
 impl<T> Ready<T> {
-    pub(super) fn ok(self, setup: T) {
-        let _ = self.0.send(Ok(setup));
+    pub(super) fn ok(self, setup: T) -> bool {
+        self.0.send(Ok(setup)).is_ok()
     }
 
     pub(super) fn fail(self, error: BackendError) {
@@ -174,6 +174,14 @@ impl<T> Ready<T> {
 /// that couldn't start is joined, and its error returned.
 pub(super) fn spawn_ready<T: Send + 'static>(
     name: &str,
+    body: impl FnOnce(Ready<T>) + Send + 'static,
+) -> Result<(JoinHandle<()>, T), BackendError> {
+    spawn_ready_within(name, std::time::Duration::from_secs(5), body)
+}
+
+fn spawn_ready_within<T: Send + 'static>(
+    name: &str,
+    _timeout: std::time::Duration,
     body: impl FnOnce(Ready<T>) + Send + 'static,
 ) -> Result<(JoinHandle<()>, T), BackendError> {
     let (sender, receiver) = mpsc::channel();
@@ -354,6 +362,8 @@ pub(super) unsafe fn read_mix_format(format: *const WAVEFORMATEX) -> MixFormat {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
     use crate::audio::capture::CAPTURE_ATTEMPTS;
 
@@ -404,6 +414,41 @@ mod tests {
         let mix = unsafe { read_mix_format(&raw const format) };
         assert!(!mix.float32);
         assert_eq!(mix.channel_mask, 0);
+    }
+
+    #[test]
+    fn a_thread_that_answers_in_time_hands_over_what_it_set_up() {
+        let (thread, setup) =
+            spawn_ready_within("audiosync-test", Duration::from_secs(5), |ready| {
+                assert!(ready.ok(7_u32), "the starter waits");
+            })
+            .unwrap();
+        assert_eq!(setup, 7);
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn a_thread_that_doesnt_answer_in_time_is_given_up_and_its_late_start_undone() {
+        let (told, still_waited) = mpsc::channel();
+        let started = Instant::now();
+        let result =
+            spawn_ready_within("audiosync-test", Duration::from_millis(50), move |ready| {
+                // Windows answers long after the starter gave up.
+                thread::sleep(Duration::from_secs(1));
+                let _ = told.send(ready.ok(7_u32));
+            });
+        assert!(
+            matches!(result, Err(BackendError::NotResponding)),
+            "{:?}",
+            result.map(|(_, setup)| setup)
+        );
+        assert!(started.elapsed() < Duration::from_millis(900));
+        // The thread learns nobody waits anymore, so it undoes its start
+        // rather than run on with nothing to stop it.
+        assert_eq!(
+            still_waited.recv_timeout(Duration::from_secs(10)),
+            Ok(false)
+        );
     }
 
     #[test]
