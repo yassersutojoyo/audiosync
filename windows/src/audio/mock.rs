@@ -117,8 +117,9 @@ struct DeviceVolumes {
     ignore_writes: bool,
     /// Writes fail with this error.
     write_error: Option<BackendError>,
-    /// Listeners don't register in time, as while Windows audio hangs.
-    stall_listeners: bool,
+    /// Calls on the outputs' own volumes (listener registrations, reads and
+    /// writes) don't answer in time, as while Windows audio hangs.
+    stall: bool,
     /// Notifications wait in `held` until a test lets them through, as
     /// Windows' come some time after the change.
     hold: bool,
@@ -399,6 +400,9 @@ impl MockDriver {
             VolumeWrite::Level { id, .. } | VolumeWrite::Unmute { id } => id.clone(),
         };
         self.device_volumes.record.lock().writes.push(write);
+        if self.device_volumes.stall {
+            return Err(BackendError::NotResponding);
+        }
         if let Some(error) = &self.device_volumes.write_error {
             return Err(error.clone());
         }
@@ -479,7 +483,7 @@ impl Driver for MockDriver {
         if !self.is_connected(id) {
             return Err(BackendError::DeviceGone);
         }
-        if self.device_volumes.stall_listeners {
+        if self.device_volumes.stall {
             return Err(BackendError::NotResponding);
         }
         self.device_volumes
@@ -502,12 +506,18 @@ impl Driver for MockDriver {
             .collect()
     }
 
-    fn endpoint_volume(&mut self, id: &str) -> Option<EndpointVolume> {
+    fn endpoint_volume(&mut self, id: &str) -> Result<EndpointVolume, BackendError> {
         self.device_volumes.record.lock().reads.push(id.to_owned());
-        if !self.is_connected(id) {
-            return None;
+        if self.device_volumes.stall {
+            return Err(BackendError::NotResponding);
         }
-        self.volume_of(id)
+        if !self.is_connected(id) {
+            return Err(BackendError::DeviceGone);
+        }
+        self.volume_of(id).ok_or(BackendError::System {
+            call: "IAudioEndpointVolume::GetMute",
+            code: 0x8000_4005_u32 as i32,
+        })
     }
 
     fn set_endpoint_level(&mut self, id: &str, level: f32) -> Result<(), BackendError> {
@@ -849,10 +859,11 @@ impl Controller<MockDriver> {
         }
     }
 
-    /// Makes later registrations of the outputs' volume listeners not answer
-    /// in time (`true`), as while Windows audio hangs, or work again.
-    pub fn stall_volume_listeners(&mut self, stall: bool) {
-        self.driver_mut().device_volumes.stall_listeners = stall;
+    /// Makes later calls on the outputs' own volumes (listener
+    /// registrations, reads and writes) not answer in time (`true`), as
+    /// while Windows audio hangs, or work again.
+    pub fn stall_device_volumes(&mut self, stall: bool) {
+        self.driver_mut().device_volumes.stall = stall;
     }
 
     /// Makes later writes to the outputs' own volumes fail with `error`, or

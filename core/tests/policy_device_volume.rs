@@ -6,7 +6,7 @@
 //! their own volume sounded very quiet with AudioSync's slider at 100.
 
 use audiosync_core::policy::device_volume::{
-    Decision, DeviceVolume, FIX_VOLUME, Fix, Hint, LOW_BELOW_PERCENT, decision_change,
+    Decision, DeviceVolume, FIX_VOLUME, Fix, Hint, LOW_AT_MOST_PERCENT, decision_change,
 };
 
 fn at(volume: f64) -> DeviceVolume {
@@ -25,22 +25,25 @@ fn muted_at(volume: f64) -> DeviceVolume {
 
 // covers: S196
 #[test]
-fn a_device_at_13_percent_is_low_and_one_at_25_percent_is_fine() {
+fn a_device_at_13_or_25_percent_is_low_and_one_at_26_percent_is_fine() {
     let quiet = at(0.13);
     assert_eq!(quiet.percent(), Some(13));
     assert_eq!(quiet.decision(), Decision::Low);
     assert_eq!(quiet.hint(), Some(Hint::Low { percent: 13 }));
 
-    assert_eq!(LOW_BELOW_PERCENT, 25);
-    assert_eq!(at(0.25).decision(), Decision::Fine);
-    assert_eq!(at(0.25).hint(), None);
-    assert_eq!(at(0.24).decision(), Decision::Low);
-    // The whole percent decides, rounded half away from zero: 24.5 % shows
-    // as 25 % and is fine, 24.4 % shows as 24 % and is low.
-    assert_eq!(at(0.245).percent(), Some(25));
-    assert_eq!(at(0.245).decision(), Decision::Fine);
-    assert_eq!(at(0.244).percent(), Some(24));
-    assert_eq!(at(0.244).decision(), Decision::Low);
+    assert_eq!(LOW_AT_MOST_PERCENT, 25);
+    // 25 % itself is low: the hint names the percent it shows.
+    assert_eq!(at(0.25).decision(), Decision::Low);
+    assert_eq!(at(0.25).hint(), Some(Hint::Low { percent: 25 }));
+    assert_eq!(at(0.25).fix().volume, Some(FIX_VOLUME));
+    assert_eq!(at(0.26).decision(), Decision::Fine);
+    assert_eq!(at(0.26).hint(), None);
+    // The whole percent decides, rounded half away from zero: 25.4 % shows
+    // as 25 % and is low, 25.5 % shows as 26 % and is fine.
+    assert_eq!(at(0.254).percent(), Some(25));
+    assert_eq!(at(0.254).decision(), Decision::Low);
+    assert_eq!(at(0.2551).percent(), Some(26));
+    assert_eq!(at(0.2551).decision(), Decision::Fine);
     // 0 % without mute is low; a third of the volume, kept low on purpose,
     // is left alone.
     assert_eq!(at(0.0).hint(), Some(Hint::Low { percent: 0 }));
@@ -62,7 +65,11 @@ fn a_device_at_13_percent_is_low_and_one_at_25_percent_is_fine() {
 fn a_muted_device_is_muted_whatever_its_volume() {
     assert_eq!(muted_at(0.9).decision(), Decision::Muted);
     assert_eq!(muted_at(0.9).hint(), Some(Hint::Muted));
-    assert_eq!(muted_at(0.25).hint(), Some(Hint::Muted));
+    assert_eq!(muted_at(0.26).hint(), Some(Hint::Muted));
+    assert_eq!(
+        muted_at(0.25).hint(),
+        Some(Hint::MutedAndLow { percent: 25 })
+    );
     assert_eq!(muted_at(0.13).decision(), Decision::MutedAndLow);
     assert_eq!(
         muted_at(0.13).hint(),
@@ -121,7 +128,7 @@ fn an_unknown_or_non_finite_volume_shows_nothing() {
 
 // covers: S197
 #[test]
-fn the_fix_raises_to_75_percent_only_below_25_and_never_lowers() {
+fn the_fix_raises_to_75_percent_only_at_25_or_less_and_never_lowers() {
     assert_eq!(FIX_VOLUME, 0.75);
     assert_eq!(
         at(0.13).fix(),
@@ -131,8 +138,8 @@ fn the_fix_raises_to_75_percent_only_below_25_and_never_lowers() {
         }
     );
     assert_eq!(at(0.0).fix().volume, Some(0.75));
-    assert_eq!(at(0.244).fix().volume, Some(0.75));
-    for fine in [0.25, 0.5, 0.9, 1.0] {
+    assert_eq!(at(0.25).fix().volume, Some(0.75));
+    for fine in [0.26, 0.5, 0.9, 1.0] {
         assert_eq!(at(fine).fix(), Fix::NOTHING, "{fine}");
         assert!(at(fine).fix().is_empty(), "{fine}");
     }
