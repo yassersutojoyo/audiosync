@@ -94,7 +94,7 @@ if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
   # The local delay model (LocalDelay.swift) and the device volume hint
   # (DeviceVolume.swift) ask the core, and the texts (Localization.swift)
   # name the capture's and the engine's start errors, which bring the
-  # engine's parts along (SyncEngine.swift with its StartError): the
+  # engine's parts along (SyncEngine.swift with StreamEngine's StartError): the
   # logic suite links the core too.
   build logic Tests/logictest.swift TrackMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
     AirPlayPairing.swift Notices.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \

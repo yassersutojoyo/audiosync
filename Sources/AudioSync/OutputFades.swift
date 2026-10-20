@@ -57,7 +57,7 @@ protocol FadingOutput: AnyObject {
     /// has nothing left to play (its device is gone or its IO stopped).
     func hasFaded(nowNs: UInt64) -> Bool
     /// Stops its IO at once.
-    func stop()
+    func halt()
 }
 
 /// Local outputs on their way out, and the session stops that wait for them
@@ -158,7 +158,7 @@ final class OutputRetirement {
     /// waiting here for one (S185).
     func stopLost(_ output: FadingOutput) {
         for batch in batches { batch.outputs.removeAll { $0 === output } }
-        output.stop()
+        output.halt()
         poll()
     }
 
@@ -170,7 +170,7 @@ final class OutputRetirement {
         while let index = finishable() {
             let batch = batches.remove(at: index)
             batch.stopCapture?()
-            for output in batch.outputs { output.stop() }
+            for output in batch.outputs { output.halt() }
             for step in batch.after { step() }
         }
     }

@@ -91,7 +91,7 @@ Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) desc
 - `CoreEngine.swift`: the Rust core's engine parts: the shared delay buffer with one independent reader per speaker, the equalizer and the output gain
 - `EngineParts.swift`: one session's set of those parts, and what the capture hands each captured block to
 - `OutputRenderer.swift`: one Core Audio output per local speaker
-- `SyncEngine.swift`: ties capture, local outputs and AudioSync's AirPlay sender together
+- `SyncEngine.swift`: `StreamEngine`, which ties capture, local outputs and AudioSync's AirPlay sender together
 - `LocalDelay.swift`: the local delay model: the reference, the hold-backs each local speaker plays at, the AirPlay delay and the one-time migration of older delays
 - `NativeAirPlay.swift`, `NativeAirPlayTap.swift`: AudioSync's own AirPlay sender through the core's C interface, and the capture's way into it
 - `NativeAirPlayModel.swift`, `NativeReceiver.swift`: what the sender lists and plays, and the decisions the app makes from it, PIN and password pairing among them (`AirPlayPairing.swift` holds the access kinds and turn-off reasons)

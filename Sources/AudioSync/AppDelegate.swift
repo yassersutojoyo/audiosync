@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// The audio session: capture, the delay ring, local outputs, and the
     /// audio for AudioSync's own AirPlay sender.
-    let engine = SyncEngine()
+    let engine = StreamEngine()
     let devices = AudioDevices()
     let nowPlaying = NowPlayingMonitor()
     let localNetworkProbe = LocalNetworkProbe()
@@ -277,7 +277,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// What the session engine and the Local Network probe report. Both
     /// report on the main thread (S113).
     private func handleEngineEvents() {
-        engine.onOutputLost = { lostUID in
+        engine.onOutputGone = { lostUID in
             // The speaker stays on; a reconcile attaches it again once its
             // device is listed again (S68, EC1).
             DBG.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
@@ -342,7 +342,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// that app, so streaming can start again once it runs.
     private func appQuit(bundleID: String?) {
         if let bundleID,
-           AppLifecycle.endsSession(source: audioSource, quitBundleID: bundleID, streaming: engine.running) {
+           AppLifecycle.endsSession(source: audioSource, quitBundleID: bundleID, streaming: engine.isRunning) {
             DBG.log("[AudioSync] source app quit: \(bundleID)")
             stopEngine()
             postNotice(text.sourceTerminated(name: SourceApps.name(for: bundleID)), subject: Notice.source)
