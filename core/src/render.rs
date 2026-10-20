@@ -32,7 +32,8 @@
 //! [`TRACK_MS`] (or [`TRACK_CALLBACKS`] callbacks, when longer) after the
 //! reader anchors as its reference, and trims its converter by a frame or
 //! so whenever a running average of the fill (the same time constant)
-//! strays more than [`TRIM_DEAD_ZONE_FRAMES`] from it: slowed when the device's clock runs fast, sped up when it runs slow,
+//! strays more than [`TRIM_DEAD_ZONE_FRAMES`] from it: slowed when the
+//! device's clock runs fast, sped up when it runs slow,
 //! at most 1 / [`TRIM_SHARE`] of a callback's reads at a time.
 //!
 //! The fade (S184 to S188):

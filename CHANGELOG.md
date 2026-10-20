@@ -29,7 +29,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - An AirPlay speaker that sends back broken or odd answers can no longer crash AudioSync. Pairing answers nested too deeply or pointing back at themselves are refused, and so are malformed replies from the speaker. This goes for the Windows version too.
 - Building from source also finds Rust when it's installed through Homebrew's rustup.
 - A Bluetooth speaker, or any other output that runs at 44.1 kHz, no longer crackles when you switch it on. It used to run short of audio for a moment at the start. This goes for the Windows version too.
-- A speaker whose clock runs a touch fast, such as any 44.1 kHz speaker on Windows or a 96 kHz one on the Mac, no longer clicks every minute or two. AudioSync now keeps following the speaker's clock and nudges its pace a frame at a time, either way, so one that runs a touch slow no longer jumps ahead every few minutes either. This goes for the Windows version too.
+- A 44.1 kHz speaker on Windows or a 96 kHz one on the Mac whose clock runs a touch fast no longer clicks every minute or two. AudioSync now keeps following the speaker's clock and nudges its pace a frame at a time, either way, so one that runs a touch slow no longer jumps ahead every few minutes either. This goes for the Windows version too.
 - A delay you type, for a speaker or for AirPlay, now applies when you press Return or leave the field, not at every keystroke, so typing 220 no longer jumps through 2 and 22 ms on the way. Escape drops what you typed, and a value you typed is still kept if you quit before pressing Return.
 
 ### Windows (preview, not released yet)
