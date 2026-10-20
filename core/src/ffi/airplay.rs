@@ -2985,6 +2985,92 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(1), "destroy waited");
     }
 
+    /// Whether a failure's detail names where a panic happened, as
+    /// `panic at <path>:<line>` with forward slashes, in a file whose path
+    /// ends with `file`.
+    fn is_panic_location(detail: &str, file: &str) -> bool {
+        detail
+            .strip_prefix("panic at ")
+            .and_then(|at| at.rsplit_once(':'))
+            .is_some_and(|(path, line)| {
+                path.ends_with(file)
+                    && !path.contains('\\')
+                    && !line.is_empty()
+                    && line.chars().all(|c| c.is_ascii_digit())
+            })
+    }
+
+    // The debug log learns where the bug is, and nothing the panic said
+    // (its message may hold anything, a receiver's reply included).
+    // covers: S205
+    #[test]
+    fn a_failure_after_a_caught_panic_says_where_it_happened_and_never_what_it_said() {
+        let mut handle = asc_airplay_create();
+        assert!(!handle.is_null());
+        panic_in_next_call();
+        // SAFETY: a live handle, used by this thread only.
+        assert_eq!(unsafe { asc_airplay_latency_ms(handle) }, 0.0);
+        let events = events_until(handle, failed);
+        let failure = events.last().expect("the failure");
+        assert_eq!(failure.kind, AIRPLAY_EVENT_FAILED, "{events:?}");
+        assert!(
+            is_panic_location(&failure.detail, "src/ffi/airplay.rs"),
+            "{failure:?}"
+        );
+        assert!(!failure.detail.contains("injected"), "{failure:?}");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S205
+    #[test]
+    fn a_failure_after_a_panic_in_an_input_write_says_where_it_happened() {
+        let mut handle = asc_airplay_create();
+        // SAFETY: a live handle, used by this thread only.
+        let mut input = unsafe { asc_airplay_take_input(handle) };
+        let block = vec![0.0f32; 480 * 2];
+        // SAFETY: a live input written by this thread only; a block of 480
+        // stereo frames.
+        unsafe {
+            assert!(asc_airplay_input_set_rate(input, 48_000.0));
+            panic_in_next_call();
+            assert_eq!(asc_airplay_input_write(input, block.as_ptr(), 480), 0);
+        }
+        let events = events_until(handle, failed);
+        let failure = events.last().expect("the failure");
+        assert_eq!(failure.kind, AIRPLAY_EVENT_FAILED, "{events:?}");
+        assert!(
+            is_panic_location(&failure.detail, "src/ffi/airplay.rs"),
+            "{failure:?}"
+        );
+        assert!(!failure.detail.contains("injected"), "{failure:?}");
+        // SAFETY: each destroyed once, by this thread.
+        unsafe {
+            asc_airplay_input_destroy(&mut input);
+            asc_airplay_destroy(&mut handle);
+        }
+    }
+
+    // A panic on the sender's own driver thread: no call caught it, so the
+    // detail is the latest panic the process saw since the sender started
+    // (other tests panic in parallel here, so only its form is checked).
+    // covers: S205
+    #[test]
+    fn a_failure_after_the_driver_panicked_says_where_a_panic_happened() {
+        let mut handle = asc_airplay_create();
+        // SAFETY: a live handle, used by this thread only.
+        unsafe { &*handle }
+            .sender
+            .start_discovery_with(Box::new(Panicking));
+        let events = events_until(handle, failed);
+        let failure = events.last().expect("the failure");
+        assert_eq!(failure.kind, AIRPLAY_EVENT_FAILED, "{events:?}");
+        assert!(is_panic_location(&failure.detail, ".rs"), "{failure:?}");
+        assert!(!failure.detail.contains("a bug in"), "{failure:?}");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     /// A browser whose daemon is already gone, as one a bug ended leaves it.
     struct Dead;
 
