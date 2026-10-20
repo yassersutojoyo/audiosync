@@ -666,6 +666,12 @@ impl MockBackend {
         self.state.notices.truncate(NOTICE_CAPACITY);
     }
 
+    /// Adds a speaker the example data lacks, such as a virtual output.
+    #[cfg(test)]
+    pub fn add_speaker(&mut self, speaker: Speaker) {
+        self.state.speakers.push(speaker);
+    }
+
     fn speaker_mut(&mut self, id: &str) -> Option<&mut Speaker> {
         self.state.speakers.iter_mut().find(|s| s.id == id)
     }
