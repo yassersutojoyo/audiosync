@@ -757,8 +757,9 @@ const char *asc_device_volume_decision_name(uint32_t decision_code);
  * detail is where the panic happened, "panic at <file>:<line>" (the file
  * from its crate's folder on), or "latest panic at <file>:<line>" when one
  * of the sender's own threads ended and no call caught the panic, never
- * what it said, or "" when no panic is known; the first asc_airplay_create installs a panic hook that notes the
- * locations and then runs the hook that was there before.
+ * what it said, or "" when no panic is known; the first asc_airplay_create
+ * installs a panic hook that notes the locations and then runs the hook that
+ * was there before.
  */
 typedef struct AscAirPlay AscAirPlay;
 
