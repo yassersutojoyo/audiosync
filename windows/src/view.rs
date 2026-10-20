@@ -226,7 +226,7 @@ pub struct App {
     pub flyout: TrayFlyout,
     pub equalizer: EqualizerWindow,
     group_dialog: GroupNameDialog,
-    /// The code prompt of an Apple TV pairing.
+    /// The PIN prompt of an Apple TV pairing.
     pin_dialog: PinDialog,
     /// The speaker the PIN dialog is open for, while it is.
     pin_for: RefCell<Option<String>>,
