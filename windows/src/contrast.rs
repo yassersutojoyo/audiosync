@@ -744,14 +744,17 @@ fn the_hint_and_the_fix_name_the_output_for_narrator() {
         .find("options := IconButton {")
         .expect("the options button");
     assert!(
-        slider < hint_at && hint_at < fix_at && fix_at < options,
+        slider < hint_at && hint_at < fix_at && !(slider..fix_at).contains(&options),
         "the hint and the fix come right after the slider"
     );
     let shown = row
         .find("if root.item.device-volume != DeviceVolumeHint.none:")
         .expect("the hint shows only with a hint to show");
     assert!(slider < shown && shown < hint_at);
-    let part = &row[shown..options];
+    let sync = row
+        .find("if root.item.has-delay && root.item.sync-open:")
+        .expect("the sync controls");
+    let part = &row[shown..sync];
     assert!(part.contains("accessible-role: text;"));
     assert!(part.contains(
         "text: Strings.device-volume-hint(root.item.device-volume, \

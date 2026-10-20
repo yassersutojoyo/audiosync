@@ -33,13 +33,14 @@ the license, and the Slint badge small at the bottom.
 
 The main window has a header (mark, wordmark, status and the Streaming switch),
 then a left column of cards (Audio Source, Master Volume, Equalizer) and the
-speaker list. Every speaker row is one line in shared columns, so they line up
-across the sections: the toggle, the name with the kind below it (and the
-availability note, when there is one), the delay, the volume slider with its
-value, and the "…" options button. Below 960 px of width the volume sliders get
-shorter, leaving the names more room; the window can't be made narrower than
-860 px or shorter than 440 px, which fits a 1366 x 768 screen at 150 %. Both
-columns scroll when the window is too short for them.
+speaker list. A speaker row has the toggle, then, as on the Mac, a line with
+the name, the kind below it (and the availability note, when there is one), the
+delay and the "…" options button, and the volume slider with its value under
+that line, so a long name isn't cut short by the slider. The delay lines up
+across the sections. The window can't be made narrower than 860 px or shorter
+than 440 px, which fits a 1366 x 768 screen at 150 %, and it holds that size
+when another program resizes it. Both columns scroll when the window is too
+short for them, and the speaker list keeps room for its scroll bar.
 
 A speaker row shows one of four states. Off: a grey toggle. On while
 streaming is off: an outlined toggle, "Will play" to Narrator. Playing: a

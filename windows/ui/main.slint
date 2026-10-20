@@ -27,7 +27,6 @@ component SpeakerSection inherits VerticalLayout {
     in property <string> title;
     in property <[SpeakerItem]> speakers;
     in property <string> note;
-    in property <bool> compact;
     callback toggled(string);
     callback volume-changed(string, float);
     callback sync-toggled(string);
@@ -67,7 +66,6 @@ component SpeakerSection inherits VerticalLayout {
 
             SpeakerRow {
                 item: speaker;
-                compact: root.compact;
                 init => {
                     if speaker.id == root.focus-id {
                         root.focus-id = "";
@@ -337,14 +335,12 @@ export component MainWindow inherits Window {
 
     title: Strings.main-window-title;
     icon: @image-url("../res/audiosync-256.png");
-    // Wide enough for a speaker row's columns next to the left column, and
+    // Wide enough for a speaker row next to the left column, and
     // short enough for a 1366 x 768 screen at 150 % (both columns scroll).
     min-width: 860px;
     min-height: 440px;
     preferred-width: 980px;
     preferred-height: 680px;
-    // Below this width the volume sliders in the speaker rows are shorter.
-    property <bool> compact: root.width < 960px;
     background: Tokens.background;
     default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
@@ -643,7 +639,6 @@ export component MainWindow inherits Window {
                         device-volume-fix(id) => {
                             root.device-volume-fix-requested(id);
                         }
-                        compact: root.compact;
                         focus-id <=> root.focus-speaker-id;
                         focus-part <=> root.focus-speaker-part;
                         focus-changed(id, part) => {
@@ -742,7 +737,6 @@ export component MainWindow inherits Window {
                         device-volume-fix(id) => {
                             root.device-volume-fix-requested(id);
                         }
-                        compact: root.compact;
                         focus-id <=> root.focus-speaker-id;
                         focus-part <=> root.focus-speaker-part;
                         focus-changed(id, part) => {

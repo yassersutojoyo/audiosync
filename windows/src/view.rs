@@ -3818,7 +3818,7 @@ mod tests {
         let app = main_window_over(backend);
         let window = app.main.window();
         // The streaming switch, then the newest notice's dismiss button.
-        tab(window, 2);
+        tab(window, 3);
         press(window, " ");
         assert_eq!(app.snapshot().notices.len(), 1, "Space dismissed it");
         press(window, " ");
@@ -4149,12 +4149,13 @@ mod tests {
         assert!(!enabled(&app, "local:cable"));
 
         // Off and no longer shown, Connected Speakers is empty: the focus
-        // goes to This PC's first row's options, so the next Tab stop is
-        // the headphones' toggle, not the source after the streaming switch.
+        // goes to This PC's first row's options; past that row's volume and
+        // its device volume fix, the next stop is the headphones' toggle, not
+        // the source after the streaming switch.
         app.main.invoke_show_virtual_devices_toggled(false);
         draw_frames();
         let headphones = enabled(&app, "local:headphones");
-        tab(window, 1);
+        tab(window, 3);
         press(window, " ");
         assert_ne!(
             enabled(&app, "local:headphones"),
