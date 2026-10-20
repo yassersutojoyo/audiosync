@@ -14,12 +14,13 @@
 //! version is read for the fields it has; one from a newer version, one that
 //! can't be read or one that isn't valid JSON is ignored as a whole: the
 //! defaults apply, and the next change writes a fresh file, after keeping
-//! the old one aside (a newer version's as [`NEWER_FILE_NAME`], any other as
-//! [`IGNORED_FILE_NAME`]). A file that can't be read is tried once more at
-//! launch (another program may hold it for a moment), and while it still
-//! can't be read nothing is saved over it, since it may hold the user's
-//! settings. Fields this version doesn't know are ignored, missing ones take
-//! their defaults, and values out of range are clamped
+//! the old one aside in a copy with the time in its name, which no later
+//! copy replaces (a newer version's named after [`NEWER_FILE_NAME`], any
+//! other after [`IGNORED_FILE_NAME`]). A file that can't be read is tried
+//! once more at launch (another program may hold it for a moment), and
+//! while it still can't be read nothing is saved over it, since it may hold
+//! the user's settings. Fields this version doesn't know are ignored,
+//! missing ones take their defaults, and values out of range are clamped
 //! ([`Settings::clamped`]). Nothing here panics on a bad file, and the
 //! caller logs what [`Loaded`] says.
 //!
@@ -48,13 +49,15 @@ use crate::ui_model::WindowFrame;
 /// The file's name in the app's data folder.
 pub const FILE_NAME: &str = "settings.json";
 
-/// Where a newer AudioSync's settings file is kept before this build first
-/// saves over it.
+/// What the copy of a newer AudioSync's settings file is named after
+/// (`settings.newer-<time>.json`), kept before this build first saves over
+/// it.
 pub const NEWER_FILE_NAME: &str = "settings.newer.json";
 
-/// Where a settings file this build ignored for another reason (it couldn't
-/// be read at launch, or it was damaged) is kept before this build first
-/// saves over it.
+/// What the copy of a settings file this build ignored for another reason
+/// (it couldn't be read at launch, or it was damaged) is named after
+/// (`settings.ignored-<time>.json`), kept before this build first saves
+/// over it.
 pub const IGNORED_FILE_NAME: &str = "settings.ignored.json";
 
 /// The format version this build writes, and the newest it reads.
@@ -460,6 +463,29 @@ impl fmt::Display for Loaded {
     }
 }
 
+/// A settings file [`SettingsFile::save`] copied aside before it first
+/// saved over it, and where the copy is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeptAside {
+    /// A newer AudioSync's file.
+    Newer(PathBuf),
+    /// A file the last load ignored: it couldn't be read at launch, or it
+    /// was damaged. The settings in effect are the defaults, with what the
+    /// user changed since.
+    Ignored(PathBuf),
+}
+
+impl KeptAside {
+    /// The copy's file name, for the log and the user.
+    pub fn file_name(&self) -> String {
+        let (KeptAside::Newer(path) | KeptAside::Ignored(path)) = self;
+        path.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
 /// Where the settings are kept: the file, or nowhere (this run only).
 #[derive(Clone, Debug, Default)]
 pub struct SettingsFile {
@@ -521,24 +547,25 @@ impl SettingsFile {
 
     /// Replaces the file with `settings`. Without a file it does nothing.
     ///
-    /// A file the last load ignored is first copied next to it (replacing an
-    /// older copy), so the user's settings in it aren't lost: a newer
-    /// AudioSync's file to [`NEWER_FILE_NAME`] (whenever this build saves
-    /// over one), any other to [`IGNORED_FILE_NAME`]; the copy's path is
-    /// returned when that happened. While such a file still can't be read,
-    /// or the copy fails, the file is left alone and the error returned.
-    pub fn save(&self, settings: &Settings) -> io::Result<Option<PathBuf>> {
+    /// A file the last load ignored is first copied next to it, so the
+    /// user's settings in it aren't lost: a newer AudioSync's file
+    /// (whenever this build saves over one) to a copy named after
+    /// [`NEWER_FILE_NAME`], any other to one named after
+    /// [`IGNORED_FILE_NAME`], each with the time
+    /// ([`data_folder::keep_bytes_aside`]), so no copy ever replaces an
+    /// older one; what was kept is returned. While such a file still can't
+    /// be read, or the copy fails, the file is left alone and the error
+    /// returned.
+    pub fn save(&self, settings: &Settings) -> io::Result<Option<KeptAside>> {
         let Some(path) = &self.path else {
             return Ok(None);
         };
         let kept = match fs::read(path) {
-            Ok(bytes) if written_by_a_newer_build(&bytes) => {
-                let kept = path.with_file_name(NEWER_FILE_NAME);
-                data_folder::write_atomically(&kept, &bytes)?;
-                Some(kept)
-            }
+            Ok(bytes) if written_by_a_newer_build(&bytes) => Some(KeptAside::Newer(
+                data_folder::keep_bytes_aside(path, NEWER_FILE_NAME, &bytes)?,
+            )),
             Ok(_) | Err(_) if self.keep_aside.get() => {
-                data_folder::keep_aside(path, IGNORED_FILE_NAME)?
+                data_folder::keep_aside(path, IGNORED_FILE_NAME)?.map(KeptAside::Ignored)
             }
             _ => None,
         };
@@ -1006,9 +1033,11 @@ mod tests {
         // The newer AudioSync saved over it again, starting from what this
         // build wrote: that file gets a copy of its own, and the first copy
         // stays.
-        let mut again = Settings::default();
-        again.version = VERSION + 1;
-        let again_text = again.to_json();
+        let again_text = Settings {
+            version: VERSION + 1,
+            ..Settings::default()
+        }
+        .to_json();
         fs::write(&path, &again_text).expect("written");
         let file = SettingsFile::at(path.clone());
         assert!(matches!(file.load().1, Loaded::Ignored(_)));
@@ -1069,8 +1098,10 @@ mod tests {
             fs::rename(&held, &path).expect("moved back");
             file.save(settings).expect("saved");
         };
-        let mut changed = Settings::default();
-        changed.master_volume = 12.0;
+        let mut changed = Settings {
+            master_volume: 12.0,
+            ..Settings::default()
+        };
         launch(&changed);
         changed.master_volume = 13.0;
         launch(&changed);

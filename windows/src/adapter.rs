@@ -61,7 +61,7 @@ use crate::audio::capture::WHOLE_SYSTEM_NAME;
 use crate::audio::routing::{DirectPath, DirectReason};
 use crate::debug_log::DebugLog;
 use crate::settings::{
-    self, SavedEqualizer, SavedGroup, SavedSource, SavedSpeaker, Settings, SettingsFile,
+    self, KeptAside, SavedEqualizer, SavedGroup, SavedSource, SavedSpeaker, Settings, SettingsFile,
 };
 use crate::ui_model::{
     self, AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, PinPhase,
@@ -468,17 +468,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
             Ok(kept) if self.settings_file.path().is_some() => {
                 if let Some(kept) = kept {
                     self.log.log(|| {
-                        let name = kept.file_name().unwrap_or_default().to_string_lossy();
-                        if name == crate::settings::NEWER_FILE_NAME {
-                            format!(
+                        let name = kept.file_name();
+                        match kept {
+                            KeptAside::Newer(_) => format!(
                                 "settings: a newer AudioSync's file was kept as {name} before \
                                  saving over it"
-                            )
-                        } else {
-                            format!(
+                            ),
+                            KeptAside::Ignored(_) => format!(
                                 "settings: the file ignored at launch was kept as {name} before \
                                  saving over it"
-                            )
+                            ),
                         }
                     });
                 }
@@ -3865,7 +3864,7 @@ mod tests {
             &messages,
             &[
                 "settings: ignored: a newer AudioSync wrote it",
-                "settings: a newer AudioSync's file was kept as settings.newer.json",
+                "settings: a newer AudioSync's file was kept as settings.newer-",
                 "settings: saved",
                 "settings: saved",
             ],

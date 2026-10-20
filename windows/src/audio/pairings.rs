@@ -9,7 +9,8 @@
 //! `%LOCALAPPDATA%\AudioSync\airplay-pairings.dat`. A file that can't be
 //! read, decrypted or parsed is ignored as a whole: the speakers in it are
 //! paired again, and the next pairing writes a fresh file, after keeping the
-//! old one as [`IGNORED_FILE_NAME`]. A read that fails is tried once more at
+//! old one aside in a copy named after [`IGNORED_FILE_NAME`] with the time,
+//! which no later copy replaces. A read that fails is tried once more at
 //! launch (another program may hold the file for a moment), and while the
 //! file still can't be read nothing is written over it: new pairings last
 //! until AudioSync quits.
@@ -34,7 +35,8 @@ use crate::data_folder;
 /// The file's name in the app's data folder.
 pub const FILE_NAME: &str = "airplay-pairings.dat";
 
-/// Where a file the store ignored at launch is kept before the store first
+/// What the copy of a file the store ignored at launch is named after
+/// (`airplay-pairings.ignored-<time>.dat`), kept before the store first
 /// writes over it.
 pub const IGNORED_FILE_NAME: &str = "airplay-pairings.ignored.dat";
 
@@ -197,7 +199,8 @@ impl PairingStore {
 
     /// Writes every entry to the file, through a temporary file renamed over
     /// it; removes the file once nothing is paired. A file ignored at launch
-    /// is first kept as [`IGNORED_FILE_NAME`]; while it can't be read, it is
+    /// is first kept aside ([`data_folder::keep_aside`] with
+    /// [`IGNORED_FILE_NAME`]); while it can't be read, it is
     /// left alone and the error returned.
     fn save(&mut self) -> io::Result<()> {
         let Some(path) = &self.path else {
@@ -551,7 +554,7 @@ pub mod tests {
         store
             .insert("02005E005303", credentials("0123456789ABCDED", 5))
             .expect("saved");
-        assert_eq!(kept(), [good.clone()]);
+        assert_eq!(kept(), std::slice::from_ref(&good));
         assert_eq!(
             PairingStore::open(path.clone(), sealer()).1,
             Loaded::Speakers(2)
