@@ -841,6 +841,7 @@ struct SyncControls: View {
         }
         // A click on the panel's blank space stays inside it, so the row's
         // tap doesn't close the panel.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture {}
         // Escape on the field or a step.
