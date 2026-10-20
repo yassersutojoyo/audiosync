@@ -1808,6 +1808,23 @@ mod tests {
     }
 
     #[test]
+    fn the_main_window_fits_a_small_laptop_screen() {
+        // A 1366 x 768 screen at 150 %, with the taskbar, leaves about
+        // 911 x 464 logical pixels inside the window's frame.
+        let (min_width, min_height) = crate::settings::MIN_WINDOW;
+        assert!(
+            min_width <= 911.0 && min_height <= 464.0,
+            "{min_width} x {min_height}"
+        );
+        let main = include_str!("../ui/main.slint");
+        assert!(main.contains(&format!("    min-width: {min_width}px;\n")));
+        assert!(main.contains(&format!("    min-height: {min_height}px;\n")));
+        // The left column scrolls when it is taller than the window, so
+        // its cards never push the window past that height.
+        assert!(main.contains("left-column := ScrollView {"));
+    }
+
+    #[test]
     fn a_saved_main_window_is_fitted_to_the_monitor_it_opens_on() {
         let laptop = crate::placement::Bounds {
             x: 0.0,
