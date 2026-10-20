@@ -204,6 +204,8 @@ export component MainWindow inherits Window {
     // Connected Speakers lists nothing only because Show Virtual Devices is
     // off and its outputs are virtual.
     in property <bool> connected-virtual-hidden;
+    // AirPlay discovery runs but has found no speaker for 20 seconds.
+    in property <bool> airplay-none-found;
     in property <string> airplay-delay-text;
 
     callback power-toggled(bool);
@@ -584,7 +586,9 @@ export component MainWindow inherits Window {
                             root.device-volume-fix-requested(id);
                         }
                         compact: root.compact;
-                        note: root.connected.length > 0 ? "" : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
+                        // While AirPlay finds nothing, the note says what to
+                        // check, after the hidden virtual outputs' note.
+                        note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + Strings.airplay-none-found : Strings.airplay-none-found) : root.connected.length > 0 ? "" : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
                         toggled(id) => {
                             root.speaker-toggled(id);
                         }

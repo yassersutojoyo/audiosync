@@ -363,6 +363,9 @@ pub struct AppState {
     /// The AirPlay delay field's value L in milliseconds, while an AirPlay
     /// sender runs (spec S178, S181).
     pub airplay_delay_ms: Option<f64>,
+    /// AirPlay discovery runs but has found no speaker for a while: the
+    /// speaker list says to check the network and Windows Firewall.
+    pub airplay_none_found: bool,
 }
 
 impl AppState {
@@ -688,6 +691,7 @@ impl MockBackend {
             pin_prompt: None,
             reference_name: Some("Speakers".into()),
             airplay_delay_ms: Some(1750.0),
+            airplay_none_found: false,
         };
         MockBackend { state, next_id: 1 }
     }
