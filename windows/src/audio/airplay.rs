@@ -63,6 +63,7 @@ use audiosync_airplay::discovery::{Device, DeviceKey, ServiceKind};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
 use audiosync_airplay::input::InputWriter;
 use audiosync_airplay::pairing::{Credentials, PairingEvent, PinError};
+use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
     ReceiverEvent, ReceiverInfo, Sender, SenderConfig, SenderEvent, SpeakerError, SpeakerEvent,
     SpeakerOptions, SpeakerState,
@@ -122,7 +123,7 @@ pub trait AirPlayLink {
     /// Starts pairing with an Apple TV that asks for a PIN, with the
     /// speaker's password when AudioSync has one (an Apple TV can ask for
     /// both); a pairing already running for it is replaced.
-    fn start_pairing(&mut self, device: &Device, password: Option<String>);
+    fn start_pairing(&mut self, device: &Device, password: Option<Secret>);
 
     /// The PIN the user typed: digits only.
     fn submit_pin(&mut self, key: &DeviceKey, pin: &str) -> Result<(), PinError>;
@@ -219,7 +220,7 @@ impl AirPlayLink for SenderLink {
         self.sender.poll_event()
     }
 
-    fn start_pairing(&mut self, device: &Device, password: Option<String>) {
+    fn start_pairing(&mut self, device: &Device, password: Option<Secret>) {
         self.sender
             .start_pairing_with_password(device.clone(), password);
     }
@@ -1054,7 +1055,7 @@ impl AirPlaySpeakers {
     /// The speaker's password, the one its sessions get too, for a pairing
     /// with an Apple TV that asks for both. AudioSync asks for no AirPlay
     /// password yet, so this is `None` for now.
-    fn password(&self, id: &str) -> Option<String> {
+    fn password(&self, id: &str) -> Option<Secret> {
         self.options(id).password
     }
 
@@ -1854,7 +1855,7 @@ pub mod tests {
             self.0.borrow_mut().events.pop_front()
         }
 
-        fn start_pairing(&mut self, device: &Device, password: Option<String>) {
+        fn start_pairing(&mut self, device: &Device, password: Option<Secret>) {
             assert_eq!(password, None, "AudioSync has no AirPlay passwords yet");
             self.0
                 .borrow_mut()

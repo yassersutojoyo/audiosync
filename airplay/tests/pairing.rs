@@ -14,6 +14,7 @@ use audiosync_airplay::pairing::{
     self, Credentials, LegacyVerifier, PairingEvent, PairingState, PinError,
 };
 use audiosync_airplay::rtsp::{Method, Request};
+use audiosync_airplay::secret::Secret;
 use audiosync_airplay::session::{SessionEvent, State, Verifier};
 use common::atv::{CLIENT, FakeAppleTv, PairLink, SealAnswer, TestEntropy, public_of};
 use common::{FakeReceiver, Link, PasswordGate, digest_params, key};
@@ -1018,7 +1019,7 @@ fn verify_link(
     let mut config = common::config();
     let verifier = LegacyVerifier::new(credentials, &mut TestEntropy::new()).expect("verifier");
     config.verifier = Some(Box::new(verifier));
-    config.password = password.map(str::to_owned);
+    config.password = password.map(Secret::from);
     let mut receiver = apple_tv_receiver(atv);
     let mut gate = PasswordGate::new("secret");
     gate.from_request = index;

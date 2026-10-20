@@ -34,6 +34,7 @@ use crate::rtsp::{
     self, JackStatus, Message, Method, ParseError, Parser, Request, Response, TransportPorts,
 };
 use crate::sdp::{self, Codec};
+use crate::secret::Secret;
 use crate::volume::{self, Volume};
 
 /// How long a TCP connect may take (P20, P134).
@@ -105,8 +106,8 @@ pub struct SessionConfig {
     /// AirPlay 1 audio (Unsupported, P27) or is busy (P137).
     pub needs_pairing: bool,
     /// The speaker's password, if the host has one (P39). Never logged: the
-    /// `Debug` output hides it.
-    pub password: Option<String>,
+    /// `Debug` output hides it. Wiped from memory when dropped.
+    pub password: Option<Secret>,
     /// The public key for `POST /auth-setup`, when the receiver needs it
     /// (P60, [`Device::needs_auth_setup`](crate::discovery::Device::needs_auth_setup)):
     /// a fresh one per connection from
@@ -991,7 +992,7 @@ impl Session {
             auth.count = auth.count.wrapping_add(1);
             let value = digest::authorization(
                 &auth.challenge,
-                password,
+                password.expose(),
                 method,
                 &uri,
                 auth.count,

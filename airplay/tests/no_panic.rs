@@ -37,6 +37,7 @@ use audiosync_airplay::rtsp::{
     Request, Response, TransportPorts,
 };
 use audiosync_airplay::sdp::Codec;
+use audiosync_airplay::secret::Secret;
 use audiosync_airplay::session::{self, Session, SessionConfig, Verifier};
 use audiosync_airplay::store::HISTORY_PACKETS;
 use audiosync_airplay::stream::MAX_RESEND_REQUEST;
@@ -1764,7 +1765,7 @@ impl PairRun {
     /// The same run with the speaker's password, so a challenge is answered
     /// with `Authorization` (P46).
     fn with_password(mut self) -> PairRun {
-        self.pairing = self.pairing.with_password(Some("secret".to_owned()));
+        self.pairing = self.pairing.with_password(Some(Secret::from("secret")));
         self
     }
 
@@ -2155,7 +2156,7 @@ fn session_setup(variant: usize) -> (SessionConfig, FakeReceiver) {
     match variant {
         0 => {}
         1 => {
-            config.password = Some("secret".to_owned());
+            config.password = Some(Secret::from("secret"));
             let mut gate = PasswordGate::new("secret");
             gate.qop = true;
             receiver.gate = Some(gate);

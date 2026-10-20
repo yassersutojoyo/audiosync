@@ -73,13 +73,13 @@ use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
 use audiosync_airplay::input::InputWriter;
 use audiosync_airplay::metadata::TrackInfo;
 use audiosync_airplay::pairing::{Credentials, PairingEvent};
+use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
     NowPlaying, ReceiverEvent, ReceiverInfo, Sender, SenderConfig, SenderEvent, SpeakerError,
     SpeakerEvent, SpeakerOptions, SpeakerState,
 };
 use audiosync_airplay::stream::SpeakerLatency;
 use audiosync_airplay::volume::{MIN_DB, Volume};
-use zeroize::Zeroizing;
 
 use super::{host_slice, stereo_samples};
 use crate::airplay_pairings::{Loaded, PairingStore};
@@ -337,7 +337,7 @@ pub struct AscAirPlay {
     store: PairingStore,
     /// The passwords the host handed over, by receiver ID, for this
     /// handle's life only; wiped from memory when dropped.
-    passwords: HashMap<String, Zeroizing<String>>,
+    passwords: HashMap<String, Secret>,
     /// The receivers with a pairing running, by ID, with the key the
     /// sender knows each by: a receiver that leaves discovery while the
     /// user reads its PIN (the wait has no timeout, P51) still takes the
@@ -698,10 +698,7 @@ impl AscAirPlay {
     /// Has the sender start a pairing with `device`, the receiver `id`,
     /// with the password handed over for it, if any.
     fn start_pairing_now(&mut self, id: &str, device: Device) {
-        let password = self
-            .passwords
-            .get(id)
-            .map(|password| String::clone(password));
+        let password = self.passwords.get(id).cloned();
         self.sender.start_pairing_with_password(device, password);
     }
 
@@ -1379,10 +1376,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
             let position = volume.clamp(0.0, 100.0);
             let key = device.key.clone();
             let mut options = SpeakerOptions::new(speaker_volume(position, airplay.master));
-            options.password = airplay
-                .passwords
-                .get(id)
-                .map(|password| String::clone(password));
+            options.password = airplay.passwords.get(id).cloned();
             options.credentials = airplay.store.get(id).cloned();
             airplay.sender.add_speaker(device, options);
             airplay.added.insert(id.to_owned(), Added { key, position });
@@ -1776,7 +1770,7 @@ pub unsafe extern "C" fn asc_airplay_set_password(
                 Some(password) => {
                     airplay
                         .passwords
-                        .insert(id.to_owned(), Zeroizing::new(password.to_owned()));
+                        .insert(id.to_owned(), Secret::from(password));
                 }
                 None => {
                     airplay.passwords.remove(id);

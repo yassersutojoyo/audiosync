@@ -50,6 +50,7 @@ use crate::error::UnsupportedReason;
 use crate::error::{ErrorKind, SessionError, Warning};
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
 use crate::rtsp::{self, Message, Method, ParseError, Parser, Request, Response};
+use crate::secret::Secret;
 use crate::session::{CONNECT_TIMEOUT, RESPONSE_TIMEOUT, STATUS_CONFLICT, Verifier};
 
 use keys::{KEY_BYTES, RECEIVER_DATA_BYTES};
@@ -440,8 +441,8 @@ pub struct Pairing {
     ids: SessionIds,
     client_id: String,
     /// The speaker's password, if the host has one (P39, P46). Never
-    /// logged: `Debug` leaves it out.
-    password: Option<String>,
+    /// logged: `Debug` leaves it out. Wiped from memory when dropped.
+    password: Option<Secret>,
     auth: Option<Auth>,
     state: PairingState,
     parser: Parser,
@@ -501,7 +502,7 @@ impl Pairing {
     /// Without one, such a 401 ends the pairing with PasswordRequired, a
     /// 401 to OPTIONS before `/pair-pin-start`. Call it right after
     /// [`Pairing::new`], before the connect completes.
-    pub fn with_password(mut self, password: Option<String>) -> Pairing {
+    pub fn with_password(mut self, password: Option<Secret>) -> Pairing {
         self.password = password;
         self
     }
@@ -781,7 +782,7 @@ impl Pairing {
             auth.count = auth.count.wrapping_add(1);
             let value = digest::authorization(
                 &auth.challenge,
-                password,
+                password.expose(),
                 method,
                 uri,
                 auth.count,
