@@ -703,7 +703,9 @@ impl AirPlaySpeakers {
         self.pairings.clear();
         self.ending.clear();
         // A password prompt still waiting (discovery stopped, the sessions
-        // didn't) stays: the speaker joins with it once listed again.
+        // didn't) stays, as the speaker joins with it once listed again;
+        // one for a pairing goes with the pairing, and the speaker stays off.
+        self.password_asks.retain(|_, ask| !ask.pair);
         self.latency = self.link.latency();
         self.stopped = false;
         self.log.log(|| {
@@ -3190,6 +3192,20 @@ pub mod tests {
         }));
         assert_eq!(airplay.password_prompt(), None);
         assert!(airplay.enabled_ids().is_empty(), "not left on and silent");
+    }
+
+    #[test]
+    fn a_new_sender_drops_the_password_prompt_of_a_pairing() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        pin_shown(&fake, &mut airplay, &tv);
+        fake.pairing(&tv, pairing_failed(ErrorKind::PasswordRequired, false));
+        airplay.poll();
+        assert!(airplay.password_prompt().is_some());
+        airplay.replace_link(FakeAirPlay::new().link());
+        assert_eq!(airplay.password_prompt(), None);
+        assert!(airplay.enabled_ids().is_empty());
     }
 
     #[test]
