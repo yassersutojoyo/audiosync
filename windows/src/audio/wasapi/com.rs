@@ -275,7 +275,9 @@ const NOT_FOUND: HRESULT = HRESULT::from_win32(ERROR_NOT_FOUND.0);
 
 /// A failed call on a device: [`BackendError::DeviceGone`] when the device
 /// went away or Windows audio stopped, or Windows is rebuilding the endpoint
-/// (after a wake, or a change of its format), so the call is tried again;
+/// (after a wake, or a change of its format), so the call is tried again
+/// (an output's start for about thirty seconds while Windows still lists
+/// its device, see the controller's `REFUSED_GIVE_UP_POLLS`);
 /// [`BackendError::DeviceBusy`] when another app holds it in exclusive mode;
 /// a failed call otherwise.
 pub(super) fn device_error(call: &'static str, error: &windows::core::Error) -> BackendError {

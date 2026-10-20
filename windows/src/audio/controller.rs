@@ -370,13 +370,22 @@ pub struct Controller<D: Driver> {
     busy: BTreeMap<String, u32>,
     /// The outputs on that don't play while their device is still listed:
     /// starting them failed as if the device were gone, or didn't answer in
-    /// time (their stream may have just ended). Once the listing drops one,
+    /// time, or waited behind a start that didn't (their stream may have
+    /// just ended). Once the listing drops one,
     /// it is lost ([`BackendEvent::OutputLost`]), as an output that played
     /// is.
     unplayable: BTreeSet<String>,
     /// The outputs whose device didn't answer in time at their last start,
     /// each with the polls left before its next try ([`STALL_RETRY_POLLS`]).
     stalled: BTreeMap<String, u32>,
+    /// The stalled outputs whose own start didn't answer in time, not just
+    /// one waiting behind another's ([`Controller::sync_outputs`]): they
+    /// start last in a pass, so the others aren't kept waiting behind them.
+    hung: BTreeSet<String>,
+    /// The outputs on whose listed device refuses to open as if it were
+    /// gone, each with the polls left before that counts as a start that
+    /// failed ([`REFUSED_GIVE_UP_POLLS`]).
+    refused: BTreeMap<String, u32>,
 }
 
 impl<D: Driver> Controller<D> {
@@ -411,6 +420,8 @@ impl<D: Driver> Controller<D> {
             busy: BTreeMap::new(),
             unplayable: BTreeSet::new(),
             stalled: BTreeMap::new(),
+            hung: BTreeSet::new(),
+            refused: BTreeMap::new(),
         }
     }
 
@@ -686,8 +697,14 @@ impl<D: Driver> Controller<D> {
     /// Adds and removes renderers so the playing outputs are the enabled,
     /// connected ones. Returns the outputs that couldn't start; they are
     /// turned off (S69). One whose device is gone stays on and is tried
-    /// again at the next poll; one whose device another app holds stays on
-    /// and is tried again every few seconds ([`BUSY_RETRY_POLLS`]).
+    /// again at the next poll, for about thirty seconds while its device is
+    /// still listed ([`REFUSED_GIVE_UP_POLLS`]); one whose device another
+    /// app holds stays on and is tried again every few seconds
+    /// ([`BUSY_RETRY_POLLS`]). Once a start doesn't answer in time, which
+    /// held the UI thread for the whole wait, the starts left in the pass
+    /// wait as that one does ([`STALL_RETRY_POLLS`]) without a try, so a
+    /// pass holds the window that long once at most; the outputs whose own
+    /// start hung go last in the next pass.
     fn sync_outputs(&mut self) -> Vec<(String, BackendError)> {
         let Some(session) = self.session.as_mut() else {
             return Vec::new();
@@ -723,7 +740,13 @@ impl<D: Driver> Controller<D> {
         }
 
         let mut failures = Vec::new();
-        for endpoint in plan.attach {
+        // The outputs whose own start hung last time go last: one that
+        // waited behind them doesn't wait behind them again.
+        let mut attach = plan.attach;
+        attach.sort_by_key(|endpoint| self.hung.contains(&endpoint.id));
+        // Whether a start in this pass didn't answer in time.
+        let mut held = false;
+        for endpoint in attach {
             // A busy or stalled output waits for its next try.
             let waits = |tries: &BTreeMap<String, u32>| {
                 tries.get(&endpoint.id).is_some_and(|&wait| wait > 0)
@@ -731,18 +754,37 @@ impl<D: Driver> Controller<D> {
             if waits(&self.busy) || waits(&self.stalled) {
                 continue;
             }
+            // A start before it hung, which most likely means Windows audio
+            // isn't answering at all: it waits as that one does instead of
+            // holding the window as long again.
+            if held {
+                self.unplayable.insert(endpoint.id.clone());
+                self.stalled.insert(endpoint.id.clone(), STALL_RETRY_POLLS);
+                self.log.log(|| {
+                    format!(
+                        "output {} isn't started yet: a start before it didn't answer in time; \
+                         it stays on and is tried again in about ten seconds",
+                        label(&self.names, &endpoint.id)
+                    )
+                });
+                continue;
+            }
             let params = self.policy.params(&endpoint.id);
             let reader = Reader::new(Arc::clone(&session.ring), SESSION_RATE);
             reader.control().set_delay_frames(params.delay_frames);
             let control = RendererControl::new(&reader);
             let gain = Arc::new(SharedGain::new(params.gain));
-            match self
-                .driver
-                .start_renderer(&endpoint, reader, control.clone(), Arc::clone(&gain))
-            {
+            let failed = match self.driver.start_renderer(
+                &endpoint,
+                reader,
+                control.clone(),
+                Arc::clone(&gain),
+            ) {
                 Ok(handle) => {
                     self.unplayable.remove(&endpoint.id);
                     self.stalled.remove(&endpoint.id);
+                    self.hung.remove(&endpoint.id);
+                    self.refused.remove(&endpoint.id);
                     if self.busy.remove(&endpoint.id).is_some() {
                         self.log.log(|| {
                             format!(
@@ -768,34 +810,55 @@ impl<D: Driver> Controller<D> {
                         )
                     });
                     session.outputs.insert(
-                        endpoint.id,
+                        endpoint.id.clone(),
                         Playing {
                             control,
                             gain,
                             handle,
                         },
                     );
+                    None
                 }
                 // Listed a moment ago and gone now, or rebuilt by Windows
                 // (after a wake, or a change of its format): it stays on and
                 // plays once it can (S68), and is lost once the listing drops
                 // it. Told once; the next tries, at every poll, are quiet.
+                // Still listed and refused about thirty seconds on, it is a
+                // start that failed (S69).
                 Err(BackendError::DeviceGone) => {
-                    if self.unplayable.insert(endpoint.id.clone()) {
+                    let left = *self
+                        .refused
+                        .entry(endpoint.id.clone())
+                        .or_insert(REFUSED_GIVE_UP_POLLS);
+                    if left == 0 {
                         self.log.log(|| {
                             format!(
-                                "output {} went away while starting; it stays on",
+                                "output {} is still listed, but its device has refused to open \
+                                 for about thirty seconds",
                                 label(&self.names, &endpoint.id)
                             )
                         });
+                        Some(BackendError::DeviceGone)
+                    } else {
+                        if self.unplayable.insert(endpoint.id.clone()) {
+                            self.log.log(|| {
+                                format!(
+                                    "output {} went away while starting; it stays on",
+                                    label(&self.names, &endpoint.id)
+                                )
+                            });
+                        }
+                        None
                     }
                 }
                 // Windows audio didn't answer in time (after a wake, say): it
                 // stays on, and is tried again a few seconds later, since
                 // each try may hold the UI thread that long.
                 Err(BackendError::NotResponding) => {
+                    held = true;
                     self.unplayable.insert(endpoint.id.clone());
                     self.stalled.insert(endpoint.id.clone(), STALL_RETRY_POLLS);
+                    self.hung.insert(endpoint.id.clone());
                     self.log.log(|| {
                         format!(
                             "output {} didn't answer in time while starting; it stays on and is \
@@ -803,6 +866,7 @@ impl<D: Driver> Controller<D> {
                             label(&self.names, &endpoint.id)
                         )
                     });
+                    None
                 }
                 // Another app holds the device in exclusive mode: it stays
                 // on, as the user chose, and plays once that app lets go.
@@ -820,27 +884,34 @@ impl<D: Driver> Controller<D> {
                                 label(&self.names, &endpoint.id)
                             )
                         });
-                        self.pending
-                            .push(BackendEvent::OutputBusy { id: endpoint.id });
-                    }
-                }
-                Err(error) => {
-                    self.log.log(|| {
-                        format!(
-                            "output {} could not start: {error} It is turned off.",
-                            label(&self.names, &endpoint.id)
-                        )
-                    });
-                    self.policy.set_enabled(&endpoint.id, false);
-                    // Off, it no longer waits for its device, so a later
-                    // busy device is told again.
-                    if self.busy.remove(&endpoint.id).is_some() {
-                        self.pending.push(BackendEvent::OutputFree {
+                        self.pending.push(BackendEvent::OutputBusy {
                             id: endpoint.id.clone(),
                         });
                     }
-                    failures.push((endpoint.id, error));
+                    None
                 }
+                Err(error) => Some(error),
+            };
+            if let Some(error) = failed {
+                self.log.log(|| {
+                    format!(
+                        "output {} could not start: {error} It is turned off.",
+                        label(&self.names, &endpoint.id)
+                    )
+                });
+                self.policy.set_enabled(&endpoint.id, false);
+                self.unplayable.remove(&endpoint.id);
+                self.stalled.remove(&endpoint.id);
+                self.hung.remove(&endpoint.id);
+                self.refused.remove(&endpoint.id);
+                // Off, it no longer waits for its device, so a later
+                // busy device is told again.
+                if self.busy.remove(&endpoint.id).is_some() {
+                    self.pending.push(BackendEvent::OutputFree {
+                        id: endpoint.id.clone(),
+                    });
+                }
+                failures.push((endpoint.id, error));
             }
         }
         failures
@@ -892,6 +963,9 @@ impl<D: Driver> Controller<D> {
             }
             listed && policy.settings(id).enabled
         });
+        // Listed again later, a device's refusals count afresh.
+        let unplayable = &self.unplayable;
+        self.refused.retain(|id, _| unplayable.contains(id));
         for id in &gone {
             self.log.log(|| {
                 format!(
@@ -1132,9 +1206,14 @@ impl<D: Driver> Controller<D> {
     /// Ends the wait of every output reported busy, once streaming stopped:
     /// nothing plays to them now. A later session tells again of one whose
     /// device is still held. The outputs that couldn't play are forgotten
-    /// too: a device that goes away while nothing streams isn't lost.
+    /// too: a device that goes away while nothing streams isn't lost. So is
+    /// the wait of one that didn't answer in time: a new session tries it
+    /// at once.
     fn release_busy(&mut self) {
         self.unplayable.clear();
+        self.stalled.clear();
+        self.hung.clear();
+        self.refused.clear();
         for id in std::mem::take(&mut self.busy).into_keys() {
             self.pending.push(BackendEvent::OutputFree { id });
         }
@@ -1464,6 +1543,8 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // device: switched on again, it is tried at once.
         if !enabled {
             self.stalled.remove(id);
+            self.hung.remove(id);
+            self.refused.remove(id);
         }
         if !enabled && self.busy.remove(id).is_some() {
             self.pending
@@ -1731,7 +1812,13 @@ impl<D: Driver> AudioBackend for Controller<D> {
 
     fn poll(&mut self) -> Vec<BackendEvent> {
         // A busy or stalled output's next try comes a poll closer.
-        for wait in self.busy.values_mut().chain(self.stalled.values_mut()) {
+        // So does the end of a listed device's refusals.
+        for wait in self
+            .busy
+            .values_mut()
+            .chain(self.stalled.values_mut())
+            .chain(self.refused.values_mut())
+        {
             *wait = wait.saturating_sub(1);
         }
         // Outputs that faded out stop, and then an ended session's capture;
