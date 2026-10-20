@@ -120,6 +120,13 @@ const BUSY_RETRY_POLLS: u32 = 6;
 /// window stays responsive while Windows audio comes back.
 const STALL_RETRY_POLLS: u32 = 20;
 
+/// An output whose device Windows still lists but refuses to open as if it
+/// were gone ([`BackendError::DeviceGone`]: `AUDCLNT_E_ENDPOINT_CREATE_FAILED`
+/// while it rebuilds the endpoint after a wake, say) is tried at every poll
+/// for this many polls, about thirty seconds at the UI's two polls a second;
+/// still refused then, it counts as a start that failed (S69).
+const REFUSED_GIVE_UP_POLLS: u32 = 60;
+
 /// A capture that started again counts as working once it has run this many
 /// polls (about five seconds); a loss before then means the restart failed,
 /// and streaming stops. After it, the next loss is restarted again.
@@ -3006,16 +3013,17 @@ mod tests {
     #[test]
     fn an_output_whose_device_doesnt_answer_stays_on_and_is_tried_again_seconds_later() {
         let mut backend = backend();
-        backend.fail_output(HEADPHONES, Some(BackendError::NotResponding));
+        // The last output of the pass: no other start waits behind it.
+        backend.fail_output(SPEAKERS, Some(BackendError::NotResponding));
         backend.start(&SourceId::WholeSystem).unwrap();
         assert!(backend.poll().is_empty(), "no notice: it is tried again");
-        assert!(backend.policy().settings(HEADPHONES).enabled, "it stays on");
-        assert_eq!(playing(&backend), [SPEAKERS]);
+        assert!(backend.policy().settings(SPEAKERS).enabled, "it stays on");
+        assert_eq!(playing(&backend), [HEADPHONES]);
 
-        backend.fail_output(HEADPHONES, None);
+        backend.fail_output(SPEAKERS, None);
         backend.poll();
         assert_eq!(
-            backend.driver().renderer_attempts(HEADPHONES),
+            backend.driver().renderer_attempts(SPEAKERS),
             1,
             "not at the next poll: a try that hangs holds the window for seconds"
         );
@@ -3023,7 +3031,119 @@ mod tests {
             backend.poll();
         }
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(backend.driver().renderer_attempts(SPEAKERS), 2);
+    }
+
+    #[test]
+    fn once_a_start_doesnt_answer_the_other_starts_of_that_pass_wait_their_turn() {
+        let mut backend = backend();
+        backend.connect_output(USB_OUTPUT, "USB DAC");
+        backend.set_output_enabled(USB_OUTPUT, true).unwrap();
+        backend.list_outputs().unwrap();
+        // The headphones start first, and hang: Windows audio isn't back
+        // after a wake. The others would most likely hang as well, each
+        // holding the window as long, so they aren't tried in that pass.
+        backend.fail_output(HEADPHONES, Some(BackendError::NotResponding));
+        backend.fail_output(SPEAKERS, Some(BackendError::NotResponding));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let attempts = |backend: &MockBackend| {
+            [HEADPHONES, SPEAKERS, USB_OUTPUT].map(|id| backend.driver().renderer_attempts(id))
+        };
+        assert_eq!(attempts(&backend), [1, 0, 0]);
+        poll_quietly(&mut backend, STALL_RETRY_POLLS - 1);
+        assert_eq!(attempts(&backend), [1, 0, 0], "they wait like it");
+        for id in [HEADPHONES, SPEAKERS, USB_OUTPUT] {
+            assert!(backend.policy().settings(id).enabled, "{id} stays on");
+        }
+
+        // At the next pass the outputs not tried yet go first: the speakers
+        // hang now, so the USB DAC waits again, and so do the headphones.
+        backend.poll();
+        assert_eq!(attempts(&backend), [1, 1, 0]);
+        // Windows audio answers again: at the next pass the USB DAC, never
+        // tried, goes first, and every output plays.
+        backend.fail_output(HEADPHONES, None);
+        backend.fail_output(SPEAKERS, None);
+        poll_quietly(&mut backend, STALL_RETRY_POLLS);
+        assert_eq!(attempts(&backend), [2, 2, 1]);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS, USB_OUTPUT]);
+    }
+
+    #[test]
+    fn a_healthy_output_isnt_kept_waiting_behind_one_that_keeps_hanging() {
+        let mut backend = backend();
+        backend.fail_output(HEADPHONES, Some(BackendError::NotResponding));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(backend.driver().renderer_attempts(SPEAKERS), 0);
+        // At the next pass the speakers, which didn't hang, go before the
+        // headphones, which still do.
+        poll_quietly(&mut backend, STALL_RETRY_POLLS);
+        assert_eq!(playing(&backend), [SPEAKERS]);
         assert_eq!(backend.driver().renderer_attempts(HEADPHONES), 2);
+    }
+
+    #[test]
+    fn stopping_ends_the_wait_for_an_output_that_didnt_answer() {
+        let mut backend = backend();
+        backend.fail_output(SPEAKERS, Some(BackendError::NotResponding));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        backend.stop();
+        backend.poll();
+        // Windows audio answers again: started again, it is tried at once.
+        backend.fail_output(SPEAKERS, None);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        assert_eq!(backend.driver().renderer_attempts(SPEAKERS), 2);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    #[test]
+    fn an_output_whose_listed_device_keeps_refusing_to_open_is_turned_off_after_a_while() {
+        let mut backend = backend();
+        // Windows still lists it but keeps refusing to open it, as after a
+        // wake while it rebuilds the endpoint, only for good.
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        poll_quietly(&mut backend, REFUSED_GIVE_UP_POLLS - 1);
+        assert!(backend.policy().settings(HEADPHONES).enabled);
+        let tries = backend.driver().renderer_attempts(HEADPHONES);
+        assert_eq!(tries, REFUSED_GIVE_UP_POLLS as usize, "a try at every poll");
+        // About thirty seconds on, it is a start that failed (S69): turned
+        // off, with the notice, and no longer tried.
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputFailed {
+                id: HEADPHONES.to_owned(),
+                error: BackendError::DeviceGone,
+            }]
+        );
+        assert!(!backend.policy().settings(HEADPHONES).enabled);
+        poll_quietly(&mut backend, STALL_RETRY_POLLS);
+        assert_eq!(backend.driver().renderer_attempts(HEADPHONES), tries + 1);
+        assert_eq!(playing(&backend), [SPEAKERS]);
+    }
+
+    #[test]
+    fn an_output_refused_for_a_moment_gets_the_whole_wait_again_next_time() {
+        let mut backend = backend();
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        poll_quietly(&mut backend, REFUSED_GIVE_UP_POLLS - 2);
+        // It opens after all, and plays.
+        backend.fail_output(HEADPHONES, None);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        // Its stream restarts later (a format change), refused again for a
+        // moment: as long a wait as the first time.
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        backend.end_renderer(HEADPHONES);
+        let lost = BackendEvent::OutputLost {
+            id: HEADPHONES.to_owned(),
+        };
+        assert_eq!(backend.poll(), [lost]);
+        poll_quietly(&mut backend, REFUSED_GIVE_UP_POLLS - 1);
+        assert!(backend.policy().settings(HEADPHONES).enabled);
     }
 
     #[test]
