@@ -7,7 +7,9 @@
 //! field being typed in keeps its focus while the rest of the window updates.
 //! A list whose length changes is rebuilt; when that removes the control that
 //! had the focus in the tray flyout, the flyout takes the focus back so Escape
-//! still closes it.
+//! still closes it, and in the main window the focus goes to the next notice,
+//! the same control of the row rebuilt, a neighbouring row's options, or the
+//! streaming switch.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -28,7 +30,7 @@ use crate::ui_model::{
 use crate::{
     AboutDialog, AirPlayProblem, Availability, DeviceVolumeHint, EqualizerWindow, GroupItem,
     GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, Palette,
-    PinDialog, PinPhase, RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
+    PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
 };
 
 /// The digits the PIN field keeps of what was typed: four at most.
@@ -216,6 +218,150 @@ impl FlyoutCounts {
     }
 }
 
+/// What has the keyboard focus in the main window's lists, as their rows
+/// report it. A row that a refresh removes never reports losing it.
+#[derive(Debug, Default)]
+struct MainFocus {
+    /// A notice's button, by notice id.
+    notice: Option<i32>,
+    /// The notices' Dismiss All button.
+    dismiss_all: bool,
+    /// A speaker row's control: the speaker id and the row's part.
+    speaker: Option<(SharedString, RowPart)>,
+    /// A group row's control: the group id and the row's part.
+    group: Option<(SharedString, RowPart)>,
+}
+
+/// Notes that the notice `id` gained or lost the focus.
+fn note_focus<T: PartialEq>(slot: &mut Option<T>, id: T, focused: bool) {
+    if focused {
+        *slot = Some(id);
+    } else if slot.as_ref() == Some(&id) {
+        // Another row may have reported gaining it first.
+        *slot = None;
+    }
+}
+
+/// Notes that the focus moved to `part` of the row `id`, or left the row
+/// (`RowPart::None`).
+fn note_row_focus(slot: &mut Option<(SharedString, RowPart)>, id: SharedString, part: RowPart) {
+    if part != RowPart::None {
+        *slot = Some((id, part));
+    } else if slot.as_ref().is_some_and(|(held, _)| *held == id) {
+        // Another row may have reported gaining it first.
+        *slot = None;
+    }
+}
+
+/// Where the main window's keyboard focus goes after a refresh rebuilt
+/// the list that had it.
+#[derive(Clone, Debug, PartialEq)]
+enum MainFocusTarget {
+    /// The notice at this index.
+    Notice(usize),
+    /// A speaker or group row, by id, on this part (the row falls back to a
+    /// harmless part when it hasn't that one).
+    Speaker(SharedString, RowPart),
+    Group(SharedString, RowPart),
+    StreamingSwitch,
+}
+
+/// The row next to `old[at]`, which `new` no longer lists: the next row
+/// that `new` still lists, else the previous one, else the one in its
+/// place; none when `new` is empty.
+fn neighbour<T>(
+    old: &[T],
+    new: &[T],
+    at: usize,
+    id: impl Fn(&T) -> &SharedString,
+) -> Option<SharedString> {
+    let kept = |row: &&T| new.iter().any(|n| id(n) == id(row));
+    old[at + 1..]
+        .iter()
+        .find(kept)
+        .or_else(|| old[..at].iter().rev().find(kept))
+        .or_else(|| new.get(at.min(new.len().saturating_sub(1))))
+        .map(|row| id(row).clone())
+}
+
+impl MainFocus {
+    /// Where the focus goes when the lists change from `old` to `new`, if a
+    /// rebuilt list (its length changed, [`sync_model`]) had it.
+    fn target(&self, old: &MainLists, new: &MainLists) -> Option<MainFocusTarget> {
+        let notice_ids = |lists: &MainLists| lists.notices.iter().map(|n| n.id).collect::<Vec<_>>();
+        if (self.notice.is_some() || self.dismiss_all) && old.notices.len() != new.notices.len() {
+            let (old_ids, new_ids) = (notice_ids(old), notice_ids(new));
+            let index = match self.notice {
+                // The same notice if it stayed, else the one in its place.
+                Some(id) => new_ids
+                    .iter()
+                    .position(|&n| n == id)
+                    .or_else(|| old_ids.iter().position(|&n| n == id))
+                    .unwrap_or(0),
+                // Dismiss All sits under the last notice.
+                None => old_ids.len(),
+            };
+            return Some(match new_ids.len() {
+                0 => MainFocusTarget::StreamingSwitch,
+                len => MainFocusTarget::Notice(index.min(len - 1)),
+            });
+        }
+        // A row that went hands the focus to a neighbour's options, where
+        // Space or Enter opens a menu rather than toggling a speaker or
+        // streaming; the streaming switch takes it only when the list is
+        // empty.
+        if let Some((id, part)) = &self.speaker {
+            for (old_rows, new_rows) in [
+                (&old.this_pc, &new.this_pc),
+                (&old.connected, &new.connected),
+            ] {
+                let Some(at) = old_rows.iter().position(|s| s.id == *id) else {
+                    continue;
+                };
+                if old_rows.len() == new_rows.len() {
+                    break;
+                }
+                let listed = new
+                    .this_pc
+                    .iter()
+                    .chain(&new.connected)
+                    .any(|s| s.id == *id);
+                return Some(if listed {
+                    MainFocusTarget::Speaker(id.clone(), *part)
+                } else {
+                    neighbour(old_rows, new_rows, at, |s| &s.id)
+                        .map_or(MainFocusTarget::StreamingSwitch, |next| {
+                            MainFocusTarget::Speaker(next, RowPart::Options)
+                        })
+                });
+            }
+        }
+        if let Some((id, part)) = &self.group
+            && old.groups.len() != new.groups.len()
+            && let Some(at) = old.groups.iter().position(|g| g.id == *id)
+        {
+            return Some(if new.groups.iter().any(|g| g.id == *id) {
+                MainFocusTarget::Group(id.clone(), *part)
+            } else {
+                neighbour(&old.groups, &new.groups, at, |g| &g.id)
+                    .map_or(MainFocusTarget::StreamingSwitch, |next| {
+                        MainFocusTarget::Group(next, RowPart::Options)
+                    })
+            });
+        }
+        None
+    }
+}
+
+/// The main window's lists that a refresh can rebuild.
+#[derive(Debug, Default)]
+struct MainLists {
+    notices: Vec<NoticeItem>,
+    this_pc: Vec<SpeakerItem>,
+    connected: Vec<SpeakerItem>,
+    groups: Vec<GroupItem>,
+}
+
 /// Runs after every refresh with the new state.
 type RefreshHook = Box<dyn Fn(&AppState)>;
 
@@ -242,6 +388,8 @@ pub struct App {
     guide_follows_notice: Cell<bool>,
     log: DebugLog,
     ui: RefCell<UiState>,
+    /// What has the keyboard focus in the main window's lists.
+    main_focus: RefCell<MainFocus>,
     dialog_purpose: RefCell<DialogPurpose>,
     models: Models,
     /// With a tray icon, closing the main window keeps the app running there.
@@ -359,6 +507,7 @@ impl App {
             guide_follows_notice: Cell::new(false),
             log,
             ui: RefCell::default(),
+            main_focus: RefCell::default(),
             dialog_purpose: RefCell::new(DialogPurpose::Message),
             models,
             tray_available: Cell::new(false),
@@ -590,15 +739,31 @@ impl App {
             groups: groups.len(),
             speakers: all.len(),
         });
+        let main_lists = MainLists {
+            notices: newest_notices(&notices, MAIN_NOTICE_LIMIT),
+            this_pc,
+            connected,
+            groups,
+        };
+        let main_focus = self.main_focus_target(&main_lists);
+        let MainLists {
+            notices: main_notices,
+            this_pc,
+            connected,
+            groups,
+        } = main_lists;
         sync_model(&m.sources, sources);
         sync_model(&m.this_pc, this_pc);
         sync_model(&m.connected, connected);
         sync_model(&m.all_speakers, all);
         sync_model(&m.groups, groups);
-        sync_model(&m.notices, newest_notices(&notices, MAIN_NOTICE_LIMIT));
+        sync_model(&m.notices, main_notices);
         sync_model(&m.flyout_notices, flyout_notices);
         self.flyout.set_notice_count(count(notices.len()));
         self.restore_flyout_focus(flyout_removed);
+        if main_focus == Some(MainFocusTarget::StreamingSwitch) {
+            self.main.invoke_focus_streaming_switch();
+        }
         self.refresh_guide(&state);
         self.show_pin_prompt(state.pin_prompt.as_ref());
 
@@ -639,6 +804,61 @@ impl App {
         if focused.overlaps(removed) && flyout.window().is_visible() {
             flyout.invoke_take_focus();
         }
+    }
+
+    /// Where the main window's keyboard focus goes when this refresh, to
+    /// `new`, rebuilds the list that has it: Slint then leaves nothing
+    /// focused. Asks the rebuilt row or notice to take it as it is built
+    /// (so before the models change); the streaming switch takes it after.
+    fn main_focus_target(&self, new: &MainLists) -> Option<MainFocusTarget> {
+        let m = &self.models;
+        let old = MainLists {
+            notices: m.notices.iter().collect(),
+            this_pc: m.this_pc.iter().collect(),
+            connected: m.connected.iter().collect(),
+            groups: m.groups.iter().collect(),
+        };
+        let mut focus = self.main_focus.borrow_mut();
+        let target = focus.target(&old, new)?;
+        let main = &self.main;
+        if !main.window().is_visible() {
+            *focus = MainFocus::default();
+            return None;
+        }
+        // What has it next. The row that takes it may report that before
+        // its own focus tracking starts, and so never report it.
+        *focus = match &target {
+            MainFocusTarget::Notice(index) => MainFocus {
+                notice: new.notices.get(*index).map(|n| n.id),
+                ..MainFocus::default()
+            },
+            MainFocusTarget::Speaker(id, part) => MainFocus {
+                speaker: Some((id.clone(), *part)),
+                ..MainFocus::default()
+            },
+            MainFocusTarget::Group(id, part) => MainFocus {
+                group: Some((id.clone(), *part)),
+                ..MainFocus::default()
+            },
+            MainFocusTarget::StreamingSwitch => MainFocus::default(),
+        };
+        drop(focus);
+        main.set_focus_notice_index(-1);
+        main.set_focus_speaker_id(SharedString::new());
+        main.set_focus_group_id(SharedString::new());
+        match &target {
+            MainFocusTarget::Notice(index) => main.set_focus_notice_index(count(*index)),
+            MainFocusTarget::Speaker(id, part) => {
+                main.set_focus_speaker_part(*part);
+                main.set_focus_speaker_id(id.clone());
+            }
+            MainFocusTarget::Group(id, part) => {
+                main.set_focus_group_part(*part);
+                main.set_focus_group_id(id.clone());
+            }
+            MainFocusTarget::StreamingSwitch => {}
+        }
+        Some(target)
     }
 
     fn show_equalizer_state(&self, settings: &EqSettings) {
@@ -744,6 +964,28 @@ impl App {
             with_app(&w, |app| app.update(|b| b.retry_airplay()))
         });
         let w = weak.clone();
+        main.on_notice_focus_changed(move |id, focused| {
+            with_app(&w, |app| {
+                note_focus(&mut app.main_focus.borrow_mut().notice, id, focused)
+            })
+        });
+        let w = weak.clone();
+        main.on_dismiss_all_focus_changed(move |focused| {
+            with_app(&w, |app| app.main_focus.borrow_mut().dismiss_all = focused)
+        });
+        let w = weak.clone();
+        main.on_speaker_focus_changed(move |id, part| {
+            with_app(&w, |app| {
+                note_row_focus(&mut app.main_focus.borrow_mut().speaker, id, part)
+            })
+        });
+        let w = weak.clone();
+        main.on_group_focus_changed(move |id, part| {
+            with_app(&w, |app| {
+                note_row_focus(&mut app.main_focus.borrow_mut().group, id, part)
+            })
+        });
+        let w = weak.clone();
         main.on_close_requested(move || with_app(&w, App::close_main));
         main.on_exit_requested(|| {
             let _ = slint::quit_event_loop();
@@ -753,7 +995,9 @@ impl App {
             with_app(&w, |app| {
                 if let Err(error) = app.about.show() {
                     app.show_window_error(&error);
+                    return;
                 }
+                app.about.invoke_take_focus();
             })
         });
         let w = weak;
@@ -763,7 +1007,7 @@ impl App {
         });
 
         let about = self.about.as_weak();
-        self.about.on_ok_clicked(move || {
+        self.about.on_closed(move || {
             if let Some(about) = about.upgrade() {
                 // A window that fails to hide stays open; the user can still close it.
                 let _ = about.hide();
@@ -1723,15 +1967,57 @@ mod tests {
     use super::*;
     use crate::ui_model::MockBackend;
 
+    use slint::platform::software_renderer::{MinimalSoftwareWindow, Rgb565Pixel};
+    use slint::platform::{Key, WindowEvent};
+
     /// A platform without native windows, so a test can build the whole App
-    /// and drive it through the windows' callbacks.
+    /// and drive it through the windows' callbacks or keys.
     struct Headless;
+
+    thread_local! {
+        /// The windows the headless platform made on this thread.
+        static HEADLESS_WINDOWS: RefCell<Vec<Weak<MinimalSoftwareWindow>>> =
+            RefCell::default();
+    }
 
     impl slint::platform::Platform for Headless {
         fn create_window_adapter(
             &self,
         ) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
-            Ok(slint::platform::software_renderer::MinimalSoftwareWindow::new(Default::default()))
+            let window = MinimalSoftwareWindow::new(Default::default());
+            HEADLESS_WINDOWS.with(|windows| windows.borrow_mut().push(Rc::downgrade(&window)));
+            Ok(window)
+        }
+    }
+
+    /// Draws a frame of every headless window, as the event loop would after
+    /// an event: lists are laid out then, and their new rows built.
+    fn draw_frames() {
+        slint::platform::update_timers_and_animations();
+        let windows: Vec<_> = HEADLESS_WINDOWS
+            .with(|windows| windows.borrow().iter().filter_map(Weak::upgrade).collect());
+        for window in windows {
+            window.set_size(slint::PhysicalSize::new(1000, 720));
+            window.draw_if_needed(|renderer| {
+                let mut pixels = vec![Rgb565Pixel::default(); 1000 * 720];
+                renderer.render(&mut pixels, 1000);
+            });
+        }
+        slint::platform::update_timers_and_animations();
+    }
+
+    /// Presses and releases `key` in `window`, then draws a frame.
+    fn press(window: &slint::Window, key: impl Into<SharedString>) {
+        let text: SharedString = key.into();
+        window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        window.dispatch_event(WindowEvent::KeyReleased { text });
+        draw_frames();
+    }
+
+    /// Presses Tab `times` times in `window`.
+    fn tab(window: &slint::Window, times: usize) {
+        for _ in 0..times {
+            press(window, Key::Tab);
         }
     }
 
@@ -2235,5 +2521,327 @@ mod tests {
             "a focused speaker row keeps its focus when other parts change"
         );
         assert!(!FlyoutParts::default().overlaps(notice), "nothing focused");
+    }
+
+    #[test]
+    fn escape_on_the_pin_dialog_buttons_cancels() {
+        let app = app_over(MockBackend::new());
+        app.preview_pin(false);
+        let window = app.pin_dialog.window();
+        assert!(window.is_visible());
+        // From the field to Cancel: Pair waits for four digits.
+        tab(window, 1);
+        press(window, "5");
+        assert_eq!(app.pin_dialog.get_pin(), "", "the field lost the focus");
+        press(window, Key::Escape);
+        assert!(!window.is_visible(), "Escape on Cancel closed the dialog");
+        assert!(!app.pin_preview.get(), "through its Cancel path");
+    }
+
+    #[test]
+    fn escape_on_the_group_dialog_buttons_cancels() {
+        let app = app_over(MockBackend::new());
+        let groups = app.snapshot().groups.len();
+        app.ask_new_group();
+        let window = app.group_dialog.window();
+        assert!(window.is_visible());
+        assert!(app.group_dialog.get_show_field(), "a speaker is on");
+        // From the name field to Create.
+        tab(window, 1);
+        press(window, "x");
+        assert_eq!(app.group_dialog.get_name(), "", "the field lost the focus");
+        press(window, Key::Escape);
+        assert!(!window.is_visible(), "Escape on Create closed the dialog");
+        assert_eq!(app.snapshot().groups.len(), groups, "and made no group");
+    }
+
+    #[test]
+    fn escape_closes_the_about_dialog() {
+        let app = app_over(MockBackend::new());
+        let window = app.about.window();
+        app.main.invoke_about_requested();
+        assert!(window.is_visible());
+        press(window, Key::Escape);
+        assert!(!window.is_visible(), "Escape right after it opened");
+
+        app.main.invoke_about_requested();
+        assert!(window.is_visible());
+        tab(window, 1);
+        press(window, Key::Escape);
+        assert!(!window.is_visible(), "Escape on a focused button");
+    }
+
+    /// The App over `backend`, with its main window shown and drawn once.
+    fn main_window_over(backend: MockBackend) -> Rc<App> {
+        let app = app_over(backend);
+        app.main.show().expect("the main window shows headless");
+        draw_frames();
+        app
+    }
+
+    #[test]
+    fn dismissing_a_notice_with_the_keyboard_focuses_the_next_then_the_switch() {
+        let mut backend = MockBackend::new();
+        backend.post("source", NoticeMessage::CaptureLost, "09.40");
+        backend.post("start", NoticeMessage::NoSpeaker, "09.41");
+        let app = main_window_over(backend);
+        let window = app.main.window();
+        // The streaming switch, then the newest notice's dismiss button.
+        tab(window, 2);
+        press(window, " ");
+        assert_eq!(app.snapshot().notices.len(), 1, "Space dismissed it");
+        press(window, " ");
+        assert_eq!(
+            app.snapshot().notices.len(),
+            0,
+            "the focus moved to the next notice, which Space dismissed"
+        );
+        assert!(!app.snapshot().running);
+        press(window, " ");
+        assert!(
+            app.snapshot().running,
+            "with no notice left, the streaming switch has the focus"
+        );
+    }
+
+    /// The example speakers plus a virtual output that is off, so it is
+    /// listed only while Show Virtual Devices is on.
+    fn main_window_with_listed_cable() -> Rc<App> {
+        let mut backend = MockBackend::new();
+        let mut cable = backend.snapshot().speaker("local:desk").unwrap().clone();
+        cable.id = "local:cable".into();
+        cable.name = "Cable Input".into();
+        cable.kind = ui_model::SpeakerKind::Virtual;
+        cable.enabled = false;
+        backend.add_speaker(cable);
+        let app = app_over(backend);
+        app.main.invoke_show_virtual_devices_toggled(true);
+        app.main.show().expect("the main window shows headless");
+        draw_frames();
+        app
+    }
+
+    fn enabled(app: &App, id: &str) -> bool {
+        app.snapshot().speaker(id).unwrap().enabled
+    }
+
+    #[test]
+    fn a_focused_speaker_row_that_goes_hands_the_focus_to_the_next_rows_options() {
+        let app = main_window_with_listed_cable();
+        let window = app.main.window();
+        // Switch, source, master volume, Equalizer, then the rows: the
+        // group's, This PC's, then the connected speakers' by name.
+        tab(window, 16);
+        press(window, " ");
+        assert!(enabled(&app, "local:cable"), "the cable row has the focus");
+        press(window, " ");
+        assert!(!enabled(&app, "local:cable"));
+
+        // Off and no longer shown, its row goes: the focus moves to the
+        // options of the row after it, the desk speaker's, not to a control
+        // whose Space acts on every speaker.
+        app.main.invoke_show_virtual_devices_toggled(false);
+        draw_frames();
+        app.update(|b| b.set_running(false));
+        draw_frames();
+        let headset = enabled(&app, "local:bt");
+        tab(window, 1);
+        press(window, " ");
+        assert_ne!(
+            enabled(&app, "local:bt"),
+            headset,
+            "the next stop after the desk row's options is the headset's toggle"
+        );
+    }
+
+    #[test]
+    fn typing_in_a_delay_field_keeps_the_focus_there_when_its_list_is_rebuilt() {
+        let app = main_window_with_listed_cable();
+        let window = app.main.window();
+        app.main.invoke_sync_toggled("local:desk".into());
+        draw_frames();
+        // The cable row's toggle, delay and options, then the desk row's
+        // toggle, delay, options, two steps and its field.
+        tab(window, 24);
+        press(window, "5");
+        let draft = || app.ui.borrow().delay_drafts.get("local:desk").cloned();
+        assert_eq!(
+            draft().as_deref(),
+            Some("5"),
+            "the desk's field has the focus"
+        );
+
+        // The cable row goes, so Connected Speakers is rebuilt.
+        app.main.invoke_show_virtual_devices_toggled(false);
+        draw_frames();
+        press(window, "0");
+        assert_eq!(
+            draft().as_deref(),
+            Some("50"),
+            "the rebuilt row's field has the focus, the typed text and the cursor at its end"
+        );
+        press(window, Key::Return);
+        assert!(!enabled(&app, "local:desk"), "Enter left the speaker off");
+    }
+
+    #[test]
+    fn a_focused_speaker_row_keeps_the_focus_when_its_list_is_rebuilt() {
+        let app = main_window_with_listed_cable();
+        let window = app.main.window();
+        tab(window, 14);
+        let bedroom = enabled(&app, "airplay:bedroom");
+        press(window, " ");
+        assert_ne!(
+            enabled(&app, "airplay:bedroom"),
+            bedroom,
+            "it has the focus"
+        );
+        press(window, " ");
+        assert_eq!(enabled(&app, "airplay:bedroom"), bedroom);
+
+        // The cable row goes, so Connected Speakers is rebuilt.
+        app.main.invoke_show_virtual_devices_toggled(false);
+        draw_frames();
+        press(window, " ");
+        assert_ne!(
+            enabled(&app, "airplay:bedroom"),
+            bedroom,
+            "the rebuilt row has the focus back"
+        );
+    }
+
+    #[test]
+    fn the_main_window_focus_goes_where_the_removed_control_was() {
+        let notices = |ids: &[i32]| -> Vec<NoticeItem> {
+            ids.iter()
+                .map(|&id| NoticeItem {
+                    id,
+                    ..NoticeItem::default()
+                })
+                .collect()
+        };
+        let groups = |ids: &[&str]| -> Vec<GroupItem> {
+            ids.iter()
+                .map(|&id| GroupItem {
+                    id: id.into(),
+                    ..GroupItem::default()
+                })
+                .collect()
+        };
+        let lists = |n: &[i32], g: &[&str]| MainLists {
+            notices: notices(n),
+            groups: groups(g),
+            ..MainLists::default()
+        };
+        let on_notice = |id| MainFocus {
+            notice: Some(id),
+            ..MainFocus::default()
+        };
+        assert_eq!(
+            on_notice(2).target(&lists(&[3, 2, 1], &[]), &lists(&[3, 1], &[])),
+            Some(MainFocusTarget::Notice(1)),
+            "the notice that took the dismissed one's place"
+        );
+        assert_eq!(
+            on_notice(1).target(&lists(&[2, 1], &[]), &lists(&[3, 2, 1], &[])),
+            Some(MainFocusTarget::Notice(2)),
+            "a new notice rebuilt the stack: the same notice"
+        );
+        assert_eq!(
+            on_notice(1).target(&lists(&[2, 1], &[]), &lists(&[2], &[])),
+            Some(MainFocusTarget::Notice(0)),
+            "the last one went: the one above"
+        );
+        assert_eq!(
+            on_notice(1).target(&lists(&[2, 1], &[]), &lists(&[2, 1], &[])),
+            None,
+            "updated in place, the focus stays"
+        );
+        let dismiss_all = MainFocus {
+            dismiss_all: true,
+            ..MainFocus::default()
+        };
+        assert_eq!(
+            dismiss_all.target(&lists(&[2, 1], &[]), &lists(&[], &[])),
+            Some(MainFocusTarget::StreamingSwitch)
+        );
+
+        let on_group = |id: &str, part| MainFocus {
+            group: Some((id.into(), part)),
+            ..MainFocus::default()
+        };
+        assert_eq!(
+            on_group("a", RowPart::Options).target(&lists(&[], &["a", "b"]), &lists(&[], &["a"])),
+            Some(MainFocusTarget::Group("a".into(), RowPart::Options)),
+            "the same group, on the same part"
+        );
+        assert_eq!(
+            on_group("b", RowPart::Toggle).target(&lists(&[], &["a", "b"]), &lists(&[], &["a"])),
+            Some(MainFocusTarget::Group("a".into(), RowPart::Options)),
+            "a deleted group: the options of the one before it"
+        );
+        assert_eq!(
+            on_group("a", RowPart::Toggle).target(&lists(&[], &["a"]), &lists(&[], &[])),
+            Some(MainFocusTarget::StreamingSwitch),
+            "the last group went"
+        );
+        assert_eq!(
+            MainFocus::default().target(&lists(&[1], &["a"]), &lists(&[], &[])),
+            None,
+            "nothing in the lists had the focus"
+        );
+    }
+
+    #[test]
+    fn a_removed_speaker_row_hands_the_focus_to_a_neighbours_options() {
+        let speakers = |ids: &[&str]| -> Vec<SpeakerItem> {
+            ids.iter()
+                .map(|&id| SpeakerItem {
+                    id: id.into(),
+                    ..SpeakerItem::default()
+                })
+                .collect()
+        };
+        let lists = |this_pc: &[&str], connected: &[&str]| MainLists {
+            this_pc: speakers(this_pc),
+            connected: speakers(connected),
+            ..MainLists::default()
+        };
+        let on = |id: &str, part| MainFocus {
+            speaker: Some((id.into(), part)),
+            ..MainFocus::default()
+        };
+        let options = |id: &str| Some(MainFocusTarget::Speaker(id.into(), RowPart::Options));
+        let before = lists(&["pc"], &["a", "b", "c"]);
+        assert_eq!(
+            on("b", RowPart::Toggle).target(&before, &lists(&["pc"], &["a", "c"])),
+            options("c"),
+            "the next row"
+        );
+        assert_eq!(
+            on("c", RowPart::Volume).target(&before, &lists(&["pc"], &["a", "b"])),
+            options("b"),
+            "the last row went: the one before it"
+        );
+        assert_eq!(
+            on("b", RowPart::Toggle).target(&before, &lists(&["pc"], &["a", "b", "c", "d"])),
+            Some(MainFocusTarget::Speaker("b".into(), RowPart::Toggle)),
+            "a rebuilt row keeps the focus on its part"
+        );
+        assert_eq!(
+            on("b", RowPart::Sync).target(&before, &lists(&["pc"], &["a", "c"])),
+            options("c"),
+            "the sync controls went with their row"
+        );
+        assert_eq!(
+            on("b", RowPart::Sync).target(&before, &lists(&["pc", "x"], &["a", "b", "c"])),
+            None,
+            "only the other list changed"
+        );
+        assert_eq!(
+            on("pc", RowPart::Toggle).target(&before, &lists(&[], &["a", "b", "c"])),
+            Some(MainFocusTarget::StreamingSwitch),
+            "its list is empty now"
+        );
     }
 }
