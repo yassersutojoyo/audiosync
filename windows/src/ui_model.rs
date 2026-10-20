@@ -32,10 +32,6 @@ pub enum SourceKind {
     /// One app's audio.
     App,
     /// An input device (line in, microphone).
-    #[cfg_attr(
-        all(windows, not(test)),
-        expect(dead_code, reason = "the Windows backend offers no input devices yet")
-    )]
     Input,
 }
 
@@ -275,6 +271,15 @@ pub enum NoticeMessage {
     /// Capturing the chosen app would capture AudioSync's own sound too, so
     /// streaming didn't start.
     SourceRefused { source: String },
+    /// The chosen input device isn't connected, so streaming didn't start.
+    InputNotConnected { source: String },
+    /// The input device being captured was disconnected, so streaming
+    /// stopped.
+    InputDisconnected { source: String },
+    /// Windows' privacy settings block microphone access for desktop apps,
+    /// so the input device can't be captured. The notice opens those
+    /// settings.
+    MicrophoneBlocked { source: String },
     /// Capture couldn't start.
     CaptureFailed,
     /// Capture stopped working while streaming, so streaming stopped.

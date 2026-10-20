@@ -20,6 +20,9 @@ pub enum SettingsPage {
     VolumeMixer,
     /// System > Sound, with the default output and each output's volume.
     Sound,
+    /// Privacy & security > Microphone, where desktop apps get microphone
+    /// access. Opened by the microphone notice, not by a guide step.
+    MicrophonePrivacy,
 }
 
 impl SettingsPage {
@@ -27,6 +30,7 @@ impl SettingsPage {
         match self {
             SettingsPage::VolumeMixer => "ms-settings:apps-volume",
             SettingsPage::Sound => "ms-settings:sound",
+            SettingsPage::MicrophonePrivacy => "ms-settings:privacy-microphone",
         }
     }
 }

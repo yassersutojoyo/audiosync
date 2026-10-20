@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use windows::Win32::Foundation::{
-    CloseHandle, E_FAIL, ERROR_NOT_FOUND, HANDLE, RPC_E_CHANGED_MODE,
+    CloseHandle, E_ACCESSDENIED, E_FAIL, ERROR_NOT_FOUND, HANDLE, RPC_E_CHANGED_MODE,
 };
 use windows::Win32::Media::Audio::{
     AUDCLNT_E_DEVICE_IN_USE, AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_ENDPOINT_CREATE_FAILED,
@@ -507,7 +507,7 @@ pub(super) fn system_error(call: &'static str, error: &windows::core::Error) -> 
 
 /// `HRESULT_FROM_WIN32(ERROR_NOT_FOUND)`: an endpoint ID that is no longer
 /// known.
-const NOT_FOUND: HRESULT = HRESULT::from_win32(ERROR_NOT_FOUND.0);
+pub(super) const NOT_FOUND: HRESULT = HRESULT::from_win32(ERROR_NOT_FOUND.0);
 
 /// A failed call on a device: [`BackendError::DeviceGone`] when the device
 /// went away or Windows audio stopped, or Windows is rebuilding the endpoint
@@ -533,6 +533,17 @@ pub(super) fn device_code_error(call: &'static str, code: HRESULT) -> BackendErr
         BackendError::DeviceBusy
     } else {
         BackendError::System { call, code: code.0 }
+    }
+}
+
+/// A failed call on an input device: [`BackendError::MicrophoneBlocked`] for
+/// `E_ACCESSDENIED`, which Windows returns while its privacy settings block
+/// microphone access for desktop apps; [`device_code_error`] otherwise.
+pub(super) fn input_code_error(call: &'static str, code: HRESULT) -> BackendError {
+    if code == E_ACCESSDENIED {
+        BackendError::MicrophoneBlocked
+    } else {
+        device_code_error(call, code)
     }
 }
 
@@ -655,6 +666,25 @@ mod tests {
 
     use super::*;
     use crate::audio::capture::CAPTURE_ATTEMPTS;
+
+    #[test]
+    fn an_input_device_denied_by_privacy_settings_is_a_blocked_microphone() {
+        assert_eq!(
+            input_code_error("IMMDevice::Activate", E_ACCESSDENIED),
+            BackendError::MicrophoneBlocked
+        );
+        assert_eq!(
+            input_code_error("IMMDevice::Activate", AUDCLNT_E_DEVICE_INVALIDATED),
+            BackendError::DeviceGone
+        );
+        assert_eq!(
+            device_code_error("IMMDevice::Activate", E_ACCESSDENIED),
+            BackendError::System {
+                call: "IMMDevice::Activate",
+                code: E_ACCESSDENIED.0
+            }
+        );
+    }
 
     /// How long a worker test waits for an answer.
     const ANSWER: Duration = Duration::from_millis(200);

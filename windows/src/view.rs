@@ -1242,6 +1242,8 @@ impl App {
             with_app(&w, |app| app.update(|b| b.retry_airplay()))
         });
         let w = weak.clone();
+        main.on_notice_privacy_requested(move |_| with_app(&w, App::open_microphone_privacy));
+        let w = weak.clone();
         main.on_notice_focus_changed(move |id, focused| {
             with_app(&w, |app| {
                 note_focus(&mut app.main_focus.borrow_mut().notice, id, focused)
@@ -1324,6 +1326,8 @@ impl App {
         flyout.on_notice_retry_requested(move |_| {
             with_app(&w, |app| app.update(|b| b.retry_airplay()))
         });
+        let w = weak.clone();
+        flyout.on_notice_privacy_requested(move |_| with_app(&w, App::open_microphone_privacy));
         let w = weak.clone();
         flyout.on_open_app(move || {
             with_app(&w, |app| {
@@ -1543,6 +1547,15 @@ impl App {
     /// Opens the Settings page a guide button asks for; only the pages the
     /// guide names, nothing else. When the shell doesn't take it, the guide
     /// says where to find the page.
+    /// Opens the microphone privacy settings for the notice that asks.
+    fn open_microphone_privacy(&self) {
+        let uri = SettingsPage::MicrophonePrivacy.uri();
+        if !crate::platform::open_settings(uri) {
+            self.log
+                .log(|| format!("notice: the shell did not open {uri}"));
+        }
+    }
+
     fn open_guide_page(&self, page: GuidePage) {
         let Some(page) = settings_page(page) else {
             return;
@@ -2294,6 +2307,7 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
         time: notice.time.as_str().into(),
         has_guide: guide::guide(&notice.message).is_some(),
         has_retry: notice.message == NoticeMessage::AirPlayStopped,
+        has_privacy: matches!(notice.message, NoticeMessage::MicrophoneBlocked { .. }),
     }
 }
 
@@ -2352,7 +2366,7 @@ fn guide_step_text(strings: &Strings<'_>, step: &GuideStep) -> SharedString {
 /// The UI's name of a step's Settings page.
 fn guide_page(page: Option<SettingsPage>) -> GuidePage {
     match page {
-        None => GuidePage::None,
+        None | Some(SettingsPage::MicrophonePrivacy) => GuidePage::None,
         Some(SettingsPage::VolumeMixer) => GuidePage::VolumeMixer,
         Some(SettingsPage::Sound) => GuidePage::Sound,
     }
@@ -2379,6 +2393,15 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         }
         NoticeMessage::SourceRefused { source } => {
             strings.invoke_notice_source_refused(source.as_str().into())
+        }
+        NoticeMessage::InputNotConnected { source } => {
+            strings.invoke_notice_input_not_connected(source.as_str().into())
+        }
+        NoticeMessage::InputDisconnected { source } => {
+            strings.invoke_notice_input_disconnected(source.as_str().into())
+        }
+        NoticeMessage::MicrophoneBlocked { source } => {
+            strings.invoke_notice_microphone_blocked(source.as_str().into())
         }
         NoticeMessage::CaptureFailed => strings.get_notice_capture_failed(),
         NoticeMessage::CaptureLost => strings.get_notice_capture_lost(),
@@ -2437,6 +2460,13 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
             (NoticeKind::SourceNotRunning, source.as_str())
         }
         NoticeMessage::SourceRefused { source } => (NoticeKind::SourceRefused, source.as_str()),
+        NoticeMessage::InputNotConnected { source } => {
+            (NoticeKind::InputNotConnected, source.as_str())
+        }
+        NoticeMessage::InputDisconnected { source } => {
+            (NoticeKind::InputDisconnected, source.as_str())
+        }
+        NoticeMessage::MicrophoneBlocked { .. } => (NoticeKind::MicrophoneBlocked, ""),
         NoticeMessage::CaptureFailed => (NoticeKind::CaptureFailed, ""),
         NoticeMessage::CaptureLost => (NoticeKind::CaptureLost, ""),
         NoticeMessage::SpeakerFailed { speaker } => (NoticeKind::SpeakerFailed, speaker.as_str()),
@@ -3799,6 +3829,9 @@ mod tests {
             NoticeMessage::SourceQuit { source: "A".into() },
             NoticeMessage::SourceNotRunning { source: "A".into() },
             NoticeMessage::SourceRefused { source: "A".into() },
+            NoticeMessage::InputNotConnected { source: "A".into() },
+            NoticeMessage::InputDisconnected { source: "A".into() },
+            NoticeMessage::MicrophoneBlocked { source: "A".into() },
             NoticeMessage::CaptureFailed,
             NoticeMessage::CaptureLost,
             NoticeMessage::SpeakerFailed {

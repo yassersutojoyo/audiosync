@@ -100,6 +100,8 @@ export component TrayFlyout inherits Window {
     callback notice-guide-requested(int);
     // Retry on a notice: start AirPlay again.
     callback notice-retry-requested(int);
+    // Open Privacy Settings on a notice.
+    callback notice-privacy-requested(int);
     callback open-app();
     callback exit-app();
     callback close-requested();
@@ -214,6 +216,9 @@ export component TrayFlyout inherits Window {
                 }
                 retry-requested(id) => {
                     root.notice-retry-requested(id);
+                }
+                privacy-requested(id) => {
+                    root.notice-privacy-requested(id);
                 }
                 button-focus-changed(focused) => {
                     root.notice-focused = focused;

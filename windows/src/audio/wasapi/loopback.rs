@@ -1,4 +1,5 @@
-//! Process loopback capture, through the Application Loopback API.
+//! Process loopback capture, through the Application Loopback API, and
+//! input device capture.
 //!
 //! `ActivateAudioInterfaceAsync` on the virtual process loopback device gives
 //! an `IAudioClient` that captures one process tree, or everything except it.
@@ -11,46 +12,51 @@
 //! and the AirPlay sender's feed. Dropping the capture waits for the thread
 //! as a [`Worker`] does: stopping the stream can hang while Windows audio
 //! doesn't answer, and a thread let go keeps the feed until it ends.
+//!
+//! An input device is opened from its own capture endpoint
+//! (`IMMDevice::Activate`) and initialized in shared mode, without the
+//! loopback flag, through the same formats; the rest is the same.
 
 use std::mem::ManuallyDrop;
 use std::ptr;
 use std::slice;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::ring::RingWriter;
 
 use crate::audio::airplay::FeedLease;
-use windows::Win32::Foundation::{E_FAIL, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows::Win32::Foundation::{E_ACCESSDENIED, E_FAIL, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
     AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
     AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
     AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
-    ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
+    ActivateAudioInterfaceAsync, DEVICE_STATE_ACTIVE, IActivateAudioInterfaceAsyncOperation,
     IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
     IAudioCaptureClient, IAudioClient, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
 };
-use windows::Win32::System::Com::BLOB;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+use windows::Win32::System::Com::{BLOB, CLSCTX_ALL};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::{WaitForMultipleObjects, WaitForSingleObject};
 use windows::Win32::System::Variant::VT_BLOB;
-use windows::core::{HRESULT, IUnknown, Interface, Ref};
+use windows::core::{HRESULT, HSTRING, IUnknown, Interface, Ref};
 use windows_core::implement;
 
 use super::com::{
-    Apartment, Event, ProAudioTask, Ready, Worker, device_code_error, spawn_worker, system_error,
-    wave_format,
+    Apartment, Event, NOT_FOUND, ProAudioTask, Ready, Worker, device_code_error, device_error,
+    input_code_error, spawn_worker, system_error, wave_format,
 };
+use super::devices::enumerator;
 use super::processes::ProcessWatch;
 use crate::audio::backend::{BackendError, TIMED_OUT};
 use crate::audio::capture::{
-    Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, GapFill, LoopbackMode,
-    StreamFormat,
+    Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, CaptureTarget, GapFill,
+    LoopbackMode, StreamFormat,
 };
 use crate::audio::controller::{CaptureHandle, CaptureState};
 use crate::audio::outputs::HNS_PER_MS;
@@ -71,17 +77,25 @@ const ACTIVATION_TIMEOUT_MS: u32 = 5_000;
 /// call on the stream then tells.
 const WAIT_MS: u32 = 10;
 
-/// A running process loopback capture.
+/// A running process loopback or input device capture.
 pub struct LoopbackCapture {
     stop: Arc<Event>,
     /// The HRESULT that ended the capture, once `ended` is set.
     failure: Arc<AtomicI32>,
     ended: Arc<AtomicBool>,
+    /// The frames Windows delivered, without the silence filling gaps.
+    #[cfg(test)]
+    captured: Arc<AtomicU64>,
     thread: Worker,
     /// The captured app, to notice when it quits.
     source: Option<ProcessWatch>,
     /// How Windows accepted to deliver the capture.
     setup: CaptureAttempt,
+    /// What the log calls the capture when it fails.
+    call: &'static str,
+    /// Whether it captures an input device, whose failures
+    /// [`input_code_error`] reads.
+    input: bool,
 }
 
 impl CaptureHandle for LoopbackCapture {
@@ -92,13 +106,25 @@ impl CaptureHandle for LoopbackCapture {
         }
         if self.ended.load(Ordering::Acquire) {
             let code = HRESULT(self.failure.load(Ordering::Relaxed));
-            return CaptureState::Failed(device_code_error("process loopback capture", code));
+            let error = if self.input {
+                input_code_error(self.call, code)
+            } else {
+                device_code_error(self.call, code)
+            };
+            return CaptureState::Failed(error);
         }
         CaptureState::Running
     }
 
     fn setup(&self) -> Option<CaptureAttempt> {
         Some(self.setup)
+    }
+}
+
+#[cfg(test)]
+impl LoopbackCapture {
+    fn frames_captured(&self) -> u64 {
+        self.captured.load(Ordering::Relaxed)
     }
 }
 
@@ -110,28 +136,37 @@ impl Drop for LoopbackCapture {
     }
 }
 
-/// Starts capturing as `activation` says, writing through `equalizer` and
-/// `writer`, and to `airplay`.
+/// Starts capturing `target`, writing through `equalizer` and `writer`, and
+/// to `airplay`.
 pub(super) fn start(
-    activation: Activation,
+    target: CaptureTarget,
     writer: RingWriter,
     equalizer: EqProcessor,
     airplay: Option<FeedLease>,
 ) -> Result<LoopbackCapture, BackendError> {
-    let source = match activation.mode {
-        LoopbackMode::IncludeTree => ProcessWatch::open(activation.target_pid)?,
-        LoopbackMode::ExcludeTree => None,
+    let input = matches!(target, CaptureTarget::Input { .. });
+    let (source, call) = match &target {
+        CaptureTarget::Loopback(activation) => (
+            match activation.mode {
+                LoopbackMode::IncludeTree => ProcessWatch::open(activation.target_pid)?,
+                LoopbackMode::ExcludeTree => None,
+            },
+            "process loopback capture",
+        ),
+        CaptureTarget::Input { .. } => (None, "input device capture"),
     };
     let stop = Arc::new(Event::manual_reset()?);
     let failure = Arc::new(AtomicI32::new(0));
     let ended = Arc::new(AtomicBool::new(false));
+    let captured = Arc::new(AtomicU64::new(0));
     let (thread, setup) = {
         let stop = Arc::clone(&stop);
         let failure = Arc::clone(&failure);
         let ended = Arc::clone(&ended);
+        let captured = Arc::clone(&captured);
         spawn_worker("audiosync-capture", move |ready| {
             run(
-                activation, writer, equalizer, airplay, &stop, &failure, &ended, ready,
+                &target, writer, equalizer, airplay, &stop, &failure, &ended, &captured, ready,
             );
         })?
     };
@@ -139,9 +174,13 @@ pub(super) fn start(
         stop,
         failure,
         ended,
+        #[cfg(test)]
+        captured,
         thread,
         source,
         setup,
+        call,
+        input,
     })
 }
 
@@ -152,20 +191,21 @@ pub(super) fn start(
     reason = "everything the thread owns or shares, passed once at its start"
 )]
 fn run(
-    activation: Activation,
+    target: &CaptureTarget,
     writer: RingWriter,
     equalizer: EqProcessor,
     airplay: Option<FeedLease>,
     stop: &Event,
     failure: &AtomicI32,
     ended: &AtomicBool,
+    captured: &AtomicU64,
     ready: Ready<CaptureAttempt>,
 ) {
     let _apartment = match Apartment::enter() {
         Ok(apartment) => apartment,
         Err(error) => return ready.fail(error),
     };
-    let stream = match open_stream(activation) {
+    let stream = match open_stream(target) {
         Ok(stream) => stream,
         Err(error) => return ready.fail(error),
     };
@@ -189,7 +229,7 @@ fn run(
         let _ = unsafe { stream.client.Stop() };
         return;
     }
-    let result = capture_loop(&stream, &mut converter, stop);
+    let result = capture_loop(&stream, &mut converter, stop, captured);
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };
     if let Err(code) = result {
@@ -212,12 +252,20 @@ struct CaptureStream {
 
 /// Activates and initializes a capture, trying each format of
 /// [`CAPTURE_ATTEMPTS`] until one is accepted.
-fn open_stream(activation: Activation) -> Result<CaptureStream, BackendError> {
+fn open_stream(target: &CaptureTarget) -> Result<CaptureStream, BackendError> {
     let mut first_error = None;
     for attempt in CAPTURE_ATTEMPTS {
-        let client = activate(activation)?;
+        let (client, mut flags) = match target {
+            CaptureTarget::Loopback(activation) => (
+                activate(*activation)?,
+                AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+            ),
+            CaptureTarget::Input { endpoint_id } => (
+                activate_input(endpoint_id)?,
+                AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+            ),
+        };
         let format = wave_format(attempt.format);
-        let mut flags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
         if attempt.autoconvert {
             flags |= AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
         }
@@ -234,6 +282,13 @@ fn open_stream(activation: Activation) -> Result<CaptureStream, BackendError> {
         };
         match initialized {
             Ok(()) => return finish_stream(client, attempt),
+            // No other format gets past the privacy settings.
+            Err(error)
+                if matches!(target, CaptureTarget::Input { .. })
+                    && error.code() == E_ACCESSDENIED =>
+            {
+                return Err(BackendError::MicrophoneBlocked);
+            }
             Err(error) => {
                 first_error.get_or_insert(system_error("IAudioClient::Initialize", &error));
             }
@@ -261,6 +316,30 @@ fn finish_stream(
         format: attempt.format,
         autoconvert: attempt.autoconvert,
     })
+}
+
+/// An `IAudioClient` for the input device of capture endpoint `endpoint_id`:
+/// [`BackendError::InputGone`] when Windows no longer knows the endpoint or
+/// it isn't active (unplugged or disabled).
+fn activate_input(endpoint_id: &str) -> Result<IAudioClient, BackendError> {
+    let enumerator = enumerator()?;
+    // SAFETY: calls on a live enumerator and the device it gives.
+    unsafe {
+        let device = match enumerator.GetDevice(&HSTRING::from(endpoint_id)) {
+            Ok(device) => device,
+            Err(error) if error.code() == NOT_FOUND => return Err(BackendError::InputGone),
+            Err(error) => return Err(device_error("IMMDeviceEnumerator::GetDevice", &error)),
+        };
+        let state = device
+            .GetState()
+            .map_err(|error| device_error("IMMDevice::GetState", &error))?;
+        if state != DEVICE_STATE_ACTIVE {
+            return Err(BackendError::InputGone);
+        }
+        device
+            .Activate(CLSCTX_ALL, None)
+            .map_err(|error| input_code_error("IMMDevice::Activate", error.code()))
+    }
 }
 
 /// The activation parameters and the PROPVARIANT that carries them, kept
@@ -404,6 +483,7 @@ fn capture_loop(
     stream: &CaptureStream,
     converter: &mut CaptureConverter,
     stop: &Event,
+    captured: &AtomicU64,
 ) -> Result<(), HRESULT> {
     let handles = [stop.raw(), stream.event.raw()];
     let packet_ready = WAIT_EVENT(WAIT_OBJECT_0.0 + 1);
@@ -447,6 +527,7 @@ fn capture_loop(
                 break;
             }
             packets += 1;
+            captured.fetch_add(u64::from(frames), Ordering::Relaxed);
             let count = frames as usize;
             // A packet without a position counts as captured just now.
             let start = if position != 0 {
@@ -508,6 +589,61 @@ mod tests {
     /// How long a test waits for an answer.
     const TIMEOUT: Duration = Duration::from_millis(200);
 
+    /// How long a real input device gets to deliver its first frames.
+    const FIRST_FRAMES: Duration = Duration::from_secs(1);
+
+    /// Captures each of this PC's input devices into a ring nothing plays,
+    /// until Windows delivers frames (silent ones count: a muted microphone
+    /// still delivers). Ignored by default since it needs Windows audio;
+    /// run it on a PC with `cargo test real_inputs -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "captures the PC's own input devices"]
+    fn real_inputs_are_captured_into_the_ring() {
+        use crate::audio::backend::SourceId;
+        use crate::audio::capture::input_sources;
+
+        let inputs = input_sources(super::super::devices::capture_endpoints().expect("listed"));
+        if inputs.is_empty() {
+            println!("skipped: this PC has no input device");
+            return;
+        }
+        for input in inputs {
+            let SourceId::Input { endpoint_id } = input.id else {
+                unreachable!("only input devices are listed");
+            };
+            let ring = Ring::for_rate(SESSION_RATE).expect("a ring");
+            let writer = ring.writer().expect("the only writer");
+            let (_control, processor) = audiosync_core::eq::equalizer();
+            let capture = start(
+                CaptureTarget::Input {
+                    endpoint_id: endpoint_id.clone(),
+                },
+                writer,
+                processor,
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{} didn't start: {error}", input.name));
+            let started = Instant::now();
+            while capture.frames_captured() == 0 && started.elapsed() < FIRST_FRAMES {
+                thread::sleep(Duration::from_millis(20));
+            }
+            println!(
+                "{}: {:?}, {} frames captured in {:?}, {} written",
+                input.name,
+                capture.setup(),
+                capture.frames_captured(),
+                started.elapsed(),
+                ring.frames_written()
+            );
+            assert_eq!(capture.state(), CaptureState::Running);
+            assert!(
+                capture.frames_captured() > 0,
+                "{} delivered no frames within {FIRST_FRAMES:?}",
+                input.name
+            );
+        }
+    }
+
     #[test]
     fn a_capture_thread_that_hangs_stopping_its_stream_doesnt_hold_quitting() {
         static STUCK: StuckThreads = StuckThreads::new();
@@ -536,9 +672,12 @@ mod tests {
             stop,
             failure: Arc::new(AtomicI32::new(0)),
             ended: Arc::new(AtomicBool::new(false)),
+            captured: Arc::new(AtomicU64::new(0)),
             thread,
             source: None,
             setup: CAPTURE_ATTEMPTS[0],
+            call: "process loopback capture",
+            input: false,
         };
         let answers = thread::spawn(move || {
             thread::sleep(HANG);

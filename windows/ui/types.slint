@@ -71,7 +71,7 @@ export struct GroupItem {
 }
 
 // What a notice is about, for its short name (Strings.notice-title).
-export enum NoticeKind { no-speaker, source-quit, source-not-running, source-refused, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-cant-play, airplay-stopped, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings }
+export enum NoticeKind { no-speaker, source-quit, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-cant-play, airplay-stopped, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings }
 
 export struct NoticeItem {
     id: int,
@@ -84,6 +84,8 @@ export struct NoticeItem {
     has-guide: bool,
     // The notice offers Retry, which starts AirPlay again.
     has-retry: bool,
+    // The notice offers Open Privacy Settings, for microphone access.
+    has-privacy: bool,
 }
 
 // The Settings page a guide step opens, if any.

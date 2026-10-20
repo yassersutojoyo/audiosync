@@ -41,6 +41,8 @@ export global Strings {
     // The button on the notice that AirPlay stopped: starts it again.
     out property <string> notice-retry: @tr("Retry");
     out property <string> notice-retry-label: @tr("Retry starting AirPlay");
+    out property <string> notice-open-privacy: @tr("Open Privacy Settings");
+    out property <string> notice-open-privacy-label: @tr("Open the microphone privacy settings");
     out property <string> delay-field-label: @tr("Delay in milliseconds");
     // Under a delay field while it holds typing not yet applied; also the
     // field's Narrator description then.
@@ -245,6 +247,21 @@ export global Strings {
         return @tr("{} is not running. Open it first, or pick another source.", source);
     }
 
+    // Streaming was turned on while the chosen input device was unplugged.
+    public pure function notice-input-not-connected(source: string) -> string {
+        return @tr("{} is not connected. Plug it in, or pick another source.", source);
+    }
+
+    // Windows' privacy settings block microphone access for desktop apps.
+    public pure function notice-microphone-blocked(source: string) -> string {
+        return @tr("Windows is blocking microphone access for desktop apps, so AudioSync can't capture {}. Open Privacy Settings and turn on microphone access for desktop apps.", source);
+    }
+
+    // The input device being captured was unplugged while streaming.
+    public pure function notice-input-disconnected(source: string) -> string {
+        return @tr("{} was disconnected, so streaming has stopped. Plug it in again, or pick another source.", source);
+    }
+
     // The chosen app started AudioSync, or AudioSync started it, so capturing
     // it would capture AudioSync's own output and echo.
     public pure function notice-source-refused(source: string) -> string {
@@ -430,6 +447,15 @@ export global Strings {
         }
         if kind == NoticeKind.source-refused {
             return @tr("can't capture {}", name);
+        }
+        if kind == NoticeKind.input-not-connected {
+            return @tr("{} not connected", name);
+        }
+        if kind == NoticeKind.input-disconnected {
+            return @tr("{} was disconnected, streaming stopped", name);
+        }
+        if kind == NoticeKind.microphone-blocked {
+            return @tr("microphone access blocked");
         }
         if kind == NoticeKind.capture-failed {
             return @tr("capture didn't start");

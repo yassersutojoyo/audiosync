@@ -25,6 +25,12 @@ pub enum SourceId {
         /// The process ID of the app's top process.
         root_pid: u32,
     },
+    /// An input device (a microphone or line in): an active capture
+    /// endpoint, by its endpoint ID.
+    Input {
+        /// The endpoint ID, the same across restarts and reboots.
+        endpoint_id: String,
+    },
 }
 
 /// A capture source the user can pick.
@@ -32,12 +38,14 @@ pub enum SourceId {
 pub struct SourceInfo {
     /// What to pass to [`AudioBackend::start`].
     pub id: SourceId,
-    /// The app's name, from its executable. For [`SourceId::WholeSystem`] it
-    /// is an English fallback: the UI shows its own, translated label.
+    /// The app's name, from its executable, or the name Windows shows for an
+    /// input device. For [`SourceId::WholeSystem`] it is an English
+    /// fallback: the UI shows its own, translated label.
     pub name: String,
     /// The app's executable file name, such as `spotify.exe`. It stays the
     /// same when the app restarts (its process ID doesn't), so the UI can
-    /// remember a choice by it. Empty for the whole system.
+    /// remember a choice by it. Empty for the whole system and for an input
+    /// device.
     pub executable: String,
 }
 
@@ -359,6 +367,12 @@ pub enum BackendError {
     ContainsAudioSync,
     /// The chosen app is no longer running.
     SourceGone,
+    /// The chosen input device isn't connected (unplugged, disabled or
+    /// removed). Unlike [`BackendError::DeviceGone`], waiting doesn't help.
+    InputGone,
+    /// Windows denies AudioSync the input device (`E_ACCESSDENIED`): its
+    /// privacy settings block microphone access for desktop apps.
+    MicrophoneBlocked,
     /// The chosen process is not an app (the System or Idle process).
     NotAnApp,
     /// The output device is not connected, Windows audio is not running, or
@@ -394,6 +408,10 @@ impl fmt::Display for BackendError {
                  could capture AudioSync too.",
             ),
             BackendError::SourceGone => f.write_str("The app isn't running anymore."),
+            BackendError::InputGone => f.write_str("The input device isn't connected."),
+            BackendError::MicrophoneBlocked => f.write_str(
+                "Windows blocks microphone access for desktop apps in its privacy settings.",
+            ),
             BackendError::NotAnApp => f.write_str("That process isn't an app."),
             BackendError::DeviceGone => {
                 f.write_str("The device isn't connected, or Windows audio isn't running.")
@@ -417,8 +435,9 @@ impl std::error::Error for BackendError {}
 /// The audio backend, as the UI sees it.
 pub trait AudioBackend {
     /// The sources to offer: the whole system first, then each app that has
-    /// opened an audio stream, by name. AudioSync's own processes, and any
-    /// app whose capture would include them, are left out.
+    /// opened an audio stream, by name, then each active input device, by
+    /// name. AudioSync's own processes, and any app whose capture would
+    /// include them, are left out.
     fn list_sources(&mut self) -> Result<Vec<SourceInfo>, BackendError>;
 
     /// The app that runs `executable` now, whether or not it has opened an
@@ -617,6 +636,8 @@ mod tests {
             BackendError::OwnProcess,
             BackendError::ContainsAudioSync,
             BackendError::SourceGone,
+            BackendError::InputGone,
+            BackendError::MicrophoneBlocked,
             BackendError::NotAnApp,
             BackendError::DeviceGone,
             BackendError::DeviceBusy,
