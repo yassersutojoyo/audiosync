@@ -71,3 +71,50 @@ enum AppLifecycle {
         streaming && source.endsWhenAppQuits(quitBundleID)
     }
 }
+
+/// The way out on one of `AppLifecycle.exitSignals` (S111). Today every
+/// signal exits at once with its status, without the steps a Quit runs.
+final class SignalQuit: @unchecked Sendable {
+    /// What one signal does.
+    enum Step: Equatable {
+        /// The quit steps, then the exit with `status`.
+        case quitThenExit(status: Int32)
+        /// The exit with `status`, now.
+        case exitNow(status: Int32)
+    }
+
+    /// What `signal` does, given whether an earlier one began the quit steps.
+    static func step(signal: Int32, quitBegun: Bool) -> Step {
+        .exitNow(status: AppLifecycle.exitStatus(signal: signal))
+    }
+
+    /// How long a signal waits for the quit steps at most.
+    static let limit: TimeInterval = 0
+
+    private let queue: DispatchQueue
+    private let limit: TimeInterval
+    private let quitSteps: (@escaping @Sendable () -> Void) -> Void
+    private let exitProcess: (Int32) -> Void
+    /// On `queue` only.
+    private var exited = false
+
+    /// `quitSteps` starts the quit steps and calls its argument, from any
+    /// thread, once they are done; `exitProcess` ends the process. Both are
+    /// called on `queue`.
+    init(queue: DispatchQueue, limit: TimeInterval = SignalQuit.limit,
+         quitSteps: @escaping (@escaping @Sendable () -> Void) -> Void,
+         exitProcess: @escaping (Int32) -> Void) {
+        self.queue = queue
+        self.limit = limit
+        self.quitSteps = quitSteps
+        self.exitProcess = exitProcess
+    }
+
+    /// Handles one signal. Call on `queue`, where the signal sources deliver.
+    func handle(signal: Int32) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard !exited else { return }
+        exited = true
+        exitProcess(AppLifecycle.exitStatus(signal: signal))
+    }
+}
