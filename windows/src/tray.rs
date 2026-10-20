@@ -1,7 +1,7 @@
 //! The notification-area (tray) icon: the Windows counterpart of the macOS
 //! menu bar item. A left click opens the flyout, a double click the main
 //! window, and a right click a short menu (Open AudioSync, streaming on or
-//! off, Exit). The icon follows the taskbar's light or dark mode (checked
+//! off, Launch at Sign-In, Exit). The icon follows the taskbar's light or dark mode (checked
 //! every few seconds, so a theme change shows without a state change) and
 //! dims while streaming is off; its tooltip says what is streaming and
 //! names the newest notice, if any.
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use slint::ComponentHandle;
 use slint::winit_030::winit::event::WindowEvent;
 use slint::winit_030::{EventResult, WinitWindowAccessor};
-use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::placement::{self, Bounds};
@@ -47,6 +47,7 @@ thread_local! {
 pub struct Tray {
     icon: TrayIcon,
     toggle_item: MenuItem,
+    login_item: CheckMenuItem,
     /// The icon variant showing now, so it is replaced only when it changes.
     shown: Cell<Option<IconChoice>>,
     running: Cell<bool>,
@@ -92,11 +93,20 @@ impl Tray {
             true,
             None,
         );
+        let login_item = CheckMenuItem::with_id(
+            MenuIds::LOGIN,
+            strings.get_launch_at_login(),
+            true,
+            app.launch_at_login(),
+            None,
+        );
         let exit_item = MenuItem::with_id(MenuIds::EXIT, strings.get_exit_app(), true, None);
         let menu = Menu::new();
         menu.append_items(&[
             &open_item,
             &toggle_item,
+            &PredefinedMenuItem::separator(),
+            &login_item,
             &PredefinedMenuItem::separator(),
             &exit_item,
         ])
@@ -115,6 +125,7 @@ impl Tray {
         let tray = Rc::new(Tray {
             icon,
             toggle_item,
+            login_item,
             shown: Cell::new(Some(choice)),
             running: Cell::new(state.running),
             theme_timer: slint::Timer::default(),
@@ -179,6 +190,7 @@ impl Tray {
         } else {
             strings.get_menu_turn_streaming_on()
         });
+        self.login_item.set_checked(app.launch_at_login());
         self.running.set(state.running);
         self.show_icon();
     }
@@ -201,6 +213,7 @@ struct MenuIds;
 impl MenuIds {
     const OPEN: &str = "open";
     const TOGGLE: &str = "toggle";
+    const LOGIN: &str = "login";
     const EXIT: &str = "exit";
 }
 
@@ -253,6 +266,14 @@ fn on_tray_event(event: TrayIconEvent) {
             app.hide_flyout();
             app.show_main();
         }
+        // Before the menu opens on the right button's release: a change
+        // made in Task Manager shows in its check mark.
+        TrayIconEvent::Enter { .. }
+        | TrayIconEvent::Click {
+            button: MouseButton::Right,
+            button_state: MouseButtonState::Down,
+            ..
+        } => app.reread_launch_at_login(),
         _ => {}
     }
 }
@@ -266,6 +287,8 @@ fn on_menu_event(id: MenuId) {
     } else if id == MenuIds::TOGGLE {
         let running = app.snapshot().running;
         app.update(|backend| backend.set_running(!running));
+    } else if id == MenuIds::LOGIN {
+        app.set_launch_at_login(!app.launch_at_login());
     } else if id == MenuIds::EXIT {
         let _ = slint::quit_event_loop();
     }

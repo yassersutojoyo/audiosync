@@ -16,10 +16,10 @@ export enum RowPart { none, toggle, delay, volume, sync, options }
 export enum SpeakerKind { airplay, built-in, headphones, bluetooth, usb, usb-headphones, usb-speakers, hdmi, display-port, virtual, other }
 
 // Whether an AirPlay speaker can simply play.
-export enum Availability { open, needs-code, pairing, waiting-to-pair, password-not-yet, pairing-not-yet, airplay2-not-yet, unsupported }
+export enum Availability { open, needs-code, pairing, waiting-to-pair, pairing-not-yet, airplay2-not-yet, unsupported }
 
 // What went wrong with an AirPlay speaker, for its notice.
-export enum AirPlayProblem { not-responding, connection-lost, busy, refused, password-not-yet, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, unsupported }
+export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, unsupported }
 
 // Where the PIN dialog of an Apple TV pairing is.
 export enum PinPhase { starting, ready, checking }
@@ -71,7 +71,7 @@ export struct GroupItem {
 }
 
 // What a notice is about, for its short name (Strings.notice-title).
-export enum NoticeKind { no-speaker, source-quit, source-not-running, source-refused, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-cant-play, airplay-stopped, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice }
+export enum NoticeKind { no-speaker, source-quit, source-not-running, source-refused, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-cant-play, airplay-stopped, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings }
 
 export struct NoticeItem {
     id: int,

@@ -597,7 +597,7 @@ export component TextField inherits Rectangle {
 
             MenuItem {
                 title: Strings.edit-cut;
-                enabled: !root.read-only && root.text != "";
+                enabled: !root.read-only && root.text != "" && root.input-type != InputType.password;
                 activated => {
                     input.cut();
                 }
@@ -605,7 +605,8 @@ export component TextField inherits Rectangle {
 
             MenuItem {
                 title: Strings.edit-copy;
-                enabled: root.text != "";
+                // A password never leaves the field through the menu.
+                enabled: root.text != "" && root.input-type != InputType.password;
                 activated => {
                     input.copy();
                 }

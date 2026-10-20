@@ -170,7 +170,7 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
   - *The delay.* The reader gets Jt in capture frames, rounded down, as Jr, and every read uses `De = min(max(D, N, Lr) + Jr, C − M − N)` (S44 step 1). A late callback anchors as much further from W as it came late and judges drift against that, so every anchor lands where a callback as early as the earliest would have put it, whichever callback anchors, and the device plays each frame at the same delay after the capture, within S208's limit of a block. S207's tracking takes the fill at the time the callback would have read at had it come that early, `now − Jt`, and compares the reader's delay with its reach without Jr.
   - *Without both times* (the Windows renderer, which gets no output time and whose late wakes ask for more frames instead, S206), Jr is 0 and nothing changes. A callback on time has Jr = 0, so steady callbacks play the very same frames with output times as without.
   - *Counters.* The renderer counts the largest Jt and the callbacks with Jt above 5 ms; the Mac logs both when an output stops, next to the reader's counters, so a session shows whether its callbacks came late.
-  - In the core's 60-second runs with 512-frame blocks at 48 kHz, a 44.1 kHz output at hold-back 0 and another 20 ms later, a 48 kHz output 43 ms later, all three with callbacks up to 30 ms late, and a 48 kHz output on time 203 ms later, every hold-back set again every 3 s: from 2 s on no read runs dry and no drift correction is made, and each output's delay stays within a block and 2 ms. Without S209 the output at hold-back 0 ran dry 18 times and its delay spread over about 34 ms. With each output's first callback 80 ms early, nothing changes either, and outputs on time play the very same frames as without that callback.
+  - In the core's 60-second runs with 512-frame blocks at 48 kHz, a 44.1 kHz output at hold-back 0 and another 20 ms later, a 48 kHz output 43 ms later, all three with callbacks up to 30 ms late, and a 48 kHz output on time 203 ms later, every hold-back set again every 3 s: from 2 s on no read runs dry and no drift correction is made, and each output's delay stays within a block and 2 ms. Without S209 the output at hold-back 0 ran dry 18 times and its delay spread over about 34 ms. With each output's first callback 80 ms early, nothing changes either, and outputs on time play the very same frames as without that callback. With the first two callbacks 80 ms early, both set the floor: each output's delay moves by at most 50 ms past its delay without them, no read runs dry and no drift correction is made from 2 s on, and from 50 s on every delay lies within a block and 2 ms of the delays without them.
 
 ### Fades at stream boundaries
 
@@ -439,6 +439,7 @@ These run in the host application, not the audio engine core, but the logic suit
 
 - **S149** *Observed* (tests "speaker key: …", "groups: JSON round-trip"). Speaker keys: `ap:<engine output id>` for AirPlay (`ap:native:<receiver ID>` under AudioSync's own sender, S204), `lc:<device UID>` for local; parsing splits at the first colon only (UIDs may contain colons); any other prefix is rejected. A group (id, name, member keys) round-trips through JSON unchanged.
 - **S150** *Observed* (tests "group name: …", "group rename: …"). Group names are trimmed; blank or whitespace-only is no name. A new group without a name gets "Group n", n being one more than the number of existing groups, skipping names in use. A blank rename keeps the old name.
+- **S210** *Observed* (`WindowRules.swift`, `GroupSummary`; tests "groups: on when every present member is on; absent members don't count", "groups: off while a present member is off", "groups: a group with no member present is never on"). A group's switch counts only its present members, those listed now (local devices under S151, AirPlay receivers under S222): it shows on when every present member is on, off while any present member is off, and never on when no member is present. A member that isn't listed counts neither way.
 - **S204** *Required* (the maintainer's decision for the switch to AudioSync's own sender, the one change of saved IDs it may make; tests "speaker IDs: …"). *Saved speaker IDs after the switch to AudioSync's own sender.* An AirPlay speaker is saved by its ID alone (switched on: `enabledAirPlayIds`; its volume: `airPlayVolumeByID`; the `ap:` keys of groups and of auto-connect), never with its name or address. Both senders take their ID from the receiver's device ID, the MAC-style address in its announcement (docs/AIRPLAY_SPEC.md P8, P9): the bundled engine writes that 48-bit number in decimal, AudioSync's own sender writes 12 uppercase hex digits behind `native:` (P10). So when the native sender's discovery reports a receiver (found or changed) whose receiver ID is 12 hex digits, every saved ID that is the same number in the engine's form (decimal digits only, no sign, space or leading zero, 1 to 2^48 − 1) becomes `native:<receiver ID>`, as an ID and inside `ap:` keys, before the receiver's row appears, so auto-connect and a speaker that was on act on the new ID at once. A volume already saved under the new ID wins over the old one; a group that already lists the new key drops the old one and otherwise keeps its order; a set never holds an ID twice. Every other ID and key stays as it is: local keys, IDs of receivers discovery hasn't listed, receivers without a device ID, anything not in the engine's form. An ID therefore moves once, when its receiver is first seen, and a second run changes nothing. The old ID is gone afterwards: back on the bundled engine (the hidden option), a moved speaker is off and outside its groups, like any speaker that engine never saw. The debug log has one line per moved ID. *Unverified* (no receiver here): that the bundled engine's output ID is the device ID in decimal; if it isn't, nothing matches, nothing moves, and the saved speakers stay off under the native sender, as before this clause. To check on a Mac with a receiver: a group saved under the bundled engine keeps its AirPlay speaker after the switch.
 - **S151** *Observed* (tests "devices: …"). The local output list hides virtual, aggregate and auto-aggregate devices and macOS's own AirPlay output by default; a hidden device that is chosen (enabled, auto-connect, in a group, or already listed) stays listed in Core Audio order; "Show Virtual Devices" lists everything; hardware transports (built-in, USB, Bluetooth, HDMI, …) and unknown transports are never hidden.
 - **S152** *Observed* (tests "layout: …"). Transport types map to tags (built-in, Bluetooth and Bluetooth LE → Bluetooth, USB, HDMI, DisplayPort, Thunderbolt, macOS AirPlay, FireWire, virtual, aggregate and auto-aggregate → aggregate, PCI, AVB; unknown → other); only built-in outputs are "This Mac", in Core Audio order; every other local and every AirPlay speaker form one "connected" list sorted by name ignoring case, numbers in numeric order, ties stable. Each tag's icon is an existing SF Symbol, never a bolt (reserved for auto-connect), grey unless the speaker plays, then in its own color.
@@ -448,6 +449,21 @@ These run in the host application, not the audio engine core, but the logic suit
 - **S156** *Observed* (`docs/DEVELOPMENT.md` "Running and testing"; run-tests output "shellcheck 0.11.0 passed (N scripts)", N being the number of listed scripts). Every listed shell script passes the pinned shellcheck version; a missing shellcheck fails the run.
 - **S170** *Required* (tests "debug log: …"; `docs/DEVELOPMENT.md`). The debug log is off unless `AUDIOSYNC_DEBUG` is exactly `1`; while it is off no message is built and nothing touches the file system for it. When on, the host empties `/tmp/audiosync-debug.log` at launch, writes a first line with the app and macOS versions and the local time, then one line per message, each starting with the UTC time to the millisecond, rounded down (`2026-10-18T17:52:13.456Z`, the Windows app's format). The file grows to at most 50 MB; the line that would pass that is replaced by one saying the log stopped, and later messages are dropped. The path is opened without following a symbolic link and without blocking (a FIFO there can't stall it), and is used only when it is a regular file owned by the user with a single hard link; only then is it emptied and made readable by its owner only. Logging never does file work on the caller's thread: the caller builds the message and stamps the time, and one serial queue writes each whole line unbuffered, in the order the lines were handed over; lines still queued are written when the app exits normally. Building a message still allocates, so audio callbacks must not log (S126, S131).
 - **S171** *Required* (tests "devices: …"; S60, S68). The device lists are read afresh from Core Audio on every call, in Core Audio's order: outputs are the devices with at least one output channel, inputs those with at least one input channel. Both leave out a device that reports it is no longer alive (a vanishing device can linger in the list for a moment, and listing it would make its speaker fail to start and be switched off under S69 instead of waiting under S68; a device that doesn't answer stays listed) and any private aggregate device (only the process that made it sees it, so it is the capture's own and never a speaker or a source); an aggregate the user made stays. A device whose name can't be read stays listed with an empty name, which the window shows as an unknown device; an unreadable UID stays empty (callers skip such devices) and an unreadable transport is unknown (0). The default output can be read, but nothing in a session follows it (S145).
+- **S211** *Observed* (`WindowRules.swift`, `SourceList`; tests "sources: …"). The source picker lists the whole system first (its entry has the empty ID of S12), then the apps, then the input devices that have a UID, marked as inputs (an input without a UID is left out). A chosen app that isn't running stays listed under its name, sorted among the apps, and a running chosen app is listed once; a chosen input device that is unplugged is not listed.
+- **S212** *Observed* (`AppSettings.swift`, `AppSettings.load` and `SettingsStore`; `WindowRules.swift`, `StoredEqualizer`; tests "settings: …", "equalizer storage: …"). Settings are kept in the user defaults under the key names existing installs use, and every saved setting comes back unchanged at the next launch. Nothing stored gives the defaults: the whole system as source (stored as the empty source, S12), master 100, delays 2000 ms. A set of speakers is stored as a sorted list. A master that isn't a finite number starts at 100 and one above 100 is clamped; speaker volumes are clamped to 0 to 100 and delays to 0 to 20 000 ms, and a stored value that isn't a number is dropped (S76, S77). Unreadable groups, IDs or appearance fall back to their defaults. Older stored forms convert once (S75, S77, S179). The equalizer's settings (S24) are stored as one encoded value; nothing stored, data that can't be read, settings with another band count than ten, or a preamp or gain that isn't a finite number give the defaults.
+- **S213** *Observed* (`AppSettings.swift`, `RetiredEngineChoice`, `RetiredAirPlayChoice`, `SettingsStore.retiredChoiceNotes`; tests "retired engine choice: …", "retired airplay choice: …", "retired choices: …"). Older builds read two choices that no longer exist: the audio engine (setting `engineImpl`, variable `AUDIOSYNC_ENGINE`) and the AirPlay sender (setting `airplayImpl`, variable `AUDIOSYNC_AIRPLAY`). Neither has any effect. A stored choice is noted once in the debug log at the first launch that finds it and then removed, leaving every other setting; an empty or non-text stored value is removed without a note; a second launch over the same settings logs nothing. A variable still set in the environment can't be removed, so it is noted at every launch. When both the setting and the variable of one choice are set, one line notes both; nothing set, or only empty values, means no note.
+- **S214** *Observed* (`WindowRules.swift`, `WindowPlacement`; tests "windows: …"). A window reopens at its saved frame only when the frame is reachable: at least 120 by 60 points of it lie on one display's visible area, enough to grab the title bar. A frame on a display that is gone, or only a sliver of it on screen (40 points), centers the window instead; with no display at all no frame is reachable.
+- **S215** *Observed* (`AppLifecycle.swift`, `isLoginItemLaunch`, `answersSecondLaunch`; `Localization.swift`, `streamingStartMessage`; tests "launch: …", "second launch: …", "start error: …"). A launch is a login-item launch only when macOS opens AudioSync at login; the main window opens at every other launch, not at login. A second launch is answered by the running copy, which shows its window, unless that copy is quitting (S111), in which case it doesn't answer and the new copy waits for it to go. A start that fails because the audio core can't be set up says so and asks the user to open the app again, a message of its own, not a capture failure's (S121).
+- **S216** *Observed* (`ProcessTapCapture.swift`, `closeCapture`; tests "capture close: …"). Closing a capture stops its IOProc at once; its process tap and the aggregate device built around it are destroyed on the main queue's next turn, after whatever the same turn does next. A source switch therefore makes the new tap before the old one is destroyed. An input device's capture has no tap, so nothing is left for the next turn.
+- **S217** *Observed* (`TrackMetadata.swift`, `jpeg`, `artworkSide`, `artworkLimit`; tests "artwork: …"). Artwork for the receivers is a JPEG of at most `artworkLimit` (6060) bytes, with its longest side at most 600 px and its aspect kept; a smaller image is never scaled up. Within those limits it is as large as fits: each size is tried at three JPEG qualities, best first, before the side steps down (to no less than 64 px), so a tighter byte limit gives a smaller image, and nothing at all comes when not even the smallest size fits. A player's artwork and AudioSync's own icon (an `NSImage`) are encoded the same way, drawn on black since JPEG has no transparency.
+- **S218** *Observed* (`ReceiverInfo.swift`, `ReceiverInfo`; tests "receiver info: …"). What AirPlay receivers with a screen show. A playing track of the source's player goes out with its fields as the player gave them (blank ones included) and its artwork. With the whole system as source, a paused player's track isn't what plays and doesn't count; with a player as source, its paused track still shows, but another player's paused track doesn't. With no track that counts, every field is filled: title "AudioSync", the source's name as the source picker shows it as the artist ("All System Audio" for the whole system, the app's or input device's name, never a bundle ID; a stand-in when there is no usable name), and a short album label, with AudioSync's icon as artwork. A Music track without artwork gets AudioSync's icon. Spotify's artwork arrives after its track: while it may still come, what is shown stays, and after `artworkWait` (5 s) without it AudioSync's icon takes its place; waiting changes nothing but that wait. After polling starts, the host waits up to `readingWait` (3 s) for the first Now Playing reading; a current reading, or none coming because nothing polls, is not waited for.
+- **S219** *Observed* (`ReceiverInfo.swift`, `SentTrackInfo`; `NativeAirPlayModel.swift`, `NativeNowPlaying`; tests "sent track info: …", "native track info: …"). What the host hands AudioSync's own sender, so a receiver never shows one track with another's cover. A new track goes out with its artwork; another artist or album counts as a new track. The sender drops the artwork when the track changes, so the next track with the same cached image sends that image again, and a new track whose artwork isn't there yet goes out without any. The same track again (a model update, a recheck) sends nothing, another image for the same track goes out, and a new sender (a resend) gets the track and its artwork again. With no track, AudioSync's labels go out with its icon, which isn't sent again for the same fields; a track without artwork after one with gets the icon at once, and artwork that comes for a track shown with the icon goes out. With no icon to give, the fields go out alone and the icon follows once there is one. While a track's artwork is on its way (S218), the track goes out alone with the time the wait ends; a look during the wait sends nothing and keeps that time, artwork that arrives in time goes out, and otherwise the icon goes out once when the wait is over.
+- **S220** *Observed* (`LocalDelay.swift`, `DelayFieldDraft`, `fieldText`; tests "delay field: …", "delay field cue: …", "delay field quit: …", "delay field input: …"). A delay field (an offset of S175 or the AirPlay delay of S178, as S181 shows them) starts out showing the saved value and keeps typed text as a draft: typing applies nothing. Return applies the typed value once, clamped to its range and shown clamped (the AirPlay delay to 20 000 ms); a focus loss after it applies nothing more. Text that can't be read, or the saved value typed again, applies nothing, and unreadable text shows the saved value again. A step button drops the typed text, so a later focus loss applies nothing, and a new saved value shows when nothing is being typed. The field marks a draft: none while it shows the saved value or the saved value as typed; typing shows one; Return, Escape and a step clear it (unreadable text keeps it until Return restores the saved value); a saved value changing under the typing keeps it. Quitting drops every draft, so a delay typed but not applied at quit is neither applied nor saved. Only digits after one leading "+" or "−" can be typed (a letter after digits doesn't show). Only a number outside the field's range gets a red outline, with a hint naming the range and the value Return applies; a negative AirPlay delay stays marked until Return applies 0.
+- **S221** *Observed* (`LocalDelay.swift`, `DelayPanels`; tests "delay panels: …"). Each speaker row with a delay opens a panel holding its delay field (S220). Return applies its row's typing once and leaves every panel open; Command-S applies every open panel's typing and leaves them open; leaving the field applies nothing. A click on a row's delay or its box applies that row's typing and closes its panel, and on a closed row's box opens its panel without applying anything. A click on another row applies the open panel's typing first and leaves that panel open. The note under a list belongs to the last row: a click on it toggles that row's panel, after applying any other panel's typing; under a row without a delay, or with no row above it, it counts as outside. A click outside every speaker row applies each readable typing and closes every panel (unreadable text shows the saved delay again); Escape drops every typing and closes every panel.
+- **S222** *Observed* (`NativeAirPlayModel.swift`, `NativeAirPlayID`, `NativeAirPlayModel`, `NativeSenderStarts`; `NativeReceiver.swift`; tests "native airplay: …", "own receiver: …", "EC7 native airplay: …", "EC12 native airplay: …", "EC13 native airplay: …"). The host's side of AudioSync's own AirPlay sender (docs/AIRPLAY_SPEC.md). IDs: a receiver ID becomes the app ID `native:<receiver ID>` and back, instance IDs with colons included, and survives a speaker key (S149); an ID older versions saved is never taken for a native receiver, and a speaker saved as on under such an ID, not moved yet (S204), neither starts nor holds up streaming. Rows list, by name, only receivers that can play or need a code (PIN or password), shown as asking for a code (S106); nothing else, and never this Mac's own AirPlay Receiver: a receiver whose name is exactly the computer's name, ignoring case, is the Mac, and with no computer name known nothing is hidden. Only a receiver able to play holds local outputs back (S176). Nothing joins while not streaming; while streaming, the able join, the ones needing a PIN or password that the user didn't turn on by a click go off (auto-connect and restored switches never pair or prompt, S223), the rest wait; an added speaker stays, and leaves when switched off or when streaming stops. Playing is reported once. A speaker that plays on after its announcement lapsed stays listed and chosen; a lost speaker the sender retries stays on; gone and not playing, it leaves the list and holds nothing back. An error the sender won't retry turns the speaker off, with why; events of a removed speaker are passed over; local outputs line up again only when L (S178) changes. The first reconcile starts the sender (S101). A failed start is told once, another failure in a row posts no second notice, a start that works ends the failures, and a new failure after it is told again; a running sender shows no problem. A sender that stopped after an internal error, or whose failure event arrives, is dropped, doesn't restart by itself and shows as failed with Retry, which starts a new sender at once. For the Local Network hint (S154) the sender is up only after a start that worked and until it stops. Debug log lines name a found receiver (ID, model, availability, hints), a changed one with its reason, a gone one (by name when it was listed), a retrying state, an error, latency and timeline figures, and a failure with where a panic happened (S205).
+- **S223** *Observed* (`NativeAirPlayModel.swift`, `NativeAccessStage`, `NativePrompt`, `NativeTurnOff`; `WindowRules.swift`, `PromptWithdrawal`; tests "native pairing: …", "prompt withdrawal: …"). Pairing and passwords for AudioSync's own sender. A click on a receiver able to play just joins; on an Apple TV asking for a PIN it starts a pairing (the TV shows a PIN and a prompt is queued); on a receiver with a password it asks for the password, unless it was given one earlier this run, and then it just joins. While pairing or prompting the speaker waits instead of going off. Prompts come oldest first, one at a time. An empty PIN counts as Cancel; a PIN is otherwise ASCII digits only, and anything else asks again; a PIN goes to its pairing, and a wrong one starts a new pairing (a new PIN on the TV) and asks again. Once paired the speaker waits for the sender's new listing, then joins when listed as able to play; refused again right after pairing, it goes off instead of pairing in a loop. With its password a receiver joins; a wrong password asks again while the user's attempt runs; an empty password counts as Cancel. A paired Apple TV just joins. Within the user's attempt a refused stored pairing pairs again; refused without the user's click, or later once it has played (which ends the attempt), it goes off with a notice instead of prompting uninvited. Cancel turns the speaker off and cancels a running pairing once. A pairing that can't start, a PIN the pairing didn't take, a pairing turned down or failing for another reason turns the speaker off; a pairing that needs the password asks for it and pairs again with it. Turning a speaker off cancels the pairing that waits for its PIN and takes back its open prompt; a PIN request nobody waits for cancels its pairing; a pairing that ends after its speaker went off, or an answer for a speaker turned off meanwhile, is passed over. A prompt its pairing waits for stays open (a password prompt while its speaker waits for it); a pairing that fails under its open PIN prompt, or a speaker that plays under it on stored credentials, takes the prompt back once. A prompt taken back is no answer, a PIN typed into it goes nowhere, and its answer never counts for the attempt that asks again, whose prompt opens next. A prompt taken back closes at once when it is the frontmost modal window; under another alert it waits, without a second retry when taken back again, and closes once that alert ends; a prompt that went meanwhile, or one already answered, stops the retries, so the next prompt is never closed in its place. Log lines name the receiver, never a PIN or password.
+- **S224** *Observed* (`NativeAirPlayModel.swift`, `NativeAirPlayPairings`; tests "pairing store: …"). The sender's stored pairings are one file, `airplay-pairings.dat`, which holds them in plain form by design, so it lives in a `Pairings` folder of its own inside AudioSync's application support folder: that folder is created for its owner only and marked excluded from backups (also when it exists), while AudioSync's own folder stays in backups. A file where older builds kept it, directly in AudioSync's folder, moves into the `Pairings` folder unchanged and still for its owner only; with no older file nothing moves and nothing is created; once moved, the next launch moves nothing; with both files, the one in the folder is kept and the older one is left alone.
+- **S225** *Observed* (`Tests/soakrules.swift`, `SoakRules`; soak rules suite, every check). The soak harness's memory rule. A run's memory growth is the last window's footprint minus the level the run settled at: the median of the last three windows inside the warm-up (of those there are, the mean of two when only two), the warm-up being the first 2 minutes, or the first half of a run shorter than 4 minutes. With no window in the warm-up growth counts from the first window; no windows, or a single one, mean no growth. A climb that ends within the warm-up counts as nothing, a leak shows in full from the warm-up's end, and a spike in the warm-up (even in its last window) can neither hide a later leak nor fail a flat run. A run passes when its growth is at most max(2 × b, b + 5) MB, b being the baseline run's growth, a negative one counting as 0.
 
 ## 18. Test map
 
@@ -598,15 +614,86 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | local network probe: a denied answer is asked again 10 s after the browser started (S101) | S101, S154 |
 | local network probe: only a running probe's denied answer is asked again (S101) | S101, S154 |
 | native airplay: before any start fails, no restart falls due (S101) | S101 |
+| EC7 native airplay: a failed start is told once | S101, S222 |
 | EC7 native airplay: after a failed start, a later reconcile starts it again, not a sooner one | S101 |
 | EC7 native airplay: the restart falls due exactly when a reconcile may start the sender again (S101) | S101 |
+| native airplay: another failure in a row posts no second notice | S222 |
+| native airplay: a start that works ends the failures | S222 |
+| native airplay: a new failure after a working start is told again | S222 |
+| native airplay: a running sender shows no problem | S222 |
+| EC7 native airplay: a sender that stopped after an internal error doesn't restart by itself | S101, S222 |
 | EC7 native airplay: a sender that stopped schedules no restart; only Retry starts one (S101) | S101 |
+| EC7 native airplay: it shows as failed, with Retry | S101, S222 |
+| EC7 native airplay: Retry starts a new sender at once | S101, S222 |
+| native airplay: before a start works, the sender isn't up for the Local Network hint | S154, S222 |
+| native airplay: a start that works brings the sender up for the Local Network hint | S154, S222 |
+| native airplay: a sender that stopped is down for the Local Network hint | S154, S222 |
+| native airplay: a start that failed leaves the sender down for the Local Network hint | S154, S222 |
+| native airplay: this Mac's own AirPlay Receiver is never listed (S100) | S222 |
+| native airplay: a receiver named otherwise than this Mac is listed | S222 |
+| native airplay: with no computer name known, nothing is hidden | S222 |
+| EC7 native airplay: the sender's failure event makes the app drop it and offer Retry | S101, S222 |
+| native airplay: the failure's log line | S170, S222 |
+| native airplay: the failure's log line says where the panic happened (S205) | S205, S222 |
+| native pairing: a PIN is ASCII digits only | S223 |
+| native pairing: a click on a receiver able to play just joins | S223 |
+| native pairing: a click on an Apple TV asking for a PIN pairs | S223 |
+| native pairing: a click on a receiver with a password asks for it | S223 |
+| native pairing: while pairing or prompting, the speaker waits instead of going off | S223 |
+| native pairing: the TV shows a PIN, a prompt is queued | S223 |
+| native pairing: prompts come oldest first, one at a time | S223 |
+| native pairing: with its password, a receiver joins | S223 |
+| native pairing: then the PIN prompt opens | S223 |
+| native pairing: something that isn't a PIN asks again | S223 |
+| native pairing: a PIN goes to the pairing | S223 |
+| native pairing: a wrong PIN starts a new pairing (a new PIN on the TV) and asks again | S223 |
+| native pairing: once paired, the speaker joins | S223 |
+| native pairing: just paired, it waits for the sender's new listing instead of going off | S223 |
+| native pairing: listed as able to play, it joins | S223 |
+| native pairing: refused again right after pairing, it goes off instead of pairing in a loop | S223 |
+| native pairing: a wrong password asks again while the user's attempt runs | S223 |
+| native pairing: an empty password counts as Cancel; no pairing runs to cancel | S223 |
+| native pairing: switched off, the speaker leaves the sender | S223 |
+| native pairing: a stored pairing refused without the user's click goes off with a notice | S223 |
+| native pairing: a PIN request nobody waits for cancels its pairing | S223 |
+| native pairing: a paired Apple TV just joins | S223 |
+| native pairing: within the user's attempt, a refused stored pairing pairs again | S223 |
+| native pairing: paired again | S223 |
+| native pairing: once it plays, the user's attempt is over | S223 |
+| native pairing: refused later on, it goes off with a notice instead of prompting uninvited | S223 |
+| native pairing: Cancel turns the speaker off and keeps the stage for the turn-off | S223 |
+| native pairing: the turn-off after Cancel says the pairing runs, so the app cancels it (once) | S223 |
+| native pairing: a pairing that ends after the speaker went off is passed over or cancelled | S223 |
+| native pairing: an answer for a speaker turned off meanwhile is ignored | S223 |
+| native pairing: a pairing that can't start turns the speaker off | S223 |
+| native pairing: a PIN the pairing didn't take turns the speaker off | S223 |
+| native pairing: turning it off cancels the pairing that waits for the PIN | S223 |
+| native pairing: a pairing that failed for another reason turns the speaker off, with nothing left to cancel | S223 |
+| native pairing: a pairing turned down turns the speaker off | S223 |
+| native pairing: a pairing that needs the password asks for it, then pairs again with it | S223 |
+| native pairing: a prompt its pairing waits for stays open | S223 |
+| native pairing: a pairing that fails under its open PIN prompt takes the prompt back, once | S223 |
+| native pairing: a prompt taken back is no answer, and a PIN typed into it goes nowhere | S223 |
+| native pairing: a speaker switched off under its open prompt takes the prompt back | S223 |
+| native pairing: the closed prompt's answer never counts for the attempt that asks again | S223 |
+| native pairing: the new attempt's prompt opens next | S223 |
+| native pairing: a speaker that plays under its open PIN prompt (stored credentials) takes the prompt back | S223 |
+| native pairing: a password prompt stays open while its speaker waits for it | S223 |
+| native pairing: switched off, its password prompt is taken back | S223 |
+| native pairing: log lines name the receiver and never a PIN or password | S170, S223 |
+| native airplay: a retrying state's log line | S170, S222 |
+| native airplay: an error's log line | S170, S222 |
+| native airplay: latency and timeline log lines | S170, S222 |
 | reconcile: with no event, the host reconciles by itself only every 30 s, the safety net (S101) | S101 |
 | reconcile: with nothing due, no reconcile is scheduled beyond the safety net (S101) | S101 |
 | reconcile: the earliest due time is the one scheduled (S101) | S101 |
 | reconcile: nothing is scheduled while the Mac sleeps; its wake reconciles (S101) | S101, S139 |
 | reconcile: a due time left in the past runs at most once a second, a later one on time (S101) | S101 |
 | reconcile: a due time already past runs at once when none ran before (S101) | S101 |
+| second launch: the running copy shows its window | S111, S215 |
+| second launch: a copy that is quitting doesn't answer, so the new one waits for it | S111, S215 |
+| quit: SIGTERM and Ctrl-C's SIGINT both take the clean exit path (S111) | S111 |
+| quit: after a signal's clean exit the status is 128 plus its number, so a calling script sees the interrupt (S111) | S111 |
 | local network probe: a browser waiting on PolicyDenied means denied | S154 |
 | local network probe: a browser failing on PolicyDenied means denied | S154 |
 | local network probe: a browser that is ready means allowed | S154 |
@@ -635,6 +722,11 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | device volume: a write the device ignores leaves the hint and the fix as they were and logs it | S197, S201 |
 | device volume: dragging the system volume across 25% logs one line | S201 |
 | device volume: a device that answers nothing for a moment keeps its listeners, and a refused listener is logged | S195, S201, S202 |
+| own receiver: the Mac's own receiver is recognized | S222 |
+| own receiver: the match ignores case | S222 |
+| own receiver: only an exact name is the Mac | S222 |
+| own receiver: an unknown computer name hides nothing | S222 |
+| own receiver: an empty computer name hides nothing | S222 |
 | capture: frames → flowing | S18 |
 | capture: no frames, unknown source → waiting | S17, S18 |
 | capture: playing only briefly → still waiting | S18 |
@@ -673,12 +765,66 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | app retap: a new tap at another rate is discarded and the old one keeps running until the rebuild | S13, S157 |
 | app retap: a tap that can't be made leaves the old capture to the caller, which ends the session | S13, S21 |
 | app retap: a new tap that can't start reading is discarded | S21 |
+| capture close: a source switch makes the new tap before the old tap is destroyed | S134, S216 |
+| capture close: the IOProc stops at once, the tap and its aggregate device go on the next turn | S134, S216 |
+| capture close: an input device's capture has no tap, so nothing is left for later | S134, S216 |
+| retired engine choice: the setting and the variable older builds read | S213 |
+| retired engine choice: nothing set (or only empty values) means no note | S213 |
+| retired engine choice: a stored choice is noted, and has no effect | S213 |
+| retired engine choice: the environment variable is noted, and has no effect | S213 |
+| retired engine choice: both are noted in one line | S213 |
+| retired airplay choice: the setting and the variable older builds read | S213 |
+| retired airplay choice: nothing set (or only empty values) means no note | S213 |
+| retired airplay choice: a stored choice of the old engine is noted, and has no effect | S213 |
+| retired airplay choice: both are noted in one line | S213 |
+| retired choices: the first launch notes both stored choices | S213 |
+| retired choices: the first launch removes both stored keys and keeps the other settings | S213 |
+| retired choices: a second launch over the same settings logs nothing | S213 |
+| retired choices: an empty or non-text stored value is removed without a note | S213 |
+| retired choices: an environment variable still set is noted at every launch (it can't be removed) | S213 |
+| native airplay: a found receiver's log line | S170, S222 |
+| native airplay: a changed receiver's log line, with its reason | S170, S222 |
+| native airplay: a gone receiver it listed | S170, S222 |
+| native airplay: a gone receiver it never listed | S170, S222 |
+| native airplay: app IDs round-trip, instance IDs included | S149, S222 |
+| native airplay: an ID older versions saved is never taken for a native receiver | S204, S222 |
+| native airplay: a native ID survives a speaker key (groups, auto-connect, notices) | S149, S222 |
+| native airplay: a speaker saved as on under an old ID that isn't moved yet neither starts nor holds up streaming | S204, S222 |
+| native airplay: rows show what can play, or needs a code (PIN or password); nothing else | S222 |
+| native airplay: rows by name | S222 |
+| native airplay: a needs-PIN or password receiver shows as asking for a code | S106, S222 |
+| native airplay: only a receiver able to play holds local outputs back | S176, S222 |
+| native airplay: nothing joins while not streaming | S222 |
+| native airplay: while streaming, the able join, the PIN and password ones not turned on by a click go off (auto-connect and restored switches never pair or prompt), the rest wait | S222 |
+| native airplay: an added speaker stays | S222 |
+| EC13 native airplay: a speaker leaves when switched off or when streaming stops | S118, S222 |
+| native airplay: playing is reported once | S222 |
+| EC12 native airplay: a speaker that plays on after its announcement lapsed stays listed and chosen | S167, S222 |
+| native airplay: a lost speaker the sender retries stays on | S222 |
+| EC12 native airplay: gone and not playing, it leaves the list and holds nothing back | S167, S222 |
+| native airplay: an error the sender won't retry turns the speaker off, with why | S222 |
+| native airplay: events of a removed speaker are passed over | S222 |
+| native airplay: local outputs line up again only when L changes | S177, S178, S222 |
+| native airplay: the first reconcile starts the sender | S101, S222 |
 | devices: macOS's own AirPlay output is hidden by default | S145, S151 |
+| pairing store: the file lives in the folder that is marked | S224 |
+| pairing store: a Pairings folder of its own in AudioSync's folder, where older builds kept the file | S224 |
+| pairing store: the folder is marked excluded from backups | S224 |
+| pairing store: the folder is created for its owner only and excluded from backups, also when it exists | S224 |
+| pairing store: AudioSync's own folder stays in backups | S224 |
+| pairing store: with no older file nothing moves and nothing is created | S224 |
+| pairing store: an older file moves into the folder, unchanged and still for its owner only | S224 |
+| pairing store: once moved, the next launch moves nothing | S224 |
+| pairing store: with both files the one in the folder is kept and the older one is left alone | S224 |
 | EC1 unplug: a playing speaker that is still present is left alone | S117, S161 |
 | EC1 unplug: a lost speaker stays on and waits while its device is missing | S68, S137, S161 |
 | EC1 unplug: streaming keeps running while the only speaker is unplugged | S137, S162 |
 | EC1 replug: the speaker is attached again once its device is listed | S68, S137, S161 |
 | EC1 switch off: a speaker turned off is detached | S117, S161 |
+| EC1 new ID: a playing speaker whose device came back under a new ID is restarted on it | S161 |
+| EC1 new ID: a speaker still on the listed device ID is left alone | S161 |
+| EC1 new ID: a playing speaker whose device isn't listed is left alone until it is | S161 |
+| EC1 new ID: a speaker switched off is detached, not restarted | S161 |
 | EC2 Bluetooth: a disconnected headset waits; the other speaker keeps playing | S138, S161 |
 | EC2 Bluetooth: a reconnected headset is attached again | S138, S161 |
 | EC4 rate: a new capture rate rebuilds the session | S20, S140, S157 |
@@ -708,6 +854,95 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | EC10 many speakers: eight local speakers are attached together | S146, S161, S165 |
 | EC11 long names: names that differ only at the end still sort and stay whole | S147, S152, S166 |
 | EC12 network loss: an empty list with Local Network allowed shows no permission hint | S154, S167 |
+| artwork: a JPEG within the artwork limit | S217 |
+| artwork: at most 600 px a side, aspect kept | S217 |
+| artwork: a tighter limit gives a smaller image | S217 |
+| artwork: nothing when not even the smallest image fits | S217 |
+| artwork: a small image isn't scaled up | S217 |
+| artwork: an NSImage (a player's artwork, AudioSync's icon) is encoded too | S217 |
+| receiver info: a playing track, with its artwork | S218 |
+| receiver info: Spotify's artwork is on its way: what is shown stays until it arrives | S218 |
+| receiver info: a Music track without artwork gets AudioSync's icon | S218 |
+| receiver info: a track's own blank fields go out as its player gave them | S218 |
+| receiver info: whole system with nothing playing: the source picker's label as the artist | S218 |
+| receiver info: whole system as source: a paused player's track isn't what plays | S218 |
+| receiver info: a paused track still shows while its player is the source | S218 |
+| receiver info: another player's paused track doesn't show | S218 |
+| receiver info: an app without track info: the neutral title and the app's name | S218 |
+| receiver info: an input device: the neutral title and the device's name | S218 |
+| receiver info: an app whose name isn't known shows no bundle ID as the artist | S218 |
+| receiver info: a source without a usable name gets the stand-in as the artist | S218 |
+| receiver info: no track that counts: no field goes out blank, whatever the source | S218 |
+| receiver info: the last cover stays while Spotify's artwork may still come | S218 |
+| receiver info: artwork that never comes gives way to AudioSync's icon | S218 |
+| receiver info: waiting changes nothing but a wait for artwork | S218 |
+| receiver info: no reading yet since polling started: wait for it | S218 |
+| receiver info: a reading that doesn't come in time isn't waited for | S218 |
+| receiver info: a current reading, or none coming (not polling), is not waited for | S218 |
+| native track info: the track goes out with its artwork | S219 |
+| native track info: the same track sent again (a resend) keeps its artwork | S219 |
+| native track info: a new track drops the last one's artwork: it goes out without the wrong cover | S219 |
+| native track info: the new track's artwork goes out once it comes | S219 |
+| native track info: another artist or album is a new track too | S219 |
+| sent track info: a new track goes out with its artwork | S219 |
+| sent track info: the same track again (a model update, a recheck) gives the sender nothing | S219 |
+| sent track info: the next track with the same cached image sends it again (the new track dropped it) | S219 |
+| sent track info: another image for the same track goes out | S219 |
+| sent track info: a new sender (a resend) gets the track and its artwork again | S219 |
+| sent track info: no track: AudioSync's labels go out with its icon | S219 |
+| sent track info: the icon isn't sent again for the same fields | S219 |
+| sent track info: a track without artwork after the icon sends the icon again (the new track dropped it) | S219 |
+| sent track info: artwork that comes for a track shown with the icon goes out | S219 |
+| sent track info: a track without artwork after one with: the icon goes out at once | S219 |
+| sent track info: no icon to give: the fields go out alone | S219 |
+| sent track info: the icon goes out once there is one | S219 |
+| sent track info: artwork on its way: the track goes out alone, with when the wait ends | S219 |
+| sent track info: a look during the wait sends nothing and keeps the wait's end | S219 |
+| sent track info: artwork that arrives during the wait goes out | S219 |
+| sent track info: artwork that never comes: the icon goes out once the wait is over | S219 |
+| sent track info: after the wait, the icon isn't sent again | S219 |
+| windows: a saved frame on the screen is used | S214 |
+| windows: a frame saved on a display that is gone is centered instead | S214 |
+| windows: a frame on the second display is used while it is attached | S214 |
+| windows: a sliver of 40 points can't be grabbed, so the window is centered | S214 |
+| windows: 120 points on screen are enough to grab the title bar | S214 |
+| windows: no screen at all is never reachable | S214 |
+| prompt withdrawal: a frontmost prompt closes at once | S223 |
+| prompt withdrawal: a prompt under another alert waits to close | S223 |
+| prompt withdrawal: taken back again while it waits, no second retry starts | S223 |
+| prompt withdrawal: it keeps waiting while the other alert is open | S223 |
+| prompt withdrawal: once the other alert ends, the prompt closes | S223 |
+| prompt withdrawal: nothing pending, a stray retry closes nothing | S223 |
+| prompt withdrawal: a prompt that went meanwhile stops the retries | S223 |
+| prompt withdrawal: answered before it could close, the next prompt is never closed in its place | S223 |
+| prompt withdrawal: no prompt open, nothing to close | S223 |
+| sources: the whole system, then apps, then inputs with a UID | S12, S211 |
+| sources: the whole system's entry has the empty id; inputs are marked | S12, S211 |
+| sources: a chosen app that isn't running stays listed, sorted among the apps | S12, S211 |
+| sources: a chosen input device that is unplugged is not listed | S12, S211 |
+| sources: a chosen app that is running is listed once | S12, S211 |
+| groups: on when every present member is on; absent members don't count | S210 |
+| groups: off while a present member is off | S210 |
+| groups: a group with no member present is never on | S210 |
+| equalizer storage: saved settings come back unchanged | S24, S212 |
+| equalizer storage: nothing saved, or unreadable data, gives the defaults | S24, S212 |
+| equalizer storage: settings with another band count give the defaults | S24, S212 |
+| settings: nothing stored gives the defaults (whole system, master 100, delays 2000 ms) | S212 |
+| settings: every saved setting comes back unchanged | S212 |
+| settings: a set of speakers is stored as a sorted list | S212 |
+| settings: the whole system is stored as an empty source (S12) | S12, S212 |
+| settings: a master that isn't a finite number starts at 100 | S212 |
+| settings: volumes are clamped to 0…100, anything else is dropped (S76) | S76, S212 |
+| settings: delays are clamped to 0…20 000 ms, anything else is dropped (S77) | S77, S212 |
+| settings: unreadable groups, IDs or appearance fall back to the defaults | S212 |
+| settings: a master above 100 is clamped | S76, S212 |
+| settings: older linear gains become slider positions (3.49 % → 32.68, 150 % → 100, S75) | S75 |
+| settings: the converted volumes are saved under the current key and the old key is removed | S75 |
+| settings: a second launch reads the converted volumes as they are | S75 |
+| settings: an older single delay is where local speakers start (S77) | S77, S179 |
+| settings: an older single delay is clamped to 20 000 ms | S77, S179 |
+| settings: stored positions win over older gains, which are removed | S75 |
+| settings: every UserDefaults key keeps the name existing installs use | S212 |
 | local delay: with only local outputs, a speaker's delay is applied | S176 |
 | local delay: a Bluetooth speaker at −250 ms makes the built-in speakers wait 250 ms | S176 |
 | local delay: the built-in speakers are the reference | S173 |
@@ -731,9 +966,44 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | migration: an offset below −2000 ms is clamped | S179 |
 | migration: runs once and leaves the old values in place | S179 |
 | settings: offsets are kept in −2000…20 000 ms and the AirPlay delay in its range (S175, S178) | S175, S178 |
+| start error: the audio core failing to set up asks to reopen the app | S121, S215 |
 | offset text: +150 ms, −250 ms and 0 ms | S181 |
 | offset text: a leading + or − (a hyphen too) is read and other text is ignored | S175, S181 |
 | speaker row: the reference has no delay field | S181 |
+| delay field: it starts out showing the saved value | S181, S220 |
+| delay field: typing 2, 22, 220 applies nothing and keeps the typed text | S181, S220 |
+| delay field: Return applies the typed value once, and focus loss after it applies nothing more | S181, S220 |
+| delay field: text it can't read applies nothing and shows the saved value again | S181, S220 |
+| delay field: the saved value typed again applies nothing | S181, S220 |
+| delay field: an offset out of range applies clamped and shows the clamped value | S175, S181, S220 |
+| delay field: the AirPlay delay clamps to 20 000 ms on commit | S178, S181, S220 |
+| delay field: a step button drops the typed text, so a later focus loss applies nothing | S181, S220 |
+| delay field: a new saved value shows when nothing is being typed | S181, S220 |
+| delay field cue: the saved value shows no draft | S220 |
+| delay field cue: the saved value as typed shows no draft | S220 |
+| delay field cue: typing shows a draft and Return clears it | S220 |
+| delay field cue: unreadable text shows a draft until Return restores the saved value | S220 |
+| delay field cue: Escape clears the draft | S220 |
+| delay field cue: a step clears the draft | S220 |
+| delay field cue: a saved value changing under the typing keeps the draft | S220 |
+| delay field quit: typing alone applies nothing | S220 |
+| delay field quit: quitting drops every draft | S220 |
+| delay field quit: a typed delay pending at quit is neither applied nor saved | S220 |
+| delay panels: Return applies its row's typing once and leaves every panel open | S221 |
+| delay panels: Command-S applies every open panel's typing and leaves them open | S221 |
+| delay panels: leaving the field applies nothing | S221 |
+| delay panels: a click on a row's delay or box applies its typing and closes its panel | S221 |
+| delay panels: a click on a closed row's box opens its panel and applies nothing | S221 |
+| delay panels: a click on another row applies the open panel's typing first and leaves that panel open | S221 |
+| delay panels: a click on the note under a list toggles the last row's panel; under a row without a delay, or alone, it is outside | S221 |
+| delay panels: a click on the note applies the other panel's typing first, then closes the last row's panel | S221 |
+| delay panels: a click outside every speaker row applies each readable typing and closes every panel; unreadable text shows the saved delay | S221 |
+| delay panels: Escape drops every typing and closes every panel | S221 |
+| delay field input: only digits after one leading + or − can be typed | S175, S181, S220 |
+| delay field input: a letter typed after digits doesn't show | S175, S181, S220 |
+| delay field input: only a number out of the offset range gets the red outline | S175, S181, S220 |
+| delay field input: a negative AirPlay delay is marked until Return applies 0 | S178, S220 |
+| delay field input: the out-of-range hint names the range and the value Return applies | S175, S181, S220 |
 | fade: a stop asks every output and the AirPlay input to fade out before capture stops | S186 |
 | fade: with only AirPlay speakers on, a stop keeps capturing until the AirPlay inputs have faded | S186, S189 |
 | fade: a stop waits for the slowest output, never more than 500 ms | S186 |
@@ -743,8 +1013,25 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | fade: switching several speakers off asks all of them to fade, then waits once | S186 |
 | fade: a lost device is stopped at once, without a fade | S185 |
 | fade: the fade cap is 500 ms and fits in the 5 s quit budget | S110, S186 |
+| S69 start failure: the speaker that throws is reported, the other one still starts | S69 |
+| S69 start failure: an attach uses the first listed device, its hold-back and its gain | S69, S71, S161, S176 |
+| S69 start failure: a speaker switched off is still detached in the same sync | S69, S161 |
+| S69 start failure: the failed speaker is switched off; the others stay on, a missing one too | S69 |
+| S69 start failure: a change the user made gets an alert and a notice for the failed speaker | S69 |
+| S69 start failure: streaming goes on while another speaker is still on | S69 |
+| S69 start failure: the next sync doesn't try the failed speaker again and reports nothing | S69 |
+| S69 start failure: a failure the app caused gets a notice but no alert | S69 |
+| S69 start failure: streaming stops when the failed speaker was the only one on | S69, S118 |
+| S69 start failure: an AirPlay speaker still on keeps streaming | S69, S118 |
+| S69 start failure: two failures share one alert and get a notice each | S69 |
 | S72 master: every running local speaker gets its gain again, and only those | S71, S72 |
 | S186 switch-off: the speakers a sync switches off are detached together | S186 |
+| EC1 new ID: a sync stops the renderer bound to the old ID and starts it on the new one | S161 |
+| EC1 new ID: the next sync leaves the restarted speaker alone | S161 |
+| EC1 new ID: a restart that won't start is reported and switched off, with no device left bound | S69, S161 |
+| launch: macOS opening AudioSync at login is a login-item launch | S215 |
+| launch: any other launch is not a login-item launch | S215 |
+| launch: the main window opens at launch, but not at login | S120, S215 |
 | quit: the first exit signal runs the quit steps (the fade-out), then exits with its status (S111) | S111 |
 | quit: an exit signal while the quit steps run exits at once with its own status (S111) | S111 |
 | quit: a signal waits at most 3 s for the quit steps, past the 500 ms fade cap and the sender's teardown (S111, S186) | S111, S186 |
@@ -788,6 +1075,33 @@ From 2026-10-19 to 2026-10-20 the suite ran the app's pipe feed, `CoreFifoFeed`,
 | core gain: 0 is exact silence from the first buffer (S64) | S64 |
 | core gain: 0.5 halves the signal once the change has ramped | S64 |
 | core gain: NaN and ±inf never reach a device (S65) | S65 |
+
+### soak rules (`Tests/soakrulestest.swift`)
+
+The soak harness's memory rule, checked on recorded footprint series, so it needs no audio hardware.
+
+| Check | Clauses |
+|---|---|
+| the 10-minute series climbs 30.1 MB from its first window, as the run did | S225 |
+| a 10-minute run that rises to 42 MB in its warm-up and then stays flat passes | S225 |
+| the same run passes against a baseline that grew nothing (limit 5 MB) | S225 |
+| a 60-minute run of the same shape passes | S225 |
+| a 10-minute run leaves out its first 2 minutes | S225 |
+| growth is measured from the median of the warm-up's last three windows (41.9, 42.2, 42.1) | S225 |
+| a 2-minute run leaves out its first minute | S225 |
+| a 2-minute run that settles in its first minute passes | S225 |
+| a 10-minute run that rises 1.5 MB a minute the whole time fails | S225 |
+| a 60-minute run that rises 12 MB an hour the whole time fails | S225 |
+| a run that keeps rising 1.5 MB a minute after its warm-up fails | S225 |
+| a 70 MB spike 30 s in doesn't hide a leak of 1.5 MB a minute after the warm-up | S225 |
+| nor does a spike in the warm-up's last window | S225 |
+| a spike in the warm-up with a flat run after it passes | S225 |
+| no windows: no growth | S225 |
+| a single window: no growth | S225 |
+| only two windows in the warm-up: growth counts from their mean | S225 |
+| limit: max(2 × 2.109, 2.109 + 5) = 7.109 MB | S225 |
+| limit: twice a large baseline | S225 |
+| limit: a baseline that shrank counts as 0, so 5 MB | S225 |
 
 ### core parity
 

@@ -20,9 +20,12 @@ use audiosync_core::eq::{self, EqSettings};
 use audiosync_core::policy::device_volume::Hint;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
+mod password;
+
 use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
+use crate::launch_at_login::{self, LaunchAtLogin};
 use crate::ui_model::{
     self, AppState, Backend, MainWindowShows, NoticeMessage, PinPrompt, SourceKind, SpeakerState,
     ViewSettings, WindowFrame,
@@ -30,8 +33,8 @@ use crate::ui_model::{
 use crate::{
     AboutDialog, AirPlayProblem, Availability, DeviceVolumeHint, EqualizerWindow, GroupItem,
     GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, NoticeKind,
-    Palette, PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind, Strings, Tokens,
-    TrayFlyout,
+    Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind,
+    Strings, Tokens, TrayFlyout,
 };
 
 /// The digits the PIN field keeps of what was typed: four at most.
@@ -246,6 +249,14 @@ impl NoticeAnnouncer {
 
 /// How often the backend is polled for what happened on its own.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How often Launch at Sign-In is read again from the registry, so a change
+/// in Task Manager shows in the menus (Slint's menu bar says nothing before
+/// it opens). One small registry read.
+const LOGIN_CHECK: Duration = Duration::from_secs(2);
+
+/// The Settings page where Windows turns startup apps on or off.
+const STARTUP_APPS_PAGE: &str = "ms-settings:startupapps";
 
 /// How often, 20 ms apart, the saved main window size waits for the native
 /// window before it gives up (about two seconds).
@@ -480,6 +491,10 @@ pub struct App {
     /// The PIN dialog shows a made-up pairing (the PIN preview), which no
     /// refresh closes.
     pin_preview: Cell<bool>,
+    /// The password prompt of a speaker protected by a password.
+    password_dialog: PasswordDialog,
+    /// The speaker the password dialog is open for, while it is.
+    password_for: RefCell<Option<String>>,
     about: AboutDialog,
     guide: GuideWindow,
     /// The paragraphs the guide shows.
@@ -511,6 +526,10 @@ pub struct App {
     announcement_timer: Timer,
     /// Polls the backend; it stops when the app is dropped.
     poll_timer: Timer,
+    /// Launch at Sign-In and its notice, which the windows own: the
+    /// backend's notices are about audio.
+    login: RefCell<LaunchAtLogin>,
+    login_timer: Timer,
 }
 
 /// Runs `action` on the app if it still exists.
@@ -635,6 +654,8 @@ impl App {
             pin_dialog: PinDialog::new()?,
             pin_for: RefCell::new(None),
             pin_preview: Cell::new(false),
+            password_dialog: PasswordDialog::new()?,
+            password_for: RefCell::new(None),
             about: AboutDialog::new()?,
             guide: GuideWindow::new()?,
             guide_steps: Rc::new(VecModel::default()),
@@ -652,12 +673,18 @@ impl App {
             out_of_range: RefCell::default(),
             announcement_timer: Timer::default(),
             poll_timer: Timer::default(),
+            login: RefCell::new(LaunchAtLogin::new(
+                launch_at_login::system_store(),
+                std::env::current_exe().ok(),
+            )),
+            login_timer: Timer::default(),
         });
         app.attach_models();
         app.connect_main();
         app.connect_flyout();
         app.connect_equalizer();
         app.connect_dialogs();
+        app.connect_password_dialog();
         app.connect_guide();
         app.restore_view();
         app.refresh();
@@ -665,6 +692,11 @@ impl App {
         app.poll_timer
             .start(TimerMode::Repeated, POLL_INTERVAL, move || {
                 with_app(&weak, App::poll)
+            });
+        let weak = Rc::downgrade(&app);
+        app.login_timer
+            .start(TimerMode::Repeated, LOGIN_CHECK, move || {
+                with_app(&weak, App::reread_launch_at_login)
             });
         Ok(app)
     }
@@ -684,7 +716,58 @@ impl App {
     }
 
     pub fn snapshot(&self) -> AppState {
-        self.backend.borrow().snapshot()
+        let mut state = self.backend.borrow().snapshot();
+        state.notices.extend(self.login.borrow().notice().cloned());
+        state
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn launch_at_login(&self) -> bool {
+        self.login.borrow().is_on()
+    }
+
+    /// Reads Launch at Sign-In again, and shows it if it changed.
+    pub fn reread_launch_at_login(&self) {
+        if self.login.borrow_mut().reread() {
+            self.refresh();
+        }
+    }
+
+    /// The user turned Launch at Sign-In on or off.
+    pub fn set_launch_at_login(&self, on: bool) {
+        let outcome = self
+            .login
+            .borrow_mut()
+            .set(on, crate::platform::notice_time);
+        let status = self.login.borrow().status();
+        self.log.log(|| match &outcome.error {
+            Some(error) => format!(
+                "launch at sign-in: turning it {} failed ({error}); {status:?}",
+                if on { "on" } else { "off" }
+            ),
+            None => format!(
+                "launch at sign-in: turned {}; {status:?}",
+                if on { "on" } else { "off" }
+            ),
+        });
+        if outcome.open_startup_settings && !crate::platform::open_settings(STARTUP_APPS_PAGE) {
+            self.log
+                .log(|| format!("launch at sign-in: {STARTUP_APPS_PAGE} didn't open"));
+        }
+        self.refresh();
+    }
+
+    fn dismiss_notice(&self, id: u64) {
+        if self.login.borrow_mut().dismiss(id) {
+            self.refresh();
+        } else {
+            self.update(|b| b.dismiss_notice(id));
+        }
+    }
+
+    fn dismiss_all_notices(&self) {
+        self.login.borrow_mut().dismiss_notice();
+        self.update(|b| b.dismiss_all_notices());
     }
 
     /// Changes the backend, then shows the result everywhere.
@@ -727,6 +810,9 @@ impl App {
             .global::<Palette>()
             .set_color_scheme(scheme);
         self.pin_dialog.global::<Palette>().set_color_scheme(scheme);
+        self.password_dialog
+            .global::<Palette>()
+            .set_color_scheme(scheme);
         self.about.global::<Palette>().set_color_scheme(scheme);
         self.guide.global::<Palette>().set_color_scheme(scheme);
         self.theme_override.set(Some(dark));
@@ -1005,12 +1091,14 @@ impl App {
         }
         self.refresh_guide(&state);
         self.show_pin_prompt(state.pin_prompt.as_ref());
+        self.show_password_prompt(state.password_prompt.as_ref());
 
         for window in [&self.main as &dyn WindowState, &self.flyout] {
             window.show_state(&state, &status, source_index);
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
         self.main.set_show_virtual_devices(ui.show_virtual);
+        self.main.set_launch_at_login(self.login.borrow().is_on());
         self.main
             .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
         let airplay_delay = format_ms(state.airplay_delay_ms.unwrap_or(0.0));
@@ -1234,13 +1322,11 @@ impl App {
             with_app(&w, |app| app.show_virtual_devices(on))
         });
         let w = weak.clone();
-        main.on_notice_dismissed(move |id| {
-            with_app(&w, |app| app.update(|b| b.dismiss_notice(id as u64)))
-        });
+        main.on_notice_dismissed(move |id| with_app(&w, |app| app.dismiss_notice(id as u64)));
         let w = weak.clone();
-        main.on_notices_dismissed_all(move || {
-            with_app(&w, |app| app.update(|b| b.dismiss_all_notices()))
-        });
+        main.on_notices_dismissed_all(move || with_app(&w, App::dismiss_all_notices));
+        let w = weak.clone();
+        main.on_launch_at_login_toggled(move |on| with_app(&w, |app| app.set_launch_at_login(on)));
         let w = weak.clone();
         main.on_notice_guide_requested(move |id| with_app(&w, |app| app.show_guide(id)));
         let w = weak.clone();
@@ -1316,13 +1402,9 @@ impl App {
         let w = weak.clone();
         flyout.on_group_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_group(&id))));
         let w = weak.clone();
-        flyout.on_notice_dismissed(move |id| {
-            with_app(&w, |app| app.update(|b| b.dismiss_notice(id as u64)))
-        });
+        flyout.on_notice_dismissed(move |id| with_app(&w, |app| app.dismiss_notice(id as u64)));
         let w = weak.clone();
-        flyout.on_notices_dismissed_all(move || {
-            with_app(&w, |app| app.update(|b| b.dismiss_all_notices()))
-        });
+        flyout.on_notices_dismissed_all(move || with_app(&w, App::dismiss_all_notices));
         let w = weak.clone();
         flyout.on_notice_guide_requested(move |id| {
             with_app(&w, |app| {
@@ -2228,7 +2310,6 @@ fn availability(a: ui_model::Availability) -> Availability {
         ui_model::Availability::NeedsCode => Availability::NeedsCode,
         ui_model::Availability::Pairing => Availability::Pairing,
         ui_model::Availability::WaitingToPair => Availability::WaitingToPair,
-        ui_model::Availability::PasswordNotYet => Availability::PasswordNotYet,
         ui_model::Availability::PairingNotYet => Availability::PairingNotYet,
         ui_model::Availability::AirPlay2NotYet => Availability::Airplay2NotYet,
         ui_model::Availability::Unsupported => Availability::Unsupported,
@@ -2242,7 +2323,7 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::ConnectionLost => AirPlayProblem::ConnectionLost,
         P::Busy => AirPlayProblem::Busy,
         P::Refused => AirPlayProblem::Refused,
-        P::PasswordNotYet => AirPlayProblem::PasswordNotYet,
+        P::NeedsPassword => AirPlayProblem::NeedsPassword,
         P::NeedsPin => AirPlayProblem::NeedsPin,
         P::PairingFailed => AirPlayProblem::PairingFailed,
         P::PairingNotYet => AirPlayProblem::PairingNotYet,
@@ -2433,6 +2514,11 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             strings.invoke_notice_pairings_kept_aside(file.as_str().into())
         }
         NoticeMessage::NoSoundOutput => strings.get_notice_no_sound_output(),
+        NoticeMessage::LaunchAtLoginFailed => strings.get_notice_launch_at_login_failed(),
+        NoticeMessage::LaunchAtLoginNotRemoved => strings.get_notice_launch_at_login_not_removed(),
+        NoticeMessage::LaunchAtLoginOffInSettings => {
+            strings.get_notice_launch_at_login_off_in_settings()
+        }
         NoticeMessage::HeardTwice {
             source,
             mute,
@@ -2477,6 +2563,9 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::SettingsKeptAside { .. } => (NoticeKind::SettingsKeptAside, ""),
         NoticeMessage::PairingsKeptAside { .. } => (NoticeKind::PairingsKeptAside, ""),
         NoticeMessage::NoSoundOutput => (NoticeKind::NoSoundOutput, ""),
+        NoticeMessage::LaunchAtLoginFailed => (NoticeKind::LaunchAtLoginFailed, ""),
+        NoticeMessage::LaunchAtLoginNotRemoved => (NoticeKind::LaunchAtLoginNotRemoved, ""),
+        NoticeMessage::LaunchAtLoginOffInSettings => (NoticeKind::LaunchAtLoginOffInSettings, ""),
         NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
     };
     strings.invoke_notice_title(kind, name.into())
@@ -2557,6 +2646,42 @@ mod tests {
         // App has it, which is fine.
         let _ = slint::platform::set_platform(Box::new(Headless));
         App::new(Box::new(backend), DebugLog::new(None)).expect("the windows build headless")
+    }
+
+    #[test]
+    fn launch_at_sign_in_follows_the_file_menu_and_its_notice_is_dismissed_here() {
+        let app = app_over(MockBackend::new());
+        let store = launch_at_login::MemoryStore::default();
+        *app.login.borrow_mut() = LaunchAtLogin::new(
+            Box::new(store.clone()),
+            Some(std::path::PathBuf::from(r"C:\Apps\audiosync.exe")),
+        );
+        app.refresh();
+        assert!(!app.main.get_launch_at_login());
+
+        app.main.invoke_launch_at_login_toggled(true);
+        assert!(app.main.get_launch_at_login());
+        assert!(store.entry().run.is_some());
+
+        // Task Manager turns it off; the next reading shows it.
+        store.entry().approval = Some(vec![3; 12]);
+        app.reread_launch_at_login();
+        assert!(!app.main.get_launch_at_login());
+
+        store.entry().refuse_writes = true;
+        store.entry().approval = None;
+        store.entry().run = None;
+        app.reread_launch_at_login();
+        app.main.invoke_launch_at_login_toggled(true);
+        let notices = app.snapshot().notices;
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].message, NoticeMessage::LaunchAtLoginFailed);
+        assert_eq!(app.main.get_notices().row_count(), 1);
+
+        app.main
+            .invoke_notice_dismissed(launch_at_login::NOTICE_ID as i32);
+        assert!(app.snapshot().notices.is_empty());
+        assert_eq!(app.main.get_notices().row_count(), 0);
     }
 
     #[test]
@@ -3698,6 +3823,53 @@ mod tests {
         assert!(!app.pin_preview.get(), "through its Cancel path");
     }
 
+    /// The App over the example data with Kitchen asking for its password.
+    fn app_asking_password(wrong: bool) -> Rc<App> {
+        let mut backend = MockBackend::new();
+        backend.ask_password("airplay:kitchen", wrong);
+        app_over(backend)
+    }
+
+    #[test]
+    fn the_password_dialog_pairs_with_what_was_typed() {
+        let app = app_asking_password(false);
+        let window = app.password_dialog.window();
+        assert!(window.is_visible(), "it opens with the prompt");
+        assert!(!app.password_dialog.get_wrong());
+        press(window, Key::Return);
+        assert!(window.is_visible(), "Enter waits for a password");
+        for key in ["p", "w"] {
+            press(window, key);
+        }
+        press(window, Key::Return);
+        assert!(!window.is_visible());
+        assert_eq!(
+            app.password_dialog.get_password(),
+            "",
+            "not kept in the field"
+        );
+        let state = app.snapshot();
+        assert_eq!(state.password_prompt, None);
+        assert!(state.speaker("airplay:kitchen").unwrap().enabled);
+    }
+
+    #[test]
+    fn escape_on_the_password_dialog_cancels_from_the_field_or_a_button() {
+        for tabs in [0, 2] {
+            let app = app_asking_password(true);
+            let window = app.password_dialog.window();
+            assert!(app.password_dialog.get_wrong(), "says it was turned down");
+            press(window, "x");
+            tab(window, tabs);
+            press(window, Key::Escape);
+            assert!(!window.is_visible(), "Escape closed it ({tabs} tabs)");
+            assert_eq!(app.password_dialog.get_password(), "");
+            let state = app.snapshot();
+            assert_eq!(state.password_prompt, None);
+            assert!(!state.speaker("airplay:kitchen").unwrap().enabled);
+        }
+    }
+
     #[test]
     fn escape_on_the_group_dialog_buttons_cancels() {
         let app = app_over(MockBackend::new());
@@ -3827,6 +3999,9 @@ mod tests {
             NoticeMessage::SettingsKeptAside { file: "f".into() },
             NoticeMessage::PairingsKeptAside { file: "f".into() },
             NoticeMessage::NoSoundOutput,
+            NoticeMessage::LaunchAtLoginFailed,
+            NoticeMessage::LaunchAtLoginNotRemoved,
+            NoticeMessage::LaunchAtLoginOffInSettings,
         ];
         for message in messages {
             let label = dismiss_label(message.clone());
