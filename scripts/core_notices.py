@@ -56,6 +56,7 @@ def build(notices, targets):
             compiled[package["id"]] = package
     local, crates = notices.split_packages(list(compiled.values()))
     expressions, supplements = notices.check_packages(policy, local, crates)
+    own = notices.own_license(local)
 
     out = notices.Notices()
     out.add(
@@ -66,7 +67,7 @@ def build(notices, targets):
         "",
         "The app binary contains AudioSync's audio core (core/), a Rust library,",
         "with AudioSync's own AirPlay sender (airplay/), both AudioSync's own",
-        "code (MIT), compiled together with the crates below. Each is listed",
+        "code ({}), compiled together with the crates below. Each is listed".format(own),
         "with its license; the full license and notice texts follow. The Rust",
         "standard library's notices are in the files next to this one.",
         "",
@@ -77,8 +78,8 @@ def build(notices, targets):
 
     out.heading("1. AudioSync")
     core = notices.find_package(local, ROOT_PACKAGE)
-    out.add("", "AudioSync's own code, MIT License: {}.".format(
-        ", ".join("{} {}".format(p["name"], p["version"]) for p in sorted(local, key=lambda p: p["name"]))),
+    out.add("", "AudioSync's own code, {}: {}.".format(
+        own, ", ".join("{} {}".format(p["name"], p["version"]) for p in sorted(local, key=lambda p: p["name"]))),
         core.get("repository") or "")
     out.text("LICENSE", notices.read_text(os.path.join(REPO, "LICENSE")), "AudioSync")
 

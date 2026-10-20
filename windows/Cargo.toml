@@ -3,7 +3,7 @@ name = "audiosync-windows"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
-license = "MIT"
+license = "GPL-3.0-or-later"
 description = "AudioSync for Windows 11 (in development)."
 repository = "https://github.com/yassersutojoyo/audiosync"
 publish = false
@@ -17,8 +17,8 @@ audiosync-core = { path = "../core" }
 # AudioSync's own AirPlay sender: discovery, one session per speaker and the
 # stream they share, on the crate's own threads.
 audiosync-airplay = { path = "../airplay" }
-# Used under the Slint Royalty-free Desktop, Mobile, and Web Applications
-# License 2.0, checked for the 1.18 line; see THIRD_PARTY_NOTICES.md.
+# Used under GPL-3.0-only (Slint is also offered under royalty-free and
+# commercial licenses), checked for the 1.18 line; see THIRD_PARTY_NOTICES.md.
 # unstable-winit-030: the winit window behind a Slint window, to focus it and
 # to close the tray flyout when it loses focus. Pinned to the 1.18 line, like
 # Slint itself.

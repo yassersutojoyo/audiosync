@@ -2,8 +2,8 @@
 #
 # `cargo deny check licenses` (run from airplay/, and in CI) fails when any
 # crate in the build graph, development dependencies included, is under a
-# license that is not on this list. The sender is MIT; only permissive
-# licenses may enter it. The list mirrors core/deny.toml.
+# license that is not on this list. The sender itself is GPL-3.0-or-later;
+# third-party crates must be permissive. The list mirrors core/deny.toml.
 
 [graph]
 all-features = true
@@ -19,7 +19,11 @@ allow = [
     "Unicode-3.0",
 ]
 confidence-threshold = 0.93
-exceptions = []
+exceptions = [
+    # AudioSync's own code is GPL-3.0-or-later; the exception names only our
+    # own crates, so no third-party crate may bring a GPL license in.
+    { crate = "audiosync-airplay", allow = ["GPL-3.0-or-later"] },
+]
 # Test and build tools are held to the same list as the library.
 include-dev = true
 include-build = true

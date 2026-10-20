@@ -3,13 +3,14 @@ import AppKit
 /// The app's menu bar menus. Items without a target go up the responder chain,
 /// which ends at the app delegate, so AppDelegate's actions and its
 /// `validateMenuItem` handle the AudioSync-specific ones.
+@MainActor
 enum MainMenu {
 
     static func make(text t: UIStrings) -> NSMenu {
         let main = NSMenu()
 
         let app = submenu(of: main, title: t.appName)
-        app.addItem(item(t.menuAbout, #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
+        app.addItem(AboutPanel.menuItem(text: t))
         app.addItem(.separator())
         let appearance = NSMenu(title: t.appearance)
         for choice in AppAppearance.allCases {

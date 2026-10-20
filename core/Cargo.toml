@@ -3,7 +3,7 @@ name = "audiosync-core"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-license = "MIT"
+license = "GPL-3.0-or-later"
 description = "Platform-independent audio core of AudioSync: delay ring buffer, drift correction, resampling, equalizer, volume and sync policy, plus the C interface of AudioSync's own AirPlay sender."
 repository = "https://github.com/yassersutojoyo/audiosync"
 publish = false
@@ -20,7 +20,7 @@ crate-type = ["rlib", "staticlib"]
 ffi-panic-probe = []
 
 [dependencies]
-# AudioSync's own AirPlay sender (airplay/, MIT), reached by the macOS app
+# AudioSync's own AirPlay sender (airplay/), reached by the macOS app
 # through this crate's C interface (src/ffi/airplay.rs): the app links one
 # Rust static library, so the sender comes in through the core's. Its
 # third-party crates are listed in THIRD_PARTY_NOTICES.md.

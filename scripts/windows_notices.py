@@ -4,8 +4,9 @@
     python3 -I scripts/windows_notices.py <target triple> [--output <file>]
 
 The file covers everything compiled into audiosync.exe for that target:
-AudioSync's own MIT code (the app, audiosync-core and audiosync-airplay), the
-Rust standard library, Slint (used under its royalty-free license), the fonts
+AudioSync's own code (the app, audiosync-core and audiosync-airplay, under the
+license their Cargo.toml declares), the Rust standard library, Slint (used
+under GPL-3.0-only), the fonts
 and icons the interface embeds, and every crate in the app's normal dependency
 graph, read from windows/Cargo.lock. For each crate it gives the name, version, license
 expression and repository, then the full text of every license or notice file
@@ -53,8 +54,8 @@ WINDOWS = os.path.join(REPO, "windows")
 ROOT_PACKAGE = "audiosync-windows"
 NOTICE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT")
 # Slint's crates are "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR
-# LicenseRef-Slint-Software-3.0"; AudioSync takes the royalty-free option.
-SLINT_ELECTED = "LicenseRef-Slint-Royalty-free-2.0"
+# LicenseRef-Slint-Software-3.0"; public builds take the GPL-3.0-only option.
+SLINT_ELECTED = "GPL-3.0-only"
 RULE = "=" * 78
 THIN_RULE = "-" * 78
 
@@ -682,10 +683,21 @@ def dependency_packages(target):
     return compiled, [packages[pid] for pid in reachable]
 
 
+def is_slint(package):
+    """Whether a package is one of Slint's crates, the only ones whose
+    license choice is made here (SLINT_ELECTED)."""
+    name = package["name"]
+    return name == "slint" or name.startswith(("slint-", "i-slint-"))
+
+
+def slint_elected(package, expression):
+    return is_slint(package) and SLINT_ELECTED in expression.ids
+
+
 def notice_files(package, expression):
     """(label, path) of every license or notice file in a package."""
     directory = os.path.dirname(package["manifest_path"])
-    rejected = set(expression.ids) - {SLINT_ELECTED} if SLINT_ELECTED in expression.ids else set()
+    rejected = set(expression.ids) - {SLINT_ELECTED} if slint_elected(package, expression) else set()
     found = []
     for name in sorted(os.listdir(directory), key=str.lower):
         if not name.upper().startswith(NOTICE_PREFIXES):
@@ -912,15 +924,27 @@ def split_packages(packages):
     return local, crates
 
 
+def own_license(local):
+    """AudioSync's own license: the expression the root package's Cargo.toml
+    declares (ROOT_PACKAGE), the one place it is written down."""
+    license = find_package(local, ROOT_PACKAGE).get("license")
+    if not license:
+        raise NoticeError("{} declares no license in its Cargo.toml".format(ROOT_PACKAGE))
+    return license
+
+
 def check_packages(policy, local, crates):
     """Each crate's parsed license expression and the supplements its
     sources need, by package ID. Raises NoticeError listing every problem: an
-    own package that isn't MIT, a license deny.toml doesn't cover, or code from
-    another project whose notice is missing."""
+    own package whose license differs from the root package's, a license
+    deny.toml doesn't cover, or code from another project whose notice is
+    missing."""
     problems = []
+    own = own_license(local)
     for package in local:
-        if package.get("license") != "MIT":
-            problems.append("{} {} (in this repository) isn't MIT-licensed".format(package["name"], package["version"]))
+        if package.get("license") != own:
+            problems.append("{} {} (in this repository) isn't licensed {}, like {}".format(
+                package["name"], package["version"], own, ROOT_PACKAGE))
     expressions, supplements = {}, {}
     for package in crates:
         if not package.get("license"):
@@ -955,7 +979,7 @@ def write_crates(out, policy, crates, expressions, supplements):
     for package in crates:
         expression = expressions[package["id"]]
         license_line = package["license"]
-        if SLINT_ELECTED in expression.ids:
+        if slint_elected(package, expression):
             license_line += " (used under {})".format(SLINT_ELECTED)
         out.add("", THIN_RULE, "{} {}".format(package["name"], package["version"]),
                 "License: {}".format(license_line),
@@ -986,7 +1010,10 @@ def build(target):
     expressions, supplements = check_packages(policy, local, crates)
 
     slint = find_package(crates, "slint")
-    slint_license = os.path.join(os.path.dirname(slint["manifest_path"]), "LICENSES", SLINT_ELECTED + ".md")
+    slint_licenses = os.path.join(os.path.dirname(slint["manifest_path"]), "LICENSES")
+    slint_names = [name for name in sorted(os.listdir(slint_licenses))
+                   if os.path.splitext(name)[0] == SLINT_ELECTED] if os.path.isdir(slint_licenses) else []
+    slint_license = os.path.join(slint_licenses, slint_names[0] if slint_names else SLINT_ELECTED + ".txt")
     # The logo's license text ships with Slint's compiler (a build-time crate).
     compiler = find_package(graph, "i-slint-compiler")
     logo_license = os.path.join(os.path.dirname(compiler["manifest_path"]), "LICENSES", "CC-BY-ND-4.0.txt")
@@ -998,6 +1025,7 @@ def build(target):
     poppins = any("brand/fonts/Poppins" in read_text(os.path.join(WINDOWS, "ui", name))
                   for name in sorted(os.listdir(os.path.join(WINDOWS, "ui"))) if name.endswith(".slint"))
 
+    own = own_license(local)
     out = Notices()
     out.add(
         "AudioSync for Windows: third-party notices",
@@ -1005,7 +1033,7 @@ def build(target):
         "Target: {}".format(target),
         "Generated from windows/Cargo.lock by scripts/windows_notices.py.",
         "",
-        "audiosync.exe is AudioSync's own code (MIT) compiled together with the",
+        "audiosync.exe is AudioSync's own code ({}) compiled together with the".format(own),
         "components below. Each is listed with its license; the full license and",
         "notice texts follow. The crates are those compiled into the executable",
         "for this target; build tools and procedural macros are left out.",
@@ -1020,8 +1048,8 @@ def build(target):
 
     out.heading("1. AudioSync")
     app = find_package(local, ROOT_PACKAGE)
-    out.add("", "AudioSync's own code, MIT License: {}.".format(
-        ", ".join("{} {}".format(p["name"], p["version"]) for p in sorted(local, key=lambda p: p["name"]))),
+    out.add("", "AudioSync's own code, {}: {}.".format(
+        own, ", ".join("{} {}".format(p["name"], p["version"]) for p in sorted(local, key=lambda p: p["name"]))),
         app.get("repository") or "")
     out.text("LICENSE", read_text(os.path.join(REPO, "LICENSE")), "AudioSync")
 
@@ -1036,14 +1064,13 @@ def build(target):
     out.heading("3. Slint")
     out.add("", "Slint {}, (c) SixtyFPS GmbH, the user interface toolkit. Its crates are".format(slint["version"]),
             "offered under GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR",
-            "LicenseRef-Slint-Software-3.0; AudioSync uses them under the Slint",
-            "Royalty-free Desktop, Mobile, and Web Applications License 2.0.",
+            "LicenseRef-Slint-Software-3.0; public builds of AudioSync use them",
+            "under the GNU General Public License, version 3 (GPL-3.0-only).",
             "",
-            "Attribution: the About dialog (Help > About AudioSync, from the app's",
-            "top-level menu) shows Slint's AboutSlint widget, as section 2 of the",
-            "license asks.",
+            "The About dialog (Help > About AudioSync, from the app's top-level",
+            "menu) also shows Slint's AboutSlint widget.",
             "https://slint.dev")
-    out.text("LICENSES/{}.md".format(SLINT_ELECTED), read_text(slint_license),
+    out.text("LICENSES/{}".format(os.path.basename(slint_license)), read_text(slint_license),
              "the Slint section")
 
     out.heading("4. Fonts and icons")

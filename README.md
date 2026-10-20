@@ -18,7 +18,7 @@
   <a href="https://github.com/yassersutojoyo/audiosync/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/yassersutojoyo/audiosync/actions/workflows/ci.yml/badge.svg?branch=main"></a>
   <a href="https://github.com/yassersutojoyo/audiosync/actions/workflows/windows.yml"><img alt="Windows CI" src="https://github.com/yassersutojoyo/audiosync/actions/workflows/windows.yml/badge.svg?branch=main"></a>
   <img alt="macOS 15+" src="https://img.shields.io/badge/macOS-15%2B-black?logo=apple">
-  <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue">
+  <img alt="GPL-3.0-or-later license" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue">
   <img alt="Early alpha" src="https://img.shields.io/badge/status-early%20alpha-E3A21A">
 </p>
 
@@ -31,7 +31,7 @@
 
 I built this because I wanted my Mac's audio on every speaker in the house at once. The catch is that a HomePod always plays a little late (AirPlay buffers about two seconds), so a HomePod and a desk speaker playing the same song sound like an echo. AudioSync captures the audio once, streams it to your AirPlay speakers, and plays a delayed copy on each local output, every one with its own offset, until the whole room sounds like one speaker.
 
-It's a small Mac app written in Swift, with a main window and a menu bar panel, free and MIT-licensed. It's an early alpha, so expect rough edges. A Windows 11 version is on the way too ([more below](#coming-to-windows)).
+It's a small Mac app written in Swift, with a main window and a menu bar panel, free and open source under the GPL. It's an early alpha, so expect rough edges. A Windows 11 version is on the way too ([more below](#coming-to-windows)).
 
 ## What's in the download, and what's next
 
@@ -155,11 +155,44 @@ An Apple TV that asks for a PIN pairs once, with the PIN it shows, and a speaker
 
 ## License and credits
 
-AudioSync's own code is under the [MIT License](LICENSE). What the app bundles from others keeps its own license; [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists everything.
+Copyright (c) 2026 Yasser Sutojoyo Kusumo
 
-- AudioSync started as a fork of [HomeSounds Sync](https://github.com/techjuicelab/homesounds-sync) by TechJuicelab. The original copyright notice is kept in `LICENSE`.
+AudioSync is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version (GPL-3.0-or-later). It comes with no warranty. The full text is in [`LICENSE`](LICENSE).
+
+What the app bundles from others keeps its own license; [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists everything.
+
+- AudioSync started as a fork of [HomeSounds Sync](https://github.com/techjuicelab/homesounds-sync) by TechJuicelab, released under the MIT License. Its original notice is kept below.
 - [Poppins](https://github.com/itfoundry/Poppins) (SIL Open Font License 1.1) is the wordmark typeface, bundled in the app.
 
 AudioSync is an independent project. It is not affiliated with, endorsed by, or based on code from Rogue Amoeba; Airfoil is a trademark of Rogue Amoeba Software, LLC, mentioned only to say what AudioSync is an alternative to. Apple, AirPlay and HomePod are trademarks of Apple Inc. The Bluetooth® word mark and logos are registered trademarks owned by Bluetooth SIG, Inc. AudioSync is not affiliated with or endorsed by Apple or Bluetooth SIG.
+
+<details>
+<summary>The original HomeSounds Sync notice (MIT License)</summary>
+
+```
+MIT License
+
+Copyright (c) 2026 TechJuicelab (original HomeSounds Sync)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+</details>
 
 Want to build it, hack on it or report something? See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md), [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`SECURITY.md`](SECURITY.md).
