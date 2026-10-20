@@ -130,6 +130,9 @@ final class OutputRenderer: FadingOutput {
     var slowedFrames: Int64 { target?.renderer.slowedFrames ?? 0 }
     var spedFrames: Int64 { target?.renderer.spedFrames ?? 0 }
     var shortfallFrames: Int64 { target?.renderer.shortfallFrames ?? 0 }
+    /// How late callbacks came against the earliest ones (S209).
+    var lateMaxMs: Double { target?.renderer.lateMaxMs ?? 0 }
+    var lateCallbacks: Int64 { target?.renderer.lateCallbacks ?? 0 }
 
     /// Where the fade was at the end of the latest callback.
     var fadeState: CoreRenderer.FadeState { target?.renderer.fadeState ?? .closed }

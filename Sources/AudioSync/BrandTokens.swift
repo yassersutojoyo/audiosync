@@ -45,6 +45,9 @@ enum BrandTokens {
         static let separator = BrandRGB(red: 217 / 255, green: 222 / 255, blue: 221 / 255)
         /// Keyboard focus ring (3:1 against the surface and the background).
         static let focus = BrandRGB(red: 20 / 255, green: 113 / 255, blue: 103 / 255)
+        /// A field's out-of-range outline and the small text that explains it: 5.66:1 on white,
+        /// 6.97:1 on #2B2B2B.
+        static let errorText = BrandRGB(red: 196 / 255, green: 43 / 255, blue: 28 / 255)
     }
 
     /// Colors in dark appearance.
@@ -80,6 +83,9 @@ enum BrandTokens {
         static let separator = BrandRGB(red: 61 / 255, green: 61 / 255, blue: 61 / 255)
         /// Keyboard focus ring (3:1 against the surface and the background).
         static let focus = BrandRGB(red: 99 / 255, green: 218 / 255, blue: 194 / 255)
+        /// A field's out-of-range outline and the small text that explains it: 5.66:1 on white,
+        /// 6.97:1 on #2B2B2B.
+        static let errorText = BrandRGB(red: 255 / 255, green: 153 / 255, blue: 164 / 255)
     }
 
     enum Opacity {
