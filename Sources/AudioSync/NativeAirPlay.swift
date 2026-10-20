@@ -71,7 +71,7 @@ final class NativeAirPlay {
                 // Gone from the sender's list meanwhile: the next reconcile decides again.
                 DispatchQueue.main.async {
                     self.model.removed(id)
-                    DBG.log("[AudioSync] native AirPlay: \(id) could not be added; it is no longer listed")
+                    DebugTrace.log("[AudioSync] native AirPlay: \(id) could not be added; it is no longer listed")
                 }
             }
         }
@@ -120,7 +120,7 @@ final class NativeAirPlay {
         queue.async { [weak self] in
             guard let self else { return }
             guard let jpeg = TrackMetadata.jpeg(image) else {
-                DispatchQueue.main.async { DBG.log("[AudioSync] native AirPlay: the artwork could not be made small enough") }
+                DispatchQueue.main.async { DebugTrace.log("[AudioSync] native AirPlay: the artwork could not be made small enough") }
                 return
             }
             self.nowPlaying.setArtwork(jpeg)
@@ -252,11 +252,11 @@ final class NativeAirPlay {
             ?? ASC_AIRPLAY_PAIRINGS_FAILED
         DispatchQueue.main.async {
             if let line = NativeAirPlayPairings.moveLogLine(moved) {
-                DBG.log("[AudioSync] native AirPlay: " + line)
+                DebugTrace.log("[AudioSync] native AirPlay: " + line)
             }
-            DBG.log("[AudioSync] native AirPlay: " + Self.pairingsLogLine(loaded))
+            DebugTrace.log("[AudioSync] native AirPlay: " + Self.pairingsLogLine(loaded))
             if !excluded {
-                DBG.log("[AudioSync] native AirPlay: the pairings folder couldn't be kept out of backups")
+                DebugTrace.log("[AudioSync] native AirPlay: the pairings folder couldn't be kept out of backups")
             }
         }
         asc_airplay_set_master(created, master)
@@ -287,7 +287,7 @@ final class NativeAirPlay {
                                         raw.bindMemory(to: UInt8.self).baseAddress, raw.count)
         }
         if !taken {
-            DispatchQueue.main.async { DBG.log("[AudioSync] native AirPlay: the sender turned the track info down") }
+            DispatchQueue.main.async { DebugTrace.log("[AudioSync] native AirPlay: the sender turned the track info down") }
         }
     }
 

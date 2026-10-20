@@ -37,7 +37,7 @@ extension AppDelegate {
             onEvent: { [weak self] event, outcome in self?.nativeSpeakerEvent(event, outcome) })
         nativeAirPlay = native   // reconciles meanwhile don't start a second one
         native.start(master: masterVolume) { [weak self] started in
-            DBG.log("[AudioSync] native AirPlay: "
+            DebugTrace.log("[AudioSync] native AirPlay: "
                 + (started ? "the sender and its discovery started" : "the sender or its discovery could not start"))
             self?.nativeStartFinished(native, started: started)
         }
@@ -66,7 +66,7 @@ extension AppDelegate {
     }
 
     private func nativeReceiverChanged(_ change: NativeReceiverChange) {
-        DBG.log(change.logLine)
+        DebugTrace.log(change.logLine)
         switch change {
         case .appeared(let receiver), .changed(let receiver): migrateSavedSpeakerIDs(to: receiver)
         case .gone: break
@@ -84,7 +84,7 @@ extension AppDelegate {
         let renames = SpeakerIDMigration.renames(saved, receivers: [receiver.id])
         guard !renames.isEmpty else { return }
         for old in renames.keys.sorted() {
-            DBG.log("[AudioSync] native AirPlay: settings saved under the bundled engine's ID \(old) now belong to \(receiver.name) (\(receiver.id))")
+            DebugTrace.log("[AudioSync] native AirPlay: settings saved under the bundled engine's ID \(old) now belong to \(receiver.name) (\(receiver.id))")
         }
         let migrated = SpeakerIDMigration.apply(renames, to: saved)
         airplayVolume = migrated.airplayVolumes
@@ -95,7 +95,7 @@ extension AppDelegate {
 
     private func nativeSpeakerEvent(_ event: NativeSpeakerEvent, _ outcome: NativeAirPlayOutcome?) {
         let names = nativeAirPlay?.model.names ?? [:]
-        DBG.log(event.logLine { names[$0] })
+        DebugTrace.log(event.logLine { names[$0] })
         if let outcome { nativeOutcome(outcome) }
         closeWithdrawnPrompt()   // its pairing may have ended underneath
     }
@@ -164,7 +164,7 @@ extension AppDelegate {
     private func startNativePairing(_ receiver: String) {
         guard let native = nativeAirPlay else { return }
         if native.model.states[receiver] != nil { native.remove(receiver) }
-        DBG.log("[AudioSync] native AirPlay: pairing with \(nativeLabel(receiver))")
+        DebugTrace.log("[AudioSync] native AirPlay: pairing with \(nativeLabel(receiver))")
         native.startPairing(receiver) { [weak self, weak native] started in
             guard !started, let self, let native, self.nativeAirPlay === native,
                   let outcome = native.model.pairingNotStarted(receiver) else { return }
@@ -185,7 +185,7 @@ extension AppDelegate {
         case (false, false): message = text.nativePairPINMessage(name: name)
         case (false, true): message = text.nativePairWrongPINMessage(name: name)
         }
-        DBG.log("[AudioSync] native AirPlay: asking for the \(prompt.password ? "password" : "PIN") of \(nativeLabel(prompt.id))"
+        DebugTrace.log("[AudioSync] native AirPlay: asking for the \(prompt.password ? "password" : "PIN") of \(nativeLabel(prompt.id))"
             + (prompt.wrong ? " again" : ""))
         codePromptBusy = true
         let code = runCodePrompt(name: name, password: prompt.password, message: message)
@@ -203,7 +203,7 @@ extension AppDelegate {
     /// nowhere. Called after everything that can end what a prompt waits for.
     private func closeWithdrawnPrompt() {
         guard codePromptBusy, let prompt = nativeAirPlay?.model.withdrawPrompt() else { return }
-        DBG.log("[AudioSync] native AirPlay: the \(prompt.password ? "password" : "PIN") prompt for \(nativeLabel(prompt.id)) is taken back: nothing waits for it any more")
+        DebugTrace.log("[AudioSync] native AirPlay: the \(prompt.password ? "password" : "PIN") prompt for \(nativeLabel(prompt.id)) is taken back: nothing waits for it any more")
         closeCodePrompt()
     }
 
@@ -243,7 +243,7 @@ extension AppDelegate {
     /// they are, so the speakers rejoin once a new sender runs.
     private func nativeSenderFailed() {
         guard let native = nativeAirPlay else { return }
-        DBG.log("[AudioSync] native AirPlay: the sender stopped after an internal error; Retry starts a new one")
+        DebugTrace.log("[AudioSync] native AirPlay: the sender stopped after an internal error; Retry starts a new one")
         nativeAirPlay = nil
         nativeStarts.senderFailed()
         native.discard()
@@ -263,7 +263,7 @@ extension AppDelegate {
 
     /// Retry after the sender stopped: a new one starts now.
     func retryNativeAirPlay() {
-        DBG.log("[AudioSync] native AirPlay: Retry")
+        DebugTrace.log("[AudioSync] native AirPlay: Retry")
         nativeStarts.retry()
         clearNotices([Notice.airplaySender])
         reconcileNativeAirPlay()
@@ -302,12 +302,12 @@ extension AppDelegate {
         guard !plan.isEmpty else { return }
         for id in plan.remove {
             native.remove(id)
-            DBG.log("[AudioSync] native AirPlay: removed \(nativeLabel(id))")
+            DebugTrace.log("[AudioSync] native AirPlay: removed \(nativeLabel(id))")
         }
         for id in plan.add {
             let volume = airplayVolume[NativeAirPlayID.app(id)] ?? defaultVolume
             native.add(id, volume: volume)
-            DBG.log("[AudioSync] native AirPlay: added \(nativeLabel(id)) at volume \(Int(volume.rounded())), master \(Int(masterVolume.rounded()))")
+            DebugTrace.log("[AudioSync] native AirPlay: added \(nativeLabel(id)) at volume \(Int(volume.rounded())), master \(Int(masterVolume.rounded()))")
         }
         retimeLocalOutputs()
         for off in plan.turnOff {
@@ -353,7 +353,7 @@ extension AppDelegate {
     func turnOffNativeSpeaker(_ id: String, reason: NativeTurnOff, origin: StartOrigin) {
         endNativeAttempt(id)
         guard enabledAirPlay.contains(id) else { return }
-        DBG.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) turned off (\(reason))")
+        DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) turned off (\(reason))")
         enabledAirPlay.remove(id)
         notify(nativeTurnOffText(id, reason), origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
         syncNativeSpeakers()

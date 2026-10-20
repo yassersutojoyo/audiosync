@@ -40,7 +40,7 @@ final class SourceCapture {
         /// The input device went away while it was captured.
         case inputDisconnected
 
-        /// For the debug log; users see `AppText`'s wording instead.
+        /// For the debug log; users see `UIStrings`'s wording instead.
         var description: String {
             switch self {
             case .appNotRunning(let bundleID): return "app not running (\(bundleID))"
@@ -139,7 +139,7 @@ final class SourceCapture {
         sessionListeners.removeAll()
         closeCapture()
         if let sink {
-            DBG.log("[AudioSync] capture stopped: \(sink.callbacks.load(ordering: .relaxed)) callbacks, "
+            DebugTrace.log("[AudioSync] capture stopped: \(sink.callbacks.load(ordering: .relaxed)) callbacks, "
                     + "\(sink.frames.load(ordering: .relaxed)) frames, "
                     + "\(sink.silentCallbacks.load(ordering: .relaxed)) without usable channels")
         }
@@ -156,7 +156,7 @@ final class SourceCapture {
     private func startSystem() throws {
         guard let own = AudioProcesses.processObject(for: getpid()) else { throw CaptureError.ownProcessUnknown }
         try openTap(CATapDescription(stereoGlobalTapButExcludeProcesses: [own]))
-        DBG.log("[AudioSync] capture: whole system at \(sampleRate) Hz")
+        DebugTrace.log("[AudioSync] capture: whole system at \(sampleRate) Hz")
     }
 
     /// One app and the processes it is responsible for (S11). The process list
@@ -171,12 +171,12 @@ final class SourceCapture {
             // Running without an audio process yet (a browser starts its audio
             // helper once a page plays): nothing to tap until one appears.
             parts?.prepare(captureRate: sampleRate)
-            DBG.log("[AudioSync] capture: \(bundleID) has no audio process yet; waiting for one")
+            DebugTrace.log("[AudioSync] capture: \(bundleID) has no audio process yet; waiting for one")
             return
         }
         tapped = found
         try openTap(CATapDescription(stereoMixdownOfProcesses: found))
-        DBG.log("[AudioSync] capture: \(bundleID) (\(found.count) audio processes) at \(sampleRate) Hz")
+        DebugTrace.log("[AudioSync] capture: \(bundleID) (\(found.count) audio processes) at \(sampleRate) Hz")
     }
 
     /// An input device, read directly (S13, S14).
@@ -197,7 +197,7 @@ final class SourceCapture {
         do { try link.begin() } catch { link.close(); throw error }
         io = link
         watchInput(device, uid: uid)
-        DBG.log("[AudioSync] capture: input device \(uid) at \(sampleRate) Hz")
+        DebugTrace.log("[AudioSync] capture: input device \(uid) at \(sampleRate) Hz")
     }
 
     // MARK: - The tap
@@ -238,7 +238,7 @@ final class SourceCapture {
         TapObjects.configure(description)
         description.uuid = tap.uuid   // the same tap, which the aggregate device names by its UID
         let status = HAL.setTapDescription(of: tap.tap, to: description)
-        if status != noErr { DBG.log("[AudioSync] capture: the tap can't be changed in place (status \(status))") }
+        if status != noErr { DebugTrace.log("[AudioSync] capture: the tap can't be changed in place (status \(status))") }
         return status == noErr
     }
 
@@ -261,7 +261,7 @@ final class SourceCapture {
 
     private static func destroy(_ objects: TapObjects) {
         objects.destroy()
-        DBG.log("[AudioSync] capture: an earlier tap and its aggregate device destroyed")
+        DebugTrace.log("[AudioSync] capture: an earlier tap and its aggregate device destroyed")
     }
 
     /// Runs `body` on a later turn of the main queue.
@@ -280,11 +280,11 @@ final class SourceCapture {
         case .wait:
             closeCapture()
             tapped = []
-            DBG.log("[AudioSync] capture: \(bundleID) has no audio process now; waiting for one")
+            DebugTrace.log("[AudioSync] capture: \(bundleID) has no audio process now; waiting for one")
         case .lost:
             closeCapture()
             tapped = []
-            DBG.log("[AudioSync] capture: \(bundleID) is gone")
+            DebugTrace.log("[AudioSync] capture: \(bundleID) is gone")
             interrupt(.sourceLost(.appNotRunning(bundleID)))
         case .retap(let processes):
             retap(bundleID, to: processes)
@@ -309,10 +309,10 @@ final class SourceCapture {
         switch outcome {
         case .updated, .rebuilt:
             tapped = processes
-            DBG.log("[AudioSync] capture: \(bundleID) now has \(processes.count) audio processes; "
+            DebugTrace.log("[AudioSync] capture: \(bundleID) now has \(processes.count) audio processes; "
                     + (outcome == .updated ? "tap changed in place" : "tap built again"))
         case .rateChanged:
-            DBG.log("[AudioSync] capture rate changed: \(bundleID)'s new tap runs at another rate than \(sampleRate) Hz")
+            DebugTrace.log("[AudioSync] capture rate changed: \(bundleID)'s new tap runs at another rate than \(sampleRate) Hz")
             interrupt(.formatChanged)
         }
     }
@@ -322,7 +322,7 @@ final class SourceCapture {
     private func retapFailed(_ bundleID: String, _ failure: Error) {
         closeCapture()
         tapped = []
-        DBG.log("[AudioSync] capture: \(bundleID)'s new tap failed: \(failure)")
+        DebugTrace.log("[AudioSync] capture: \(bundleID)'s new tap failed: \(failure)")
         interrupt(.sourceLost(failure as? CaptureError ?? .tapNotCreated(kAudioHardwareUnspecifiedError)))
     }
 
@@ -331,7 +331,7 @@ final class SourceCapture {
         guard let tap else { return }
         let rate = CaptureRate.running(device: HAL.nominalRate(of: tap.aggregate), tap: HAL.tapRate(of: tap.tap))
         guard CaptureRate.needsRestart(current: sampleRate, reported: rate) else { return }
-        DBG.log("[AudioSync] capture rate changed: \(sampleRate) → \(rate) Hz")
+        DebugTrace.log("[AudioSync] capture rate changed: \(sampleRate) → \(rate) Hz")
         interrupt(.formatChanged)
     }
 
@@ -356,7 +356,7 @@ final class SourceCapture {
         tapListeners.add(objects.aggregate, kAudioDevicePropertyNominalSampleRate, rateChanged)
         tapListeners.add(objects.aggregate, kAudioDevicePropertyDeviceIsAlive) { [weak self] in
             guard let self, self.isCurrent(mark, tap: build), !HAL.isAlive(objects.aggregate) else { return }
-            DBG.log("[AudioSync] capture: the aggregate device died")
+            DebugTrace.log("[AudioSync] capture: the aggregate device died")
             self.closeCapture()
             self.interrupt(.sourceLost(.aggregateDeviceFailed(kAudioHardwareBadDeviceError)))
         }
@@ -366,7 +366,7 @@ final class SourceCapture {
         let mark = sessionMark
         let gone = { [weak self] in
             guard let self, self.isCurrent(mark) else { return }
-            DBG.log("[AudioSync] capture: input device \(uid) disconnected")
+            DebugTrace.log("[AudioSync] capture: input device \(uid) disconnected")
             self.closeCapture()
             self.interrupt(.sourceLost(.inputDisconnected))
         }
@@ -381,7 +381,7 @@ final class SourceCapture {
             guard let self, self.isCurrent(mark) else { return }
             let rate = CaptureRate.running(device: HAL.nominalRate(of: device))
             guard CaptureRate.needsRestart(current: self.sampleRate, reported: rate) else { return }
-            DBG.log("[AudioSync] capture rate changed: \(self.sampleRate) → \(rate) Hz")
+            DebugTrace.log("[AudioSync] capture rate changed: \(self.sampleRate) → \(rate) Hz")
             self.interrupt(.formatChanged)
         }
     }
@@ -572,7 +572,7 @@ private extension SourceCapture {
             let block: AudioObjectPropertyListenerBlock = { _, _ in handler() }
             let status = AudioObjectAddPropertyListenerBlock(object, &address, DispatchQueue.main, block)
             guard status == noErr else {
-                DBG.log("[AudioSync] capture: listener refused (selector \(selector), status \(status))")
+                DebugTrace.log("[AudioSync] capture: listener refused (selector \(selector), status \(status))")
                 return
             }
             entries.append(Entry(object: object, address: address, block: block))

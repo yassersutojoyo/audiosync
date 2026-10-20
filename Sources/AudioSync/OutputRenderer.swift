@@ -42,7 +42,7 @@ final class OutputRenderer: FadingOutput {
         /// The core could not make this output's renderer.
         case coreUnavailable
 
-        /// For the debug log; users see `AppText`'s wording instead.
+        /// For the debug log; users see `UIStrings`'s wording instead.
         var description: String {
             switch self {
             case .halUnitMissing: return "no HAL output unit is available on this Mac"
@@ -176,7 +176,7 @@ final class OutputRenderer: FadingOutput {
         latencyNs = Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
         installDeviceAliveListener(device)
         startDebugReport()
-        DBG.log("[AudioSync] output unit started on device \(device): \(started.channels) channels at "
+        DebugTrace.log("[AudioSync] output unit started on device \(device): \(started.channels) channels at "
                 + "\(started.rate) Hz from \(captureRate) Hz, delay \(delayMs) ms, "
                 + "output latency \(latencyNs / 1000) µs")
     }
@@ -417,13 +417,13 @@ final class OutputRenderer: FadingOutput {
             guard let self, self.generation == mark, !self.reportedLoss,
                   !OutputRenderer.isAlive(device) else { return }
             self.reportedLoss = true
-            DBG.log("[AudioSync] output device \(device) is no longer alive")
+            DebugTrace.log("[AudioSync] output device \(device) is no longer alive")
             self.onDeviceGone?()
         }
         var address = Self.aliveAddress
         let status = AudioObjectAddPropertyListenerBlock(device, &address, DispatchQueue.main, block)
         guard status == noErr else {
-            DBG.log("[AudioSync] output device \(device): its loss can't be watched (status \(status))")
+            DebugTrace.log("[AudioSync] output device \(device): its loss can't be watched (status \(status))")
             return
         }
         aliveListener = (device, block)
@@ -445,7 +445,7 @@ final class OutputRenderer: FadingOutput {
     /// queue of its own, never on the render thread (S131) and never on the
     /// main queue; it reads only atomics.
     private func startDebugReport() {
-        guard DBG.enabled else { return }
+        guard DebugTrace.enabled else { return }
         var lastFrames = framesRendered.load(ordering: .relaxed)
         var lastTime = DispatchTime.now().uptimeNanoseconds
         let queue = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.output-report", qos: .utility)
@@ -462,7 +462,7 @@ final class OutputRenderer: FadingOutput {
             guard rendered > 0, seconds > 0 else { return }
             let perSecond = Int((Double(rendered) / seconds).rounded())
             let delay = self.delayFrames.load(ordering: .relaxed)
-            DBG.log("[AudioSync] output rendering: ~\(perSecond) frames/s, delay=\(delay)")
+            DebugTrace.log("[AudioSync] output rendering: ~\(perSecond) frames/s, delay=\(delay)")
         }
         timer.resume()
         debugTimer = timer

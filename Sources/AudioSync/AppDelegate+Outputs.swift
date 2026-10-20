@@ -119,7 +119,7 @@ extension AppDelegate {
             engine.setDelay(uid: uid, ms: holdBack)
             localHoldBacks[uid] = holdBack
         }
-        DBG.log("[AudioSync] local delays re-timed: "
+        DebugTrace.log("[AudioSync] local delays re-timed: "
             + calls.sorted(by: { $0.key < $1.key }).map { "\($0.key) \(Int($0.value.rounded())) ms" }
                 .joined(separator: ", "))
     }

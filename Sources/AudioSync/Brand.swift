@@ -63,7 +63,7 @@ struct Wordmark: View {
             // wordmark lines up with the text around it like a system font does.
             .padding(.top, -0.3 * size)
             .padding(.bottom, -0.08 * size)
-            .accessibilityLabel(AppText().appName)
+            .accessibilityLabel(UIStrings().appName)
     }
 
     /// The logo's lettering, drawn as artwork rather than translated text.

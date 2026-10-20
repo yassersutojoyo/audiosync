@@ -117,7 +117,7 @@ struct MainView: View {
 
     // MARK: Header
 
-    private func header(_ t: AppText) -> some View {
+    private func header(_ t: UIStrings) -> some View {
         HStack(spacing: 12) {
             BrandMark()
                 .fill(model.running ? Brand.logo : Color.secondary)
@@ -136,7 +136,7 @@ struct MainView: View {
         }
     }
 
-    private func gearMenu(_ t: AppText) -> some View {
+    private func gearMenu(_ t: UIStrings) -> some View {
         Menu {
             Button(t.newGroup) { model.actions.newGroup() }
             Button(t.refreshDevices) { model.actions.refreshDevices() }
@@ -167,7 +167,7 @@ struct MainView: View {
 
     // MARK: Left column
 
-    private func sourceCard(_ t: AppText) -> some View {
+    private func sourceCard(_ t: UIStrings) -> some View {
         Card {
             VStack(alignment: .leading, spacing: 8) {
                 SectionTitle(t.sourceLabel)
@@ -176,7 +176,7 @@ struct MainView: View {
         }
     }
 
-    private func nowPlayingCard(_ track: NowPlayingMonitor.Track, _ t: AppText) -> some View {
+    private func nowPlayingCard(_ track: NowPlayingMonitor.Track, _ t: UIStrings) -> some View {
         Card {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
@@ -224,7 +224,7 @@ struct MainView: View {
         .help(label)
     }
 
-    private func volumeCard(_ t: AppText) -> some View {
+    private func volumeCard(_ t: UIStrings) -> some View {
         Card {
             VStack(alignment: .leading, spacing: 8) {
                 SectionTitle(t.masterVolumeTitle)
@@ -248,7 +248,7 @@ struct MainView: View {
         }
     }
 
-    private func equalizerCard(_ t: AppText) -> some View {
+    private func equalizerCard(_ t: UIStrings) -> some View {
         Button { model.actions.openEqualizer() } label: {
             Card {
                 HStack(spacing: 10) {
@@ -278,7 +278,7 @@ struct MainView: View {
 
     // MARK: Right column
 
-    private func groupsSection(_ t: AppText) -> some View {
+    private func groupsSection(_ t: UIStrings) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             SectionTitle(t.groups).padding(.leading, 4)
             Card(padding: 4) {
@@ -353,7 +353,7 @@ struct MainView: View {
 /// and macOS doesn't say so.
 private struct LocalNetworkHintView: View {
     let message: String
-    let text: AppText
+    let text: UIStrings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -546,7 +546,7 @@ struct SpeakerRow: View {
         .contextMenu { autoConnectToggle(t) }
     }
 
-    private func delayButton(_ ms: Double, _ t: AppText) -> some View {
+    private func delayButton(_ ms: Double, _ t: UIStrings) -> some View {
         Button {
             withAnimation(.easeInOut(duration: 0.15)) {
                 if showSync { model.expandedSync.remove(speaker.id) }
@@ -568,7 +568,7 @@ struct SpeakerRow: View {
         .accessibilityHint(t.syncAdjust)
     }
 
-    private func optionsMenu(_ t: AppText) -> some View {
+    private func optionsMenu(_ t: UIStrings) -> some View {
         Menu { autoConnectToggle(t) } label: {
             Image(systemName: "ellipsis.circle")
         }
@@ -580,7 +580,7 @@ struct SpeakerRow: View {
         .help(t.speakerOptions(name: speaker.name))
     }
 
-    private func autoConnectToggle(_ t: AppText) -> some View {
+    private func autoConnectToggle(_ t: UIStrings) -> some View {
         Toggle(t.autoConnect, isOn: Binding(get: { speaker.autoConnect },
                                             set: { model.actions.setAutoConnect(speaker.key, $0) }))
     }
@@ -665,7 +665,7 @@ struct SyncControls: View {
     let ms: Double
     /// The field's VoiceOver label.
     let label: String
-    let text: AppText
+    let text: UIStrings
     @ObservedObject var draft: SyncDraft
     let apply: (Double) -> Void
     @FocusState private var fieldFocused: Bool

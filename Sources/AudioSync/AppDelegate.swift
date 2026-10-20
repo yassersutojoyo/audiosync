@@ -45,7 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// The own volume and mute of the local outputs that are on (`+DeviceVolume`).
     private(set) lazy var deviceVolumes = makeDeviceVolumes()
     /// Every user-facing text.
-    let text = AppText()
+    let text = UIStrings()
     /// What the main window, the menu bar panel and the menu bar icon render.
     let appModel = AppModel()
 
@@ -220,14 +220,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         else { return }
         localOffsetMs = migration.offsets
         airPlayDelay = AirPlayDelay(adjustmentMs: migration.nativeAdjustmentMs)
-        DBG.log("[AudioSync] delays migrated to offsets relative to \(reference ?? "no reference"): "
+        DebugTrace.log("[AudioSync] delays migrated to offsets relative to \(reference ?? "no reference"): "
             + "\(migration.offsets.count) offset(s), AirPlay adjustment \(Int(migration.nativeAdjustmentMs)) ms")
     }
 
     // MARK: - Launch
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        DBG.beginLaunchLog()   // each launch starts a fresh debug log (S170)
+        DebugTrace.beginLaunchLog()   // each launch starts a fresh debug log (S170)
         appearance.apply()   // before any window or alert exists
         // Every window stands on its own: no tab items in the menus, and the
         // Equalizer and the Guide never open as tabs of the main window.
@@ -236,9 +236,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let loginItem = Self.launchedAsLoginItem()
-        DBG.log("[AudioSync] launched\(loginItem ? " at login" : ""); audio engine: the Rust core")
+        DebugTrace.log("[AudioSync] launched\(loginItem ? " at login" : ""); audio engine: the Rust core")
         SettingsStore.standard.retiredChoiceNotes(environment: ProcessInfo.processInfo.environment)
-            .forEach { DBG.log($0) }
+            .forEach { DebugTrace.log($0) }
         AudioSyncCore.logVersion()   // which Rust core this build carries
 
         startUpdater()   // before the menus, which offer Check for Updates… only with an updater
@@ -282,13 +282,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         engine.onOutputGone = { lostUID in
             // The speaker stays on; a reconcile attaches it again once its
             // device is listed again (S68, EC1).
-            DBG.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
+            DebugTrace.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
         }
         engine.onInterrupted = { [weak self] interruption in
             guard let self else { return }
             switch interruption {
             case .formatChanged:
-                DBG.log("[AudioSync] capture rate changed")
+                DebugTrace.log("[AudioSync] capture rate changed")
                 // The engine has already stopped the session: rebuild it at
                 // the new rate, with the speakers and the AirPlay selection
                 // as they are (S20, EC4).
@@ -296,14 +296,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     startEngine(origin: .automatic)
                 }
             case .sourceLost(let error):
-                DBG.log("[AudioSync] capture lost: \(error)")
+                DebugTrace.log("[AudioSync] capture lost: \(error)")
                 // A notice, never a modal alert: nobody clicked anything (S21).
                 stopEngine()
                 postNotice(text.sourceStopped(error), subject: Notice.source)
             }
         }
         localNetworkProbe.onChange = { [weak self] access in
-            DBG.log("[AudioSync] Local Network access: \(access)")
+            DebugTrace.log("[AudioSync] Local Network access: \(access)")
             self?.pushModel()
         }
     }
@@ -345,7 +345,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func appQuit(bundleID: String?) {
         if let bundleID,
            AppLifecycle.endsSession(source: audioSource, quitBundleID: bundleID, streaming: engine.isRunning) {
-            DBG.log("[AudioSync] source app quit: \(bundleID)")
+            DebugTrace.log("[AudioSync] source app quit: \(bundleID)")
             stopEngine()
             postNotice(text.sourceTerminated(name: SourceApps.name(for: bundleID)), subject: Notice.source)
         }
@@ -362,7 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                                          DispatchQueue.main) { [weak self] _, _ in
             self?.devicesChanged()
         }
-        if status != noErr { DBG.log("[AudioSync] device list listener not added: \(status)") }
+        if status != noErr { DebugTrace.log("[AudioSync] device list listener not added: \(status)") }
     }
 
     /// Devices change in bursts (a dock, the capture's own aggregate device):
@@ -383,7 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let center = DistributedNotificationCenter.default()
         observers.append(center.addObserver(forName: Self.showRequest, object: nil, queue: .main) { [weak self] _ in
             guard AppLifecycle.answersSecondLaunch(exiting: AppDelegate.exiting.load(ordering: .relaxed)) else { return }
-            DBG.log("[AudioSync] opened again; showing the window")
+            DebugTrace.log("[AudioSync] opened again; showing the window")
             center.postNotificationName(AppDelegate.showReply, object: nil, userInfo: nil, deliverImmediately: true)
             self?.showMainWindow()
         })
@@ -415,7 +415,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guard !quitStepsRan else { return }
         quitStepsRan = true
         Self.exiting.store(true, ordering: .relaxed)
-        DBG.log("[AudioSync] quitting")
+        DebugTrace.log("[AudioSync] quitting")
         // Quitting doesn't close the window: keep a half-typed delay.
         mainWindow?.finishEditing()
         reconcileTimer?.invalidate()
