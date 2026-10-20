@@ -2,20 +2,28 @@
 # name, SHA-256 of the salt plus the name's ASCII letters and digits in lower
 # case, so the names never appear in a published file. Rewrite the hashes
 # from the untracked plain list with `scripts/privacy_check.py --hash-names`;
-# the salt and the allow lines are kept.
+# the salt and the allow lines are kept, and the flags come from the list.
 #
+# HASH title
+#   a name whose spaced spelling ("Foo Bar", also with a no-break space or
+#   %20) counts only in Title Case, for a name that reads as ordinary words in
+#   lower case; its glued, CamelCase, hyphenated and other spellings still
+#   count. The plain list marks it with a trailing [title].
 # allow GLOB [REGEX]
 #   waives forbidden-name hits in tracked files whose repository-relative path
 #   matches GLOB (fnmatch): on lines where REGEX (Python re.search) matches,
-#   or, without a REGEX, everywhere in the file and in its path. Commit
-#   messages have no allow rule. A rule must never spell a forbidden name.
+#   or, without a REGEX, everywhere in the file and in its path.
+# allow-commit REGEX
+#   waives forbidden-name hits in commit messages on lines where REGEX
+#   matches (the line the name starts on).
+# A rule must never spell a forbidden name.
 salt 9d7fa04b6cd0d89114bcc45cd6ac4fdb
 2a207e5296bfa17eb91769f660a1fa14e42644cc3c9ec871937f9d34e5db6161
 311450b1888924ec7f0cdc93c205487be752dbbdb0b1aee10434508e9ad9dc01
-33056c41b07ae28c63bf40bfce8116d2624e6baa5f7c8caa13e329f185dd4d9c
+33056c41b07ae28c63bf40bfce8116d2624e6baa5f7c8caa13e329f185dd4d9c title
 455fe3be5d05274e0435bc84e9d0f1d40ff8a56a9f033ee27fbca341b216d4b9
-5004f3850d7ce659994da9d7ce8cf98b4f4539803d8c34bb5b02b6ce723118fd
+5004f3850d7ce659994da9d7ce8cf98b4f4539803d8c34bb5b02b6ce723118fd title
 5b4d932e763200bdc69de957696e2b1aae12ba9f9984d329eb7c8b3497c2b974
 70a8f99ae8ee14a2934a652f7fdd4489d26360a530055d3ae0e8c23fcc9a1c69
 a2253b527c470e358c34b9a0a660a86e81d40fb264e66ed3d7165cdde9babf72
-c65c3d197e71bdfa9987342159f886c9aefa7b3cb6c1f10373cbec9e8599a4d2
+c65c3d197e71bdfa9987342159f886c9aefa7b3cb6c1f10373cbec9e8599a4d2 title
