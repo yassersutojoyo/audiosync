@@ -42,7 +42,7 @@ Say plainly in the release notes that it's an unsigned preview (SmartScreen will
 
 ## Sources and license obligations
 
-AudioSync bundles no GPL or LGPL code: the app is AudioSync's own code (MIT), the Rust standard library and the crates the audio core compiles in, and the Poppins font, all under permissive licenses. Every release ships `THIRD_PARTY_NOTICES.md` (it's also inside the app, with the license files). A new dependency gets its license checked and its entry in the notices before it ships.
+AudioSync bundles no third-party GPL or LGPL code: the app is AudioSync's own code (GPL-3.0-or-later), the Rust standard library and the crates the audio core compiles in, and the Poppins font, the third-party parts all under permissive licenses. Every release ships `THIRD_PARTY_NOTICES.md` (it's also inside the app, with the license files). A new dependency gets its license checked and its entry in the notices before it ships.
 
 Releases up to 0.4.1 bundled an AirPlay engine (OwnTone, GPL-2.0-or-later) and its libraries, and attached their sources. The written offer for those builds in `THIRD_PARTY_NOTICES.md` still has to be honored, so their source archives stay in a private backup for at least three years.
 
