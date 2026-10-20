@@ -4770,7 +4770,11 @@ mod tests {
         backend.stop();
         backend.poll();
         assert_eq!(reader.following(), None, "reading stops with the stream");
-        assert!(now_playing_sent(&fake).is_empty());
+        assert_eq!(
+            now_playing_sent(&fake),
+            [NowPlaying::default()],
+            "a receiver that starts later gets no track from before"
+        );
     }
 
     #[test]

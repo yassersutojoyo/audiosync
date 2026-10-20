@@ -7,7 +7,9 @@
 //! of its own, only while AirPlay receivers play; [`TrackInfo`] turns its
 //! readings into what the sender is given, at the backend's polls, and
 //! gives it only what changed. The sender keeps that and sends it to every
-//! speaker that starts. The rules, as on the Mac:
+//! speaker that starts, until the last receiver stops: then it is cleared,
+//! so a receiver that starts later never shows a track from before. The
+//! rules, as on the Mac:
 //!
 //! - with the whole system as the source, the track of a session that
 //!   plays; with one app as the source, that app's session only, paused or
@@ -49,6 +51,7 @@ pub const ARTWORK_SIDE: u32 = 600;
 const SMALLEST_SIDE: u32 = 64;
 const JPEG_QUALITIES: [f32; 3] = [0.65, 0.5, 0.4];
 
+// These labels move to the strings file with the Now Playing card item.
 /// The title receivers show while no track counts.
 pub const UNTITLED_TITLE: &str = "AudioSync";
 /// The artist receivers show while no track counts and the source has no
@@ -294,16 +297,26 @@ impl TrackInfo {
 
     /// At each backend poll: `source` is what is captured while AirPlay
     /// receivers play, `None` while none do. Returns what the sender should
-    /// be given, when it differs from what it was given last; `None` with
-    /// no reader.
+    /// be given, when it differs from what it was given last: nothing at
+    /// all once the last receiver stops, and everything again when one
+    /// plays again. `None` with no reader.
     pub fn sync(&mut self, source: Option<&TrackSource>, now: Instant) -> Option<NowPlaying> {
         let reader = self.reader.as_mut()?;
         let follow = source.map(|source| source.follow.clone());
         if follow != self.following {
             reader.follow(follow.clone());
+            let stopped = follow.is_none();
             self.following = follow;
             self.since = Some(now);
             self.reading = None;
+            if stopped {
+                self.fields = None;
+                if self.sent.take().is_some() {
+                    self.log
+                        .log(|| "AirPlay now playing: cleared, no receiver plays".to_owned());
+                    return Some(NowPlaying::default());
+                }
+            }
         }
         let source = source?;
         if let Some(reading) = reader.take_reading() {
@@ -755,6 +768,50 @@ mod tests {
             .sync(Some(&spotify), later)
             .expect("Spotify's track goes");
         assert_eq!(sent.track, fields("Song", "Song artist", "Song album"));
+    }
+
+    #[test]
+    fn the_sender_is_cleared_when_the_last_receiver_stops() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(track("Spotify.exe", "Song", true, Some(COVER))));
+        assert!(info.sync(Some(&whole_system()), start).is_some());
+
+        assert_eq!(info.sync(None, start), Some(NowPlaying::default()));
+        assert_eq!(info.sync(None, start), None, "cleared once");
+
+        let later = start + POLL_INTERVAL;
+        info.sync(Some(&whole_system()), later);
+        reader.read(Some(track("Spotify.exe", "Song", true, Some(COVER))));
+        let sent = info
+            .sync(Some(&whole_system()), later)
+            .expect("the same track goes again");
+        assert_eq!(sent.track, fields("Song", "Song artist", "Song album"));
+    }
+
+    #[test]
+    fn a_restart_on_a_track_without_artwork_waits_for_it_again() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(track("Chrome", "Video", true, None)));
+        info.sync(Some(&whole_system()), start);
+        info.sync(None, start + ARTWORK_WAIT);
+
+        let restart = start + ARTWORK_WAIT * 2;
+        info.sync(Some(&whole_system()), restart);
+        reader.read(Some(track("Chrome", "Video", true, None)));
+        let sent = info
+            .sync(Some(&whole_system()), restart)
+            .expect("the fields go again");
+        assert_eq!(sent.artwork, None, "the wait starts over");
+        let sent = info
+            .sync(Some(&whole_system()), restart + ARTWORK_WAIT)
+            .expect("then the icon");
+        assert_eq!(sent.artwork.as_deref(), Some(ICON));
     }
 
     #[test]
