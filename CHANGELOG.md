@@ -4,7 +4,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-10-20
+## [0.5.0] - 2026-10-21
 
 ### Added
 
