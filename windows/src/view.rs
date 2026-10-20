@@ -29,8 +29,8 @@ use crate::ui_model::{
 };
 use crate::{
     AboutDialog, AirPlayProblem, Availability, DeviceVolumeHint, EqualizerWindow, GroupItem,
-    GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, Palette,
-    PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
+    GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, NoticeKind,
+    Palette, PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
 };
 
 /// The digits the PIN field keeps of what was typed: four at most.
@@ -284,6 +284,18 @@ fn neighbour<T>(
         .map(|row| id(row).clone())
 }
 
+/// The options of the first row `new` lists, This PC's, then Connected
+/// Speakers', then the groups' (a row's list is empty, so its own list adds
+/// nothing); the streaming switch when every list is empty.
+fn first_row(new: &MainLists) -> MainFocusTarget {
+    let speaker = new.this_pc.first().or_else(|| new.connected.first());
+    match (speaker, new.groups.first()) {
+        (Some(speaker), _) => MainFocusTarget::Speaker(speaker.id.clone(), RowPart::Options),
+        (None, Some(group)) => MainFocusTarget::Group(group.id.clone(), RowPart::Options),
+        (None, None) => MainFocusTarget::StreamingSwitch,
+    }
+}
+
 impl MainFocus {
     /// Where the focus goes when the lists change from `old` to `new`, if a
     /// rebuilt list (its length changed, [`sync_model`]) had it.
@@ -308,8 +320,9 @@ impl MainFocus {
         }
         // A row that went hands the focus to a neighbour's options, where
         // Space or Enter opens a menu rather than toggling a speaker or
-        // streaming; the streaming switch takes it only when the list is
-        // empty.
+        // streaming; once its list is empty, to the first row of the other
+        // lists ([`first_row`]), and the streaming switch takes it only when
+        // no row is left.
         if let Some((id, part)) = &self.speaker {
             for (old_rows, new_rows) in [
                 (&old.this_pc, &new.this_pc),
@@ -329,10 +342,10 @@ impl MainFocus {
                 return Some(if listed {
                     MainFocusTarget::Speaker(id.clone(), *part)
                 } else {
-                    neighbour(old_rows, new_rows, at, |s| &s.id)
-                        .map_or(MainFocusTarget::StreamingSwitch, |next| {
-                            MainFocusTarget::Speaker(next, RowPart::Options)
-                        })
+                    neighbour(old_rows, new_rows, at, |s| &s.id).map_or_else(
+                        || first_row(new),
+                        |next| MainFocusTarget::Speaker(next, RowPart::Options),
+                    )
                 });
             }
         }
@@ -343,10 +356,10 @@ impl MainFocus {
             return Some(if new.groups.iter().any(|g| g.id == *id) {
                 MainFocusTarget::Group(id.clone(), *part)
             } else {
-                neighbour(&old.groups, &new.groups, at, |g| &g.id)
-                    .map_or(MainFocusTarget::StreamingSwitch, |next| {
-                        MainFocusTarget::Group(next, RowPart::Options)
-                    })
+                neighbour(&old.groups, &new.groups, at, |g| &g.id).map_or_else(
+                    || first_row(new),
+                    |next| MainFocusTarget::Group(next, RowPart::Options),
+                )
             });
         }
         None
@@ -1839,6 +1852,7 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
     NoticeItem {
         id: i32::try_from(notice.id).unwrap_or(i32::MAX),
         message: notice_text(strings, &notice.message),
+        title: notice_title(strings, &notice.message),
         time: notice.time.as_str().into(),
         has_guide: guide::guide(&notice.message).is_some(),
         has_retry: notice.message == NoticeMessage::AirPlayStopped,
@@ -1969,6 +1983,37 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             }
         }
     }
+}
+
+/// A few words that name a notice, for its dismiss button.
+fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
+    let (kind, name) = match message {
+        NoticeMessage::NoSpeaker => (NoticeKind::NoSpeaker, ""),
+        NoticeMessage::SourceQuit { source } => (NoticeKind::SourceQuit, source.as_str()),
+        NoticeMessage::SourceNotRunning { source } => {
+            (NoticeKind::SourceNotRunning, source.as_str())
+        }
+        NoticeMessage::SourceRefused { source } => (NoticeKind::SourceRefused, source.as_str()),
+        NoticeMessage::CaptureFailed => (NoticeKind::CaptureFailed, ""),
+        NoticeMessage::CaptureLost => (NoticeKind::CaptureLost, ""),
+        NoticeMessage::SpeakerFailed { speaker } => (NoticeKind::SpeakerFailed, speaker.as_str()),
+        NoticeMessage::SpeakerLost { speaker } => (NoticeKind::SpeakerLost, speaker.as_str()),
+        NoticeMessage::SpeakerBusy { speaker } => (NoticeKind::SpeakerBusy, speaker.as_str()),
+        NoticeMessage::AirPlayRetrying { speaker, .. } => {
+            (NoticeKind::AirplayRetrying, speaker.as_str())
+        }
+        NoticeMessage::AirPlayCantPlay { speaker, .. } => {
+            (NoticeKind::AirplayCantPlay, speaker.as_str())
+        }
+        NoticeMessage::AirPlayStopped => (NoticeKind::AirplayStopped, ""),
+        NoticeMessage::SettingsNotSaved => (NoticeKind::SettingsNotSaved, ""),
+        NoticeMessage::PairingsNotSaved => (NoticeKind::PairingsNotSaved, ""),
+        NoticeMessage::SettingsKeptAside { .. } => (NoticeKind::SettingsKeptAside, ""),
+        NoticeMessage::PairingsKeptAside { .. } => (NoticeKind::PairingsKeptAside, ""),
+        NoticeMessage::NoSoundOutput => (NoticeKind::NoSoundOutput, ""),
+        NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
+    };
+    strings.invoke_notice_title(kind, name.into())
 }
 
 #[cfg(test)]
@@ -2599,6 +2644,74 @@ mod tests {
         assert!(!window.is_visible(), "Escape on a focused button");
     }
 
+    #[test]
+    fn a_notices_dismiss_button_names_it_in_a_few_words() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let dismiss_label = |message: NoticeMessage| {
+            let notice = ui_model::Notice {
+                id: 1,
+                subject: "test".into(),
+                message,
+                time: "09.40".into(),
+            };
+            let item = notice_item(&strings, &notice);
+            strings.invoke_dismiss_notice(item.title).to_string()
+        };
+        assert_eq!(
+            dismiss_label(NoticeMessage::HeardTwice {
+                source: Some("Music Player".into()),
+                mute: vec!["Speakers".into()],
+                shared: vec!["Headphones".into()],
+                default_output: None,
+            }),
+            "Dismiss: double audio"
+        );
+        assert_eq!(
+            dismiss_label(NoticeMessage::AirPlayRetrying {
+                speaker: "Kitchen".into(),
+                problem: ui_model::AirPlayProblem::ConnectionLost,
+            }),
+            "Dismiss: Kitchen reconnecting"
+        );
+        // Every kind gets a name of a few words, never the whole message.
+        let messages = [
+            NoticeMessage::NoSpeaker,
+            NoticeMessage::SourceQuit { source: "A".into() },
+            NoticeMessage::SourceNotRunning { source: "A".into() },
+            NoticeMessage::SourceRefused { source: "A".into() },
+            NoticeMessage::CaptureFailed,
+            NoticeMessage::CaptureLost,
+            NoticeMessage::SpeakerFailed {
+                speaker: "A".into(),
+            },
+            NoticeMessage::SpeakerLost {
+                speaker: "A".into(),
+            },
+            NoticeMessage::SpeakerBusy {
+                speaker: "A".into(),
+            },
+            NoticeMessage::AirPlayCantPlay {
+                speaker: "A".into(),
+                problem: ui_model::AirPlayProblem::Refused,
+            },
+            NoticeMessage::AirPlayStopped,
+            NoticeMessage::SettingsNotSaved,
+            NoticeMessage::PairingsNotSaved,
+            NoticeMessage::SettingsKeptAside { file: "f".into() },
+            NoticeMessage::PairingsKeptAside { file: "f".into() },
+            NoticeMessage::NoSoundOutput,
+        ];
+        for message in messages {
+            let label = dismiss_label(message.clone());
+            let words = label.split_whitespace().count();
+            assert!(
+                (3..=6).contains(&words),
+                "{message:?}: \"{label}\" is not a short name"
+            );
+        }
+    }
+
     /// The App over `backend`, with its main window shown and drawn once.
     fn main_window_over(backend: MockBackend) -> Rc<App> {
         let app = app_over(backend);
@@ -2868,8 +2981,76 @@ mod tests {
         );
         assert_eq!(
             on("pc", RowPart::Toggle).target(&before, &lists(&[], &["a", "b", "c"])),
+            options("a"),
+            "its list is empty now: the other list's first row"
+        );
+        assert_eq!(
+            on("a", RowPart::Toggle).target(&lists(&["pc"], &["a"]), &lists(&["pc"], &[])),
+            options("pc"),
+            "the same from the other list"
+        );
+        let with_group = |this_pc: &[&str], connected: &[&str]| MainLists {
+            groups: vec![GroupItem {
+                id: "g".into(),
+                ..GroupItem::default()
+            }],
+            ..lists(this_pc, connected)
+        };
+        assert_eq!(
+            on("pc", RowPart::Volume).target(&with_group(&["pc"], &[]), &with_group(&[], &[])),
+            Some(MainFocusTarget::Group("g".into(), RowPart::Options)),
+            "no speaker row left: the first group's options"
+        );
+        assert_eq!(
+            on("pc", RowPart::Toggle).target(&lists(&["pc"], &[]), &lists(&[], &[])),
             Some(MainFocusTarget::StreamingSwitch),
-            "its list is empty now"
+            "no row left at all"
+        );
+    }
+
+    #[test]
+    fn the_last_row_of_a_list_hands_the_focus_to_the_other_lists_first_row() {
+        // This PC's two outputs, and under Connected Speakers only a
+        // virtual output that is off, listed while Show Virtual Devices is
+        // on.
+        let mut backend = MockBackend::new();
+        backend.retain_speakers(|s| s.kind.is_this_pc());
+        backend.delete_group("group:1");
+        let mut cable = backend
+            .snapshot()
+            .speaker("local:headphones")
+            .unwrap()
+            .clone();
+        cable.id = "local:cable".into();
+        cable.name = "Cable Input".into();
+        cable.kind = ui_model::SpeakerKind::Virtual;
+        cable.enabled = false;
+        backend.add_speaker(cable);
+        let app = app_over(backend);
+        app.main.invoke_show_virtual_devices_toggled(true);
+        app.main.show().expect("the main window shows headless");
+        draw_frames();
+        let window = app.main.window();
+        // As in the example's order without the group's row and Bedroom's:
+        // the cable row's toggle.
+        tab(window, 12);
+        press(window, " ");
+        assert!(enabled(&app, "local:cable"), "the cable row has the focus");
+        press(window, " ");
+        assert!(!enabled(&app, "local:cable"));
+
+        // Off and no longer shown, Connected Speakers is empty: the focus
+        // goes to This PC's first row's options, so the next Tab stop is
+        // the headphones' toggle, not the source after the streaming switch.
+        app.main.invoke_show_virtual_devices_toggled(false);
+        draw_frames();
+        let headphones = enabled(&app, "local:headphones");
+        tab(window, 1);
+        press(window, " ");
+        assert_ne!(
+            enabled(&app, "local:headphones"),
+            headphones,
+            "the next stop after the speakers' options is the headphones' toggle"
         );
     }
 }

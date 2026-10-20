@@ -38,8 +38,9 @@ name that Narrator also reads as the toggle's value, "Waiting for device" when
 another app holds the output's device for itself, or "Reconnecting…" while
 AudioSync keeps trying to reach an AirPlay speaker. That speaker stays on, so
 selecting it turns it off; the row goes back to playing as soon as it plays
-again, and the notice explains what happened. Group rows show only the first
-three states.
+again, and the notice explains what happened. The tray flyout's row shows the
+same note under the name. A group row waits too, with the same note, when
+every present member waits (it shows the first present member's note).
 
 The windows read their data through the `Backend` trait in
 `windows/src/ui_model.rs`. On Windows that is the adapter over the WASAPI audio
@@ -117,10 +118,12 @@ A focused control shows a ring in the focus color while it has keyboard focus.
 Escape in a dialog works wherever the focus is, on its buttons too. When an
 update removes the focused control (a notice dismissed or retried, a speaker
 unplugged), the main window moves the focus to the notice in its place (its
-dismiss button names the notice, "Dismiss: …"), the same control of a row
-once its list is rebuilt (a delay field keeps what you typed), the options
-button of the row next to one that went, or the streaming switch once its
-list is empty, so Narrator keeps talking, Tab goes on from there, and Space
+dismiss button names the notice in a few words, "Dismiss: double audio"),
+the same control of a row once its list is rebuilt (a delay field keeps what
+you typed), the options button of the row next to one that went, or, once
+its list is empty, the options button of the other speaker list's first row,
+then of the first group (a group that went: the first speaker's), and the
+streaming switch only when no row is left, so Narrator keeps talking, Tab goes on from there, and Space
 or Enter never toggles something you didn't aim at. The tray flyout keeps
 the focus inside itself the same way, so Escape still closes it.
 

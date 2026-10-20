@@ -335,8 +335,8 @@ pub enum SpeakerState {
     /// Chosen, and plays once streaming starts.
     WillPlay,
     Playing,
-    /// On while streaming is on, but it can't play right now (a speaker
-    /// only, never a group).
+    /// On while streaming is on, but it can't play right now (a group:
+    /// none of its present members can).
     #[cfg_attr(
         all(not(windows), not(test)),
         expect(
@@ -410,11 +410,21 @@ impl AppState {
         group.members.iter().filter_map(|id| self.speaker(id))
     }
 
-    /// A group is on when all its present members are.
+    /// A group is on when all its present members are. Playing, it waits
+    /// when every present member waits, as its first present member does.
     pub fn group_state(&self, group: &Group) -> SpeakerState {
         let mut present = self.available_members(group).peekable();
         let all_on = present.peek().is_some() && present.all(|s| s.enabled);
-        SpeakerState::new(all_on, self.running)
+        match SpeakerState::new(all_on, self.running) {
+            SpeakerState::Playing => {
+                let waiting: Option<Vec<Waiting>> =
+                    self.available_members(group).map(|s| s.waiting).collect();
+                waiting
+                    .and_then(|w| w.first().copied())
+                    .map_or(SpeakerState::Playing, SpeakerState::Waiting)
+            }
+            state => state,
+        }
     }
 
     /// Speakers switched on right now.
@@ -741,6 +751,12 @@ impl MockBackend {
         self.state.speakers.push(speaker);
     }
 
+    /// Keeps only the example speakers `keep` accepts, and the groups.
+    #[cfg(test)]
+    pub fn retain_speakers(&mut self, keep: impl Fn(&Speaker) -> bool) {
+        self.state.speakers.retain(keep);
+    }
+
     fn speaker_mut(&mut self, id: &str) -> Option<&mut Speaker> {
         self.state.speakers.iter_mut().find(|s| s.id == id)
     }
@@ -1018,6 +1034,47 @@ mod tests {
         backend.toggle_group(&group.id);
         let state = backend.snapshot();
         assert!(state.available_members(&group).all(|s| !s.enabled));
+    }
+
+    #[test]
+    fn a_group_waits_when_all_its_present_members_wait() {
+        let mut backend = MockBackend::new();
+        let group = backend.snapshot().groups[0].clone();
+        backend.toggle_group(&group.id);
+        backend.set_running(true);
+        let mut state = backend.snapshot();
+        let wait = |state: &mut AppState, id: &str, waiting| {
+            state
+                .speakers
+                .iter_mut()
+                .find(|s| s.id == id)
+                .unwrap()
+                .waiting = waiting;
+        };
+        wait(&mut state, "airplay:kitchen", Some(Waiting::Reconnecting));
+        assert_eq!(
+            state.group_state(&group),
+            SpeakerState::Playing,
+            "one member still plays"
+        );
+        wait(&mut state, "airplay:living", Some(Waiting::Reconnecting));
+        assert_eq!(
+            state.group_state(&group),
+            SpeakerState::Waiting(Waiting::Reconnecting),
+            "every present member waits"
+        );
+        state.speakers.retain(|s| s.id != "airplay:living");
+        assert_eq!(
+            state.group_state(&group),
+            SpeakerState::Waiting(Waiting::Reconnecting),
+            "a member that went doesn't count"
+        );
+        assert!(
+            !state.group_state(&group).click_turns_on(),
+            "a click turns a waiting group off"
+        );
+        state.running = false;
+        assert_eq!(state.group_state(&group), SpeakerState::WillPlay);
     }
 
     #[test]

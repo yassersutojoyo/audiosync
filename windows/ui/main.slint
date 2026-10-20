@@ -18,7 +18,7 @@ export { GuideWindow } from "guide.slint";
 export { Strings } from "strings.slint";
 // The style's palette, for the theme preview (src/view.rs).
 export { Palette } from "std-widgets.slint";
-export { AirPlayProblem, Availability, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, NoticeItem, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
+export { AirPlayProblem, Availability, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
 
 // A titled card of speaker rows, with a note when it has none.
 component SpeakerSection inherits VerticalLayout {
@@ -36,8 +36,9 @@ component SpeakerSection inherits VerticalLayout {
     callback device-volume-fix(string);
     // The part of a row with the keyboard focus changed; none: it lost it.
     callback focus-changed(string, RowPart);
-    // A row built while this is its speaker's ID takes the keyboard focus
-    // on focus-part and clears the ID (see MainWindow).
+    // A row built while this is its speaker's ID, or already built when it
+    // becomes it, takes the keyboard focus on focus-part and clears the ID
+    // (see MainWindow).
     in-out property <string> focus-id;
     in-out property <RowPart> focus-part;
 
@@ -64,6 +65,13 @@ component SpeakerSection inherits VerticalLayout {
                 compact: root.compact;
                 init => {
                     if speaker.id == root.focus-id {
+                        root.focus-id = "";
+                        self.take-focus(root.focus-part);
+                    }
+                }
+                property <bool> focus-asked: speaker.id == root.focus-id;
+                changed focus-asked => {
+                    if self.focus-asked {
                         root.focus-id = "";
                         self.take-focus(root.focus-part);
                     }
@@ -264,7 +272,9 @@ export component MainWindow inherits Window {
     // app (src/view.rs) asks for the focus back: on the notice at this
     // index, or the speaker or group row with this ID (the same row, or its
     // neighbour when it went), which takes it on the given part as it is
-    // built and clears the request; else on the streaming switch.
+    // built and clears the request. A row of another list, which isn't
+    // rebuilt, takes it when the request names it (a list's last row went:
+    // the other list's first row). Else the streaming switch takes it.
     callback notice-focus-changed(int, bool);
     callback dismiss-all-focus-changed(bool);
     callback speaker-focus-changed(string, RowPart);
@@ -621,6 +631,13 @@ export component MainWindow inherits Window {
                                     item: group;
                                     init => {
                                         if group.id == root.focus-group-id {
+                                            root.focus-group-id = "";
+                                            self.take-focus(root.focus-group-part);
+                                        }
+                                    }
+                                    property <bool> focus-asked: group.id == root.focus-group-id;
+                                    changed focus-asked => {
+                                        if self.focus-asked {
                                             root.focus-group-id = "";
                                             self.take-focus(root.focus-group-part);
                                         }

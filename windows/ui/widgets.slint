@@ -1142,9 +1142,12 @@ export component GroupRow inherits Rectangle {
                         accessible-role: none;
                     }
 
+                    // The members, and the note of a group whose present
+                    // members all wait ("Waiting for device", "Reconnecting…").
                     QuietText {
-                        text: Strings.group-members(root.item.available, root.item.total);
+                        text: Strings.speaker-caption(Strings.group-members(root.item.available, root.item.total), Strings.row-note(root.item.state));
                         wrap: no-wrap;
+                        overflow: elide;
                     }
                 }
 
@@ -1302,7 +1305,7 @@ export component NoticeStack inherits VerticalLayout {
                 dismiss := IconButton {
                     glyph: Glyphs.dismiss;
                     glyph-size: 12px;
-                    label: Strings.dismiss-notice(notice.message);
+                    label: Strings.dismiss-notice(notice.title);
                     clicked => {
                         root.dismissed(notice.id);
                     }

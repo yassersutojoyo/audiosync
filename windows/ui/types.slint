@@ -3,7 +3,7 @@
 // How a speaker or group row shows: playing only while streaming is on. A
 // speaker that is on while streaming is on but can't play right now waits
 // for its device (another app holds it) or is reconnecting (AirPlay); a
-// group never waits.
+// group waits when every present member does.
 export enum RowState { off, will-play, playing, waiting-for-device, reconnecting }
 
 // The part of a speaker or group row that has, or is to take, the keyboard
@@ -65,10 +65,16 @@ export struct GroupItem {
     total: int,
 }
 
+// What a notice is about, for its short name (Strings.notice-title).
+export enum NoticeKind { no-speaker, source-quit, source-not-running, source-refused, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-cant-play, airplay-stopped, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice }
+
 export struct NoticeItem {
     id: int,
     message: string,
     time: string,
+    // A few words that name the notice, for its dismiss button ("double
+    // audio", "Kitchen reconnecting").
+    title: string,
     // The notice offers Show How, which opens its guide.
     has-guide: bool,
     // The notice offers Retry, which starts AirPlay again.
