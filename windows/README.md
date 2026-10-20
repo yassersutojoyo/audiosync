@@ -11,9 +11,10 @@ one app, or everything the PC plays except AudioSync itself, and plays it on
 the outputs you turn on, each at its own delay and volume, through the
 equalizer. AirPlay speakers on your network show up under Connected Speakers,
 through AudioSync's own sender ([`../airplay`](../airplay)); that part hasn't
-been tried with a real speaker yet. So far it has only been started on one
-Windows 11 PC, with nothing playing, and nobody has listened to it there yet;
-CI builds and tests it. [docs/WINDOWS_UI.md](../docs/WINDOWS_UI.md) maps each
+been tried with a real speaker yet. Local playback has had a short first
+listen on one Windows 11 PC (a USB-C in-ear and wired speakers on the jack,
+playing together); Bluetooth outputs haven't been tried yet. CI builds and
+tests it. [docs/WINDOWS_UI.md](../docs/WINDOWS_UI.md) maps each
 part of the Mac main window to its Windows counterpart and lists the keyboard
 shortcuts.
 
