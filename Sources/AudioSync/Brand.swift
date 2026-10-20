@@ -18,6 +18,11 @@ enum Brand {
     static let tealText = dynamic("AudioSyncTealText",
                                   light: BrandTokens.Light.tealText, dark: BrandTokens.Dark.tealText)
 
+    /// A delay field's out-of-range outline and the caption that explains it:
+    /// light #C42B1C, 5.66:1 on white; dark #FF99A4, 6.97:1 on #2B2B2B.
+    static let errorText = dynamic("AudioSyncErrorText",
+                                   light: BrandTokens.Light.errorText, dark: BrandTokens.Dark.errorText)
+
     /// Small secondary text (captions, notes, values), in place of `.secondary`.
     /// WCAG AA needs 4.5:1 for small text, and `.secondary` misses it in light
     /// appearance. Measured on macOS 26 (window and card #FFFFFF, menu bar panel

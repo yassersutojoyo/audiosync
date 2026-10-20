@@ -134,6 +134,7 @@ export global Strings {
 
     // Menu bar (Windows names: File > Exit, View)
     out property <string> menu-file: @tr("File");
+    out property <string> menu-apply-delay: @tr("Apply Typed Delay");
     out property <string> menu-close-window: @tr("Close Window");
     out property <string> menu-exit: @tr("Exit");
     out property <string> menu-speakers: @tr("Speakers");
@@ -587,6 +588,13 @@ export global Strings {
 
     public pure function delay-of(name: string) -> string {
         return @tr("{} delay", name);
+    }
+
+    // Under a delay field, in place of the Enter hint, while it holds a
+    // number out of the delay's range; also the field's Narrator
+    // description then.
+    public pure function delay-out-of-range(lowest: string, highest: string, applies: string) -> string {
+        return @tr("The range is {} to {} ms. Enter applies {}.", lowest, highest, applies);
     }
 
     // An offset relative to the reference, with its sign: "+150 ms",

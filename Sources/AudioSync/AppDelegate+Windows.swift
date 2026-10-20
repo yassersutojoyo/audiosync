@@ -359,6 +359,10 @@ extension AppDelegate {
 
     @objc func refreshDevices(_ sender: Any?) { rescanDevices() }
 
+    /// Command-S: the delays typed in the open delay panels apply, and the
+    /// panels stay open.
+    @objc func applyTypedDelay(_ sender: Any?) { appModel.applyDelayTyping() }
+
     /// Reads the login item afresh: it can be changed in System Settings too.
     @objc func toggleLaunchAtLogin(_ sender: Any?) {
         setLaunchAtLogin(SMAppService.mainApp.status != .enabled)
@@ -372,9 +376,12 @@ extension AppDelegate {
     }
 
     /// Keeps the menus current each time one opens: check marks for the
-    /// choices that are on, the streaming item's wording.
+    /// choices that are on, the streaming item's wording, Apply Typed Delay
+    /// only while there is typing to apply.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case #selector(applyTypedDelay(_:)):
+            return appModel.hasDelayTyping
         case #selector(toggleStreaming(_:)):
             menuItem.title = engine.isRunning ? text.menuTurnStreamingOff : text.menuTurnStreamingOn
         case #selector(chooseAppearance(_:)):

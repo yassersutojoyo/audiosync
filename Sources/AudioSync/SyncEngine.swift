@@ -291,6 +291,7 @@ final class StreamEngine {
         DebugTrace.log("[AudioSync] output stopped (\(reason)): \(uid), \(renderer.stopNote), "
                 + "\(renderer.framesRendered.load(ordering: .relaxed)) frames rendered, \(renderer.counters), "
                 + "slowed \(renderer.slowedFrames) frames, sped \(renderer.spedFrames) frames, "
-                + "shortfall \(renderer.shortfallFrames) frames")
+                + "shortfall \(renderer.shortfallFrames) frames, "
+                + "late callbacks \(renderer.lateCallbacks) (most \(String(format: "%.1f", renderer.lateMaxMs)) ms)")
     }
 }

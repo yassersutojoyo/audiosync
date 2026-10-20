@@ -69,6 +69,11 @@ struct UIStrings {
     /// Under a delay field while it holds typing not yet applied; also the
     /// field's VoiceOver hint then.
     let delayDraftHint = "Press Return to apply"
+    /// Under a delay field, in place of `delayDraftHint`, while it holds a
+    /// number out of the delay's range; also the field's VoiceOver hint then.
+    func delayOutOfRange(lowest: String, highest: String, applies: String) -> String {
+        "The range is \(lowest) to \(highest) \(millisecondsUnit). Return applies \(applies)."
+    }
 
     func statusStreaming(speakers: Int) -> String {
         switch speakers {
@@ -174,6 +179,8 @@ struct UIStrings {
     let menuTurnStreamingOff = "Turn Streaming Off"
     let menuFile = "File"
     let menuCloseWindow = "Close Window"
+    /// Command-S: applies the delay typed in an open delay panel.
+    let menuApplyDelay = "Apply Typed Delay"
     let menuWindow = "Window"
     let menuMinimize = "Minimize"
     let menuZoom = "Zoom"

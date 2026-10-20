@@ -198,10 +198,22 @@ fn take(flag: &AtomicBool) -> bool {
 }
 
 /// De for a read of `n` frames at delay `delay` (S44 step 1):
-/// `min(max(D, N, Lr), C - M - N)`, never negative.
-fn effective_delay(delay: i64, n: i64, lead: i64, capacity: usize, margin: usize) -> i64 {
+/// `min(max(D, N, Lr) + Jr, C - M - N)`, never negative.
+fn effective_delay(
+    delay: i64,
+    n: i64,
+    lead: i64,
+    late: i64,
+    capacity: usize,
+    margin: usize,
+) -> i64 {
     let ceiling = capacity as i64 - margin as i64 - n;
-    delay.max(n).max(lead).min(ceiling).max(0)
+    delay
+        .max(n)
+        .max(lead)
+        .saturating_add(late)
+        .min(ceiling)
+        .max(0)
 }
 
 /// The control thread's handle to a [`Reader`]: target delay, tolerance,
@@ -304,6 +316,9 @@ pub struct Reader {
     /// Lr: the floor of the effective delay that the reader's renderer sets
     /// (S206); 0 for a reader without one.
     lead: i64,
+    /// Jr: how late the renderer's callback came, in capture frames (S209);
+    /// 0 for a reader without one.
+    late: i64,
     /// Test hook run between the copy and the post-copy check.
     #[cfg(test)]
     before_check: Option<Box<dyn FnMut() + Send>>,
@@ -338,6 +353,7 @@ impl Reader {
             applied_delay: 0,
             reanchor: false,
             lead: 0,
+            late: 0,
             #[cfg(test)]
             before_check: None,
         }
@@ -355,6 +371,19 @@ impl Reader {
     /// Lr, as last set.
     pub fn lead_frames(&self) -> i64 {
         self.lead
+    }
+
+    /// Sets Jr, the capture frames by which the renderer's callback came
+    /// later than its earliest ones (S209): every read uses
+    /// `De = min(max(D, N, Lr) + Jr, C - M - N)`. A negative value counts as
+    /// 0. Called by the renderer that owns the reader, on its thread.
+    pub fn set_late_frames(&mut self, frames: i64) {
+        self.late = frames.max(0);
+    }
+
+    /// Jr, as last set.
+    pub fn late_frames(&self) -> i64 {
+        self.late
     }
 
     /// The frames the next read can go on with (S206): `W - P`, with W
@@ -383,7 +412,14 @@ impl Reader {
         }
         let n = frames as i64;
         let (capacity, margin) = (self.ring.capacity(), self.ring.margin());
-        let delay = effective_delay(self.applied_delay, n, self.lead, capacity, margin);
+        let delay = effective_delay(
+            self.applied_delay,
+            n,
+            self.lead,
+            self.late,
+            capacity,
+            margin,
+        );
         let tolerance = self.shared.tolerance.load(Ordering::Relaxed).max(0);
         let w = self.ring.frames_written() as i64;
         let position = self.next;
@@ -506,8 +542,9 @@ impl Reader {
         }
         let frames = frames.min(dst.len() / 2);
         let n = frames as i64;
-        let (capacity, margin, lead) = (self.ring.capacity(), self.ring.margin(), self.lead);
-        let effective = |delay: i64| effective_delay(delay, n, lead, capacity, margin);
+        let (capacity, margin) = (self.ring.capacity(), self.ring.margin());
+        let (lead, late) = (self.lead, self.late);
+        let effective = |delay: i64| effective_delay(delay, n, lead, late, capacity, margin);
 
         // Step 1.
         let w = self.ring.frames_written() as i64;
