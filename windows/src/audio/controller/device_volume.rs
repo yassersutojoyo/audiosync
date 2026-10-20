@@ -230,6 +230,7 @@ mod tests {
 
     use audiosync_core::policy::device_volume::{DeviceVolume, Hint};
 
+    use super::super::STALL_RETRY_POLLS;
     use crate::audio::backend::{AudioBackend, BackendError, BackendEvent, SourceId};
     use crate::audio::mock::{MockBackend, VolumeWrite};
     use crate::debug_log::{DebugLog, FILE_NAME, TEST_FLUSH, read_messages, test_dir};
@@ -420,6 +421,73 @@ mod tests {
         backend.set_output_level(SPEAKERS, 0.125);
         assert_eq!(changed(&backend.poll()), [SPEAKERS]);
         assert_eq!(hint(&backend, SPEAKERS), Some(Hint::Low { percent: 13 }));
+    }
+
+    // S195, S202
+    #[test]
+    fn an_output_whose_volume_listener_doesnt_answer_shows_no_device_volume_until_a_later_try() {
+        let dir = test_dir("controller-device-volume-stalled");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let mut backend = MockBackend::empty();
+        backend.set_debug_log(log.clone());
+        backend.connect_output(SPEAKERS, "Speakers");
+        backend.connect_output(HEADPHONES, "Headphones");
+        backend.list_outputs().unwrap();
+        let record = backend.volume_record();
+        // Windows audio hangs: the listener isn't there in time, and the
+        // device isn't read, since that would wait for Windows audio too.
+        backend.stall_volume_listeners(true);
+        backend.set_output_enabled(SPEAKERS, true).unwrap();
+        assert!(record.watched().is_empty());
+        assert!(record.reads().is_empty(), "{:?}", record.reads());
+        assert_eq!(device_volume(&backend, SPEAKERS), None, "nothing for now");
+        // Not tried at every poll: once Windows audio answers again, the
+        // next try comes some seconds after the last.
+        poll_times(&mut backend, STALL_RETRY_POLLS);
+        backend.stall_volume_listeners(false);
+        poll_times(&mut backend, STALL_RETRY_POLLS - 1);
+        assert!(record.watched().is_empty());
+        backend.poll();
+        assert_eq!(record.watched(), [SPEAKERS]);
+        assert_eq!(device_volume(&backend, SPEAKERS), at(1.0, false));
+
+        // Windows reports a change of the outputs while it hangs again: the
+        // listener can't be renewed, so the row shows nothing for now.
+        backend.set_output_level(SPEAKERS, 0.125);
+        backend.poll();
+        assert_eq!(hint(&backend, SPEAKERS), Some(Hint::Low { percent: 13 }));
+        backend.stall_volume_listeners(true);
+        let reads = record.reads().len();
+        backend.connect_output("usb", "USB DAC");
+        assert_eq!(changed(&backend.poll()), [SPEAKERS]);
+        assert_eq!(device_volume(&backend, SPEAKERS), None);
+        assert_eq!(record.reads().len(), reads, "not read");
+        backend.stall_volume_listeners(false);
+        poll_times(&mut backend, STALL_RETRY_POLLS);
+        assert_eq!(record.watched(), [SPEAKERS]);
+        assert_eq!(hint(&backend, SPEAKERS), Some(Hint::Low { percent: 13 }));
+
+        // Said once each time it stops answering, not at every try.
+        let stalled: Vec<String> = logged(&log, &dir)
+            .into_iter()
+            .filter(|message| message.contains("didn't answer"))
+            .collect();
+        assert_eq!(
+            stalled,
+            [
+                "output \"Speakers\" (speakers) device volume: Windows audio didn't answer in \
+                 time; none shown for now, tried again in about ten seconds",
+                "output \"Speakers\" (speakers) device volume: Windows audio didn't answer in \
+                 time; none shown for now, tried again in about ten seconds",
+            ]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn poll_times(backend: &mut MockBackend, polls: u32) {
+        for _ in 0..polls {
+            backend.poll();
+        }
     }
 
     fn logged(log: &DebugLog, dir: &Path) -> Vec<String> {

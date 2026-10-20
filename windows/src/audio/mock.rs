@@ -81,6 +81,8 @@ pub struct VolumeRecord(Arc<Mutex<Recorded>>);
 struct Recorded {
     watched: BTreeSet<String>,
     writes: Vec<VolumeWrite>,
+    /// The output of every read of an own volume, in order.
+    reads: Vec<String>,
 }
 
 impl VolumeRecord {
@@ -92,6 +94,11 @@ impl VolumeRecord {
     /// Every write so far, in order.
     pub fn writes(&self) -> Vec<VolumeWrite> {
         self.lock().writes.clone()
+    }
+
+    /// The output of every read so far, in order.
+    pub fn reads(&self) -> Vec<String> {
+        self.lock().reads.clone()
     }
 
     fn lock(&self) -> MutexGuard<'_, Recorded> {
@@ -110,6 +117,8 @@ struct DeviceVolumes {
     ignore_writes: bool,
     /// Writes fail with this error.
     write_error: Option<BackendError>,
+    /// Listeners don't register in time, as while Windows audio hangs.
+    stall_listeners: bool,
     /// Notifications wait in `held` until a test lets them through, as
     /// Windows' come some time after the change.
     hold: bool,
@@ -470,6 +479,9 @@ impl Driver for MockDriver {
         if !self.is_connected(id) {
             return Err(BackendError::DeviceGone);
         }
+        if self.device_volumes.stall_listeners {
+            return Err(BackendError::NotResponding);
+        }
         self.device_volumes
             .record
             .lock()
@@ -491,6 +503,11 @@ impl Driver for MockDriver {
     }
 
     fn endpoint_volume(&mut self, id: &str) -> Option<EndpointVolume> {
+        self.device_volumes
+            .record
+            .lock()
+            .reads
+            .push(id.to_owned());
         if !self.is_connected(id) {
             return None;
         }
@@ -834,6 +851,12 @@ impl Controller<MockDriver> {
             let held = std::mem::take(&mut volumes.held);
             volumes.changed.extend(held);
         }
+    }
+
+    /// Makes later registrations of the outputs' volume listeners not answer
+    /// in time (`true`), as while Windows audio hangs, or work again.
+    pub fn stall_volume_listeners(&mut self, stall: bool) {
+        self.driver_mut().device_volumes.stall_listeners = stall;
     }
 
     /// Makes later writes to the outputs' own volumes fail with `error`, or
