@@ -172,6 +172,10 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The last kind of every output listed, to tell a device listed under
     /// a new endpoint ID.
     kinds: BTreeMap<String, OutputKind>,
+    /// The endpoint IDs a device left when what was set for it followed it
+    /// to a new one ([`AudioAdapter::move_output`]), until they are listed
+    /// again: the same device's old IDs, not other devices of its name.
+    left_behind: BTreeSet<String>,
     /// The AirPlay speaker IDs of the last listing, to tell which appeared.
     airplay_listed: BTreeSet<String>,
     /// The last name of every AirPlay speaker listed.
@@ -270,6 +274,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
             kinds: BTreeMap::new(),
+            left_behind: BTreeSet::new(),
             airplay_listed: BTreeSet::new(),
             airplay_quiet_polls: 0,
             airplay_names: BTreeMap::new(),
@@ -708,9 +713,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let outputs = self.audio.outputs();
         let mut listed = BTreeSet::new();
         let mut appeared = Vec::new();
+        let mut fresh = BTreeSet::new();
         for output in &outputs {
             if !self.listed.contains(&output.id) {
                 appeared.push(output.id.clone());
+                if !self.names.contains_key(&output.id) || self.left_behind.contains(&output.id) {
+                    fresh.insert(output.id.clone());
+                }
             }
             self.names.insert(output.id.clone(), output.name.clone());
             self.kinds.insert(output.id.clone(), output.kind);
@@ -722,7 +731,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 matches!(message, NoticeMessage::SpeakerLost { .. })
             });
         }
-        self.follow_moved_outputs(&outputs, &appeared);
+        // Listed again, an ID left behind is an output of its own once more.
+        for id in &appeared {
+            self.left_behind.remove(id);
+        }
+        self.follow_moved_outputs(&outputs, &appeared, &fresh);
         self.auto_connect(&appeared);
     }
 
@@ -738,11 +751,21 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Hands what the user set for an output that is gone to one that
     /// appeared under a new endpoint ID with nothing set, when both are most
     /// likely the same device: Windows lists a USB device plugged into
-    /// another USB port under another endpoint ID. They match when the new
-    /// one is the only output that appeared with its name and kind (which
-    /// follows its form factor and bus), and exactly one output with
-    /// something set, listed earlier in this run and not now, has them too.
-    fn follow_moved_outputs(&mut self, outputs: &[OutputInfo], appeared: &[String]) {
+    /// another USB port under another endpoint ID. The new one must be
+    /// `fresh`: an endpoint ID not listed before in this run, or one a
+    /// device left behind when its settings followed it to another port (it
+    /// came back). It must be the only output that appeared with its name
+    /// and kind (which follows its form factor and bus). And exactly one
+    /// output with that name and kind, listed earlier in this run and not
+    /// now, with or without anything set, must be gone, and have something
+    /// set: with two gone, the new ID could be either device. An ID a
+    /// device left behind isn't another device, so it doesn't count.
+    fn follow_moved_outputs(
+        &mut self,
+        outputs: &[OutputInfo],
+        appeared: &[String],
+        fresh: &BTreeSet<String>,
+    ) {
         let new: Vec<&OutputInfo> = outputs
             .iter()
             .filter(|output| appeared.contains(&output.id))
@@ -755,7 +778,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .iter()
                 .filter(|other| same(&other.name, Some(&other.kind)))
                 .count();
-            if twins > 1 || self.has_choices(&output.id) {
+            if twins > 1 || !fresh.contains(&output.id) || self.has_choices(&output.id) {
                 continue;
             }
             let gone: Vec<String> = self
@@ -763,12 +786,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .iter()
                 .filter(|(id, name)| {
                     !self.listed.contains(*id)
+                        && !self.left_behind.contains(*id)
                         && same(name, self.kinds.get(*id))
-                        && self.has_choices(id)
                 })
                 .map(|(id, _)| id.clone())
                 .collect();
-            if let [from] = gone.as_slice() {
+            if let [from] = gone.as_slice()
+                && self.has_choices(from)
+            {
                 self.move_output(from, &output.id);
             }
         }
@@ -802,6 +827,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if self.saved.outputs.remove(from).is_some() {
             self.must_save = true;
         }
+        self.left_behind.insert(from.to_owned());
         self.busy.remove(from);
         self.notices.clear(&[speaker_subject(from)]);
         if result.is_err() {
@@ -2758,6 +2784,28 @@ mod tests {
         let dac = speaker_of(&adapter, &key(DAC_PORT_1));
         assert!(dac.enabled);
         assert_eq!(dac.volume, 35.0);
+    }
+
+    #[test]
+    fn a_port_a_moved_speaker_left_counts_as_new_only_until_it_is_listed_again() {
+        let mut adapter = adapter();
+        plug_dac(&mut adapter, DAC_PORT_1);
+        turn_on(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_1);
+        plug_dac(&mut adapter, DAC_PORT_2);
+        assert!(enabled(&adapter, DAC_PORT_2), "its settings followed it");
+
+        // A second DAC of the model, in the port the first one left, while
+        // the first one is still listed: a new speaker.
+        plug_dac(&mut adapter, DAC_PORT_1);
+        assert!(!enabled(&adapter, DAC_PORT_1));
+        // Both unplugged, the second one back in that port: listed before,
+        // it is that second DAC again, not the first one.
+        unplug(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_dac(&mut adapter, DAC_PORT_1);
+        assert!(!enabled(&adapter, DAC_PORT_1));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_2]);
     }
 
     /// Two displays of the same model on HDMI.
