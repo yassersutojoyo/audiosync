@@ -2737,6 +2737,72 @@ mod tests {
     }
 
     #[test]
+    fn a_new_id_doesnt_take_settings_when_an_untouched_twin_left_too() {
+        let mut adapter = adapter();
+        // Two DACs of the same model: only the first was ever set.
+        plug_dac(&mut adapter, DAC_PORT_1);
+        turn_on(&mut adapter, DAC_PORT_1);
+        adapter.set_speaker_volume(&key(DAC_PORT_1), 35.0);
+        plug_dac(&mut adapter, DAC_PORT_2);
+
+        // Both unplugged, the untouched one into a third port: it could be
+        // either of them, so it is a new speaker.
+        unplug(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_dac(&mut adapter, DAC_PORT_3);
+        assert!(!enabled(&adapter, DAC_PORT_3));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1]);
+
+        // The first one, back in its port, still has its settings.
+        plug_dac(&mut adapter, DAC_PORT_1);
+        let dac = speaker_of(&adapter, &key(DAC_PORT_1));
+        assert!(dac.enabled);
+        assert_eq!(dac.volume, 35.0);
+    }
+
+    /// Two displays of the same model on HDMI.
+    const MONITOR_A: &str = "hdmi-monitor-a";
+    const MONITOR_B: &str = "hdmi-monitor-b";
+
+    fn connect_monitor(adapter: &mut AudioAdapter<MockBackend>, endpoint_id: &str) {
+        adapter
+            .audio_mut()
+            .connect_output_as(endpoint_id, "LG HDR 4K", OutputKind::Hdmi);
+        adapter.poll();
+    }
+
+    #[test]
+    fn a_twin_listed_before_that_comes_back_first_doesnt_take_the_others_settings() {
+        let mut adapter = adapter();
+        connect_monitor(&mut adapter, MONITOR_A);
+        connect_monitor(&mut adapter, MONITOR_B);
+        turn_on(&mut adapter, MONITOR_A);
+        adapter.set_auto_connect(&key(MONITOR_A), true);
+        adapter.new_group("Desk").unwrap();
+        adapter.poll();
+
+        // The displays sleep: both leave the list, and the one never set
+        // wakes first, under the endpoint ID it had.
+        unplug(&mut adapter, MONITOR_A);
+        unplug(&mut adapter, MONITOR_B);
+        connect_monitor(&mut adapter, MONITOR_B);
+        let b = speaker_of(&adapter, &key(MONITOR_B));
+        assert!(!b.enabled);
+        assert!(!b.auto_connect);
+        assert_eq!(adapter.audio.enabled_outputs(), [MONITOR_A]);
+        assert_eq!(adapter.snapshot().groups[0].members, [key(MONITOR_A)]);
+        let saved = adapter.current_settings();
+        assert!(saved.auto_connect.contains(&key(MONITOR_A)));
+
+        // The other one wakes too, with everything that was set for it.
+        connect_monitor(&mut adapter, MONITOR_A);
+        let a = speaker_of(&adapter, &key(MONITOR_A));
+        assert!(a.enabled);
+        assert!(a.auto_connect);
+        assert!(!speaker_of(&adapter, &key(MONITOR_B)).enabled);
+    }
+
+    #[test]
     fn a_new_speaker_of_another_kind_doesnt_take_the_settings_of_one_with_its_name() {
         let mut adapter = adapter();
         plug_dac(&mut adapter, DAC_PORT_1);
