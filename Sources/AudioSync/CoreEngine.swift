@@ -196,6 +196,16 @@ final class CoreGainStage {
     func apply(_ buffer: UnsafeMutablePointer<Float>, frames: Int) {
         asc_gain_stage_apply(handle, buffer, frames, 2)
     }
+
+    /// Output thread: lays `frames` stereo frames out on a device buffer of
+    /// `channels` interleaved channels (L and R on the first two, silence on
+    /// the rest, their mean on a one-channel device, S63), then applies the
+    /// gain as `apply` does. Returns the frames written. Real-time safe.
+    @discardableResult
+    func render(_ stereo: UnsafePointer<Float>, frames: Int,
+                into device: UnsafeMutablePointer<Float>, channels: Int) -> Int {
+        asc_gain_stage_render(handle, stereo, frames, device, channels)
+    }
 }
 
 /// The core's volume curve: slider positions (0…100) and linear gain (S70, S71).
