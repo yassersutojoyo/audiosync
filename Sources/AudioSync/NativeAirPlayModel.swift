@@ -307,8 +307,9 @@ struct NativeAirPlayModel {
     private(set) var pairedInAttempt: Set<String> = []
     /// Prompts waiting to be shown, oldest first (receiver IDs).
     private(set) var queuedPrompts: [String] = []
-    /// A prompt is open; the next waits for its answer.
-    private(set) var promptOpen = false
+    /// The prompt that is open, until it is answered or taken back; the
+    /// next waits for it.
+    private(set) var openPrompt: NativePrompt?
 
     /// A PIN as the sender takes it: ASCII digits, at least one.
     static func isPin(_ code: String) -> Bool {
@@ -358,31 +359,49 @@ struct NativeAirPlayModel {
     /// The next prompt to show, unless one is open: the oldest queued one
     /// whose receiver still waits for it.
     mutating func nextPrompt() -> NativePrompt? {
-        guard !promptOpen else { return nil }
+        guard openPrompt == nil else { return nil }
         while !queuedPrompts.isEmpty {
             let id = queuedPrompts.removeFirst()
+            let prompt: NativePrompt
             switch stages[id] {
-            case .askingPin(let wrong)?:
-                promptOpen = true
-                return NativePrompt(id: id, password: false, wrong: wrong)
-            case .askingPassword(let wrong)?:
-                promptOpen = true
-                return NativePrompt(id: id, password: true, wrong: wrong)
-            default:
-                continue
+            case .askingPin(let wrong)?: prompt = NativePrompt(id: id, password: false, wrong: wrong)
+            case .askingPassword(let wrong)?: prompt = NativePrompt(id: id, password: true, wrong: wrong)
+            default: continue
             }
+            openPrompt = prompt
+            return prompt
         }
         return nil
     }
 
-    /// The user answered `prompt` with `code`, nil or empty for Cancel.
-    mutating func answered(_ prompt: NativePrompt, code: String?) -> NativePromptAnswer {
-        promptOpen = false
-        let id = prompt.id
-        switch (stages[id], prompt.password) {
-        case (.askingPin(_)?, false), (.askingPassword(_)?, true): break
-        default: return .ignore
+    /// Whether `stage` still waits for the answer to `prompt`.
+    private static func waits(_ stage: NativeAccessStage?, for prompt: NativePrompt) -> Bool {
+        switch (stage, prompt.password) {
+        case (.askingPin?, false), (.askingPassword?, true): return true
+        default: return false
         }
+    }
+
+    /// Takes the open prompt back once its receiver no longer waits for
+    /// its answer: its pairing failed or ended underneath, or the attempt
+    /// ended (the speaker was switched off, or plays). The app closes it,
+    /// and whatever it returns then is no answer (`answered` ignores it):
+    /// the user sees it go, with the notice that says why if the speaker
+    /// went off, instead of typing a PIN nothing waits for. Nil while the
+    /// open prompt is still waited for, or none is open.
+    mutating func withdrawPrompt() -> NativePrompt? {
+        guard let prompt = openPrompt, !Self.waits(stages[prompt.id], for: prompt) else { return nil }
+        openPrompt = nil
+        return prompt
+    }
+
+    /// The user answered `prompt` with `code`, nil or empty for Cancel.
+    /// A prompt that isn't the open one (taken back meanwhile) is ignored.
+    mutating func answered(_ prompt: NativePrompt, code: String?) -> NativePromptAnswer {
+        guard openPrompt == prompt else { return .ignore }
+        openPrompt = nil
+        let id = prompt.id
+        guard Self.waits(stages[id], for: prompt) else { return .ignore }
         // The stage stays: turning the speaker off cancels a waiting pairing.
         guard let code, !code.isEmpty else { return .turnOff(.cancelled) }
         if prompt.password {

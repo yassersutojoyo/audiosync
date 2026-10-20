@@ -97,13 +97,19 @@ extension AppDelegate {
         let names = nativeAirPlay?.model.names ?? [:]
         DBG.log(event.logLine { names[$0] })
         if let outcome { nativeOutcome(outcome) }
+        closeWithdrawnPrompt()   // its pairing may have ended underneath
     }
 
     /// Acts on what the native model decided.
     private func nativeOutcome(_ outcome: NativeAirPlayOutcome) {
         switch outcome {
         case .playingChanged(let id, let playing):
-            if playing { clearNotices([SpeakerKey.make(id: id, airplay: true)]) }   // playing: whatever went wrong is over
+            if playing {
+                clearNotices([SpeakerKey.make(id: id, airplay: true)])   // playing: whatever went wrong is over
+                // It plays with credentials an earlier pairing stored: a
+                // pairing still under way for it is no longer needed.
+                if let receiver = NativeAirPlayID.receiver(id) { nativeAirPlay?.cancelPairing(receiver) }
+            }
             refreshNativeRows()   // a lapsed receiver that stops playing leaves the list; chosen may flip
         case .turnOff(let id, let reason):
             turnOffNativeSpeaker(id, reason: reason, origin: .automatic)
@@ -140,6 +146,7 @@ extension AppDelegate {
             endNativeAttempt(id)   // an attempt still under way ends first
             if let outcome = native.model.turnedOnByUser(receiver) { nativeOutcome(outcome) }
         }
+        closeWithdrawnPrompt()
     }
 
     /// The native speaker `id` (app ID) was switched off: its attempt ends,
@@ -148,6 +155,7 @@ extension AppDelegate {
     func endNativeAttempt(_ id: String) {
         guard let receiver = NativeAirPlayID.receiver(id), let native = nativeAirPlay else { return }
         if native.model.turnedOff(receiver) { native.cancelPairing(receiver) }
+        closeWithdrawnPrompt()
     }
 
     /// Starts a PIN pairing with `receiver`. A speaker of it still in the
@@ -185,6 +193,18 @@ extension AppDelegate {
         // A sender that stopped meanwhile took its pairings and prompts with it.
         if nativeAirPlay === native { nativeAnswered(native, prompt, code: code) }
         DispatchQueue.main.async { [weak self] in self?.showNextNativePrompt() }
+    }
+
+    /// Closes the open prompt once nobody waits for its answer
+    /// (`NativeAirPlayModel.withdrawPrompt`): its pairing failed or ended
+    /// underneath, or the speaker went off or plays. It returns as
+    /// cancelled, which is then no answer, and a notice says why the
+    /// speaker went off, if it did, instead of a PIN typed late going
+    /// nowhere. Called after everything that can end what a prompt waits for.
+    private func closeWithdrawnPrompt() {
+        guard codePromptBusy, let prompt = nativeAirPlay?.model.withdrawPrompt() else { return }
+        DBG.log("[AudioSync] native AirPlay: the \(prompt.password ? "password" : "PIN") prompt for \(nativeLabel(prompt.id)) is taken back: nothing waits for it any more")
+        closeCodePrompt()
     }
 
     /// Hands the user's answer to `prompt` (nil: Cancel) to the sender.
@@ -227,6 +247,7 @@ extension AppDelegate {
         nativeAirPlay = nil
         nativeStarts.senderFailed()
         native.discard()
+        if codePromptBusy { closeCodePrompt() }   // its prompt went with it
         airplayOrder = []
         stopNativeLocalNetworkProbe()
         notify(text.nativeAirPlayStopped, origin: .automatic, subject: Notice.airplaySender)
