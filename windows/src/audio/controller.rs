@@ -652,19 +652,27 @@ impl<D: Driver> Controller<D> {
             }
             // An input device has no media session; receivers get the
             // labels with its name, or without one when it isn't listed.
-            SourceId::Input { endpoint_id } => TrackSource {
-                follow: Follow::App {
-                    executable: String::new(),
-                },
-                name: self.driver.inputs().ok().and_then(|readings| {
-                    input_sources(readings)
+            SourceId::Input { endpoint_id } => {
+                let unnamed = TrackSource {
+                    follow: Follow::App {
+                        executable: String::new(),
+                    },
+                    name: None,
+                };
+                // A failed listing isn't kept, so a later poll can still name it.
+                let Ok(readings) = self.driver.inputs() else {
+                    return Some(unnamed);
+                };
+                TrackSource {
+                    name: input_sources(readings)
                         .into_iter()
                         .find(|input| {
                             matches!(&input.id, SourceId::Input { endpoint_id: listed } if listed == endpoint_id)
                         })
-                        .map(|input| input.name)
-                }),
-            },
+                        .map(|input| input.name),
+                    ..unnamed
+                }
+            }
         };
         self.track_source = Some((id, source.clone()));
         Some(source)
@@ -5019,6 +5027,18 @@ mod tests {
             track_sent.map(|track| track.artist.as_str()),
             Some(crate::audio::now_playing::UNNAMED_SOURCE),
             "{sent:?}"
+        );
+
+        backend.fail_input_listing(None);
+        reader.read(None);
+        backend.poll();
+        let sent = now_playing_sent(&fake);
+        assert_eq!(
+            sent.last()
+                .and_then(|sent| sent.track.as_ref())
+                .map(|track| track.artist.as_str()),
+            Some("USB Microphone"),
+            "a listing that works again names the device: {sent:?}"
         );
     }
 
