@@ -424,7 +424,7 @@ export global Strings {
             return @tr("{} not connected", name);
         }
         if kind == NoticeKind.input-disconnected {
-            return @tr("{} disconnected", name);
+            return @tr("{} was disconnected, streaming stopped", name);
         }
         if kind == NoticeKind.microphone-blocked {
             return @tr("microphone access blocked");

@@ -21,7 +21,7 @@ use std::mem::ManuallyDrop;
 use std::ptr;
 use std::slice;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::ring::RingWriter;
@@ -83,6 +83,9 @@ pub struct LoopbackCapture {
     /// The HRESULT that ended the capture, once `ended` is set.
     failure: Arc<AtomicI32>,
     ended: Arc<AtomicBool>,
+    /// The frames Windows delivered, without the silence filling gaps.
+    #[cfg(test)]
+    captured: Arc<AtomicU64>,
     thread: Worker,
     /// The captured app, to notice when it quits.
     source: Option<ProcessWatch>,
@@ -118,6 +121,13 @@ impl CaptureHandle for LoopbackCapture {
     }
 }
 
+#[cfg(test)]
+impl LoopbackCapture {
+    fn frames_captured(&self) -> u64 {
+        self.captured.load(Ordering::Relaxed)
+    }
+}
+
 impl Drop for LoopbackCapture {
     fn drop(&mut self) {
         // The thread stops its stream and ends.
@@ -148,13 +158,15 @@ pub(super) fn start(
     let stop = Arc::new(Event::manual_reset()?);
     let failure = Arc::new(AtomicI32::new(0));
     let ended = Arc::new(AtomicBool::new(false));
+    let captured = Arc::new(AtomicU64::new(0));
     let (thread, setup) = {
         let stop = Arc::clone(&stop);
         let failure = Arc::clone(&failure);
         let ended = Arc::clone(&ended);
+        let captured = Arc::clone(&captured);
         spawn_worker("audiosync-capture", move |ready| {
             run(
-                &target, writer, equalizer, airplay, &stop, &failure, &ended, ready,
+                &target, writer, equalizer, airplay, &stop, &failure, &ended, &captured, ready,
             );
         })?
     };
@@ -162,6 +174,8 @@ pub(super) fn start(
         stop,
         failure,
         ended,
+        #[cfg(test)]
+        captured,
         thread,
         source,
         setup,
@@ -184,6 +198,7 @@ fn run(
     stop: &Event,
     failure: &AtomicI32,
     ended: &AtomicBool,
+    captured: &AtomicU64,
     ready: Ready<CaptureAttempt>,
 ) {
     let _apartment = match Apartment::enter() {
@@ -214,7 +229,7 @@ fn run(
         let _ = unsafe { stream.client.Stop() };
         return;
     }
-    let result = capture_loop(&stream, &mut converter, stop);
+    let result = capture_loop(&stream, &mut converter, stop, captured);
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };
     if let Err(code) = result {
@@ -468,6 +483,7 @@ fn capture_loop(
     stream: &CaptureStream,
     converter: &mut CaptureConverter,
     stop: &Event,
+    captured: &AtomicU64,
 ) -> Result<(), HRESULT> {
     let handles = [stop.raw(), stream.event.raw()];
     let packet_ready = WAIT_EVENT(WAIT_OBJECT_0.0 + 1);
@@ -511,6 +527,7 @@ fn capture_loop(
                 break;
             }
             packets += 1;
+            captured.fetch_add(u64::from(frames), Ordering::Relaxed);
             let count = frames as usize;
             // A packet without a position counts as captured just now.
             let start = if position != 0 {
@@ -572,8 +589,12 @@ mod tests {
     /// How long a test waits for an answer.
     const TIMEOUT: Duration = Duration::from_millis(200);
 
-    /// Captures each of this PC's input devices for half a second into a
-    /// ring nothing plays. Ignored by default since it needs Windows audio;
+    /// How long a real input device gets to deliver its first frames.
+    const FIRST_FRAMES: Duration = Duration::from_secs(1);
+
+    /// Captures each of this PC's input devices into a ring nothing plays,
+    /// until Windows delivers frames (silent ones count: a muted microphone
+    /// still delivers). Ignored by default since it needs Windows audio;
     /// run it on a PC with `cargo test real_inputs -- --ignored --nocapture`.
     #[test]
     #[ignore = "captures the PC's own input devices"]
@@ -582,6 +603,10 @@ mod tests {
         use crate::audio::capture::input_sources;
 
         let inputs = input_sources(super::super::devices::capture_endpoints().expect("listed"));
+        if inputs.is_empty() {
+            println!("skipped: this PC has no input device");
+            return;
+        }
         for input in inputs {
             let SourceId::Input { endpoint_id } = input.id else {
                 unreachable!("only input devices are listed");
@@ -598,15 +623,24 @@ mod tests {
                 None,
             )
             .unwrap_or_else(|error| panic!("{} didn't start: {error}", input.name));
-            std::thread::sleep(Duration::from_millis(500));
+            let started = Instant::now();
+            while capture.frames_captured() == 0 && started.elapsed() < FIRST_FRAMES {
+                thread::sleep(Duration::from_millis(20));
+            }
             println!(
-                "{}: {:?}, {} frames",
+                "{}: {:?}, {} frames captured in {:?}, {} written",
                 input.name,
                 capture.setup(),
+                capture.frames_captured(),
+                started.elapsed(),
                 ring.frames_written()
             );
             assert_eq!(capture.state(), CaptureState::Running);
-            assert!(ring.frames_written() > 0, "{} wrote nothing", input.name);
+            assert!(
+                capture.frames_captured() > 0,
+                "{} delivered no frames within {FIRST_FRAMES:?}",
+                input.name
+            );
         }
     }
 
@@ -638,6 +672,7 @@ mod tests {
             stop,
             failure: Arc::new(AtomicI32::new(0)),
             ended: Arc::new(AtomicBool::new(false)),
+            captured: Arc::new(AtomicU64::new(0)),
             thread,
             source: None,
             setup: CAPTURE_ATTEMPTS[0],
