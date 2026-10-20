@@ -63,10 +63,13 @@ speakers.
 
 The wordmark SVGs in `brand/` are outlined from Poppins Medium.
 
-## Windows app (in development, not released)
+## Windows app (preview)
 
-`windows/` is the start of a Windows 11 version of AudioSync. None of it is in
-the macOS app, and no Windows build has been released.
+`windows/` is the Windows 11 version of AudioSync, released as an unsigned
+preview starting with 0.6.0-preview.1. None of it is in the macOS app. Each
+release with the Windows preview attaches, next to the x64 and ARM64 zips, the
+complete source of those builds: the repository at the release commit plus
+every crate they compile, vendored (`scripts/windows_source_archive.sh`).
 
 | Component | License |
 |---|---|

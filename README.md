@@ -31,7 +31,7 @@
 
 I built this because I wanted my Mac's audio on every speaker in the house at once. The catch is that a HomePod always plays a little late (AirPlay buffers about two seconds), so a HomePod and a desk speaker playing the same song sound like an echo. AudioSync captures the audio once, streams it to your AirPlay speakers, and plays a delayed copy on each local output, every one with its own offset, until the whole room sounds like one speaker.
 
-It's a small Mac app written in Swift, with a main window and a menu bar panel, free and open source under the GPL. It's an early alpha, so expect rough edges. A Windows 11 version is on the way too ([more below](#coming-to-windows)).
+It's a small Mac app written in Swift, with a main window and a menu bar panel, free and open source under the GPL. It's an early alpha, so expect rough edges. There's a Windows 11 preview too ([more below](#windows-preview)).
 
 ## What's new in 0.5.0
 
@@ -53,7 +53,9 @@ Each local speaker gets its own delay relative to the Mac's built-in speakers (â
 
 macOS also keeps its own volume for every output, and only the default one is in the Sound menu. If a speaker you switched on sits at 25% or less there, or is muted, its row tells you, and one click sets it to 75% or unmutes it.
 
-## Coming to Windows
+## Windows preview
+
+[![Made with Slint](https://img.shields.io/badge/made_with-Slint-lightgrey)](https://slint.dev)
 
 There's a Windows 11 version too, written in Rust with a [Slint](https://slint.dev) interface, for x64 and ARM64 PCs. It shares the Rust audio engine with the Mac app, and by now it does most of what the Mac app does.
 
@@ -71,7 +73,14 @@ The part I'm proudest of: AirPlay on Windows goes out through AudioSync's own Ai
 - Your settings are kept between launches, and a settings or pairing file it can't read is set aside as a copy instead of being overwritten.
 - A debug log you can switch on when something acts up.
 
-It isn't released yet, so there's no download on the Releases page today. It can go out with an upcoming release as an unsigned preview, once I've tried that exact build on a real Windows 11 PC. CI builds and tests it on every push, and if you're signed in to GitHub you can grab a build from there; [windows/README.md](windows/README.md#trying-the-preview-exe) says where and what to expect the first time (it needs Windows 11, isn't code-signed, and wants a Private network for AirPlay).
+The first preview, 0.6.0-preview.1, is on the [Releases page](https://github.com/yassersutojoyo/audiosync/releases/tag/v0.6.0-preview.1) as a pre-release: `AudioSync-0.6.0-preview.1-windows-x64.zip` for most PCs and `-windows-arm64.zip` for ARM PCs. Each zip holds `audiosync.exe` and its `THIRD-PARTY-NOTICES.txt`; there's no installer, so unzip it into a folder of its own and run the exe. A few things to know first:
+
+- It needs Windows 11. On anything older it says so and quits.
+- The exe isn't code-signed, so the first time Windows SmartScreen may say it protected your PC. Click More info, then Run anyway.
+- For AirPlay, allow AudioSync through Windows Firewall when it asks, and keep your network set to Private; on a Public network Windows will probably block the speaker search.
+- The release also has the full source of that build, `cargo vendor` crates included, because the Windows app uses Slint under GPL-3.0-only.
+
+[windows/README.md](windows/README.md#trying-the-preview-exe) has more on the first launch, the tray icon and the debug log.
 
 To be upfront about the gaps: from Windows, AirPlay only plays to receivers that take AirPlay 1. Receivers that only do AirPlay 2, or that ask for a password, are listed with a note and stay off. I haven't tried the AirPlay part with a real speaker or Apple TV yet. Local playback has had a short first listen on my Windows 11 PC, a USB-C in-ear and a pair of wired speakers playing together; Bluetooth speakers are next on my list.
 

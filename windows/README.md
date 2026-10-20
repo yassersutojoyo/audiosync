@@ -20,9 +20,11 @@ shortcuts.
 
 ## Trying the preview exe
 
-There's no Windows release yet, so for now you build it yourself (below).
+Download `AudioSync-<version>-windows-x64.zip` (or `-windows-arm64.zip` for
+an ARM PC) from a release marked as a preview, or build it yourself (below).
 It's a single exe with no installer: put it in a folder of its own, keep the
-`THIRD-PARTY-NOTICES.txt` you write for it (below) next to it, and run it.
+`THIRD-PARTY-NOTICES.txt` that comes with it (or that you write for it, below)
+next to it, and run it.
 
 - **What you need:** Windows 11 (build 22000 or later) on x64 or ARM64. On
   anything older the app says so and exits.
