@@ -301,7 +301,10 @@ impl<D: Driver> Controller<D> {
         let level = fix
             .volume
             .map(|volume| (volume, self.driver.set_endpoint_level(id, volume as f32)));
-        let unmuted = fix.unmute.then(|| self.driver.unmute_endpoint(id));
+        // A level write that didn't answer leaves Windows audio hung: the
+        // unmute would only wait and fail too.
+        let level_hung = matches!(&level, Some((_, Err(BackendError::NotResponding))));
+        let unmuted = (fix.unmute && !level_hung).then(|| self.driver.unmute_endpoint(id));
         self.log.log(|| {
             let mut written = Vec::new();
             if let Some((volume, result)) = &level {
@@ -313,6 +316,8 @@ impl<D: Driver> Controller<D> {
             }
             if let Some(result) = &unmuted {
                 written.push(format!("unmuted: {}", outcome(result)));
+            } else if fix.unmute {
+                written.push("unmute not tried".to_owned());
             }
             format!(
                 "output {} device volume fix: {}",
@@ -323,7 +328,7 @@ impl<D: Driver> Controller<D> {
         let hung = |result: Option<&Result<(), BackendError>>| {
             matches!(result, Some(Err(BackendError::NotResponding)))
         };
-        if hung(level.as_ref().map(|(_, result)| result)) || hung(unmuted.as_ref()) {
+        if level_hung || hung(unmuted.as_ref()) {
             self.stall_device_volume(id);
         }
     }
@@ -737,8 +742,10 @@ mod tests {
             .collect();
         assert_eq!(
             lines,
-            ["output \"Speakers\" (speakers) device volume fix: volume set to 75%: failed: \
-              Windows audio didn't answer in time.; unmute not tried"]
+            [
+                "output \"Speakers\" (speakers) device volume fix: volume set to 75%: failed: \
+              Windows audio didn't answer in time.; unmute not tried"
+            ]
         );
         let _ = std::fs::remove_dir_all(dir);
     }
