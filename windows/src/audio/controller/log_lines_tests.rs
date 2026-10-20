@@ -209,14 +209,15 @@ fn an_output_line_shows_the_stream_an_endpoint_gets() {
             "48000 Hz, 2 ch (mask 0x3), float, the device's own format; \
              buffer 9600 frames (200.0 ms)",
         ),
-        // Windows may round the buffer up to its own alignment.
+        // Windows may round the buffer up to its own alignment: a 48 kHz
+        // HD Audio endpoint asked for 20 ms got 1056 frames.
         (
             StreamSetup {
-                buffer_frames: 1032,
+                buffer_frames: 1056,
                 ..wasapi_setup(SPEAKERS_MIX, DEFAULT_PERIOD_HNS)
             },
             "48000 Hz, 2 ch (mask 0x3), float, the device's own format; \
-             buffer 1032 frames (21.5 ms)",
+             buffer 1056 frames (22.0 ms)",
         ),
     ];
     let speakers = label(&names(), SPEAKERS_ID);
