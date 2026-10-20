@@ -746,8 +746,10 @@ bool asc_airplay_next_receiver(AscAirPlay *airplay, AscAirPlayReceiver *receiver
  * Takes the next speaker or timeline event, if one is waiting, into *event
  * and returns true. Returns false, leaving *event as it was, when none is
  * waiting or either pointer is NULL. Never waits. Receiver changes wait for
- * asc_airplay_next_receiver. A dead sender reports ASC_AIRPLAY_EVENT_FAILED
- * once, in place of whatever still waited, and nothing after it.
+ * asc_airplay_next_receiver, and an event waits until every receiver change
+ * queued before it was taken there: take the changes first. A dead sender
+ * reports ASC_AIRPLAY_EVENT_FAILED once, in place of whatever still waited,
+ * and nothing after it.
  */
 bool asc_airplay_next_event(AscAirPlay *airplay, AscAirPlayEvent *event);
 
@@ -828,8 +830,12 @@ int32_t asc_airplay_open_pairings(AscAirPlay *airplay, const char *path);
  * ASC_AIRPLAY_NEEDS_PIN that the user turned on; never on the app's own): it
  * is asked to show a PIN, and ASC_AIRPLAY_EVENT_PIN_NEEDED follows, or how
  * the pairing ended. It uses the password handed over for `id`, if any. A
- * pairing already running for it is replaced. Returns false, starting
- * nothing, when the handle or id is NULL or id isn't listed.
+ * pairing already running for it is replaced (cancelled). A new pairing
+ * starts once the one cancelled before it has ended, and nothing that one
+ * reports reaches the host or ends the new one; when that one ended paired
+ * after all, the new one never starts and ASC_AIRPLAY_EVENT_PAIRED follows
+ * instead, with no PIN asked. Returns false, starting nothing, when the
+ * handle or id is NULL or id isn't listed.
  */
 bool asc_airplay_start_pairing(AscAirPlay *airplay, const char *id);
 
@@ -842,7 +848,10 @@ bool asc_airplay_start_pairing(AscAirPlay *airplay, const char *id);
  */
 bool asc_airplay_submit_pin(AscAirPlay *airplay, const char *id, const char *pin);
 
-/* Stops the pairing with `id`, if one runs; nothing more is reported for it. */
+/*
+ * Stops the pairing with `id`, if one runs; nothing more is reported for it.
+ * Credentials it still gets before it stops are stored all the same.
+ */
 void asc_airplay_cancel_pairing(AscAirPlay *airplay, const char *id);
 
 /*

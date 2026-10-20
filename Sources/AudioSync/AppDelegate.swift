@@ -148,6 +148,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var airplayEmptySince: Date?
     /// A PIN or password prompt is open.
     var codePromptBusy = false
+    /// The open PIN or password prompt's window, while it runs (`closeCodePrompt`).
+    var codePromptWindow: NSWindow?
     var sentTrackInfo: SentTrackInfo?
 
     // MARK: - Local speakers (`+Outputs`)

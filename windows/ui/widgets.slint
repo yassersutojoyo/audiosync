@@ -547,12 +547,17 @@ export component SyncControls inherits VerticalLayout {
 }
 
 // The AirPlay delay: how long the local speakers wait for the AirPlay
-// speakers. Steps and a field that applies as you type, like a speaker's
-// sync controls, under its own title.
+// speakers. Steps and a field, under its own title. Unlike a speaker's sync
+// controls, the field applies on Enter or when it loses the focus: its lower
+// bound follows the sender's latency, so a half-typed number would clamp.
 export component AirPlayDelayControls inherits VerticalLayout {
     in property <string> delay-text;
     callback stepped(int);
     callback edited(string);
+    // Enter, or the field lost the focus: apply what was typed.
+    callback committed();
+    // Escape in the field: drop what was typed.
+    callback cancelled();
 
     spacing: 8px;
     accessible-role: groupbox;
@@ -572,41 +577,65 @@ export component AirPlayDelayControls inherits VerticalLayout {
         VerticalLayout {
             spacing: 6px;
 
-            HorizontalLayout {
-                spacing: 4px;
-                alignment: start;
-
-                for delta in [-100, -10]: Button {
-                    text: Strings.delay-step(delta);
-                    accessible-label: Strings.delay-step-accessibility(delta);
-                    clicked => {
-                        root.stepped(delta);
+            // Escape in the field drops what was typed and shows the applied
+            // value again; the focus loss that follows then applies nothing.
+            // Captured before the field sees the key.
+            FocusScope {
+                focus-on-click: false;
+                focus-on-tab-navigation: false;
+                capture-key-pressed(event) => {
+                    if event.text == Key.Escape && field.has-focus {
+                        root.cancelled();
+                        field.text = root.delay-text;
+                        return accept;
                     }
+                    return reject;
                 }
 
-                field := LineEdit {
-                    width: 72px;
-                    text: root.delay-text;
-                    horizontal-alignment: center;
-                    accessible-label: Strings.airplay-delay-title;
-                    accessible-description: Strings.airplay-delay-hint;
-                    edited(text) => {
-                        root.edited(text);
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+
+                    for delta in [-100, -10]: Button {
+                        text: Strings.delay-step(delta);
+                        accessible-label: Strings.delay-step-accessibility(delta);
+                        clicked => {
+                            root.stepped(delta);
+                        }
                     }
-                }
 
-                Text {
-                    text: Strings.milliseconds-unit;
-                    color: Tokens.secondary-text;
-                    vertical-alignment: center;
-                    accessible-role: none;
-                }
+                    field := LineEdit {
+                        width: 72px;
+                        text: root.delay-text;
+                        horizontal-alignment: center;
+                        accessible-label: Strings.airplay-delay-title;
+                        accessible-description: Strings.airplay-delay-hint;
+                        edited(text) => {
+                            root.edited(text);
+                        }
+                        accepted => {
+                            root.committed();
+                        }
+                        changed has-focus => {
+                            if !self.has-focus {
+                                root.committed();
+                            }
+                        }
+                    }
 
-                for delta in [10, 100]: Button {
-                    text: Strings.delay-step(delta);
-                    accessible-label: Strings.delay-step-accessibility(delta);
-                    clicked => {
-                        root.stepped(delta);
+                    Text {
+                        text: Strings.milliseconds-unit;
+                        color: Tokens.secondary-text;
+                        vertical-alignment: center;
+                        accessible-role: none;
+                    }
+
+                    for delta in [10, 100]: Button {
+                        text: Strings.delay-step(delta);
+                        accessible-label: Strings.delay-step-accessibility(delta);
+                        clicked => {
+                            root.stepped(delta);
+                        }
                     }
                 }
             }
