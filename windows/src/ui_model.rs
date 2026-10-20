@@ -265,9 +265,9 @@ pub enum NoticeMessage {
         speaker: String,
         problem: AirPlayProblem,
     },
-    /// AudioSync's AirPlay sender stopped after an internal error, so
-    /// AirPlay speakers aren't listed or playing. The notice offers Retry
-    /// ([`Backend::retry_airplay`]).
+    /// AudioSync's AirPlay sender stopped after an internal error or
+    /// couldn't start, so AirPlay speakers aren't listed or playing. The
+    /// notice offers Retry ([`Backend::retry_airplay`]).
     AirPlayStopped,
     /// The source also plays straight from these outputs, undelayed, so it
     /// is heard twice. `source` is the app's name, or `None` for the whole

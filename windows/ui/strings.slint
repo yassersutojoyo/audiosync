@@ -56,7 +56,7 @@ export global Strings {
     out property <string> notice-no-speaker: @tr("Turn on at least one speaker first (under This PC or Connected Speakers).");
     out property <string> notice-capture-failed: @tr("AudioSync couldn't capture audio from the selected source. Turn streaming off and on again, or pick another source. If it keeps happening, restart your PC.");
     out property <string> notice-capture-lost: @tr("AudioSync lost the audio from the selected source, so streaming has stopped. Turn streaming on again, or pick another source.");
-    out property <string> notice-airplay-stopped: @tr("AirPlay stopped working after an internal error. Select Retry to start it again. If it keeps stopping, restart AudioSync.");
+    out property <string> notice-airplay-stopped: @tr("AirPlay stopped or couldn't start. Select Retry to try again. If it keeps happening, restart AudioSync.");
 
     // Pairing with an Apple TV that asks for a PIN: the dialog and the
     // speaker menu.
@@ -201,9 +201,11 @@ export global Strings {
     }
 
     // Another app holds a speaker's device for itself (exclusive mode); the
-    // speaker stays on and plays once that app lets go of it.
+    // speaker stays on and plays once that app lets go of it. Windows calls
+    // the setting "Allow applications to take exclusive control of this
+    // device", in the device's properties under Sound settings.
     public pure function notice-speaker-busy(speaker: string) -> string {
-        return @tr("{} is being used by another app right now. AudioSync plays to it as soon as it's free.", speaker);
+        return @tr("{} is in use by another app. Close that app, or stop apps from taking exclusive control of it in Sound settings. AudioSync plays to it as soon as it's free.", speaker);
     }
 
     // An AirPlay speaker stopped playing or can't play. For the first four

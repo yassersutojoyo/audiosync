@@ -298,9 +298,10 @@ pub enum BackendEvent {
         /// The endpoint ID.
         id: String,
     },
-    /// The AirPlay sender stopped after an internal error, so no AirPlay
-    /// speaker is listed or plays, or its discovery did, so none is listed;
-    /// [`AudioBackend::retry_airplay`] starts a new sender.
+    /// The AirPlay sender stopped after an internal error or couldn't
+    /// start, so no AirPlay speaker is listed or plays, or its discovery
+    /// did, so none is listed; [`AudioBackend::retry_airplay`] starts a new
+    /// sender.
     AirPlayStopped,
 }
 
