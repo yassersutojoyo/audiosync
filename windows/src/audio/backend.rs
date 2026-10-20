@@ -310,6 +310,13 @@ pub enum BackendEvent {
         /// The last write worked.
         saved: bool,
     },
+    /// The pairings' file the store ignored at launch (it couldn't be read,
+    /// decrypted or parsed) was kept aside before the first write over it,
+    /// so the user can be told where. Reported once.
+    PairingsKeptAside {
+        /// The copy's file name, in the app's data folder.
+        file: String,
+    },
 }
 
 /// Why playback stopped on its own.

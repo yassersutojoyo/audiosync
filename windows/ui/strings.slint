@@ -203,6 +203,21 @@ export global Strings {
     }
 
     // A speaker that couldn't start was turned off.
+    // The settings file couldn't be read when the app started (another
+    // program held it, or it was damaged), so the defaults applied; it was
+    // kept under this file name in %LOCALAPPDATA%\AudioSync before the
+    // first save over it.
+    public pure function notice-settings-kept-aside(file: string) -> string {
+        return @tr("AudioSync couldn't read your saved settings when it started, so it's using the default settings. The old file was kept as {} in the AudioSync folder in %LOCALAPPDATA%.", file);
+    }
+
+    // The same for the file with the Apple TV pairings: those Apple TVs ask
+    // for a code again.
+    public pure function notice-pairings-kept-aside(file: string) -> string {
+        return @tr("AudioSync couldn't read your Apple TV pairings when it started, so those Apple TVs ask for a code again. The old file was kept as {} in the AudioSync folder in %LOCALAPPDATA%.", file);
+    }
+
+    // A speaker that couldn't start was turned off.
     public pure function notice-speaker-failed(speaker: string) -> string {
         return @tr("Could not start output for this speaker, so it was turned off: {}\nAnother app may be using it exclusively, or the format may be incompatible.", speaker);
     }

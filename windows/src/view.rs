@@ -1701,6 +1701,12 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::AirPlayStopped => strings.get_notice_airplay_stopped(),
         NoticeMessage::SettingsNotSaved => strings.get_notice_settings_not_saved(),
         NoticeMessage::PairingsNotSaved => strings.get_notice_pairings_not_saved(),
+        NoticeMessage::SettingsKeptAside { file } => {
+            strings.invoke_notice_settings_kept_aside(file.as_str().into())
+        }
+        NoticeMessage::PairingsKeptAside { file } => {
+            strings.invoke_notice_pairings_kept_aside(file.as_str().into())
+        }
         NoticeMessage::NoSoundOutput => strings.get_notice_no_sound_output(),
         NoticeMessage::HeardTwice {
             source,

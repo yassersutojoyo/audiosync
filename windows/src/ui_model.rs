@@ -299,6 +299,16 @@ pub enum NoticeMessage {
     /// forgotten now last only until AudioSync quits. Posted once until a
     /// write works again, which clears it.
     PairingsNotSaved,
+    /// The settings file couldn't be read at launch (or was damaged), so
+    /// AudioSync started with the defaults; once it could be read again, it
+    /// was kept aside as `file`, in the app's data folder, before the first
+    /// save over it.
+    SettingsKeptAside { file: String },
+    /// The pairings' file couldn't be read at launch (or decrypted, or
+    /// parsed), so AudioSync started without the pairings in it; once it
+    /// could be read again, it was kept aside as `file`, in the app's data
+    /// folder, before the first write over it.
+    PairingsKeptAside { file: String },
     /// Windows has no active sound output while an AirPlay speaker is on, so
     /// apps have nowhere to play and nothing reaches the speaker. Clears
     /// itself once an output is back or no AirPlay speaker is on.

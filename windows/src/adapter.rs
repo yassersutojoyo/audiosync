@@ -1105,6 +1105,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::PairingStore { saved: true } => {
                 self.notices.clear(&[NoticeSubject::PairingsFile]);
             }
+            BackendEvent::PairingsKeptAside { .. } => {}
         }
     }
 
@@ -3967,6 +3968,82 @@ mod tests {
         );
         // Writable again: the next write clears the notice.
         std::fs::remove_dir(&path).expect("the folder is removed");
+        adapter.forget_pairing(&id);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn settings_unreadable_at_launch_get_a_notice_once_they_are_kept_aside() {
+        let dir = test_dir("adapter-settings-kept-aside");
+        let path = dir.join(settings::FILE_NAME);
+        let held = dir.join("held");
+        std::fs::write(&held, "the user's settings").expect("written");
+        // Another program holds the file at launch (a folder stands in its
+        // place), and lets go of it before the first save.
+        std::fs::create_dir(&path).expect("the folder is made");
+        let mut adapter = launch(launch_audio(), &path);
+        assert!(messages(&adapter).is_empty(), "nothing kept aside yet");
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(&held, &path).expect("moved back");
+        adapter.set_master_volume(64.0);
+        assert!(adapter.poll(), "the notice shows");
+        let shown = messages(&adapter);
+        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert!(file.starts_with("settings.ignored-"), "{file}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(file)).expect("kept"),
+            "the user's settings"
+        );
+        // Told once: dismissed, it stays away at the next saves.
+        adapter.dismiss_all_notices();
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pairings_unreadable_at_launch_get_a_notice_once_they_are_kept_aside() {
+        use crate::audio::pairings::tests::sealer;
+        let dir = test_dir("adapter-pairings-kept-aside");
+        let path = dir.join(crate::audio::pairings::FILE_NAME);
+        // Another program holds the file at launch (a folder stands in its
+        // place), and lets go of it before the first pairing.
+        std::fs::create_dir(&path).expect("the folder is made");
+        let mut audio = launch_audio();
+        let fake = FakeAirPlay::new();
+        let (store, _) = PairingStore::open(path.clone(), sealer());
+        audio.set_airplay_with_pairings(fake.link(), None, store);
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::write(&path, b"the pairings made before").expect("written");
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        fake.appear(&tv);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEF", 0x11)),
+        );
+        assert!(adapter.poll());
+        let shown = messages(&adapter);
+        let [NoticeMessage::PairingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert!(file.starts_with("airplay-pairings.ignored-"), "{file}");
+        assert_eq!(
+            std::fs::read(dir.join(file)).expect("kept"),
+            b"the pairings made before"
+        );
+        // Told once: dismissed, it stays away at the next writes.
+        adapter.dismiss_all_notices();
         adapter.forget_pairing(&id);
         adapter.poll();
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));

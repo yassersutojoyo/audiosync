@@ -2158,6 +2158,9 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
              since last until AudioSync quits"
                 .to_owned()
         }
+        BackendEvent::PairingsKeptAside { file } => {
+            format!("the AirPlay pairings' file ignored at launch was kept as {file}")
+        }
     }
 }
 

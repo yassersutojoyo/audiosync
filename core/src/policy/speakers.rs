@@ -313,6 +313,12 @@ pub enum NoticeSubject {
     SettingsFile,
     /// The speaker pairings' file: it couldn't be written (Windows).
     PairingsFile,
+    /// The user's settings file couldn't be read at launch and was kept
+    /// aside before the first save over it (Windows).
+    SettingsKeptAside,
+    /// The speaker pairings' file couldn't be read at launch and was kept
+    /// aside before the first write over it (Windows).
+    PairingsKeptAside,
     /// The system's sound outputs as a whole: none is active (Windows).
     SoundOutput,
 }
