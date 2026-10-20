@@ -401,6 +401,7 @@ mod dpapi {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::data_folder::copies_kept_aside;
     use crate::debug_log::test_dir;
 
     /// Credentials whose secret is `fill` repeated.
@@ -527,7 +528,7 @@ pub mod tests {
     fn a_file_that_cant_be_read_at_launch_is_never_saved_over() {
         let dir = test_dir("pairings-unreadable");
         let path = dir.join(FILE_NAME);
-        let kept = dir.join("airplay-pairings.ignored.dat");
+        let kept = || copies_kept_aside(&dir, "airplay-pairings.ignored");
         // A folder where the file should be: reading it fails, but not with
         // "not found", as when another program holds the file at launch.
         fs::create_dir(&path).unwrap();
@@ -550,14 +551,46 @@ pub mod tests {
         store
             .insert("02005E005303", credentials("0123456789ABCDED", 5))
             .expect("saved");
-        assert_eq!(fs::read(&kept).expect("kept"), good);
+        assert_eq!(kept(), [good.clone()]);
         assert_eq!(
             PairingStore::open(path.clone(), sealer()).1,
             Loaded::Speakers(2)
         );
         // Once replaced, the next write leaves the copy alone.
         store.remove("02005E005303").expect("saved");
-        assert_eq!(fs::read(&kept).expect("kept"), good);
+        assert_eq!(kept(), [good]);
+    }
+
+    #[test]
+    fn pairings_unreadable_at_two_launches_in_a_row_are_never_lost() {
+        let dir = test_dir("pairings-unreadable-twice");
+        let path = dir.join(FILE_NAME);
+        let users = good_file("pairings-unreadable-twice-good");
+        fs::write(&path, &users).unwrap();
+        // A launch while another program holds the file (a folder stands in
+        // its place), which lets go of it before the first pairing.
+        let launch = |fill: u8| {
+            let held = dir.join("held");
+            fs::rename(&path, &held).unwrap();
+            fs::create_dir(&path).unwrap();
+            let (mut store, loaded) = PairingStore::open(path.clone(), sealer());
+            assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+            fs::remove_dir(&path).unwrap();
+            fs::rename(&held, &path).unwrap();
+            store
+                .insert("02005E005304", credentials("0123456789ABCDEC", fill))
+                .expect("saved");
+        };
+        launch(6);
+        launch(7);
+        // The user's pairings are still kept, next to the first launch's.
+        let kept = copies_kept_aside(&dir, "airplay-pairings.ignored");
+        assert!(kept.contains(&users), "{} copies", kept.len());
+        assert_eq!(kept.len(), 2);
+        assert_eq!(
+            PairingStore::open(path.clone(), sealer()).1,
+            Loaded::Speakers(1)
+        );
     }
 
     #[test]
@@ -570,8 +603,8 @@ pub mod tests {
             .insert("02005E005301", credentials("0123456789ABCDEF", 3))
             .expect("saved");
         assert_eq!(
-            fs::read(dir.join("airplay-pairings.ignored.dat")).expect("kept"),
-            b"sealed for another user"
+            copies_kept_aside(&dir, "airplay-pairings.ignored"),
+            [b"sealed for another user".to_vec()]
         );
     }
 

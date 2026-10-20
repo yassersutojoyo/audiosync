@@ -3855,8 +3855,10 @@ mod tests {
         adapter.poll();
         adapter.set_master_volume(65.0);
         adapter.poll();
-        let kept = dir.join(settings::NEWER_FILE_NAME);
-        assert_eq!(std::fs::read_to_string(kept).expect("kept"), newer);
+        assert_eq!(
+            crate::data_folder::copies_kept_aside(&dir, "settings.newer"),
+            [newer.into_bytes()]
+        );
         assert!(log.flush(TEST_FLUSH));
         let messages = read_messages(&dir.join(FILE_NAME));
         assert_in_order(

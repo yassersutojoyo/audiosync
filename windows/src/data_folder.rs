@@ -100,6 +100,24 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     replaced
 }
 
+/// The contents of every copy kept aside in `folder` whose name starts with
+/// `stem` (`settings.ignored`), in no particular order.
+#[cfg(test)]
+pub fn copies_kept_aside(folder: &Path, stem: &str) -> Vec<Vec<u8>> {
+    fs::read_dir(folder)
+        .expect("the folder can be listed")
+        .map(|entry| entry.expect("an entry").path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(stem))
+        })
+        .map(|path| fs::read(path).expect("a copy can be read"))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn a_file_kept_aside_is_copied_whole_and_an_unreadable_one_is_an_error() {
+    fn a_copy_kept_aside_never_replaces_an_older_one() {
         let folder = test_dir("data-folder-keep-aside");
         let path = folder.join("file.json");
         assert!(
@@ -159,22 +177,36 @@ mod tests {
                 .expect("no file")
                 .is_none()
         );
-        fs::write(folder.join("file.kept.json"), b"an older copy").expect("written");
-        fs::write(&path, b"contents").expect("written");
-        let kept = keep_aside(&path, "file.kept.json").expect("kept");
-        assert_eq!(kept, Some(folder.join("file.kept.json")));
-        assert_eq!(
-            fs::read(folder.join("file.kept.json")).unwrap(),
-            b"contents"
-        );
-        assert_eq!(fs::read(&path).unwrap(), b"contents", "left in place");
+        fs::write(&path, b"first contents").expect("written");
+        let first = keep_aside(&path, "file.kept.json")
+            .expect("kept")
+            .expect("a copy");
+        assert_eq!(fs::read(&first).unwrap(), b"first contents");
+        assert_eq!(fs::read(&path).unwrap(), b"first contents", "left in place");
+
+        // Other contents get a copy of their own; the first one stays.
+        fs::write(&path, b"second").expect("written");
+        let second = keep_aside(&path, "file.kept.json")
+            .expect("kept")
+            .expect("a copy");
+        assert_ne!(first, second);
+        assert_eq!(fs::read(&first).unwrap(), b"first contents");
+        assert_eq!(fs::read(&second).unwrap(), b"second");
+        // The same contents again are kept already: no third copy.
+        let again = keep_aside(&path, "file.kept.json")
+            .expect("kept")
+            .expect("a copy");
+        assert_eq!(again, second);
+        let mut kept = copies_kept_aside(&folder, "file.kept");
+        kept.sort();
+        assert_eq!(kept, [b"first contents".to_vec(), b"second".to_vec()]);
+
+        // An unreadable file is an error, and no copy is made or changed.
         fs::remove_file(&path).unwrap();
         fs::create_dir(&path).unwrap();
         assert!(keep_aside(&path, "file.kept.json").is_err());
-        assert_eq!(
-            fs::read(folder.join("file.kept.json")).unwrap(),
-            b"contents"
-        );
+        assert_eq!(copies_kept_aside(&folder, "file.kept").len(), 2);
+        assert_eq!(fs::read(&first).unwrap(), b"first contents");
     }
 
     #[test]
