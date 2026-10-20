@@ -28,7 +28,8 @@ use audiosync_airplay::discovery::{
 use audiosync_airplay::error::ErrorKind;
 use audiosync_airplay::pairing::srp::{self, SrpGroup};
 use audiosync_airplay::pairing::{
-    self, Credentials, LegacyVerifier, Pairing, PairingEvent, PairingState, keys,
+    self, Credentials, LegacyVerifier, MAX_PAIRING_BODY_BYTES, Pairing, PairingEvent, PairingState,
+    keys,
 };
 use audiosync_airplay::rtp::{self, ResendRequest, RtpHeader, SyncPacket, TimingPacket};
 use audiosync_airplay::rtsp::{
@@ -1855,9 +1856,6 @@ fn the_pairing_survives_any_answer_before_the_pin() {
     }
 }
 
-/// The largest pairing answer body the pairing reads.
-const BODY_CAP: usize = 8 * 1024;
-
 /// A binary plist of `objects` written by hand, the first one on top;
 /// references take 2 bytes and offsets 4.
 fn bplist_objects(objects: &[Vec<u8>]) -> Vec<u8> {
@@ -1952,10 +1950,26 @@ fn assert_protocol_error(run: &PairRun) {
 // covers: P140
 #[test]
 fn a_pairing_answer_over_the_body_cap_is_refused_unread() {
-    let run = answered_with(&padded_answer(BODY_CAP));
+    // The largest real answer, B and the salt, is far below the cap as a
+    // binary plist and as XML.
+    let mut real = Dictionary::new();
+    real.insert("pk".to_owned(), Value::Data(vec![0xFF; 256]));
+    real.insert("salt".to_owned(), Value::Data(vec![0xFF; 16]));
+    let real = Value::Dictionary(real);
+    let mut xml = Vec::new();
+    real.to_writer_xml(&mut xml).expect("an XML plist");
+    assert!(
+        plist_bytes(&real).len() < 400,
+        "{}",
+        plist_bytes(&real).len()
+    );
+    assert!(xml.len() < 1024, "{} bytes of XML", xml.len());
+    assert!(4 * xml.len() < MAX_PAIRING_BODY_BYTES);
+
+    let run = answered_with(&padded_answer(MAX_PAIRING_BODY_BYTES));
     assert_eq!(run.pairing.state(), PairingState::WaitingForPin);
     assert_eq!(run.events, [PairingEvent::PinRequested]);
-    assert_protocol_error(&answered_with(&padded_answer(BODY_CAP + 1)));
+    assert_protocol_error(&answered_with(&padded_answer(MAX_PAIRING_BODY_BYTES + 1)));
 }
 
 // covers: P140

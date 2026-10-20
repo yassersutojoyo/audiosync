@@ -13,36 +13,44 @@ use std::thread;
 use std::time::Instant;
 
 use audiosync_airplay::error::ErrorKind;
-use audiosync_airplay::pairing::{self, Pairing, PairingEvent, PairingState};
+use audiosync_airplay::pairing::{
+    self, MAX_PAIRING_BODY_BYTES, Pairing, PairingEvent, PairingState,
+};
 use audiosync_airplay::rtsp::{MAX_BODY_BYTES, Message, Method, Parser, Request, Response};
 use common::atv::CLIENT;
 use common::{RAOP_PORT, RECEIVER, ids};
 
 const LEVELS: u32 = 100_000;
+/// The stack of a thread spawned without a size, like the sender's driver
+/// thread: 2 MiB, std's default on every tier-1 platform.
+const DRIVER_STACK: usize = 2 * 1024 * 1024;
 
 /// Arrays nested `levels` deep as a binary plist written by hand: object
 /// `i` is an array holding object `i + 1`, the last one is empty, and the
-/// top object is the outermost array. References and offsets take 4 bytes.
-fn deep_binary(levels: u32) -> Vec<u8> {
+/// top object is the outermost array. References and offsets take `size`
+/// bytes (2 or 4).
+fn deep_binary(levels: u32, size: usize) -> Vec<u8> {
+    let sized = |value: u32| value.to_be_bytes()[4 - size..].to_vec();
     let mut body = b"bplist00".to_vec();
     let mut offsets = Vec::with_capacity(levels as usize);
     for index in 0..levels {
         offsets.push(u32::try_from(body.len()).expect("a small body"));
         if index + 1 < levels {
             body.push(0xA1);
-            body.extend_from_slice(&(index + 1).to_be_bytes());
+            body.extend(sized(index + 1));
         } else {
             body.push(0xA0);
         }
     }
     let table = body.len() as u64;
     for offset in offsets {
-        body.extend_from_slice(&offset.to_be_bytes());
+        body.extend(sized(offset));
     }
     body.extend_from_slice(&[0; 6]);
     // Offset size, then reference size.
-    body.push(4);
-    body.push(4);
+    let size = u8::try_from(size).expect("2 or 4");
+    body.push(size);
+    body.push(size);
     body.extend_from_slice(&u64::from(levels).to_be_bytes());
     // The top object, then where the offset table starts.
     body.extend_from_slice(&0u64.to_be_bytes());
@@ -148,7 +156,7 @@ fn assert_protocol_error(events: &[PairingEvent], state: PairingState) {
 // covers: P140
 #[test]
 fn a_binary_pairing_answer_nested_a_hundred_thousand_deep_is_a_protocol_error() {
-    let body = deep_binary(LEVELS);
+    let body = deep_binary(LEVELS, 4);
     assert!(body.len() <= MAX_BODY_BYTES, "{} bytes", body.len());
     let (events, state) = pair_on_a_driver_thread(body);
     assert_protocol_error(&events, state);
@@ -160,5 +168,30 @@ fn an_xml_pairing_answer_nested_sixty_thousand_deep_is_a_protocol_error() {
     let body = deep_xml(60_000);
     assert!(body.len() <= MAX_BODY_BYTES, "{} bytes", body.len());
     let (events, state) = pair_on_a_driver_thread(body);
+    assert_protocol_error(&events, state);
+}
+
+// covers: P140
+#[test]
+fn the_deepest_answer_within_the_body_cap_is_read_on_a_quarter_of_the_stack() {
+    // With 2-byte references and offsets a level takes 5 bytes, and the
+    // header, the empty innermost array and the trailer 38 more.
+    let levels = u32::try_from((MAX_PAIRING_BODY_BYTES - 38) / 5).expect("a small count");
+    let body = deep_binary(levels, 2);
+    assert!(body.len() <= MAX_PAIRING_BODY_BYTES, "{} bytes", body.len());
+    assert!(
+        body.len() + 5 > MAX_PAIRING_BODY_BYTES,
+        "{} bytes",
+        body.len()
+    );
+    // Read whole and found to be no dictionary, then dropped, with a
+    // quarter of the driver thread's stack.
+    let (events, state) = thread::Builder::new()
+        .name("deep-plist".to_owned())
+        .stack_size(DRIVER_STACK / 4)
+        .spawn(move || pair_with(&body))
+        .expect("a thread")
+        .join()
+        .expect("the pairing doesn't panic");
     assert_protocol_error(&events, state);
 }
