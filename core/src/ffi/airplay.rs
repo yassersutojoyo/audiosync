@@ -3406,12 +3406,18 @@ mod tests {
         let c_id = c"02005E005314";
         let mut handle = listing(vec![apple_tv_at(id, "Den TV", port)]);
         let key = inside(handle).listed[id].device.key.clone();
+        // Marked as running without a pairing on the sender, so its real
+        // end can't arrive before the one below (see the next test).
+        inside(handle).pairing.insert(id.to_owned(), key.clone());
         // SAFETY: a live handle, used by this thread only; a local C string.
         unsafe {
-            assert!(asc_airplay_start_pairing(handle, c_id.as_ptr()));
             asc_airplay_cancel_pairing(handle, c_id.as_ptr());
             assert!(asc_airplay_start_pairing(handle, c_id.as_ptr()));
         }
+        assert!(
+            inside(handle).ending.contains_key(id),
+            "the new pairing waits for the cancelled one's end"
+        );
         inside(handle).take_in(SenderEvent::Pairing {
             key,
             event: PairingEvent::Stopped,
@@ -3462,12 +3468,20 @@ mod tests {
         let mut handle = listing(vec![apple_tv_at(id, "Den TV", port)]);
         let key = inside(handle).listed[id].device.key.clone();
         waiting_events(handle);
+        // The first pairing is marked as running without a pairing on the
+        // sender, so no real end of it can arrive before the one below and
+        // let the next pairing start at once (the test would then race the
+        // sender's thread).
+        inside(handle).pairing.insert(id.to_owned(), key.clone());
         // SAFETY: a live handle, used by this thread only; a local C string.
         unsafe {
-            assert!(asc_airplay_start_pairing(handle, c_id.as_ptr()));
             asc_airplay_cancel_pairing(handle, c_id.as_ptr());
             assert!(asc_airplay_start_pairing(handle, c_id.as_ptr()));
         }
+        assert!(
+            inside(handle).ending.contains_key(id),
+            "the new pairing waits for the cancelled one's end"
+        );
         inside(handle).take_in(SenderEvent::Pairing {
             key: key.clone(),
             event: PairingEvent::Failed {
