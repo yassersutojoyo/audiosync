@@ -83,6 +83,8 @@ export component TrayFlyout inherits Window {
     in property <float> master-volume;
     in property <[SpeakerItem]> speakers;
     in property <[GroupItem]> groups;
+    // AirPlay discovery has run for 20 seconds without finding a speaker.
+    in property <bool> airplay-none-found;
     // The newest notice only (or none); `notice-count` counts them all.
     in property <[NoticeItem]> notices;
     in property <int> notice-count;
@@ -259,7 +261,9 @@ export component TrayFlyout inherits Window {
 
             Divider { }
 
-            if root.groups.length == 0 && root.speakers.length == 0: SecondaryText {
+            // Said only once AirPlay discovery has looked for 20 seconds, as
+            // the main window's note; before that the list stays empty.
+            if root.groups.length == 0 && root.speakers.length == 0 && root.airplay-none-found: SecondaryText {
                 text: Strings.no-speakers;
             }
 

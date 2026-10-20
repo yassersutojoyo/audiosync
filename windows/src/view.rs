@@ -735,7 +735,7 @@ impl App {
     /// whenever it creates a native window or the theme changes, so this runs
     /// after each (`apply_frame`, `follow_frame`). The Fluent style keeps its
     /// own lightness and takes only the hue: dark teal on light, mint on dark.
-    fn use_brand_accent(&self, window: &slint::Window) {
+    pub fn use_brand_accent(&self, window: &slint::Window) {
         use slint::private_unstable_api::re_exports::WindowInner;
         let teal = self.main.global::<Tokens>().get_teal();
         WindowInner::from_pub(window)
@@ -778,6 +778,9 @@ impl App {
                         window(app).with_winit_window(|window| {
                             window.set_enabled_buttons(WindowButtons::CLOSE);
                         });
+                        // A PIN dialog opened before the event loop ran had
+                        // no native window to fit yet.
+                        app.fit_pin_dialog();
                     }
                     app.apply_frame(window(app), name, Frame::Titled);
                 }),
@@ -852,6 +855,7 @@ impl App {
         self.main
             .set_connected_virtual_hidden(only_virtual_outputs_hidden(&connected, lists));
         self.main.set_airplay_none_found(state.airplay_none_found);
+        self.flyout.set_airplay_none_found(state.airplay_none_found);
         let listed = |s: &&ui_model::Speaker| lists(s);
         let this_pc: Vec<SpeakerItem> = this_pc
             .into_iter()
@@ -1398,6 +1402,7 @@ impl App {
                 dialog.set_pin(SharedString::new());
             }
             dialog.invoke_prepare();
+            self.fit_pin_dialog();
         }
     }
 
@@ -1407,7 +1412,21 @@ impl App {
             return;
         }
         self.pin_dialog.invoke_prepare();
+        self.fit_pin_dialog();
         crate::platform::bring_to_front(self.pin_dialog.window());
+    }
+
+    /// Grows the PIN dialog to its layout's lowest height at its width. The
+    /// window is made at the height the layout has before the message wraps,
+    /// and Windows doesn't grow it when the message gets longer (a wrong PIN).
+    fn fit_pin_dialog(&self) {
+        let window = self.pin_dialog.window();
+        let size = window.size().to_logical(window.scale_factor());
+        let fit = self.pin_dialog.get_fit_height();
+        // Before the native window exists there is no width to fit to.
+        if size.width > 0.0 && size.height < fit {
+            window.set_size(slint::LogicalSize::new(size.width, fit));
+        }
     }
 
     /// Pair: the PIN goes to the pairing; the dialog stays open until it
@@ -2973,6 +2992,40 @@ mod tests {
             maximized: false,
         };
         assert_eq!(fitted_main_frame(small, laptop, 1.0, true), small);
+    }
+
+    /// Windows makes the PIN dialog at the height its layout has before the
+    /// message wraps, and keeps it there when the message grows (after a
+    /// wrong PIN): the buttons were cut off. The dialog now grows to fit.
+    #[test]
+    fn the_pin_dialog_grows_to_show_its_buttons_after_a_wrong_pin() {
+        let app = app_over(MockBackend::new());
+        app.preview_pin(false);
+        let dialog = &app.pin_dialog;
+        // About the client height Windows gave it: too short for the
+        // wrong-PIN message at this width.
+        dialog
+            .window()
+            .set_size(slint::LogicalSize::new(380.0, 150.0));
+        dialog.set_wrong_pin(true);
+        app.fit_pin_dialog();
+        let size = dialog
+            .window()
+            .size()
+            .to_logical(dialog.window().scale_factor());
+        assert_eq!(size.width, 380.0);
+        let fit = dialog.get_fit_height();
+        assert!(
+            size.height >= fit,
+            "window {} high, layout needs {fit}",
+            size.height
+        );
+        let bottom = dialog.get_buttons_bottom();
+        assert!(
+            bottom > 0.0 && bottom <= size.height,
+            "buttons end at {bottom}, window {} high",
+            size.height
+        );
     }
 
     #[test]

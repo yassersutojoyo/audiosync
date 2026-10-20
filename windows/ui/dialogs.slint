@@ -130,6 +130,11 @@ export component PinDialog inherits Dialog {
     // takes the cursor with its text selected.
     property <int> focus-request;
 
+    // For the layout test (src/view.rs): the height Windows keeps the window
+    // at least, and where the buttons end in it.
+    out property <length> fit-height: root.min-height;
+    out property <length> buttons-bottom: pair.absolute-position.y + pair.height;
+
     public function prepare() {
         root.focus-request += 1;
     }
@@ -143,8 +148,6 @@ export component PinDialog inherits Dialog {
             return reject;
         }
 
-        // On the dialog's own surface, like the group name dialog: the title
-        // bar already names the speaker.
         VerticalLayout {
             padding: 18px;
             spacing: 12px;
@@ -204,7 +207,7 @@ export component PinDialog inherits Dialog {
         }
     }
 
-    DialogButton {
+    pair := DialogButton {
         text: Strings.pair;
         primary: true;
         active: root.can-pair;
