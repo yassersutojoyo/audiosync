@@ -2590,6 +2590,78 @@ mod tests {
         assert_eq!(playing(&backend), [SPEAKERS]);
     }
 
+    #[test]
+    fn an_output_lost_while_still_listed_is_lost_again_once_the_listing_drops_it() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        // Its stream dies first, and opening it again fails as if the device
+        // were gone, while Windows still lists it.
+        backend.end_renderer(HEADPHONES);
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        let lost = BackendEvent::OutputLost {
+            id: HEADPHONES.to_owned(),
+        };
+        assert_eq!(backend.poll(), std::slice::from_ref(&lost));
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        assert!(backend.poll().is_empty(), "still listed: nothing new");
+
+        // Then the listing drops it: now it is gone for the user too.
+        backend.disconnect_output_unnoticed(HEADPHONES);
+        let events = backend.poll();
+        assert!(events.contains(&lost), "{events:?}");
+        assert!(events.contains(&BackendEvent::OutputsChanged));
+        assert!(backend.policy().settings(HEADPHONES).enabled, "it stays on");
+        assert!(backend.poll().is_empty(), "reported once");
+
+        backend.fail_output(HEADPHONES, None);
+        backend.connect_output(HEADPHONES, "Headphones");
+        assert_eq!(backend.poll(), [BackendEvent::OutputsChanged]);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    #[test]
+    fn an_output_that_cant_start_for_a_vanishing_device_is_lost_once_the_listing_drops_it() {
+        let mut backend = backend();
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(backend.poll().is_empty());
+        backend.disconnect_output_unnoticed(HEADPHONES);
+        let events = backend.poll();
+        assert!(
+            events.contains(&BackendEvent::OutputLost {
+                id: HEADPHONES.to_owned(),
+            }),
+            "{events:?}"
+        );
+        assert!(backend.poll().is_empty(), "reported once");
+    }
+
+    #[test]
+    fn an_output_that_plays_again_after_a_reset_is_lost_once_when_unplugged() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        // A format change: the stream ends and plays again a poll later.
+        backend.end_renderer(HEADPHONES);
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        backend.poll();
+        backend.fail_output(HEADPHONES, None);
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        // Unplugged now, it is lost as any playing output is: once.
+        backend.disconnect_output_unnoticed(HEADPHONES);
+        let lost: Vec<BackendEvent> = backend
+            .poll()
+            .into_iter()
+            .filter(|event| matches!(event, BackendEvent::OutputLost { .. }))
+            .collect();
+        assert_eq!(
+            lost,
+            [BackendEvent::OutputLost {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+    }
+
     fn listing_error() -> BackendError {
         BackendError::System {
             call: "IMMDeviceEnumerator::EnumAudioEndpoints",

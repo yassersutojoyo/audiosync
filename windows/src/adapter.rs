@@ -2405,6 +2405,30 @@ mod tests {
     }
 
     #[test]
+    fn a_speaker_whose_stream_dies_before_its_device_leaves_the_list_is_reported() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
+        // The stream dies and can't open again while Windows still lists the
+        // device: no notice yet, as for a format change.
+        adapter.audio_mut().end_renderer(HEADPHONES);
+        adapter
+            .audio_mut()
+            .fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+
+        // Then Windows drops it from the list.
+        adapter.audio_mut().disconnect_output_unnoticed(HEADPHONES);
+        assert!(adapter.poll());
+        assert!(adapter.snapshot().speaker(&key(HEADPHONES)).is_none());
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "Headphones".into(),
+        };
+        assert_eq!(messages(&adapter), [lost]);
+    }
+
+    #[test]
     fn a_speaker_another_app_holds_stays_on_with_a_notice_until_it_is_free() {
         let mut adapter = adapter();
         turn_on(&mut adapter, SPEAKERS);
