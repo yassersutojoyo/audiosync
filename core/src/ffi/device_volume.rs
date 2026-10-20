@@ -16,11 +16,11 @@ use crate::policy::device_volume::{self, Decision, DeviceVolume};
 pub const DEVICE_VOLUME_UNKNOWN: u32 = 0;
 /// [`Decision::Fine`]: not muted and not low, the row shows nothing.
 pub const DEVICE_VOLUME_FINE: u32 = 1;
-/// [`Decision::Low`]: the volume is below 25 %.
+/// [`Decision::Low`]: the volume is 25 % or less.
 pub const DEVICE_VOLUME_LOW: u32 = 2;
 /// [`Decision::Muted`]: muted at a volume that isn't low or isn't known.
 pub const DEVICE_VOLUME_MUTED: u32 = 3;
-/// [`Decision::MutedAndLow`]: muted, and below 25 % too.
+/// [`Decision::MutedAndLow`]: muted, and 25 % or less too.
 pub const DEVICE_VOLUME_MUTED_AND_LOW: u32 = 4;
 
 /// One reading of an output device's own volume and mute, as the host read
@@ -171,10 +171,14 @@ mod tests {
                 fix_unmutes: false,
             }
         );
-        let fine = asc_device_volume_decide(at(Some(0.25), Some(false)));
+        let edge = asc_device_volume_decide(at(Some(0.25), Some(false)));
+        assert_eq!(edge.decision, DEVICE_VOLUME_LOW);
+        assert!(edge.shows_hint && edge.fix_sets_volume && !edge.fix_unmutes);
+        assert_eq!(edge.percent, 25);
+        let fine = asc_device_volume_decide(at(Some(0.26), Some(false)));
         assert_eq!(fine.decision, DEVICE_VOLUME_FINE);
         assert!(!fine.shows_hint && !fine.fix_sets_volume && !fine.fix_unmutes);
-        assert_eq!(fine.percent, 25);
+        assert_eq!(fine.percent, 26);
         let muted = asc_device_volume_decide(at(Some(0.9), Some(true)));
         assert_eq!(muted.decision, DEVICE_VOLUME_MUTED);
         assert!(muted.shows_hint && muted.fix_unmutes && !muted.fix_sets_volume);

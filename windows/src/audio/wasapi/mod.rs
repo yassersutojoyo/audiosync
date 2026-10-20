@@ -36,8 +36,9 @@ use super::routing::{EndpointAudio, EndpointVolume};
 /// The platform calls of the Windows backend.
 pub struct WasapiDriver {
     watcher: devices::DeviceWatcher,
-    /// The outputs' volume listeners, from the first output followed on.
-    volumes: Option<volume::VolumeWatcher>,
+    /// The thread that reads, follows and sets the outputs' own volumes,
+    /// from the first call on.
+    volumes: volume::Volumes,
     own_pid: u32,
 }
 
@@ -46,7 +47,7 @@ impl WasapiDriver {
     pub fn new() -> Result<WasapiDriver, BackendError> {
         Ok(WasapiDriver {
             watcher: devices::DeviceWatcher::start()?,
-            volumes: None,
+            volumes: volume::Volumes::default(),
             own_pid: std::process::id(),
         })
     }
@@ -81,36 +82,32 @@ impl Driver for WasapiDriver {
     }
 
     fn watch_endpoint_volume(&mut self, id: &str) -> Result<(), BackendError> {
-        let watcher = match &mut self.volumes {
-            Some(watcher) => watcher,
-            None => self.volumes.insert(volume::VolumeWatcher::start()?),
-        };
-        watcher.watch(id)
+        self.volumes.watcher()?.watch(id)
     }
 
     fn unwatch_endpoint_volume(&mut self, id: &str) {
-        if let Some(watcher) = &mut self.volumes {
+        if let Some(watcher) = self.volumes.running() {
             watcher.unwatch(id);
         }
     }
 
     fn endpoint_volume_changes(&mut self) -> Vec<String> {
         self.volumes
-            .as_ref()
-            .map(volume::VolumeWatcher::take_changed)
+            .running()
+            .map(|watcher| watcher.take_changed())
             .unwrap_or_default()
     }
 
-    fn endpoint_volume(&mut self, id: &str) -> Option<EndpointVolume> {
-        volume::read(id)
+    fn endpoint_volume(&mut self, id: &str) -> Result<EndpointVolume, BackendError> {
+        self.volumes.watcher()?.read(id)
     }
 
     fn set_endpoint_level(&mut self, id: &str, level: f32) -> Result<(), BackendError> {
-        volume::set_level(id, level)
+        self.volumes.watcher()?.set_level(id, level)
     }
 
     fn unmute_endpoint(&mut self, id: &str) -> Result<(), BackendError> {
-        volume::unmute(id)
+        self.volumes.watcher()?.unmute(id)
     }
 
     fn start_capture(

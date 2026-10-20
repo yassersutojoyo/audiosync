@@ -8,6 +8,14 @@
 //! (S64, S65), and then its fade at the device rate (S183). It works in
 //! pieces of at most [`RENDER_CHUNK`] device frames, one read each.
 //!
+//! Callbacks against the capture's blocks (S206): at the start of every
+//! callback the renderer gives its reader a lead, a floor of the effective
+//! delay: the largest callback so far, and with rate conversion what that
+//! callback can ask the reader for plus the writer's latest block, since a
+//! converting output's callbacks never line up with the capture's blocks.
+//! Only the first read of a callback may correct drift; its later reads are
+//! held and what they report as due is ignored.
+//!
 //! The fade (S184 to S188):
 //!
 //! - The renderer starts closed. A frame its reader fills with silence closes
@@ -293,7 +301,10 @@ pub struct Renderer {
     gain: Arc<SharedGain>,
     shared: Arc<Shared>,
     channels: usize,
+    capture_rate: u32,
     device_rate: u32,
+    /// The largest callback rendered so far, in device frames (S206).
+    largest_callback: usize,
     /// Capture-rate stereo frames from the reader.
     stereo: Box<[f32]>,
     /// Device-rate stereo frames from the resampler.
@@ -354,7 +365,9 @@ impl Renderer {
             gain,
             shared: Arc::clone(&control.shared),
             channels,
+            capture_rate,
             device_rate,
+            largest_callback: 0,
             stereo: vec![0.0; read_frames * 2].into_boxed_slice(),
             converted: vec![0.0; RENDER_CHUNK * 2].into_boxed_slice(),
             fade: Fade::new(device_rate),
@@ -419,6 +432,7 @@ impl Renderer {
     fn render_inner(&mut self, out: &mut [f32], time: Option<u64>) {
         let channels = self.channels;
         let frames = out.len() / channels;
+        self.update_lead(frames);
         self.take_requests();
         let ramp = self.stage.begin(self.gain.get(), frames);
         let read_capacity = self.stereo.len() / 2;
@@ -457,6 +471,22 @@ impl Renderer {
             .store(state_code(self.fade.state()), Ordering::Relaxed);
     }
 
+    /// Gives the reader its lead Lr at the start of a callback of `frames`
+    /// device frames (S206): the largest callback so far, and with rate
+    /// conversion the most that callback can ask the reader for plus the
+    /// frames of the writer's latest block.
+    fn update_lead(&mut self, frames: usize) {
+        self.largest_callback = self.largest_callback.max(frames);
+        let lead = if self.resampler.is_passthrough() {
+            self.largest_callback
+        } else {
+            reader_frames_bound(self.largest_callback, self.capture_rate, self.device_rate)
+                .saturating_add(self.reader.ring().last_block_frames())
+        };
+        self.reader
+            .set_lead_frames(i64::try_from(lead).unwrap_or(i64::MAX));
+    }
+
     /// Takes the control's requests at the start of a callback (S190).
     fn take_requests(&mut self) {
         if self.stop == Stop::None && self.shared.fade_out.load(Ordering::Acquire) {
@@ -479,9 +509,13 @@ impl Renderer {
     }
 
     /// One read of `need` frames for the piece that starts at callback frame
-    /// `at`, with corrections held while anything is audible (S188).
+    /// `at`, with corrections held while anything is audible (S188). Drift
+    /// is judged once per callback (S206): a read after the callback's first
+    /// is always held, and what it reports as due is ignored, since its
+    /// error also counts the frames the callback has already read.
     fn read(&mut self, need: usize, at: usize) -> ReadReport {
-        let hold = !self.fade.is_closed();
+        let continued = at > 0;
+        let hold = continued || !self.fade.is_closed();
         let block = &mut self.stereo[..need * 2];
         let report = if hold {
             self.reader.read_target_held(block, need)
@@ -498,7 +532,7 @@ impl Renderer {
         {
             self.awaiting_resync = false;
         }
-        if hold && report.due != Correction::None && !self.correction_due {
+        if hold && !continued && report.due != Correction::None && !self.correction_due {
             self.correction_due = true;
             // From the start of this block.
             self.begin_fade_out(at.checked_sub(1));

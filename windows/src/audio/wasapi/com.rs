@@ -205,7 +205,7 @@ pub(super) fn spawn_ready<T: Send + 'static>(
 }
 
 /// [`spawn_ready`], waiting `timeout` at most.
-fn spawn_ready_within<T: Send + 'static>(
+pub(super) fn spawn_ready_within<T: Send + 'static>(
     name: &str,
     timeout: Duration,
     body: impl FnOnce(Ready<T>) + Send + 'static,

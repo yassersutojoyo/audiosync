@@ -280,6 +280,9 @@ pub struct Reader {
     /// Set when a copy failed the post-copy check (S40): the next read skips
     /// forward as for an overrun (S55).
     reanchor: bool,
+    /// Lr: the floor of the effective delay that the reader's renderer sets
+    /// (S206); 0 for a reader without one.
+    lead: i64,
     /// Test hook run between the copy and the post-copy check.
     #[cfg(test)]
     before_check: Option<Box<dyn FnMut() + Send>>,
@@ -313,9 +316,24 @@ impl Reader {
             anchored: false,
             applied_delay: 0,
             reanchor: false,
+            lead: 0,
             #[cfg(test)]
             before_check: None,
         }
+    }
+
+    /// Sets Lr, the floor of the effective delay (S206): every read uses
+    /// `De = min(max(D, N, Lr), C - M - N)` (S44 step 1). A negative value
+    /// counts as 0. It moves nothing by itself: the dead band absorbs a
+    /// change, and the next prime, resync or correction lands on it. Called
+    /// by the renderer that owns the reader, on its thread.
+    pub fn set_lead_frames(&mut self, frames: i64) {
+        self.lead = frames.max(0);
+    }
+
+    /// Lr, as last set.
+    pub fn lead_frames(&self) -> i64 {
+        self.lead
     }
 
     /// A control handle for this reader.
@@ -415,7 +433,8 @@ impl Reader {
         let n = frames as i64;
         let capacity = self.ring.capacity() as i64;
         let margin = self.ring.margin() as i64;
-        let effective = |delay: i64| delay.max(n).min(capacity - margin - n).max(0);
+        let lead = self.lead;
+        let effective = |delay: i64| delay.max(n).max(lead).min(capacity - margin - n).max(0);
 
         // Step 1.
         let w = self.ring.frames_written() as i64;
@@ -936,6 +955,37 @@ mod tests {
             0,
             "the capped delay still lies inside the readable window"
         );
+    }
+
+    // covers: S42, S44, S206
+    #[test]
+    fn a_reader_is_floored_at_its_lead() {
+        let ring = ring(1 << 18);
+        let mut cap = Capture::new(&ring);
+        cap.write(8 * N);
+        let mut out = Output::new(&ring);
+        assert_eq!(out.reader.lead_frames(), 0);
+        out.reader.set_lead_frames(1075);
+        // Below the lead, the reader primes at the lead ...
+        let block = out.read(N, 0);
+        assert_eq!(block.report.correction, Correction::Prime);
+        assert_eq!(block.report.delay, 1075);
+        assert_eq!(block.report.start, cap.w() - 1075);
+        assert_eq!(block.report.lag, 1075 - N as i64);
+        // ... and at or above it, the delay is the delay.
+        cap.write(N);
+        assert_eq!(out.read(N, 1075).report.delay, 1075);
+        cap.write(N);
+        assert_eq!(out.read(N, 3000).report.delay, 3000);
+        // The cap still wins, and a negative lead counts as none.
+        out.reader.set_lead_frames(1 << 30);
+        cap.write(N);
+        let cap_frames = (1 << 18) - MIN_MARGIN_FRAMES as i64 - N as i64;
+        assert_eq!(out.read(N, 0).report.delay, cap_frames);
+        out.reader.set_lead_frames(-5);
+        assert_eq!(out.reader.lead_frames(), 0);
+        cap.write(N);
+        assert_eq!(out.read(N, 0).report.delay, N as i64);
     }
 
     // covers: S44, S56, S59

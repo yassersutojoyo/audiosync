@@ -2,12 +2,15 @@
 //! spec S194, S195, S197): reading them, following their changes, and the
 //! fix the user clicks.
 //!
-//! Reads and writes activate the endpoint's volume control afresh on the
-//! calling thread, like the double-audio snapshot. Change listeners need a
-//! home that outlives a call, so a thread of its own (in the multithreaded
-//! apartment) registers and unregisters them on request and keeps them until
-//! asked to drop them or until the watcher goes. Windows calls a listener on
-//! a system thread; it only raises the endpoint's flag, which
+//! Every one of these calls can hang while Windows audio does (still waking
+//! up, say), and the thread that asks for them is the UI thread, so a thread
+//! of their own (in the multithreaded apartment) makes them, and the UI
+//! thread waits for each answer as long as an output thread's start at most
+//! ([`VolumeWatcher`]). Reads and writes activate the endpoint's volume
+//! control afresh there. Change listeners need a home that outlives a call,
+//! so the same thread registers and unregisters them on request and keeps
+//! them until asked to drop them or until the watcher goes. Windows calls a
+//! listener on a system thread; it only raises the endpoint's flag, which
 //! [`VolumeWatcher::take_changed`] collects on the thread that polls, so
 //! several notifications in between count once. Nothing here runs on an
 //! audio thread.
@@ -19,6 +22,7 @@ use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use windows::Win32::Foundation::E_FAIL;
 use windows::Win32::Media::Audio::AUDIO_VOLUME_NOTIFICATION_DATA;
 use windows::Win32::Media::Audio::Endpoints::{
     IAudioEndpointVolume, IAudioEndpointVolumeCallback, IAudioEndpointVolumeCallback_Impl,
@@ -28,7 +32,7 @@ use windows::Win32::System::Com::CLSCTX_ALL;
 use windows::core::HSTRING;
 use windows_core::implement;
 
-use super::com::{Apartment, READY_TIMEOUT, Ready, device_error, spawn_ready};
+use super::com::{Apartment, READY_TIMEOUT, Ready, device_error, spawn_ready_within};
 use super::devices::enumerator;
 use crate::audio::backend::BackendError;
 use crate::audio::routing::EndpointVolume;
@@ -50,21 +54,67 @@ fn control(
     }
 }
 
-/// The volume control of the endpoint `id`, on the calling thread.
-fn with_control<T>(
-    id: &str,
-    call: impl FnOnce(&IAudioEndpointVolume) -> Result<T, BackendError>,
-) -> Result<T, BackendError> {
-    let _apartment = Apartment::enter()?;
-    let control = control(&enumerator()?, id)?;
-    call(&control)
+/// What the listener thread is asked to do.
+enum Command {
+    /// Register a listener for the endpoint that raises `flag`, and answer.
+    Watch {
+        id: String,
+        flag: Arc<AtomicBool>,
+        reply: mpsc::Sender<Result<(), BackendError>>,
+    },
+    /// Unregister the endpoint's listener.
+    Unwatch(String),
+    /// Read the endpoint's mute and master volume, and answer.
+    Read {
+        id: String,
+        reply: mpsc::Sender<Result<EndpointVolume, BackendError>>,
+    },
+    /// Set the endpoint's master volume, 0 to 1, and answer.
+    SetLevel {
+        id: String,
+        level: f32,
+        reply: mpsc::Sender<Result<(), BackendError>>,
+    },
+    /// Unmute the endpoint, and answer.
+    Unmute {
+        id: String,
+        reply: mpsc::Sender<Result<(), BackendError>>,
+    },
 }
 
-/// The endpoint's mute and master volume (the Sound settings slider), or
-/// `None` when its volume control can't be activated or read: then both are
-/// unknown (S194).
-pub(super) fn read(id: &str) -> Option<EndpointVolume> {
-    with_control(id, |control| {
+/// The Windows calls the listener thread makes on the endpoints: through
+/// its own enumerator ([`Windows`]), or a fake in the tests.
+trait Endpoints {
+    /// A registered change listener, unregistered on drop.
+    type Listener;
+
+    /// Registers a change listener on the endpoint `id` that raises `flag`.
+    fn listen(&self, id: &str, flag: Arc<AtomicBool>) -> Result<Self::Listener, BackendError>;
+
+    /// The endpoint's mute and master volume; an error when its volume
+    /// control can't be activated or read (S194).
+    fn read(&self, id: &str) -> Result<EndpointVolume, BackendError>;
+
+    /// Sets the endpoint's master volume, 0 to 1.
+    fn set_level(&self, id: &str, level: f32) -> Result<(), BackendError>;
+
+    /// Unmutes the endpoint.
+    fn unmute(&self, id: &str) -> Result<(), BackendError>;
+}
+
+/// The endpoints as Windows has them, through the listener thread's own
+/// enumerator.
+struct Windows(IMMDeviceEnumerator);
+
+impl Endpoints for Windows {
+    type Listener = Registration;
+
+    fn listen(&self, id: &str, flag: Arc<AtomicBool>) -> Result<Registration, BackendError> {
+        Registration::new(&self.0, id, flag)
+    }
+
+    fn read(&self, id: &str) -> Result<EndpointVolume, BackendError> {
+        let control = control(&self.0, id)?;
         // SAFETY: two reads on a live volume control.
         unsafe {
             let muted = control
@@ -76,76 +126,73 @@ pub(super) fn read(id: &str) -> Option<EndpointVolume> {
             })?;
             Ok(EndpointVolume { muted, level })
         }
-    })
-    .ok()
-}
+    }
 
-/// Sets the endpoint's master volume, 0 to 1: the fix the user clicked.
-pub(super) fn set_level(id: &str, level: f32) -> Result<(), BackendError> {
-    with_control(id, |control| {
+    fn set_level(&self, id: &str, level: f32) -> Result<(), BackendError> {
+        let control = control(&self.0, id)?;
         // SAFETY: one write on a live volume control; no event context.
         unsafe { control.SetMasterVolumeLevelScalar(level, std::ptr::null()) }.map_err(|error| {
             device_error("IAudioEndpointVolume::SetMasterVolumeLevelScalar", &error)
         })
-    })
-}
+    }
 
-/// Unmutes the endpoint: the fix the user clicked.
-pub(super) fn unmute(id: &str) -> Result<(), BackendError> {
-    with_control(id, |control| {
+    fn unmute(&self, id: &str) -> Result<(), BackendError> {
+        let control = control(&self.0, id)?;
         // SAFETY: one write on a live volume control; no event context.
         unsafe { control.SetMute(false, std::ptr::null()) }
             .map_err(|error| device_error("IAudioEndpointVolume::SetMute", &error))
-    })
+    }
 }
 
-/// What the listener thread is asked to do.
-enum Command {
-    /// Register a listener for the endpoint that raises `flag`, and answer.
-    Watch {
-        id: String,
-        flag: Arc<AtomicBool>,
-        reply: mpsc::Sender<Result<(), BackendError>>,
-    },
-    /// Unregister the endpoint's listener.
-    Unwatch(String),
+/// A call the caller stopped waiting for: it knows whether the thread making
+/// it is still in it.
+struct Late(Box<dyn Fn() -> bool + Send>);
+
+impl Late {
+    /// The call whose answer comes on `answer`, or which ends when the
+    /// sender of `answer` goes.
+    fn on<T: Send + 'static>(answer: mpsc::Receiver<T>) -> Late {
+        Late(Box::new(move || {
+            matches!(answer.try_recv(), Err(TryRecvError::Empty))
+        }))
+    }
+
+    /// Whether the call still hasn't returned.
+    fn pending(&self) -> bool {
+        (self.0)()
+    }
 }
 
-/// Follows the volume of the endpoints it is asked to, through listeners
-/// that a thread of its own holds. Dropping it unregisters them all.
+/// Reads, follows and sets the volume of the endpoints it is asked to, all
+/// through a thread of its own, which also holds the listeners. Dropping it
+/// unregisters them all.
 ///
-/// A registration is a Windows call that can hang (Windows audio still
-/// waking up, say), and the thread that asks for it is the UI thread, so it
-/// waits for the answer as long as an output thread's start at most
-/// ([`READY_TIMEOUT`]). One that doesn't come in time is given up: the
-/// endpoint isn't followed for now, and the listener thread drops that
-/// listener as soon as its call returns. Until then the thread is stuck, so
-/// further registrations fail at once instead of each waiting again.
+/// Each call waits for the thread's answer as long as an output thread's
+/// start at most ([`READY_TIMEOUT`]). One that doesn't come in time is given
+/// up ([`BackendError::NotResponding`]): a read shows no device volume for
+/// now, a write may still happen, and a listener registered late is dropped
+/// as soon as its call returns. Until that call returns the thread is stuck,
+/// so further calls fail at once instead of each waiting again.
 pub(super) struct VolumeWatcher {
     commands: Option<mpsc::Sender<Command>>,
     /// The flag of each endpoint followed.
     flags: BTreeMap<String, Arc<AtomicBool>>,
-    /// How long a registration's answer is waited for.
+    /// How long an answer is waited for.
     answer_timeout: Duration,
-    /// Where the answer to the registration given up last comes, until it
-    /// does.
-    late: Option<mpsc::Receiver<Result<(), BackendError>>>,
+    /// The call given up last, until it returns.
+    late: Option<Late>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl VolumeWatcher {
-    pub(super) fn start() -> Result<VolumeWatcher, BackendError> {
-        VolumeWatcher::start_with(READY_TIMEOUT, listen)
-    }
-
     /// The watcher whose listener thread runs `body`, waiting
-    /// `answer_timeout` at most for each registration's answer.
+    /// `answer_timeout` at most for the thread's start and for each answer.
     fn start_with(
         answer_timeout: Duration,
         body: impl FnOnce(&mpsc::Receiver<Command>, Ready) + Send + 'static,
     ) -> Result<VolumeWatcher, BackendError> {
         let (commands, received) = mpsc::channel();
-        let (thread, ()) = spawn_ready("audiosync-volumes", move |ready| {
+        let (thread, ()) = spawn_ready_within("audiosync-volumes", answer_timeout, move |ready| {
             body(&received, ready);
         })?;
         Ok(VolumeWatcher {
@@ -157,56 +204,65 @@ impl VolumeWatcher {
         })
     }
 
-    /// Registers a change listener for the endpoint `id`; waits for the
-    /// listener thread's answer, for the answer timeout at most. Returns
+    /// Sends the thread the request `request` makes with its reply sender,
+    /// and waits for the answer, for the answer timeout at most. Returns
     /// [`BackendError::NotResponding`] when the answer doesn't come in time,
-    /// or at once while the thread is still in a registration given up
-    /// before; the endpoint isn't followed then.
-    pub(super) fn watch(&mut self, id: &str) -> Result<(), BackendError> {
-        self.unwatch(id);
+    /// or at once while the thread is still in a call given up before.
+    fn ask<T: Send + 'static>(
+        &mut self,
+        request: impl FnOnce(mpsc::Sender<Result<T, BackendError>>) -> Command,
+    ) -> Result<T, BackendError> {
         if self.stuck() {
             return Err(BackendError::NotResponding);
         }
-        let flag = Arc::new(AtomicBool::new(false));
-        let (reply, answer) = mpsc::channel();
         let gone = BackendError::System {
             call: "the volume listener thread",
-            code: windows::Win32::Foundation::E_FAIL.0,
+            code: E_FAIL.0,
         };
         let commands = self.commands.as_ref().ok_or_else(|| gone.clone())?;
-        commands
-            .send(Command::Watch {
-                id: id.to_owned(),
-                flag: Arc::clone(&flag),
-                reply,
-            })
-            .map_err(|_| gone.clone())?;
+        let (reply, answer) = mpsc::channel();
+        commands.send(request(reply)).map_err(|_| gone.clone())?;
         match answer.recv_timeout(self.answer_timeout) {
-            Ok(answered) => answered?,
-            Err(RecvTimeoutError::Disconnected) => return Err(gone),
+            Ok(answered) => answered,
+            Err(RecvTimeoutError::Disconnected) => Err(gone),
             Err(RecvTimeoutError::Timeout) => {
-                // The thread handles its requests in order, so it drops the
-                // listener right after it registers it, if it ever does.
-                let _ = commands.send(Command::Unwatch(id.to_owned()));
-                self.late = Some(answer);
-                return Err(BackendError::NotResponding);
+                self.late = Some(Late::on(answer));
+                Err(BackendError::NotResponding)
             }
         }
-        self.flags.insert(id.to_owned(), flag);
-        Ok(())
     }
 
-    /// Whether the listener thread is still in the registration given up
-    /// last: its answer hasn't come yet.
+    /// Whether the listener thread is still in the call given up last: its
+    /// answer hasn't come yet.
     fn stuck(&mut self) -> bool {
-        let still = self
-            .late
-            .as_ref()
-            .is_some_and(|late| matches!(late.try_recv(), Err(TryRecvError::Empty)));
+        let still = self.late.as_ref().is_some_and(Late::pending);
         if !still {
             self.late = None;
         }
         still
+    }
+
+    /// Registers a change listener for the endpoint `id` ([`Self::ask`]);
+    /// the endpoint isn't followed when that fails.
+    pub(super) fn watch(&mut self, id: &str) -> Result<(), BackendError> {
+        self.unwatch(id);
+        let flag = Arc::new(AtomicBool::new(false));
+        let watched = self.ask(|reply| Command::Watch {
+            id: id.to_owned(),
+            flag: Arc::clone(&flag),
+            reply,
+        });
+        if watched == Err(BackendError::NotResponding)
+            && let Some(commands) = &self.commands
+        {
+            // The thread handles its requests in order, so it drops the
+            // listener right after it registers it, if it ever does; with
+            // none registered, this drops nothing.
+            let _ = commands.send(Command::Unwatch(id.to_owned()));
+        }
+        watched?;
+        self.flags.insert(id.to_owned(), flag);
+        Ok(())
     }
 
     /// Unregisters the endpoint's listener, if it has one.
@@ -225,6 +281,90 @@ impl VolumeWatcher {
             .filter(|(_, flag)| flag.swap(false, Ordering::AcqRel))
             .map(|(id, _)| id.clone())
             .collect()
+    }
+
+    /// The endpoint's mute and master volume, the Sound settings slider
+    /// ([`Self::ask`]): an error when its volume control can't be activated
+    /// or read, and both parts are unknown then (S194).
+    pub(super) fn read(&mut self, id: &str) -> Result<EndpointVolume, BackendError> {
+        self.ask(|reply| Command::Read {
+            id: id.to_owned(),
+            reply,
+        })
+    }
+
+    /// Sets the endpoint's master volume, 0 to 1 ([`Self::ask`]): the fix
+    /// the user clicked.
+    pub(super) fn set_level(&mut self, id: &str, level: f32) -> Result<(), BackendError> {
+        self.ask(|reply| Command::SetLevel {
+            id: id.to_owned(),
+            level,
+            reply,
+        })
+    }
+
+    /// Unmutes the endpoint ([`Self::ask`]): the fix the user clicked.
+    pub(super) fn unmute(&mut self, id: &str) -> Result<(), BackendError> {
+        self.ask(|reply| Command::Unmute {
+            id: id.to_owned(),
+            reply,
+        })
+    }
+}
+
+/// The listener thread, started on first use and kept until AudioSync quits.
+///
+/// Its start makes Windows calls too, which can hang, and is waited for as
+/// long as an answer. A start that doesn't answer in time is given up, and
+/// that thread ends by itself once its call returns ([`Ready::ok`]); until
+/// then further starts fail at once instead of each waiting again, so the
+/// outputs after the first don't each hold the UI thread.
+#[derive(Default)]
+pub(super) struct Volumes {
+    watcher: Option<VolumeWatcher>,
+    /// The start given up last, until its thread ends.
+    late_start: Option<Late>,
+}
+
+impl Volumes {
+    /// The watcher, when its thread runs.
+    pub(super) fn running(&mut self) -> Option<&mut VolumeWatcher> {
+        self.watcher.as_mut()
+    }
+
+    /// The watcher, its thread started now when it doesn't run yet.
+    pub(super) fn watcher(&mut self) -> Result<&mut VolumeWatcher, BackendError> {
+        self.watcher_with(READY_TIMEOUT, listen)
+    }
+
+    /// [`Volumes::watcher`], whose thread runs `body` and is waited for
+    /// `timeout` at most. [`BackendError::NotResponding`] when the start
+    /// doesn't answer in time, or at once while a start given up before
+    /// still hangs.
+    fn watcher_with(
+        &mut self,
+        timeout: Duration,
+        body: impl FnOnce(&mpsc::Receiver<Command>, Ready) + Send + 'static,
+    ) -> Result<&mut VolumeWatcher, BackendError> {
+        let watcher = match self.watcher.take() {
+            Some(watcher) => watcher,
+            None => {
+                if self.late_start.as_ref().is_some_and(Late::pending) {
+                    return Err(BackendError::NotResponding);
+                }
+                let (running, ended) = mpsc::channel::<()>();
+                let started = VolumeWatcher::start_with(timeout, move |commands, ready| {
+                    // Goes when the thread ends, whichever way it does.
+                    let _running = running;
+                    body(commands, ready);
+                });
+                // A thread that couldn't start has ended already; one that
+                // didn't answer in time ends once its call returns.
+                self.late_start = started.is_err().then(|| Late::on(ended));
+                started?
+            }
+        };
+        Ok(self.watcher.insert(watcher))
     }
 }
 
@@ -258,32 +398,37 @@ fn listen(commands: &mpsc::Receiver<Command>, ready: Ready) {
         // Nobody waits for this listener thread anymore.
         return;
     }
-    serve(commands, |id, flag| {
-        Registration::new(&enumerator, id, flag)
-    });
+    serve(commands, &Windows(enumerator));
 }
 
-/// Registers listeners through `register` and drops them on request, until
-/// the watcher goes; then drops the rest, which unregisters them.
-fn serve<R>(
-    commands: &mpsc::Receiver<Command>,
-    mut register: impl FnMut(&str, Arc<AtomicBool>) -> Result<R, BackendError>,
-) {
-    let mut registrations: BTreeMap<String, R> = BTreeMap::new();
+/// Makes the calls asked for on `endpoints`, registering listeners and
+/// dropping them on request, until the watcher goes; then drops the rest,
+/// which unregisters them.
+fn serve<E: Endpoints>(commands: &mpsc::Receiver<Command>, endpoints: &E) {
+    let mut listeners: BTreeMap<String, E::Listener> = BTreeMap::new();
     while let Ok(command) = commands.recv() {
         match command {
             Command::Watch { id, flag, reply } => {
-                let answer = register(&id, flag).map(|registration| {
-                    registrations.insert(id, registration);
+                let answer = endpoints.listen(&id, flag).map(|listener| {
+                    listeners.insert(id, listener);
                 });
                 let _ = reply.send(answer);
             }
             Command::Unwatch(id) => {
-                registrations.remove(&id);
+                listeners.remove(&id);
+            }
+            Command::Read { id, reply } => {
+                let _ = reply.send(endpoints.read(&id));
+            }
+            Command::SetLevel { id, level, reply } => {
+                let _ = reply.send(endpoints.set_level(&id, level));
+            }
+            Command::Unmute { id, reply } => {
+                let _ = reply.send(endpoints.unmute(&id));
             }
         }
     }
-    drop(registrations);
+    drop(listeners);
 }
 
 /// A registered listener on one endpoint's volume control, unregistered on
@@ -384,24 +529,100 @@ mod tests {
         }
     }
 
-    /// A listener thread whose every registration waits for a word on
-    /// `gate`, as a Windows call that hangs until Windows audio answers.
+    /// What every read of the fake endpoints answers.
+    const FAKE_VOLUME: EndpointVolume = EndpointVolume {
+        muted: false,
+        level: 0.5,
+    };
+
+    /// Fake endpoints whose every call waits for a word on `gate`, as a
+    /// Windows call that hangs until Windows audio answers, and then lists
+    /// what it did in `done`.
+    struct Hanging {
+        gate: mpsc::Receiver<()>,
+        done: Done,
+    }
+
+    impl Hanging {
+        fn call(&self, entry: String) -> Result<(), BackendError> {
+            self.gate.recv().map_err(|_| BackendError::NotResponding)?;
+            self.done.push(entry);
+            Ok(())
+        }
+    }
+
+    impl Endpoints for Hanging {
+        type Listener = FakeRegistration;
+
+        fn listen(
+            &self,
+            id: &str,
+            _flag: Arc<AtomicBool>,
+        ) -> Result<FakeRegistration, BackendError> {
+            self.call(format!("+{id}"))?;
+            Ok(FakeRegistration {
+                id: id.to_owned(),
+                done: self.done.clone(),
+            })
+        }
+
+        fn read(&self, id: &str) -> Result<EndpointVolume, BackendError> {
+            self.call(format!("read {id}"))?;
+            Ok(FAKE_VOLUME)
+        }
+
+        fn set_level(&self, id: &str, level: f32) -> Result<(), BackendError> {
+            self.call(format!("level {id} {level}"))
+        }
+
+        fn unmute(&self, id: &str) -> Result<(), BackendError> {
+            self.call(format!("unmute {id}"))
+        }
+    }
+
+    /// A listener thread that starts at once and whose every call waits for
+    /// a word on `gate` ([`Hanging`]).
     fn hanging(
         gate: mpsc::Receiver<()>,
         done: Done,
     ) -> impl FnOnce(&mpsc::Receiver<Command>, Ready) + Send + 'static {
         move |commands, ready| {
             if ready.ok(()) {
-                serve(commands, |id, _flag| {
-                    gate.recv().map_err(|_| BackendError::NotResponding)?;
-                    done.push(format!("+{id}"));
-                    Ok(FakeRegistration {
-                        id: id.to_owned(),
-                        done: done.clone(),
-                    })
-                });
+                serve(commands, &Hanging { gate, done });
             }
         }
+    }
+
+    /// A listener thread whose start waits for a word on `gate`, as Windows
+    /// audio that hangs while the thread sets up, and that serves no call.
+    fn hanging_start(
+        gate: mpsc::Receiver<()>,
+    ) -> impl FnOnce(&mpsc::Receiver<Command>, Ready) + Send + 'static {
+        move |commands, ready| {
+            let _ = gate.recv();
+            if ready.ok(()) {
+                while commands.recv().is_ok() {}
+            }
+        }
+    }
+
+    /// A listener thread that starts at once and serves no call.
+    fn idle() -> impl FnOnce(&mpsc::Receiver<Command>, Ready) + Send + 'static {
+        |commands, ready| {
+            if ready.ok(()) {
+                while commands.recv().is_ok() {}
+            }
+        }
+    }
+
+    /// Waits up to [`LIMIT`] for the watcher to see the answer it gave up
+    /// on.
+    fn wait_until_answered(watcher: &mut VolumeWatcher) {
+        let until = Instant::now() + LIMIT;
+        while watcher.stuck() && Instant::now() < until {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!watcher.stuck(), "the late answer came");
     }
 
     /// How long the watcher waits for an answer in these tests.
@@ -467,6 +688,105 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn a_volume_read_or_fix_that_doesnt_answer_in_time_is_given_up_without_freezing_the_caller() {
+        let (gate, hold) = mpsc::channel();
+        let done = Done::default();
+        let watcher =
+            VolumeWatcher::start_with(TIMEOUT, hanging(hold, done.clone())).expect("it starts");
+        // Windows audio hangs in a read the UI thread asked for: the call
+        // returns after the wait, as no device volume for now.
+        let (mut watcher, read) = within(move || {
+            let mut watcher = watcher;
+            let read = watcher.read("speakers");
+            (watcher, read)
+        });
+        assert_eq!(read, Err(BackendError::NotResponding));
+        // While it still hangs, the fix's writes and every other call fail
+        // at once, with no second wait.
+        let asked = Instant::now();
+        assert_eq!(
+            watcher.set_level("speakers", 0.75),
+            Err(BackendError::NotResponding)
+        );
+        assert_eq!(watcher.unmute("speakers"), Err(BackendError::NotResponding));
+        assert_eq!(watcher.read("headphones"), Err(BackendError::NotResponding));
+        assert_eq!(
+            watcher.watch("headphones"),
+            Err(BackendError::NotResponding)
+        );
+        assert!(asked.elapsed() < TIMEOUT, "{:?}", asked.elapsed());
+        // It answers after all; then every call goes to Windows again, on
+        // the listener thread.
+        gate.send(()).expect("the thread waits");
+        done.wait_for(&["read speakers"]);
+        wait_until_answered(&mut watcher);
+        for _ in 0..3 {
+            gate.send(()).expect("the thread waits");
+        }
+        assert_eq!(watcher.read("headphones"), Ok(FAKE_VOLUME));
+        assert_eq!(watcher.set_level("headphones", 0.75), Ok(()));
+        assert_eq!(watcher.unmute("headphones"), Ok(()));
+        done.wait_for(&[
+            "read speakers",
+            "read headphones",
+            "level headphones 0.75",
+            "unmute headphones",
+        ]);
+
+        // A write that hangs is given up the same way.
+        let (watcher, written) = within(move || {
+            let mut watcher = watcher;
+            let written = watcher.set_level("speakers", 0.75);
+            (watcher, written)
+        });
+        assert_eq!(written, Err(BackendError::NotResponding));
+        within(move || drop(watcher));
+    }
+
+    #[test]
+    fn a_volume_thread_that_doesnt_start_in_time_holds_no_later_start() {
+        let (gate, hold) = mpsc::channel();
+        // Windows audio hangs while the listener thread sets up: given up
+        // after the wait.
+        let (mut volumes, started) = within(move || {
+            let mut volumes = Volumes::default();
+            let started = volumes
+                .watcher_with(TIMEOUT, hanging_start(hold))
+                .map(|_| ());
+            (volumes, started)
+        });
+        assert_eq!(started, Err(BackendError::NotResponding));
+        // While that start still hangs, the next output's call fails at
+        // once, without a thread of its own.
+        let asked = Instant::now();
+        let tried = Arc::new(AtomicBool::new(false));
+        let also = Arc::clone(&tried);
+        let again = volumes
+            .watcher_with(TIMEOUT, move |_, ready| {
+                also.store(true, Ordering::Release);
+                let _ = ready.ok(());
+            })
+            .map(|_| ());
+        assert_eq!(again, Err(BackendError::NotResponding));
+        assert!(asked.elapsed() < TIMEOUT, "{:?}", asked.elapsed());
+        assert!(!tried.load(Ordering::Acquire), "no second start");
+        // Windows audio answers: the late thread ends by itself, and the
+        // next start works.
+        gate.send(()).expect("the thread waits");
+        let until = Instant::now() + LIMIT;
+        loop {
+            match volumes.watcher_with(TIMEOUT, idle()).map(|_| ()) {
+                Ok(()) => break,
+                Err(BackendError::NotResponding) if Instant::now() < until => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("the next start works: {error:?}"),
+            }
+        }
+        assert!(volumes.running().is_some());
+    }
+
     /// Reads this PC's endpoint volumes and follows them for a moment,
     /// silently and changing nothing. Ignored by default since it needs
     /// Windows audio; run it on a PC with
@@ -475,20 +795,21 @@ mod tests {
     #[ignore = "reads the PC's own audio endpoints"]
     fn real_endpoint_volumes_are_read_and_followed_without_changing_them() {
         let listing = super::super::devices::render_endpoints().expect("the endpoints are listed");
-        let mut watcher = VolumeWatcher::start().expect("the listener thread starts");
+        let mut volumes = Volumes::default();
+        let watcher = volumes.watcher().expect("the listener thread starts");
         for endpoint in &listing.endpoints {
-            let before = read(&endpoint.id);
+            let before = watcher.read(&endpoint.id);
             println!("{:?}: {before:?}", endpoint.name);
-            if let Some(volume) = before {
+            if let Ok(volume) = before {
                 assert!((0.0..=1.0).contains(&volume.level), "{volume:?}");
             }
             watcher.watch(&endpoint.id).expect("a listener registers");
-            assert_eq!(read(&endpoint.id), before, "nothing changed");
+            assert_eq!(watcher.read(&endpoint.id), before, "nothing changed");
         }
         println!("changed meanwhile: {:?}", watcher.take_changed());
         for endpoint in &listing.endpoints {
             watcher.unwatch(&endpoint.id);
         }
-        drop(watcher);
+        drop(volumes);
     }
 }

@@ -143,9 +143,9 @@ extern "C" {
 /* What an output device's own volume and mute mean for its row (AscDeviceVolumeDecision.decision). */
 #define ASC_DEVICE_VOLUME_UNKNOWN 0       /* neither part is known: no hint */
 #define ASC_DEVICE_VOLUME_FINE 1          /* not muted, not low: no hint */
-#define ASC_DEVICE_VOLUME_LOW 2           /* the volume is below 25 % */
+#define ASC_DEVICE_VOLUME_LOW 2           /* the volume is 25 % or less */
 #define ASC_DEVICE_VOLUME_MUTED 3         /* muted, at a volume that isn't low or isn't known */
-#define ASC_DEVICE_VOLUME_MUTED_AND_LOW 4 /* muted, and below 25 % too */
+#define ASC_DEVICE_VOLUME_MUTED_AND_LOW 4 /* muted, and 25 % or less too */
 
 /* ---- Version and volume ------------------------------------------------- */
 
@@ -714,7 +714,7 @@ typedef struct AscDeviceVolumeDecision {
 
 /*
  * What `reading` means: MUTED when the mute is known and set, LOW when the
- * volume is known and below 25 %, MUTED_AND_LOW when both hold, UNKNOWN when
+ * volume is known and 25 % or less, MUTED_AND_LOW when both hold, UNKNOWN when
  * neither part is known, FINE otherwise; a volume that isn't finite counts as
  * unknown. The fix writes each part at most once.
  */

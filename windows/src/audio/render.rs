@@ -492,6 +492,57 @@ mod tests {
         play_tone_at(22_050, 97);
     }
 
+    /// The capture has run for a second, writing a 10 ms block on its own
+    /// clock, when an endpoint whose clock runs 100 ppm fast starts asking
+    /// for one 10 ms period per event, at hold-back 0: the output never runs
+    /// dry after its start when it converts (S206).
+    #[test]
+    fn a_converting_output_at_hold_back_0_never_runs_dry_after_its_start() {
+        for device_rate in [44_100, 96_000] {
+            for phase in [0.0, 0.25, 0.5, 0.75, 0.95] {
+                let mut s = setup(device_rate, 2, 0, 1.0);
+                let block = SESSION_RATE as usize / 100;
+                let period = device_rate as usize / 100;
+                for _ in 0..100 {
+                    s.writer.write(&vec![0.5f32; block * 2], block);
+                }
+                // Time in units of 1 / (session rate × device rate × 10^4)
+                // seconds; the endpoint's period is 10^-4 short.
+                let write_every = block as u128 * u128::from(device_rate) * 10_000;
+                let pull_every = period as u128 * u128::from(SESSION_RATE) * 9_999;
+                let offset = (phase * write_every as f64) as u128;
+                let (mut written, mut pulled) = (1u128, 0u128);
+                let mut played = Vec::new();
+                // Five seconds.
+                while played.len() < 5 * device_rate as usize {
+                    if pulled * pull_every + offset < written * write_every {
+                        played.extend(play(&mut s, period, period));
+                        pulled += 1;
+                    } else {
+                        s.writer.write(&vec![0.5f32; block * 2], block);
+                        written += 1;
+                    }
+                }
+                let counters = s.control.counters();
+                assert_eq!(
+                    (
+                        counters.starved_renders,
+                        counters.drift_skips,
+                        counters.drift_silences
+                    ),
+                    (0, 0, 0),
+                    "{device_rate} Hz, phase {phase}"
+                );
+                let first = played.iter().position(|&x| x != 0.0).unwrap();
+                let open = first + fade_len(device_rate) + 64;
+                assert!(
+                    played[open..].iter().all(|&x| (x - 0.5).abs() < 1e-3),
+                    "a gap after the fade-in at {device_rate} Hz, phase {phase}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_device_without_channels_or_at_an_unsupported_rate_is_refused() {
         let ring = Ring::for_rate(SESSION_RATE).unwrap();
