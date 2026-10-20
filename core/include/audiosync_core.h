@@ -576,6 +576,14 @@ uint64_t asc_renderer_slowed_frames(const AscRenderer *renderer);
    follow the capture's clock (S207), in all; 0 for a NULL handle. */
 uint64_t asc_renderer_sped_frames(const AscRenderer *renderer);
 
+/* Any thread: the largest lateness of a callback against the renderer's
+   earliest ones, in ns (S209); 0 without output times or for a NULL handle. */
+uint64_t asc_renderer_late_max_ns(const AscRenderer *renderer);
+
+/* Any thread: the callbacks that came more than 5 ms later than
+   the renderer's earliest ones (S209); 0 for a NULL handle. */
+uint64_t asc_renderer_late_callbacks(const AscRenderer *renderer);
+
 /* Any thread: the device frames the converter couldn't produce and that were
    played as silence, in all (0 unless the read sizing is wrong); 0 for a NULL
    handle. */
