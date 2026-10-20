@@ -4,6 +4,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-20
+
 ### Added
 
 - AirPlay speakers with a screen, such as a TV, show the track that's playing in Spotify or Music: title, artist, album and artwork. When nothing is playing there, or with any other source, they show "AudioSync", the source's name (such as the app or input device) and "From your Mac" instead of a file name. It uses the same Automation access to Spotify or Music as Now Playing in the window.
@@ -69,7 +71,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - As on the Mac, when a speaker that's on sits at 25% or less, or is muted, in Windows, its row says so and one click sets it to 75% or unmutes it. If Windows audio stops answering, reading or fixing that volume can no longer freeze the window: AudioSync gives up after five seconds and tries again a little later.
 - A speaker that disappears always gets its notice, a USB device plugged into another port keeps its settings, short Windows audio errors (after sleep, for example) are retried, and an output that doesn't answer holds up the window for about five seconds at most.
 
-## [0.4.1] - 2026-10-17
+## 0.4.1 - 2026-10-17
 
 ### Changed
 
@@ -80,7 +82,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - The AirPlay engine in the 0.4.0 download could crash on macOS 26.0 through 26.3, because one of its bundled libraries needed macOS 26.4.
 
-## [0.4.0] - 2026-10-17
+## 0.4.0 - 2026-10-17
 
 The big one: AudioSync is now a regular Dock app with a main window, and it can pair with speakers that ask for a code.
 
@@ -147,6 +149,5 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
-[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.4.1...HEAD
-[0.4.1]: https://github.com/yassersutojoyo/audiosync/compare/v0.4...v0.4.1
-[0.4.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.4
+[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.5.0
