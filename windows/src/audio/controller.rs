@@ -758,6 +758,9 @@ impl<D: Driver> Controller<D> {
             // isn't answering at all: it waits as that one does instead of
             // holding the window as long again.
             if held {
+                // It waited behind a hang this time, so next time it goes
+                // before the one that hung, whatever happened before.
+                self.hung.remove(&endpoint.id);
                 self.unplayable.insert(endpoint.id.clone());
                 self.stalled.insert(endpoint.id.clone(), STALL_RETRY_POLLS);
                 self.log.log(|| {
