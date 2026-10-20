@@ -1717,6 +1717,90 @@ mod tests {
     use super::*;
     use crate::ui_model::MockBackend;
 
+    /// A platform without native windows, so a test can build the whole App
+    /// and drive it through the windows' callbacks.
+    struct Headless;
+
+    impl slint::platform::Platform for Headless {
+        fn create_window_adapter(
+            &self,
+        ) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
+            Ok(slint::platform::software_renderer::MinimalSoftwareWindow::new(Default::default()))
+        }
+    }
+
+    /// The App over `backend`, with headless windows.
+    fn app_over(backend: MockBackend) -> Rc<App> {
+        // The platform is set per thread: a thread that already built an
+        // App has it, which is fine.
+        let _ = slint::platform::set_platform(Box::new(Headless));
+        App::new(Box::new(backend), DebugLog::new(None)).expect("the windows build headless")
+    }
+
+    #[test]
+    fn the_main_window_keeps_a_virtual_output_listed_after_it_is_turned_off() {
+        let mut backend = MockBackend::new();
+        let mut cable = backend.snapshot().speaker("local:desk").unwrap().clone();
+        cable.id = "local:cable".into();
+        cable.name = "Cable Input".into();
+        cable.kind = ui_model::SpeakerKind::Virtual;
+        cable.enabled = true;
+        backend.add_speaker(cable);
+        backend.set_running(true);
+        let app = app_over(backend);
+        let listed = || {
+            app.models
+                .all_speakers
+                .iter()
+                .any(|s| s.id == "local:cable")
+        };
+        assert!(!app.ui.borrow().show_virtual, "Show Virtual Devices is off");
+        assert!(listed(), "on, the virtual output is listed");
+
+        app.main.invoke_speaker_toggled("local:cable".into());
+        let enabled = |app: &App| app.snapshot().speaker("local:cable").unwrap().enabled;
+        assert!(!enabled(&app), "the click on its row turned it off");
+        assert!(listed(), "turned off, its row stays under the focus");
+        app.refresh();
+        assert!(listed(), "and a later refresh keeps it");
+
+        app.main.invoke_show_virtual_devices_toggled(true);
+        assert!(listed(), "Show Virtual Devices on lists it");
+        app.main.invoke_show_virtual_devices_toggled(false);
+        assert!(
+            !listed(),
+            "Show Virtual Devices changed: off and hidden again, it is forgotten"
+        );
+    }
+
+    #[test]
+    fn escape_in_the_airplay_delay_field_leaves_the_applied_delay() {
+        let app = app_over(MockBackend::new());
+        let applied = app.snapshot().airplay_delay_ms;
+        assert_eq!(applied, Some(1750.0), "the example sender has a delay");
+        let shown = || app.main.get_airplay_delay_text().to_string();
+        assert_eq!(shown(), format_ms(1750.0));
+
+        app.main.invoke_airplay_delay_edited("9999".into());
+        assert_eq!(shown(), "9999", "the field keeps what is typed");
+        assert_eq!(
+            app.snapshot().airplay_delay_ms,
+            applied,
+            "typing applies nothing"
+        );
+
+        app.main.invoke_airplay_delay_cancelled();
+        assert_eq!(shown(), format_ms(1750.0), "Escape shows the applied value");
+
+        app.main.invoke_airplay_delay_committed();
+        assert_eq!(
+            app.snapshot().airplay_delay_ms,
+            applied,
+            "leaving the field after Escape applies nothing"
+        );
+        assert_eq!(shown(), format_ms(1750.0));
+    }
+
     #[test]
     fn a_saved_main_window_is_fitted_to_the_monitor_it_opens_on() {
         let laptop = crate::placement::Bounds {
