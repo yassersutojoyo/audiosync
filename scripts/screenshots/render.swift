@@ -234,7 +234,7 @@ func mainWindowShot(_ model: AppModel, look: Look) -> NSBitmapImageRep {
 func equalizerShot(_ model: EqualizerModel, look: Look) -> NSBitmapImageRep {
     let window = ShotWindow(contentViewController: NSHostingController(rootView: EqualizerView(model: model)))
     window.appearance = look.appearance
-    window.title = AppText().equalizerTitle
+    window.title = UIStrings().equalizerTitle
     window.styleMask = [.titled, .closable]
     guard let frameView = window.contentView?.superview else { fatalError("The window has no frame view") }
     return framed(capture(frameView), cornerRadius: windowCornerRadius, look: look)

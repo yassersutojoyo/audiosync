@@ -275,7 +275,7 @@ enum AudioProcesses {
     private static let responsibilityLookup: (@convention(c) (pid_t) -> pid_t)? = {
         let everyImage = UnsafeMutableRawPointer(bitPattern: -2)   // RTLD_DEFAULT
         guard let symbol = dlsym(everyImage, "responsibility_get_pid_responsible_for_pid") else {
-            DBG.log("[AudioSync] app source: macOS's responsibility lookup is unavailable, so only the app's "
+            DebugTrace.log("[AudioSync] app source: macOS's responsibility lookup is unavailable, so only the app's "
                 + "own process is captured; audio it plays through helper processes (browser tabs) stays silent")
             return nil
         }

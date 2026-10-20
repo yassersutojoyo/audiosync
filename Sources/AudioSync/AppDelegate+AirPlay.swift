@@ -155,7 +155,7 @@ extension AppDelegate {
     func observeSleepAndWake() {
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
-            DBG.log("[AudioSync] going to sleep")
+            DebugTrace.log("[AudioSync] going to sleep")
             self?.macAsleep = true
         }
         center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -169,7 +169,7 @@ extension AppDelegate {
     }
 
     private func wokeFromSleep() {
-        DBG.log("[AudioSync] woke from sleep")
+        DebugTrace.log("[AudioSync] woke from sleep")
         macAsleep = false
         reconcileAirPlaySpeakers()
     }

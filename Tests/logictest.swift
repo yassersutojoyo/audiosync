@@ -280,14 +280,14 @@ do {
 
 // MARK: Debug log — opt-in, one UTC line per message, capped, never through a link
 do {
-    check(DBG.isEnabled(environment: ["AUDIOSYNC_DEBUG": "1"]), "debug log: on with AUDIOSYNC_DEBUG=1")
-    check(!DBG.isEnabled(environment: [:]) && !DBG.isEnabled(environment: ["AUDIOSYNC_DEBUG": "0"])
-          && !DBG.isEnabled(environment: ["AUDIOSYNC_DEBUG": ""])
-          && !DBG.isEnabled(environment: ["AUDIOSYNC_DEBUG": "true"]),
+    check(DebugTrace.isEnabled(environment: ["AUDIOSYNC_DEBUG": "1"]), "debug log: on with AUDIOSYNC_DEBUG=1")
+    check(!DebugTrace.isEnabled(environment: [:]) && !DebugTrace.isEnabled(environment: ["AUDIOSYNC_DEBUG": "0"])
+          && !DebugTrace.isEnabled(environment: ["AUDIOSYNC_DEBUG": ""])
+          && !DebugTrace.isEnabled(environment: ["AUDIOSYNC_DEBUG": "true"]),
           "debug log: off unless the variable is exactly 1")
-    if !DBG.enabled {
+    if !DebugTrace.enabled {
         var built = false
-        DBG.log({ () -> String in built = true; return "never" }())
+        DebugTrace.log({ () -> String in built = true; return "never" }())
         check(!built, "debug log: a message is never built while the log is off")
     }
     let t = Date(timeIntervalSince1970: 1_792_345_933.25)   // 2026-10-18 17:52:13.250 UTC
@@ -644,7 +644,7 @@ do {
     }
 
     let main = kAudioObjectPropertyElementMain
-    let text = AppText(locale: Locale(identifier: "en_US"))
+    let text = UIStrings(locale: Locale(identifier: "en_US"))
     let speakers = "MacBook Pro Speakers"
     let builtIn: AudioDeviceID = 41
     let uid = "BuiltInSpeakerDevice"
@@ -2281,7 +2281,7 @@ do {
           "\(damaged.localOffsets), \(damaged.airPlayDelay), \(unreadable.airPlayDelay)")
 
     // A start that fails in the audio core says so, not that capture failed.
-    let t = AppText()
+    let t = UIStrings()
     let coreMessage = t.streamingStartMessage(for: StreamEngine.StartError.coreUnavailable)
     check(coreMessage == t.engineSetupFailed && coreMessage.contains("open it again")
             && coreMessage != t.streamingStartMessage(for: SourceCapture.CaptureError.tapNotCreated(-1)),
@@ -2309,7 +2309,7 @@ do {
 
 // MARK: Delay field — typed text applies on Return or focus loss, once (DelayFieldDraft)
 do {
-    let t = AppText()
+    let t = UIStrings()
     let offset = LocalDelay.sanitizedOffset
     let airPlay = LocalDelay.sanitizedAirPlayDelay
     let signed = t.offsetNumber

@@ -14,7 +14,7 @@ enum Equalizer {
         var gains = [Double](repeating: 0, count: Equalizer.frequencies.count)  // dB
     }
 
-    /// A preset's stable identity; its display name lives in `AppText`.
+    /// A preset's stable identity; its display name lives in `UIStrings`.
     enum PresetID: String, CaseIterable {
         case flat, bassBoost, bassCut, trebleBoost, vocal, rock, pop, jazz,
              classical, electronic, loudness, smallSpeakers

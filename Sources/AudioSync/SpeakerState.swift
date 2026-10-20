@@ -143,7 +143,7 @@ extension LocalOutputSync {
                 try engine.attachOutput(uid: uid, device: device.id, delayMs: holdBack, gain: gain(uid))
                 applied.attached[uid] = holdBack
             } catch let startError {
-                DBG.log("[AudioSync] local output \(uid) failed to start: \(startError)")
+                DebugTrace.log("[AudioSync] local output \(uid) failed to start: \(startError)")
                 applied.failures.append(Failure(uid: uid, deviceName: device.name))
             }
         }

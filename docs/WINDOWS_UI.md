@@ -4,7 +4,7 @@ The Windows app (`windows/`) has the same screens as the Mac app, in the same
 order, with Windows manners: a menu bar with Ctrl shortcuts, a notification-area
 (tray) icon with a flyout where the Mac has its menu bar panel, the system's
 window controls, and light or dark following Windows. The wording follows the
-Mac app's `AppText`; all of it lives in `windows/ui/strings.slint`.
+Mac app's `UIStrings`; all of it lives in `windows/ui/strings.slint`.
 
 Colors, the wordmark typeface, font sizes and the window margins come from the
 shared design tokens (`brand/tokens.json`, see `brand/README.md`). The rest

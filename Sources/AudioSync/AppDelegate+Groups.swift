@@ -113,7 +113,7 @@ extension AppDelegate {
     func autoConnect(_ keys: [String]) {
         let hits = keys.filter { autoConnect.contains($0) }
         guard !hits.isEmpty else { return }
-        DBG.log("[AudioSync] auto-connect \(hits)")
+        DebugTrace.log("[AudioSync] auto-connect \(hits)")
         for key in hits where !isEnabled(key) {
             guard let (id, airplay) = SpeakerKey.parse(key) else { continue }
             // Switched on automatically: an AirPlay speaker's code request becomes a notice.
@@ -134,7 +134,7 @@ extension AppDelegate {
         do {
             if on { try service.register() } else { try service.unregister() }
         } catch {
-            DBG.log("[AudioSync] login item: \(error)")
+            DebugTrace.log("[AudioSync] login item: \(error)")
             if on { notify(text.launchAtLoginFailed, origin: .user, subject: Notice.login) }
         }
         if on && service.status == .requiresApproval {

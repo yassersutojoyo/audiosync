@@ -2,7 +2,7 @@ import Foundation
 
 /// How an AirPlay speaker controls access, and why AudioSync switched one
 /// off. AudioSync's own sender decides both (`NativeReceiver.access`,
-/// `NativeAirPlayModel`); the texts for them are in `AppText`.
+/// `NativeAirPlayModel`); the texts for them are in `UIStrings`.
 enum AirPlayPairing {
 
     /// How a speaker controls access, from what discovery reports.

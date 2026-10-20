@@ -126,7 +126,7 @@ final class AppModel: ObservableObject {
     @Published var panelSession = 0
     /// Room below the menu bar on the screen the panel opens on (set by the panel).
     @Published var panelRoom: CGFloat = 800
-    var text = AppText()
+    var text = UIStrings()
     var actions = Actions()
 
     var currentSource: Source? { sources.first { $0.id == sourceID } }
@@ -227,8 +227,8 @@ final class MenuBarController: NSObject {
             self.noticeCount = list.count
             self.refreshIcon()
         }
-        DBG.log("[AudioSync] status item visible=\(statusItem.isVisible) button=\(statusItem.button != nil)")
-        DBG.log("[AudioSync] brand font \(Brand.fontName) loaded=\(NSFont(name: Brand.fontName, size: 13) != nil)")
+        DebugTrace.log("[AudioSync] status item visible=\(statusItem.isVisible) button=\(statusItem.button != nil)")
+        DebugTrace.log("[AudioSync] brand font \(Brand.fontName) loaded=\(NSFont(name: Brand.fontName, size: 13) != nil)")
     }
 
     func setRunning(_ running: Bool) {
@@ -267,7 +267,7 @@ final class MenuBarController: NSObject {
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = AppText().appName
+        image.accessibilityDescription = UIStrings().appName
         return image
     }
 
@@ -472,7 +472,7 @@ struct MenuBarView: View {
         .tint(accent)
     }
 
-    private func header(_ t: AppText) -> some View {
+    private func header(_ t: UIStrings) -> some View {
         HStack(spacing: 9) {
             // The brand opens the main window too, for those who know.
             Button { model.actions.openMainWindow() } label: {
@@ -500,7 +500,7 @@ struct MenuBarView: View {
         }
     }
 
-    private func masterRow(_ t: AppText) -> some View {
+    private func masterRow(_ t: UIStrings) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "speaker.fill").foregroundStyle(.secondary).font(.caption)
                 .accessibilityHidden(true)
@@ -515,7 +515,7 @@ struct MenuBarView: View {
     }
 
     @ViewBuilder
-    private func speakerList(_ t: AppText) -> some View {
+    private func speakerList(_ t: UIStrings) -> some View {
         let count = model.groups.count + model.layout.connected.count   // This Mac is above the divider
         if count == 0 && model.airPlayProblem != nil {
             EmptyView()   // the problem below says why
@@ -536,7 +536,7 @@ struct MenuBarView: View {
 
     /// The main window's Local Network hint, cut to a caption and a link:
     /// without that access the sender sees no AirPlay speaker, silently.
-    private func localNetworkHint(_ t: AppText, caption: String, detail: String) -> some View {
+    private func localNetworkHint(_ t: UIStrings, caption: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(caption)
                 .font(.caption)
@@ -553,7 +553,7 @@ struct MenuBarView: View {
     }
 
     @ViewBuilder
-    private func thisMacRows(_ t: AppText) -> some View {
+    private func thisMacRows(_ t: UIStrings) -> some View {
         let thisMac = model.layout.thisMac
         if !thisMac.isEmpty {
             VStack(spacing: 0) {
@@ -605,7 +605,7 @@ struct MenuBarView: View {
 private struct CompactRow: View {
     let name, symbol: String
     let state: SpeakerState
-    let text: AppText
+    let text: UIStrings
     let height: CGFloat
     /// Read after the name by VoiceOver: a group's member count.
     var hint: String? = nil
@@ -679,7 +679,7 @@ private struct PanelButton: View {
 struct AirPlayProblemView: View {
     let message: String
     let canRetry: Bool
-    let text: AppText
+    let text: UIStrings
     var compact = false
     let retry: () -> Void
 
@@ -764,7 +764,7 @@ struct SpeakerBadge: View {
 struct SpeakerTypeIcon: View {
     let kind: SpeakerTag
     let state: SpeakerState
-    let text: AppText
+    let text: UIStrings
     var font: Font = .caption
 
     var body: some View {
@@ -803,7 +803,7 @@ struct SpeakerTypeIcon: View {
 /// as it is. The speaker stays listed and clickable.
 struct AvailabilityNote: View {
     let availability: SpeakerAvailability
-    let text: AppText
+    let text: UIStrings
 
     var body: some View {
         if let note = text.availability(availability) {
@@ -911,7 +911,7 @@ struct NoticeStack: View {
         }
     }
 
-    private func footer(_ t: AppText, more: Int) -> some View {
+    private func footer(_ t: UIStrings, more: Int) -> some View {
         HStack {
             NoticeLink(title: t.moreNotices(more)) { model.actions.openMainWindow() }
             Spacer()
@@ -939,7 +939,7 @@ private struct NoticeLink: View {
 /// One notice, with a dismiss button.
 struct NoticeBanner<Footer: View>: View {
     let notice: Notice
-    let text: AppText
+    let text: UIStrings
     let showsTime: Bool
     let lineLimit: Int?
     let dismiss: () -> Void
@@ -990,7 +990,7 @@ struct NoticeBanner<Footer: View>: View {
 /// (a system switch dims whenever its window isn't key).
 struct PowerSwitch: View {
     let isOn: Bool
-    let text: AppText
+    let text: UIStrings
     let toggle: () -> Void
 
     var body: some View {

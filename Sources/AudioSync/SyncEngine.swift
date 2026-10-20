@@ -101,21 +101,21 @@ final class StreamEngine {
     /// 500 ms (S186).
     func start(source: AudioSource) throws {
         guard !isRunning else {
-            DBG.log("[AudioSync] session start ignored: a session is already running")
+            DebugTrace.log("[AudioSync] session start ignored: a session is already running")
             return
         }
         if !retirement.isIdle {
-            DBG.log("[AudioSync] session start waits for the last outputs to fade out")
+            DebugTrace.log("[AudioSync] session start waits for the last outputs to fade out")
             finishStopping()
         }
         guard let parts = EngineParts.make(equalizer: equalizerSettings) else {
-            DBG.log("[AudioSync] session not started: \(StartError.coreUnavailable)")
+            DebugTrace.log("[AudioSync] session not started: \(StartError.coreUnavailable)")
             throw StartError.coreUnavailable
         }
         try capture.start(source: source, parts: parts)
         self.parts = parts
         isRunning = true
-        DBG.log("[AudioSync] session started: \(source) at \(capture.sampleRate) Hz")
+        DebugTrace.log("[AudioSync] session started: \(source) at \(capture.sampleRate) Hz")
     }
 
     /// Ends the session (S115, S186): every output and the AirPlay input
@@ -136,14 +136,14 @@ final class StreamEngine {
         renderers = [:]
         let capture = self.capture
         let inputs = Self.inputsFadedCheck(ring: parts.ring, captureRate: capture.sampleRate)
-        DBG.log("[AudioSync] session stopping: \(leaving.count) output(s) and the AirPlay inputs fade out")
+        DebugTrace.log("[AudioSync] session stopping: \(leaving.count) output(s) and the AirPlay inputs fade out")
         retirement.stopSession(leaving.map { $0.renderer }, fadeInputs: {
             NativeAirPlayTap.requestFadeOut()
         }, inputsFaded: inputs.faded, inputsFallbackNs: inputs.fallbackNs, stopCapture: {
             capture.halt()
         }, then: {
             for output in leaving { StreamEngine.logStopped(output.uid, output.renderer, why: "session stopped") }
-            DBG.log("[AudioSync] session stopped")
+            DebugTrace.log("[AudioSync] session stopped")
             completion?()
         })
         watchFades()
@@ -216,11 +216,11 @@ final class StreamEngine {
     /// the output can't start.
     func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {
         guard isRunning, let parts else {
-            DBG.log("[AudioSync] output \(uid) not added: no session is running")
+            DebugTrace.log("[AudioSync] output \(uid) not added: no session is running")
             return
         }
         guard renderers[uid] == nil else {
-            DBG.log("[AudioSync] output \(uid) not added: it is already attached")
+            DebugTrace.log("[AudioSync] output \(uid) not added: it is already attached")
             return
         }
         guard let renderer = parts.makeRenderer(captureRate: capture.sampleRate) else {
@@ -233,7 +233,7 @@ final class StreamEngine {
         }
         try renderer.start(on: device, captureRate: capture.sampleRate, delayMs: delayMs)
         renderers[uid] = renderer
-        DBG.log("[AudioSync] output added: \(uid) on device \(device), delay \(delayMs) ms, gain \(gain)")
+        DebugTrace.log("[AudioSync] output added: \(uid) on device \(device), delay \(delayMs) ms, gain \(gain)")
     }
 
     /// Switches output `uid` off; see `detachOutputs`.
@@ -250,7 +250,7 @@ final class StreamEngine {
             renderers.removeValue(forKey: uid).map { (uid: uid, renderer: $0) }
         }
         guard !leaving.isEmpty else { return }
-        DBG.log("[AudioSync] output(s) fading out: " + leaving.map { $0.uid }.joined(separator: ", "))
+        DebugTrace.log("[AudioSync] output(s) fading out: " + leaving.map { $0.uid }.joined(separator: ", "))
         retirement.remove(leaving.map { $0.renderer }) {
             for output in leaving { StreamEngine.logStopped(output.uid, output.renderer, why: "removed") }
         }
@@ -262,7 +262,7 @@ final class StreamEngine {
     func setDelay(uid: String, ms: Double) {
         guard let renderer = renderers[uid] else { return }
         renderer.setDelay(ms: ms)
-        DBG.log("[AudioSync] output \(uid): delay \(ms) ms")
+        DebugTrace.log("[AudioSync] output \(uid): delay \(ms) ms")
     }
 
     /// A new linear gain for output `uid`, applied from its next callback (S64).
@@ -288,7 +288,7 @@ final class StreamEngine {
     /// Logs what output `uid` rendered, how it stopped and what its reader counted.
     private static func logStopped(_ uid: String, _ renderer: OutputRenderer, why reason: String) {
         renderer.onDeviceGone = nil
-        DBG.log("[AudioSync] output stopped (\(reason)): \(uid), \(renderer.stopNote), "
+        DebugTrace.log("[AudioSync] output stopped (\(reason)): \(uid), \(renderer.stopNote), "
                 + "\(renderer.framesRendered.load(ordering: .relaxed)) frames rendered, \(renderer.counters), "
                 + "slowed \(renderer.slowedFrames) frames, shortfall \(renderer.shortfallFrames) frames")
     }

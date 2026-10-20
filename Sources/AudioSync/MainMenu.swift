@@ -5,7 +5,7 @@ import AppKit
 /// `validateMenuItem` handle the AudioSync-specific ones.
 enum MainMenu {
 
-    static func make(text t: AppText, checksForUpdates: Bool) -> NSMenu {
+    static func make(text t: UIStrings, checksForUpdates: Bool) -> NSMenu {
         let main = NSMenu()
 
         let app = submenu(of: main, title: t.appName)
