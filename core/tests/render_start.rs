@@ -7,11 +7,17 @@
 //!
 //! The capture writes fixed blocks at 48 kHz on its own clock (512 frames,
 //! the Mac's tap; 480, a Windows loopback period); the device pulls fixed
-//! callbacks at its own rate on its own clock, which runs exactly in step
-//! with the capture's or 100 ppm fast or slow. Each run is deterministic; the
+//! callbacks at its own rate on its own clock. Each run is deterministic: the
 //! phase of the device's clock against the capture's varies over one capture
 //! block, and a pull due at the same instant as a write comes after it. The
 //! ring holds a constant 0.5.
+//!
+//! A run whose clocks are in step lasts five seconds. A converting output's
+//! clock also runs 100 ppm fast or slow, for the first second after the
+//! start: a fast clock moves the reader about 5 frames a second closer to W,
+//! inside the dead band, so in the long run a reader at a short hold-back
+//! reaches W again whatever its start (S53); the start is what S206 is about.
+//! An output at the capture rate is taken to run on the capture's clock.
 
 use std::sync::Arc;
 
@@ -26,9 +32,11 @@ const A: f32 = 0.5;
 /// Where the device's first pull falls in the capture's first block, as a
 /// fraction of the block.
 const PHASES: [f64; 6] = [0.0, 0.1, 0.3, 0.5, 0.7, 0.95];
-/// How much faster the device's clock runs than the capture's, in ppm.
+/// How much faster a converting output's clock runs than the capture's, in
+/// ppm.
 const DRIFTS_PPM: [i64; 3] = [-100, 0, 100];
-/// Seconds each run lasts.
+/// Seconds a run with the clocks in step lasts; one with a clock off lasts
+/// one.
 const SECONDS: u64 = 5;
 
 #[derive(Clone, Copy, Debug)]
@@ -45,6 +53,7 @@ struct Clocks {
     /// (a speaker switched on), rather than starting with it.
     running: bool,
     phase: f64,
+    /// How much faster the device's clock runs, in ppm.
     drift_ppm: i64,
 }
 
@@ -87,7 +96,8 @@ fn run(clocks: Clocks) -> Outcome {
         * u128::from(RATE)
         * (PPM as i128 - i128::from(clocks.drift_ppm)) as u128;
     let offset = (clocks.phase * write_period as f64) as u128;
-    let end = u128::from(SECONDS) * u128::from(RATE) * u128::from(clocks.device_rate) * PPM;
+    let seconds = if clocks.drift_ppm == 0 { SECONDS } else { 1 };
+    let end = u128::from(seconds) * u128::from(RATE) * u128::from(clocks.device_rate) * PPM;
     let (mut k, mut j) = (1u128, 0u128);
     let mut out = vec![9.0f32; clocks.callback * 2];
     let mut outcome = Outcome {
@@ -152,9 +162,14 @@ fn assert_clean_start(clocks: Clocks) {
 }
 
 fn every_start(device_rate: u32, callback: usize, block: usize, delay: i64) {
+    let drifts: &[i64] = if device_rate == RATE {
+        &[0]
+    } else {
+        &DRIFTS_PPM
+    };
     for running in [false, true] {
         for phase in PHASES {
-            for drift_ppm in DRIFTS_PPM {
+            for &drift_ppm in drifts {
                 assert_clean_start(Clocks {
                     device_rate,
                     callback,

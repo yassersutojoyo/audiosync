@@ -379,14 +379,16 @@ fn a_status_line_shows_what_a_real_reader_and_render_pipeline_count() {
     };
     let app = SourceId::App { root_pid: APP_PID };
     // A capture and a render thread in step: anchored once, nothing to
-    // correct.
+    // correct. The receiver converts, so its reader sits at its lead (S206),
+    // one period's reads and one packet (485 + 480 frames), above the 10 ms
+    // hold-back: 485 frames behind W after each period.
     assert_eq!(
         describe_status(&app, span, &[status()], Some("AirPlay: L = 2000 ms")),
         format!(
             "status: capturing the app of process 2000; 240000 frames captured, \
              48000 frames/s over 5.0 s\n  \
              output \"HDMI\" ({HDMI_ID}): delay 10 ms (480 frames), volume 50 (gain 0.250), \
-             lag 0 frames; primes 1, resyncs 0, starved reads 0 (0 frames), \
+             lag 485 frames; primes 1, resyncs 0, starved reads 0 (0 frames), \
              drift skips 0 (0 frames), drift silences 0 (0 frames), rejected copies 0\n\
              AirPlay: L = 2000 ms"
         )

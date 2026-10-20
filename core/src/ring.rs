@@ -77,6 +77,9 @@ pub struct Ring {
     margin: u64,
     /// W: frames written since the last reset (S37).
     written: AtomicU64,
+    /// The frame count of the writer's latest write, 0 before the first
+    /// one and after a reset (S206).
+    last_block: AtomicU64,
     /// Set while a [`RingWriter`] exists.
     writer_taken: AtomicBool,
 }
@@ -108,6 +111,7 @@ impl Ring {
             capacity: capacity as u64,
             margin: margin as u64,
             written: AtomicU64::new(0),
+            last_block: AtomicU64::new(0),
             writer_taken: AtomicBool::new(false),
         }))
     }
@@ -142,6 +146,14 @@ impl Ring {
     /// ordering (S37). This is also the engine's `framesCaptured` (S133).
     pub fn frames_written(&self) -> u64 {
         self.written.load(Ordering::Acquire)
+    }
+
+    /// The frame count of the writer's latest write, 0 before the first one
+    /// and after a reset: how far W may still be from the capture's own
+    /// timeline, which a converting renderer's lead covers (S206). A relaxed
+    /// load; the writer stores it with each write.
+    pub fn last_block_frames(&self) -> usize {
+        self.last_block.load(Ordering::Relaxed) as usize
     }
 
     /// The readable index range `[max(0, W - C + M), W)` for the current W
@@ -222,6 +234,9 @@ impl RingWriter {
     pub fn write(&mut self, interleaved: &[f32], frames: usize) {
         let ring = &*self.ring;
         let frames = frames.min(interleaved.len() / 2);
+        if frames > 0 {
+            ring.last_block.store(frames as u64, Ordering::Relaxed);
+        }
         let capacity = ring.capacity as usize;
         let margin = ring.margin as usize;
         // Only this writer stores W, so its own last store is the current W.
@@ -249,6 +264,7 @@ impl RingWriter {
     /// Sets W to 0, which makes all history unreadable (S39). Call it only
     /// while no capture callback runs and no reader exists.
     pub fn reset(&mut self) {
+        self.ring.last_block.store(0, Ordering::Relaxed);
         self.ring.written.store(0, Ordering::Release);
         fence(Ordering::Release);
     }
@@ -426,6 +442,26 @@ mod tests {
         assert_eq!(ring.readable(), (0, 10));
         let fresh = read_raw(&ring, 0, 10);
         assert_eq!(index_of(fresh[0], fresh[1]), Some(1_000_000));
+    }
+
+    // covers: S38, S206
+    #[test]
+    fn a_write_publishes_its_frame_count() {
+        let ring = Ring::new(16_384, 8192).unwrap();
+        let mut writer = ring.writer().unwrap();
+        assert_eq!(ring.last_block_frames(), 0);
+        writer.write(&block(0, 512), 512);
+        assert_eq!(ring.last_block_frames(), 512);
+        writer.write(&block(512, 480), 480);
+        assert_eq!(ring.last_block_frames(), 480);
+        // A write longer than the margin is stored in chunks, but it is one
+        // block; a write of nothing leaves the count as it was.
+        writer.write(&block(992, 10_000), 10_000);
+        assert_eq!(ring.last_block_frames(), 10_000);
+        writer.write(&[], 0);
+        assert_eq!(ring.last_block_frames(), 10_000);
+        writer.reset();
+        assert_eq!(ring.last_block_frames(), 0);
     }
 
     // covers: S40
