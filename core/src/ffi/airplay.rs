@@ -352,8 +352,8 @@ pub struct AscAirPlay {
     ending: HashMap<String, Option<Device>>,
     /// The master position, 0 to 100.
     master: f64,
-    /// Set when a call on this handle or its input panicked; shared with
-    /// the input.
+    /// Whether a call on this handle or its input panicked, or discovery
+    /// died, and where the panic happened; shared with the input.
     death: Arc<Death>,
     /// How many panics the process had noted when this handle was created
     /// ([`PANICS`]).
