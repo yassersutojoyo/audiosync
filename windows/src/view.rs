@@ -2682,6 +2682,19 @@ mod tests {
         draw_frames();
     }
 
+    /// Turns the mouse wheel over `x`, `y` by `delta_y` logical pixels
+    /// (negative scrolls down), then draws a frame.
+    fn scroll(window: &slint::Window, x: f32, y: f32, delta_y: f32) {
+        let position = slint::LogicalPosition::new(x, y);
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        window.dispatch_event(WindowEvent::PointerScrolled {
+            position,
+            delta_x: 0.0,
+            delta_y,
+        });
+        draw_frames();
+    }
+
     /// Presses Tab `times` times in `window`.
     pub(super) fn tab(window: &slint::Window, times: usize) {
         for _ in 0..times {
@@ -3135,8 +3148,10 @@ mod tests {
         );
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
-        // The note, moved down by the open controls.
-        click(app.main.window(), 420.0, 645.0);
+        // The open controls push the note below the list's bottom edge;
+        // scrolled to the end, it sits at y 522 to 540.
+        scroll(app.main.window(), 640.0, 600.0, -300.0);
+        click(app.main.window(), 420.0, 530.0);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),
@@ -3160,9 +3175,9 @@ mod tests {
         click(app.main.window(), 420.0, 525.0);
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
-        // The open controls fill the desk's row from y 480 to 572: right of
-        // the steps, then under them.
-        for (x, y) in [(900.0, 500.0), (600.0, 560.0)] {
+        // The open controls fill the desk's row from y 600 to 680: right of
+        // the steps, then right of the line under them.
+        for (x, y) in [(900.0, 619.0), (600.0, 649.0)] {
             click(app.main.window(), x, y);
             assert!(
                 app.ui.borrow().sync_open.contains("local:desk"),
@@ -3172,7 +3187,7 @@ mod tests {
             assert_eq!(delay_of(&app, "local:desk"), Some(120.0));
         }
         // The row's own blank space, above them, still closes them.
-        click(app.main.window(), 900.0, 460.0);
+        click(app.main.window(), 600.0, 545.0);
         assert!(app.ui.borrow().sync_open.is_empty());
         assert_eq!(
             delay_of(&app, "local:desk"),
