@@ -539,6 +539,12 @@ pub trait AudioBackend {
     /// The PIN prompt to show, if a pairing has one.
     fn airplay_pin_prompt(&self) -> Option<AirPlayPinPrompt>;
 
+    /// The user switched the speaker on themselves and it is on: until it
+    /// plays, a session that asks for a password, or turns the one
+    /// AudioSync has down, asks the user for it instead of turning the
+    /// speaker off. Auto-connect and restored switches never call this.
+    fn begin_airplay_attempt(&mut self, id: &str);
+
     /// Asks the user for the password of a speaker they switched on that
     /// returned [`AirPlayProblem::NeedsPassword`]:
     /// [`AudioBackend::airplay_password_prompt`] shows it.

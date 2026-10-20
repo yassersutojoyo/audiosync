@@ -3275,7 +3275,7 @@ mod tests {
     }
 
     #[test]
-    fn the_password_dialog_connects_with_what_was_typed() {
+    fn the_password_dialog_pairs_with_what_was_typed() {
         let app = app_asking_password(false);
         let window = app.password_dialog.window();
         assert!(window.is_visible(), "it opens with the prompt");

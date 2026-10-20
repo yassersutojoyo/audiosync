@@ -62,7 +62,7 @@ impl App {
         }
     }
 
-    /// Connect: the password goes to the backend, which closes the prompt.
+    /// Pair: the password goes to the backend, which closes the prompt.
     fn confirm_password(&self, password: &str) {
         if password.is_empty() {
             return;

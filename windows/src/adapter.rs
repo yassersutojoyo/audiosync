@@ -10,8 +10,9 @@
 //! only) is listed with that note and stays off, with a notice when the user
 //! tries it. One that asks for a password asks the user for it when they
 //! switch it on (the snapshot's [`PasswordPrompt`]), never on auto-connect,
-//! which posts a notice instead. An Apple TV that asks for a PIN is paired when the user
-//! switches it on (never by auto-connect, which only posts a notice): the
+//! which posts a notice instead. An Apple TV that asks for a PIN is paired
+//! when the user switches it on (never by auto-connect, which only posts a
+//! notice): the
 //! snapshot's [`PinPrompt`] asks the UI for the PIN, and once paired the
 //! speaker is on and streaming starts like for any speaker switched on. What
 //! happens on its own comes from
@@ -1174,7 +1175,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             // A new attempt.
             self.notices.clear(&[airplay_subject(id)]);
         }
-        if let Err(problem) = self.audio.set_airplay_enabled(id, on) {
+        if let Err(problem) = self.switch_airplay_by_user(id, on) {
             self.airplay_switch_failed(id, problem);
             return;
         }
@@ -1184,6 +1185,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.stop_if_idle();
         }
         self.take_events();
+    }
+
+    /// Switches an AirPlay speaker on or off for the user: one switched on
+    /// starts an attempt, which may prompt for a password
+    /// ([`AudioBackend::begin_airplay_attempt`]).
+    fn switch_airplay_by_user(&mut self, id: &str, on: bool) -> Result<(), AirPlayProblem> {
+        self.audio.set_airplay_enabled(id, on)?;
+        if on {
+            self.audio.begin_airplay_attempt(id);
+        }
+        Ok(())
     }
 
     /// An AirPlay speaker the user switched on didn't turn on: an Apple TV
@@ -1842,7 +1854,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                         }
                         self.notices.clear(&[airplay_subject(id)]);
                     }
-                    if let Err(problem) = self.audio.set_airplay_enabled(id, turn_on) {
+                    if let Err(problem) = self.switch_airplay_by_user(id, turn_on) {
                         self.airplay_switch_failed(id, problem);
                     }
                 }
@@ -3895,6 +3907,34 @@ mod tests {
         assert!(!state.speaker(&ap(&study)).unwrap().enabled);
         assert!(!state.running, "nothing else is on");
         assert!(messages(&adapter).is_empty(), "no notice for a cancel");
+    }
+
+    #[test]
+    fn a_password_changed_on_the_speaker_prompts_on_the_next_switch_on() {
+        let (mut adapter, fake, _, study) = airplay_adapter();
+        study_asks(&mut adapter, &fake, &study);
+        adapter.submit_password(&ap(&study), "hunter2");
+        fake.state(&study, AirPlayState::Playing);
+        adapter.poll();
+        adapter.set_speaker_enabled(&ap(&study), false);
+        adapter.set_speaker_enabled(&ap(&study), true);
+        assert_eq!(adapter.snapshot().password_prompt, None, "kept this run");
+        fake.fail(&study, ErrorKind::WrongPassword);
+        adapter.poll();
+        let prompt = adapter.snapshot().password_prompt.expect("asked again");
+        assert!(prompt.wrong, "says the old one was turned down");
+        assert!(messages(&adapter).is_empty());
+    }
+
+    #[test]
+    fn a_password_discovery_didnt_announce_prompts_on_the_first_switch_on() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.fail(&kitchen, ErrorKind::PasswordRequired);
+        adapter.poll();
+        let prompt = adapter.snapshot().password_prompt.expect("asked at once");
+        assert!(!prompt.wrong);
+        assert!(messages(&adapter).is_empty());
     }
 
     #[test]

@@ -1796,6 +1796,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.airplay.as_ref().and_then(AirPlaySpeakers::pin_prompt)
     }
 
+    fn begin_airplay_attempt(&mut self, id: &str) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.begin_attempt(id);
+        }
+    }
+
     fn ask_airplay_password(&mut self, id: &str) -> Result<(), AirPlayProblem> {
         match self.airplay.as_mut() {
             Some(airplay) => airplay.ask_password(id),

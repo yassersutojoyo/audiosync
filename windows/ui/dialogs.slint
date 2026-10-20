@@ -258,7 +258,7 @@ export component PinDialog inherits Dialog {
 }
 
 // The password prompt of an AirPlay speaker protected by a password. Enter
-// connects once something is typed, Escape cancels. After a password the
+// pairs once something is typed, Escape cancels. After a password the
 // speaker turned down it opens again, says so, and takes a new one.
 export component PasswordDialog inherits Dialog {
     in property <string> speaker;
@@ -268,7 +268,7 @@ export component PasswordDialog inherits Dialog {
     callback cancelled();
 
     property <string> message: Strings.password-message(root.speaker, root.wrong);
-    property <bool> can-connect: root.password != "";
+    property <bool> can-pair: root.password != "";
 
     title: Strings.password-dialog-title(root.speaker);
     icon: @image-url("../res/audiosync-256.png");
@@ -365,7 +365,7 @@ export component PasswordDialog inherits Dialog {
                             self.select-all();
                         }
                         accepted => {
-                            if root.can-connect {
+                            if root.can-pair {
                                 root.confirmed(root.password);
                             }
                         }
@@ -376,9 +376,9 @@ export component PasswordDialog inherits Dialog {
     }
 
     DialogButton {
-        text: Strings.connect;
+        text: Strings.pair;
         primary: true;
-        active: root.can-connect;
+        active: root.can-pair;
         dialog-button-role: accept;
         clicked => {
             root.confirmed(root.password);

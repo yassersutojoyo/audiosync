@@ -112,7 +112,7 @@ export global Strings {
     // The password prompt of an AirPlay speaker protected by a password; the
     // password is kept until AudioSync quits.
     public pure function password-dialog-title(speaker: string) -> string {
-        return @tr("Connect to {}", speaker);
+        return @tr("Pair with {}", speaker);
     }
 
     public pure function password-field-label(speaker: string) -> string {
@@ -120,13 +120,12 @@ export global Strings {
     }
 
     out property <string> password-field-placeholder: @tr("Password");
-    out property <string> connect: @tr("Connect");
 
     public pure function password-message(speaker: string, wrong: bool) -> string {
         if wrong {
-            return @tr("{} didn't accept that password. Enter the password set for it in the speaker's settings or in the Home app. Cancel turns the speaker off; turn it on again to retry.", speaker);
+            return @tr("{} didn't accept that password. Enter the password set for it in the Home app or in the speaker's settings. Cancel turns the speaker off; turn it on again to retry.", speaker);
         }
-        return @tr("{} is protected by a password. Enter the password set for it in the speaker's settings or in the Home app. Cancel turns the speaker off; turn it on again to retry.", speaker);
+        return @tr("{} is protected by a password. Enter the password set for it in the Home app or in the speaker's settings. Cancel turns the speaker off; turn it on again to retry.", speaker);
     }
 
     // Groups
