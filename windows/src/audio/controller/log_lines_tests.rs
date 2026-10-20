@@ -21,7 +21,7 @@ use super::{
 };
 use crate::audio::SESSION_RATE;
 use crate::audio::backend::SourceId;
-use crate::audio::capture::{CAPTURE_ATTEMPTS, decide_activation};
+use crate::audio::capture::{CAPTURE_ATTEMPTS, CaptureTarget, decide_capture};
 use crate::audio::outputs::{HNS_PER_MS, MixFormat, StreamSetup, render_buffer_hns, render_format};
 use crate::audio::process::{ProcessEntry, ProcessTable};
 use crate::audio::render::RenderPipeline;
@@ -141,10 +141,13 @@ fn rate(span: StatusSpan) -> f64 {
 fn a_capture_line_names_each_format_the_loopback_can_settle_on() {
     // The loopback reports the attempt Windows accepted as it is, so these
     // are the only formats a real capture line can show.
-    let whole = decide_activation(&SourceId::WholeSystem, OWN_PID, &ProcessTable::default())
+    let whole = decide_capture(&SourceId::WholeSystem, OWN_PID, &ProcessTable::default())
         .expect("the whole system can be captured");
-    let app = decide_activation(&SourceId::App { root_pid: APP_PID }, OWN_PID, &processes())
+    let app = decide_capture(&SourceId::App { root_pid: APP_PID }, OWN_PID, &processes())
         .expect("the app can be captured");
+    let input = CaptureTarget::Input {
+        endpoint_id: "mic".to_owned(),
+    };
     let formats = [
         "48000 Hz, 2 ch, 32-bit float, converted by Windows",
         "48000 Hz, 2 ch, 32-bit float",
@@ -158,13 +161,13 @@ fn a_capture_line_names_each_format_the_loopback_can_settle_on() {
     );
     for (attempt, format) in CAPTURE_ATTEMPTS.into_iter().zip(formats) {
         assert_eq!(
-            describe_capture_start(whole, Some(attempt), false),
+            describe_capture_start(&whole, Some(attempt), false),
             format!(
                 "capture started: everything except process {OWN_PID} and its children; {format}"
             )
         );
         assert_eq!(
-            describe_capture_start(app, Some(attempt), true),
+            describe_capture_start(&app, Some(attempt), true),
             format!(
                 "capture started: process {APP_PID} and its children; {format}; \
                  it feeds the AirPlay sender"
@@ -172,8 +175,12 @@ fn a_capture_line_names_each_format_the_loopback_can_settle_on() {
         );
     }
     assert_eq!(
-        describe_capture_start(whole, None, false),
+        describe_capture_start(&whole, None, false),
         "capture started: everything except process 1000 and its children; format not known"
+    );
+    assert_eq!(
+        describe_capture_start(&input, Some(CAPTURE_ATTEMPTS[0]), false),
+        "capture started: input device mic; 48000 Hz, 2 ch, 32-bit float, converted by Windows"
     );
 }
 

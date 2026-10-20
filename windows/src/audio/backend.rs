@@ -25,6 +25,12 @@ pub enum SourceId {
         /// The process ID of the app's top process.
         root_pid: u32,
     },
+    /// An input device (a microphone or line in): an active capture
+    /// endpoint, by its endpoint ID.
+    Input {
+        /// The endpoint ID, the same across restarts and reboots.
+        endpoint_id: String,
+    },
 }
 
 /// A capture source the user can pick.
@@ -32,12 +38,14 @@ pub enum SourceId {
 pub struct SourceInfo {
     /// What to pass to [`AudioBackend::start`].
     pub id: SourceId,
-    /// The app's name, from its executable. For [`SourceId::WholeSystem`] it
-    /// is an English fallback: the UI shows its own, translated label.
+    /// The app's name, from its executable, or the name Windows shows for an
+    /// input device. For [`SourceId::WholeSystem`] it is an English
+    /// fallback: the UI shows its own, translated label.
     pub name: String,
     /// The app's executable file name, such as `spotify.exe`. It stays the
     /// same when the app restarts (its process ID doesn't), so the UI can
-    /// remember a choice by it. Empty for the whole system.
+    /// remember a choice by it. Empty for the whole system and for an input
+    /// device.
     pub executable: String,
 }
 
@@ -50,8 +58,13 @@ pub enum OutputKind {
     Headphones,
     /// A Bluetooth device.
     Bluetooth,
-    /// A USB device.
+    /// A USB device whose form Windows doesn't tell (a line out, or not
+    /// known).
     Usb,
+    /// USB headphones or a USB headset.
+    UsbHeadphones,
+    /// USB speakers.
+    UsbSpeakers,
     /// A display or TV over HDMI.
     Hdmi,
     /// A display over DisplayPort.
@@ -97,8 +110,9 @@ pub struct OutputInfo {
 pub enum AirPlayAvailability {
     /// It can.
     Open,
-    /// It asks for a password; AudioSync can't send one yet.
-    PasswordNotYet,
+    /// It asks for a password: switching it on asks the user for it, which
+    /// AudioSync keeps in memory until it quits.
+    NeedsPassword,
     /// An Apple TV that asks for a PIN once: switching it on pairs it, and
     /// its credentials are kept from then on.
     NeedsPin,
@@ -150,6 +164,18 @@ pub struct AirPlayPinPrompt {
     pub wrong_pin: bool,
 }
 
+/// The password prompt of a speaker the user switched on: it asks for a
+/// password, or turned the one typed down.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AirPlayPasswordPrompt {
+    /// The speaker's ID.
+    pub id: String,
+    /// The name it announces.
+    pub name: String,
+    /// The speaker turned the last password down.
+    pub wrong: bool,
+}
+
 /// Where a pairing is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PairingPhase {
@@ -174,8 +200,9 @@ pub enum AirPlayProblem {
     /// It turned the stream down, or answered in a way AudioSync doesn't
     /// understand; AudioSync keeps trying.
     Refused,
-    /// It asks for a password, which AudioSync can't send yet.
-    PasswordNotYet,
+    /// It asks for a password AudioSync doesn't have, or turned the one it
+    /// had down. Switching it on asks for it.
+    NeedsPassword,
     /// An Apple TV that needs pairing with a PIN first (or again, after it
     /// stopped accepting AudioSync's credentials). Switching it on pairs it.
     NeedsPin,
@@ -208,7 +235,7 @@ impl AirPlayAvailability {
     pub fn problem(self) -> Option<AirPlayProblem> {
         match self {
             AirPlayAvailability::Open => None,
-            AirPlayAvailability::PasswordNotYet => Some(AirPlayProblem::PasswordNotYet),
+            AirPlayAvailability::NeedsPassword => Some(AirPlayProblem::NeedsPassword),
             AirPlayAvailability::NeedsPin => Some(AirPlayProblem::NeedsPin),
             AirPlayAvailability::PairingNotYet => Some(AirPlayProblem::PairingNotYet),
             AirPlayAvailability::AirPlay2NotYet => Some(AirPlayProblem::AirPlay2NotYet),
@@ -345,6 +372,12 @@ pub enum BackendError {
     ContainsAudioSync,
     /// The chosen app is no longer running.
     SourceGone,
+    /// The chosen input device isn't connected (unplugged, disabled or
+    /// removed). Unlike [`BackendError::DeviceGone`], waiting doesn't help.
+    InputGone,
+    /// Windows denies AudioSync the input device (`E_ACCESSDENIED`): its
+    /// privacy settings block microphone access for desktop apps.
+    MicrophoneBlocked,
     /// The chosen process is not an app (the System or Idle process).
     NotAnApp,
     /// The output device is not connected, Windows audio is not running, or
@@ -380,6 +413,10 @@ impl fmt::Display for BackendError {
                  could capture AudioSync too.",
             ),
             BackendError::SourceGone => f.write_str("The app isn't running anymore."),
+            BackendError::InputGone => f.write_str("The input device isn't connected."),
+            BackendError::MicrophoneBlocked => f.write_str(
+                "Windows blocks microphone access for desktop apps in its privacy settings.",
+            ),
             BackendError::NotAnApp => f.write_str("That process isn't an app."),
             BackendError::DeviceGone => {
                 f.write_str("The device isn't connected, or Windows audio isn't running.")
@@ -403,8 +440,9 @@ impl std::error::Error for BackendError {}
 /// The audio backend, as the UI sees it.
 pub trait AudioBackend {
     /// The sources to offer: the whole system first, then each app that has
-    /// opened an audio stream, by name. AudioSync's own processes, and any
-    /// app whose capture would include them, are left out.
+    /// opened an audio stream, by name, then each active input device, by
+    /// name. AudioSync's own processes, and any app whose capture would
+    /// include them, are left out.
     fn list_sources(&mut self) -> Result<Vec<SourceInfo>, BackendError>;
 
     /// The app that runs `executable` now, whether or not it has opened an
@@ -525,6 +563,28 @@ pub trait AudioBackend {
     /// The PIN prompt to show, if a pairing has one.
     fn airplay_pin_prompt(&self) -> Option<AirPlayPinPrompt>;
 
+    /// The user switched the speaker on themselves and it is on: until it
+    /// plays, a session that asks for a password, or turns the one
+    /// AudioSync has down, asks the user for it instead of turning the
+    /// speaker off. Auto-connect and restored switches never call this.
+    fn begin_airplay_attempt(&mut self, id: &str);
+
+    /// Asks the user for the password of a speaker they switched on that
+    /// returned [`AirPlayProblem::NeedsPassword`]:
+    /// [`AudioBackend::airplay_password_prompt`] shows it.
+    fn ask_airplay_password(&mut self, id: &str) -> Result<(), AirPlayProblem>;
+
+    /// The password the user typed for the speaker: kept in memory until
+    /// AudioSync quits, never logged, and the speaker is turned on. Returns
+    /// whether it was taken: not empty, while its prompt is open.
+    fn submit_airplay_password(&mut self, id: &str, password: &str) -> bool;
+
+    /// The user cancelled the speaker's password prompt: it is off.
+    fn cancel_airplay_password(&mut self, id: &str);
+
+    /// The password prompt to show, if one waits and no PIN prompt is open.
+    fn airplay_password_prompt(&self) -> Option<AirPlayPasswordPrompt>;
+
     /// Sets an AirPlay speaker's volume slider position (0 to 100), live. A
     /// value that isn't finite is ignored.
     fn set_airplay_volume(&mut self, id: &str, position: f64);
@@ -581,6 +641,8 @@ mod tests {
             BackendError::OwnProcess,
             BackendError::ContainsAudioSync,
             BackendError::SourceGone,
+            BackendError::InputGone,
+            BackendError::MicrophoneBlocked,
             BackendError::NotAnApp,
             BackendError::DeviceGone,
             BackendError::DeviceBusy,

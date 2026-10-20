@@ -66,16 +66,19 @@ use super::airplay::{
     AirPlayLink, AirPlaySpeakers, FeedLease, FeedSlot, SenderStarter, StartedSender,
 };
 use super::backend::{
-    AirPlayInfo, AirPlayPinPrompt, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
-    OutputInfo, SourceId, SourceInfo, StopReason, TIMED_OUT,
+    AirPlayInfo, AirPlayPasswordPrompt, AirPlayPinPrompt, AirPlayProblem, AudioBackend,
+    BackendError, BackendEvent, OutputInfo, SourceId, SourceInfo, StopReason, TIMED_OUT,
 };
 use super::capture::{
-    Activation, CaptureAttempt, LoopbackMode, SampleType, decide_activation, running_app,
-    source_list,
+    CaptureAttempt, CaptureTarget, LoopbackMode, SampleType, WHOLE_SYSTEM_NAME, decide_capture,
+    display_name, input_sources, running_app, source_list,
 };
+use super::now_playing::{Follow, TrackInfo, TrackReader, TrackSource};
 #[cfg(test)]
 use super::outputs::OutputParams;
-use super::outputs::{AirPlay, Endpoint, Listing, ListingNote, OutputPolicy, StreamSetup};
+use super::outputs::{
+    AirPlay, Endpoint, EndpointReading, Listing, ListingNote, OutputPolicy, StreamSetup,
+};
 use super::pairings::PairingStore;
 use super::process::ProcessTable;
 use super::routing::{
@@ -237,14 +240,18 @@ pub trait Driver {
     /// didn't answer in time.
     fn unmute_endpoint(&mut self, id: &str) -> Result<(), BackendError>;
 
-    /// Starts capturing as `activation` says, writing to the ring through
+    /// The active capture endpoints (input devices), as Windows describes
+    /// them; [`input_sources`] decides which to offer.
+    fn inputs(&mut self) -> Result<Vec<EndpointReading>, BackendError>;
+
+    /// Starts capturing `target`, writing to the ring through
     /// `equalizer` and `writer`, and handing the same audio to the AirPlay
     /// sender's feed when there is one. Returns once the capture runs, or
     /// with why it couldn't start. The feed goes back to its slot when the
     /// capture stops.
     fn start_capture(
         &mut self,
-        activation: Activation,
+        target: CaptureTarget,
         writer: RingWriter,
         equalizer: EqProcessor,
         airplay: Option<FeedLease>,
@@ -267,7 +274,7 @@ pub trait Driver {
 struct Session<D: Driver> {
     source: SourceId,
     /// What the capture takes in.
-    activation: Activation,
+    target: CaptureTarget,
     ring: Arc<Ring>,
     capture: D::Capture,
     /// The control half of the capture's equalizer.
@@ -344,6 +351,9 @@ pub struct Controller<D: Driver> {
     /// error that repeats at every poll is logged once.
     listing_error: Option<BackendError>,
     sources_error: Option<BackendError>,
+    /// Why the input devices couldn't be listed last time, if they couldn't:
+    /// the log tells once per failure, and the list goes on without them.
+    inputs_error: Option<BackendError>,
     /// The notes of the last listing: notes that repeat at every listing
     /// are logged once.
     listing_notes: Vec<ListingNote>,
@@ -397,6 +407,10 @@ pub struct Controller<D: Driver> {
     /// gone, each with the polls left before that counts as a start that
     /// failed ([`REFUSED_GIVE_UP_POLLS`]).
     refused: BTreeMap<String, u32>,
+    /// What AirPlay receivers with a screen show of the playing track.
+    track_info: TrackInfo,
+    /// The source track info last followed, as it looks to track info.
+    track_source: Option<(SourceId, TrackSource)>,
 }
 
 impl<D: Driver> Controller<D> {
@@ -416,6 +430,7 @@ impl<D: Driver> Controller<D> {
             setups: BTreeMap::new(),
             listing_error: None,
             sources_error: None,
+            inputs_error: None,
             listing_notes: Vec::new(),
             last_status: None,
             routing: RoutingState::default(),
@@ -433,7 +448,15 @@ impl<D: Driver> Controller<D> {
             stalled: BTreeMap::new(),
             hung: BTreeSet::new(),
             refused: BTreeMap::new(),
+            track_info: TrackInfo::default(),
+            track_source: None,
         }
+    }
+
+    /// Reads the playing track through `reader` for the AirPlay receivers
+    /// that show it, while they play.
+    pub fn set_track_reader(&mut self, reader: Box<dyn TrackReader>) {
+        self.track_info.set_reader(reader);
     }
 
     /// Starts a new AirPlay sender through `starter` when the user retries
@@ -494,6 +517,7 @@ impl<D: Driver> Controller<D> {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_debug_log(log.clone());
         }
+        self.track_info.set_debug_log(log.clone());
         self.log = log;
     }
 
@@ -570,6 +594,88 @@ impl<D: Driver> Controller<D> {
             _ => "local outputs line up with each other: no AirPlay speaker is chosen".to_owned(),
         });
         self.retime();
+    }
+
+    /// Gives the sender what its receivers should show of the playing
+    /// track, while an AirPlay speaker plays the capture.
+    fn sync_track_info(&mut self) {
+        let sending = self.session.is_some()
+            && self
+                .airplay
+                .as_ref()
+                .is_some_and(|airplay| airplay.chosen());
+        if self.session.is_none() {
+            self.track_source = None;
+        }
+        let source = if sending { self.track_source() } else { None };
+        let Some(now_playing) = self.track_info.sync(source.as_ref(), Instant::now()) else {
+            return;
+        };
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_now_playing(now_playing);
+        }
+    }
+
+    /// The session's source as track info sees it: which media sessions
+    /// count, and the name the source list shows. An app or input device is
+    /// looked up once per session; when the process snapshot fails, no media
+    /// session counts until a later poll finds the app.
+    fn track_source(&mut self) -> Option<TrackSource> {
+        let id = self.session.as_ref()?.source.clone();
+        if let Some((known, source)) = &self.track_source
+            && *known == id
+        {
+            return Some(source.clone());
+        }
+        let source = match &id {
+            SourceId::WholeSystem => TrackSource {
+                follow: Follow::AnyApp,
+                name: Some(WHOLE_SYSTEM_NAME.to_owned()),
+            },
+            SourceId::App { root_pid } => {
+                let Ok(processes) = self.driver.processes() else {
+                    return Some(TrackSource {
+                        follow: Follow::App {
+                            executable: String::new(),
+                        },
+                        name: None,
+                    });
+                };
+                let executable = processes
+                    .get(*root_pid)
+                    .map(|entry| entry.executable.clone())
+                    .unwrap_or_default();
+                TrackSource {
+                    name: (!executable.is_empty()).then(|| display_name(&executable)),
+                    follow: Follow::App { executable },
+                }
+            }
+            // An input device has no media session; receivers get the
+            // labels with its name, or without one when it isn't listed.
+            SourceId::Input { endpoint_id } => {
+                let unnamed = TrackSource {
+                    follow: Follow::App {
+                        executable: String::new(),
+                    },
+                    name: None,
+                };
+                // A failed listing isn't kept, so a later poll can still name it.
+                let Ok(readings) = self.driver.inputs() else {
+                    return Some(unnamed);
+                };
+                TrackSource {
+                    name: input_sources(readings)
+                        .into_iter()
+                        .find(|input| {
+                            matches!(&input.id, SourceId::Input { endpoint_id: listed } if listed == endpoint_id)
+                        })
+                        .map(|input| input.name),
+                    ..unnamed
+                }
+            }
+        };
+        self.track_source = Some((id, source.clone()));
+        Some(source)
     }
 
     /// The driver.
@@ -1192,10 +1298,10 @@ impl<D: Driver> Controller<D> {
             return self.start_session(source);
         }
         let processes = match source {
-            SourceId::WholeSystem => ProcessTable::default(),
+            SourceId::WholeSystem | SourceId::Input { .. } => ProcessTable::default(),
             SourceId::App { .. } => self.driver.processes()?,
         };
-        decide_activation(source, self.driver.own_pid(), &processes)?;
+        decide_capture(source, self.driver.own_pid(), &processes)?;
         self.log
             .log(|| "the capture starts once the last session's outputs have faded out".to_owned());
         self.next_start = Some(source.clone());
@@ -1334,10 +1440,10 @@ impl<D: Driver> Controller<D> {
     /// Starts a session capturing `source` now, after the running one ended.
     fn start_session(&mut self, source: &SourceId) -> Result<(), BackendError> {
         let processes = match source {
-            SourceId::WholeSystem => ProcessTable::default(),
+            SourceId::WholeSystem | SourceId::Input { .. } => ProcessTable::default(),
             SourceId::App { .. } => self.driver.processes()?,
         };
-        let activation = decide_activation(source, self.driver.own_pid(), &processes)?;
+        let target = decide_capture(source, self.driver.own_pid(), &processes)?;
         let ring = Ring::for_rate(SESSION_RATE).map_err(|_| BackendError::UnsupportedFormat)?;
         let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
         // The capture equalizes at the session rate, after any resampling
@@ -1350,9 +1456,9 @@ impl<D: Driver> Controller<D> {
         let waits_for_feed = self.feed.is_some() && !feeds_airplay;
         let capture = self
             .driver
-            .start_capture(activation, writer, processor, feed)?;
+            .start_capture(target.clone(), writer, processor, feed)?;
         self.log
-            .log(|| describe_capture_start(activation, capture.setup(), feeds_airplay));
+            .log(|| describe_capture_start(&target, capture.setup(), feeds_airplay));
         if waits_for_feed {
             self.log.log(|| {
                 "the AirPlay feed is still held by an earlier capture that hung: the capture \
@@ -1365,7 +1471,7 @@ impl<D: Driver> Controller<D> {
         }
         self.session = Some(Session {
             source: source.clone(),
-            activation,
+            target,
             ring,
             capture,
             equalizer,
@@ -1414,8 +1520,11 @@ impl<D: Driver> Controller<D> {
         let Some(session) = &self.session else {
             return;
         };
+        // An input device is no render stream Windows could play straight.
+        let &CaptureTarget::Loopback(activation) = &session.target else {
+            return;
+        };
         self.routing.last_check = Some(now);
-        let activation = session.activation;
         let rendered: Vec<String> = session.outputs.keys().cloned().collect();
         let snapshot = self
             .driver
@@ -1474,11 +1583,25 @@ impl<D: Driver> Controller<D> {
     fn read_sources(&mut self) -> Result<Vec<SourceInfo>, BackendError> {
         let processes = self.driver.processes()?;
         let session_pids = self.driver.session_pids()?;
-        Ok(source_list(
-            &processes,
-            &session_pids,
-            self.driver.own_pid(),
-        ))
+        let mut sources = source_list(&processes, &session_pids, self.driver.own_pid());
+        match self.driver.inputs() {
+            Ok(readings) => {
+                if self.inputs_error.take().is_some() {
+                    self.log
+                        .log(|| "listing the input devices works again".to_owned());
+                }
+                sources.extend(input_sources(readings));
+            }
+            Err(error) => {
+                if self.inputs_error.as_ref() != Some(&error) {
+                    self.log.log(|| {
+                        format!("listing the input devices failed, so none are offered: {error}")
+                    });
+                    self.inputs_error = Some(error);
+                }
+            }
+        }
+        Ok(sources)
     }
 }
 
@@ -1796,6 +1919,41 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.airplay.as_ref().and_then(AirPlaySpeakers::pin_prompt)
     }
 
+    fn begin_airplay_attempt(&mut self, id: &str) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.begin_attempt(id);
+        }
+    }
+
+    fn ask_airplay_password(&mut self, id: &str) -> Result<(), AirPlayProblem> {
+        match self.airplay.as_mut() {
+            Some(airplay) => airplay.ask_password(id),
+            None => Err(AirPlayProblem::Unsupported),
+        }
+    }
+
+    fn submit_airplay_password(&mut self, id: &str, password: &str) -> bool {
+        let taken = self
+            .airplay
+            .as_mut()
+            .is_some_and(|airplay| airplay.submit_password(id, password));
+        self.sync_airplay_rule();
+        taken
+    }
+
+    fn cancel_airplay_password(&mut self, id: &str) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.cancel_password(id);
+        }
+        self.sync_airplay_rule();
+    }
+
+    fn airplay_password_prompt(&self) -> Option<AirPlayPasswordPrompt> {
+        self.airplay
+            .as_ref()
+            .and_then(AirPlaySpeakers::password_prompt)
+    }
+
     fn set_airplay_volume(&mut self, id: &str, position: f64) {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_volume(id, position);
@@ -1925,6 +2083,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
             self.pending.extend(events);
             self.sync_airplay_rule();
         }
+        self.sync_track_info();
 
         // Outputs that stopped by themselves.
         let mut ended = Vec::new();
@@ -1988,14 +2147,16 @@ impl<D: Driver> AudioBackend for Controller<D> {
 }
 
 /// Whether a capture that couldn't start again after a loss may start at a
-/// later try: Windows audio isn't back yet, or the device is held or failed
-/// for now. An app that quit, or a source that can't be captured, stays so.
+/// later try: Windows audio isn't back yet, the device is held or failed for
+/// now, or an input device is inactive for a moment (a USB microphone after a
+/// wake, or while Windows lists it again). An app that quit, or a source that
+/// can't be captured, stays so.
 /// An activation Windows never completed, or a capture thread that didn't
 /// answer in time ([`BackendError::NotResponding`]), is the last try: each
 /// one held the UI thread for the whole wait.
 fn may_start_later(error: &BackendError) -> bool {
     match error {
-        BackendError::DeviceGone | BackendError::DeviceBusy => true,
+        BackendError::DeviceGone | BackendError::DeviceBusy | BackendError::InputGone => true,
         BackendError::System { code, .. } => *code != TIMED_OUT,
         _ => false,
     }
@@ -2162,15 +2323,23 @@ fn describe_source(source: &SourceId) -> String {
     match source {
         SourceId::WholeSystem => "the whole system".to_owned(),
         SourceId::App { root_pid } => format!("the app of process {root_pid}"),
+        SourceId::Input { endpoint_id } => format!("the input device {endpoint_id}"),
     }
 }
 
 /// What a capture captures, and the format Windows delivers it in.
-fn describe_capture(activation: Activation, setup: Option<CaptureAttempt>) -> String {
-    let pid = activation.target_pid;
-    let what = match activation.mode {
-        LoopbackMode::ExcludeTree => format!("everything except process {pid} and its children"),
-        LoopbackMode::IncludeTree => format!("process {pid} and its children"),
+fn describe_capture(target: &CaptureTarget, setup: Option<CaptureAttempt>) -> String {
+    let what = match target {
+        CaptureTarget::Loopback(activation) => {
+            let pid = activation.target_pid;
+            match activation.mode {
+                LoopbackMode::ExcludeTree => {
+                    format!("everything except process {pid} and its children")
+                }
+                LoopbackMode::IncludeTree => format!("process {pid} and its children"),
+            }
+        }
+        CaptureTarget::Input { endpoint_id } => format!("input device {endpoint_id}"),
     };
     let format = match setup {
         Some(attempt) => {
@@ -2214,7 +2383,7 @@ fn describe_stream(setup: Option<StreamSetup>) -> String {
 /// The log line of a capture that started: what it captures, the format
 /// Windows delivers it in, and whether it feeds the AirPlay sender.
 fn describe_capture_start(
-    activation: Activation,
+    target: &CaptureTarget,
     setup: Option<CaptureAttempt>,
     feeds_airplay: bool,
 ) -> String {
@@ -2225,7 +2394,7 @@ fn describe_capture_start(
     };
     format!(
         "capture started: {}{airplay}",
-        describe_capture(activation, setup)
+        describe_capture(target, setup)
     )
 }
 
@@ -2446,7 +2615,7 @@ mod tests {
     use audiosync_airplay::clock::SenderClock;
     use audiosync_airplay::discovery::Device;
     use audiosync_airplay::error::ErrorKind;
-    use audiosync_airplay::sender::SpeakerState;
+    use audiosync_airplay::sender::{NowPlaying, SpeakerState};
     use audiosync_airplay::stream::{Stream, StreamConfig};
     use audiosync_airplay::volume::Volume;
     use audiosync_core::render::STOP_FADE_CAP;
@@ -2454,7 +2623,9 @@ mod tests {
     use super::*;
     use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, device, id_of};
     use crate::audio::backend::OutputKind;
+    use crate::audio::capture::Activation;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
+    use crate::audio::now_playing::fake::{FakeReader, track};
     use crate::audio::outputs::{EndpointProperties, EndpointReading};
     use crate::audio::routing::{DirectPath, DirectReason, HOLD_CHECKS};
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
@@ -2487,10 +2658,10 @@ mod tests {
         backend.start(&SourceId::WholeSystem).unwrap();
         assert_eq!(
             backend.driver().captures_started(),
-            [Activation {
+            [CaptureTarget::Loopback(Activation {
                 mode: LoopbackMode::ExcludeTree,
                 target_pid: MOCK_OWN_PID,
-            }]
+            })]
         );
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
     }
@@ -2504,10 +2675,10 @@ mod tests {
         backend.start(&source).unwrap();
         assert_eq!(
             backend.driver().captures_started(),
-            [Activation {
+            [CaptureTarget::Loopback(Activation {
                 mode: LoopbackMode::IncludeTree,
                 target_pid: PLAYER_PID,
-            }]
+            })]
         );
         assert_eq!(backend.running_source(), Some(source));
     }
@@ -3500,6 +3671,114 @@ mod tests {
         assert!(backend.driver().capture_running());
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+    }
+
+    #[test]
+    fn input_devices_are_listed_after_the_apps() {
+        let mut backend = backend();
+        backend.connect_input("mic", "Microphone", "USB");
+        let ids: Vec<SourceId> = backend
+            .list_sources()
+            .unwrap()
+            .into_iter()
+            .map(|source| source.id)
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                SourceId::WholeSystem,
+                SourceId::App {
+                    root_pid: PLAYER_PID
+                },
+                SourceId::Input {
+                    endpoint_id: "mic".to_owned()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_input_device_unplugged_while_streaming_stops_streaming_once_the_restart_tries_run_out() {
+        let mut backend = backend();
+        backend.connect_input("mic", "Microphone", "USB");
+        let source = SourceId::Input {
+            endpoint_id: "mic".to_owned(),
+        };
+        backend.start(&source).unwrap();
+        assert_eq!(
+            backend.driver().captures_started(),
+            [CaptureTarget::Input {
+                endpoint_id: "mic".to_owned()
+            }]
+        );
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        backend.disconnect_input("mic");
+        // The stream fails as one lost to a Windows audio restart does, and
+        // is tried again as that one is: a USB device can be inactive for a
+        // moment after a wake.
+        poll_quietly(&mut backend, 5 * RESTART_DELAY_POLLS);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(BackendError::InputGone),
+            }]
+        );
+        assert_eq!(backend.driver().capture_attempts(), 1 + 5);
+        assert_eq!(backend.running_source(), None);
+        assert!(playing(&backend).is_empty());
+    }
+
+    #[test]
+    fn an_input_device_back_within_the_restart_tries_is_captured_again() {
+        let mut backend = backend();
+        backend.connect_input("mic", "Microphone", "USB");
+        let source = SourceId::Input {
+            endpoint_id: "mic".to_owned(),
+        };
+        backend.start(&source).unwrap();
+        backend.disconnect_input("mic");
+        poll_quietly(&mut backend, 2 * RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().capture_attempts(), 1 + 1, "one try failed");
+        backend.connect_input("mic", "Microphone", "USB");
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().capture_attempts(), 1 + 2);
+        assert!(backend.driver().capture_running());
+        assert_eq!(backend.running_source(), Some(source));
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    #[test]
+    fn a_failed_input_listing_leaves_the_inputs_out_and_keeps_the_apps() {
+        let mut backend = backend();
+        backend.connect_input("mic", "Microphone", "USB");
+        backend.fail_input_listing(Some(BackendError::System {
+            call: "IMMDeviceEnumerator::EnumAudioEndpoints",
+            code: 1,
+        }));
+        let ids = |backend: &mut MockBackend| -> Vec<SourceId> {
+            backend
+                .list_sources()
+                .expect("the apps are listed")
+                .into_iter()
+                .map(|source| source.id)
+                .collect()
+        };
+        let apps = [
+            SourceId::WholeSystem,
+            SourceId::App {
+                root_pid: PLAYER_PID,
+            },
+        ];
+        assert_eq!(ids(&mut backend), apps);
+        assert_eq!(ids(&mut backend), apps, "every refresh");
+        backend.fail_input_listing(None);
+        assert_eq!(ids(&mut backend).len(), 3, "the input is back");
+    }
+
+    #[test]
+    fn a_microphone_blocked_by_windows_privacy_settings_isnt_tried_again() {
+        assert!(!may_start_later(&BackendError::MicrophoneBlocked));
+        assert!(may_start_later(&BackendError::InputGone));
     }
 
     #[test]
@@ -4636,6 +4915,133 @@ mod tests {
         assert_eq!(backend.enabled_airplay(), [id], "it stays on");
     }
 
+    fn now_playing_sent(fake: &FakeAirPlay) -> Vec<NowPlaying> {
+        fake.take_calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::NowPlaying(now_playing) => Some(now_playing),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_playing_track_reaches_airplay_receivers_while_they_play() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        let reader = FakeReader::with_icon(b"icon");
+        backend.set_track_reader(reader.reader());
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.poll();
+        assert_eq!(reader.following(), None, "nothing streams yet");
+
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        assert_eq!(
+            reader.following(),
+            Some(Follow::App {
+                executable: "player.exe".to_owned()
+            })
+        );
+        reader.read(Some(track("player.exe", "Song", false, Some(b"cover"))));
+        backend.poll();
+        let sent = now_playing_sent(&fake);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        let track_sent = sent[0].track.as_ref().expect("a track");
+        assert_eq!(
+            track_sent.title, "Song",
+            "a paused track of the source app counts"
+        );
+        assert_eq!(sent[0].artwork.as_deref(), Some(&b"cover"[..]));
+
+        reader.read(Some(track("player.exe", "Song", false, Some(b"cover"))));
+        backend.poll();
+        assert!(now_playing_sent(&fake).is_empty(), "nothing changed");
+
+        reader.read(None);
+        backend.poll();
+        let sent = now_playing_sent(&fake);
+        let track_sent = sent[0].track.as_ref().expect("labels");
+        assert_eq!(
+            (track_sent.artist.as_str(), sent[0].artwork.as_deref()),
+            ("Player", Some(&b"icon"[..])),
+            "with no session, the source's name and AudioSync's icon"
+        );
+
+        backend.stop();
+        backend.poll();
+        assert_eq!(reader.following(), None, "reading stops with the stream");
+        assert_eq!(
+            now_playing_sent(&fake),
+            [NowPlaying::default()],
+            "a receiver that starts later gets no track from before"
+        );
+    }
+
+    #[test]
+    fn an_input_device_source_names_the_device_to_airplay_receivers() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        backend.connect_input("mic", "USB Microphone", "USB");
+        let reader = FakeReader::with_icon(b"icon");
+        backend.set_track_reader(reader.reader());
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend
+            .start(&SourceId::Input {
+                endpoint_id: "mic".to_owned(),
+            })
+            .unwrap();
+        backend.poll();
+        reader.read(None);
+        backend.poll();
+        let sent = now_playing_sent(&fake);
+        let track_sent = sent.last().and_then(|sent| sent.track.as_ref());
+        assert_eq!(
+            track_sent.map(|track| (track.title.as_str(), track.artist.as_str())),
+            Some(("AudioSync", "USB Microphone")),
+            "{sent:?}"
+        );
+    }
+
+    #[test]
+    fn an_input_device_that_cant_be_named_gets_the_unnamed_source_label() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        backend.connect_input("mic", "USB Microphone", "USB");
+        let reader = FakeReader::with_icon(b"icon");
+        backend.set_track_reader(reader.reader());
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend
+            .start(&SourceId::Input {
+                endpoint_id: "mic".to_owned(),
+            })
+            .unwrap();
+        backend.fail_input_listing(Some(BackendError::NotResponding));
+        backend.poll();
+        reader.read(None);
+        backend.poll();
+        let sent = now_playing_sent(&fake);
+        let track_sent = sent.last().and_then(|sent| sent.track.as_ref());
+        assert_eq!(
+            track_sent.map(|track| track.artist.as_str()),
+            Some(crate::audio::now_playing::UNNAMED_SOURCE),
+            "{sent:?}"
+        );
+
+        backend.fail_input_listing(None);
+        reader.read(None);
+        backend.poll();
+        let sent = now_playing_sent(&fake);
+        assert_eq!(
+            sent.last()
+                .and_then(|sent| sent.track.as_ref())
+                .map(|track| track.artist.as_str()),
+            Some("USB Microphone"),
+            "a listing that works again names the device: {sent:?}"
+        );
+    }
+
     #[test]
     fn a_capture_started_while_a_hung_one_holds_the_airplay_feed_takes_it_once_its_back() {
         let mut backend = backend();
@@ -4705,7 +5111,7 @@ mod tests {
                 BackendEvent::AirPlayChanged,
                 BackendEvent::AirPlayFailed {
                     id: id.clone(),
-                    problem: AirPlayProblem::PasswordNotYet,
+                    problem: AirPlayProblem::NeedsPassword,
                 }
             ]
         );

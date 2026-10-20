@@ -20,9 +20,12 @@ use audiosync_core::eq::{self, EqSettings};
 use audiosync_core::policy::device_volume::Hint;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
+mod password;
+
 use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
+use crate::launch_at_login::{self, LaunchAtLogin};
 use crate::ui_model::{
     self, AppState, Backend, MainWindowShows, NoticeMessage, PinPrompt, SourceKind, SpeakerState,
     ViewSettings, WindowFrame,
@@ -30,8 +33,11 @@ use crate::ui_model::{
 use crate::{
     AboutDialog, AirPlayProblem, Availability, DeviceVolumeHint, EqualizerWindow, GroupItem,
     GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, NoticeKind,
-    Palette, PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
+    Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind,
+    Strings, Tokens, TrayFlyout,
 };
+
+mod help_window;
 
 /// The digits the PIN field keeps of what was typed: four at most.
 fn pin_digits(text: &str) -> String {
@@ -245,6 +251,14 @@ impl NoticeAnnouncer {
 
 /// How often the backend is polled for what happened on its own.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How often Launch at Sign-In is read again from the registry, so a change
+/// in Task Manager shows in the menus (Slint's menu bar says nothing before
+/// it opens). One small registry read.
+const LOGIN_CHECK: Duration = Duration::from_secs(2);
+
+/// The Settings page where Windows turns startup apps on or off.
+const STARTUP_APPS_PAGE: &str = "ms-settings:startupapps";
 
 /// How often, 20 ms apart, the saved main window size waits for the native
 /// window before it gives up (about two seconds).
@@ -479,6 +493,10 @@ pub struct App {
     /// The PIN dialog shows a made-up pairing (the PIN preview), which no
     /// refresh closes.
     pin_preview: Cell<bool>,
+    /// The password prompt of a speaker protected by a password.
+    password_dialog: PasswordDialog,
+    /// The speaker the password dialog is open for, while it is.
+    password_for: RefCell<Option<String>>,
     about: AboutDialog,
     guide: GuideWindow,
     /// The paragraphs the guide shows.
@@ -486,6 +504,8 @@ pub struct App {
     /// The guide is open for the double-audio notice and follows it (not
     /// for a made-up preview notice).
     guide_follows_notice: Cell<bool>,
+    /// The AudioSync Guide (Help > AudioSync Guide), `help_window.rs`.
+    help: crate::HelpWindow,
     log: DebugLog,
     ui: RefCell<UiState>,
     /// What has the keyboard focus in the main window's lists.
@@ -510,6 +530,10 @@ pub struct App {
     announcement_timer: Timer,
     /// Polls the backend; it stops when the app is dropped.
     poll_timer: Timer,
+    /// Launch at Sign-In and its notice, which the windows own: the
+    /// backend's notices are about audio.
+    login: RefCell<LaunchAtLogin>,
+    login_timer: Timer,
 }
 
 /// Runs `action` on the app if it still exists.
@@ -536,6 +560,7 @@ fn set_size_once_native(
         };
         let window = window_owner.window();
         if window.with_winit_window(|_| ()).is_some() {
+            keep_main_min_size(window);
             window.set_size(size);
             if maximized {
                 window.set_maximized(true);
@@ -544,6 +569,30 @@ fn set_size_once_native(
             set_size_once_native(main, size, maximized, tries - 1);
         }
     });
+}
+
+/// What a titled window does on gaining the focus besides taking its frame.
+#[derive(Clone, Copy, PartialEq)]
+enum Titled {
+    Window,
+    /// Keeps only the close button and fits the PIN dialog.
+    Dialog,
+    /// Holds `settings::MIN_WINDOW`.
+    Main,
+}
+
+/// Holds the main window at `settings::MIN_WINDOW` natively (a MoveWindow
+/// from another program shrank it to 286 x 193), growing it first if it is
+/// smaller.
+fn keep_main_min_size(window: &slint::Window) {
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::dpi::LogicalSize;
+
+    let (width, height) = crate::settings::MIN_WINDOW;
+    window.with_winit_window(|window| {
+        window.set_min_inner_size(Some(LogicalSize::new(width, height)));
+    });
+    crate::platform::hold_min_size(window, crate::settings::MIN_WINDOW);
 }
 
 /// The saved main window `frame` as it opens on the monitor with
@@ -588,6 +637,7 @@ fn fitted_main_frame(
 impl App {
     /// The windows over `backend`; what they do themselves goes to `log`.
     pub fn new(backend: Box<dyn Backend>, log: DebugLog) -> Result<Rc<App>, slint::PlatformError> {
+        crate::platform::set_min_size_log(log.clone());
         let models = Models {
             sources: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
@@ -608,10 +658,13 @@ impl App {
             pin_dialog: PinDialog::new()?,
             pin_for: RefCell::new(None),
             pin_preview: Cell::new(false),
+            password_dialog: PasswordDialog::new()?,
+            password_for: RefCell::new(None),
             about: AboutDialog::new()?,
             guide: GuideWindow::new()?,
             guide_steps: Rc::new(VecModel::default()),
             guide_follows_notice: Cell::new(false),
+            help: crate::HelpWindow::new()?,
             log,
             ui: RefCell::default(),
             main_focus: RefCell::default(),
@@ -625,19 +678,31 @@ impl App {
             out_of_range: RefCell::default(),
             announcement_timer: Timer::default(),
             poll_timer: Timer::default(),
+            login: RefCell::new(LaunchAtLogin::new(
+                launch_at_login::system_store(),
+                std::env::current_exe().ok(),
+            )),
+            login_timer: Timer::default(),
         });
         app.attach_models();
         app.connect_main();
         app.connect_flyout();
         app.connect_equalizer();
         app.connect_dialogs();
+        app.connect_password_dialog();
         app.connect_guide();
+        app.connect_help();
         app.restore_view();
         app.refresh();
         let weak = Rc::downgrade(&app);
         app.poll_timer
             .start(TimerMode::Repeated, POLL_INTERVAL, move || {
                 with_app(&weak, App::poll)
+            });
+        let weak = Rc::downgrade(&app);
+        app.login_timer
+            .start(TimerMode::Repeated, LOGIN_CHECK, move || {
+                with_app(&weak, App::reread_launch_at_login)
             });
         Ok(app)
     }
@@ -657,7 +722,58 @@ impl App {
     }
 
     pub fn snapshot(&self) -> AppState {
-        self.backend.borrow().snapshot()
+        let mut state = self.backend.borrow().snapshot();
+        state.notices.extend(self.login.borrow().notice().cloned());
+        state
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn launch_at_login(&self) -> bool {
+        self.login.borrow().is_on()
+    }
+
+    /// Reads Launch at Sign-In again, and shows it if it changed.
+    pub fn reread_launch_at_login(&self) {
+        if self.login.borrow_mut().reread() {
+            self.refresh();
+        }
+    }
+
+    /// The user turned Launch at Sign-In on or off.
+    pub fn set_launch_at_login(&self, on: bool) {
+        let outcome = self
+            .login
+            .borrow_mut()
+            .set(on, crate::platform::notice_time);
+        let status = self.login.borrow().status();
+        self.log.log(|| match &outcome.error {
+            Some(error) => format!(
+                "launch at sign-in: turning it {} failed ({error}); {status:?}",
+                if on { "on" } else { "off" }
+            ),
+            None => format!(
+                "launch at sign-in: turned {}; {status:?}",
+                if on { "on" } else { "off" }
+            ),
+        });
+        if outcome.open_startup_settings && !crate::platform::open_settings(STARTUP_APPS_PAGE) {
+            self.log
+                .log(|| format!("launch at sign-in: {STARTUP_APPS_PAGE} didn't open"));
+        }
+        self.refresh();
+    }
+
+    fn dismiss_notice(&self, id: u64) {
+        if self.login.borrow_mut().dismiss(id) {
+            self.refresh();
+        } else {
+            self.update(|b| b.dismiss_notice(id));
+        }
+    }
+
+    fn dismiss_all_notices(&self) {
+        self.login.borrow_mut().dismiss_notice();
+        self.update(|b| b.dismiss_all_notices());
     }
 
     /// Changes the backend, then shows the result everywhere.
@@ -700,14 +816,19 @@ impl App {
             .global::<Palette>()
             .set_color_scheme(scheme);
         self.pin_dialog.global::<Palette>().set_color_scheme(scheme);
+        self.password_dialog
+            .global::<Palette>()
+            .set_color_scheme(scheme);
         self.about.global::<Palette>().set_color_scheme(scheme);
         self.guide.global::<Palette>().set_color_scheme(scheme);
+        self.help.global::<Palette>().set_color_scheme(scheme);
         self.theme_override.set(Some(dark));
     }
 
     /// Gives a window that is showing its Windows 11 frame (`backdrop`), and
     /// logs whether DWM took it. `true` when it did.
     pub fn apply_frame(&self, window: &slint::Window, name: &'static str, frame: Frame) -> bool {
+        self.use_brand_accent(window);
         if let Some(dark) = self.theme_override.get() {
             use slint::winit_030::WinitWindowAccessor;
             use slint::winit_030::winit::window::Theme;
@@ -732,19 +853,83 @@ impl App {
         applied
     }
 
+    /// Gives the standard controls (buttons, sliders, switches, fields) the
+    /// brand teal for their accent instead of the Windows accent color. Slint
+    /// keeps one accent for the whole app and reads the Windows one again
+    /// whenever it creates a native window or the theme changes, so this runs
+    /// after each (`apply_frame`, `follow_frame`). The Fluent style keeps its
+    /// own lightness and takes only the hue: dark teal on light, mint on dark.
+    pub fn use_brand_accent(&self, window: &slint::Window) {
+        use slint::private_unstable_api::re_exports::WindowInner;
+        let teal = self.main.global::<Tokens>().get_teal();
+        WindowInner::from_pub(window)
+            .context()
+            .set_accent_color(teal);
+    }
+
     /// Gives a titled window (every window but the flyout) its frame each
     /// time it gains the focus, which covers a native window created after
-    /// `show` returned.
+    /// `show` returned, and the brand accent again after a theme change.
     fn follow_frame(self: &Rc<Self>, window: fn(&App) -> &slint::Window, name: &'static str) {
+        self.follow_titled_frame(window, name, Titled::Window);
+    }
+
+    /// `follow_frame` for a dialog, which also keeps only the close button
+    /// in its title bar, as Windows dialogs do.
+    fn follow_dialog_frame(
+        self: &Rc<Self>,
+        window: fn(&App) -> &slint::Window,
+        name: &'static str,
+    ) {
+        self.follow_titled_frame(window, name, Titled::Dialog);
+    }
+
+    fn follow_titled_frame(
+        self: &Rc<Self>,
+        window: fn(&App) -> &slint::Window,
+        name: &'static str,
+        kind: Titled,
+    ) {
         use slint::winit_030::winit::event::WindowEvent;
+        use slint::winit_030::winit::window::WindowButtons;
         use slint::winit_030::{EventResult, WinitWindowAccessor};
 
         let weak = Rc::downgrade(self);
+        // The main window's first event comes once its native window exists,
+        // with or without the focus; outside this filter, as it resizes.
+        let min_held = std::cell::Cell::new(kind != Titled::Main);
         window(self).on_winit_window_event(move |_, event| {
-            if let WindowEvent::Focused(true) = event {
-                with_app(&weak, |app| {
-                    app.apply_frame(window(app), name, Frame::Titled);
+            if !min_held.replace(true) {
+                let weak = weak.clone();
+                Timer::single_shot(Duration::ZERO, move || {
+                    with_app(&weak, |app| {
+                        keep_main_min_size(window(app));
+                    });
                 });
+            }
+            match event {
+                WindowEvent::Focused(true) => with_app(&weak, |app| {
+                    if kind == Titled::Main {
+                        keep_main_min_size(window(app));
+                    }
+                    if kind == Titled::Dialog {
+                        window(app).with_winit_window(|window| {
+                            window.set_enabled_buttons(WindowButtons::CLOSE);
+                        });
+                        // A PIN dialog opened before the event loop ran had
+                        // no native window to fit yet.
+                        app.fit_pin_dialog();
+                    }
+                    app.apply_frame(window(app), name, Frame::Titled);
+                }),
+                // Slint reads the Windows accent after this filter returns.
+                WindowEvent::ThemeChanged(_) => {
+                    let weak = weak.clone();
+                    Timer::single_shot(Duration::ZERO, move || {
+                        with_app(&weak, |app| app.use_brand_accent(window(app)));
+                    });
+                }
+                _ => {}
             }
             EventResult::Propagate
         });
@@ -816,6 +1001,7 @@ impl App {
         self.main
             .set_connected_virtual_hidden(only_virtual_outputs_hidden(&connected, lists));
         self.main.set_airplay_none_found(state.airplay_none_found);
+        self.flyout.set_airplay_none_found(state.airplay_none_found);
         let listed = |s: &&ui_model::Speaker| lists(s);
         let this_pc: Vec<SpeakerItem> = this_pc
             .into_iter()
@@ -917,13 +1103,16 @@ impl App {
             self.main.invoke_focus_streaming_switch();
         }
         self.refresh_guide(&state);
+        self.refresh_help(&state);
         self.show_pin_prompt(state.pin_prompt.as_ref());
+        self.show_password_prompt(state.password_prompt.as_ref());
 
         for window in [&self.main as &dyn WindowState, &self.flyout] {
             window.show_state(&state, &status, source_index);
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
         self.main.set_show_virtual_devices(ui.show_virtual);
+        self.main.set_launch_at_login(self.login.borrow().is_on());
         self.main
             .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
         let airplay_delay = format_ms(state.airplay_delay_ms.unwrap_or(0.0));
@@ -1079,7 +1268,7 @@ impl App {
     }
 
     fn connect_main(self: &Rc<Self>) {
-        self.follow_frame(|app| app.main.window(), "main window");
+        self.follow_titled_frame(|app| app.main.window(), "main window", Titled::Main);
         let main = &self.main;
         let weak = Rc::downgrade(self);
 
@@ -1152,19 +1341,19 @@ impl App {
             with_app(&w, |app| app.show_virtual_devices(on))
         });
         let w = weak.clone();
-        main.on_notice_dismissed(move |id| {
-            with_app(&w, |app| app.update(|b| b.dismiss_notice(id as u64)))
-        });
+        main.on_notice_dismissed(move |id| with_app(&w, |app| app.dismiss_notice(id as u64)));
         let w = weak.clone();
-        main.on_notices_dismissed_all(move || {
-            with_app(&w, |app| app.update(|b| b.dismiss_all_notices()))
-        });
+        main.on_notices_dismissed_all(move || with_app(&w, App::dismiss_all_notices));
+        let w = weak.clone();
+        main.on_launch_at_login_toggled(move |on| with_app(&w, |app| app.set_launch_at_login(on)));
         let w = weak.clone();
         main.on_notice_guide_requested(move |id| with_app(&w, |app| app.show_guide(id)));
         let w = weak.clone();
         main.on_notice_retry_requested(move |_| {
             with_app(&w, |app| app.update(|b| b.retry_airplay()))
         });
+        let w = weak.clone();
+        main.on_notice_privacy_requested(move |_| with_app(&w, App::open_microphone_privacy));
         let w = weak.clone();
         main.on_notice_focus_changed(move |id, focused| {
             with_app(&w, |app| {
@@ -1234,13 +1423,9 @@ impl App {
         let w = weak.clone();
         flyout.on_group_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_group(&id))));
         let w = weak.clone();
-        flyout.on_notice_dismissed(move |id| {
-            with_app(&w, |app| app.update(|b| b.dismiss_notice(id as u64)))
-        });
+        flyout.on_notice_dismissed(move |id| with_app(&w, |app| app.dismiss_notice(id as u64)));
         let w = weak.clone();
-        flyout.on_notices_dismissed_all(move || {
-            with_app(&w, |app| app.update(|b| b.dismiss_all_notices()))
-        });
+        flyout.on_notices_dismissed_all(move || with_app(&w, App::dismiss_all_notices));
         let w = weak.clone();
         flyout.on_notice_guide_requested(move |id| {
             with_app(&w, |app| {
@@ -1252,6 +1437,8 @@ impl App {
         flyout.on_notice_retry_requested(move |_| {
             with_app(&w, |app| app.update(|b| b.retry_airplay()))
         });
+        let w = weak.clone();
+        flyout.on_notice_privacy_requested(move |_| with_app(&w, App::open_microphone_privacy));
         let w = weak.clone();
         flyout.on_open_app(move || {
             with_app(&w, |app| {
@@ -1322,8 +1509,8 @@ impl App {
     }
 
     fn connect_dialogs(self: &Rc<Self>) {
-        self.follow_frame(|app| app.group_dialog.window(), "group name dialog");
-        self.follow_frame(|app| app.about.window(), "about dialog");
+        self.follow_dialog_frame(|app| app.group_dialog.window(), "group name dialog");
+        self.follow_dialog_frame(|app| app.about.window(), "about dialog");
         let weak = Rc::downgrade(self);
         let w = weak.clone();
         self.group_dialog
@@ -1335,7 +1522,7 @@ impl App {
             })
         });
 
-        self.follow_frame(|app| app.pin_dialog.window(), "PIN dialog");
+        self.follow_dialog_frame(|app| app.pin_dialog.window(), "PIN dialog");
         let dialog = self.pin_dialog.as_weak();
         self.pin_dialog.on_pin_edited(move |text| {
             if let Some(dialog) = dialog.upgrade() {
@@ -1392,6 +1579,7 @@ impl App {
                 dialog.set_pin(SharedString::new());
             }
             dialog.invoke_prepare();
+            self.fit_pin_dialog();
         }
     }
 
@@ -1401,7 +1589,21 @@ impl App {
             return;
         }
         self.pin_dialog.invoke_prepare();
+        self.fit_pin_dialog();
         crate::platform::bring_to_front(self.pin_dialog.window());
+    }
+
+    /// Grows the PIN dialog to its layout's lowest height at its width. The
+    /// window is made at the height the layout has before the message wraps,
+    /// and Windows doesn't grow it when the message gets longer (a wrong PIN).
+    fn fit_pin_dialog(&self) {
+        let window = self.pin_dialog.window();
+        let size = window.size().to_logical(window.scale_factor());
+        let fit = self.pin_dialog.get_fit_height();
+        // Before the native window exists there is no width to fit to.
+        if size.width > 0.0 && size.height < fit {
+            window.set_size(slint::LogicalSize::new(size.width, fit));
+        }
     }
 
     /// Pair: the PIN goes to the pairing; the dialog stays open until it
@@ -1471,6 +1673,15 @@ impl App {
     /// Opens the Settings page a guide button asks for; only the pages the
     /// guide names, nothing else. When the shell doesn't take it, the guide
     /// says where to find the page.
+    /// Opens the microphone privacy settings for the notice that asks.
+    fn open_microphone_privacy(&self) {
+        let uri = SettingsPage::MicrophonePrivacy.uri();
+        if !crate::platform::open_settings(uri) {
+            self.log
+                .log(|| format!("notice: the shell did not open {uri}"));
+        }
+    }
+
     fn open_guide_page(&self, page: GuidePage) {
         let Some(page) = settings_page(page) else {
             return;
@@ -2116,6 +2327,8 @@ pub fn speaker_kind(kind: ui_model::SpeakerKind) -> SpeakerKind {
         K::Headphones => SpeakerKind::Headphones,
         K::Bluetooth => SpeakerKind::Bluetooth,
         K::Usb => SpeakerKind::Usb,
+        K::UsbHeadphones => SpeakerKind::UsbHeadphones,
+        K::UsbSpeakers => SpeakerKind::UsbSpeakers,
         K::Hdmi => SpeakerKind::Hdmi,
         K::DisplayPort => SpeakerKind::DisplayPort,
         K::Virtual => SpeakerKind::Virtual,
@@ -2129,7 +2342,6 @@ fn availability(a: ui_model::Availability) -> Availability {
         ui_model::Availability::NeedsCode => Availability::NeedsCode,
         ui_model::Availability::Pairing => Availability::Pairing,
         ui_model::Availability::WaitingToPair => Availability::WaitingToPair,
-        ui_model::Availability::PasswordNotYet => Availability::PasswordNotYet,
         ui_model::Availability::PairingNotYet => Availability::PairingNotYet,
         ui_model::Availability::AirPlay2NotYet => Availability::Airplay2NotYet,
         ui_model::Availability::Unsupported => Availability::Unsupported,
@@ -2143,7 +2355,7 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::ConnectionLost => AirPlayProblem::ConnectionLost,
         P::Busy => AirPlayProblem::Busy,
         P::Refused => AirPlayProblem::Refused,
-        P::PasswordNotYet => AirPlayProblem::PasswordNotYet,
+        P::NeedsPassword => AirPlayProblem::NeedsPassword,
         P::NeedsPin => AirPlayProblem::NeedsPin,
         P::PairingFailed => AirPlayProblem::PairingFailed,
         P::PairingNotYet => AirPlayProblem::PairingNotYet,
@@ -2223,6 +2435,7 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
         time: notice.time.as_str().into(),
         has_guide: guide::guide(&notice.message).is_some(),
         has_retry: notice.message == NoticeMessage::AirPlayStopped,
+        has_privacy: matches!(notice.message, NoticeMessage::MicrophoneBlocked { .. }),
     }
 }
 
@@ -2281,7 +2494,7 @@ fn guide_step_text(strings: &Strings<'_>, step: &GuideStep) -> SharedString {
 /// The UI's name of a step's Settings page.
 fn guide_page(page: Option<SettingsPage>) -> GuidePage {
     match page {
-        None => GuidePage::None,
+        None | Some(SettingsPage::MicrophonePrivacy) => GuidePage::None,
         Some(SettingsPage::VolumeMixer) => GuidePage::VolumeMixer,
         Some(SettingsPage::Sound) => GuidePage::Sound,
     }
@@ -2309,6 +2522,15 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::SourceRefused { source } => {
             strings.invoke_notice_source_refused(source.as_str().into())
         }
+        NoticeMessage::InputNotConnected { source } => {
+            strings.invoke_notice_input_not_connected(source.as_str().into())
+        }
+        NoticeMessage::InputDisconnected { source } => {
+            strings.invoke_notice_input_disconnected(source.as_str().into())
+        }
+        NoticeMessage::MicrophoneBlocked { source } => {
+            strings.invoke_notice_microphone_blocked(source.as_str().into())
+        }
         NoticeMessage::CaptureFailed => strings.get_notice_capture_failed(),
         NoticeMessage::CaptureLost => strings.get_notice_capture_lost(),
         NoticeMessage::SpeakerFailed { speaker } => {
@@ -2334,6 +2556,11 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             strings.invoke_notice_pairings_kept_aside(file.as_str().into())
         }
         NoticeMessage::NoSoundOutput => strings.get_notice_no_sound_output(),
+        NoticeMessage::LaunchAtLoginFailed => strings.get_notice_launch_at_login_failed(),
+        NoticeMessage::LaunchAtLoginNotRemoved => strings.get_notice_launch_at_login_not_removed(),
+        NoticeMessage::LaunchAtLoginOffInSettings => {
+            strings.get_notice_launch_at_login_off_in_settings()
+        }
         NoticeMessage::HeardTwice {
             source,
             mute,
@@ -2361,6 +2588,13 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
             (NoticeKind::SourceNotRunning, source.as_str())
         }
         NoticeMessage::SourceRefused { source } => (NoticeKind::SourceRefused, source.as_str()),
+        NoticeMessage::InputNotConnected { source } => {
+            (NoticeKind::InputNotConnected, source.as_str())
+        }
+        NoticeMessage::InputDisconnected { source } => {
+            (NoticeKind::InputDisconnected, source.as_str())
+        }
+        NoticeMessage::MicrophoneBlocked { .. } => (NoticeKind::MicrophoneBlocked, ""),
         NoticeMessage::CaptureFailed => (NoticeKind::CaptureFailed, ""),
         NoticeMessage::CaptureLost => (NoticeKind::CaptureLost, ""),
         NoticeMessage::SpeakerFailed { speaker } => (NoticeKind::SpeakerFailed, speaker.as_str()),
@@ -2378,6 +2612,9 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::SettingsKeptAside { .. } => (NoticeKind::SettingsKeptAside, ""),
         NoticeMessage::PairingsKeptAside { .. } => (NoticeKind::PairingsKeptAside, ""),
         NoticeMessage::NoSoundOutput => (NoticeKind::NoSoundOutput, ""),
+        NoticeMessage::LaunchAtLoginFailed => (NoticeKind::LaunchAtLoginFailed, ""),
+        NoticeMessage::LaunchAtLoginNotRemoved => (NoticeKind::LaunchAtLoginNotRemoved, ""),
+        NoticeMessage::LaunchAtLoginOffInSettings => (NoticeKind::LaunchAtLoginOffInSettings, ""),
         NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
     };
     strings.invoke_notice_title(kind, name.into())
@@ -2413,7 +2650,7 @@ mod tests {
 
     /// Draws a frame of every headless window, as the event loop would after
     /// an event: lists are laid out then, and their new rows built.
-    fn draw_frames() {
+    pub(super) fn draw_frames() {
         slint::platform::update_timers_and_animations();
         let windows: Vec<_> = HEADLESS_WINDOWS
             .with(|windows| windows.borrow().iter().filter_map(Weak::upgrade).collect());
@@ -2428,7 +2665,7 @@ mod tests {
     }
 
     /// Presses and releases `key` in `window`, then draws a frame.
-    fn press(window: &slint::Window, key: impl Into<SharedString>) {
+    pub(super) fn press(window: &slint::Window, key: impl Into<SharedString>) {
         let text: SharedString = key.into();
         window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
         window.dispatch_event(WindowEvent::KeyReleased { text });
@@ -2446,18 +2683,54 @@ mod tests {
     }
 
     /// Presses Tab `times` times in `window`.
-    fn tab(window: &slint::Window, times: usize) {
+    pub(super) fn tab(window: &slint::Window, times: usize) {
         for _ in 0..times {
             press(window, Key::Tab);
         }
     }
 
     /// The App over `backend`, with headless windows.
-    fn app_over(backend: MockBackend) -> Rc<App> {
+    pub(super) fn app_over(backend: MockBackend) -> Rc<App> {
         // The platform is set per thread: a thread that already built an
         // App has it, which is fine.
         let _ = slint::platform::set_platform(Box::new(Headless));
         App::new(Box::new(backend), DebugLog::new(None)).expect("the windows build headless")
+    }
+
+    #[test]
+    fn launch_at_sign_in_follows_the_file_menu_and_its_notice_is_dismissed_here() {
+        let app = app_over(MockBackend::new());
+        let store = launch_at_login::MemoryStore::default();
+        *app.login.borrow_mut() = LaunchAtLogin::new(
+            Box::new(store.clone()),
+            Some(std::path::PathBuf::from(r"C:\Apps\audiosync.exe")),
+        );
+        app.refresh();
+        assert!(!app.main.get_launch_at_login());
+
+        app.main.invoke_launch_at_login_toggled(true);
+        assert!(app.main.get_launch_at_login());
+        assert!(store.entry().run.is_some());
+
+        // Task Manager turns it off; the next reading shows it.
+        store.entry().approval = Some(vec![3; 12]);
+        app.reread_launch_at_login();
+        assert!(!app.main.get_launch_at_login());
+
+        store.entry().refuse_writes = true;
+        store.entry().approval = None;
+        store.entry().run = None;
+        app.reread_launch_at_login();
+        app.main.invoke_launch_at_login_toggled(true);
+        let notices = app.snapshot().notices;
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].message, NoticeMessage::LaunchAtLoginFailed);
+        assert_eq!(app.main.get_notices().row_count(), 1);
+
+        app.main
+            .invoke_notice_dismissed(launch_at_login::NOTICE_ID as i32);
+        assert!(app.snapshot().notices.is_empty());
+        assert_eq!(app.main.get_notices().row_count(), 0);
     }
 
     #[test]
@@ -2744,7 +3017,7 @@ mod tests {
             .invoke_delay_edited("local:bt".into(), "-200".into());
 
         // The blank part of the desk's row, right of its name.
-        click(window, 420.0, 510.0);
+        click(window, 420.0, 625.0);
         assert_eq!(
             delay_of(&app, "local:bt"),
             Some(-200.0),
@@ -2757,7 +3030,7 @@ mod tests {
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
         app.main.invoke_airplay_delay_edited("2100".into());
-        click(window, 420.0, 510.0);
+        click(window, 420.0, 625.0);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),
@@ -2767,7 +3040,7 @@ mod tests {
         assert!(!open(&app).contains("local:desk"), "and closed it");
 
         // The reference row has no delay: a click there is outside.
-        click(window, 420.0, 510.0);
+        click(window, 420.0, 625.0);
         app.main
             .invoke_delay_edited("local:desk".into(), "300".into());
         click(window, 420.0, 190.0);
@@ -2863,7 +3136,7 @@ mod tests {
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
         // The note, moved down by the open controls.
-        click(app.main.window(), 420.0, 610.0);
+        click(app.main.window(), 420.0, 645.0);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),
@@ -3324,6 +3597,53 @@ mod tests {
         assert_eq!(fitted_main_frame(small, laptop, 1.0, true), small);
     }
 
+    /// Windows makes the PIN dialog at the height its layout has before the
+    /// message wraps, and keeps it there when the message grows (after a
+    /// wrong PIN): the buttons were cut off. The dialog now grows to fit.
+    #[test]
+    fn the_pin_dialog_grows_to_show_its_buttons_after_a_wrong_pin() {
+        let app = app_over(MockBackend::new());
+        app.preview_pin(false);
+        let dialog = &app.pin_dialog;
+        // About the client height Windows gave it: too short for the
+        // wrong-PIN message at this width.
+        dialog
+            .window()
+            .set_size(slint::LogicalSize::new(380.0, 150.0));
+        dialog.set_wrong_pin(true);
+        app.fit_pin_dialog();
+        let size = dialog
+            .window()
+            .size()
+            .to_logical(dialog.window().scale_factor());
+        assert_eq!(size.width, 380.0);
+        let fit = dialog.get_fit_height();
+        assert!(
+            size.height >= fit,
+            "window {} high, layout needs {fit}",
+            size.height
+        );
+        let bottom = dialog.get_buttons_bottom();
+        assert!(
+            bottom > 0.0 && bottom <= size.height,
+            "buttons end at {bottom}, window {} high",
+            size.height
+        );
+    }
+
+    #[test]
+    fn a_usb_device_with_a_form_still_reads_as_usb() {
+        let app = app_over(MockBackend::new());
+        for kind in [
+            ui_model::SpeakerKind::Usb,
+            ui_model::SpeakerKind::UsbHeadphones,
+            ui_model::SpeakerKind::UsbSpeakers,
+        ] {
+            let label = app.strings().invoke_speaker_kind(speaker_kind(kind));
+            assert_eq!(label.as_str(), "USB", "{kind:?}");
+        }
+    }
+
     #[test]
     fn rows_show_the_speaker_state_kind_and_delay() {
         let mut backend = MockBackend::new();
@@ -3654,6 +3974,53 @@ mod tests {
         assert!(!app.pin_preview.get(), "through its Cancel path");
     }
 
+    /// The App over the example data with Kitchen asking for its password.
+    fn app_asking_password(wrong: bool) -> Rc<App> {
+        let mut backend = MockBackend::new();
+        backend.ask_password("airplay:kitchen", wrong);
+        app_over(backend)
+    }
+
+    #[test]
+    fn the_password_dialog_pairs_with_what_was_typed() {
+        let app = app_asking_password(false);
+        let window = app.password_dialog.window();
+        assert!(window.is_visible(), "it opens with the prompt");
+        assert!(!app.password_dialog.get_wrong());
+        press(window, Key::Return);
+        assert!(window.is_visible(), "Enter waits for a password");
+        for key in ["p", "w"] {
+            press(window, key);
+        }
+        press(window, Key::Return);
+        assert!(!window.is_visible());
+        assert_eq!(
+            app.password_dialog.get_password(),
+            "",
+            "not kept in the field"
+        );
+        let state = app.snapshot();
+        assert_eq!(state.password_prompt, None);
+        assert!(state.speaker("airplay:kitchen").unwrap().enabled);
+    }
+
+    #[test]
+    fn escape_on_the_password_dialog_cancels_from_the_field_or_a_button() {
+        for tabs in [0, 2] {
+            let app = app_asking_password(true);
+            let window = app.password_dialog.window();
+            assert!(app.password_dialog.get_wrong(), "says it was turned down");
+            press(window, "x");
+            tab(window, tabs);
+            press(window, Key::Escape);
+            assert!(!window.is_visible(), "Escape closed it ({tabs} tabs)");
+            assert_eq!(app.password_dialog.get_password(), "");
+            let state = app.snapshot();
+            assert_eq!(state.password_prompt, None);
+            assert!(!state.speaker("airplay:kitchen").unwrap().enabled);
+        }
+    }
+
     #[test]
     fn escape_on_the_group_dialog_buttons_cancels() {
         let app = app_over(MockBackend::new());
@@ -3669,6 +4036,29 @@ mod tests {
         press(window, Key::Escape);
         assert!(!window.is_visible(), "Escape on Create closed the dialog");
         assert_eq!(app.snapshot().groups.len(), groups, "and made no group");
+    }
+
+    #[test]
+    fn a_group_name_longer_than_its_field_keeps_the_cursor_in_view() {
+        let app = app_over(MockBackend::new());
+        app.ask_new_group();
+        let window = app.group_dialog.window();
+        // Wider than the 1000 px the headless windows draw at.
+        let name = "Living Room and Kitchen and Bedroom and Office Speakers, ".repeat(4);
+        let name = name.trim_end();
+        for character in name.chars() {
+            press(window, character.to_string());
+            assert!(
+                app.group_dialog.get_name_caret_in_view(),
+                "the cursor is in view after {:?}",
+                app.group_dialog.get_name()
+            );
+        }
+        assert_eq!(app.group_dialog.get_name(), name);
+        press(window, Key::Home);
+        assert!(app.group_dialog.get_name_caret_in_view(), "at the start");
+        press(window, Key::End);
+        assert!(app.group_dialog.get_name_caret_in_view(), "at the end");
     }
 
     #[test]
@@ -3739,6 +4129,9 @@ mod tests {
             NoticeMessage::SourceQuit { source: "A".into() },
             NoticeMessage::SourceNotRunning { source: "A".into() },
             NoticeMessage::SourceRefused { source: "A".into() },
+            NoticeMessage::InputNotConnected { source: "A".into() },
+            NoticeMessage::InputDisconnected { source: "A".into() },
+            NoticeMessage::MicrophoneBlocked { source: "A".into() },
             NoticeMessage::CaptureFailed,
             NoticeMessage::CaptureLost,
             NoticeMessage::SpeakerFailed {
@@ -3760,6 +4153,9 @@ mod tests {
             NoticeMessage::SettingsKeptAside { file: "f".into() },
             NoticeMessage::PairingsKeptAside { file: "f".into() },
             NoticeMessage::NoSoundOutput,
+            NoticeMessage::LaunchAtLoginFailed,
+            NoticeMessage::LaunchAtLoginNotRemoved,
+            NoticeMessage::LaunchAtLoginOffInSettings,
         ];
         for message in messages {
             let label = dismiss_label(message.clone());
@@ -3787,7 +4183,7 @@ mod tests {
         let app = main_window_over(backend);
         let window = app.main.window();
         // The streaming switch, then the newest notice's dismiss button.
-        tab(window, 2);
+        tab(window, 3);
         press(window, " ");
         assert_eq!(app.snapshot().notices.len(), 1, "Space dismissed it");
         press(window, " ");
@@ -4118,17 +4514,19 @@ mod tests {
         assert!(!enabled(&app, "local:cable"));
 
         // Off and no longer shown, Connected Speakers is empty: the focus
-        // goes to This PC's first row's options, so the next Tab stop is
-        // the headphones' toggle, not the source after the streaming switch.
+        // goes to This PC's first row's options. Three Tabs on: its volume,
+        // its device volume fix (the mock's speaker device sits at 13 %),
+        // then the headphones' toggle, not the source after the streaming
+        // switch.
         app.main.invoke_show_virtual_devices_toggled(false);
         draw_frames();
         let headphones = enabled(&app, "local:headphones");
-        tab(window, 1);
+        tab(window, 3);
         press(window, " ");
         assert_ne!(
             enabled(&app, "local:headphones"),
             headphones,
-            "the next stop after the speakers' options is the headphones' toggle"
+            "after the speakers' volume and its fix, the headphones' toggle"
         );
     }
 
