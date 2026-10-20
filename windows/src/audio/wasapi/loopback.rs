@@ -555,6 +555,44 @@ mod tests {
     /// How long a test waits for an answer.
     const TIMEOUT: Duration = Duration::from_millis(200);
 
+    /// Captures each of this PC's input devices for half a second into a
+    /// ring nothing plays. Ignored by default since it needs Windows audio;
+    /// run it on a PC with `cargo test real_inputs -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "captures the PC's own input devices"]
+    fn real_inputs_are_captured_into_the_ring() {
+        use crate::audio::backend::SourceId;
+        use crate::audio::capture::input_sources;
+
+        let inputs = input_sources(super::super::devices::capture_endpoints().expect("listed"));
+        for input in inputs {
+            let SourceId::Input { endpoint_id } = input.id else {
+                unreachable!("only input devices are listed");
+            };
+            let ring = Ring::for_rate(SESSION_RATE).expect("a ring");
+            let writer = ring.writer().expect("the only writer");
+            let (_control, processor) = audiosync_core::eq::equalizer();
+            let capture = start(
+                CaptureTarget::Input {
+                    endpoint_id: endpoint_id.clone(),
+                },
+                writer,
+                processor,
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{} didn't start: {error}", input.name));
+            std::thread::sleep(Duration::from_millis(500));
+            println!(
+                "{}: {:?}, {} frames",
+                input.name,
+                capture.setup(),
+                ring.frames_written()
+            );
+            assert_eq!(capture.state(), CaptureState::Running);
+            assert!(ring.frames_written() > 0, "{} wrote nothing", input.name);
+        }
+    }
+
     #[test]
     fn a_capture_thread_that_hangs_stopping_its_stream_doesnt_hold_quitting() {
         static STUCK: StuckThreads = StuckThreads::new();

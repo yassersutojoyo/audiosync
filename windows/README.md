@@ -7,7 +7,8 @@ with a [Slint](https://slint.dev) interface. The audio work comes from
 **Status: in development, ready for a first try on a real PC.** It has the Mac
 app's screens (the main window, the equalizer, a tray icon with a flyout, the
 About dialog), and on Windows they drive the real audio backend: it captures
-one app, or everything the PC plays except AudioSync itself, and plays it on
+one app, everything the PC plays except AudioSync itself, or an input device
+such as a microphone or line in, and plays it on
 the outputs you turn on, each at its own delay and volume, through the
 equalizer. AirPlay speakers on your network show up under Connected Speakers,
 through AudioSync's own sender ([`../airplay`](../airplay)); that part hasn't
@@ -88,7 +89,8 @@ cargo build --release --target aarch64-pc-windows-msvc
 ## Trying it on a PC
 
 Turn on a speaker under This PC or Connected Speakers and streaming starts,
-from All System Audio unless you pick an app under Audio Source. Windows can't
+from All System Audio unless you pick an app or an input device under Audio
+Source. Windows can't
 mute the original sound for AudioSync, so the app keeps playing on its own
 output too, without the delay. To hear only AudioSync's copies, send the app
 (Settings > System > Sound > Volume mixer) or the Windows default output to an
@@ -173,7 +175,8 @@ cargo check --target aarch64-pc-windows-msvc
 - `src/platform.rs`: the Windows calls (`RtlGetVersion`, the message box, the
   taskbar theme, a monitor's work area, the time format of a notice)
 - `src/audio/`: the audio backend the adapter drives. `wasapi/` is the
-  Windows part (process loopback capture, one render stream per output,
+  Windows part (process loopback and input device capture, one render
+  stream per output,
   device notifications, what kind of device each output is); the rest is
   plain Rust over `audiosync-core` (which outputs play, at what delay and
   volume, what gets captured, the equalizer in the capture path) and is
