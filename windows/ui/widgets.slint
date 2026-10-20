@@ -1218,6 +1218,28 @@ export component Divider inherits Rectangle {
     background: Tokens.separator;
 }
 
+// Has Narrator read `said` without moving the focus: a polite live region,
+// which Windows announces when it appears or its text changes. It exists
+// only while there is something to say, so the same words said again after
+// the app cleared them are announced again. Nothing is drawn; it is 1 px
+// (not 0) and sits in the window's top-left corner, so it stays inside the
+// window's bounds and Windows keeps it in the accessibility tree.
+export component Announcer inherits Rectangle {
+    in property <string> said;
+    x: 0px;
+    y: 0px;
+    width: 1px;
+    height: 1px;
+
+    if root.said != "": Rectangle {
+        width: 1px;
+        height: 1px;
+        accessible-role: text;
+        accessible-label: root.said;
+        accessible-live-region: polite;
+    }
+}
+
 // The notices, newest first, each with its own dismiss button, Show How
 // on one that has a guide, and Retry on one that offers it. It lists every notice in `notices`; a window that
 // shows only the newest few passes just those (a hidden row would still take

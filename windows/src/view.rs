@@ -158,6 +158,37 @@ const MAIN_NOTICE_LIMIT: usize = 4;
 /// The flyout lists only the newest notice and a button for the rest.
 const FLYOUT_NOTICE_LIMIT: usize = 1;
 
+/// How long a notice's announcement stays in its window's live region.
+/// Cleared, the same words can be announced again for a later notice.
+const ANNOUNCEMENT_CLEARS_AFTER: Duration = Duration::from_secs(10);
+
+/// The most UTF-16 units a tray icon's tooltip holds (128 with the
+/// terminating null).
+const TOOLTIP_MAX_UNITS: usize = 127;
+
+/// Picks the notice Narrator is told about: the newest one posted since the
+/// last refresh. The notices there at launch are not news.
+#[derive(Debug, Default)]
+struct NoticeAnnouncer {
+    /// The newest notice id seen so far; `None` until the first refresh.
+    seen: Option<i32>,
+}
+
+impl NoticeAnnouncer {
+    /// The notice to announce among `notices`, if one is new. Ids only
+    /// grow, so a notice with a higher id than any seen is new.
+    fn next<'a>(&mut self, notices: &'a [NoticeItem]) -> Option<&'a NoticeItem> {
+        let newest = notices.iter().max_by_key(|n| n.id);
+        let fresh = match (self.seen, newest) {
+            (Some(seen), Some(notice)) if notice.id > seen => Some(notice),
+            _ => None,
+        };
+        let top = newest.map_or(0, |n| n.id);
+        self.seen = Some(self.seen.map_or(top, |seen| seen.max(top)));
+        fresh
+    }
+}
+
 /// How often the backend is polled for what happened on its own.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -416,6 +447,10 @@ pub struct App {
     frames: RefCell<HashMap<&'static str, bool>>,
     /// Called after every refresh, e.g. to update the tray icon and tooltip.
     on_refresh: RefCell<Option<RefreshHook>>,
+    /// Which new notice Narrator is told about.
+    notice_announcer: RefCell<NoticeAnnouncer>,
+    /// Clears the announcement a while after it was made.
+    announcement_timer: Timer,
     /// Polls the backend; it stops when the app is dropped.
     poll_timer: Timer,
 }
@@ -529,6 +564,8 @@ impl App {
             theme_override: Cell::new(None),
             frames: RefCell::default(),
             on_refresh: RefCell::new(None),
+            notice_announcer: RefCell::default(),
+            announcement_timer: Timer::default(),
             poll_timer: Timer::default(),
         });
         app.attach_models();
@@ -731,6 +768,9 @@ impl App {
             .iter()
             .map(|n| notice_item(&strings, n))
             .collect();
+        if let Some(notice) = self.notice_announcer.borrow_mut().next(&notices) {
+            self.announce(strings.invoke_notice_announcement(notice.message.clone()));
+        }
         let sources: Vec<SharedString> = state
             .sources
             .iter()
@@ -809,6 +849,33 @@ impl App {
         if let Some(callback) = self.on_refresh.borrow().as_ref() {
             callback(&state);
         }
+    }
+
+    /// Has Narrator say `text` without moving the focus, through the live
+    /// region of the window it can hear: the flyout while it is open (it
+    /// has the focus then), else the main window. Never both, so it is said
+    /// once. The live region empties again after a while.
+    fn announce(&self, text: SharedString) {
+        if self.flyout.window().is_visible() {
+            self.main.set_notice_announcement(SharedString::new());
+            self.flyout.set_notice_announcement(text);
+        } else {
+            self.flyout.set_notice_announcement(SharedString::new());
+            self.main.set_notice_announcement(text);
+        }
+        let (main, flyout) = (self.main.as_weak(), self.flyout.as_weak());
+        self.announcement_timer.start(
+            TimerMode::SingleShot,
+            ANNOUNCEMENT_CLEARS_AFTER,
+            move || clear_announcement(&main, &flyout),
+        );
+    }
+
+    /// Empties both live regions now.
+    #[cfg(test)]
+    fn clear_announcement(&self) {
+        self.announcement_timer.stop();
+        clear_announcement(&self.main.as_weak(), &self.flyout.as_weak());
     }
 
     /// Gives the keyboard focus back to the open flyout when a refresh
@@ -1754,6 +1821,51 @@ fn sync_model<T: Clone + PartialEq + 'static>(model: &VecModel<T>, items: Vec<T>
 
 fn count(n: usize) -> i32 {
     i32::try_from(n).unwrap_or(i32::MAX)
+}
+
+/// Empties the notice live regions of the windows still there.
+fn clear_announcement(main: &slint::Weak<MainWindow>, flyout: &slint::Weak<TrayFlyout>) {
+    if let Some(main) = main.upgrade() {
+        main.set_notice_announcement(SharedString::new());
+    }
+    if let Some(flyout) = flyout.upgrade() {
+        flyout.set_notice_announcement(SharedString::new());
+    }
+}
+
+/// The tray icon's tooltip: AudioSync and its status, then the newest
+/// notice's title on a second line while there is a notice, so Narrator
+/// reads it on the tray icon even with every window closed.
+pub fn tray_tooltip(strings: &Strings<'_>, state: &AppState) -> String {
+    let speakers = count(state.active_speakers());
+    let text = match state.notices.iter().max_by_key(|n| n.id) {
+        Some(notice) => strings.invoke_tray_tooltip_notice(
+            state.running,
+            speakers,
+            notice_title(strings, &notice.message),
+        ),
+        None => strings.invoke_tray_tooltip(state.running, speakers),
+    };
+    fit_tooltip(&text)
+}
+
+/// `text` cut to what a tray tooltip holds, ending in "…" when cut.
+fn fit_tooltip(text: &str) -> String {
+    if text.encode_utf16().count() <= TOOLTIP_MAX_UNITS {
+        return text.to_owned();
+    }
+    let room = TOOLTIP_MAX_UNITS - '…'.len_utf16();
+    let mut fitted = String::new();
+    let mut units = 0;
+    for c in text.chars() {
+        units += c.len_utf16();
+        if units > room {
+            break;
+        }
+        fitted.push(c);
+    }
+    fitted.push('…');
+    fitted
 }
 
 fn format_ms(ms: f64) -> String {
@@ -3228,5 +3340,103 @@ mod tests {
             headphones,
             "the next stop after the speakers' options is the headphones' toggle"
         );
+    }
+
+    fn notice_with_id(id: i32) -> NoticeItem {
+        NoticeItem {
+            id,
+            message: format!("notice {id}").into(),
+            ..NoticeItem::default()
+        }
+    }
+
+    /// Only a notice posted after launch is news, once: the newest one when
+    /// several arrive together, and again after the list was emptied.
+    #[test]
+    fn the_announcer_picks_each_new_notice_once() {
+        let mut announcer = NoticeAnnouncer::default();
+        let ids = |announcer: &mut NoticeAnnouncer, ids: &[i32]| {
+            let notices: Vec<NoticeItem> = ids.iter().map(|&id| notice_with_id(id)).collect();
+            announcer.next(&notices).map(|n| n.id)
+        };
+        assert_eq!(ids(&mut announcer, &[2, 1]), None, "there at launch");
+        assert_eq!(ids(&mut announcer, &[2, 1]), None);
+        assert_eq!(ids(&mut announcer, &[3, 2, 1]), Some(3), "a new one");
+        assert_eq!(ids(&mut announcer, &[3, 2, 1]), None, "said once");
+        assert_eq!(ids(&mut announcer, &[3]), None, "one dismissed");
+        assert_eq!(
+            ids(&mut announcer, &[5, 4, 3]),
+            Some(5),
+            "the newest of two"
+        );
+        assert_eq!(ids(&mut announcer, &[]), None, "all dismissed");
+        assert_eq!(ids(&mut announcer, &[6]), Some(6), "a new one after that");
+    }
+
+    /// A new notice is announced in the window Narrator can hear: the open
+    /// flyout, else the main window; never in both.
+    #[test]
+    fn a_new_notice_is_announced_in_the_flyout_or_the_main_window() {
+        let mut backend = MockBackend::new();
+        backend.post("source", NoticeMessage::CaptureLost, "09.40");
+        backend.post("start", NoticeMessage::NoSpeaker, "09.41");
+        let app = app_over(backend);
+        assert_eq!(app.main.get_notice_announcement(), "", "not at launch");
+        assert_eq!(app.flyout.get_notice_announcement(), "");
+
+        let strings = app.strings();
+        let said = strings.invoke_notice_announcement(strings.get_notice_no_speaker());
+        // As if only the first notice had been there at launch.
+        app.notice_announcer.borrow_mut().seen = Some(1);
+        app.refresh();
+        assert_eq!(app.main.get_notice_announcement(), said);
+        assert_eq!(app.flyout.get_notice_announcement(), "");
+
+        app.clear_announcement();
+        assert_eq!(app.main.get_notice_announcement(), "");
+        app.flyout.show().expect("the flyout shows headless");
+        app.notice_announcer.borrow_mut().seen = Some(1);
+        app.refresh();
+        assert_eq!(app.flyout.get_notice_announcement(), said);
+        assert_eq!(app.main.get_notice_announcement(), "", "not twice");
+    }
+
+    /// The tray icon's tooltip names the newest notice on a second line while
+    /// there is one, and fits the 127 characters Windows shows.
+    #[test]
+    fn the_tray_tooltip_follows_the_newest_notice() {
+        let mut backend = MockBackend::new();
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let plain = strings.invoke_tray_tooltip(false, 0).to_string();
+        assert_eq!(tray_tooltip(&strings, &backend.snapshot()), plain);
+
+        backend.post("source", NoticeMessage::CaptureLost, "09.40");
+        backend.post("start", NoticeMessage::NoSpeaker, "09.41");
+        let title = notice_title(&strings, &NoticeMessage::NoSpeaker);
+        assert_eq!(
+            tray_tooltip(&strings, &backend.snapshot()),
+            format!("{plain}\nNotice: {title}")
+        );
+
+        backend.dismiss_all_notices();
+        assert_eq!(tray_tooltip(&strings, &backend.snapshot()), plain);
+
+        backend.post(
+            "speaker",
+            NoticeMessage::SpeakerFailed {
+                speaker: "Kitchen ".repeat(30),
+            },
+            "09.42",
+        );
+        let long = tray_tooltip(&strings, &backend.snapshot());
+        assert!(long.encode_utf16().count() <= 127, "{long}");
+        assert!(long.ends_with('…'), "{long}");
+        assert!(long.starts_with(&format!("{plain}\nNotice: Kitchen")));
+
+        // The tray shows this tooltip, not the plain one.
+        let tray = include_str!("tray.rs");
+        assert!(!tray.contains("invoke_tray_tooltip("));
+        assert_eq!(tray.matches("view::tray_tooltip(").count(), 2);
     }
 }

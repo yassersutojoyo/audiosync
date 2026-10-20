@@ -183,6 +183,18 @@ export global Strings {
         return @tr("{} – {}", root.app-name, root.status(running, speakers));
     }
 
+    // The tray icon's tooltip while there are notices: the usual tooltip,
+    // then the newest notice's title (`notice-title`) on a second line.
+    public pure function tray-tooltip-notice(running: bool, speakers: int, title: string) -> string {
+        return @tr("{}\nNotice: {}", root.tray-tooltip(running, speakers), title);
+    }
+
+    // What Narrator says when a new notice appears, without the focus
+    // moving: the notice's text.
+    public pure function notice-announcement(message: string) -> string {
+        return @tr("Notice: {}", message);
+    }
+
     // The link under the newest notice in the flyout to the window that lists the others.
     public pure function more-notices(count: int) -> string {
         return @tr("{n} more notice…" | "{n} more notices…" % count);

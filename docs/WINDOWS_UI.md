@@ -151,6 +151,19 @@ appearing isn't announced. Pressed from the keyboard, the fix first hands the
 focus to that slider, so it stays in the row when the hint goes. In the tray flyout the hint is part of the
 speaker toggle's description.
 
+A new notice is announced without the focus moving: each window has an
+invisible polite live region (Slint 1.18's `accessible-live-region`), and
+when a notice is posted the app puts "Notice: " and its text there, in the
+open flyout if there is one, otherwise in the main window, never both. It
+empties again after 10 seconds, so the same words for a later notice are
+announced again. Notices already there at launch aren't announced. Windows
+only exposes a window that is showing, so with every window closed nothing
+is said; for that case the tray icon's tooltip names the newest notice on a
+second line ("Notice: Kitchen didn't start, turned off"), which Narrator reads when the
+tray icon gets the focus (Windows+B), and drops it once no notice is left.
+The tooltip is cut to the 127 characters Windows shows. AudioSync shows no
+toast for a notice: an automatic event never pops up over other apps.
+
 Text colors meet 4.5:1 on every background they're drawn on, in light and
 dark (the lowest is 5.07:1). The pairs are listed in `brand/tokens.json`, and
 a unit test in `windows/src/contrast.rs` computes each ratio and fails below
