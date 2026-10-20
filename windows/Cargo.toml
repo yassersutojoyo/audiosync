@@ -33,6 +33,14 @@ zeroize = "1.8.1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
+    # The playing track for AirPlay receivers: Windows' media sessions, and
+    # their artwork decoded, scaled and encoded as a JPEG
+    # (src/audio/wasapi/media.rs).
+    "Foundation",
+    "Foundation_Collections",
+    "Graphics_Imaging",
+    "Media_Control",
+    "Storage_Streams",
     "Wdk_System_SystemServices",
     "Win32_Devices_FunctionDiscovery",
     "Win32_Foundation",
