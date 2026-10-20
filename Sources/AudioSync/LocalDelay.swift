@@ -220,7 +220,8 @@ struct DelayFieldDraft: Equatable {
         text = format(saved)
     }
 
-    /// Drop the typing and show the saved value (a step button applied one).
+    /// Drop the typing and show the saved value (a step button applied one,
+    /// or Escape).
     mutating func discard(saved: Double, format: (Double) -> String) {
         isEditing = false
         text = format(saved)

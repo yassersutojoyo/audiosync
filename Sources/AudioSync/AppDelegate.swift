@@ -406,6 +406,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationWillTerminate(_ notification: Notification) {
         Self.exiting.store(true, ordering: .relaxed)
         DBG.log("[AudioSync] quitting")
+        // Quitting doesn't close the window: keep a half-typed delay.
+        mainWindow?.finishEditing()
         reconcileTimer?.invalidate()
         // Nothing needs to reach the views any more.
         localNetworkProbe.onChange = { _ in }

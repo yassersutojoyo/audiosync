@@ -56,9 +56,14 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         model.actions.refreshExternalState()
     }
 
+    /// Finish a half-typed delay: the field loses the focus and commits.
+    func finishEditing() {
+        window.makeFirstResponder(nil)
+    }
+
     func windowWillClose(_ notification: Notification) {
         // Finish a half-typed delay before the field goes away.
-        window.makeFirstResponder(nil)
+        finishEditing()
         onScreen = false
         model.actions.mainWindowVisible(false)
     }
@@ -680,6 +685,8 @@ struct SyncControls: View {
                 .accessibilityLabel(label)
                 .focused($fieldFocused)
                 .onSubmit(commit)
+                // Escape drops the typing, so a later focus loss applies nothing.
+                .onExitCommand { draft.field.discard(saved: ms, format: shown) }
                 .onChange(of: fieldFocused) { _, focused in if !focused { commit() } }
                 Text(text.millisecondsUnit).font(.callout).foregroundStyle(Brand.secondaryText)
                 step(10)
