@@ -44,11 +44,19 @@ enum AppLifecycle {
 
     /// The signals that end AudioSync the clean way (S111): the entry point
     /// marks the app as quitting, so a second launch arriving meanwhile waits
-    /// instead of being answered, and exits with status 0, even while a modal
-    /// alert keeps the main queue busy. SIGTERM comes from `kill` or a logout,
-    /// SIGINT from Ctrl-C in the terminal that launched it; left to their
-    /// default action, either would end the process as killed by a signal.
+    /// instead of being answered, and exits with `exitStatus(signal:)`, even
+    /// while a modal alert keeps the main queue busy. SIGTERM comes from
+    /// `kill` or a logout, SIGINT from Ctrl-C in the terminal that launched
+    /// it; left to their default action, either would end the process as
+    /// killed by a signal, without the clean steps.
     static let exitSignals: [Int32] = [SIGTERM, SIGINT]
+
+    /// The status AudioSync exits with after the clean steps for one of the
+    /// `exitSignals`: 128 plus the signal's number (143 for SIGTERM, 130 for
+    /// SIGINT), the shells' convention for a process a signal ended, so a
+    /// script that started AudioSync sees it was interrupted, not that it
+    /// finished.
+    static func exitStatus(signal: Int32) -> Int32 { 128 + signal }
 
     /// A capture format change rebuilds the session at the new rate (S20).
     /// The engine stops the session before it reports the change, so the
