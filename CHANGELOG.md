@@ -28,6 +28,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - If the audio engine can't be set up when streaming starts, the message now says exactly that and suggests quitting and reopening AudioSync, instead of pointing at the audio source.
 - An AirPlay speaker that sends back broken or odd answers can no longer crash AudioSync. Pairing answers nested too deeply or pointing back at themselves are refused, and so are malformed replies from the speaker. This goes for the Windows version too.
 - Building from source also finds Rust when it's installed through Homebrew's rustup.
+- A Bluetooth speaker, or any other output that runs at 44.1 kHz, no longer crackles when you switch it on. It used to run short of audio for a moment at the start. This goes for the Windows version too.
+- A delay you type, for a speaker or for AirPlay, now applies when you press Return or leave the field, not at every keystroke, so typing 220 no longer jumps through 2 and 22 ms on the way. Escape drops what you typed, and a value you typed is still kept if you quit before pressing Return.
 
 ### Windows (preview, not released yet)
 
@@ -38,6 +40,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Bluetooth hands-free endpoints (the call profile) are left out of the speaker list, since they carry mono call audio and opening one puts the headset in call mode. A headset's stereo output is still listed.
 - The Windows version remembers your choices between launches: the source, which speakers are on with their delays and volumes, the master volume, auto-connect, groups, the equalizer, Show Virtual Devices and the window's size, place and whether it was maximized. Like the Mac, it doesn't start streaming by itself at launch unless an auto-connect speaker is there, and a speaker that's unplugged keeps its settings for when it's back.
 - The AirPlay delay field takes what you typed when you press Enter or leave the field, and Escape puts back the delay that's in use. Before, with a receiver that has a high latency, it could rewrite the field right after the first digit.
+- A speaker's delay field works the same way now: what you typed applies on Enter, when you leave the field or when you close that speaker's sync controls, and Escape puts back the delay in use. Before, typing 220 re-timed the speaker at 2 and 22 ms on the way.
 - When the only outputs are virtual ones and they're hidden, Connected Speakers says so and points you to View > Show Virtual Devices.
 - A virtual output you turn off stays in the list for the rest of the session, instead of disappearing from under the keyboard focus.
 - If you switch on a second Apple TV while another one is showing its PIN prompt, it says "Waiting to pair…" and gets its own prompt next.
@@ -50,9 +53,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - If AirPlay can't start at launch, or can't start looking for speakers, you now get the notice "AirPlay stopped or couldn't start" with Retry, the same one as when it stops later.
 - A speaker that's on but can't play right now says so: "Waiting for device" while another app holds it, "Reconnecting…" while an AirPlay speaker comes back.
 - When no AirPlay speaker turns up after about 20 seconds, the list says to check that the PC is on the same network, that Windows Firewall allows AudioSync, or to set the network to Private.
-- Keyboard fixes: Escape closes the PIN, group name and About dialogs wherever the focus is, the focus stays on the same control or moves to a neighbouring row when the list changes instead of getting lost, and Narrator says which notice a dismiss button closes.
+- Keyboard fixes: Escape closes the PIN, group name and About dialogs wherever the focus is, the focus stays on the same control or moves to a neighbouring row when the list changes instead of getting lost, and Narrator says which notice a dismiss button closes and what happened, such as "Kitchen didn't start, turned off" or "settings unreadable, copy kept".
 - Settings or Apple TV pairings that can't be read at launch are no longer overwritten. The old file is kept as a copy in AudioSync's data folder and a notice tells you where. You also get a notice when your settings or pairings can't be saved, and when Windows has no working sound output.
 - The window fits a 1366×768 screen at 150% scaling.
+- As on the Mac, when a speaker that's on sits at 25% or less, or is muted, in Windows, its row says so and one click sets it to 75% or unmutes it. If Windows audio stops answering, reading or fixing that volume can no longer freeze the window: AudioSync gives up after five seconds and tries again a little later.
 - A speaker that disappears always gets its notice, a USB device plugged into another port keeps its settings, short Windows audio errors (after sleep, for example) are retried, and an output that doesn't answer holds up the window for about five seconds at most.
 
 ## [0.4.1] — 2026-10-17
