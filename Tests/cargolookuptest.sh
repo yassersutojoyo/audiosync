@@ -6,13 +6,16 @@
 set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")/.."
 repo=$PWD
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/audiosync-cargo-XXXXXX")
+# Resolved, so it compares equal to what realpath gives (macOS /tmp and
+# /var/folders are links into /private).
+tmp=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/audiosync-cargo-XXXXXX")" && pwd -P)
 trap 'rm -rf "$tmp"' EXIT
 failures=0
 check() {   # check <name> <expected path> <PATH> <HOME>
   local name=$1 expected=$2 path=$3 home=$4 found
+  # shellcheck disable=SC2016 # expanded by the inner bash
   found=$(env -i HOME="$home" PATH="$path" /bin/bash -c \
-    'source "$1/scripts/cargo_path.sh" && command -v cargo' _ "$repo" 2>&1) || true
+    'set -o errexit -o nounset; source "$1/scripts/cargo_path.sh" && command -v cargo' _ "$repo" 2>&1) || true
   if [ "$found" = "$expected" ]; then
     echo "  PASS  $name"
   else

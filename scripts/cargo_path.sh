@@ -13,7 +13,7 @@ cargo_rustup_dir() {
 }
 
 if ! command -v cargo >/dev/null 2>&1; then
-  for cargo_dir in "${CARGO_HOME:-$HOME/.cargo}/bin" "$(cargo_rustup_dir)"; do
+  for cargo_dir in "${CARGO_HOME:-${HOME:-}/.cargo}/bin" "$(cargo_rustup_dir)"; do
     if [ -n "$cargo_dir" ] && [ -x "$cargo_dir/cargo" ]; then
       PATH="$cargo_dir:$PATH"
       break
