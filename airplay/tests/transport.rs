@@ -28,8 +28,8 @@ use audiosync_airplay::sender::{
 use audiosync_airplay::volume::Volume;
 
 use common::net::{
-    AudioPacket, Behavior, Events, HostAudio, LOOPBACK, Log, NetReceiver, host_samples,
-    play_times, serial, step_error, wait_until,
+    AudioPacket, Behavior, Events, HostAudio, LOOPBACK, Log, NetReceiver, host_samples, play_times,
+    serial, step_error, wait_until,
 };
 use common::{PasswordGate, START};
 
@@ -88,6 +88,48 @@ fn largest_gap(receiver: &NetReceiver, from: Instant, to: Instant) -> (Duration,
         .max()
         .unwrap_or(Duration::MAX);
     (gap, times.len())
+}
+
+/// The fewest host frames two receivers must both have play times for
+/// before their step is judged.
+const STEP_FRAMES: usize = 20;
+
+/// The play times of what `receiver` got, for the packets `keep` takes,
+/// worked out on a copy so the receiver's threads aren't held up.
+fn play_times_of(
+    receiver: &NetReceiver,
+    clock: &SenderClock,
+    keep: impl Fn(&AudioPacket) -> bool,
+) -> BTreeMap<u64, f64> {
+    let copy = {
+        let log = receiver.log();
+        Log {
+            audio: log.audio.iter().filter(|p| keep(p)).cloned().collect(),
+            syncs: log.syncs.clone(),
+            ..Log::default()
+        }
+    };
+    play_times(&copy, clock)
+}
+
+/// Waits up to `LONG` until `a` and `b` share at least [`STEP_FRAMES`] host
+/// frames with play times, then gives the step error over all they share
+/// and how many that is. Waiting for the shared frames themselves, not for
+/// a packet count, keeps a stall of the host or a receiver thread on a slow
+/// runner from leaving too few to judge.
+fn wait_in_step(
+    a: impl Fn() -> BTreeMap<u64, f64>,
+    b: impl Fn() -> BTreeMap<u64, f64>,
+    expected: f64,
+) -> (f64, usize) {
+    let deadline = Instant::now() + LONG;
+    loop {
+        let (error, common) = step_error(&a(), &b(), expected);
+        if common >= STEP_FRAMES || Instant::now() >= deadline {
+            return (error, common);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 // A whole session over real sockets: the host only writes audio and sends
@@ -304,12 +346,12 @@ fn a_lost_speaker_leaves_the_others_playing_and_rejoins_in_step() {
     }));
 
     let clock = sender.clock();
-    let (error, common) = step_error(
-        &play_times(&a.log(), &clock),
-        &play_times(&b.log(), &clock),
+    let (error, common) = wait_in_step(
+        || play_times_of(&a, &clock, |_| true),
+        || play_times_of(&b, &clock, |_| true),
         -0.300,
     );
-    assert!(common >= 20, "frames both played: {common}");
+    assert!(common >= STEP_FRAMES, "frames both played: {common}");
     assert!(error < 0.002, "in step within 2 ms, got {error}");
     {
         let (log_a, log_b) = (a.log(), b.log());
@@ -360,23 +402,13 @@ fn a_lost_speaker_leaves_the_others_playing_and_rejoins_in_step() {
             .count()
             >= 100
     }));
-    let after: BTreeMap<u64, f64> = {
-        let log = a.log();
-        let rejoined_log = common::net::Log {
-            audio: log
-                .audio
-                .iter()
-                .filter(|p| p.header.ssrc != first_ssrc)
-                .cloned()
-                .collect(),
-            syncs: log.syncs.clone(),
-            ..common::net::Log::default()
-        };
-        play_times(&rejoined_log, &clock)
-    };
-    let (error, common) = step_error(&after, &play_times(&b.log(), &clock), -0.300);
+    let (error, common) = wait_in_step(
+        || play_times_of(&a, &clock, |p| p.header.ssrc != first_ssrc),
+        || play_times_of(&b, &clock, |_| true),
+        -0.300,
+    );
     assert!(
-        common >= 20,
+        common >= STEP_FRAMES,
         "frames both played after the rejoin: {common}"
     );
     assert!(error < 0.002, "in step after the rejoin, got {error}");
