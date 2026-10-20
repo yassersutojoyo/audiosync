@@ -224,7 +224,7 @@ component EqualizerCard inherits Rectangle {
 
         Glyph {
             glyph: Glyphs.chevron-right;
-            font-size: 10px;
+            font-size: Tokens.font-size-caption;
             color: Tokens.secondary-text;
         }
     }
@@ -629,7 +629,8 @@ export component MainWindow inherits Window {
                 speaker-list := VerticalLayout {
                     spacing: Tokens.spacing-section-gap;
                     padding-bottom: 4px;
-                    padding-right: 4px;
+                    // The Fluent scroll bar is 14 px wide and drawn over the content.
+                    padding-right: 14px;
                     // Rows keep their height when the list is shorter than the view.
                     alignment: start;
 

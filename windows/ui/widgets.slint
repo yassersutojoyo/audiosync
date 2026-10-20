@@ -524,20 +524,24 @@ export component VolumeSlider inherits HorizontalLayout {
 
 // Around a delay field: a teal outline while the field holds typing not yet
 // applied (Enter applies it), a red one while that typing is a number out of
-// range. The space is kept either way, so the row doesn't shift when the
-// outline comes and goes.
+// range. Drawn in the 4 px spacing around the field instead of taking room,
+// so the row is no taller than its buttons.
 component DraftOutline inherits Rectangle {
     in property <bool> pending;
     in property <bool> out-of-range;
 
-    border-radius: Tokens.radius-control + 2px;
-    border-width: 2px;
-    border-color: root.out-of-range ? Tokens.error-text : root.pending ? Tokens.teal-text : transparent;
-
     HorizontalLayout {
-        padding: 2px;
-
         @children
+    }
+
+    Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: Tokens.radius-control + 3px;
+        border-width: 2px;
+        border-color: root.out-of-range ? Tokens.error-text : root.pending ? Tokens.teal-text : transparent;
     }
 }
 
@@ -680,13 +684,19 @@ export component SyncControls inherits VerticalLayout {
         }
     }
 
-    DraftHint {
-        shown: root.pending;
-        range-hint: root.range-hint;
-    }
+    // The draft hint's line stays when it's hidden; a tight gap keeps that
+    // line from reading as a hole above the hint.
+    VerticalLayout {
+        spacing: 2px;
 
-    SecondaryText {
-        text: Strings.sync-hint(root.reference-name);
+        DraftHint {
+            shown: root.pending;
+            range-hint: root.range-hint;
+        }
+
+        SecondaryText {
+            text: Strings.sync-hint(root.reference-name);
+        }
     }
 }
 
@@ -794,13 +804,17 @@ export component AirPlayDelayControls inherits VerticalLayout {
                 }
             }
 
-            DraftHint {
-                shown: root.pending;
-                range-hint: root.range-hint;
-            }
+            VerticalLayout {
+                spacing: 2px;
 
-            SecondaryText {
-                text: Strings.airplay-delay-hint;
+                DraftHint {
+                    shown: root.pending;
+                    range-hint: root.range-hint;
+                }
+
+                SecondaryText {
+                    text: Strings.airplay-delay-hint;
+                }
             }
         }
     }
@@ -965,7 +979,7 @@ export component SpeakerRow inherits Rectangle {
 
                             if root.item.auto-connect: Glyph {
                                 glyph: Glyphs.auto-connect;
-                                font-size: 11px;
+                                font-size: Tokens.font-size-caption;
                                 color: Tokens.teal-text;
                             }
                         }
