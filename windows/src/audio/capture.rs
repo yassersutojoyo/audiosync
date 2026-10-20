@@ -1099,6 +1099,27 @@ mod tests {
         assert!(out.iter().all(|s| s.is_finite()));
     }
 
+    /// The outputs' lead covers the capture's blocks (S206): a packet the
+    /// converter writes in pieces, in conversion chunks or as the resampler
+    /// hands them out, is one block, and a short packet after it (what a gap
+    /// fill left of it) leaves the larger block in view.
+    #[test]
+    fn a_packet_written_in_pieces_is_one_block_for_the_outputs_lead() {
+        for format in [CAPTURE_ATTEMPTS[0].format, CAPTURE_ATTEMPTS[3].format] {
+            let (ring, writer) = session_ring();
+            let mut converter = new_converter(format, writer).unwrap();
+            let align = format.block_align();
+            // More than two conversion chunks.
+            let frames = CONVERT_CHUNK * 2 + 157;
+            converter.push(&vec![0u8; frames * align], frames, false);
+            let packet = usize::try_from(ring.frames_written()).unwrap();
+            assert!(packet > CONVERT_CHUNK * 2, "{} Hz: {packet}", format.rate);
+            assert_eq!(ring.last_block_frames(), packet, "{} Hz", format.rate);
+            converter.push(&vec![0u8; 37 * align], 37, false);
+            assert_eq!(ring.last_block_frames(), packet, "{} Hz", format.rate);
+        }
+    }
+
     #[test]
     fn a_rate_outside_the_supported_range_is_refused() {
         let (_ring, writer) = session_ring();
