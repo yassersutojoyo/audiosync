@@ -2825,18 +2825,71 @@ mod tests {
         backend.start(&SourceId::WholeSystem).unwrap();
         backend.fail_capture(BackendError::DeviceGone);
         backend.refuse_captures(Some(BackendError::DeviceGone));
-        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        // Five tries a second apart, the first a second after the loss.
+        poll_quietly(&mut backend, 5 * RESTART_DELAY_POLLS);
         assert_eq!(
             backend.poll(),
             [BackendEvent::Stopped {
                 reason: StopReason::CaptureFailed(BackendError::DeviceGone),
             }]
         );
+        assert_eq!(backend.driver().capture_attempts(), 1 + 5);
         assert_eq!(backend.running_source(), None);
         assert!(playing(&backend).is_empty());
         backend.refuse_captures(None);
         poll_quietly(&mut backend, RESTART_DELAY_POLLS + 1);
-        assert_eq!(backend.running_source(), None, "restarted only once");
+        assert_eq!(backend.running_source(), None, "no try once it stopped");
+    }
+
+    #[test]
+    fn a_capture_that_cant_start_again_at_first_is_tried_again_for_a_few_seconds() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        // Windows audio takes a few seconds to come back: two tries fail.
+        poll_quietly(&mut backend, 1 + 2 * RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().capture_attempts(), 1 + 2);
+        assert_eq!(
+            backend.running_source(),
+            Some(SourceId::WholeSystem),
+            "streaming stays on"
+        );
+        backend.refuse_captures(None);
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert!(backend.driver().capture_running());
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        // It has the trial of any capture that started again.
+        poll_quietly(&mut backend, 3);
+        backend.fail_capture(BackendError::DeviceGone);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(BackendError::DeviceGone),
+            }]
+        );
+    }
+
+    #[test]
+    fn an_app_that_quit_while_its_capture_waits_to_start_again_stops_streaming_at_once() {
+        let mut backend = backend();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        backend.quit_app(PLAYER_PID);
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS - 1);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(BackendError::SourceGone),
+            }]
+        );
+        assert_eq!(backend.running_source(), None);
     }
 
     #[test]
