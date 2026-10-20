@@ -7,7 +7,7 @@
 import { AboutSlint, VerticalBox } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { DialogButton, Fluent } from "widgets.slint";
+import { BrandMark, DialogButton, Fluent, Wordmark } from "widgets.slint";
 
 export component AboutDialog inherits Dialog {
     in property <string> version;
@@ -42,12 +42,24 @@ export component AboutDialog inherits Dialog {
         VerticalBox {
             alignment: start;
 
-            Text {
-                text: Strings.app-name;
-                font-size: Tokens.font-size-title;
-                font-weight: 600;
-                color: Tokens.text;
-                horizontal-alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                padding-top: 8px;
+
+                BrandMark {
+                    running: true;
+                    width: 48px;
+                    height: 48px;
+                }
+            }
+
+            // Narrator reads the wordmark as "AudioSync".
+            HorizontalLayout {
+                alignment: center;
+
+                Wordmark {
+                    size: 24px;
+                }
             }
 
             Text {
@@ -79,7 +91,16 @@ export component AboutDialog inherits Dialog {
                 wrap: word-wrap;
             }
 
-            AboutSlint { }
+            // The badge at its smallest height, its width kept to the
+            // badge's own proportions (212 by 97) so it isn't stretched.
+            HorizontalLayout {
+                alignment: center;
+
+                AboutSlint {
+                    width: 129px;
+                    height: self.min-height;
+                }
+            }
         }
     }
 

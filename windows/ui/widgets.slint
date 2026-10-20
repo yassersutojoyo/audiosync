@@ -84,7 +84,8 @@ export global Glyphs {
         if kind == SpeakerKind.airplay {
             return root.network;
         }
-        if kind == SpeakerKind.headphones {
+        // The device's form wins over its bus; the kind line still says USB.
+        if kind == SpeakerKind.headphones || kind == SpeakerKind.usb-headphones {
             return root.headphones;
         }
         if kind == SpeakerKind.bluetooth {
@@ -96,7 +97,7 @@ export global Glyphs {
         if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
             return root.display;
         }
-        if kind == SpeakerKind.built-in {
+        if kind == SpeakerKind.built-in || kind == SpeakerKind.usb-speakers {
             return root.speakers;
         }
         return root.device;

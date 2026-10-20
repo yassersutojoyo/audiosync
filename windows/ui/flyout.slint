@@ -8,7 +8,7 @@ import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { DeviceVolumeHint, GroupItem, NoticeItem, RowState, SpeakerItem } from "types.slint";
-import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 // A compact row: the toggle and the name, with the note of a speaker or
 // group that is on but can't play right now under it ("Waiting for device",
@@ -237,10 +237,8 @@ export component TrayFlyout inherits Window {
 
             Divider { }
 
-            SectionTitle {
-                text: Strings.source-label;
-            }
-
+            // No visible labels above the source and the volume, as in the
+            // Mac panel; Narrator still hears each control's name.
             source := ComboBox {
                 model: root.sources;
                 current-index: root.source-index;
@@ -249,10 +247,6 @@ export component TrayFlyout inherits Window {
                     root.source-selected(self.current-index);
                     self.current-index = root.source-index;
                 }
-            }
-
-            SectionTitle {
-                text: Strings.master-volume-title;
             }
 
             VolumeSlider {
@@ -265,7 +259,11 @@ export component TrayFlyout inherits Window {
 
             Divider { }
 
-            ScrollView {
+            if root.groups.length == 0 && root.speakers.length == 0: SecondaryText {
+                text: Strings.no-speakers;
+            }
+
+            if root.groups.length > 0 || root.speakers.length > 0: ScrollView {
                 // Every row up to five or so, then it scrolls.
                 height: min(list.preferred-height, 260px);
 

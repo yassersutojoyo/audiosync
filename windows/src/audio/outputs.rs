@@ -73,15 +73,22 @@ pub mod form_factor {
 /// (`PKEY_AudioEndpoint_JackSubType`).
 ///
 /// The enumerator decides first, since a USB or Bluetooth headset reports the
-/// same form factor as the PC's headphone jack; any other enumerator leaves it
-/// to the form factor.
+/// same form factor as the PC's headphone jack; a USB device keeps its form
+/// (headphones or speakers) beside the bus. Any other enumerator leaves it to
+/// the form factor.
 pub fn output_kind(form_factor: Option<u32>, enumerator: &str, display_port: bool) -> OutputKind {
     let bus = enumerator.to_ascii_uppercase();
     if bus.starts_with("BTH") {
         return OutputKind::Bluetooth;
     }
     match bus.as_str() {
-        "USB" => return OutputKind::Usb,
+        "USB" => {
+            return match form_factor {
+                Some(form_factor::HEADPHONES | form_factor::HEADSET) => OutputKind::UsbHeadphones,
+                Some(form_factor::SPEAKERS) => OutputKind::UsbSpeakers,
+                _ => OutputKind::Usb,
+            };
+        }
         "ROOT" => return OutputKind::Virtual,
         _ => {}
     }
@@ -698,8 +705,21 @@ mod tests {
         );
         assert_eq!(
             output_kind(Some(form_factor::HEADSET), "USB", false),
+            OutputKind::UsbHeadphones
+        );
+        assert_eq!(
+            output_kind(Some(form_factor::HEADPHONES), "USB", false),
+            OutputKind::UsbHeadphones
+        );
+        assert_eq!(
+            output_kind(Some(form_factor::SPEAKERS), "USB", false),
+            OutputKind::UsbSpeakers
+        );
+        assert_eq!(
+            output_kind(Some(form_factor::LINE_LEVEL), "USB", false),
             OutputKind::Usb
         );
+        assert_eq!(output_kind(None, "USB", false), OutputKind::Usb);
         assert_eq!(
             output_kind(Some(form_factor::SPEAKERS), "ROOT", false),
             OutputKind::Virtual

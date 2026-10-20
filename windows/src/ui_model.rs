@@ -57,6 +57,10 @@ pub enum SpeakerKind {
     Headphones,
     Bluetooth,
     Usb,
+    /// Shown with the headphones glyph and "USB" as its kind.
+    UsbHeadphones,
+    /// Shown with the speakers glyph and "USB" as its kind.
+    UsbSpeakers,
     Hdmi,
     DisplayPort,
     Virtual,

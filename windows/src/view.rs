@@ -30,7 +30,8 @@ use crate::ui_model::{
 use crate::{
     AboutDialog, AirPlayProblem, Availability, DeviceVolumeHint, EqualizerWindow, GroupItem,
     GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, NoticeKind,
-    Palette, PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
+    Palette, PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind, Strings, Tokens,
+    TrayFlyout,
 };
 
 /// The digits the PIN field keeps of what was typed: four at most.
@@ -703,6 +704,7 @@ impl App {
     /// Gives a window that is showing its Windows 11 frame (`backdrop`), and
     /// logs whether DWM took it. `true` when it did.
     pub fn apply_frame(&self, window: &slint::Window, name: &'static str, frame: Frame) -> bool {
+        self.use_brand_accent(window);
         if let Some(dark) = self.theme_override.get() {
             use slint::winit_030::WinitWindowAccessor;
             use slint::winit_030::winit::window::Theme;
@@ -727,19 +729,66 @@ impl App {
         applied
     }
 
+    /// Gives the standard controls (buttons, sliders, switches, fields) the
+    /// brand teal for their accent instead of the Windows accent color. Slint
+    /// keeps one accent for the whole app and reads the Windows one again
+    /// whenever it creates a native window or the theme changes, so this runs
+    /// after each (`apply_frame`, `follow_frame`). The Fluent style keeps its
+    /// own lightness and takes only the hue: dark teal on light, mint on dark.
+    fn use_brand_accent(&self, window: &slint::Window) {
+        use slint::private_unstable_api::re_exports::WindowInner;
+        let teal = self.main.global::<Tokens>().get_teal();
+        WindowInner::from_pub(window)
+            .context()
+            .set_accent_color(teal);
+    }
+
     /// Gives a titled window (every window but the flyout) its frame each
     /// time it gains the focus, which covers a native window created after
-    /// `show` returned.
+    /// `show` returned, and the brand accent again after a theme change.
     fn follow_frame(self: &Rc<Self>, window: fn(&App) -> &slint::Window, name: &'static str) {
+        self.follow_titled_frame(window, name, false);
+    }
+
+    /// `follow_frame` for a dialog, which also keeps only the close button
+    /// in its title bar, as Windows dialogs do.
+    fn follow_dialog_frame(
+        self: &Rc<Self>,
+        window: fn(&App) -> &slint::Window,
+        name: &'static str,
+    ) {
+        self.follow_titled_frame(window, name, true);
+    }
+
+    fn follow_titled_frame(
+        self: &Rc<Self>,
+        window: fn(&App) -> &slint::Window,
+        name: &'static str,
+        dialog: bool,
+    ) {
         use slint::winit_030::winit::event::WindowEvent;
+        use slint::winit_030::winit::window::WindowButtons;
         use slint::winit_030::{EventResult, WinitWindowAccessor};
 
         let weak = Rc::downgrade(self);
         window(self).on_winit_window_event(move |_, event| {
-            if let WindowEvent::Focused(true) = event {
-                with_app(&weak, |app| {
+            match event {
+                WindowEvent::Focused(true) => with_app(&weak, |app| {
+                    if dialog {
+                        window(app).with_winit_window(|window| {
+                            window.set_enabled_buttons(WindowButtons::CLOSE);
+                        });
+                    }
                     app.apply_frame(window(app), name, Frame::Titled);
-                });
+                }),
+                // Slint reads the Windows accent after this filter returns.
+                WindowEvent::ThemeChanged(_) => {
+                    let weak = weak.clone();
+                    Timer::single_shot(Duration::ZERO, move || {
+                        with_app(&weak, |app| app.use_brand_accent(window(app)));
+                    });
+                }
+                _ => {}
             }
             EventResult::Propagate
         });
@@ -1279,8 +1328,8 @@ impl App {
     }
 
     fn connect_dialogs(self: &Rc<Self>) {
-        self.follow_frame(|app| app.group_dialog.window(), "group name dialog");
-        self.follow_frame(|app| app.about.window(), "about dialog");
+        self.follow_dialog_frame(|app| app.group_dialog.window(), "group name dialog");
+        self.follow_dialog_frame(|app| app.about.window(), "about dialog");
         let weak = Rc::downgrade(self);
         let w = weak.clone();
         self.group_dialog
@@ -1292,7 +1341,7 @@ impl App {
             })
         });
 
-        self.follow_frame(|app| app.pin_dialog.window(), "PIN dialog");
+        self.follow_dialog_frame(|app| app.pin_dialog.window(), "PIN dialog");
         let dialog = self.pin_dialog.as_weak();
         self.pin_dialog.on_pin_edited(move |text| {
             if let Some(dialog) = dialog.upgrade() {
@@ -2013,6 +2062,8 @@ pub fn speaker_kind(kind: ui_model::SpeakerKind) -> SpeakerKind {
         K::Headphones => SpeakerKind::Headphones,
         K::Bluetooth => SpeakerKind::Bluetooth,
         K::Usb => SpeakerKind::Usb,
+        K::UsbHeadphones => SpeakerKind::UsbHeadphones,
+        K::UsbSpeakers => SpeakerKind::UsbSpeakers,
         K::Hdmi => SpeakerKind::Hdmi,
         K::DisplayPort => SpeakerKind::DisplayPort,
         K::Virtual => SpeakerKind::Virtual,
@@ -2922,6 +2973,19 @@ mod tests {
             maximized: false,
         };
         assert_eq!(fitted_main_frame(small, laptop, 1.0, true), small);
+    }
+
+    #[test]
+    fn a_usb_device_with_a_form_still_reads_as_usb() {
+        let app = app_over(MockBackend::new());
+        for kind in [
+            ui_model::SpeakerKind::Usb,
+            ui_model::SpeakerKind::UsbHeadphones,
+            ui_model::SpeakerKind::UsbSpeakers,
+        ] {
+            let label = app.strings().invoke_speaker_kind(speaker_kind(kind));
+            assert_eq!(label.as_str(), "USB", "{kind:?}");
+        }
     }
 
     #[test]

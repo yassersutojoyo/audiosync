@@ -26,6 +26,8 @@ export global Strings {
     out property <string> reconnecting: @tr("Reconnecting…");
     out property <string> status-off: @tr("Off");
     out property <string> connected-none: @tr("No connected speakers");
+    // The flyout's speaker list when it has no speaker and no group.
+    out property <string> no-speakers: @tr("No speakers found");
     // Connected Speakers when its only outputs are virtual ones, hidden.
     out property <string> connected-none-virtual-hidden: @tr("No connected speakers. Virtual devices are hidden; to list them, choose View > Show Virtual Devices.");
     // Under Connected Speakers once AirPlay discovery has run for 20 seconds
@@ -524,7 +526,7 @@ export global Strings {
         if kind == SpeakerKind.bluetooth {
             return @tr("Bluetooth");
         }
-        if kind == SpeakerKind.usb {
+        if kind == SpeakerKind.usb || kind == SpeakerKind.usb-headphones || kind == SpeakerKind.usb-speakers {
             return @tr("USB");
         }
         if kind == SpeakerKind.hdmi {
