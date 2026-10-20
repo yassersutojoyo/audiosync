@@ -122,7 +122,7 @@ checks them with `cargo deny check licenses` against the list in
 generates it from `windows/Cargo.lock` for that build's target: every crate
 compiled into the executable with its version, license and repository and the
 full text of its license and notice files, plus the Rust standard library's
-copyright notices, Slint's royalty-free license, and the font and icon
+copyright notices, Slint's license (GPL-3.0-only), and the font and icon
 licenses above. It also adds the notices for code that crates took from other
 projects, which their own license files don't carry: AccessKit's code derived
 from Chromium (BSD-3-Clause, © The Chromium Authors) and the image crate's JPEG
