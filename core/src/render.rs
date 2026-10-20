@@ -36,6 +36,11 @@
 //! device's clock runs fast, sped up when it runs slow,
 //! at most 1 / [`TRIM_SHARE`] of a callback's reads at a time.
 //!
+//! Late callbacks (S209): given each callback's output time and the time
+//! it reads at, the renderer moves its reader's delay by how much later
+//! than its earliest callbacks this one came, so a late callback anchors
+//! and judges drift where an early one would.
+//!
 //! Exact differences (S208): each renderer publishes its start lead and
 //! hold-back in its ring's [`SessionLeads`], and gives its reader its
 //! hold-back plus the session lead, less its converter's latency, so every
@@ -141,6 +146,16 @@ pub const STALE_STAMP_MS: u64 = 100;
 
 /// See [`STALE_STAMP_MS`].
 pub const STALE_STAMP_BLOCKS: u64 = 4;
+
+/// The most a late callback's lateness moves its reader's delay, in ms
+/// (S209): more than the spread of two Bluetooth sinks sharing a radio, so
+/// one stray callback costs no more than that.
+pub const LATE_CAP_MS: u64 = 50;
+
+/// How fast the earliest lateness a renderer saw is forgotten, in ns per
+/// second of device frames (S209), so one stray early callback stops
+/// counting within [`LATE_CAP_MS`] seconds.
+pub const EARLIEST_LEAK_NS_PER_S: u64 = 1_000_000;
 
 /// Where a renderer that follows the capture's clock stands (S207).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -489,6 +504,9 @@ pub struct Renderer {
     tracking: Tracking,
     /// [`TRACK_MS`] in device frames.
     track_frames: f64,
+    /// The earliest a callback came against the output time of its first
+    /// frame, `now - output time` in ns, with its leak (S209).
+    earliest: Option<i64>,
 }
 
 impl fmt::Debug for Renderer {
@@ -555,6 +573,7 @@ impl Renderer {
             frames_after_fade: None,
             tracking: RESTART,
             track_frames: f64::from(device_rate) * f64::from(TRACK_MS) / 1000.0,
+            earliest: None,
         })
     }
 
@@ -661,6 +680,16 @@ impl Renderer {
         let channels = self.channels;
         let frames = out.len() / channels;
         self.update_lead(frames);
+        let late_ns = match (time, now) {
+            (Some(time), Some(now)) => self.lateness(time, now, frames),
+            _ => 0,
+        };
+        let late = late_ns as u128 * u128::from(self.capture_rate) / 1_000_000_000;
+        self.reader
+            .set_late_frames(i64::try_from(late).unwrap_or(i64::MAX));
+        // The capture's clock is judged at the time the callback would have
+        // read at had it come as early as the earliest ones.
+        let now = now.map(|now| now.saturating_sub(late_ns));
         if !self.start_lead_fixed {
             self.publish_start_lead(frames);
             self.start_lead_fixed = true;
@@ -731,6 +760,24 @@ impl Renderer {
         };
         self.reader
             .set_lead_frames(i64::try_from(lead).unwrap_or(i64::MAX));
+    }
+
+    /// How much later than the earliest callbacks this one came, in ns, by
+    /// `now - time` against its first frame's output time (S209), at most
+    /// [`LATE_CAP_MS`].
+    fn lateness(&mut self, time: u64, now: u64, frames: usize) -> u64 {
+        let late = (i128::from(now) - i128::from(time))
+            .clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+        let leak = (frames as u64).saturating_mul(EARLIEST_LEAK_NS_PER_S)
+            / u64::from(self.device_rate.max(1));
+        let earliest = self.earliest.map_or(late, |earliest| {
+            earliest
+                .saturating_add(i64::try_from(leak).unwrap_or(i64::MAX))
+                .min(late)
+        });
+        self.earliest = Some(earliest);
+        let behind = late.saturating_sub(earliest).max(0) as u64;
+        behind.min(LATE_CAP_MS * 1_000_000)
     }
 
     /// Trims the converter over a callback of `frames` device frames that
@@ -809,7 +856,8 @@ impl Renderer {
             / rate;
         let stale_ns = (STALE_STAMP_MS * 1_000_000).max(blocks_ns);
         let reach = self.reader.lead_frames().saturating_add(next.tolerance);
-        if now.saturating_sub(stamp.time_ns) > stale_ns || next.delay > reach {
+        let delay = next.delay.saturating_sub(self.reader.late_frames());
+        if now.saturating_sub(stamp.time_ns) > stale_ns || delay > reach {
             self.tracking = RESTART;
             return 0;
         }
