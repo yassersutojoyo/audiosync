@@ -1359,40 +1359,44 @@ export component SpeakerRow inherits Rectangle {
                     padding-left: Fluent.name-inset - 12px;
                     padding-bottom: 4px;
 
-                    SyncControls {
-                        name: root.item.name;
-                        delay-text: root.item.delay-text;
-                        pending: root.item.delay-pending;
-                        range-hint: root.item.delay-range-hint;
-                        reference-name: root.item.reference-name;
-                        init => {
-                            // The field keeps what was typed (the app's draft).
-                            if root.pending-focus == RowPart.sync {
-                                root.pending-focus = RowPart.none;
-                                self.focus-field();
+                    // A click on the controls' blank space is inside them, not
+                    // on the row: it neither closes them nor applies the typing.
+                    TouchArea {
+                        SyncControls {
+                            name: root.item.name;
+                            delay-text: root.item.delay-text;
+                            pending: root.item.delay-pending;
+                            range-hint: root.item.delay-range-hint;
+                            reference-name: root.item.reference-name;
+                            init => {
+                                // The field keeps what was typed (the app's draft).
+                                if root.pending-focus == RowPart.sync {
+                                    root.pending-focus = RowPart.none;
+                                    self.focus-field();
+                                }
                             }
-                        }
-                        property <bool> focus-asked: root.pending-focus == RowPart.sync;
-                        changed focus-asked => {
-                            if self.focus-asked {
-                                root.pending-focus = RowPart.none;
-                                self.focus-field();
+                            property <bool> focus-asked: root.pending-focus == RowPart.sync;
+                            changed focus-asked => {
+                                if self.focus-asked {
+                                    root.pending-focus = RowPart.none;
+                                    self.focus-field();
+                                }
                             }
-                        }
-                        stepped(delta) => {
-                            root.delay-stepped(delta);
-                        }
-                        edited(text) => {
-                            root.delay-edited(text);
-                        }
-                        committed => {
-                            root.delay-committed();
-                        }
-                        cancelled => {
-                            root.delay-cancelled();
-                        }
-                        changed focus-within => {
-                            root.sync-focused = self.focus-within;
+                            stepped(delta) => {
+                                root.delay-stepped(delta);
+                            }
+                            edited(text) => {
+                                root.delay-edited(text);
+                            }
+                            committed => {
+                                root.delay-committed();
+                            }
+                            cancelled => {
+                                root.delay-cancelled();
+                            }
+                            changed focus-within => {
+                                root.sync-focused = self.focus-within;
+                            }
                         }
                     }
                 }
