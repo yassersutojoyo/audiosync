@@ -402,6 +402,25 @@ mod tests {
     }
 
     #[test]
+    fn an_endpoint_windows_rebuilds_after_a_wake_or_a_format_change_is_tried_again() {
+        use windows::Win32::Media::Audio::{
+            AUDCLNT_E_ENDPOINT_CREATE_FAILED, AUDCLNT_E_RESOURCES_INVALIDATED,
+        };
+        for code in [
+            AUDCLNT_E_ENDPOINT_CREATE_FAILED,
+            AUDCLNT_E_RESOURCES_INVALIDATED,
+            AUDCLNT_E_SERVICE_NOT_RUNNING,
+        ] {
+            assert_eq!(
+                device_code_error("x", code),
+                BackendError::DeviceGone,
+                "0x{:08X}",
+                code.0
+            );
+        }
+    }
+
+    #[test]
     fn a_device_that_went_away_is_gone() {
         assert_eq!(
             device_code_error("x", AUDCLNT_E_DEVICE_INVALIDATED),
