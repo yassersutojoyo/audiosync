@@ -190,6 +190,12 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The last save of the settings file failed; its notice was posted
     /// then, once until a save works again.
     settings_unsaved: bool,
+    /// An output listing worked at least once, so an empty list means
+    /// Windows has no active output.
+    outputs_known: bool,
+    /// The notice that Windows has no active output was posted for the
+    /// current spell without one ([`AudioAdapter::check_sound_output`]).
+    no_output_noticed: bool,
     /// The windows' own settings.
     view: ViewSettings,
 }
@@ -252,6 +258,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             must_save: false,
             airplay_unrestored: BTreeSet::new(),
             settings_unsaved: false,
+            outputs_known: false,
+            no_output_noticed: false,
             view: ViewSettings::default(),
         };
         adapter.restore(saved);
@@ -565,12 +573,34 @@ impl<A: AudioBackend> AudioAdapter<A> {
         // An older file's delays are migrated before auto-connect outputs
         // start, so they start at their migrated hold-backs.
         if self.audio.list_outputs().is_ok() {
+            self.outputs_known = true;
             self.migrate_delays_if_due();
         }
         self.take_events();
         self.outputs_listed();
         self.airplay_listed();
         self.refresh_sources();
+        self.check_sound_output();
+    }
+
+    /// Posts the notice that Windows has no active sound output while none
+    /// is listed and an AirPlay speaker is on (apps then have nowhere to
+    /// play, so nothing reaches the speaker), once each time that starts,
+    /// and clears it once it ends. Returns whether the notices changed.
+    fn check_sound_output(&mut self) -> bool {
+        let none = self.outputs_known
+            && self.audio.outputs().is_empty()
+            && !self.audio.enabled_airplay().is_empty();
+        if none == self.no_output_noticed {
+            return false;
+        }
+        self.no_output_noticed = none;
+        if none {
+            self.post(NoticeSubject::SoundOutput, NoticeMessage::NoSoundOutput);
+        } else {
+            self.notices.clear(&[NoticeSubject::SoundOutput]);
+        }
+        true
     }
 
     /// Takes in the outputs as last listed: remembers their names, clears the
@@ -959,6 +989,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn handle(&mut self, event: BackendEvent) {
         match event {
             BackendEvent::OutputsChanged => {
+                self.outputs_known = true;
                 self.migrate_delays_if_due();
                 self.outputs_listed();
             }
@@ -1658,6 +1689,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     /// poll, so a slider drag is saved about twice a second at most.
     fn poll(&mut self) -> bool {
         let mut changed = self.take_events();
+        changed |= self.check_sound_output();
         self.polls += 1;
         if self.polls >= SOURCE_POLLS {
             self.polls = 0;
