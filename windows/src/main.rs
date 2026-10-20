@@ -193,6 +193,9 @@ fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
     log.log(|| "audio: the WASAPI backend is open".to_owned());
     audio.set_debug_log(log.clone());
     start_airplay(&mut audio, log);
+    audio.set_track_reader(Box::new(audio::wasapi::MediaSessionReader::start(
+        log.clone(),
+    )));
     let settings_file = settings::SettingsFile::default_path().map_or_else(
         settings::SettingsFile::in_memory,
         settings::SettingsFile::at,

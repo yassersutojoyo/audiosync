@@ -70,9 +70,10 @@ use super::backend::{
     OutputInfo, SourceId, SourceInfo, StopReason, TIMED_OUT,
 };
 use super::capture::{
-    Activation, CaptureAttempt, LoopbackMode, SampleType, decide_activation, running_app,
-    source_list,
+    Activation, CaptureAttempt, LoopbackMode, SampleType, WHOLE_SYSTEM_NAME, decide_activation,
+    display_name, running_app, source_list,
 };
+use super::now_playing::{Follow, TrackInfo, TrackReader, TrackSource};
 #[cfg(test)]
 use super::outputs::OutputParams;
 use super::outputs::{AirPlay, Endpoint, Listing, ListingNote, OutputPolicy, StreamSetup};
@@ -397,6 +398,10 @@ pub struct Controller<D: Driver> {
     /// gone, each with the polls left before that counts as a start that
     /// failed ([`REFUSED_GIVE_UP_POLLS`]).
     refused: BTreeMap<String, u32>,
+    /// What AirPlay receivers with a screen show of the playing track.
+    track_info: TrackInfo,
+    /// The source track info last followed, as it looks to track info.
+    track_source: Option<(SourceId, TrackSource)>,
 }
 
 impl<D: Driver> Controller<D> {
@@ -433,7 +438,15 @@ impl<D: Driver> Controller<D> {
             stalled: BTreeMap::new(),
             hung: BTreeSet::new(),
             refused: BTreeMap::new(),
+            track_info: TrackInfo::default(),
+            track_source: None,
         }
+    }
+
+    /// Reads the playing track through `reader` for the AirPlay receivers
+    /// that show it, while they play.
+    pub fn set_track_reader(&mut self, reader: Box<dyn TrackReader>) {
+        self.track_info.set_reader(reader);
     }
 
     /// Starts a new AirPlay sender through `starter` when the user retries
@@ -494,6 +507,7 @@ impl<D: Driver> Controller<D> {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_debug_log(log.clone());
         }
+        self.track_info.set_debug_log(log.clone());
         self.log = log;
     }
 
@@ -570,6 +584,65 @@ impl<D: Driver> Controller<D> {
             _ => "local outputs line up with each other: no AirPlay speaker is chosen".to_owned(),
         });
         self.retime();
+    }
+
+    /// Gives the sender what its receivers should show of the playing
+    /// track, while an AirPlay speaker plays the capture.
+    fn sync_track_info(&mut self) {
+        let sending = self.session.is_some()
+            && self
+                .airplay
+                .as_ref()
+                .is_some_and(|airplay| airplay.chosen());
+        if self.session.is_none() {
+            self.track_source = None;
+        }
+        let source = if sending { self.track_source() } else { None };
+        let Some(now_playing) = self.track_info.sync(source.as_ref(), Instant::now()) else {
+            return;
+        };
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_now_playing(now_playing);
+        }
+    }
+
+    /// The session's source as track info sees it: which media sessions
+    /// count, and the name the source list shows. An app is looked up once
+    /// per session; when the process snapshot fails, no media session
+    /// counts until a later poll finds the app.
+    fn track_source(&mut self) -> Option<TrackSource> {
+        let id = self.session.as_ref()?.source.clone();
+        if let Some((known, source)) = &self.track_source
+            && *known == id
+        {
+            return Some(source.clone());
+        }
+        let source = match &id {
+            SourceId::WholeSystem => TrackSource {
+                follow: Follow::AnyApp,
+                name: Some(WHOLE_SYSTEM_NAME.to_owned()),
+            },
+            SourceId::App { root_pid } => {
+                let Ok(processes) = self.driver.processes() else {
+                    return Some(TrackSource {
+                        follow: Follow::App {
+                            executable: String::new(),
+                        },
+                        name: None,
+                    });
+                };
+                let executable = processes
+                    .get(*root_pid)
+                    .map(|entry| entry.executable.clone())
+                    .unwrap_or_default();
+                TrackSource {
+                    name: (!executable.is_empty()).then(|| display_name(&executable)),
+                    follow: Follow::App { executable },
+                }
+            }
+        };
+        self.track_source = Some((id, source.clone()));
+        Some(source)
     }
 
     /// The driver.
@@ -1925,6 +1998,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
             self.pending.extend(events);
             self.sync_airplay_rule();
         }
+        self.sync_track_info();
 
         // Outputs that stopped by themselves.
         let mut ended = Vec::new();
@@ -2446,7 +2520,7 @@ mod tests {
     use audiosync_airplay::clock::SenderClock;
     use audiosync_airplay::discovery::Device;
     use audiosync_airplay::error::ErrorKind;
-    use audiosync_airplay::sender::SpeakerState;
+    use audiosync_airplay::sender::{NowPlaying, SpeakerState};
     use audiosync_airplay::stream::{Stream, StreamConfig};
     use audiosync_airplay::volume::Volume;
     use audiosync_core::render::STOP_FADE_CAP;
@@ -2455,6 +2529,7 @@ mod tests {
     use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, device, id_of};
     use crate::audio::backend::OutputKind;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
+    use crate::audio::now_playing::fake::{FakeReader, track};
     use crate::audio::outputs::{EndpointProperties, EndpointReading};
     use crate::audio::routing::{DirectPath, DirectReason, HOLD_CHECKS};
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
@@ -4634,6 +4709,68 @@ mod tests {
         assert_eq!(fake.take_calls(), [Call::Remove(id.clone())]);
         assert!(feed.is_free(), "the feed is back for the next capture");
         assert_eq!(backend.enabled_airplay(), [id], "it stays on");
+    }
+
+    fn now_playing_sent(fake: &FakeAirPlay) -> Vec<NowPlaying> {
+        fake.take_calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::NowPlaying(now_playing) => Some(now_playing),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_playing_track_reaches_airplay_receivers_while_they_play() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        let reader = FakeReader::with_icon(b"icon");
+        backend.set_track_reader(reader.reader());
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.poll();
+        assert_eq!(reader.following(), None, "nothing streams yet");
+
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        assert_eq!(
+            reader.following(),
+            Some(Follow::App {
+                executable: "player.exe".to_owned()
+            })
+        );
+        reader.read(Some(track("player.exe", "Song", false, Some(b"cover"))));
+        backend.poll();
+        let sent = now_playing_sent(&fake);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        let track_sent = sent[0].track.as_ref().expect("a track");
+        assert_eq!(
+            track_sent.title, "Song",
+            "a paused track of the source app counts"
+        );
+        assert_eq!(sent[0].artwork.as_deref(), Some(&b"cover"[..]));
+
+        reader.read(Some(track("player.exe", "Song", false, Some(b"cover"))));
+        backend.poll();
+        assert!(now_playing_sent(&fake).is_empty(), "nothing changed");
+
+        reader.read(None);
+        backend.poll();
+        let sent = now_playing_sent(&fake);
+        let track_sent = sent[0].track.as_ref().expect("labels");
+        assert_eq!(
+            (track_sent.artist.as_str(), sent[0].artwork.as_deref()),
+            ("Player", Some(&b"icon"[..])),
+            "with no session, the source's name and AudioSync's icon"
+        );
+
+        backend.stop();
+        backend.poll();
+        assert_eq!(reader.following(), None, "reading stops with the stream");
+        assert!(now_playing_sent(&fake).is_empty());
     }
 
     #[test]

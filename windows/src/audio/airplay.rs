@@ -62,11 +62,12 @@ use audiosync_airplay::discovery::mdns::DiscoveryError;
 use audiosync_airplay::discovery::{Device, DeviceKey, ServiceKind};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
 use audiosync_airplay::input::InputWriter;
+use audiosync_airplay::metadata::MetadataError;
 use audiosync_airplay::pairing::{Credentials, PairingEvent, PinError};
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
-    ReceiverEvent, ReceiverInfo, Sender, SenderConfig, SenderEvent, SpeakerError, SpeakerEvent,
-    SpeakerOptions, SpeakerState,
+    NowPlaying, ReceiverEvent, ReceiverInfo, Sender, SenderConfig, SenderEvent, SpeakerError,
+    SpeakerEvent, SpeakerOptions, SpeakerState,
 };
 use audiosync_airplay::stream::{MAX_DELAY, SpeakerCounters, StreamCounters};
 use audiosync_airplay::volume::{MIN_DB, Volume};
@@ -110,6 +111,10 @@ pub trait AirPlayLink {
     /// The capture restarted: every speaker is flushed and the timeline
     /// starts over (P143).
     fn restart_timeline(&mut self);
+
+    /// What is playing, for every speaker that shows it, now and when one
+    /// starts (P123 to P127).
+    fn set_now_playing(&mut self, now_playing: NowPlaying) -> Result<(), MetadataError>;
 
     /// L, the sender's base latency.
     fn latency(&self) -> Duration;
@@ -206,6 +211,10 @@ impl AirPlayLink for SenderLink {
 
     fn restart_timeline(&mut self) {
         self.sender.restart_timeline();
+    }
+
+    fn set_now_playing(&mut self, now_playing: NowPlaying) -> Result<(), MetadataError> {
+        self.sender.set_now_playing(now_playing)
     }
 
     fn latency(&self) -> Duration {
@@ -591,6 +600,9 @@ pub struct AirPlaySpeakers {
     /// since the last poll, which reports it
     /// ([`BackendEvent::PairingsKeptAside`]).
     store_kept_aside: Option<String>,
+    /// What is playing, as the sender was given it last: a new sender gets
+    /// it too.
+    now_playing: Option<NowPlaying>,
     log: DebugLog,
 }
 
@@ -621,6 +633,7 @@ impl AirPlaySpeakers {
             store_unsaved: false,
             store_change: None,
             store_kept_aside: None,
+            now_playing: None,
             log,
         }
     }
@@ -671,6 +684,23 @@ impl AirPlaySpeakers {
                 self.latency.as_millis()
             )
         });
+        if let Some(now_playing) = self.now_playing.clone() {
+            self.send_now_playing(now_playing);
+        }
+    }
+
+    /// What is playing, for the speakers that show it: the sender keeps it
+    /// and sends it to every speaker that starts.
+    pub fn set_now_playing(&mut self, now_playing: NowPlaying) {
+        self.now_playing = Some(now_playing.clone());
+        self.send_now_playing(now_playing);
+    }
+
+    fn send_now_playing(&mut self, now_playing: NowPlaying) {
+        if let Err(error) = self.link.set_now_playing(now_playing) {
+            self.log
+                .log(|| format!("AirPlay: the sender refused what is playing: {error}"));
+        }
     }
 
     /// The sender stopped by itself: nothing it listed, played or paired is
@@ -1688,6 +1718,7 @@ pub mod tests {
         Volume(String, Volume),
         Delay(String, Duration),
         RestartTimeline,
+        NowPlaying(NowPlaying),
         /// The speaker added just before came with credentials of this
         /// client ID.
         Credentials(String, String),
@@ -1852,6 +1883,14 @@ pub mod tests {
 
         fn restart_timeline(&mut self) {
             self.0.borrow_mut().calls.push(Call::RestartTimeline);
+        }
+
+        fn set_now_playing(&mut self, now_playing: NowPlaying) -> Result<(), MetadataError> {
+            self.0
+                .borrow_mut()
+                .calls
+                .push(Call::NowPlaying(now_playing));
+            Ok(())
         }
 
         fn latency(&self) -> Duration {
@@ -2408,6 +2447,28 @@ pub mod tests {
         // With the cancelled pairing ended, a new one starts at once.
         airplay.start_pairing(&id).unwrap();
         assert_eq!(fake.take_calls(), [Call::StartPairing(id)]);
+    }
+
+    #[test]
+    fn a_new_sender_gets_what_is_playing_from_the_last() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let now_playing = NowPlaying {
+            track: Some(audiosync_airplay::metadata::TrackInfo {
+                title: "Song".to_owned(),
+                artist: "Artist".to_owned(),
+                album: "Album".to_owned(),
+            }),
+            artwork: Some(b"cover".to_vec()),
+            progress: None,
+        };
+        airplay.set_now_playing(now_playing.clone());
+        assert_eq!(fake.take_calls(), [Call::NowPlaying(now_playing.clone())]);
+
+        let second = FakeAirPlay::new();
+        airplay.replace_link(second.link());
+        assert_eq!(second.take_calls(), [Call::NowPlaying(now_playing)]);
+        assert!(fake.take_calls().is_empty());
     }
 
     #[test]

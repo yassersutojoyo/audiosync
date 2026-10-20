@@ -15,6 +15,8 @@
 //! - [`controller`]: the backend logic, over a [`controller::Driver`] that owns
 //!   the platform calls.
 //! - `mock` (tests only): an in-memory driver and the backend over it.
+//! - [`now_playing`]: the playing track's title, artist, album and artwork
+//!   for the AirPlay receivers that show it, from Windows' media sessions.
 //! - [`process`]: process trees, from a snapshot of the running processes.
 //! - [`capture`]: what process loopback captures, the source list, the capture
 //!   formats and the conversion of captured packets into the ring, through
@@ -39,6 +41,7 @@ pub mod capture;
 pub mod controller;
 #[cfg(test)]
 pub mod mock;
+pub mod now_playing;
 pub mod outputs;
 pub mod pairings;
 pub mod process;
