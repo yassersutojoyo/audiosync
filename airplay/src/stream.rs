@@ -217,6 +217,7 @@ pub struct SpeakerCounters {
     timing_replies: AtomicU64,
     late_packets: AtomicU64,
     silent_frames: AtomicU64,
+    foreign_datagrams: AtomicU64,
     stream: Arc<StreamCounters>,
 }
 
@@ -233,6 +234,13 @@ impl SpeakerCounters {
     /// (P91, P144).
     pub(crate) fn count_timing_reply(&self) {
         self.timing_replies.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// One more datagram dropped on the session's control or timing socket
+    /// because it came from an address other than the receiver's (P86,
+    /// P91, P144).
+    pub(crate) fn count_foreign_datagram(&self) {
+        self.foreign_datagrams.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Audio packets sent (resends not included).
@@ -270,6 +278,13 @@ impl SpeakerCounters {
     /// speaker (P112).
     pub fn silent_frames(&self) -> u64 {
         self.silent_frames.load(Ordering::Relaxed)
+    }
+
+    /// Datagrams dropped on the session's control and timing sockets
+    /// because they came from an address other than the receiver's (P86,
+    /// P91).
+    pub fn foreign_datagrams(&self) -> u64 {
+        self.foreign_datagrams.load(Ordering::Relaxed)
     }
 
     /// Input frames dropped: the stream's count, since every speaker plays

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::JoinHandle;
+use std::time::Duration;
 
 use windows::Win32::Devices::FunctionDiscovery::{
     PKEY_Device_EnumeratorName, PKEY_Device_FriendlyName,
@@ -22,7 +22,10 @@ use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 use windows::core::{GUID, PCWSTR};
 use windows_core::implement;
 
-use super::com::{Apartment, Event, Ready, spawn_ready, system_error, take_com_string};
+use super::com::{
+    Apartment, Event, READY_TIMEOUT, Ready, StuckThreads, WINDOWS_AUDIO, Worker,
+    spawn_worker_within, system_error, take_com_string,
+};
 use crate::audio::backend::BackendError;
 use crate::audio::outputs::{EndpointProperties, EndpointReading, Listing, list_endpoints};
 
@@ -139,28 +142,41 @@ fn u32_property(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<u32> {
 
 /// Watches for render endpoints being added, removed, enabled, disabled,
 /// renamed or made the default. A thread of its own holds the registration,
-/// so the watcher can be used from any thread.
+/// so the watcher can be used from any thread. Dropping it waits for that
+/// thread as a [`Worker`] does: unregistering can hang while Windows audio
+/// doesn't answer.
 pub(super) struct DeviceWatcher {
     changed: Arc<AtomicBool>,
     stop: Arc<Event>,
-    thread: Option<JoinHandle<()>>,
+    thread: Worker,
 }
 
 impl DeviceWatcher {
     pub(super) fn start() -> Result<DeviceWatcher, BackendError> {
+        DeviceWatcher::start_with(READY_TIMEOUT, &WINDOWS_AUDIO, watch)
+    }
+
+    /// A watcher whose thread runs `body`, which sets the flag it's given
+    /// when endpoints change and ends once the event it's given is set. See
+    /// [`spawn_worker_within`] for `timeout` and `stuck`.
+    fn start_with(
+        timeout: Duration,
+        stuck: &'static StuckThreads,
+        body: impl FnOnce(&Arc<AtomicBool>, &Event, Ready) + Send + 'static,
+    ) -> Result<DeviceWatcher, BackendError> {
         let changed = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(Event::manual_reset()?);
         let (thread, ()) = {
             let changed = Arc::clone(&changed);
             let stop = Arc::clone(&stop);
-            spawn_ready("audiosync-devices", move |ready| {
-                watch(&changed, &stop, ready);
+            spawn_worker_within("audiosync-devices", timeout, stuck, move |ready| {
+                body(&changed, &stop, ready);
             })?
         };
         Ok(DeviceWatcher {
             changed,
             stop,
-            thread: Some(thread),
+            thread,
         })
     }
 
@@ -172,10 +188,9 @@ impl DeviceWatcher {
 
 impl Drop for DeviceWatcher {
     fn drop(&mut self) {
+        // The thread unregisters its listener and ends.
         self.stop.set();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        self.thread.finish();
     }
 }
 
@@ -293,5 +308,53 @@ impl IMMNotificationClient_Impl for DeviceListener_Impl {
             self.note();
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    /// How long the fake Windows audio hangs before it answers again.
+    const HANG: Duration = Duration::from_secs(3);
+
+    /// How long a test waits for an answer.
+    const TIMEOUT: Duration = Duration::from_millis(200);
+
+    #[test]
+    fn a_device_thread_that_hangs_unregistering_its_listener_doesnt_hold_quitting() {
+        static STUCK: StuckThreads = StuckThreads::new();
+        let (answer, hung) = mpsc::channel::<()>();
+        let (unregistered, done) = mpsc::channel();
+        let watcher = DeviceWatcher::start_with(TIMEOUT, &STUCK, move |_changed, stop, ready| {
+            if ready.ok(()) {
+                // SAFETY: waits on an event that outlives this thread's use
+                // of it.
+                unsafe { WaitForSingleObject(stop.raw(), INFINITE) };
+                // Unregistering the listener hangs until Windows audio
+                // answers.
+                let _ = hung.recv();
+                let _ = unregistered.send(());
+            }
+        })
+        .expect("it starts");
+        let answers = thread::spawn(move || {
+            thread::sleep(HANG);
+            drop(answer);
+        });
+        let started = Instant::now();
+        drop(watcher);
+        let waited = started.elapsed();
+        assert!(waited < HANG / 2, "the drop waited {waited:?}");
+        assert!(STUCK.any(), "the thread counts as stuck");
+        // Once Windows audio answers, the thread still unregisters, and
+        // ends.
+        assert_eq!(done.recv_timeout(HANG * 3), Ok(()));
+        assert!(STUCK.none_within(HANG), "the thread ends");
+        answers.join().expect("the answer comes");
     }
 }
