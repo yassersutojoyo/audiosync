@@ -65,7 +65,7 @@ use super::airplay::{
 };
 use super::backend::{
     AirPlayInfo, AirPlayPinPrompt, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
-    OutputInfo, SourceId, SourceInfo, StopReason,
+    OutputInfo, SourceId, SourceInfo, StopReason, TIMED_OUT,
 };
 use super::capture::{
     Activation, CaptureAttempt, LoopbackMode, SampleType, decide_activation, running_app,
@@ -782,6 +782,13 @@ impl<D: Driver> Controller<D> {
                         )
                     });
                     self.policy.set_enabled(&endpoint.id, false);
+                    // Off, it no longer waits for its device, so a later
+                    // busy device is told again.
+                    if self.busy.remove(&endpoint.id).is_some() {
+                        self.pending.push(BackendEvent::OutputFree {
+                            id: endpoint.id.clone(),
+                        });
+                    }
                     failures.push((endpoint.id, error));
                 }
             }
@@ -1720,11 +1727,14 @@ impl<D: Driver> AudioBackend for Controller<D> {
 /// Whether a capture that couldn't start again after a loss may start at a
 /// later try: Windows audio isn't back yet, or the device is held or failed
 /// for now. An app that quit, or a source that can't be captured, stays so.
+/// An activation Windows never completed is the last try: each one held the
+/// UI thread for the whole wait.
 fn may_start_later(error: &BackendError) -> bool {
-    matches!(
-        error,
-        BackendError::DeviceGone | BackendError::DeviceBusy | BackendError::System { .. }
-    )
+    match error {
+        BackendError::DeviceGone | BackendError::DeviceBusy => true,
+        BackendError::System { code, .. } => *code != TIMED_OUT,
+        _ => false,
+    }
 }
 
 /// How the log names an output: its last listed name and its endpoint ID.
