@@ -23,6 +23,18 @@
 //! 1 / [`SLOW_DOWN_SHARE`] of the callback's reads, instead of letting the
 //! reader run dry.
 //!
+//! Clock stamps (S207): when the host gives each callback the time it reads
+//! at ([`Renderer::render_at`]) and stamps the capture's blocks on the same
+//! clock, a converting renderer whose reader plays within the dead band of
+//! its lead follows the capture's clock by those times. It estimates where
+//! the capture is now from the newest stamp, takes the fill `Ŵ - P` at the
+//! start of every callback, keeps the average over the first
+//! [`TRACK_MS`] after the reader anchors as its reference, and trims its
+//! converter by a frame or so whenever a running average of the fill (time
+//! constant [`TRACK_MS`]) strays more than [`TRIM_DEAD_ZONE_FRAMES`] from
+//! it: slowed when the device's clock runs fast, sped up when it runs slow,
+//! at most 1 / [`TRIM_SHARE`] of a callback's reads at a time.
+//!
 //! The fade (S184 to S188):
 //!
 //! - The renderer starts closed. A frame its reader fills with silence closes
@@ -62,7 +74,7 @@ use std::time::Duration;
 
 use crate::convert::map_to_device;
 use crate::fade::{Fade, FadeState};
-use crate::reader::{Correction, ReadReport, Reader, ReaderControl, ReaderCounters};
+use crate::reader::{Correction, NextRead, ReadReport, Reader, ReaderControl, ReaderCounters};
 use crate::resample::Resampler;
 use crate::volume::{GainStage, SharedGain};
 
@@ -93,6 +105,46 @@ pub const LEAD_BLOCK_CAP_MS: u32 = 25;
 /// that over one callback isn't kept off W by a fast clock but by a
 /// stopped writer, and runs dry as S53 says.
 pub const SLOW_DOWN_SHARE: usize = 16;
+
+/// A renderer that follows the capture's clock (S207) averages the fill
+/// over this many ms of device frames after its reader anchors for its
+/// reference, and moves the running average of the fill with this time
+/// constant.
+pub const TRACK_MS: u32 = 500;
+
+/// How far the running average of the fill may stray from the reference,
+/// in capture frames, before the converter is trimmed (S207).
+pub const TRIM_DEAD_ZONE_FRAMES: f64 = 4.0;
+
+/// A trim takes at most this share of a callback's reads, a 256th, and at
+/// least one frame (S207).
+pub const TRIM_SHARE: usize = 256;
+
+/// A stamp older than this, in ms, or than [`STALE_STAMP_BLOCKS`] of the
+/// capture's blocks, whichever is more, means the capture stalled: the
+/// tracking restarts (S207).
+pub const STALE_STAMP_MS: u64 = 100;
+
+/// See [`STALE_STAMP_MS`].
+pub const STALE_STAMP_BLOCKS: u64 = 4;
+
+/// Where a renderer that follows the capture's clock stands (S207).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Tracking {
+    /// Measuring the reference since the tracking (re)started: the fills
+    /// taken so far, summed, their count, and the device frames of their
+    /// callbacks.
+    Measuring { sum: f64, count: u32, frames: u64 },
+    /// Following: the fill the renderer keeps, and the running average.
+    Following { reference: f64, average: f64 },
+}
+
+/// The tracking right after it (re)starts.
+const RESTART: Tracking = Tracking::Measuring {
+    sum: 0.0,
+    count: 0,
+    frames: 0,
+};
 
 /// The most capture-rate frames the resampler can ask for to produce
 /// `device_frames` frames at `device_rate`, whatever state it is in: the
@@ -166,8 +218,11 @@ struct Shared {
     /// Device frames the resampler could not produce and that were played
     /// as silence. Stays 0 unless [`reader_frames_bound`] is wrong.
     shortfall_frames: AtomicU64,
-    /// Capture frames the converter was slowed down by in all (S206).
+    /// Capture frames the converter was slowed down by in all (S206,
+    /// S207).
     slowed_frames: AtomicU64,
+    /// Capture frames the converter was sped up by in all (S207).
+    sped_frames: AtomicU64,
 }
 
 /// A fade state as the renderer publishes it.
@@ -212,6 +267,7 @@ impl RendererControl {
                 state: AtomicU8::new(state_code(FadeState::Closed)),
                 shortfall_frames: AtomicU64::new(0),
                 slowed_frames: AtomicU64::new(0),
+                sped_frames: AtomicU64::new(0),
             }),
             reader,
         }
@@ -299,9 +355,14 @@ impl RendererControl {
         self.reader.counters()
     }
 
-    /// [`Renderer::slowed_frames`], from any thread (S206).
+    /// [`Renderer::slowed_frames`], from any thread (S206, S207).
     pub fn slowed_frames(&self) -> u64 {
         self.shared.slowed_frames.load(Ordering::Relaxed)
+    }
+
+    /// [`Renderer::sped_frames`], from any thread (S207).
+    pub fn sped_frames(&self) -> u64 {
+        self.shared.sped_frames.load(Ordering::Relaxed)
     }
 
     /// [`Renderer::shortfall_frames`], from any thread.
@@ -370,6 +431,10 @@ pub struct Renderer {
     correction_due: bool,
     /// Device frames rendered after the stop's fade's last frame.
     frames_after_fade: Option<u64>,
+    /// Following the capture's clock by its stamps (S207).
+    tracking: Tracking,
+    /// [`TRACK_MS`] in device frames.
+    track_frames: f64,
 }
 
 impl fmt::Debug for Renderer {
@@ -403,7 +468,10 @@ impl Renderer {
         }
         let resampler =
             Resampler::new(capture_rate, device_rate).map_err(|_| RenderError::UnsupportedRate)?;
-        let read_frames = reader_frames_bound(RENDER_CHUNK, capture_rate, device_rate);
+        // A speed-up (S207) reads at most a 256th more, spread over the
+        // callback, so a piece may ask for a frame or two above the bound.
+        let bound = reader_frames_bound(RENDER_CHUNK, capture_rate, device_rate);
+        let read_frames = bound + bound / TRIM_SHARE + 2;
         Ok(Renderer {
             reader,
             reader_control: control.reader.clone(),
@@ -426,6 +494,8 @@ impl Renderer {
             awaiting_resync: false,
             correction_due: false,
             frames_after_fade: None,
+            tracking: RESTART,
+            track_frames: f64::from(device_rate) * f64::from(TRACK_MS) / 1000.0,
         })
     }
 
@@ -466,11 +536,19 @@ impl Renderer {
         self.shared.shortfall_frames.load(Ordering::Relaxed)
     }
 
-    /// Capture frames the converter was slowed down by to keep the reader
-    /// off W (S206), in all; each one plays the output one capture frame
-    /// later. Stays 0 without conversion.
+    /// Capture frames the converter was slowed down by, in all: to keep the
+    /// reader off W (S206) and to follow the capture's clock (S207). Each
+    /// one plays the output one capture frame later. Stays 0 without
+    /// conversion.
     pub fn slowed_frames(&self) -> u64 {
         self.shared.slowed_frames.load(Ordering::Relaxed)
+    }
+
+    /// Capture frames the converter was sped up by to follow the capture's
+    /// clock (S207), in all. Each one plays the output one capture frame
+    /// earlier. Stays 0 without conversion or stamps.
+    pub fn sped_frames(&self) -> u64 {
+        self.shared.sped_frames.load(Ordering::Relaxed)
     }
 
     /// Sets the device's period, in device frames: the callback it asks for
@@ -491,35 +569,37 @@ impl Renderer {
 
     /// Fills `out`, interleaved with [`Renderer::channels`] channels.
     pub fn render(&mut self, out: &mut [f32]) {
-        self.render_inner(out, None);
+        self.render_inner(out, None, None);
     }
 
     /// [`Renderer::render`] for a callback whose first frame is output at
     /// `output_time_ns` host nanoseconds, so a fade-out's end can be
     /// published (S185, the Mac).
     pub fn render_timed(&mut self, out: &mut [f32], output_time_ns: u64) {
-        self.render_inner(out, Some(output_time_ns));
+        self.render_inner(out, Some(output_time_ns), None);
     }
 
     /// [`Renderer::render`] for a callback that reads at `now_ns` on the
-    /// host's monotonic clock, the one the capture stamps its blocks with
-    /// (S207). Not used yet.
-    pub fn render_at(&mut self, out: &mut [f32], _now_ns: u64) {
-        self.render_inner(out, None);
+    /// monotonic clock the capture stamps its blocks with
+    /// ([`crate::clock`]), so a converting renderer follows the capture's
+    /// clock (S207).
+    pub fn render_at(&mut self, out: &mut [f32], now_ns: u64) {
+        self.render_inner(out, None, Some(now_ns));
     }
 
-    /// Capture frames the converter was sped up by (S207), in all. Not used
-    /// yet.
-    pub fn sped_frames(&self) -> u64 {
-        0
+    /// [`Renderer::render_timed`] and [`Renderer::render_at`] at once: the
+    /// callback's first frame is output at `output_time_ns` host
+    /// nanoseconds, and it reads at `now_ns` on the stamps' clock.
+    pub fn render_timed_at(&mut self, out: &mut [f32], output_time_ns: u64, now_ns: u64) {
+        self.render_inner(out, Some(output_time_ns), Some(now_ns));
     }
 
-    fn render_inner(&mut self, out: &mut [f32], time: Option<u64>) {
+    fn render_inner(&mut self, out: &mut [f32], time: Option<u64>, now: Option<u64>) {
         let channels = self.channels;
         let frames = out.len() / channels;
         self.update_lead(frames);
         self.take_requests();
-        self.keep_reader_off_w(frames);
+        self.keep_reader_off_w(frames, now);
         let ramp = self.stage.begin(self.gain.get(), frames);
         let read_capacity = self.stereo.len() / 2;
         let mut done = 0;
@@ -585,13 +665,22 @@ impl Renderer {
             .set_lead_frames(i64::try_from(lead).unwrap_or(i64::MAX));
     }
 
-    /// Slows the converter over a callback of `frames` device frames when
-    /// the reader would go on from where it is but holds fewer frames than
-    /// the callback needs, by that shortage, if it is at most
-    /// 1 / [`SLOW_DOWN_SHARE`] of the need (S206): a device clock that runs
-    /// fast never runs the reader dry. Called after the control's requests
-    /// are taken, so the first read's hold is known.
-    fn keep_reader_off_w(&mut self, frames: usize) {
+    /// Trims the converter over a callback of `frames` device frames that
+    /// reads at `now` on the stamps' clock, when the reader would go on
+    /// from where it is (S206, S207):
+    ///
+    /// - When it holds fewer frames than the callback needs, it is slowed
+    ///   by that shortage, if that is at most 1 / [`SLOW_DOWN_SHARE`] of
+    ///   the need (S206): a device clock that runs fast never runs the
+    ///   reader dry. The output keeps playing that much later, so the
+    ///   fill the renderer keeps moves along.
+    /// - Otherwise, with a usable stamp, the running average of the fill
+    ///   is compared with the reference, and the converter slowed or sped
+    ///   up by what it strays beyond the dead zone (S207).
+    ///
+    /// Called after the control's requests are taken, so the first read's
+    /// hold is known.
+    fn keep_reader_off_w(&mut self, frames: usize, now: Option<u64>) {
         if self.resampler.is_passthrough() || self.resampler.is_trimming() || frames < 2 {
             return;
         }
@@ -599,19 +688,121 @@ impl Renderer {
             .resampler
             .input_frames_for(frames.min(RENDER_CHUNK))
             .min(self.stereo.len() / 2);
-        let Some(held) = self.reader.readable_frames(first, !self.fade.is_closed()) else {
+        let Some(next) = self.reader.next_read(first, !self.fade.is_closed()) else {
+            self.tracking = RESTART;
             return;
         };
         let need = self.resampler.input_frames_for(frames);
-        let short = need.saturating_sub(usize::try_from(held).unwrap_or(0));
-        if short == 0 || short > need / SLOW_DOWN_SHARE {
+        let trim = now.map_or(0, |now| self.follow(now, frames, need, &next));
+        let short = need.saturating_sub(usize::try_from(next.readable).unwrap_or(0));
+        if short > 0 && short <= need / SLOW_DOWN_SHARE {
+            // S206's slow-down wins over a trim the other way; a larger
+            // slow-down of the trim's own covers the shortage too.
+            let own = usize::try_from(trim).unwrap_or(0);
+            let slowed = short.max(own);
+            if self.resampler.slow_down(slowed, frames - 1) {
+                self.count_trim(slowed as f64, (slowed - own) as f64);
+                self.shared
+                    .slowed_frames
+                    .fetch_add(slowed as u64, Ordering::Relaxed);
+            }
             return;
         }
-        if self.resampler.slow_down(short, frames - 1) {
+        let by = trim.unsigned_abs() as usize;
+        if trim > 0 && self.resampler.slow_down(by, frames - 1) {
+            self.count_trim(by as f64, 0.0);
             self.shared
                 .slowed_frames
-                .fetch_add(short as u64, Ordering::Relaxed);
+                .fetch_add(by as u64, Ordering::Relaxed);
+        } else if trim < 0 && self.resampler.speed_up(by, frames - 1) {
+            self.count_trim(-(by as f64), 0.0);
+            self.shared
+                .sped_frames
+                .fetch_add(by as u64, Ordering::Relaxed);
         }
+    }
+
+    /// Follows the capture's clock at the start of a callback of `frames`
+    /// device frames that reads at `now`, needs `need` capture frames and
+    /// goes on as `next` says (S207). Returns the trim it asks for, in
+    /// capture frames: positive to slow the converter, negative to speed it
+    /// up, 0 for none. Restarts the tracking when the output is out of the
+    /// trim's reach or the newest stamp is stale; a callback without a
+    /// usable stamp changes nothing.
+    fn follow(&mut self, now: u64, frames: usize, need: usize, next: &NextRead) -> i64 {
+        let ring = self.reader.ring();
+        let Some(stamp) = ring.stamp() else {
+            return 0;
+        };
+        let rate = u64::from(self.capture_rate.max(1));
+        let blocks_ns = STALE_STAMP_BLOCKS
+            .saturating_mul(ring.block_frames() as u64)
+            .saturating_mul(1_000_000_000)
+            / rate;
+        let stale_ns = (STALE_STAMP_MS * 1_000_000).max(blocks_ns);
+        let reach = self.reader.lead_frames().saturating_add(next.tolerance);
+        if now.saturating_sub(stamp.time_ns) > stale_ns || next.delay > reach {
+            self.tracking = RESTART;
+            return 0;
+        }
+        // Ŵ - P: the W of the stamp, plus the capture frames of the time
+        // since it, less P.
+        let since_ns = i128::from(now) - i128::from(stamp.time_ns);
+        let since = since_ns as f64 * rate as f64 / 1e9;
+        let fill = (stamp.written as i64 - next.position) as f64 + since;
+        match self.tracking {
+            Tracking::Measuring {
+                sum,
+                count,
+                frames: span,
+            } => {
+                let (sum, count, span) = (sum + fill, count + 1, span + frames as u64);
+                self.tracking = if span as f64 >= self.track_frames {
+                    let reference = sum / f64::from(count);
+                    Tracking::Following {
+                        reference,
+                        average: reference,
+                    }
+                } else {
+                    Tracking::Measuring {
+                        sum,
+                        count,
+                        frames: span,
+                    }
+                };
+                0
+            }
+            Tracking::Following { reference, average } => {
+                let alpha = 1.0 - (-(frames as f64) / self.track_frames).exp();
+                let average = average + alpha * (fill - average);
+                self.tracking = Tracking::Following { reference, average };
+                let off = average - reference;
+                if off.abs() <= TRIM_DEAD_ZONE_FRAMES {
+                    return 0;
+                }
+                let most = (need / TRIM_SHARE).max(1) as f64;
+                let by = (off.abs() - TRIM_DEAD_ZONE_FRAMES).ceil().min(most) as i64;
+                if off < 0.0 { by } else { -by }
+            }
+        }
+    }
+
+    /// Counts a trim of `by` capture frames (positive slowed, negative sped
+    /// up) in the tracking (S207): the fill moves by as much, and so does
+    /// the running average; `kept`, the part of a slow-down S206 made for a
+    /// shortage, moves the reference too, so the output keeps that slack.
+    fn count_trim(&mut self, by: f64, kept: f64) {
+        self.tracking = match self.tracking {
+            Tracking::Measuring { sum, count, frames } => Tracking::Measuring {
+                sum: sum + by * f64::from(count),
+                count,
+                frames,
+            },
+            Tracking::Following { reference, average } => Tracking::Following {
+                reference: reference + kept,
+                average: average + by,
+            },
+        };
     }
 
     /// Takes the control's requests at the start of a callback (S190).
@@ -653,6 +844,11 @@ impl Renderer {
             // The first read after a held correction's fade-out, which made
             // it if it was still due.
             self.correction_due = false;
+        }
+        if report.correction != Correction::None || report.starved > 0 || report.rejected {
+            // Anchored, corrected, dry or rejected: the fill the renderer
+            // kept is gone, and a new reference is measured (S207).
+            self.tracking = RESTART;
         }
         if self.awaiting_resync
             && matches!(report.correction, Correction::Resync | Correction::Prime)
