@@ -628,6 +628,18 @@ fn rtsp_parser_caps_heads_and_bodies() {
     many.extend_from_slice(b"\r\n");
     let (messages, error) = read_all(&[&many]);
     assert_eq!((messages.len(), error), (1, None));
+    // The same head with a body that trickles in, then another answer: read
+    // the same as all at once.
+    many.truncate(many.len() - 2);
+    many.extend(b"Content-Length: 262144\r\n\r\n");
+    many.extend(std::iter::repeat_n(0x5A, 262_144));
+    many.extend_from_slice(RTSP_CORPUS[1]);
+    let whole = read_all(&[&many]);
+    assert_eq!((whole.0.len(), whole.1), (2, None));
+    let (head, body) = many.split_at(many.len() - 262_144 - RTSP_CORPUS[1].len());
+    let mut chunks = vec![head];
+    chunks.extend(body.chunks(97));
+    assert_eq!(read_all(&chunks), whole);
     let mut stray = b"\r\n".repeat(50_000);
     stray.extend_from_slice(RTSP_CORPUS[0]);
     let (messages, error) = read_all(&random_chunks(&mut Rng::new(7), &stray));
