@@ -158,34 +158,80 @@ const MAIN_NOTICE_LIMIT: usize = 4;
 /// The flyout lists only the newest notice and a button for the rest.
 const FLYOUT_NOTICE_LIMIT: usize = 1;
 
-/// How long a notice's announcement stays in its window's live region.
-/// Cleared, the same words can be announced again for a later notice.
-const ANNOUNCEMENT_CLEARS_AFTER: Duration = Duration::from_secs(10);
+/// How long a notice's announcement stays in its window's live region at
+/// most (it goes sooner with its notice). Cleared, nothing stray is left for
+/// Narrator's scan mode, and the same words can be announced again later.
+const ANNOUNCEMENT_CLEARS_AFTER: Duration = Duration::from_secs(5);
 
 /// The most UTF-16 units a tray icon's tooltip holds (128 with the
 /// terminating null).
 const TOOLTIP_MAX_UNITS: usize = 127;
 
+/// A listed notice, as the announcer compares them.
+#[derive(Debug)]
+struct Listed {
+    id: u64,
+    subject: String,
+    title: SharedString,
+}
+
+/// What the live regions should do after a refresh.
+#[derive(Debug, PartialEq)]
+enum Announcement {
+    /// Say this notice title.
+    Say(SharedString),
+    /// The notice last said is gone: empty them.
+    Clear,
+    /// Leave them as they are.
+    Keep,
+}
+
 /// Picks the notice Narrator is told about: the newest one posted since the
-/// last refresh. The notices there at launch are not news.
+/// last refresh, unless it only repeats a listed notice (same subject and
+/// title, as an AirPlay speaker's retries do). The notices there at launch
+/// are not news.
 #[derive(Debug, Default)]
 struct NoticeAnnouncer {
     /// The newest notice id seen so far; `None` until the first refresh.
-    seen: Option<i32>,
+    seen: Option<u64>,
+    /// The subject and title of each notice listed at the last refresh.
+    listed: Vec<(String, SharedString)>,
+    /// The subject of the notice last said, until it leaves the list.
+    said: Option<String>,
 }
 
 impl NoticeAnnouncer {
-    /// The notice to announce among `notices`, if one is new. Ids only
-    /// grow, so a notice with a higher id than any seen is new.
-    fn next<'a>(&mut self, notices: &'a [NoticeItem]) -> Option<&'a NoticeItem> {
-        let newest = notices.iter().max_by_key(|n| n.id);
-        let fresh = match (self.seen, newest) {
-            (Some(seen), Some(notice)) if notice.id > seen => Some(notice),
-            _ => None,
+    /// What to announce for `notices`. Ids only grow, so a notice with a
+    /// higher id than any seen was posted since the last refresh.
+    fn next(&mut self, notices: &[Listed]) -> Announcement {
+        let repeats = |n: &Listed| {
+            self.listed
+                .iter()
+                .any(|(subject, title)| *subject == n.subject && *title == n.title)
         };
-        let top = newest.map_or(0, |n| n.id);
+        let fresh = self.seen.and_then(|seen| {
+            notices
+                .iter()
+                .filter(|n| n.id > seen && !repeats(n))
+                .max_by_key(|n| n.id)
+        });
+        let top = notices.iter().map(|n| n.id).max().unwrap_or(0);
         self.seen = Some(self.seen.map_or(top, |seen| seen.max(top)));
-        fresh
+        self.listed = notices
+            .iter()
+            .map(|n| (n.subject.clone(), n.title.clone()))
+            .collect();
+        if let Some(notice) = fresh {
+            self.said = Some(notice.subject.clone());
+            return Announcement::Say(notice.title.clone());
+        }
+        match &self.said {
+            Some(said) if !notices.iter().any(|n| n.subject == *said) => {
+                self.said = None;
+                Announcement::Clear
+            }
+            _ => Announcement::Keep,
+        }
     }
 }
 
@@ -768,8 +814,21 @@ impl App {
             .iter()
             .map(|n| notice_item(&strings, n))
             .collect();
-        if let Some(notice) = self.notice_announcer.borrow_mut().next(&notices) {
-            self.announce(strings.invoke_notice_announcement(notice.message.clone()));
+        let listed: Vec<Listed> = state
+            .notices
+            .iter()
+            .zip(&notices)
+            .map(|(notice, item)| Listed {
+                id: notice.id,
+                subject: notice.subject.clone(),
+                title: item.title.clone(),
+            })
+            .collect();
+        let announcement = self.notice_announcer.borrow_mut().next(&listed);
+        match announcement {
+            Announcement::Say(title) => self.announce(strings.invoke_notice_announcement(title)),
+            Announcement::Clear => self.clear_announcement(),
+            Announcement::Keep => {}
         }
         let sources: Vec<SharedString> = state
             .sources
@@ -854,7 +913,7 @@ impl App {
     /// Has Narrator say `text` without moving the focus, through the live
     /// region of the window it can hear: the flyout while it is open (it
     /// has the focus then), else the main window. Never both, so it is said
-    /// once. The live region empties again after a while.
+    /// once. The live region empties again after a few seconds.
     fn announce(&self, text: SharedString) {
         if self.flyout.window().is_visible() {
             self.main.set_notice_announcement(SharedString::new());
@@ -872,7 +931,6 @@ impl App {
     }
 
     /// Empties both live regions now.
-    #[cfg(test)]
     fn clear_announcement(&self) {
         self.announcement_timer.stop();
         clear_announcement(&self.main.as_weak(), &self.flyout.as_weak());
@@ -3342,11 +3400,20 @@ mod tests {
         );
     }
 
-    fn notice_with_id(id: i32) -> NoticeItem {
-        NoticeItem {
-            id,
-            message: format!("notice {id}").into(),
-            ..NoticeItem::default()
+    /// What the announcer makes of `notices`, given as (id, subject, title).
+    fn announce_for(announcer: &mut NoticeAnnouncer, notices: &[(u64, &str, &str)]) -> String {
+        let listed: Vec<Listed> = notices
+            .iter()
+            .map(|&(id, subject, title)| Listed {
+                id,
+                subject: subject.into(),
+                title: title.into(),
+            })
+            .collect();
+        match announcer.next(&listed) {
+            Announcement::Say(title) => format!("say {title}"),
+            Announcement::Clear => "clear".into(),
+            Announcement::Keep => "keep".into(),
         }
     }
 
@@ -3354,27 +3421,56 @@ mod tests {
     /// several arrive together, and again after the list was emptied.
     #[test]
     fn the_announcer_picks_each_new_notice_once() {
-        let mut announcer = NoticeAnnouncer::default();
-        let ids = |announcer: &mut NoticeAnnouncer, ids: &[i32]| {
-            let notices: Vec<NoticeItem> = ids.iter().map(|&id| notice_with_id(id)).collect();
-            announcer.next(&notices).map(|n| n.id)
-        };
-        assert_eq!(ids(&mut announcer, &[2, 1]), None, "there at launch");
-        assert_eq!(ids(&mut announcer, &[2, 1]), None);
-        assert_eq!(ids(&mut announcer, &[3, 2, 1]), Some(3), "a new one");
-        assert_eq!(ids(&mut announcer, &[3, 2, 1]), None, "said once");
-        assert_eq!(ids(&mut announcer, &[3]), None, "one dismissed");
-        assert_eq!(
-            ids(&mut announcer, &[5, 4, 3]),
-            Some(5),
-            "the newest of two"
-        );
-        assert_eq!(ids(&mut announcer, &[]), None, "all dismissed");
-        assert_eq!(ids(&mut announcer, &[6]), Some(6), "a new one after that");
+        let mut a = NoticeAnnouncer::default();
+        let launch = [(2, "b", "B"), (1, "a", "A")];
+        assert_eq!(announce_for(&mut a, &launch), "keep", "there at launch");
+        assert_eq!(announce_for(&mut a, &launch), "keep");
+        let three = [(3, "c", "C"), (2, "b", "B"), (1, "a", "A")];
+        assert_eq!(announce_for(&mut a, &three), "say C", "a new one");
+        assert_eq!(announce_for(&mut a, &three), "keep", "said once");
+        let two = [(5, "e", "E"), (4, "d", "D"), (3, "c", "C")];
+        assert_eq!(announce_for(&mut a, &two), "say E", "the newest of two");
+        assert_eq!(announce_for(&mut a, &[]), "clear", "all dismissed");
+        assert_eq!(announce_for(&mut a, &[(6, "f", "F")]), "say F");
     }
 
-    /// A new notice is announced in the window Narrator can hear: the open
-    /// flyout, else the main window; never in both.
+    /// A notice posted again for the same subject with the same title (an
+    /// AirPlay speaker that keeps retrying) is not news; a new title for
+    /// that subject is, and so is the same notice after it was dismissed.
+    #[test]
+    fn a_repost_of_the_same_notice_is_not_announced_again() {
+        let mut a = NoticeAnnouncer::default();
+        assert_eq!(announce_for(&mut a, &[]), "keep");
+        let retrying = |id| [(id, "airplay:kitchen", "Kitchen reconnecting")];
+        assert_eq!(
+            announce_for(&mut a, &retrying(1)),
+            "say Kitchen reconnecting"
+        );
+        assert_eq!(announce_for(&mut a, &retrying(2)), "keep", "a retry");
+        assert_eq!(announce_for(&mut a, &retrying(3)), "keep", "another");
+        let cant = |id| [(id, "airplay:kitchen", "Kitchen can't play")];
+        assert_eq!(announce_for(&mut a, &cant(4)), "say Kitchen can't play");
+        assert_eq!(announce_for(&mut a, &[]), "clear", "dismissed");
+        assert_eq!(announce_for(&mut a, &cant(5)), "say Kitchen can't play");
+    }
+
+    /// The live region empties as soon as the notice it names is gone, so
+    /// Narrator's scan mode finds no stray announcement; other notices
+    /// leaving keep it.
+    #[test]
+    fn the_announcement_clears_when_its_notice_leaves() {
+        let mut a = NoticeAnnouncer::default();
+        assert_eq!(announce_for(&mut a, &[(1, "a", "A")]), "keep");
+        let both = [(2, "b", "B"), (1, "a", "A")];
+        assert_eq!(announce_for(&mut a, &both), "say B");
+        assert_eq!(announce_for(&mut a, &[(2, "b", "B")]), "keep", "A left");
+        assert_eq!(announce_for(&mut a, &[]), "clear", "B left");
+        assert_eq!(announce_for(&mut a, &[]), "keep");
+    }
+
+    /// A new notice is announced by its title in the window Narrator can
+    /// hear: the open flyout, else the main window; never in both. It goes
+    /// once the notice is dismissed.
     #[test]
     fn a_new_notice_is_announced_in_the_flyout_or_the_main_window() {
         let mut backend = MockBackend::new();
@@ -3385,9 +3481,14 @@ mod tests {
         assert_eq!(app.flyout.get_notice_announcement(), "");
 
         let strings = app.strings();
-        let said = strings.invoke_notice_announcement(strings.get_notice_no_speaker());
+        let title = notice_title(&strings, &NoticeMessage::NoSpeaker);
+        let said = strings.invoke_notice_announcement(title);
         // As if only the first notice had been there at launch.
-        app.notice_announcer.borrow_mut().seen = Some(1);
+        let only_the_first = || NoticeAnnouncer {
+            seen: Some(1),
+            ..NoticeAnnouncer::default()
+        };
+        *app.notice_announcer.borrow_mut() = only_the_first();
         app.refresh();
         assert_eq!(app.main.get_notice_announcement(), said);
         assert_eq!(app.flyout.get_notice_announcement(), "");
@@ -3395,10 +3496,29 @@ mod tests {
         app.clear_announcement();
         assert_eq!(app.main.get_notice_announcement(), "");
         app.flyout.show().expect("the flyout shows headless");
-        app.notice_announcer.borrow_mut().seen = Some(1);
+        *app.notice_announcer.borrow_mut() = only_the_first();
         app.refresh();
         assert_eq!(app.flyout.get_notice_announcement(), said);
         assert_eq!(app.main.get_notice_announcement(), "", "not twice");
+
+        app.update(|backend| backend.dismiss_all_notices());
+        assert_eq!(app.flyout.get_notice_announcement(), "", "dismissed");
+    }
+
+    /// A character outside the Basic Multilingual Plane (two UTF-16 units)
+    /// across the cut is left out whole, never split.
+    #[test]
+    fn the_tooltip_cut_never_splits_a_surrogate_pair() {
+        // The emoji takes units 126 and 127 (1-based); 126 fit before "…".
+        let text = format!("{}\u{1F50A}{}", "a".repeat(125), "b".repeat(10));
+        let cut = fit_tooltip(&text);
+        assert_eq!(cut, format!("{}…", "a".repeat(125)));
+        assert_eq!(cut.encode_utf16().count(), 126);
+        // One unit earlier, it fits whole.
+        let text = format!("{}\u{1F50A}{}", "a".repeat(124), "b".repeat(10));
+        let cut = fit_tooltip(&text);
+        assert_eq!(cut, format!("{}\u{1F50A}…", "a".repeat(124)));
+        assert_eq!(cut.encode_utf16().count(), 127);
     }
 
     /// The tray icon's tooltip names the newest notice on a second line while

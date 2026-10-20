@@ -190,9 +190,9 @@ export global Strings {
     }
 
     // What Narrator says when a new notice appears, without the focus
-    // moving: the notice's text.
-    public pure function notice-announcement(message: string) -> string {
-        return @tr("Notice: {}", message);
+    // moving: the notice's title (`notice-title`).
+    public pure function notice-announcement(title: string) -> string {
+        return @tr("Notice: {}", title);
     }
 
     // The link under the newest notice in the flyout to the window that lists the others.
