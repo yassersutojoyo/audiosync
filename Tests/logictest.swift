@@ -2453,6 +2453,63 @@ do {
     for id in fields.keys { commit(id) }   // a focus loss as the app ends
     check(store == ["usb": -270, "hdmi": 40, "dock": 77],
           "delay field quit: a typed delay pending at quit is neither applied nor saved", "store: \(store)")
+
+    // How a panel's typing ends (DelayPanels): a panel applies its typing as
+    // it closes (SyncControls.onDisappear), unless Escape dropped it first.
+    var saved: [String: Double] = ["usb": -270, "dock": 10]
+    var typed = ["usb": DelayFieldDraft(), "dock": DelayFieldDraft()]
+    var panels = DelayPanels()
+    var retimes = 0
+    func commitTyped(_ id: String) {
+        if let v = typed[id]?.commit(saved: saved[id] ?? 0, sanitize: offset, format: signed) {
+            saved[id] = v
+            retimes += 1
+        }
+    }
+    func change(_ action: (inout DelayPanels) -> Void) {
+        let before = panels.open
+        action(&panels)
+        for id in before.subtracting(panels.open) { commitTyped(id) }
+    }
+    func openBoth() {
+        for id in ["usb", "dock"] where !panels.isOpen(id) {
+            change { $0.toggle(id) }
+            typed[id]?.show(saved[id] ?? 0, format: signed)
+        }
+    }
+
+    openBoth()
+    typed["usb"]?.type("400"); typed["dock"]?.type("77")
+    commitTyped("usb"); change { $0.close("usb") }   // Return
+    check(saved == ["usb": 400, "dock": 10] && retimes == 1 && panels.open == ["dock"]
+              && typed["dock"]?.isEditing == true,
+          "delay panels: Return applies its row's typing once and closes only its panel", "saved: \(saved)")
+    typed["dock"]?.type("-30")   // focus moved on to another control meanwhile
+    check(saved["dock"] == 10, "delay panels: leaving the field applies nothing")
+    change { $0.toggle("dock") }   // its delay value
+    check(saved["dock"] == -30 && retimes == 2 && panels.open.isEmpty,
+          "delay panels: a row's delay value applies its typing and closes its panel", "saved: \(saved)")
+
+    openBoth()
+    typed["usb"]?.type("380"); typed["dock"]?.type("77")
+    change { $0.toggle("usb") }
+    check(saved == ["usb": 380, "dock": -30] && panels.open == ["dock"] && typed["dock"]?.isEditing == true,
+          "delay panels: a row's delay value leaves the other panels and their typing", "saved: \(saved)")
+
+    openBoth()
+    typed["usb"]?.type("-250"); typed["dock"]?.type("abc")
+    change { $0.closeAll() }   // a click outside every control
+    check(saved == ["usb": -250, "dock": -30] && panels.open.isEmpty && typed["dock"]?.text == signed(-30),
+          "delay panels: a click outside applies each readable typing and closes every panel; unreadable text shows the saved delay",
+          "saved: \(saved), dock: \(typed["dock"]?.text ?? "")")
+
+    openBoth()
+    typed["usb"]?.type("400"); typed["dock"]?.type("77")
+    let before = retimes
+    for id in typed.keys { typed[id]?.drop() }   // Escape
+    change { $0.closeAll() }
+    check(saved == ["usb": -250, "dock": -30] && retimes == before && panels.open.isEmpty,
+          "delay panels: Escape drops every typing and closes every panel", "saved: \(saved)")
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)

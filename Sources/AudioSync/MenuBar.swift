@@ -111,7 +111,7 @@ final class AppModel: ObservableObject {
     @Published var appearance = AppAppearance.system
     /// Rows whose sync controls are expanded. Lives here rather than in view
     /// @State: the Command Line Tools toolchain ships without SwiftUI's macro plugins.
-    @Published var expandedSync: Set<String> = []
+    @Published private(set) var delayPanels = DelayPanels()
     private var drafts: [String: SyncDraft] = [:]
     func draft(for id: String) -> SyncDraft {
         if let d = drafts[id] { return d }
@@ -119,9 +119,22 @@ final class AppModel: ObservableObject {
         drafts[id] = d
         return d
     }
-    /// Quit drops every typed delay not applied with Return: it's never saved.
+    /// Quit drops every typed delay not applied yet: it's never saved.
     func dropDelayDrafts() {
         for draft in drafts.values { draft.field.drop() }
+    }
+    func toggleDelayPanel(_ id: String) { delayPanels.toggle(id) }
+    func closeDelayPanel(_ id: String) { delayPanels.close(id) }
+    /// A click in the window outside every control: each panel applies its
+    /// typing as it goes (`SyncControls`).
+    func closeDelayPanels() {
+        guard !delayPanels.open.isEmpty else { return }
+        delayPanels.closeAll()
+    }
+    /// Escape in a delay panel.
+    func dropDelayTyping() {
+        dropDelayDrafts()
+        closeDelayPanels()
     }
     /// Bumped every time the menu bar panel opens, so its rows start fresh
     /// (a row the pointer was over when the panel closed never got a hover exit).
@@ -191,6 +204,9 @@ extension SpeakerTag {
 /// half-typed number isn't overwritten on every redraw.
 final class SyncDraft: ObservableObject {
     @Published var field = DelayFieldDraft()
+    /// The field has the keyboard focus, which its row's delay value takes
+    /// back when a click outside closes the panel.
+    var fieldFocused = false
 }
 
 // MARK: - Status item and panel

@@ -56,14 +56,9 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         model.actions.refreshExternalState()
     }
 
-    /// Finish a half-typed delay: the field loses the focus and commits.
-    func finishEditing() {
-        window.makeFirstResponder(nil)
-    }
-
     func windowWillClose(_ notification: Notification) {
-        // Finish a half-typed delay before the field goes away.
-        finishEditing()
+        // As a click outside the controls: a typed delay applies.
+        model.closeDelayPanels()
         onScreen = false
         model.actions.mainWindowVisible(false)
     }
@@ -90,7 +85,7 @@ struct MainView: View {
                     Spacer(minLength: 0)
                 }
                 .frame(width: 280)
-                ScrollView {
+                GeometryReader { viewport in ScrollView {
                     let layout = model.layout
                     VStack(alignment: .leading, spacing: BrandTokens.Spacing.sectionGap) {
                         // This Mac first: few, stable rows that don't shift as
@@ -104,7 +99,11 @@ struct MainView: View {
                                        localNetworkHint: model.localNetworkHint)
                     }
                     .padding(.bottom, 4)
-                }
+                    // Blank space under a short list is outside every control too.
+                    .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .topLeading)
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.closeDelayPanels() }
+                } }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -112,6 +111,10 @@ struct MainView: View {
         .padding(.top, 4)
         .padding(.bottom, 20)
         .frame(minWidth: 720, maxWidth: .infinity, minHeight: 460, maxHeight: .infinity, alignment: .topLeading)
+        // A click no control takes closes the delay panels, applying what
+        // was typed; controls get their clicks first.
+        .contentShape(Rectangle())
+        .onTapGesture { model.closeDelayPanels() }
         .tint(accent)
     }
 
@@ -456,7 +459,7 @@ struct SpeakerRow: View {
 
     private var tag: String? { showTag ? model.text.speakerTag(speaker.tag) : nil }
 
-    private var showSync: Bool { model.expandedSync.contains(speaker.id) }
+    private var showSync: Bool { model.delayPanels.isOpen(speaker.id) }
 
     private var isAirPlay: Bool { speaker.isAirPlay }
 
@@ -466,6 +469,8 @@ struct SpeakerRow: View {
     /// fix goes away once it works, so focus moves to the slider first.
     @FocusState private var volumeFocused: Bool
     @FocusState private var deviceVolumeFixFocused: Bool
+    /// The delay value, which takes the focus back when its panel closes.
+    @FocusState private var delayFocused: Bool
 
     var body: some View {
         let t = model.text
@@ -529,12 +534,16 @@ struct SpeakerRow: View {
             }
             if showSync, let ms = speaker.offsetMs {
                 SyncControls(kind: .offset(hasReference: model.hasLocalReference), ms: ms,
-                             label: t.delay(of: speaker.name), text: t, draft: model.draft(for: speaker.id)) {
+                             label: t.delay(of: speaker.name), text: t, draft: model.draft(for: speaker.id),
+                             close: { all in closeSync(all: all) }) {
                     model.actions.setLocalOffset(speaker.id, $0)
                 }
                 .padding(.leading, 44)
                 .transition(.opacity)
             }
+        }
+        .onChange(of: showSync) { _, open in
+            if !open, model.draft(for: speaker.id).fieldFocused { delayFocused = true }
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
@@ -543,12 +552,17 @@ struct SpeakerRow: View {
         .contextMenu { autoConnectToggle(t) }
     }
 
+    /// Return (`all` false) or Escape (`all` true) in this row's panel.
+    private func closeSync(all: Bool) {
+        delayFocused = true
+        withAnimation(.easeInOut(duration: 0.15)) {
+            if all { model.dropDelayTyping() } else { model.closeDelayPanel(speaker.id) }
+        }
+    }
+
     private func delayButton(_ ms: Double, _ t: UIStrings) -> some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.15)) {
-                if showSync { model.expandedSync.remove(speaker.id) }
-                else { model.expandedSync.insert(speaker.id) }
-            }
+            withAnimation(.easeInOut(duration: 0.15)) { model.toggleDelayPanel(speaker.id) }
         } label: {
             HStack(spacing: 3) {
                 Image(systemName: "timer")
@@ -559,6 +573,7 @@ struct SpeakerRow: View {
             .foregroundStyle(showSync ? Brand.tealText : Brand.secondaryText)
         }
         .buttonStyle(.plain)
+        .focused($delayFocused)
         .help(t.syncAdjust)
         .accessibilityLabel(t.delay(of: speaker.name))
         .accessibilityValue(t.offsetValue(ms: ms))
@@ -598,10 +613,11 @@ struct SpeakerRow: View {
 /// that long for them while one is on.
 struct AirPlayDelayRow: View {
     @ObservedObject var model: AppModel
-    /// Its key in `expandedSync` and the drafts, apart from every speaker's ID.
+    /// Its key in `delayPanels` and the drafts, apart from every speaker's ID.
     static let id = "airplay-delay"
 
-    private var expanded: Bool { model.expandedSync.contains(Self.id) }
+    private var expanded: Bool { model.delayPanels.isOpen(Self.id) }
+    @FocusState private var delayFocused: Bool
 
     var body: some View {
         let t = model.text
@@ -615,9 +631,7 @@ struct AirPlayDelayRow: View {
                 Text(t.airPlayDelay)
                 Spacer()
                 Button {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        if expanded { model.expandedSync.remove(Self.id) } else { model.expandedSync.insert(Self.id) }
-                    }
+                    withAnimation(.easeInOut(duration: 0.15)) { model.toggleDelayPanel(Self.id) }
                 } label: {
                     Text(t.delayValue(ms: model.airPlayDelayMs))
                         .monospacedDigit()
@@ -626,6 +640,7 @@ struct AirPlayDelayRow: View {
                         .foregroundStyle(expanded ? Brand.tealText : Brand.secondaryText)
                 }
                 .buttonStyle(.plain)
+                .focused($delayFocused)
                 .help(t.syncAdjust)
                 .accessibilityLabel(t.airPlayDelay)
                 .accessibilityValue(t.delayValue(ms: model.airPlayDelayMs))
@@ -633,10 +648,18 @@ struct AirPlayDelayRow: View {
             }
             if expanded {
                 SyncControls(kind: .airPlay, ms: model.airPlayDelayMs, label: t.airPlayDelay, text: t,
-                             draft: model.draft(for: Self.id)) { model.actions.setAirPlayDelay($0) }
+                             draft: model.draft(for: Self.id), close: { all in
+                    delayFocused = true
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        if all { model.dropDelayTyping() } else { model.closeDelayPanel(Self.id) }
+                    }
+                }) { model.actions.setAirPlayDelay($0) }
                     .padding(.leading, 44)
                     .transition(.opacity)
             }
+        }
+        .onChange(of: expanded) { _, open in
+            if !open, model.draft(for: Self.id).fieldFocused { delayFocused = true }
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
@@ -654,8 +677,9 @@ private struct DraftUnderline: Shape {
 }
 
 /// A delay's controls: coarse/fine steppers that apply at once, plus a typed
-/// value in whole ms that applies on Return or when the field loses focus, so
-/// the outputs re-time once rather than at every keystroke. Text the field
+/// value in whole ms that applies when the panel closes (Return, its delay
+/// value, a click outside every control; `DelayPanels`), so the outputs
+/// re-time once rather than at every keystroke. Text the field
 /// can't read applies nothing and the stored value shows again (S181,
 /// `DelayFieldDraft`).
 struct SyncControls: View {
@@ -674,6 +698,9 @@ struct SyncControls: View {
     let label: String
     let text: UIStrings
     @ObservedObject var draft: SyncDraft
+    /// Return (false: this panel closes) or Escape (true: every typed delay
+    /// is dropped and every panel closes); the focus goes to the delay value.
+    let close: (_ all: Bool) -> Void
     let apply: (Double) -> Void
     @FocusState private var fieldFocused: Bool
 
@@ -706,10 +733,11 @@ struct SyncControls: View {
                 .accessibilityLabel(label)
                 .accessibilityHint(pending ? text.delayDraftHint : "")
                 .focused($fieldFocused)
-                .onSubmit(commit)
-                // Escape drops the typing, so a later focus loss applies nothing.
-                .onExitCommand { draft.field.discard(saved: ms, format: shown) }
-                .onChange(of: fieldFocused) { _, focused in if !focused { commit() } }
+                .onSubmit {
+                    commit()
+                    close(false)
+                }
+                .onChange(of: fieldFocused) { _, focused in draft.fieldFocused = focused }
                 Text(text.millisecondsUnit).font(.callout).foregroundStyle(Brand.secondaryText)
                 step(10)
                 step(100)
@@ -727,9 +755,11 @@ struct SyncControls: View {
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        // Escape on the field or a step.
+        .onExitCommand { close(true) }
         .onAppear { draft.field.show(ms, format: shown) }
         .onChange(of: ms) { _, value in draft.field.show(value, format: shown) }
-        // Collapsing the controls mid-typing still applies what was typed.
+        // A panel closing applies what was typed, unless Escape dropped it.
         .onDisappear(perform: commit)
     }
 
@@ -756,16 +786,16 @@ struct SyncControls: View {
         }
     }
 
-    /// Apply the typed value, once (Return and the focus loss after it both
-    /// get here).
+    /// Apply the typed value, once (Return and the panel closing after it
+    /// both get here).
     private func commit() {
         if let value = draft.field.commit(saved: ms, sanitize: clamped, format: shown) { apply(value) }
     }
 
     private func step(_ delta: Int) -> some View {
         Button(text.delayStep(delta)) {
-            // A step applies at once and drops any typing, so a focus loss
-            // later doesn't apply the old typed text over it.
+            // A step applies at once and drops any typing, so the panel
+            // closing later doesn't apply the old typed text over it.
             draft.field.discard(saved: ms, format: shown)
             apply(ms + Double(delta))
         }

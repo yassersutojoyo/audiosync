@@ -253,14 +253,17 @@ export component MainWindow inherits Window {
     callback sync-toggled(string);
     callback delay-stepped(string, int);
     callback delay-edited(string, string);
-    // Enter, or the speaker's delay field lost the focus: apply what was typed.
+    // Enter in the speaker's delay field: apply what was typed.
     callback delay-committed(string);
-    // Escape in the speaker's delay field: drop what was typed.
+    // Escape in the speaker's sync controls: drop every typed delay.
     callback delay-cancelled(string);
     callback airplay-delay-stepped(int);
     callback airplay-delay-edited(string);
     callback airplay-delay-committed();
     callback airplay-delay-cancelled();
+    // A click on the window outside every control: apply every typed delay
+    // and close the sync controls.
+    callback blank-clicked();
     callback auto-connect-toggled(string, bool);
     callback forget-pairing-requested(string);
     // The fix under a speaker's device-volume hint.
@@ -413,6 +416,13 @@ export component MainWindow inherits Window {
                     root.about-requested();
                 }
             }
+        }
+    }
+
+    // Under everything else, so only clicks no control takes reach it.
+    TouchArea {
+        clicked => {
+            root.blank-clicked();
         }
     }
 

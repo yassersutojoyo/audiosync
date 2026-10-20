@@ -1067,9 +1067,9 @@ impl App {
         let w = weak.clone();
         main.on_delay_edited(move |id, text| with_app(&w, |app| app.edit_delay(&id, &text)));
         let w = weak.clone();
-        main.on_delay_committed(move |id| with_app(&w, |app| app.commit_delay(&id)));
+        main.on_delay_committed(move |id| with_app(&w, |app| app.enter_delay(&id)));
         let w = weak.clone();
-        main.on_delay_cancelled(move |id| with_app(&w, |app| app.cancel_delay(&id)));
+        main.on_delay_cancelled(move |_| with_app(&w, |app| app.end_delay_typing(false)));
         let w = weak.clone();
         main.on_airplay_delay_stepped(move |delta| {
             with_app(&w, |app| app.step_airplay_delay(delta))
@@ -1079,7 +1079,9 @@ impl App {
         let w = weak.clone();
         main.on_airplay_delay_committed(move || with_app(&w, App::commit_airplay_delay));
         let w = weak.clone();
-        main.on_airplay_delay_cancelled(move || with_app(&w, App::cancel_airplay_delay));
+        main.on_airplay_delay_cancelled(move || with_app(&w, |app| app.end_delay_typing(false)));
+        let w = weak.clone();
+        main.on_blank_clicked(move || with_app(&w, |app| app.end_delay_typing(true)));
         let w = weak.clone();
         main.on_auto_connect_toggled(move |id, on| {
             with_app(&w, |app| app.update(|b| b.set_auto_connect(&id, on)))
@@ -1524,8 +1526,7 @@ impl App {
     }
 
     /// Opens or closes a speaker's sync controls. Closing applies what was
-    /// typed in its field: the delay button doesn't take the focus, so the
-    /// field goes without losing it first.
+    /// typed in its field; other rows' controls stay open with their typing.
     fn toggle_sync(&self, id: &str) {
         let closed = {
             let mut ui = self.ui.borrow_mut();
@@ -1671,7 +1672,8 @@ impl App {
     }
 
     /// Keeps what is typed in a speaker's delay field ("+150", "−250");
-    /// nothing applies until Enter or leaving the field (see [`TypedDelay`]).
+    /// nothing applies until Enter, its delay button or a click outside
+    /// every control (see [`TypedDelay`]).
     fn edit_delay(&self, id: &str, text: &str) {
         let shown = self.snapshot().speaker(id).and_then(|s| s.delay_ms);
         self.ui
@@ -1683,16 +1685,61 @@ impl App {
         self.refresh();
     }
 
-    /// Escape in a speaker's delay field: drops what was typed, so the field
-    /// shows the applied value again and leaving it applies nothing.
-    fn cancel_delay(&self, id: &str) {
-        self.ui.borrow_mut().delay_drafts.remove(id);
-        self.refresh();
+    /// Enter in a speaker's delay field: applies what was typed and closes
+    /// that speaker's sync controls; other rows' stay open with their typing.
+    fn enter_delay(&self, id: &str) {
+        self.ui.borrow_mut().sync_open.remove(id);
+        self.commit_delay(id);
+        self.focus_delay_button(id);
     }
 
-    /// Applies the typed offset on Enter or when the field loses the focus.
-    /// Unreadable text applies nothing and the field shows the applied value
-    /// again; out of range, it shows the value that was applied.
+    /// A click on the window outside every control (`apply`), or Escape in
+    /// a delay field: every typed delay applies, or none does, and every
+    /// sync control closes. Unreadable text applies nothing.
+    fn end_delay_typing(&self, apply: bool) {
+        let idle = {
+            let ui = self.ui.borrow();
+            ui.sync_open.is_empty()
+                && ui.delay_drafts.is_empty()
+                && ui.airplay_delay_draft.draft.is_none()
+        };
+        if idle {
+            return;
+        }
+        let focused = match &self.main_focus.borrow().speaker {
+            Some((id, RowPart::Sync)) => Some(id.clone()),
+            _ => None,
+        };
+        if apply {
+            let typed: Vec<String> = self.ui.borrow().delay_drafts.keys().cloned().collect();
+            for id in typed {
+                self.commit_delay(&id);
+            }
+            self.commit_airplay_delay();
+        }
+        {
+            let mut ui = self.ui.borrow_mut();
+            ui.sync_open.clear();
+            ui.delay_drafts.clear();
+            ui.airplay_delay_draft.cancel();
+        }
+        self.refresh();
+        if let Some(id) = focused {
+            self.focus_delay_button(&id);
+        }
+    }
+
+    /// The speaker's sync controls closed under the keyboard focus: its
+    /// delay button takes it, so Narrator and Tab carry on from there.
+    fn focus_delay_button(&self, id: &str) {
+        self.main.set_focus_speaker_part(RowPart::Delay);
+        self.main.set_focus_speaker_id(id.into());
+    }
+
+    /// Applies the typed offset (Enter, the delay button, a click outside
+    /// every control). Unreadable text applies nothing and the field shows
+    /// the applied value again; out of range, it shows the value that was
+    /// applied.
     fn commit_delay(&self, id: &str) {
         let shown = self.snapshot().speaker(id).and_then(|s| s.delay_ms);
         let typed = self.ui.borrow_mut().delay_drafts.remove(id);
@@ -1715,22 +1762,15 @@ impl App {
     }
 
     /// Keeps what is typed in the AirPlay delay field; nothing applies until
-    /// Enter or leaving the field (see [`TypedDelay`]).
+    /// Enter or a click outside every control (see [`TypedDelay`]).
     fn edit_airplay_delay(&self, text: &str) {
         let shown = self.snapshot().airplay_delay_ms;
         self.ui.borrow_mut().airplay_delay_draft.edit(text, shown);
         self.refresh();
     }
 
-    /// Escape in the AirPlay delay field: drops what was typed, so the field
-    /// shows the applied value again and leaving it applies nothing.
-    fn cancel_airplay_delay(&self) {
-        self.ui.borrow_mut().airplay_delay_draft.cancel();
-        self.refresh();
-    }
-
-    /// Applies the typed AirPlay delay on Enter or when the field loses the
-    /// focus. Clamped, the field shows the value that was applied.
+    /// Applies the typed AirPlay delay (Enter, a click outside every
+    /// control). Clamped, the field shows the value that was applied.
     fn commit_airplay_delay(&self) {
         let shown = self.snapshot().airplay_delay_ms;
         let typed = self.ui.borrow_mut().airplay_delay_draft.commit(shown);
@@ -1829,6 +1869,8 @@ impl App {
     /// Closing the main window keeps AudioSync running in the tray, like the
     /// Mac app in the menu bar. Without a tray icon, it quits.
     fn close_main(&self) {
+        // As a click outside the controls: what was typed applies.
+        self.end_delay_typing(true);
         self.remember_view();
         let _ = self.main.hide();
         if !self.tray_available.get() {
@@ -2241,7 +2283,7 @@ mod tests {
     use crate::ui_model::MockBackend;
 
     use slint::platform::software_renderer::{MinimalSoftwareWindow, Rgb565Pixel};
-    use slint::platform::{Key, WindowEvent};
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
 
     /// A platform without native windows, so a test can build the whole App
     /// and drive it through the windows' callbacks or keys.
@@ -2284,6 +2326,16 @@ mod tests {
         let text: SharedString = key.into();
         window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
         window.dispatch_event(WindowEvent::KeyReleased { text });
+        draw_frames();
+    }
+
+    /// Clicks `window` at `x`, `y` (logical pixels), then draws a frame.
+    fn click(window: &slint::Window, x: f32, y: f32) {
+        let position = slint::LogicalPosition::new(x, y);
+        let button = PointerEventButton::Left;
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        window.dispatch_event(WindowEvent::PointerPressed { position, button });
+        window.dispatch_event(WindowEvent::PointerReleased { position, button });
         draw_frames();
     }
 
@@ -2454,7 +2506,7 @@ mod tests {
     }
 
     #[test]
-    fn a_typed_speaker_delay_applies_only_on_enter_or_focus_loss() {
+    fn a_typed_speaker_delay_applies_only_on_enter() {
         let app = app_over(MockBackend::new());
         let applied = || app.snapshot().speaker("local:desk").unwrap().delay_ms;
         assert_eq!(applied(), Some(120.0), "the example desk has a delay");
@@ -2471,7 +2523,7 @@ mod tests {
         assert_eq!(applied(), Some(220.0), "Enter applies what was typed");
         assert_eq!(desk_delay_text(&app), "+220");
 
-        // Escape drops the typing; the focus loss after it applies nothing.
+        // Escape drops the typing; an Enter after it applies nothing.
         app.main
             .invoke_delay_edited("local:desk".into(), "5".into());
         app.main.invoke_delay_cancelled("local:desk".into());
@@ -2481,11 +2533,7 @@ mod tests {
             "Escape shows the saved value"
         );
         app.main.invoke_delay_committed("local:desk".into());
-        assert_eq!(
-            applied(),
-            Some(220.0),
-            "leaving after Escape applies nothing"
-        );
+        assert_eq!(applied(), Some(220.0), "Enter after Escape applies nothing");
 
         // Unreadable text reverts to the saved value.
         app.main
@@ -2504,23 +2552,202 @@ mod tests {
         assert_eq!(applied(), Some(230.0), "the dropped text stays dropped");
     }
 
-    #[test]
-    fn closing_the_sync_controls_applies_the_typed_delay() {
-        let app = app_over(MockBackend::new());
-        let applied = || app.snapshot().speaker("local:desk").unwrap().delay_ms;
-        app.main.invoke_sync_toggled("local:desk".into());
-        assert!(app.ui.borrow().sync_open.contains("local:desk"));
-        app.main
-            .invoke_delay_edited("local:desk".into(), "220".into());
-        assert_eq!(applied(), Some(120.0), "typing applies nothing");
+    /// A speaker's applied delay.
+    fn delay_of(app: &App, id: &str) -> Option<f64> {
+        app.snapshot().speaker(id).unwrap().delay_ms
+    }
 
-        // The delay button doesn't take the focus, so the field goes
-        // without losing it first: closing applies what was typed.
+    /// The speaker's row.
+    fn row_of(app: &App, id: &str) -> SpeakerItem {
+        app.models
+            .this_pc
+            .iter()
+            .chain(app.models.connected.iter())
+            .find(|s| s.id == id)
+            .expect("the speaker has a row")
+    }
+
+    /// Opens the desk's and the headset's sync controls, types 400 into the
+    /// desk's field and `headset` into the headset's.
+    fn type_into_two_rows(app: &App, headset: &str) {
+        for id in ["local:desk", "local:bt"] {
+            app.main.invoke_sync_toggled(id.into());
+        }
+        app.main
+            .invoke_delay_edited("local:desk".into(), "400".into());
+        app.main
+            .invoke_delay_edited("local:bt".into(), headset.into());
+        assert_eq!(
+            delay_of(app, "local:desk"),
+            Some(120.0),
+            "typing applies nothing"
+        );
+    }
+
+    #[test]
+    fn the_delay_button_applies_its_rows_typed_delay_and_closes_only_its_controls() {
+        let app = app_over(MockBackend::new());
+        type_into_two_rows(&app, "-200");
+
         app.main.invoke_sync_toggled("local:desk".into());
+        assert_eq!(
+            delay_of(&app, "local:desk"),
+            Some(400.0),
+            "closing applied it"
+        );
+        assert_eq!(desk_delay_text(&app), "+400");
+        let ui = app.ui.borrow();
+        assert!(!ui.sync_open.contains("local:desk"));
+        assert!(ui.sync_open.contains("local:bt"), "the headset's stay open");
+        assert!(ui.delay_drafts.contains_key("local:bt"), "with its draft");
+        drop(ui);
+        assert_eq!(delay_of(&app, "local:bt"), Some(-250.0));
+    }
+
+    #[test]
+    fn enter_applies_its_rows_typed_delay_and_closes_only_its_controls() {
+        let app = app_over(MockBackend::new());
+        type_into_two_rows(&app, "-200");
+        app.main.invoke_delay_committed("local:desk".into());
+        assert_eq!(
+            delay_of(&app, "local:desk"),
+            Some(400.0),
+            "Enter applied it"
+        );
+        let ui = app.ui.borrow();
+        assert!(!ui.sync_open.contains("local:desk"), "its controls closed");
+        assert!(ui.sync_open.contains("local:bt"), "the headset's stay open");
+        assert!(ui.delay_drafts.contains_key("local:bt"), "with its draft");
+        drop(ui);
+        assert_eq!(delay_of(&app, "local:bt"), Some(-250.0));
+    }
+
+    #[test]
+    fn a_click_on_a_control_does_only_what_the_control_does() {
+        let app = app_over(MockBackend::new());
+        draw_frames();
+        type_into_two_rows(&app, "-200");
+        let running = app.snapshot().running;
+        // The streaming switch, at the right end of the header.
+        click(app.main.window(), 920.0, 78.0);
+        assert_ne!(
+            app.snapshot().running,
+            running,
+            "the switch toggled streaming"
+        );
+        assert_eq!(
+            delay_of(&app, "local:desk"),
+            Some(120.0),
+            "and applied no typed delay"
+        );
+        let ui = app.ui.borrow();
+        assert_eq!(ui.sync_open.len(), 2, "the sync controls stay open");
+        assert_eq!(ui.delay_drafts.len(), 2, "with their typing");
+    }
+
+    #[test]
+    fn a_click_outside_every_control_applies_each_typed_delay_and_closes_every_sync_control() {
+        // Between the wordmark and the streaming switch, then under the
+        // left column's cards, in its scroll view.
+        for (x, y) in [(500.0, 60.0), (100.0, 700.0)] {
+            let app = app_over(MockBackend::new());
+            draw_frames();
+            type_into_two_rows(&app, "abc");
+            app.main.invoke_airplay_delay_edited("2100".into());
+            click(app.main.window(), x, y);
+            assert_eq!(delay_of(&app, "local:desk"), Some(400.0), "at {x}, {y}");
+            assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0));
+            assert_eq!(
+                delay_of(&app, "local:bt"),
+                Some(-250.0),
+                "unreadable text applies nothing"
+            );
+            assert!(
+                !row_of(&app, "local:bt").delay_pending,
+                "and shows the delay in use"
+            );
+            let ui = app.ui.borrow();
+            assert!(ui.sync_open.is_empty(), "every sync control closed");
+            assert!(ui.delay_drafts.is_empty() && ui.airplay_delay_draft.draft.is_none());
+        }
+    }
+
+    #[test]
+    fn escape_drops_every_typed_delay_and_closes_every_sync_control() {
+        let app = app_over(MockBackend::new());
+        type_into_two_rows(&app, "-200");
+        app.main.invoke_airplay_delay_edited("2100".into());
+        app.main.invoke_delay_cancelled("local:bt".into());
+        assert_eq!(delay_of(&app, "local:desk"), Some(120.0));
+        assert_eq!(delay_of(&app, "local:bt"), Some(-250.0));
+        assert_eq!(app.snapshot().airplay_delay_ms, Some(1750.0));
+        assert_eq!(
+            desk_delay_text(&app),
+            "+120",
+            "the field shows the delay in use"
+        );
+        let ui = app.ui.borrow();
+        assert!(ui.sync_open.is_empty(), "every sync control closed");
+        assert!(ui.delay_drafts.is_empty() && ui.airplay_delay_draft.draft.is_none());
+    }
+
+    #[test]
+    fn leaving_the_delay_field_applies_nothing_and_enter_and_escape_hand_the_focus_back() {
+        let app = app_over(MockBackend::new());
+        let window = app.main.window();
+        app.main.show().unwrap();
+        let focus_desk_field = || {
+            app.main.invoke_sync_toggled("local:desk".into());
+            draw_frames();
+            app.main.set_focus_speaker_part(RowPart::Sync);
+            app.main.set_focus_speaker_id("local:desk".into());
+            draw_frames();
+        };
+        let focus = || app.main_focus.borrow().speaker.clone();
+        focus_desk_field();
+        assert_eq!(
+            focus(),
+            Some(("local:desk".into(), RowPart::Sync)),
+            "the field has it"
+        );
+
+        press(window, "4");
+        press(window, "0");
+        tab(window, 1);
+        assert_eq!(
+            delay_of(&app, "local:desk"),
+            Some(120.0),
+            "leaving the field applies nothing"
+        );
+        assert!(desk_row(&app).delay_pending, "the draft stays marked");
+
+        press(window, Key::Escape);
+        assert_eq!(
+            delay_of(&app, "local:desk"),
+            Some(120.0),
+            "Escape applied nothing"
+        );
         assert!(!app.ui.borrow().sync_open.contains("local:desk"));
-        assert_eq!(applied(), Some(220.0), "closing applied the typed delay");
-        assert_eq!(desk_delay_text(&app), "+220");
-        assert!(app.ui.borrow().delay_drafts.is_empty(), "no draft is left");
+        assert_eq!(
+            focus(),
+            Some(("local:desk".into(), RowPart::Delay)),
+            "its delay button has it"
+        );
+
+        focus_desk_field();
+        press(window, "9");
+        press(window, Key::Return);
+        assert_eq!(
+            delay_of(&app, "local:desk"),
+            Some(1209.0),
+            "Enter applied it"
+        );
+        assert!(!app.ui.borrow().sync_open.contains("local:desk"));
+        assert_eq!(
+            focus(),
+            Some(("local:desk".into(), RowPart::Delay)),
+            "its delay button has it"
+        );
     }
 
     #[test]
@@ -3258,14 +3485,15 @@ mod tests {
         press(window, Key::Return);
         assert!(!enabled(&app, "local:desk"), "Enter left the speaker off");
         assert_eq!(applied(), Some(50.0), "Enter applied the typed delay");
-
-        // Escape in the field drops the typing; Enter then applies nothing.
-        press(window, "9");
-        assert!(draft().is_some_and(|text| text.contains('9')));
-        press(window, Key::Escape);
-        assert_eq!(draft(), None, "Escape dropped the typed text");
-        press(window, Key::Return);
-        assert_eq!(applied(), Some(50.0), "Enter after Escape applied nothing");
+        assert!(
+            !app.ui.borrow().sync_open.contains("local:desk"),
+            "and closed the controls"
+        );
+        assert_eq!(
+            app.main_focus.borrow().speaker,
+            Some(("local:desk".into(), RowPart::Delay)),
+            "the desk's delay button has the focus"
+        );
     }
 
     #[test]
