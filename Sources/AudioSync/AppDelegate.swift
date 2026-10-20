@@ -150,6 +150,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var codePromptBusy = false
     /// The open PIN or password prompt's window, while it runs (`closeCodePrompt`).
     var codePromptWindow: NSWindow?
+    /// A taken-back prompt that waits to close under another modal window.
+    var promptWithdrawal = PromptWithdrawal()
     var sentTrackInfo: SentTrackInfo?
 
     // MARK: - Local speakers (`+Outputs`)
