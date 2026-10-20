@@ -7,12 +7,13 @@
 //! nothing but zeros and its stream latency has passed since. Only then does
 //! the thread stop the stream and mark the output faded, so the end of the
 //! fade is never cut; it stops anyway after [`STOP_FADE_CAP`] of audio, or
-//! at once when the output is dropped (S186).
+//! at once when the output is dropped (S186). The drop waits for the thread
+//! as a [`Worker`] does: stopping the stream can hang while Windows audio
+//! doesn't answer.
 
 use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::JoinHandle;
 
 use audiosync_core::reader::Reader;
 use audiosync_core::render::{RendererControl, STOP_FADE_CAP};
@@ -28,8 +29,8 @@ use windows::Win32::System::Threading::{WaitForMultipleObjects, WaitForSingleObj
 use windows::core::HSTRING;
 
 use super::com::{
-    Apartment, ComMemory, Event, ProAudioTask, Ready, device_error, float_format, read_mix_format,
-    spawn_ready,
+    Apartment, ComMemory, Event, ProAudioTask, Ready, Worker, device_error, float_format,
+    read_mix_format, spawn_worker,
 };
 use super::devices::enumerator;
 use crate::audio::backend::BackendError;
@@ -62,7 +63,7 @@ pub struct EndpointRenderer {
     abort: Arc<AtomicBool>,
     ended: Arc<AtomicBool>,
     control: RendererControl,
-    thread: Option<JoinHandle<()>>,
+    thread: Worker,
     /// How the render thread set up its stream.
     setup: StreamSetup,
 }
@@ -78,11 +79,7 @@ impl RendererHandle for EndpointRenderer {
     }
 
     fn is_faded(&self) -> bool {
-        self.control.is_faded()
-            || self
-                .thread
-                .as_ref()
-                .is_none_or(|thread| thread.is_finished())
+        self.control.is_faded() || self.thread.is_finished()
     }
 
     fn setup(&self) -> Option<StreamSetup> {
@@ -92,11 +89,10 @@ impl RendererHandle for EndpointRenderer {
 
 impl Drop for EndpointRenderer {
     fn drop(&mut self) {
+        // The thread stops its stream at once and ends.
         self.abort.store(true, Ordering::Release);
         self.stop.set();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        self.thread.finish();
     }
 }
 
@@ -118,7 +114,7 @@ pub(super) fn start(
         let abort = Arc::clone(&abort);
         let ended = Arc::clone(&ended);
         let control = control.clone();
-        spawn_ready("audiosync-output", move |ready| {
+        spawn_worker("audiosync-output", move |ready| {
             let signals = Signals {
                 stop: &stop,
                 abort: &abort,
@@ -132,7 +128,7 @@ pub(super) fn start(
         abort,
         ended,
         control,
-        thread: Some(thread),
+        thread,
         setup,
     })
 }
@@ -402,14 +398,19 @@ mod tests {
     use audiosync_core::ring::Ring;
     use windows::Win32::System::Threading::INFINITE;
 
+    use super::super::com::{StuckThreads, spawn_worker_within};
     use super::*;
     use crate::audio::SESSION_RATE;
 
     /// How long the fake Windows audio hangs before it answers again.
     const HANG: Duration = Duration::from_secs(3);
 
+    /// How long a test waits for an answer.
+    const TIMEOUT: Duration = Duration::from_millis(200);
+
     #[test]
     fn a_render_thread_that_hangs_stopping_its_stream_doesnt_hold_quitting() {
+        static STUCK: StuckThreads = StuckThreads::new();
         let ring = Ring::for_rate(SESSION_RATE).expect("a ring");
         let reader = Reader::new(ring, SESSION_RATE);
         let control = RendererControl::new(&reader);
@@ -417,26 +418,29 @@ mod tests {
         let abort = Arc::new(AtomicBool::new(false));
         let (answer, hung) = mpsc::channel::<()>();
         let (stopped, done) = mpsc::channel();
-        let thread = {
+        let (thread, ()) = {
             let stop = Arc::clone(&stop);
             let abort = Arc::clone(&abort);
-            thread::spawn(move || {
+            spawn_worker_within("audiosync-test", TIMEOUT, &STUCK, move |ready| {
                 // The thread owns the reader, as the real one does.
                 let _reader = reader;
-                // SAFETY: waits on an event that outlives this thread's use
-                // of it.
-                unsafe { WaitForSingleObject(stop.raw(), INFINITE) };
-                // Stopping the stream hangs until Windows audio answers.
-                let _ = hung.recv();
-                let _ = stopped.send(abort.load(Ordering::Acquire));
+                if ready.ok(()) {
+                    // SAFETY: waits on an event that outlives this thread's
+                    // use of it.
+                    unsafe { WaitForSingleObject(stop.raw(), INFINITE) };
+                    // Stopping the stream hangs until Windows audio answers.
+                    let _ = hung.recv();
+                    let _ = stopped.send(abort.load(Ordering::Acquire));
+                }
             })
+            .expect("it starts")
         };
         let renderer = EndpointRenderer {
             stop,
             abort,
             ended: Arc::new(AtomicBool::new(false)),
             control,
-            thread: Some(thread),
+            thread,
             setup: StreamSetup {
                 format: RenderFormat {
                     rate: 48_000,
@@ -455,9 +459,11 @@ mod tests {
         drop(renderer);
         let waited = started.elapsed();
         assert!(waited < HANG / 2, "the drop waited {waited:?}");
+        assert!(STUCK.any(), "the thread counts as stuck");
         // Once Windows audio answers, the thread still stops its stream,
-        // having been told to stop at once.
+        // having been told to stop at once, and ends.
         assert_eq!(done.recv_timeout(HANG * 3), Ok(true));
+        assert!(STUCK.none_within(HANG), "the thread ends");
         answers.join().expect("the answer comes");
     }
 }

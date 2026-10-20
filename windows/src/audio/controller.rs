@@ -1065,7 +1065,9 @@ impl<D: Driver> Controller<D> {
 
     /// Drops what `entry` holds: an ended session's capture first, then the
     /// outputs (S115, S186), then the ring. The capture and each renderer
-    /// wait for their threads before the ring they use is freed (S134).
+    /// wait for their threads before the ring they use is freed (S134); a
+    /// thread let go because Windows audio doesn't answer holds its share
+    /// of the ring until it ends.
     fn retire(&mut self, entry: Retiring<D>, faded: bool, waited: Duration) {
         let Retiring {
             outputs, session, ..

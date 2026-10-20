@@ -1,9 +1,10 @@
 //! The plumbing the WASAPI driver shares: COM apartments, kernel handles and
-//! events, MMCSS registration, threads that report their start, wave formats
-//! and errors.
+//! events, MMCSS registration, threads that report their start and whose end
+//! is waited for a bounded time, wave formats and errors.
 
 use std::ffi::c_void;
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -192,19 +193,12 @@ fn lock_flag(flag: &Mutex<bool>) -> MutexGuard<'_, bool> {
 }
 
 /// Runs `body` on a new thread named `name` and waits until it reports
-/// through its [`Ready`], for [`READY_TIMEOUT`] at most; returns the thread
-/// and what it set up. A thread that couldn't start is joined, and its error
-/// returned. One that doesn't report in time is left to end by itself
-/// (`Ready::ok` tells it), and [`BackendError::NotResponding`] returned, so
-/// the caller can try again later.
-pub(super) fn spawn_ready<T: Send + 'static>(
-    name: &str,
-    body: impl FnOnce(Ready<T>) + Send + 'static,
-) -> Result<(JoinHandle<()>, T), BackendError> {
-    spawn_ready_within(name, READY_TIMEOUT, body)
-}
-
-/// [`spawn_ready`], waiting `timeout` at most.
+/// through its [`Ready`], for `timeout` at most ([`READY_TIMEOUT`] in the
+/// app); returns the thread and what it set up. A thread that couldn't start
+/// is joined, and its error returned. One that doesn't report in time is left
+/// to end by itself (`Ready::ok` tells it), and
+/// [`BackendError::NotResponding`] returned, so the caller can try again
+/// later.
 pub(super) fn spawn_ready_within<T: Send + 'static>(
     name: &str,
     timeout: Duration,
@@ -258,6 +252,204 @@ pub(super) fn spawn_ready_within<T: Send + 'static>(
                 code: E_FAIL.0,
             })
         }
+    }
+}
+
+/// How long dropping a [`Worker`] waits for its thread while another thread
+/// let go before is still in its Windows call. Windows audio isn't answering
+/// then, and the thread most likely hangs in the same service, so quitting
+/// waits one answer timeout for the first such thread and this little for
+/// each one after it. A thread whose calls answer ends within milliseconds
+/// of being told to.
+pub(super) const STUCK_GRACE: Duration = Duration::from_millis(250);
+
+/// The threads let go while still in a Windows call (see [`Worker`]),
+/// counted until they end.
+pub(super) struct StuckThreads(AtomicUsize);
+
+impl StuckThreads {
+    pub(super) const fn new() -> StuckThreads {
+        StuckThreads(AtomicUsize::new(0))
+    }
+
+    /// Whether one of them is still in its call.
+    pub(super) fn any(&self) -> bool {
+        self.0.load(Ordering::Acquire) > 0
+    }
+
+    /// Waits until none is stuck, `bound` at most; returns whether none is.
+    #[cfg(test)]
+    pub(super) fn none_within(&self, bound: Duration) -> bool {
+        let deadline = std::time::Instant::now() + bound;
+        while self.any() {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        true
+    }
+}
+
+/// The audio threads of this process that Windows audio left hanging. Every
+/// output, the capture and the endpoint watcher share it, since they all
+/// wait on the same Windows audio service.
+pub(super) static WINDOWS_AUDIO: StuckThreads = StuckThreads::new();
+
+/// A [`Worker`]'s thread runs.
+const RUNNING: u8 = 0;
+/// It ended.
+const ENDED: u8 = 1;
+/// It was let go while it ran, and is counted as stuck until it ends.
+const LET_GO: u8 = 2;
+
+/// What a [`Worker`] and its thread share.
+struct Lifetime {
+    state: AtomicU8,
+    stuck: &'static StuckThreads,
+}
+
+impl Lifetime {
+    /// Counts the thread as stuck until it ends, unless it ended already;
+    /// returns whether it was let go.
+    fn let_go(&self) -> bool {
+        // Counted before it's marked, so its end never uncounts it first.
+        self.stuck.0.fetch_add(1, Ordering::AcqRel);
+        let marked = self
+            .state
+            .compare_exchange(RUNNING, LET_GO, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+        if !marked {
+            // It ended just now.
+            self.stuck.0.fetch_sub(1, Ordering::AcqRel);
+        }
+        marked
+    }
+
+    /// The thread ends.
+    fn end(&self) {
+        if self.state.swap(ENDED, Ordering::AcqRel) == LET_GO {
+            self.stuck.0.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+/// Held by a [`Worker`]'s thread from its start, and dropped as the thread
+/// ends, a panic included: it marks the end, then closes the channel the
+/// worker waits on.
+struct Running {
+    lifetime: Arc<Lifetime>,
+    _ended: mpsc::Sender<()>,
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.lifetime.end();
+    }
+}
+
+/// A thread that ends once told to, started by [`spawn_worker`]. Its owner
+/// tells it to end, then [`finish`](Worker::finish)es it, which the drop
+/// does too if it wasn't done before.
+pub(super) struct Worker {
+    thread: Option<JoinHandle<()>>,
+    /// Disconnects as the thread ends.
+    ended: mpsc::Receiver<()>,
+    lifetime: Arc<Lifetime>,
+    /// How long `finish` waits while no other thread is stuck.
+    timeout: Duration,
+}
+
+impl Worker {
+    /// Whether the thread ended.
+    pub(super) fn is_finished(&self) -> bool {
+        self.thread.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+
+    /// Waits for the thread to end, as long as an answer at most (or
+    /// [`STUCK_GRACE`] while another thread is stuck), and joins it if it
+    /// did. A thread still in a Windows call by then (unregistering a
+    /// listener or stopping a stream while Windows audio hangs) is let go
+    /// instead, counted as stuck until it ends: it finishes by itself once
+    /// Windows audio answers, and waiting for it would hold AudioSync's
+    /// exit. Such a thread owns everything it uses (its COM apartment and
+    /// objects are its own, what it shares is behind `Arc`s), so it can
+    /// outlive this value.
+    pub(super) fn finish(&mut self) {
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        let timeout = if self.lifetime.stuck.any() {
+            self.timeout.min(STUCK_GRACE)
+        } else {
+            self.timeout
+        };
+        match self.ended.recv_timeout(timeout) {
+            // Detached: it ends by itself once its call returns.
+            Err(RecvTimeoutError::Timeout) if self.lifetime.let_go() => drop(thread),
+            // It ended, or is ending: what's left of it takes no time.
+            _ => {
+                let _ = thread.join();
+            }
+        }
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
+/// Runs `body` on a new thread as [`spawn_ready_within`] does, waiting
+/// [`READY_TIMEOUT`] at most, and returns it as a [`Worker`] counted in
+/// [`WINDOWS_AUDIO`] when let go.
+pub(super) fn spawn_worker<T: Send + 'static>(
+    name: &str,
+    body: impl FnOnce(Ready<T>) + Send + 'static,
+) -> Result<(Worker, T), BackendError> {
+    spawn_worker_within(name, READY_TIMEOUT, &WINDOWS_AUDIO, body)
+}
+
+/// [`spawn_worker`], waiting `timeout` at most for the thread's start and
+/// for its end, and counting it in `stuck` when it's let go. A thread whose
+/// start doesn't answer in time is let go the same way: it's in a Windows
+/// call that hangs.
+pub(super) fn spawn_worker_within<T: Send + 'static>(
+    name: &str,
+    timeout: Duration,
+    stuck: &'static StuckThreads,
+    body: impl FnOnce(Ready<T>) + Send + 'static,
+) -> Result<(Worker, T), BackendError> {
+    let lifetime = Arc::new(Lifetime {
+        state: AtomicU8::new(RUNNING),
+        stuck,
+    });
+    let (sender, ended) = mpsc::channel();
+    let running = Running {
+        lifetime: Arc::clone(&lifetime),
+        _ended: sender,
+    };
+    let started = spawn_ready_within(name, timeout, move |ready| {
+        // Declared first, so it's dropped last, as the thread ends.
+        let _running = running;
+        body(ready);
+    });
+    match started {
+        Ok((thread, setup)) => Ok((
+            Worker {
+                thread: Some(thread),
+                ended,
+                lifetime,
+                timeout,
+            },
+            setup,
+        )),
+        Err(BackendError::NotResponding) => {
+            let _ = lifetime.let_go();
+            Err(BackendError::NotResponding)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -414,10 +606,156 @@ pub(super) unsafe fn read_mix_format(format: *const WAVEFORMATEX) -> MixFormat {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
     use std::time::Instant;
 
     use super::*;
     use crate::audio::capture::CAPTURE_ATTEMPTS;
+
+    /// How long a worker test waits for an answer.
+    const ANSWER: Duration = Duration::from_millis(200);
+
+    /// A wait long enough that a drop that waits it fails the test.
+    const LONG: Duration = Duration::from_secs(10);
+
+    /// A worker whose thread ends once `told` closes, raising `ended` as it
+    /// goes.
+    fn ending_worker(
+        stuck: &'static StuckThreads,
+        timeout: Duration,
+        told: mpsc::Receiver<()>,
+        ended: &Arc<AtomicBool>,
+    ) -> Worker {
+        let ended = Arc::clone(ended);
+        let (worker, ()) = spawn_worker_within("audiosync-test", timeout, stuck, move |ready| {
+            if ready.ok(()) {
+                let _ = told.recv();
+                thread::sleep(Duration::from_millis(20));
+                ended.store(true, Ordering::Release);
+            }
+        })
+        .expect("it starts");
+        worker
+    }
+
+    /// A worker whose thread hangs in a Windows call until `hung` closes,
+    /// as Windows audio answers.
+    fn hanging_worker(
+        stuck: &'static StuckThreads,
+        timeout: Duration,
+        hung: mpsc::Receiver<()>,
+    ) -> Worker {
+        let (worker, ()) = spawn_worker_within("audiosync-test", timeout, stuck, move |ready| {
+            if ready.ok(()) {
+                let _ = hung.recv();
+            }
+        })
+        .expect("it starts");
+        worker
+    }
+
+    #[test]
+    fn a_worker_whose_thread_ends_once_told_is_joined() {
+        static STUCK: StuckThreads = StuckThreads::new();
+        let (tell, told) = mpsc::channel();
+        let ended = Arc::new(AtomicBool::new(false));
+        let worker = ending_worker(&STUCK, LONG, told, &ended);
+        assert!(!worker.is_finished());
+        drop(tell);
+        let started = Instant::now();
+        drop(worker);
+        assert!(ended.load(Ordering::Acquire), "the thread was joined");
+        assert!(started.elapsed() < LONG / 2);
+        assert!(!STUCK.any());
+    }
+
+    #[test]
+    fn a_worker_whose_thread_hangs_is_let_go_and_counts_as_stuck_until_it_ends() {
+        static STUCK: StuckThreads = StuckThreads::new();
+        let (answer, hung) = mpsc::channel();
+        let worker = hanging_worker(&STUCK, ANSWER, hung);
+        let started = Instant::now();
+        drop(worker);
+        let waited = started.elapsed();
+        assert!(
+            waited >= ANSWER / 2 && waited < LONG / 2,
+            "the drop waited {waited:?}"
+        );
+        assert!(STUCK.any(), "the thread counts as stuck");
+        // Windows audio answers: the thread ends by itself.
+        drop(answer);
+        assert!(STUCK.none_within(LONG), "the thread ends");
+    }
+
+    #[test]
+    fn while_a_thread_is_stuck_quitting_waits_only_a_grace_for_each_other_one() {
+        static STUCK: StuckThreads = StuckThreads::new();
+        // The first thread Windows audio leaves hanging is waited for as
+        // long as an answer.
+        let (first_answer, first_hung) = mpsc::channel();
+        drop(hanging_worker(&STUCK, ANSWER, first_hung));
+        assert!(STUCK.any());
+        // Another one is waited for only a grace, however long its own
+        // answer timeout.
+        let (second_answer, second_hung) = mpsc::channel();
+        let worker = hanging_worker(&STUCK, LONG, second_hung);
+        let started = Instant::now();
+        drop(worker);
+        let waited = started.elapsed();
+        assert!(
+            waited >= STUCK_GRACE / 2 && waited < LONG / 2,
+            "the drop waited {waited:?}"
+        );
+        // A thread whose calls answer still ends within that grace, and
+        // is joined.
+        let (tell, told) = mpsc::channel();
+        let ended = Arc::new(AtomicBool::new(false));
+        let worker = ending_worker(&STUCK, LONG, told, &ended);
+        drop(tell);
+        drop(worker);
+        assert!(ended.load(Ordering::Acquire), "the thread was joined");
+        // Windows audio answers: both stuck threads end by themselves.
+        drop(first_answer);
+        drop(second_answer);
+        assert!(STUCK.none_within(LONG), "the threads end");
+    }
+
+    #[test]
+    fn a_worker_whose_thread_panics_is_joined_at_once() {
+        static STUCK: StuckThreads = StuckThreads::new();
+        let (tell, told) = mpsc::channel::<()>();
+        let (worker, ()) = spawn_worker_within("audiosync-test", LONG, &STUCK, move |ready| {
+            if ready.ok(()) {
+                let _ = told.recv();
+                panic!("a test panic as the thread ends");
+            }
+        })
+        .expect("it starts");
+        drop(tell);
+        let started = Instant::now();
+        drop(worker);
+        assert!(started.elapsed() < LONG / 2);
+        assert!(!STUCK.any());
+    }
+
+    #[test]
+    fn a_worker_whose_start_hangs_counts_as_stuck_until_it_returns() {
+        static STUCK: StuckThreads = StuckThreads::new();
+        let (answer, hung) = mpsc::channel::<()>();
+        let result = spawn_worker_within(
+            "audiosync-test",
+            Duration::from_millis(50),
+            &STUCK,
+            move |ready: Ready| {
+                let _ = hung.recv();
+                let _ = ready.ok(());
+            },
+        );
+        assert!(matches!(result, Err(BackendError::NotResponding)));
+        assert!(STUCK.any(), "the thread counts as stuck");
+        drop(answer);
+        assert!(STUCK.none_within(LONG), "the thread ends");
+    }
 
     #[test]
     fn the_extensible_part_of_a_wave_format_is_22_bytes() {
