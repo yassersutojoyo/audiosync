@@ -70,13 +70,21 @@ enum LocalOutputSync {
         var attach: [String]
         /// Playing but switched off: stop its renderer (sorted by UID).
         var detach: [String]
+        /// On and playing, but bound to a device ID other than the one its
+        /// UID is listed with now: the device came back under a new ID
+        /// without an "is alive" notice (EC1). Stop its renderer first; it is
+        /// in `attach` too, so it starts again on the listed device (sorted).
+        var restart: [String] = []
     }
 
     /// - Parameters:
     ///   - enabled: the local speakers (device UIDs) that are on.
     ///   - active: the UIDs with a running renderer.
     ///   - available: the UIDs of the output devices present right now.
-    static func plan(enabled: Set<String>, active: [String], available: Set<String>) -> Plan {
+    ///   - bound: the device ID each running renderer was started on.
+    ///   - listed: the device ID each available UID has right now.
+    static func plan(enabled: Set<String>, active: [String], available: Set<String>,
+                     bound: [String: AudioObjectID] = [:], listed: [String: AudioObjectID] = [:]) -> Plan {
         let running = Set(active)
         return Plan(attach: enabled.filter { !running.contains($0) && available.contains($0) }.sorted(),
                     detach: running.filter { !enabled.contains($0) }.sorted())
@@ -122,13 +130,21 @@ extension LocalOutputSync {
         var detached: [String] = []
         /// The speakers whose renderer wouldn't start, in attach order.
         var failures: [Failure] = []
+        /// The speakers stopped to start again on their device's new ID
+        /// (sorted by UID); each one is in `attached` or `failures` too.
+        var restarted: [String] = []
+        /// The device ID each attached speaker was started on, for the next
+        /// sync's `bound`.
+        var devices: [String: AudioObjectID] = [:]
     }
 
     /// Attaches and detaches on `engine` what `plan` asks for, given the
-    /// devices listed now (a UID listed twice: the first device counts). Each
+    /// devices listed now (a UID listed twice: the first device counts) and
+    /// the device ID each running renderer was started on (`bound`). Each
     /// attach starts at its target hold-back (0 without one) and its gain; one
     /// that throws is logged and comes back as a failure.
     static func apply(enabled: Set<String>, listing: [AudioDevices.Device], to engine: LocalOutputEngine,
+                      bound: [String: AudioObjectID] = [:],
                       holdBacks: [String: Double], gain: (String) -> Double) -> Applied {
         var deviceByUID: [String: AudioDevices.Device] = [:]
         for device in listing where deviceByUID[device.uid] == nil {
