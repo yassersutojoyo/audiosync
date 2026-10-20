@@ -72,3 +72,19 @@ S200 VoiceOver and Narrator labels of the hint and its fix button.
 S202 Host re-reads when a device goes away, comes back or its row is switched on again.
 S203 Retired with the FIFO feed: the live edge after a stall of the pipe.
 S204 Mac host only: settings the Mac app saved under the bundled engine's output IDs move to the native sender's receiver IDs; its logic suite checks it.
+S210 Mac host only: a speaker group's switch state in the window; its logic suite checks it.
+S211 Mac host only: the source picker's entries; its logic suite checks it.
+S212 Mac host only: settings kept in the user defaults; its logic suite checks it.
+S213 Mac host only: notes on choices older builds read; its logic suite checks it.
+S214 Mac host only: where a window reopens; its logic suite checks it.
+S215 Mac host only: login-item launches, second launches and the core-setup start message; its logic suite checks it.
+S216 Mac host only: closing a Core Audio process tap and its aggregate device; its logic suite checks it.
+S217 Mac host only: artwork encoded as a JPEG for the AirPlay sender; its logic suite checks it.
+S218 Mac host only: the now-playing fields and artwork the receivers show; its logic suite checks it.
+S219 Mac host only: what the app hands its own AirPlay sender as track info; its logic suite checks it.
+S220 Mac host only: the delay field's typed text and when it applies; its logic suite checks it.
+S221 Mac host only: the delay panels of the speaker rows; its logic suite checks it.
+S222 Mac host only: the window's model of the native AirPlay sender's receivers, speakers and failures; its logic suite checks it.
+S223 Mac host only: pairing and password prompts for the native AirPlay sender; its logic suite checks it.
+S224 Mac host only: the folder of the native AirPlay sender's stored pairings; its logic suite checks it.
+S225 Test harness only: the soak run's memory rule; the soak rules suite checks it.

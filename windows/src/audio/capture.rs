@@ -30,7 +30,8 @@ use super::outputs::{EndpointReading, is_hands_free};
 use super::process::{IDLE_PID, ProcessTable, SYSTEM_PID};
 
 /// The name of the whole-system source in English, as the macOS app shows
-/// it: for logs and the mock. The UI shows its own, translated label.
+/// it: for logs, the mock, and the artist AirPlay receivers show while no
+/// track counts. The UI shows its own, translated label.
 pub const WHOLE_SYSTEM_NAME: &str = "All System Audio";
 
 /// Which render streams a process loopback capture includes.
