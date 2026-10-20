@@ -52,8 +52,9 @@ enum DialogPurpose {
 #[derive(Default)]
 struct UiState {
     sync_open: HashSet<String>,
-    delay_drafts: HashMap<String, String>,
-    airplay_delay_draft: TypedAirPlayDelay,
+    /// What is typed in each speaker's delay field, by speaker ID.
+    delay_drafts: HashMap<String, TypedDelay>,
+    airplay_delay_draft: TypedDelay,
     /// View > Show Virtual Devices; off at launch, like the Mac's default.
     show_virtual: bool,
     listed_virtual: ListedVirtual,
@@ -91,18 +92,19 @@ impl ListedVirtual {
     }
 }
 
-/// What is being typed in the AirPlay delay field. Typing only keeps the
-/// text: the delay's lower bound follows the sender's latency (2000 ms under
-/// it), so applying "2" and "25" on the way to "2500" would clamp them.
-/// Enter or leaving the field applies it.
+/// What is being typed in a delay field (a speaker's or the AirPlay delay).
+/// Typing only keeps the text: applying "2" and "22" on the way to "220"
+/// would re-time the output at each of them, and the AirPlay delay's lower
+/// bound (2000 ms under the sender's latency) would clamp them. Enter or
+/// leaving the field applies it; Escape drops it.
 #[derive(Default)]
-struct TypedAirPlayDelay {
+struct TypedDelay {
     /// The text, and the value the field showed when it was typed: the
     /// field follows a new value (a new sender latency) instead.
     draft: Option<(String, Option<f64>)>,
 }
 
-impl TypedAirPlayDelay {
+impl TypedDelay {
     fn edit(&mut self, text: &str, shown: Option<f64>) {
         self.draft = Some((text.to_owned(), shown));
     }
@@ -690,7 +692,10 @@ impl App {
         }
         let ui = self.ui.borrow();
         let item = |speaker: &ui_model::Speaker, show_kind: bool| {
-            let draft = ui.delay_drafts.get(&speaker.id).map(String::as_str);
+            let draft = ui
+                .delay_drafts
+                .get(&speaker.id)
+                .and_then(|typed| typed.text(speaker.delay_ms));
             speaker_item(
                 &state,
                 speaker,
@@ -926,6 +931,10 @@ impl App {
         main.on_delay_stepped(move |id, delta| with_app(&w, |app| app.step_delay(&id, delta)));
         let w = weak.clone();
         main.on_delay_edited(move |id, text| with_app(&w, |app| app.edit_delay(&id, &text)));
+        let w = weak.clone();
+        main.on_delay_committed(move |id| with_app(&w, |app| app.commit_delay(&id)));
+        let w = weak.clone();
+        main.on_delay_cancelled(move |id| with_app(&w, |app| app.cancel_delay(&id)));
         let w = weak.clone();
         main.on_airplay_delay_stepped(move |delta| {
             with_app(&w, |app| app.step_airplay_delay(delta))
@@ -1510,25 +1519,40 @@ impl App {
         self.update(|b| b.set_speaker_delay(id, current + f64::from(delta)));
     }
 
-    /// Applies the typed offset as soon as it is a number ("+150", "−250").
-    /// Out of range, the field shows the value that was applied.
+    /// Keeps what is typed in a speaker's delay field ("+150", "−250");
+    /// nothing applies until Enter or leaving the field (see [`TypedDelay`]).
     fn edit_delay(&self, id: &str, text: &str) {
-        let draft = match ui_model::parse_delay_ms(text) {
-            Some(ms) => {
-                self.backend.borrow_mut().set_speaker_delay(id, ms);
-                if ui_model::parse_ms(text) == Some(ms) {
-                    text.to_string()
-                } else {
-                    format_offset_ms(ms)
-                }
-            }
-            None => text.to_string(),
-        };
+        let shown = self.snapshot().speaker(id).and_then(|s| s.delay_ms);
         self.ui
             .borrow_mut()
             .delay_drafts
-            .insert(id.to_string(), draft);
+            .entry(id.to_string())
+            .or_default()
+            .edit(text, shown);
         self.refresh();
+    }
+
+    /// Escape in a speaker's delay field: drops what was typed, so the field
+    /// shows the applied value again and leaving it applies nothing.
+    fn cancel_delay(&self, id: &str) {
+        self.ui.borrow_mut().delay_drafts.remove(id);
+        self.refresh();
+    }
+
+    /// Applies the typed offset on Enter or when the field loses the focus.
+    /// Unreadable text applies nothing and the field shows the applied value
+    /// again; out of range, it shows the value that was applied.
+    fn commit_delay(&self, id: &str) {
+        let shown = self.snapshot().speaker(id).and_then(|s| s.delay_ms);
+        let typed = self.ui.borrow_mut().delay_drafts.remove(id);
+        let ms = typed
+            .as_ref()
+            .and_then(|typed| typed.text(shown))
+            .and_then(ui_model::parse_delay_ms);
+        match ms {
+            Some(ms) => self.update(|b| b.set_speaker_delay(id, ms)),
+            None => self.refresh(),
+        }
     }
 
     fn step_airplay_delay(&self, delta: i32) {
@@ -1540,7 +1564,7 @@ impl App {
     }
 
     /// Keeps what is typed in the AirPlay delay field; nothing applies until
-    /// Enter or leaving the field (see [`TypedAirPlayDelay`]).
+    /// Enter or leaving the field (see [`TypedDelay`]).
     fn edit_airplay_delay(&self, text: &str) {
         let shown = self.snapshot().airplay_delay_ms;
         self.ui.borrow_mut().airplay_delay_draft.edit(text, shown);
@@ -2404,7 +2428,7 @@ mod tests {
         // so applying "2", "25" and "250" on the way to "2500" would clamp
         // each of them.
         let shown = Some(2100.0);
-        let mut field = TypedAirPlayDelay::default();
+        let mut field = TypedDelay::default();
         for text in ["2", "25", "250", "2500"] {
             field.edit(text, shown);
             assert_eq!(field.text(shown), Some(text), "the field keeps the text");
@@ -2431,7 +2455,7 @@ mod tests {
     #[test]
     fn escape_drops_the_typed_airplay_delay() {
         let shown = Some(2100.0);
-        let mut field = TypedAirPlayDelay::default();
+        let mut field = TypedDelay::default();
         field.edit("9999", shown);
         field.cancel();
         assert_eq!(field.text(shown), None, "the field shows the value again");
@@ -2868,7 +2892,14 @@ mod tests {
         // toggle, delay, options, two steps and its field.
         tab(window, 24);
         press(window, "5");
-        let draft = || app.ui.borrow().delay_drafts.get("local:desk").cloned();
+        let draft = || {
+            let shown = app.snapshot().speaker("local:desk").unwrap().delay_ms;
+            app.ui
+                .borrow()
+                .delay_drafts
+                .get("local:desk")
+                .and_then(|typed| typed.text(shown).map(str::to_owned))
+        };
         assert_eq!(
             draft().as_deref(),
             Some("5"),
@@ -2884,8 +2915,19 @@ mod tests {
             Some("50"),
             "the rebuilt row's field has the focus, the typed text and the cursor at its end"
         );
+        let applied = || app.snapshot().speaker("local:desk").unwrap().delay_ms;
+        assert_eq!(applied(), Some(120.0), "typing applied nothing");
         press(window, Key::Return);
         assert!(!enabled(&app, "local:desk"), "Enter left the speaker off");
+        assert_eq!(applied(), Some(50.0), "Enter applied the typed delay");
+
+        // Escape in the field drops the typing; Enter then applies nothing.
+        press(window, "9");
+        assert!(draft().is_some_and(|text| text.contains('9')));
+        press(window, Key::Escape);
+        assert_eq!(draft(), None, "Escape dropped the typed text");
+        press(window, Key::Return);
+        assert_eq!(applied(), Some(50.0), "Enter after Escape applied nothing");
     }
 
     #[test]

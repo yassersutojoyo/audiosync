@@ -522,7 +522,9 @@ export component VolumeSlider inherits HorizontalLayout {
 }
 
 // The per-speaker sync offset relative to the reference output: coarse and
-// fine steps, and a field that applies as you type ("+150", "−250").
+// fine steps that apply at once, and a field ("+150", "−250") that applies on
+// Enter or when it loses the focus, so typing "220" doesn't re-time the
+// output at 2 and 22 ms on the way.
 export component SyncControls inherits VerticalLayout {
     in property <string> name;
     in property <string> delay-text;
@@ -530,6 +532,10 @@ export component SyncControls inherits VerticalLayout {
     in property <string> reference-name;
     callback stepped(int);
     callback edited(string);
+    // Enter, or the field lost the focus: apply what was typed.
+    callback committed();
+    // Escape in the field: drop what was typed.
+    callback cancelled();
     // Whether one of its steps or its field has the keyboard focus: a count,
     // as the handlers of two controls trading the focus run in any order.
     property <int> focused-controls;
@@ -550,50 +556,72 @@ export component SyncControls inherits VerticalLayout {
         }
     }
 
-    HorizontalLayout {
-        spacing: 4px;
-        alignment: start;
-
-        for delta in [-100, -10]: Button {
-            text: Strings.delay-step(delta);
-            accessible-label: Strings.delay-step-accessibility(delta);
-            clicked => {
-                root.stepped(delta);
+    // Escape in the field drops what was typed and shows the applied value
+    // again; the focus loss that follows then applies nothing. Captured
+    // before the field sees the key.
+    FocusScope {
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape && field.has-focus {
+                root.cancelled();
+                field.text = root.delay-text;
+                return accept;
             }
-            changed has-focus => {
-                root.focused-controls += self.has-focus ? 1 : -1;
-            }
+            return reject;
         }
 
-        // Text input, so a leading "+" or "−" can be typed.
-        field := LineEdit {
-            width: 72px;
-            text: root.delay-text;
-            horizontal-alignment: center;
-            accessible-label: Strings.delay-of(root.name);
-            edited(text) => {
-                root.edited(text);
-            }
-            changed has-focus => {
-                root.focused-controls += self.has-focus ? 1 : -1;
-            }
-        }
+        HorizontalLayout {
+            spacing: 4px;
+            alignment: start;
 
-        Text {
-            text: Strings.milliseconds-unit;
-            color: Tokens.secondary-text;
-            vertical-alignment: center;
-            accessible-role: none;
-        }
-
-        for delta in [10, 100]: Button {
-            text: Strings.delay-step(delta);
-            accessible-label: Strings.delay-step-accessibility(delta);
-            clicked => {
-                root.stepped(delta);
+            for delta in [-100, -10]: Button {
+                text: Strings.delay-step(delta);
+                accessible-label: Strings.delay-step-accessibility(delta);
+                clicked => {
+                    root.stepped(delta);
+                }
+                changed has-focus => {
+                    root.focused-controls += self.has-focus ? 1 : -1;
+                }
             }
-            changed has-focus => {
-                root.focused-controls += self.has-focus ? 1 : -1;
+
+            // Text input, so a leading "+" or "−" can be typed.
+            field := LineEdit {
+                width: 72px;
+                text: root.delay-text;
+                horizontal-alignment: center;
+                accessible-label: Strings.delay-of(root.name);
+                edited(text) => {
+                    root.edited(text);
+                }
+                accepted => {
+                    root.committed();
+                }
+                changed has-focus => {
+                    root.focused-controls += self.has-focus ? 1 : -1;
+                    if !self.has-focus {
+                        root.committed();
+                    }
+                }
+            }
+
+            Text {
+                text: Strings.milliseconds-unit;
+                color: Tokens.secondary-text;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+
+            for delta in [10, 100]: Button {
+                text: Strings.delay-step(delta);
+                accessible-label: Strings.delay-step-accessibility(delta);
+                clicked => {
+                    root.stepped(delta);
+                }
+                changed has-focus => {
+                    root.focused-controls += self.has-focus ? 1 : -1;
+                }
             }
         }
     }
@@ -604,7 +632,7 @@ export component SyncControls inherits VerticalLayout {
 }
 
 // The AirPlay delay: how long the local speakers wait for the AirPlay
-// speakers. Steps and a field, under its own title. Unlike a speaker's sync
+// speakers. Steps and a field, under its own title. Like a speaker's sync
 // controls, the field applies on Enter or when it loses the focus: its lower
 // bound follows the sender's latency, so a half-typed number would clamp.
 export component AirPlayDelayControls inherits VerticalLayout {
@@ -716,6 +744,10 @@ export component SpeakerRow inherits Rectangle {
     callback sync-toggled();
     callback delay-stepped(int);
     callback delay-edited(string);
+    // Enter, or its delay field lost the focus: apply what was typed.
+    callback delay-committed();
+    // Escape in its delay field: drop what was typed.
+    callback delay-cancelled();
     callback auto-connect-toggled(bool);
     callback forget-pairing();
     // The fix after the device-volume hint.
@@ -1038,6 +1070,12 @@ export component SpeakerRow inherits Rectangle {
                         }
                         edited(text) => {
                             root.delay-edited(text);
+                        }
+                        committed => {
+                            root.delay-committed();
+                        }
+                        cancelled => {
+                            root.delay-cancelled();
                         }
                         changed focus-within => {
                             root.sync-focused = self.focus-within;
