@@ -47,8 +47,6 @@ on an entry sets that flag.
     scripts/privacy_check.py --self-test  seed a scratch repository with one
                                           leak per rule and expect each to be
                                           caught
-    --forbidden-names                     also apply the forbidden-name rule
-                                          (off in CI until the clean slate)
     --commits RANGE                       check the messages of the commits in
                                           RANGE (`A..B`); an all-zero or unknown
                                           A, as on a new branch's first push,
@@ -941,7 +939,6 @@ def main(argv):
     )
     parser.add_argument("files", nargs="*", metavar="FILE")
     parser.add_argument("--self-test", action="store_true")
-    parser.add_argument("--forbidden-names", action="store_true")
     parser.add_argument("--commits", metavar="RANGE")
     parser.add_argument("--hash-names", nargs="?", const="", metavar="PATH")
     parser.add_argument("--verify-names", action="store_true")
@@ -984,9 +981,6 @@ def main(argv):
         return 0
     if args.commits is not None:
         count = len(commit_messages(root, args.commits))
-        if not args.forbidden_names:
-            print(f"forbidden names: off until the clean slate; {count} commit message(s) not checked")
-            return 0
         hits = check_commits(root, args.commits, forbidden)
         for hit in hits:
             print(hit)
@@ -995,9 +989,6 @@ def main(argv):
             return 1
         print(f"forbidden names: none in {count} commit message(s)")
         return 0
-    if not args.forbidden_names:
-        forbidden = None
-        print("forbidden names: off until the clean slate (--forbidden-names turns them on)")
     argv = args.files
     if argv:
         paths = [os.path.relpath(os.path.abspath(p), root).replace("\\", "/") for p in argv]
