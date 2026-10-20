@@ -85,8 +85,8 @@ negative delay (around −150 to −300 ms), and the others wait for it. Setting
 saved by an older version are converted once, so everything sounds as it did.
 
 Not supported yet: speakers that ask for a password, speakers that need
-pairing with a PIN (such as an Apple TV that asks for one), and speakers that
-only play AirPlay 2. They're listed with a note saying so, and AudioSync never
+another kind of pairing (the Apple TV code above is the one AudioSync does),
+and speakers that only play AirPlay 2. They're listed with a note saying so, and AudioSync never
 connects to them. Windows Firewall may ask whether AudioSync can use the
 network the first time it looks for speakers; it needs private networks for
 AirPlay.
