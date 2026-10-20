@@ -30,8 +30,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - An AirPlay speaker that sends back broken or odd answers can no longer crash AudioSync. Pairing answers nested too deeply or pointing back at themselves are refused, and so are malformed replies from the speaker. This goes for the Windows version too.
 - Building from source also finds Rust when it's installed through Homebrew's rustup.
 - A Bluetooth speaker, or any other output that runs at 44.1 kHz, no longer crackles when you switch it on. It used to run short of audio for a moment at the start. This goes for the Windows version too.
-- A delay you type, for a speaker or for AirPlay, now applies when you press Return or leave the field, not at every keystroke, so typing 220 no longer jumps through 2 and 22 ms on the way. Escape drops what you typed, and a value you typed is still kept if you quit before pressing Return.
-- Quitting right after typing a delay, before pressing Return, now applies and saves it, so it's still there next time. Text that isn't a number keeps the delay you had.
+- A delay you type, for a speaker or for AirPlay, now applies when you press Return or leave the field, not at every keystroke, so typing 220 no longer jumps through 2 and 22 ms on the way. Escape drops what you typed.
+- Quitting right after typing a delay, before pressing Return, now applies and saves it, so it's still there next time. Text that isn't a number keeps the delay you had. This goes for the Windows version too.
 - A USB or Bluetooth speaker that came back after being unplugged or disconnected could look like it was playing and still stay silent. It plays again now.
 
 ### Windows (preview, not released yet)
@@ -43,7 +43,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Bluetooth hands-free endpoints (the call profile) are left out of the speaker list, since they carry mono call audio and opening one puts the headset in call mode. A headset's stereo output is still listed.
 - The Windows version remembers your choices between launches: the source, which speakers are on with their delays and volumes, the master volume, auto-connect, groups, the equalizer, Show Virtual Devices and the window's size, place and whether it was maximized. Like the Mac, it doesn't start streaming by itself at launch unless an auto-connect speaker is there, and a speaker that's unplugged keeps its settings for when it's back.
 - The AirPlay delay field takes what you typed when you press Enter or leave the field, and Escape puts back the delay that's in use. Before, with a receiver that has a high latency, it could rewrite the field right after the first digit.
-- A speaker's delay field works the same way now: what you typed applies on Enter, when you leave the field or when you close that speaker's sync controls, and Escape puts back the delay in use. Before, typing 220 re-timed the speaker at 2 and 22 ms on the way.
+- A speaker's delay field works the same way now: what you typed applies on Enter, when you leave the field, when you close that speaker's sync controls or when you quit, and Escape puts back the delay in use. Before, typing 220 re-timed the speaker at 2 and 22 ms on the way.
 - When the only outputs are virtual ones and they're hidden, Connected Speakers says so and points you to View > Show Virtual Devices.
 - A virtual output you turn off stays in the list for the rest of the session, instead of disappearing from under the keyboard focus.
 - If you switch on a second Apple TV while another one is showing its PIN prompt, it says "Waiting to pair…" and gets its own prompt next.
