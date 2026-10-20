@@ -71,6 +71,12 @@ export global Strings {
     out property <string> notice-settings-not-saved: @tr("AudioSync couldn't save your settings, so changes you make now won't be kept after AudioSync quits.");
     // The file with the Apple TV pairings couldn't be written.
     out property <string> notice-pairings-not-saved: @tr("AudioSync couldn't save your Apple TV pairings, so pairings you add or forget now won't be kept after AudioSync quits.");
+    // Launch at Sign-In: Windows refused to add AudioSync to its startup
+    // apps, refused to remove it, or has it turned off in Task Manager or
+    // Settings (AudioSync then opens Settings > Apps > Startup).
+    out property <string> notice-launch-at-login-failed: @tr("Windows didn't let AudioSync add itself to the startup apps, so Launch at Sign-In stays off. To start AudioSync at sign-in anyway, put a shortcut to it in your Startup folder (press Windows+R and enter shell:startup).");
+    out property <string> notice-launch-at-login-not-removed: @tr("Windows didn't let AudioSync remove itself from the startup apps. To stop it launching at sign-in, turn AudioSync off in Settings > Apps > Startup.");
+    out property <string> notice-launch-at-login-off-in-settings: @tr("AudioSync is turned off in Windows' startup apps. Turn it on in Settings > Apps > Startup to finish turning on Launch at Sign-In.");
     // Windows lists no active sound output (none connected, or all turned
     // off) while a network speaker is on: apps have nowhere to play.
     out property <string> notice-no-sound-output: @tr("Windows has no working sound output, so apps have nowhere to play and AudioSync has nothing to send to your speakers. Connect or turn on an output in Sound settings.");
@@ -137,6 +143,9 @@ export global Strings {
     out property <string> menu-view: @tr("View");
     out property <string> menu-help: @tr("Help");
     out property <string> menu-about: @tr("About AudioSync");
+    // File > Launch at Sign-In and the tray menu's check item: AudioSync
+    // starts in the tray when the user signs in to Windows.
+    out property <string> launch-at-login: @tr("Launch at Sign-In");
 
     // Tray icon and its flyout (the macOS menu bar panel)
     out property <string> open-app: @tr("Open AudioSync");
@@ -441,6 +450,15 @@ export global Strings {
         }
         if kind == NoticeKind.no-sound-output {
             return @tr("no sound output");
+        }
+        if kind == NoticeKind.launch-at-login-failed {
+            return @tr("launch at sign-in failed");
+        }
+        if kind == NoticeKind.launch-at-login-not-removed {
+            return @tr("launch at sign-in still on");
+        }
+        if kind == NoticeKind.launch-at-login-off-in-settings {
+            return @tr("startup app turned off");
         }
         return @tr("double audio");
     }

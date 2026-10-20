@@ -326,6 +326,13 @@ pub enum NoticeMessage {
         shared: Vec<String>,
         default_output: Option<String>,
     },
+    /// Windows refused the Run value, so Launch at Sign-In stays off.
+    LaunchAtLoginFailed,
+    /// Windows refused to remove the Run value, so Launch at Sign-In stays on.
+    LaunchAtLoginNotRemoved,
+    /// The Run value is written, but Task Manager or Settings has AudioSync
+    /// turned off as a startup app; it is turned on again there.
+    LaunchAtLoginOffInSettings,
 }
 
 /// How a speaker or group row shows: playing only while streaming is on.
