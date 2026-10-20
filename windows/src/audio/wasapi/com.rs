@@ -11,8 +11,9 @@ use windows::Win32::Foundation::{
     CloseHandle, E_FAIL, ERROR_NOT_FOUND, HANDLE, RPC_E_CHANGED_MODE,
 };
 use windows::Win32::Media::Audio::{
-    AUDCLNT_E_DEVICE_IN_USE, AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_SERVICE_NOT_RUNNING,
-    WAVE_FORMAT_PCM, WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
+    AUDCLNT_E_DEVICE_IN_USE, AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_ENDPOINT_CREATE_FAILED,
+    AUDCLNT_E_RESOURCES_INVALIDATED, AUDCLNT_E_SERVICE_NOT_RUNNING, WAVE_FORMAT_PCM, WAVEFORMATEX,
+    WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
 };
 use windows::Win32::Media::KernelStreaming::WAVE_FORMAT_EXTENSIBLE;
 use windows::Win32::Media::Multimedia::{KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, WAVE_FORMAT_IEEE_FLOAT};
@@ -215,8 +216,10 @@ pub(super) fn system_error(call: &'static str, error: &windows::core::Error) -> 
 const NOT_FOUND: HRESULT = HRESULT::from_win32(ERROR_NOT_FOUND.0);
 
 /// A failed call on a device: [`BackendError::DeviceGone`] when the device
-/// went away or Windows audio stopped, [`BackendError::DeviceBusy`] when
-/// another app holds it in exclusive mode, a failed call otherwise.
+/// went away or Windows audio stopped, or Windows is rebuilding the endpoint
+/// (after a wake, or a change of its format), so the call is tried again;
+/// [`BackendError::DeviceBusy`] when another app holds it in exclusive mode;
+/// a failed call otherwise.
 pub(super) fn device_error(call: &'static str, error: &windows::core::Error) -> BackendError {
     device_code_error(call, error.code())
 }
@@ -225,6 +228,8 @@ pub(super) fn device_error(call: &'static str, error: &windows::core::Error) -> 
 pub(super) fn device_code_error(call: &'static str, code: HRESULT) -> BackendError {
     if code == AUDCLNT_E_DEVICE_INVALIDATED
         || code == AUDCLNT_E_SERVICE_NOT_RUNNING
+        || code == AUDCLNT_E_ENDPOINT_CREATE_FAILED
+        || code == AUDCLNT_E_RESOURCES_INVALIDATED
         || code == NOT_FOUND
     {
         BackendError::DeviceGone
@@ -403,9 +408,6 @@ mod tests {
 
     #[test]
     fn an_endpoint_windows_rebuilds_after_a_wake_or_a_format_change_is_tried_again() {
-        use windows::Win32::Media::Audio::{
-            AUDCLNT_E_ENDPOINT_CREATE_FAILED, AUDCLNT_E_RESOURCES_INVALIDATED,
-        };
         for code in [
             AUDCLNT_E_ENDPOINT_CREATE_FAILED,
             AUDCLNT_E_RESOURCES_INVALIDATED,

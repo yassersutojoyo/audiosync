@@ -753,9 +753,10 @@ impl<D: Driver> Controller<D> {
                         },
                     );
                 }
-                // Listed a moment ago and gone now: it stays on and plays
-                // once it is listed again (S68), and is lost once the listing
-                // drops it. Told once; the next tries, at every poll, are
+                // Listed a moment ago and gone now, or rebuilt by Windows
+                // (after a wake, or a change of its format): it stays on and
+                // plays once it can (S68), and is lost once the listing drops
+                // it. Told once; the next tries, at every poll, are
                 // quiet.
                 Err(BackendError::DeviceGone) => {
                     if self.unplayable.insert(endpoint.id.clone()) {

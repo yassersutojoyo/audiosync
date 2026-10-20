@@ -328,7 +328,9 @@ pub enum BackendError {
     SourceGone,
     /// The chosen process is not an app (the System or Idle process).
     NotAnApp,
-    /// The output device is not connected, or Windows audio is not running.
+    /// The output device is not connected, Windows audio is not running, or
+    /// Windows is rebuilding the device's endpoint (after a wake, or a change
+    /// of its format): worth another try.
     DeviceGone,
     /// Another app holds the device for itself (exclusive mode), so nothing
     /// else can play to it until that app lets go.
