@@ -29,10 +29,10 @@
 //! its lead follows the capture's clock by those times. It estimates where
 //! the capture is now from the newest stamp, takes the fill `Ŵ - P` at the
 //! start of every callback, keeps the average over the first
-//! [`TRACK_MS`] after the reader anchors as its reference, and trims its
-//! converter by a frame or so whenever a running average of the fill (time
-//! constant [`TRACK_MS`]) strays more than [`TRIM_DEAD_ZONE_FRAMES`] from
-//! it: slowed when the device's clock runs fast, sped up when it runs slow,
+//! [`TRACK_MS`] (or [`TRACK_CALLBACKS`] callbacks, when longer) after the
+//! reader anchors as its reference, and trims its converter by a frame or
+//! so whenever a running average of the fill (the same time constant)
+//! strays more than [`TRIM_DEAD_ZONE_FRAMES`] from it: slowed when the device's clock runs fast, sped up when it runs slow,
 //! at most 1 / [`TRIM_SHARE`] of a callback's reads at a time.
 //!
 //! The fade (S184 to S188):
@@ -109,8 +109,13 @@ pub const SLOW_DOWN_SHARE: usize = 16;
 /// A renderer that follows the capture's clock (S207) averages the fill
 /// over this many ms of device frames after its reader anchors for its
 /// reference, and moves the running average of the fill with this time
-/// constant.
+/// constant, or over [`TRACK_CALLBACKS`] callbacks when those last longer.
 pub const TRACK_MS: u32 = 500;
+
+/// The fewest callbacks the tracking averages over (S207): with large
+/// callbacks, half a second holds only a few, and the jitter of the times
+/// the host takes would move the average past the dead zone both ways.
+pub const TRACK_CALLBACKS: usize = 16;
 
 /// How far the running average of the fill may stray from the reference,
 /// in capture frames, before the converter is trimmed (S207).
@@ -750,6 +755,7 @@ impl Renderer {
         let since_ns = i128::from(now) - i128::from(stamp.time_ns);
         let since = since_ns as f64 * rate as f64 / 1e9;
         let fill = (stamp.written as i64 - next.position) as f64 + since;
+        let track = self.track_frames.max((TRACK_CALLBACKS * frames) as f64);
         match self.tracking {
             Tracking::Measuring {
                 sum,
@@ -757,7 +763,7 @@ impl Renderer {
                 frames: span,
             } => {
                 let (sum, count, span) = (sum + fill, count + 1, span + frames as u64);
-                self.tracking = if span as f64 >= self.track_frames {
+                self.tracking = if span as f64 >= track {
                     let reference = sum / f64::from(count);
                     Tracking::Following {
                         reference,
@@ -773,7 +779,7 @@ impl Renderer {
                 0
             }
             Tracking::Following { reference, average } => {
-                let alpha = 1.0 - (-(frames as f64) / self.track_frames).exp();
+                let alpha = 1.0 - (-(frames as f64) / track).exp();
                 let average = average + alpha * (fill - average);
                 self.tracking = Tracking::Following { reference, average };
                 let off = average - reference;
