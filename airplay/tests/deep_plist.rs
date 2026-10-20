@@ -209,4 +209,14 @@ fn the_deepest_ascii_answer_within_the_body_cap_is_read_on_the_driver_stack() {
     assert_eq!(body.len(), MAX_PAIRING_BODY_BYTES);
     let (events, state) = pair_on_a_driver_thread(body);
     assert_protocol_error(&events, state);
+    // Parsed and found to be no dictionary, not refused unread, or the
+    // test would pass without reading anything.
+    assert!(
+        matches!(
+            events.as_slice(),
+            [PairingEvent::Failed { error, .. }]
+                if error.detail != Some("pair-setup answer too large to read")
+        ),
+        "{events:?}"
+    );
 }

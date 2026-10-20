@@ -86,8 +86,9 @@ pub const CLIENT_ID_CHARS: usize = 16;
 /// nests at most about 800 levels, whose drop takes under 300 KiB of stack
 /// even in a debug build. The ASCII format, which the parser tries when XML
 /// fails, opens an array in one byte, so "((...))" nests about 2,000
-/// levels: roughly 0.8 to 1.3 MiB of drop recursion in a debug build, still
-/// under the driver thread's 2 MiB.
+/// levels: about 0.7 MiB of stack in a debug build and under 0.5 MiB in a
+/// release build (measured on Windows), still well under the driver
+/// thread's 2 MiB.
 pub const MAX_PAIRING_BODY_BYTES: usize = 4 * 1024;
 /// How many bytes the plist parser may read from one pairing answer body,
 /// its rereads included. A binary plist may refer to one object from many
