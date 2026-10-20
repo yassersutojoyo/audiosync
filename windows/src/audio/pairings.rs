@@ -8,7 +8,11 @@
 //! read them. The file lives in the app's data folder,
 //! `%LOCALAPPDATA%\AudioSync\airplay-pairings.dat`. A file that can't be
 //! read, decrypted or parsed is ignored as a whole: the speakers in it are
-//! paired again, and the next pairing writes a fresh file.
+//! paired again, and the next pairing writes a fresh file, after keeping the
+//! old one as [`IGNORED_FILE_NAME`]. A read that fails is tried once more at
+//! launch (another program may hold the file for a moment), and while the
+//! file still can't be read nothing is written over it: new pairings last
+//! until AudioSync quits.
 //!
 //! Before encryption the file holds a magic tag, then per speaker its ID and
 //! the credential blob the sender defines ([`Credentials::to_bytes`]), each
@@ -29,6 +33,10 @@ use crate::data_folder;
 
 /// The file's name in the app's data folder.
 pub const FILE_NAME: &str = "airplay-pairings.dat";
+
+/// Where a file the store ignored at launch is kept before the store first
+/// writes over it.
+pub const IGNORED_FILE_NAME: &str = "airplay-pairings.ignored.dat";
 
 /// The first bytes of the decrypted file, with its format version.
 const MAGIC: &[u8] = b"AudioSync pairings 1\n";
@@ -101,6 +109,9 @@ pub struct PairingStore {
     path: Option<PathBuf>,
     sealer: Sealer,
     entries: BTreeMap<String, Credentials>,
+    /// The file was ignored when the store opened: it is kept aside before
+    /// the next write replaces it.
+    keep_aside: bool,
 }
 
 impl fmt::Debug for PairingStore {
@@ -126,6 +137,7 @@ impl PairingStore {
             path: None,
             sealer: Sealer::current_user(),
             entries: BTreeMap::new(),
+            keep_aside: false,
         }
     }
 
@@ -135,7 +147,9 @@ impl PairingStore {
         data_folder::folder().map(|folder| folder.join(FILE_NAME))
     }
 
-    /// The store kept in `path`, with what it holds now.
+    /// The store kept in `path`, with what it holds now. A read that fails
+    /// is tried once more after a short pause
+    /// ([`data_folder::read_at_launch`]).
     pub fn open(path: PathBuf, sealer: Sealer) -> (PairingStore, Loaded) {
         let (entries, loaded) = match read(&path, sealer) {
             Ok(Some(entries)) => {
@@ -149,6 +163,7 @@ impl PairingStore {
             path: Some(path),
             sealer,
             entries,
+            keep_aside: matches!(loaded, Loaded::Ignored(_)),
         };
         (store, loaded)
     }
@@ -181,11 +196,17 @@ impl PairingStore {
     }
 
     /// Writes every entry to the file, through a temporary file renamed over
-    /// it; removes the file once nothing is paired.
-    fn save(&self) -> io::Result<()> {
+    /// it; removes the file once nothing is paired. A file ignored at launch
+    /// is first kept as [`IGNORED_FILE_NAME`]; while it can't be read, it is
+    /// left alone and the error returned.
+    fn save(&mut self) -> io::Result<()> {
         let Some(path) = &self.path else {
             return Ok(());
         };
+        if self.keep_aside {
+            data_folder::keep_aside(path, IGNORED_FILE_NAME)?;
+            self.keep_aside = false;
+        }
         if self.entries.is_empty() {
             return match fs::remove_file(path) {
                 Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
@@ -203,10 +224,14 @@ impl PairingStore {
 /// The entries in the file at `path`: `None` without a file, or why it was
 /// ignored.
 fn read(path: &Path, sealer: Sealer) -> Result<Option<BTreeMap<String, Credentials>>, String> {
-    let sealed = match fs::read(path) {
+    let sealed = match data_folder::read_at_launch(path) {
         Ok(sealed) => sealed,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("the file can't be read: {error}")),
+        Err(error) => {
+            return Err(format!(
+                "the file can't be read, even at a second try: {error}"
+            ));
+        }
     };
     let plain = (sealer.open)(&sealed)
         .map_err(|error| format!("the file can't be decrypted for this Windows user: {error}"))?;
