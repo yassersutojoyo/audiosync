@@ -512,6 +512,29 @@ do {
         check(hint(access, up: false, empty: t0, at: t0 + wait) == .none,
               "local network: no hint while the engine isn't up")
     }
+    // When the host has to look again for the hint, with no event to say so (S101).
+    func due(_ access: LocalNetworkAccess, up: Bool = true, empty since: Date?, at now: Date) -> Date? {
+        LocalNetworkHint.dueAt(access: access, senderUp: up, emptySince: since, now: now)
+    }
+    let hintDue = due(.unknown, empty: t0, at: t0 + 1)
+    check(hintDue == t0 + wait && hint(.unknown, empty: t0, at: hintDue ?? t0) == .possible
+            && hint(.unknown, empty: t0, at: (hintDue ?? t0) - 0.001) == .none,
+          "local network: the host looks again exactly when an empty list brings up the soft hint (S101)",
+          "\(String(describing: hintDue))")
+    check(due(.unknown, empty: t0, at: t0 + wait) == nil,
+          "local network: once the soft hint shows, nothing more falls due for it (S101)")
+    check(due(.denied, empty: t0, at: t0) == nil && due(.allowed, empty: t0, at: t0) == nil
+            && due(.unknown, up: false, empty: t0, at: t0) == nil && due(.unknown, empty: nil, at: t0) == nil,
+          "local network: no hint falls due when access is known, the engine isn't up or speakers were found (S101)")
+    // While the answer is "denied", the probe asks again `deniedRecheck` after its browser started.
+    let recheck = LocalNetworkProbe.recheckDate(running: true, access: .denied, startedAt: t0)
+    check(recheck == t0 + LocalNetworkProbe.deniedRecheck,
+          "local network probe: a denied answer is asked again 10 s after the browser started (S101)",
+          "\(String(describing: recheck))")
+    check(LocalNetworkProbe.recheckDate(running: true, access: .unknown, startedAt: t0) == nil
+            && LocalNetworkProbe.recheckDate(running: true, access: .allowed, startedAt: t0) == nil
+            && LocalNetworkProbe.recheckDate(running: false, access: .denied, startedAt: t0) == nil,
+          "local network probe: only a running probe's denied answer is asked again (S101)")
     // What the in-process Bonjour browser's states say about access.
     let policyDenied = NWError.dns(DNSServiceErrorType(kDNSServiceErr_PolicyDenied))
     check(LocalNetworkProbe.access(for: .waiting(policyDenied)) == .denied,
@@ -1294,14 +1317,20 @@ do {
         var starts = NativeSenderStarts()
         let t0 = Date(timeIntervalSince1970: 1_000_000)
         check(starts.mayStart(at: t0), "native airplay: the first reconcile starts the sender")
+        check(starts.restartAt == nil, "native airplay: before any start fails, no restart falls due (S101)")
         check(starts.finished(started: false, at: t0), "EC7 native airplay: a failed start is told once")
         check(!starts.mayStart(at: t0.addingTimeInterval(3))
                 && starts.mayStart(at: t0.addingTimeInterval(NativeSenderStarts.retrySpacing)),
-              "EC7 native airplay: after a failed start, a later reconcile starts it again, not every poll")
+              "EC7 native airplay: after a failed start, a later reconcile starts it again, not a sooner one")
+        let restart = starts.restartAt ?? .distantFuture
+        check(restart == t0.addingTimeInterval(NativeSenderStarts.retrySpacing)
+                && starts.mayStart(at: restart) && !starts.mayStart(at: restart.addingTimeInterval(-0.001)),
+              "EC7 native airplay: the restart falls due exactly when a reconcile may start the sender again (S101)",
+              "\(String(describing: starts.restartAt))")
         check(!starts.finished(started: false, at: t0.addingTimeInterval(10)),
               "native airplay: another failure in a row posts no second notice")
         check(!starts.finished(started: true, at: t0.addingTimeInterval(20)) && starts.failedAt == nil
-                && starts.mayStart(at: t0.addingTimeInterval(20)),
+                && starts.mayStart(at: t0.addingTimeInterval(20)) && starts.restartAt == nil,
               "native airplay: a start that works ends the failures")
         check(starts.finished(started: false, at: t0.addingTimeInterval(30)),
               "native airplay: a new failure after a working start is told again")
@@ -1311,6 +1340,11 @@ do {
         stops.senderFailed()
         check(!stops.mayStart(at: t0.addingTimeInterval(3600)),
               "EC7 native airplay: a sender that stopped after an internal error doesn't restart by itself")
+        var failedThenStopped = NativeSenderStarts()
+        _ = failedThenStopped.finished(started: false, at: t0)
+        failedThenStopped.senderFailed()
+        check(failedThenStopped.restartAt == nil,
+              "EC7 native airplay: a sender that stopped schedules no restart; only Retry starts one (S101)")
         check(stops.stopped, "EC7 native airplay: it shows as failed, with Retry")
         stops.retry()
         check(stops.mayStart(at: t0) && !stops.stopped, "EC7 native airplay: Retry starts a new sender at once")
@@ -2680,7 +2714,7 @@ do {
             && LocalOutputSync.report(next.failures, enabled: byUser?.enabled ?? [], origin: .automatic) == nil,
           "S69 start failure: the next sync doesn't try the failed speaker again and reports nothing")
 
-    // A poll attaches the only speaker on, and it won't start.
+    // A reconcile (a device-list notice, say) attaches the only speaker on, and it won't start.
     let lone = RefusingEngine(active: [], refusing: ["usb", "bt"])
     let lonely = LocalOutputSync.apply(enabled: ["usb"], listing: [usb], to: lone, holdBacks: [:], gain: { _ in 1 })
     let byPoll = LocalOutputSync.report(lonely.failures, enabled: ["usb"], origin: .automatic)
@@ -2741,7 +2775,25 @@ do {
     check(!AppLifecycle.hasUpdateFeed(nil) && !AppLifecycle.hasUpdateFeed("") && !AppLifecycle.hasUpdateFeed(" \n")
             && !AppLifecycle.hasUpdateFeed(42),
           "launch: no feed, a blank one or a wrong type leaves the updater off")
-    check(AppLifecycle.pollInterval == 3, "poll: the speakers are read again every 3 s (S101)")
+    check(AppLifecycle.safetyNetInterval == 30,
+          "reconcile: with no event, the host reconciles by itself only every 30 s, the safety net (S101)")
+    do {
+        let t0 = Date(timeIntervalSince1970: 3_000_000)
+        func next(_ due: [Date?], last: Date? = nil, asleep: Bool = false) -> Date? {
+            AppLifecycle.nextDueReconcile(due: due, last: last, asleep: asleep)
+        }
+        check(next([]) == nil && next([nil, nil, nil]) == nil,
+              "reconcile: with nothing due, no reconcile is scheduled beyond the safety net (S101)")
+        check(next([t0 + 20, nil, t0 + 10]) == t0 + 10,
+              "reconcile: the earliest due time is the one scheduled (S101)")
+        check(next([t0 + 10], asleep: true) == nil,
+              "reconcile: nothing is scheduled while the Mac sleeps; its wake reconciles (S101)")
+        check(next([t0 - 5], last: t0) == t0 + AppLifecycle.dueSpacing
+                && next([t0 + 10], last: t0) == t0 + 10,
+              "reconcile: a due time left in the past runs at most once a second, a later one on time (S101)")
+        check(next([t0 - 5]) == t0 - 5,
+              "reconcile: a due time already past runs at once when none ran before (S101)")
+    }
     check(AppLifecycle.answersSecondLaunch(exiting: false), "second launch: the running copy shows its window")
     check(!AppLifecycle.answersSecondLaunch(exiting: true),
           "second launch: a copy that is quitting doesn't answer, so the new one waits for it")

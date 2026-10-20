@@ -12,14 +12,37 @@ enum StartOrigin: Equatable {
     case automatic
 }
 
-/// The decisions behind the app's launch, the poll, a second launch and the
-/// events that end or rebuild a session, kept free of AppKit so the logic
-/// tests can check them. Clause numbers refer to docs/ENGINE_SPEC.md, case IDs
-/// to docs/EDGE_CASES.md.
+/// The decisions behind the app's launch, when the speakers are reconciled, a
+/// second launch and the events that end or rebuild a session, kept free of
+/// AppKit so the logic tests can check them. Clause numbers refer to
+/// docs/ENGINE_SPEC.md, case IDs to docs/EDGE_CASES.md.
 enum AppLifecycle {
-    /// How often the AirPlay sender's speaker list and then the local devices
-    /// are read again (S101).
-    static let pollInterval: TimeInterval = 3
+    /// The safety net (S101): how often the AirPlay speakers and then the
+    /// local devices are reconciled with no event asking for it. Events drive
+    /// everything else; this catches what none reports, such as a device that
+    /// changes in place (its name, its output channels, its alive flag coming
+    /// back without a change to Core Audio's device list) or a device-list
+    /// notice that never came.
+    static let safetyNetInterval: TimeInterval = 30
+
+    /// The least time between two reconciles scheduled for something that
+    /// fell due (`nextDueReconcile`), so a due time that somehow stays in the
+    /// past can't keep the main thread busy.
+    static let dueSpacing: TimeInterval = 1
+
+    /// When the host reconciles next for something that falls due with no
+    /// event to report it (S101): a restart of the AirPlay sender after a
+    /// failed start (`NativeSenderStarts.restartAt`), the Local Network
+    /// recheck while access is denied (`LocalNetworkProbe.recheckAt`), the
+    /// moment the Local Network hint may show (`LocalNetworkHint.dueAt`).
+    /// The earliest of `due`, but no sooner than `dueSpacing` after the last
+    /// such reconcile (`last`). Nil when nothing is due, or while the Mac
+    /// sleeps: its wake reconciles at once.
+    static func nextDueReconcile(due: [Date?], last: Date?, asleep: Bool) -> Date? {
+        guard !asleep, let earliest = due.compactMap({ $0 }).min() else { return nil }
+        guard let last else { return earliest }
+        return max(earliest, last.addingTimeInterval(dueSpacing))
+    }
 
     /// A launch by macOS at login, not by the user: the open-application
     /// event carries the login-item flag.

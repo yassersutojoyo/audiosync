@@ -572,9 +572,10 @@ struct NativeAirPlayModel {
 
 /// When the app starts AudioSync's own sender again after a start failed
 /// or after it stopped, and when the user hears about it (main queue). A
-/// failed start leaves nothing running; a later AirPlay reconcile starts it
-/// again, at most once every `retrySpacing`, and only the first failure in
-/// a row posts a notice, which a start that works clears. A sender that
+/// failed start leaves nothing running; the AirPlay reconcile the host runs
+/// once `retrySpacing` has passed (`restartAt`) starts it again, and no
+/// reconcile starts it sooner. Only the first failure in a row posts a
+/// notice, which a start that works clears. A sender that
 /// stopped after an internal error (`NativeSpeakerEvent.failed`) starts
 /// again only on Retry, since the same bug could stop it again; until then
 /// the AirPlay section shows it as failed.
@@ -595,6 +596,14 @@ struct NativeSenderStarts {
     func mayStart(at now: Date) -> Bool {
         guard !stopped else { return false }
         return failedAt.map { now.timeIntervalSince($0) >= Self.retrySpacing } ?? true
+    }
+
+    /// When a reconcile may start the sender again after a failed start; the
+    /// host reconciles then (`AppLifecycle.nextDueReconcile`). Nil when no
+    /// start failed, or when the sender stopped and waits for Retry.
+    var restartAt: Date? {
+        guard !stopped, let failedAt else { return nil }
+        return failedAt.addingTimeInterval(Self.retrySpacing)
     }
 
     /// The sender stopped after an internal error.

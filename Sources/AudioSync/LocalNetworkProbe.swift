@@ -42,6 +42,16 @@ enum LocalNetworkHint: Equatable {
             return .possible
         }
     }
+
+    /// When the soft hint would show if nothing changes, while that is still
+    /// ahead of `now`: no event says the time has passed, so the host
+    /// reconciles then (`AppLifecycle.nextDueReconcile`), and `decide` shows
+    /// the hint. Nil when it is shown already or can't come.
+    static func dueAt(access: LocalNetworkAccess, senderUp: Bool, emptySince: Date?, now: Date) -> Date? {
+        guard senderUp, access == .unknown, let emptySince else { return nil }
+        let due = emptySince.addingTimeInterval(emptyBeforeHint)
+        return due > now ? due : nil
+    }
 }
 
 /// Finds out whether macOS lets AudioSync use the local network.
@@ -85,9 +95,19 @@ final class LocalNetworkProbe {
 
     /// Starts over if the answer is "denied" and was last asked a while ago.
     func recheckIfDenied(now: Date = Date()) {
-        guard isRunning, access == .denied,
-              now.timeIntervalSince(startedAt) >= Self.deniedRecheck else { return }
+        guard let due = recheckAt, now >= due else { return }
         startBrowsing()
+    }
+
+    /// When `recheckIfDenied` asks again; the host reconciles then
+    /// (`AppLifecycle.nextDueReconcile`).
+    var recheckAt: Date? { Self.recheckDate(running: isRunning, access: access, startedAt: startedAt) }
+
+    /// While a running browser's answer is "denied": `deniedRecheck` after
+    /// it last started. Nil otherwise: nothing to ask again.
+    static func recheckDate(running: Bool, access: LocalNetworkAccess, startedAt: Date) -> Date? {
+        guard running, access == .denied else { return nil }
+        return startedAt.addingTimeInterval(deniedRecheck)
     }
 
     /// Stops browsing and forgets the answer: it is asked again on the next start.

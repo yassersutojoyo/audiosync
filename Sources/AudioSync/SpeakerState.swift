@@ -155,7 +155,7 @@ extension LocalOutputSync {
     /// What the app does about the speakers that wouldn't start (S69).
     struct FailureReport: Equatable {
         /// The local speakers left on. Each failed one is switched off, so it
-        /// no longer holds the others back and the next poll doesn't try it again.
+        /// no longer holds the others back and the next reconcile doesn't try it again.
         var enabled: Set<String>
         /// The device names for one alert, only when the user made the change.
         var alertNames: [String]?
