@@ -3,7 +3,8 @@
 //! window, and a right click a short menu (Open AudioSync, streaming on or
 //! off, Exit). The icon follows the taskbar's light or dark mode (checked
 //! every few seconds, so a theme change shows without a state change) and
-//! dims while streaming is off; its tooltip says what is streaming.
+//! dims while streaming is off; its tooltip says what is streaming and
+//! names the newest notice, if any.
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -18,7 +19,7 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, 
 use crate::placement::{self, Bounds};
 use crate::platform;
 use crate::ui_model::AppState;
-use crate::view::App;
+use crate::view::{self, App};
 
 /// Icon resource ordinals, as build.rs embeds them.
 const ICON_LIGHT: u16 = 2;
@@ -105,7 +106,7 @@ impl Tray {
         let choice = IconChoice::current(state.running);
         let icon = TrayIconBuilder::new()
             .with_icon(load_icon(choice)?)
-            .with_tooltip(strings.invoke_tray_tooltip(state.running, 0))
+            .with_tooltip(view::tray_tooltip(&strings, &state))
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
             .build()
@@ -159,10 +160,9 @@ impl Tray {
             return;
         };
         let strings = app.strings();
-        let speakers = i32::try_from(state.active_speakers()).unwrap_or(i32::MAX);
         let _ = self
             .icon
-            .set_tooltip(Some(strings.invoke_tray_tooltip(state.running, speakers)));
+            .set_tooltip(Some(view::tray_tooltip(&strings, state)));
         self.toggle_item.set_text(if state.running {
             strings.get_menu_turn_streaming_off()
         } else {

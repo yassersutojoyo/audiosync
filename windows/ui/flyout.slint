@@ -8,7 +8,7 @@ import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { DeviceVolumeHint, GroupItem, NoticeItem, RowState, SpeakerItem } from "types.slint";
-import { BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 // A compact row: the toggle and the name, with the note of a speaker or
 // group that is on but can't play right now under it ("Waiting for device",
@@ -86,6 +86,9 @@ export component TrayFlyout inherits Window {
     // The newest notice only (or none); `notice-count` counts them all.
     in property <[NoticeItem]> notices;
     in property <int> notice-count;
+    // What Narrator says about a new notice, while the app wants it said
+    // here (empty otherwise).
+    in property <string> notice-announcement;
     callback power-toggled(bool);
     callback source-selected(int);
     callback master-volume-changed(float);
@@ -324,5 +327,9 @@ export component TrayFlyout inherits Window {
                 }
             }
         }
+    }
+
+    Announcer {
+        said: root.notice-announcement;
     }
 }
