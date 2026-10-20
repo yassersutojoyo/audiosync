@@ -614,6 +614,7 @@ fn fitted_main_frame(
 impl App {
     /// The windows over `backend`; what they do themselves goes to `log`.
     pub fn new(backend: Box<dyn Backend>, log: DebugLog) -> Result<Rc<App>, slint::PlatformError> {
+        crate::platform::set_min_size_log(log.clone());
         let models = Models {
             sources: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
@@ -2842,7 +2843,7 @@ mod tests {
             .invoke_delay_edited("local:bt".into(), "-200".into());
 
         // The blank part of the desk's row, right of its name.
-        click(window, 420.0, 510.0);
+        click(window, 420.0, 625.0);
         assert_eq!(
             delay_of(&app, "local:bt"),
             Some(-200.0),
@@ -2855,7 +2856,7 @@ mod tests {
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
         app.main.invoke_airplay_delay_edited("2100".into());
-        click(window, 420.0, 510.0);
+        click(window, 420.0, 625.0);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),
@@ -2865,7 +2866,7 @@ mod tests {
         assert!(!open(&app).contains("local:desk"), "and closed it");
 
         // The reference row has no delay: a click there is outside.
-        click(window, 420.0, 510.0);
+        click(window, 420.0, 625.0);
         app.main
             .invoke_delay_edited("local:desk".into(), "300".into());
         click(window, 420.0, 190.0);
@@ -2961,7 +2962,7 @@ mod tests {
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
         // The note, moved down by the open controls.
-        click(app.main.window(), 420.0, 610.0);
+        click(app.main.window(), 420.0, 645.0);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),

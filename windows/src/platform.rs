@@ -2,6 +2,7 @@
 //! developed on. Only the Windows versions ship; elsewhere the app skips the
 //! version check and reports errors on stderr.
 
+use crate::debug_log::DebugLog;
 use crate::os_version::OsVersion;
 
 /// The version of the running Windows, or `None` when it can't be read (and
@@ -285,8 +286,8 @@ pub fn hold_min_size(window: &slint::Window, min: (f64, f64)) -> bool {
             };
             let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
             // SAFETY: `hwnd` is this thread's live window, and the procedure
-            // only reads the MINMAXINFO that WM_GETMINMAXINFO points to.
-            unsafe {
+            // only touches the structures its two messages point to.
+            let held = unsafe {
                 SetWindowSubclass(
                     hwnd,
                     Some(min_size_procedure),
@@ -294,7 +295,15 @@ pub fn hold_min_size(window: &slint::Window, min: (f64, f64)) -> bool {
                     pack_min_size(min),
                 )
             }
-            .as_bool()
+            .as_bool();
+            log_min_size_once(MinSizeEvent::Installed, || {
+                if held {
+                    format!("main window: minimum {} x {} held natively", min.0, min.1)
+                } else {
+                    "main window: the minimum size subclass did not install".to_owned()
+                }
+            });
+            held
         })
         .unwrap_or(false)
 }
@@ -302,6 +311,38 @@ pub fn hold_min_size(window: &slint::Window, min: (f64, f64)) -> bool {
 #[cfg(not(windows))]
 pub fn hold_min_size(_window: &slint::Window, _min: (f64, f64)) -> bool {
     false
+}
+
+/// Gives the window subclass behind `hold_min_size` the debug log, so a
+/// launch shows whether it installed and which messages reach it.
+pub fn set_min_size_log(log: DebugLog) {
+    MIN_SIZE_LOG.with(|slot| *slot.borrow_mut() = Some(log));
+}
+
+#[derive(Clone, Copy)]
+enum MinSizeEvent {
+    Installed = 1,
+    MinMaxInfo = 2,
+    Clamped = 4,
+}
+
+thread_local! {
+    // A window procedure takes no context of ours; it runs on this thread.
+    static MIN_SIZE_LOG: std::cell::RefCell<Option<DebugLog>> = const { std::cell::RefCell::new(None) };
+    static MIN_SIZE_LOGGED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// Logs `event` the first time it happens on this thread.
+fn log_min_size_once(event: MinSizeEvent, message: impl FnOnce() -> String) {
+    let bit = event as u8;
+    if MIN_SIZE_LOGGED.with(|logged| logged.replace(logged.get() | bit)) & bit != 0 {
+        return;
+    }
+    MIN_SIZE_LOG.with(|slot| {
+        if let Some(log) = slot.borrow().as_ref() {
+            log.log(message);
+        }
+    });
 }
 
 #[cfg(windows)]
@@ -320,22 +361,25 @@ unsafe extern "system" fn min_size_procedure(
     use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
     use windows::Win32::UI::Shell::DefSubclassProc;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GWL_STYLE, GetMenu, GetWindowLongW, MINMAXINFO, WINDOW_EX_STYLE, WINDOW_STYLE,
-        WM_GETMINMAXINFO,
+        GWL_EXSTYLE, GWL_STYLE, GetMenu, GetWindowLongW, IsIconic, IsZoomed, MINMAXINFO,
+        SWP_NOSIZE, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPOS, WM_GETMINMAXINFO,
+        WM_WINDOWPOSCHANGING,
     };
 
     // SAFETY: passes the message on unchanged, as a subclass must.
     let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
-    if message != WM_GETMINMAXINFO || lparam.0 == 0 {
+    if (message != WM_GETMINMAXINFO && message != WM_WINDOWPOSCHANGING) || lparam.0 == 0 {
         return result;
     }
     // SAFETY: `hwnd` is the live window this message is for.
-    let (dpi, style, ex_style, has_menu) = unsafe {
+    let (dpi, style, ex_style, has_menu, minimized, maximized) = unsafe {
         (
             GetDpiForWindow(hwnd),
             WINDOW_STYLE(GetWindowLongW(hwnd, GWL_STYLE) as u32),
             WINDOW_EX_STYLE(GetWindowLongW(hwnd, GWL_EXSTYLE) as u32),
             !GetMenu(hwnd).is_invalid(),
+            IsIconic(hwnd).as_bool(),
+            IsZoomed(hwnd).as_bool(),
         )
     };
     let mut rect = RECT::default();
@@ -345,11 +389,36 @@ unsafe extern "system" fn min_size_procedure(
     }
     let frame = (rect.right - rect.left, rect.bottom - rect.top);
     let (width, height) = min_track_size(unpack_min_size(packed), dpi, frame);
-    // SAFETY: for WM_GETMINMAXINFO, `lparam` points to the MINMAXINFO that
-    // Windows reads back once the message returns.
-    let info = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
-    info.ptMinTrackSize.x = info.ptMinTrackSize.x.max(width);
-    info.ptMinTrackSize.y = info.ptMinTrackSize.y.max(height);
+    if message == WM_GETMINMAXINFO {
+        log_min_size_once(MinSizeEvent::MinMaxInfo, || {
+            format!("main window: WM_GETMINMAXINFO arrived, minimum {width} x {height} px")
+        });
+        // SAFETY: for WM_GETMINMAXINFO, `lparam` points to the MINMAXINFO
+        // that Windows reads back once the message returns.
+        let info = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
+        info.ptMinTrackSize.x = info.ptMinTrackSize.x.max(width);
+        info.ptMinTrackSize.y = info.ptMinTrackSize.y.max(height);
+        return result;
+    }
+    // A move that doesn't go through WM_GETMINMAXINFO, as winit may answer
+    // WM_WINDOWPOSCHANGING itself. Minimizing shrinks the window on purpose.
+    // SAFETY: for WM_WINDOWPOSCHANGING, `lparam` points to the WINDOWPOS
+    // that Windows applies once the message returns.
+    let position = unsafe { &mut *(lparam.0 as *mut WINDOWPOS) };
+    if minimized || maximized || position.flags.contains(SWP_NOSIZE) {
+        return result;
+    }
+    let clamped = (position.cx.max(width), position.cy.max(height));
+    if clamped != (position.cx, position.cy) {
+        let asked = (position.cx, position.cy);
+        log_min_size_once(MinSizeEvent::Clamped, || {
+            format!(
+                "main window: a move to {} x {} px kept at {} x {} px",
+                asked.0, asked.1, clamped.0, clamped.1
+            )
+        });
+        (position.cx, position.cy) = clamped;
+    }
     result
 }
 

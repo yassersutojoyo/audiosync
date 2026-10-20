@@ -1107,11 +1107,14 @@ export component SpeakerRow inherits Rectangle {
 
                 HorizontalLayout {
                     spacing: 8px;
-                    min-height: Fluent.row-height - 16px;
 
+                    // The row's least height sits here: on the line itself it
+                    // would replace the content's minimum and let the volume
+                    // line spill past the row.
                     VerticalLayout {
                         alignment: center;
                         padding-right: 4px;
+                        min-height: Fluent.row-height - 16px;
                         badge := SpeakerBadge {
                             glyph: Glyphs.speaker(root.item.kind);
                             state: root.item.state;
