@@ -37,7 +37,12 @@
 //! for a device that isn't there yet; at each poll it writes the file again
 //! if anything changed. Like the Mac app, a launch doesn't start streaming
 //! by itself, except through an auto-connect speaker that is there. Saved
-//! settings of a device that is gone stay in the file for when it is back.
+//! settings of a device that is gone stay in the file for when it is back;
+//! one saved as on that no listing has shown since launch doesn't count as a
+//! speaker that is on until it is listed. A device Windows lists under a new
+//! endpoint ID (a USB device plugged into another USB port) takes over what
+//! was set for its old ID, which is forgotten, when exactly one gone output
+//! with something set has its name and kind.
 //!
 //! Speakers are named by the core's speaker keys: `lc:` and the endpoint ID
 //! for a local output, `ap:` and the speaker's ID for an AirPlay speaker, so
@@ -164,6 +169,13 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The last name of every output listed, for a notice about one that is
     /// gone.
     names: BTreeMap<String, String>,
+    /// The last kind of every output listed, to tell a device listed under
+    /// a new endpoint ID.
+    kinds: BTreeMap<String, OutputKind>,
+    /// The endpoint IDs a device left when what was set for it followed it
+    /// to a new one ([`AudioAdapter::move_output`]), until they are listed
+    /// again: the same device's old IDs, not other devices of its name.
+    left_behind: BTreeSet<String>,
     /// The AirPlay speaker IDs of the last listing, to tell which appeared.
     airplay_listed: BTreeSet<String>,
     /// The last name of every AirPlay speaker listed.
@@ -261,6 +273,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             chosen: Chosen::WholeSystem,
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
+            kinds: BTreeMap::new(),
+            left_behind: BTreeSet::new(),
             airplay_listed: BTreeSet::new(),
             airplay_quiet_polls: 0,
             airplay_names: BTreeMap::new(),
@@ -539,9 +553,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.audio.running_source().is_some()
     }
 
-    /// Speakers turned on, local and AirPlay, connected or not.
+    /// Speakers turned on, local and AirPlay, connected or not (S162).
     fn enabled_count(&self) -> usize {
-        self.audio.enabled_outputs().len() + self.audio.enabled_airplay().len()
+        self.enabled_local() + self.audio.enabled_airplay().len()
+    }
+
+    /// Local outputs turned on that were listed at some point in this run,
+    /// connected now or not (S162). One saved as on that no listing showed
+    /// since launch doesn't count: the user can't see it or switch it off,
+    /// so it would keep streaming on and the notice asking for a speaker
+    /// away (the old endpoint ID of a device that moved to another USB port,
+    /// say). It stays on, and counts once it is listed.
+    fn enabled_local(&self) -> usize {
+        self.audio
+            .enabled_outputs()
+            .iter()
+            .filter(|id| self.names.contains_key(*id))
+            .count()
     }
 
     /// The streaming policy after `event` (S162), from the speakers on.
@@ -549,7 +577,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         streaming_after(
             event,
             self.running(),
-            self.audio.enabled_outputs().len(),
+            self.enabled_local(),
             self.audio.enabled_airplay().len(),
         )
     }
@@ -677,18 +705,25 @@ impl<A: AudioBackend> AudioAdapter<A> {
         true
     }
 
-    /// Takes in the outputs as last listed: remembers their names, clears the
-    /// notice about a lost output that is back, and switches on the
-    /// auto-connect speakers that appeared.
+    /// Takes in the outputs as last listed: remembers their names and kinds,
+    /// clears the notice about a lost output that is back, hands what was
+    /// set for a device that moved to its new endpoint ID, and switches on
+    /// the auto-connect speakers that appeared.
     fn outputs_listed(&mut self) {
+        let outputs = self.audio.outputs();
         let mut listed = BTreeSet::new();
         let mut appeared = Vec::new();
-        for output in self.audio.outputs() {
+        let mut fresh = BTreeSet::new();
+        for output in &outputs {
             if !self.listed.contains(&output.id) {
                 appeared.push(output.id.clone());
+                if !self.names.contains_key(&output.id) || self.left_behind.contains(&output.id) {
+                    fresh.insert(output.id.clone());
+                }
             }
-            self.names.insert(output.id.clone(), output.name);
-            listed.insert(output.id);
+            self.names.insert(output.id.clone(), output.name.clone());
+            self.kinds.insert(output.id.clone(), output.kind);
+            listed.insert(output.id.clone());
         }
         self.listed = listed;
         for id in &appeared {
@@ -696,7 +731,108 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 matches!(message, NoticeMessage::SpeakerLost { .. })
             });
         }
+        // Listed again, an ID left behind is an output of its own once more.
+        for id in &appeared {
+            self.left_behind.remove(id);
+        }
+        self.follow_moved_outputs(&outputs, &appeared, &fresh);
         self.auto_connect(&appeared);
+    }
+
+    /// Whether the user set anything for output `endpoint_id`: settings, an
+    /// auto-connect mark or a group.
+    fn has_choices(&self, endpoint_id: &str) -> bool {
+        let key = speaker_key(endpoint_id);
+        self.audio.has_output_settings(endpoint_id)
+            || self.auto_connect.contains(&key)
+            || self.groups.iter().any(|group| group.members.contains(&key))
+    }
+
+    /// Hands what the user set for an output that is gone to one that
+    /// appeared under a new endpoint ID with nothing set, when both are most
+    /// likely the same device: Windows lists a USB device plugged into
+    /// another USB port under another endpoint ID. The new one must be
+    /// `fresh`: an endpoint ID not listed before in this run, or one a
+    /// device left behind when its settings followed it to another port (it
+    /// came back). It must be the only output that appeared with its name
+    /// and kind (which follows its form factor and bus). And exactly one
+    /// output with that name and kind, listed earlier in this run and not
+    /// now, with or without anything set, must be gone, and have something
+    /// set: with two gone, the new ID could be either device. An ID a
+    /// device left behind isn't another device, so it doesn't count.
+    fn follow_moved_outputs(
+        &mut self,
+        outputs: &[OutputInfo],
+        appeared: &[String],
+        fresh: &BTreeSet<String>,
+    ) {
+        let new: Vec<&OutputInfo> = outputs
+            .iter()
+            .filter(|output| appeared.contains(&output.id))
+            .collect();
+        for output in &new {
+            let same = |name: &str, kind: Option<&OutputKind>| {
+                name == output.name && kind == Some(&output.kind)
+            };
+            let twins = new
+                .iter()
+                .filter(|other| same(&other.name, Some(&other.kind)))
+                .count();
+            if twins > 1 || !fresh.contains(&output.id) || self.has_choices(&output.id) {
+                continue;
+            }
+            let gone: Vec<String> = self
+                .names
+                .iter()
+                .filter(|(id, name)| {
+                    !self.listed.contains(*id)
+                        && !self.left_behind.contains(*id)
+                        && same(name, self.kinds.get(*id))
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+            if let [from] = gone.as_slice()
+                && self.has_choices(from)
+            {
+                self.move_output(from, &output.id);
+            }
+        }
+    }
+
+    /// Moves what the user set for output `from` to output `to`: see
+    /// [`AudioAdapter::follow_moved_outputs`]. `from` is forgotten, here and
+    /// in the settings file, and its notice goes.
+    fn move_output(&mut self, from: &str, to: &str) {
+        self.log.log(|| {
+            format!(
+                "{} is listed under a new endpoint ID ({to}, was {from}): what was set for it \
+                 follows it",
+                self.output_name(to)
+            )
+        });
+        let result = self.audio.move_output_settings(from, to);
+        let (from_key, to_key) = (speaker_key(from), speaker_key(to));
+        if self.auto_connect.remove(&from_key) {
+            self.auto_connect.insert(to_key.clone());
+        }
+        for group in &mut self.groups {
+            if let Some(place) = group.members.iter().position(|key| *key == from_key) {
+                if group.members.contains(&to_key) {
+                    group.members.remove(place);
+                } else {
+                    group.members[place] = to_key.clone();
+                }
+            }
+        }
+        if self.saved.outputs.remove(from).is_some() {
+            self.must_save = true;
+        }
+        self.left_behind.insert(from.to_owned());
+        self.busy.remove(from);
+        self.notices.clear(&[speaker_subject(from)]);
+        if result.is_err() {
+            self.output_failed(to, false);
+        }
     }
 
     /// Takes in the AirPlay speakers as last listed: remembers their names,
@@ -2488,6 +2624,244 @@ mod tests {
         adapter.poll();
         assert_eq!(playing(&adapter), [SPEAKERS]);
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    #[test]
+    fn a_speaker_whose_stream_dies_before_its_device_leaves_the_list_is_reported() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
+        // The stream dies and can't open again while Windows still lists the
+        // device: no notice yet, as for a format change.
+        adapter.audio_mut().end_renderer(HEADPHONES);
+        adapter
+            .audio_mut()
+            .fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+
+        // Then Windows drops it from the list.
+        adapter.audio_mut().disconnect_output_unnoticed(HEADPHONES);
+        assert!(adapter.poll());
+        assert!(adapter.snapshot().speaker(&key(HEADPHONES)).is_none());
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "Headphones".into(),
+        };
+        assert_eq!(messages(&adapter), [lost]);
+    }
+
+    /// The endpoint IDs Windows gives one USB DAC in three USB ports.
+    const DAC_PORT_1: &str = "usb-dac-port-1";
+    const DAC_PORT_2: &str = "usb-dac-port-2";
+    const DAC_PORT_3: &str = "usb-dac-port-3";
+
+    /// Plugs the USB DAC in under `endpoint_id`, and polls.
+    fn plug_dac(adapter: &mut AudioAdapter<MockBackend>, endpoint_id: &str) {
+        adapter
+            .audio_mut()
+            .connect_output_as(endpoint_id, "USB DAC", OutputKind::Usb);
+        adapter.poll();
+    }
+
+    fn unplug(adapter: &mut AudioAdapter<MockBackend>, endpoint_id: &str) {
+        adapter.audio_mut().disconnect_output(endpoint_id);
+        adapter.poll();
+    }
+
+    #[test]
+    fn a_speaker_on_that_wasnt_listed_since_launch_doesnt_count_as_on() {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.add_app(PLAYER_PID, "player.exe");
+        // Saved as on under an endpoint ID Windows no longer lists: the DAC
+        // went to another USB port while AudioSync wasn't running.
+        audio.set_output_enabled(DAC_PORT_1, true).unwrap();
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.set_running(true);
+        assert!(!adapter.snapshot().running);
+        assert_eq!(messages(&adapter), [NoticeMessage::NoSpeaker]);
+
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+        // Every speaker the user can see is off: streaming stops.
+        adapter.set_speaker_enabled(&key(SPEAKERS), false);
+        assert!(!adapter.snapshot().running);
+
+        // It kept its switch: listed, it counts and plays.
+        plug_dac(&mut adapter, DAC_PORT_1);
+        assert!(enabled(&adapter, DAC_PORT_1));
+        adapter.set_running(true);
+        assert_eq!(playing(&adapter), [DAC_PORT_1]);
+    }
+
+    #[test]
+    fn a_usb_speaker_plugged_into_another_port_keeps_its_settings_under_its_new_id() {
+        let mut adapter = adapter();
+        plug_dac(&mut adapter, DAC_PORT_1);
+        turn_on(&mut adapter, DAC_PORT_1);
+        adapter.set_speaker_volume(&key(DAC_PORT_1), 35.0);
+        adapter.set_speaker_delay(&key(DAC_PORT_1), 120.0);
+        adapter.set_auto_connect(&key(DAC_PORT_1), true);
+        adapter.new_group("Desk").unwrap();
+        adapter.poll();
+
+        // Into another port: Windows lists it under a new endpoint ID.
+        unplug(&mut adapter, DAC_PORT_1);
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "USB DAC".into(),
+        };
+        assert_eq!(messages(&adapter), [lost]);
+        plug_dac(&mut adapter, DAC_PORT_2);
+        let dac = speaker_of(&adapter, &key(DAC_PORT_2));
+        assert!(dac.enabled);
+        assert_eq!(dac.volume, 35.0);
+        assert_eq!(dac.delay_ms, Some(120.0));
+        assert!(dac.auto_connect);
+        assert_eq!(adapter.snapshot().groups[0].members, [key(DAC_PORT_2)]);
+        assert_eq!(playing(&adapter), [DAC_PORT_2]);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert_eq!(
+            adapter.audio.enabled_outputs(),
+            [DAC_PORT_2],
+            "the old ID is forgotten"
+        );
+        let saved = adapter.current_settings();
+        assert!(!saved.outputs.contains_key(DAC_PORT_1));
+        assert!(!saved.auto_connect.contains(&key(DAC_PORT_1)));
+
+        // Back in the first port, the settings follow it again.
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_dac(&mut adapter, DAC_PORT_1);
+        let dac = speaker_of(&adapter, &key(DAC_PORT_1));
+        assert!(dac.enabled);
+        assert_eq!(dac.volume, 35.0);
+        assert_eq!(playing(&adapter), [DAC_PORT_1]);
+        // And into a third: the IDs it left behind hold nothing anymore.
+        unplug(&mut adapter, DAC_PORT_1);
+        plug_dac(&mut adapter, DAC_PORT_3);
+        assert!(enabled(&adapter, DAC_PORT_3));
+        assert_eq!(playing(&adapter), [DAC_PORT_3]);
+    }
+
+    #[test]
+    fn settings_follow_a_new_id_only_from_the_one_absent_speaker_of_its_name() {
+        let mut adapter = adapter();
+        // Two DACs of the same model, both on: one plugged in under a new ID
+        // while the other is still listed stays a new speaker.
+        plug_dac(&mut adapter, DAC_PORT_1);
+        turn_on(&mut adapter, DAC_PORT_1);
+        plug_dac(&mut adapter, DAC_PORT_2);
+        assert!(!enabled(&adapter, DAC_PORT_2));
+        turn_on(&mut adapter, DAC_PORT_2);
+
+        // Both unplugged, a third port could be either: a new speaker.
+        unplug(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_dac(&mut adapter, DAC_PORT_3);
+        assert!(!enabled(&adapter, DAC_PORT_3));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1, DAC_PORT_2]);
+    }
+
+    #[test]
+    fn a_new_id_doesnt_take_settings_when_an_untouched_twin_left_too() {
+        let mut adapter = adapter();
+        // Two DACs of the same model: only the first was ever set.
+        plug_dac(&mut adapter, DAC_PORT_1);
+        turn_on(&mut adapter, DAC_PORT_1);
+        adapter.set_speaker_volume(&key(DAC_PORT_1), 35.0);
+        plug_dac(&mut adapter, DAC_PORT_2);
+
+        // Both unplugged, the untouched one into a third port: it could be
+        // either of them, so it is a new speaker.
+        unplug(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_dac(&mut adapter, DAC_PORT_3);
+        assert!(!enabled(&adapter, DAC_PORT_3));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1]);
+
+        // The first one, back in its port, still has its settings.
+        plug_dac(&mut adapter, DAC_PORT_1);
+        let dac = speaker_of(&adapter, &key(DAC_PORT_1));
+        assert!(dac.enabled);
+        assert_eq!(dac.volume, 35.0);
+    }
+
+    #[test]
+    fn a_port_a_moved_speaker_left_counts_as_new_only_until_it_is_listed_again() {
+        let mut adapter = adapter();
+        plug_dac(&mut adapter, DAC_PORT_1);
+        turn_on(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_1);
+        plug_dac(&mut adapter, DAC_PORT_2);
+        assert!(enabled(&adapter, DAC_PORT_2), "its settings followed it");
+
+        // A second DAC of the model, in the port the first one left, while
+        // the first one is still listed: a new speaker.
+        plug_dac(&mut adapter, DAC_PORT_1);
+        assert!(!enabled(&adapter, DAC_PORT_1));
+        // Both unplugged, the second one back in that port: listed before,
+        // it is that second DAC again, not the first one.
+        unplug(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_dac(&mut adapter, DAC_PORT_1);
+        assert!(!enabled(&adapter, DAC_PORT_1));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_2]);
+    }
+
+    /// Two displays of the same model on HDMI.
+    const MONITOR_A: &str = "hdmi-monitor-a";
+    const MONITOR_B: &str = "hdmi-monitor-b";
+
+    fn connect_monitor(adapter: &mut AudioAdapter<MockBackend>, endpoint_id: &str) {
+        adapter
+            .audio_mut()
+            .connect_output_as(endpoint_id, "LG HDR 4K", OutputKind::Hdmi);
+        adapter.poll();
+    }
+
+    #[test]
+    fn a_twin_listed_before_that_comes_back_first_doesnt_take_the_others_settings() {
+        let mut adapter = adapter();
+        connect_monitor(&mut adapter, MONITOR_A);
+        connect_monitor(&mut adapter, MONITOR_B);
+        turn_on(&mut adapter, MONITOR_A);
+        adapter.set_auto_connect(&key(MONITOR_A), true);
+        adapter.new_group("Desk").unwrap();
+        adapter.poll();
+
+        // The displays sleep: both leave the list, and the one never set
+        // wakes first, under the endpoint ID it had.
+        unplug(&mut adapter, MONITOR_A);
+        unplug(&mut adapter, MONITOR_B);
+        connect_monitor(&mut adapter, MONITOR_B);
+        let b = speaker_of(&adapter, &key(MONITOR_B));
+        assert!(!b.enabled);
+        assert!(!b.auto_connect);
+        assert_eq!(adapter.audio.enabled_outputs(), [MONITOR_A]);
+        assert_eq!(adapter.snapshot().groups[0].members, [key(MONITOR_A)]);
+        let saved = adapter.current_settings();
+        assert!(saved.auto_connect.contains(&key(MONITOR_A)));
+
+        // The other one wakes too, with everything that was set for it.
+        connect_monitor(&mut adapter, MONITOR_A);
+        let a = speaker_of(&adapter, &key(MONITOR_A));
+        assert!(a.enabled);
+        assert!(a.auto_connect);
+        assert!(!speaker_of(&adapter, &key(MONITOR_B)).enabled);
+    }
+
+    #[test]
+    fn a_new_speaker_of_another_kind_doesnt_take_the_settings_of_one_with_its_name() {
+        let mut adapter = adapter();
+        plug_dac(&mut adapter, DAC_PORT_1);
+        turn_on(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_1);
+        adapter
+            .audio_mut()
+            .connect_output_as(DAC_PORT_2, "USB DAC", OutputKind::Bluetooth);
+        adapter.poll();
+        assert!(!enabled(&adapter, DAC_PORT_2));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1]);
     }
 
     #[test]

@@ -10,10 +10,12 @@
 //! output sync (spec S117, S161), keyed by endpoint ID. An output whose
 //! device goes away stops, whether its stream notices or the device list no
 //! longer shows the device, and stays on; it plays again once the device is
-//! listed (S68). An output that can't start is turned off and reported (S69),
-//! except one whose device another app holds in exclusive mode: that one
-//! stays on, as the user chose, is reported once as busy, and is tried again
-//! every few seconds until it plays.
+//! listed (S68). One whose stream ended while the device was still listed,
+//! and that can't start again, is lost once the list drops the device. An
+//! output that can't start is turned off and reported (S69), except one
+//! whose device another app holds in exclusive mode: that one stays on, as
+//! the user chose, is reported once as busy, and is tried again every few
+//! seconds until it plays.
 //!
 //! A capture lost because Windows audio restarted, or the device it captures
 //! through went away, ends its session and starts it again about a second
@@ -47,7 +49,7 @@
 //! sender's timeline (P143); a new L_s from the sender re-times every
 //! playing output.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -110,6 +112,20 @@ const RESTART_TRIES: u32 = 5;
 /// and opens the device while the UI thread waits, too much for every poll,
 /// and the user hears it within three seconds once the device is free.
 const BUSY_RETRY_POLLS: u32 = 6;
+
+/// An output whose device didn't answer in time while it started
+/// ([`BackendError::NotResponding`]) is tried again this many polls later:
+/// about every ten seconds at the UI's two polls a second. Each such try
+/// holds the UI thread for up to five seconds, so most of the time the
+/// window stays responsive while Windows audio comes back.
+const STALL_RETRY_POLLS: u32 = 20;
+
+/// An output whose device Windows still lists but refuses to open as if it
+/// were gone ([`BackendError::DeviceGone`]: `AUDCLNT_E_ENDPOINT_CREATE_FAILED`
+/// while it rebuilds the endpoint after a wake, say) is tried at every poll
+/// for this many polls, about thirty seconds at the UI's two polls a second;
+/// still refused then, it counts as a start that failed (S69).
+const REFUSED_GIVE_UP_POLLS: u32 = 60;
 
 /// A capture that started again counts as working once it has run this many
 /// polls (about five seconds); a loss before then means the restart failed,
@@ -352,6 +368,24 @@ pub struct Controller<D: Driver> {
     /// haven't played since or been switched off, each with the polls left
     /// before its next try ([`BUSY_RETRY_POLLS`]).
     busy: BTreeMap<String, u32>,
+    /// The outputs on that don't play while their device is still listed:
+    /// starting them failed as if the device were gone, or didn't answer in
+    /// time, or waited behind a start that didn't (their stream may have
+    /// just ended). Once the listing drops one,
+    /// it is lost ([`BackendEvent::OutputLost`]), as an output that played
+    /// is.
+    unplayable: BTreeSet<String>,
+    /// The outputs whose device didn't answer in time at their last start,
+    /// each with the polls left before its next try ([`STALL_RETRY_POLLS`]).
+    stalled: BTreeMap<String, u32>,
+    /// The stalled outputs whose own start didn't answer in time, not just
+    /// one waiting behind another's ([`Controller::sync_outputs`]): they
+    /// start last in a pass, so the others aren't kept waiting behind them.
+    hung: BTreeSet<String>,
+    /// The outputs on whose listed device refuses to open as if it were
+    /// gone, each with the polls left before that counts as a start that
+    /// failed ([`REFUSED_GIVE_UP_POLLS`]).
+    refused: BTreeMap<String, u32>,
 }
 
 impl<D: Driver> Controller<D> {
@@ -384,6 +418,10 @@ impl<D: Driver> Controller<D> {
             restart_tries_left: 0,
             device_volumes: device_volume::Followed::default(),
             busy: BTreeMap::new(),
+            unplayable: BTreeSet::new(),
+            stalled: BTreeMap::new(),
+            hung: BTreeSet::new(),
+            refused: BTreeMap::new(),
         }
     }
 
@@ -659,8 +697,14 @@ impl<D: Driver> Controller<D> {
     /// Adds and removes renderers so the playing outputs are the enabled,
     /// connected ones. Returns the outputs that couldn't start; they are
     /// turned off (S69). One whose device is gone stays on and is tried
-    /// again at the next poll; one whose device another app holds stays on
-    /// and is tried again every few seconds ([`BUSY_RETRY_POLLS`]).
+    /// again at the next poll, for about thirty seconds while its device is
+    /// still listed ([`REFUSED_GIVE_UP_POLLS`]); one whose device another
+    /// app holds stays on and is tried again every few seconds
+    /// ([`BUSY_RETRY_POLLS`]). Once a start doesn't answer in time, which
+    /// held the UI thread for the whole wait, the starts left in the pass
+    /// wait as that one does ([`STALL_RETRY_POLLS`]) without a try, so a
+    /// pass holds the window that long once at most; the outputs whose own
+    /// start hung go last in the next pass.
     fn sync_outputs(&mut self) -> Vec<(String, BackendError)> {
         let Some(session) = self.session.as_mut() else {
             return Vec::new();
@@ -696,9 +740,36 @@ impl<D: Driver> Controller<D> {
         }
 
         let mut failures = Vec::new();
-        for endpoint in plan.attach {
-            // A busy output waits for its next try.
-            if self.busy.get(&endpoint.id).is_some_and(|&wait| wait > 0) {
+        // The outputs whose own start hung last time go last: one that
+        // waited behind them doesn't wait behind them again.
+        let mut attach = plan.attach;
+        attach.sort_by_key(|endpoint| self.hung.contains(&endpoint.id));
+        // Whether a start in this pass didn't answer in time.
+        let mut held = false;
+        for endpoint in attach {
+            // A busy or stalled output waits for its next try.
+            let waits = |tries: &BTreeMap<String, u32>| {
+                tries.get(&endpoint.id).is_some_and(|&wait| wait > 0)
+            };
+            if waits(&self.busy) || waits(&self.stalled) {
+                continue;
+            }
+            // A start before it hung, which most likely means Windows audio
+            // isn't answering at all: it waits as that one does instead of
+            // holding the window as long again.
+            if held {
+                // It waited behind a hang this time, so next time it goes
+                // before the one that hung, whatever happened before.
+                self.hung.remove(&endpoint.id);
+                self.unplayable.insert(endpoint.id.clone());
+                self.stalled.insert(endpoint.id.clone(), STALL_RETRY_POLLS);
+                self.log.log(|| {
+                    format!(
+                        "output {} isn't started yet: a start before it didn't answer in time; \
+                         it stays on and is tried again in about ten seconds",
+                        label(&self.names, &endpoint.id)
+                    )
+                });
                 continue;
             }
             let params = self.policy.params(&endpoint.id);
@@ -706,11 +777,17 @@ impl<D: Driver> Controller<D> {
             reader.control().set_delay_frames(params.delay_frames);
             let control = RendererControl::new(&reader);
             let gain = Arc::new(SharedGain::new(params.gain));
-            match self
-                .driver
-                .start_renderer(&endpoint, reader, control.clone(), Arc::clone(&gain))
-            {
+            let failed = match self.driver.start_renderer(
+                &endpoint,
+                reader,
+                control.clone(),
+                Arc::clone(&gain),
+            ) {
                 Ok(handle) => {
+                    self.unplayable.remove(&endpoint.id);
+                    self.stalled.remove(&endpoint.id);
+                    self.hung.remove(&endpoint.id);
+                    self.refused.remove(&endpoint.id);
                     if self.busy.remove(&endpoint.id).is_some() {
                         self.log.log(|| {
                             format!(
@@ -736,23 +813,63 @@ impl<D: Driver> Controller<D> {
                         )
                     });
                     session.outputs.insert(
-                        endpoint.id,
+                        endpoint.id.clone(),
                         Playing {
                             control,
                             gain,
                             handle,
                         },
                     );
+                    None
                 }
-                // Listed a moment ago and gone now: it stays on and plays
-                // once it is listed again (S68).
+                // Listed a moment ago and gone now, or rebuilt by Windows
+                // (after a wake, or a change of its format): it stays on and
+                // plays once it can (S68), and is lost once the listing drops
+                // it. Told once; the next tries, at every poll, are quiet.
+                // Still listed and refused about thirty seconds on, it is a
+                // start that failed (S69).
                 Err(BackendError::DeviceGone) => {
+                    let left = *self
+                        .refused
+                        .entry(endpoint.id.clone())
+                        .or_insert(REFUSED_GIVE_UP_POLLS);
+                    if left == 0 {
+                        self.log.log(|| {
+                            format!(
+                                "output {} is still listed, but its device has refused to open \
+                                 for about thirty seconds",
+                                label(&self.names, &endpoint.id)
+                            )
+                        });
+                        Some(BackendError::DeviceGone)
+                    } else {
+                        if self.unplayable.insert(endpoint.id.clone()) {
+                            self.log.log(|| {
+                                format!(
+                                    "output {} went away while starting; it stays on",
+                                    label(&self.names, &endpoint.id)
+                                )
+                            });
+                        }
+                        None
+                    }
+                }
+                // Windows audio didn't answer in time (after a wake, say): it
+                // stays on, and is tried again a few seconds later, since
+                // each try may hold the UI thread that long.
+                Err(BackendError::NotResponding) => {
+                    held = true;
+                    self.unplayable.insert(endpoint.id.clone());
+                    self.stalled.insert(endpoint.id.clone(), STALL_RETRY_POLLS);
+                    self.hung.insert(endpoint.id.clone());
                     self.log.log(|| {
                         format!(
-                            "output {} went away while starting; it stays on",
+                            "output {} didn't answer in time while starting; it stays on and is \
+                             tried again in about ten seconds",
                             label(&self.names, &endpoint.id)
                         )
                     });
+                    None
                 }
                 // Another app holds the device in exclusive mode: it stays
                 // on, as the user chose, and plays once that app lets go.
@@ -770,27 +887,34 @@ impl<D: Driver> Controller<D> {
                                 label(&self.names, &endpoint.id)
                             )
                         });
-                        self.pending
-                            .push(BackendEvent::OutputBusy { id: endpoint.id });
-                    }
-                }
-                Err(error) => {
-                    self.log.log(|| {
-                        format!(
-                            "output {} could not start: {error} It is turned off.",
-                            label(&self.names, &endpoint.id)
-                        )
-                    });
-                    self.policy.set_enabled(&endpoint.id, false);
-                    // Off, it no longer waits for its device, so a later
-                    // busy device is told again.
-                    if self.busy.remove(&endpoint.id).is_some() {
-                        self.pending.push(BackendEvent::OutputFree {
+                        self.pending.push(BackendEvent::OutputBusy {
                             id: endpoint.id.clone(),
                         });
                     }
-                    failures.push((endpoint.id, error));
+                    None
                 }
+                Err(error) => Some(error),
+            };
+            if let Some(error) = failed {
+                self.log.log(|| {
+                    format!(
+                        "output {} could not start: {error} It is turned off.",
+                        label(&self.names, &endpoint.id)
+                    )
+                });
+                self.policy.set_enabled(&endpoint.id, false);
+                self.unplayable.remove(&endpoint.id);
+                self.stalled.remove(&endpoint.id);
+                self.hung.remove(&endpoint.id);
+                self.refused.remove(&endpoint.id);
+                // Off, it no longer waits for its device, so a later
+                // busy device is told again.
+                if self.busy.remove(&endpoint.id).is_some() {
+                    self.pending.push(BackendEvent::OutputFree {
+                        id: endpoint.id.clone(),
+                    });
+                }
+                failures.push((endpoint.id, error));
             }
         }
         failures
@@ -825,6 +949,35 @@ impl<D: Driver> Controller<D> {
             });
         }
         unlisted
+    }
+
+    /// Forgets the outputs that couldn't play while their device was listed
+    /// ([`Controller::unplayable`]) whose device the last successful listing
+    /// no longer shows, or that were switched off, and returns the IDs of
+    /// the first: they are lost now.
+    fn forget_unlisted_unplayable(&mut self) -> Vec<String> {
+        let present = &self.present;
+        let policy = &self.policy;
+        let mut gone = Vec::new();
+        self.unplayable.retain(|id| {
+            let listed = present.iter().any(|endpoint| endpoint.id == *id);
+            if !listed && policy.settings(id).enabled {
+                gone.push(id.clone());
+            }
+            listed && policy.settings(id).enabled
+        });
+        // Listed again later, a device's refusals count afresh.
+        let unplayable = &self.unplayable;
+        self.refused.retain(|id, _| unplayable.contains(id));
+        for id in &gone {
+            self.log.log(|| {
+                format!(
+                    "output {}, which couldn't play, is no longer listed",
+                    label(&self.names, id)
+                )
+            });
+        }
+        gone
     }
 
     fn report_failures(&mut self, failures: Vec<(String, BackendError)>) {
@@ -1055,8 +1208,15 @@ impl<D: Driver> Controller<D> {
 
     /// Ends the wait of every output reported busy, once streaming stopped:
     /// nothing plays to them now. A later session tells again of one whose
-    /// device is still held.
+    /// device is still held. The outputs that couldn't play are forgotten
+    /// too: a device that goes away while nothing streams isn't lost. So is
+    /// the wait of one that didn't answer in time: a new session tries it
+    /// at once.
     fn release_busy(&mut self) {
+        self.unplayable.clear();
+        self.stalled.clear();
+        self.hung.clear();
+        self.refused.clear();
         for id in std::mem::take(&mut self.busy).into_keys() {
             self.pending.push(BackendEvent::OutputFree { id });
         }
@@ -1382,7 +1542,13 @@ impl<D: Driver> AudioBackend for Controller<D> {
             format!("output {} switched {state}", label(&self.names, id))
         });
         self.policy.set_enabled(id, enabled);
-        // Switched off, a busy output no longer waits for its device.
+        // Switched off, a busy or stalled output no longer waits for its
+        // device: switched on again, it is tried at once.
+        if !enabled {
+            self.stalled.remove(id);
+            self.hung.remove(id);
+            self.refused.remove(id);
+        }
         if !enabled && self.busy.remove(id).is_some() {
             self.pending
                 .push(BackendEvent::OutputFree { id: id.to_owned() });
@@ -1444,6 +1610,29 @@ impl<D: Driver> AudioBackend for Controller<D> {
                     )
                 });
             }
+        }
+    }
+
+    fn has_output_settings(&self, id: &str) -> bool {
+        self.policy.has_settings(id)
+    }
+
+    fn move_output_settings(&mut self, from: &str, to: &str) -> Result<(), BackendError> {
+        let settings = self.policy.take_settings(from);
+        self.log.log(|| {
+            format!(
+                "output {} takes over the settings of {}, which is forgotten",
+                label(&self.names, to),
+                label(&self.names, from)
+            )
+        });
+        self.policy.set_delay_ms(to, settings.delay_ms);
+        self.policy.set_volume(to, settings.volume);
+        if settings.enabled {
+            self.set_output_enabled(to, true)
+        } else {
+            self.policy.set_enabled(to, false);
+            Ok(())
         }
     }
 
@@ -1625,8 +1814,14 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn poll(&mut self) -> Vec<BackendEvent> {
-        // A busy output's next try comes a poll closer.
-        for wait in self.busy.values_mut() {
+        // A busy or stalled output's next try comes a poll closer.
+        // So does the end of a listed device's refusals.
+        for wait in self
+            .busy
+            .values_mut()
+            .chain(self.stalled.values_mut())
+            .chain(self.refused.values_mut())
+        {
             *wait = wait.saturating_sub(1);
         }
         // Outputs that faded out stop, and then an ended session's capture;
@@ -1696,8 +1891,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // notification arrived, so the list is read again then too.
         self.refresh_if_needed(!ended.is_empty());
         // An output whose device is no longer listed is lost too, whether or
-        // not its stream noticed.
+        // not its stream noticed, and so is one that couldn't play while its
+        // device was still listed.
         ended.extend(self.stop_unlisted_outputs());
+        ended.extend(self.forget_unlisted_unplayable());
         let failures = self.sync_outputs();
         // An output that left or joined moves the others (S177).
         self.retime();
@@ -1733,8 +1930,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
 /// Whether a capture that couldn't start again after a loss may start at a
 /// later try: Windows audio isn't back yet, or the device is held or failed
 /// for now. An app that quit, or a source that can't be captured, stays so.
-/// An activation Windows never completed is the last try: each one held the
-/// UI thread for the whole wait.
+/// An activation Windows never completed, or a capture thread that didn't
+/// answer in time ([`BackendError::NotResponding`]), is the last try: each
+/// one held the UI thread for the whole wait.
 fn may_start_later(error: &BackendError) -> bool {
     match error {
         BackendError::DeviceGone | BackendError::DeviceBusy => true,
@@ -2611,6 +2809,78 @@ mod tests {
         assert_eq!(playing(&backend), [SPEAKERS]);
     }
 
+    #[test]
+    fn an_output_lost_while_still_listed_is_lost_again_once_the_listing_drops_it() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        // Its stream dies first, and opening it again fails as if the device
+        // were gone, while Windows still lists it.
+        backend.end_renderer(HEADPHONES);
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        let lost = BackendEvent::OutputLost {
+            id: HEADPHONES.to_owned(),
+        };
+        assert_eq!(backend.poll(), std::slice::from_ref(&lost));
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        assert!(backend.poll().is_empty(), "still listed: nothing new");
+
+        // Then the listing drops it: now it is gone for the user too.
+        backend.disconnect_output_unnoticed(HEADPHONES);
+        let events = backend.poll();
+        assert!(events.contains(&lost), "{events:?}");
+        assert!(events.contains(&BackendEvent::OutputsChanged));
+        assert!(backend.policy().settings(HEADPHONES).enabled, "it stays on");
+        assert!(backend.poll().is_empty(), "reported once");
+
+        backend.fail_output(HEADPHONES, None);
+        backend.connect_output(HEADPHONES, "Headphones");
+        assert_eq!(backend.poll(), [BackendEvent::OutputsChanged]);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    #[test]
+    fn an_output_that_cant_start_for_a_vanishing_device_is_lost_once_the_listing_drops_it() {
+        let mut backend = backend();
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(backend.poll().is_empty());
+        backend.disconnect_output_unnoticed(HEADPHONES);
+        let events = backend.poll();
+        assert!(
+            events.contains(&BackendEvent::OutputLost {
+                id: HEADPHONES.to_owned(),
+            }),
+            "{events:?}"
+        );
+        assert!(backend.poll().is_empty(), "reported once");
+    }
+
+    #[test]
+    fn an_output_that_plays_again_after_a_reset_is_lost_once_when_unplugged() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        // A format change: the stream ends and plays again a poll later.
+        backend.end_renderer(HEADPHONES);
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        backend.poll();
+        backend.fail_output(HEADPHONES, None);
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        // Unplugged now, it is lost as any playing output is: once.
+        backend.disconnect_output_unnoticed(HEADPHONES);
+        let lost: Vec<BackendEvent> = backend
+            .poll()
+            .into_iter()
+            .filter(|event| matches!(event, BackendEvent::OutputLost { .. }))
+            .collect();
+        assert_eq!(
+            lost,
+            [BackendEvent::OutputLost {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+    }
+
     fn listing_error() -> BackendError {
         BackendError::System {
             call: "IMMDeviceEnumerator::EnumAudioEndpoints",
@@ -2828,6 +3098,157 @@ mod tests {
             }),
             "{events:?}"
         );
+    }
+
+    #[test]
+    fn an_output_whose_device_doesnt_answer_stays_on_and_is_tried_again_seconds_later() {
+        let mut backend = backend();
+        // The last output of the pass: no other start waits behind it.
+        backend.fail_output(SPEAKERS, Some(BackendError::NotResponding));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(backend.poll().is_empty(), "no notice: it is tried again");
+        assert!(backend.policy().settings(SPEAKERS).enabled, "it stays on");
+        assert_eq!(playing(&backend), [HEADPHONES]);
+
+        backend.fail_output(SPEAKERS, None);
+        backend.poll();
+        assert_eq!(
+            backend.driver().renderer_attempts(SPEAKERS),
+            1,
+            "not at the next poll: a try that hangs holds the window for seconds"
+        );
+        for _ in 0..40 {
+            backend.poll();
+        }
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(backend.driver().renderer_attempts(SPEAKERS), 2);
+    }
+
+    #[test]
+    fn once_a_start_doesnt_answer_the_other_starts_of_that_pass_wait_their_turn() {
+        let mut backend = backend();
+        backend.connect_output(USB_OUTPUT, "USB DAC");
+        backend.set_output_enabled(USB_OUTPUT, true).unwrap();
+        backend.list_outputs().unwrap();
+        // The headphones start first, and hang: Windows audio isn't back
+        // after a wake. The others would most likely hang as well, each
+        // holding the window as long, so they aren't tried in that pass.
+        backend.fail_output(HEADPHONES, Some(BackendError::NotResponding));
+        backend.fail_output(SPEAKERS, Some(BackendError::NotResponding));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let attempts = |backend: &MockBackend| {
+            [HEADPHONES, SPEAKERS, USB_OUTPUT].map(|id| backend.driver().renderer_attempts(id))
+        };
+        assert_eq!(attempts(&backend), [1, 0, 0]);
+        poll_quietly(&mut backend, STALL_RETRY_POLLS - 1);
+        assert_eq!(attempts(&backend), [1, 0, 0], "they wait like it");
+        for id in [HEADPHONES, SPEAKERS, USB_OUTPUT] {
+            assert!(backend.policy().settings(id).enabled, "{id} stays on");
+        }
+
+        // At the next pass the outputs not tried yet go first: the speakers
+        // hang now, so the USB DAC waits again, and so do the headphones.
+        backend.poll();
+        assert_eq!(attempts(&backend), [1, 1, 0]);
+        // Windows audio answers again: at the next pass the USB DAC, never
+        // tried, goes first, and every output plays.
+        backend.fail_output(HEADPHONES, None);
+        backend.fail_output(SPEAKERS, None);
+        poll_quietly(&mut backend, STALL_RETRY_POLLS);
+        assert_eq!(attempts(&backend), [2, 2, 1]);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS, USB_OUTPUT]);
+    }
+
+    #[test]
+    fn a_healthy_output_isnt_kept_waiting_behind_one_that_keeps_hanging() {
+        let mut backend = backend();
+        backend.fail_output(HEADPHONES, Some(BackendError::NotResponding));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(backend.driver().renderer_attempts(SPEAKERS), 0);
+        // At the next pass the speakers, which didn't hang, go before the
+        // headphones, which still do.
+        poll_quietly(&mut backend, STALL_RETRY_POLLS);
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        assert_eq!(backend.driver().renderer_attempts(HEADPHONES), 2);
+    }
+
+    #[test]
+    fn an_output_that_answers_again_isnt_starved_behind_one_that_still_hangs() {
+        let mut backend = backend();
+        // After a wake both hang: the headphones at the start, the speakers
+        // at the next pass, so both have hung once.
+        backend.fail_output(HEADPHONES, Some(BackendError::NotResponding));
+        backend.fail_output(SPEAKERS, Some(BackendError::NotResponding));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        poll_quietly(&mut backend, STALL_RETRY_POLLS);
+        // Windows answers for the speakers again; the headphones still hang.
+        backend.fail_output(SPEAKERS, None);
+        poll_quietly(&mut backend, 3 * STALL_RETRY_POLLS);
+        assert_eq!(playing(&backend), [SPEAKERS]);
+    }
+
+    #[test]
+    fn stopping_ends_the_wait_for_an_output_that_didnt_answer() {
+        let mut backend = backend();
+        backend.fail_output(SPEAKERS, Some(BackendError::NotResponding));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        backend.stop();
+        backend.poll();
+        // Windows audio answers again: started again, it is tried at once.
+        backend.fail_output(SPEAKERS, None);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        assert_eq!(backend.driver().renderer_attempts(SPEAKERS), 2);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    #[test]
+    fn an_output_whose_listed_device_keeps_refusing_to_open_is_turned_off_after_a_while() {
+        let mut backend = backend();
+        // Windows still lists it but keeps refusing to open it, as after a
+        // wake while it rebuilds the endpoint, only for good.
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        poll_quietly(&mut backend, REFUSED_GIVE_UP_POLLS - 1);
+        assert!(backend.policy().settings(HEADPHONES).enabled);
+        let tries = backend.driver().renderer_attempts(HEADPHONES);
+        assert_eq!(tries, REFUSED_GIVE_UP_POLLS as usize, "a try at every poll");
+        // About thirty seconds on, it is a start that failed (S69): turned
+        // off, with the notice, and no longer tried.
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputFailed {
+                id: HEADPHONES.to_owned(),
+                error: BackendError::DeviceGone,
+            }]
+        );
+        assert!(!backend.policy().settings(HEADPHONES).enabled);
+        poll_quietly(&mut backend, STALL_RETRY_POLLS);
+        assert_eq!(backend.driver().renderer_attempts(HEADPHONES), tries + 1);
+        assert_eq!(playing(&backend), [SPEAKERS]);
+    }
+
+    #[test]
+    fn an_output_refused_for_a_moment_gets_the_whole_wait_again_next_time() {
+        let mut backend = backend();
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        poll_quietly(&mut backend, REFUSED_GIVE_UP_POLLS - 2);
+        // It opens after all, and plays.
+        backend.fail_output(HEADPHONES, None);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        // Its stream restarts later (a format change), refused again for a
+        // moment: as long a wait as the first time.
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        backend.end_renderer(HEADPHONES);
+        let lost = BackendEvent::OutputLost {
+            id: HEADPHONES.to_owned(),
+        };
+        assert_eq!(backend.poll(), [lost]);
+        poll_quietly(&mut backend, REFUSED_GIVE_UP_POLLS - 1);
+        assert!(backend.policy().settings(HEADPHONES).enabled);
     }
 
     #[test]
@@ -3064,6 +3485,25 @@ mod tests {
         }));
         poll_quietly(&mut backend, 1 + 2 * RESTART_DELAY_POLLS);
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+    }
+
+    #[test]
+    fn a_capture_restart_whose_thread_doesnt_answer_is_the_last_try() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        // The capture thread didn't answer within its wait: that try held
+        // the UI thread for the whole wait, so there is no other.
+        backend.refuse_captures(Some(BackendError::NotResponding));
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(BackendError::NotResponding),
+            }]
+        );
+        assert_eq!(backend.driver().capture_attempts(), 1 + 1);
+        assert_eq!(backend.running_source(), None);
     }
 
     #[test]

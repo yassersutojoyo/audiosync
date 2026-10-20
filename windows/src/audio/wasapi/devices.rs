@@ -189,7 +189,10 @@ fn watch(changed: &Arc<AtomicBool>, stop: &Event, ready: Ready) {
         Ok(registration) => registration,
         Err(error) => return ready.fail(error),
     };
-    ready.ok(());
+    if !ready.ok(()) {
+        // Nobody waits for this watcher anymore, and nothing would stop it.
+        return;
+    }
     // SAFETY: waits on an event that outlives this thread's use of it.
     unsafe { WaitForSingleObject(stop.raw(), INFINITE) };
     drop(registration);

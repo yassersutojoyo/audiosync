@@ -347,13 +347,18 @@ pub enum BackendError {
     SourceGone,
     /// The chosen process is not an app (the System or Idle process).
     NotAnApp,
-    /// The output device is not connected, or Windows audio is not running.
+    /// The output device is not connected, Windows audio is not running, or
+    /// Windows is rebuilding the device's endpoint (after a wake, or a change
+    /// of its format): worth another try.
     DeviceGone,
     /// Another app holds the device for itself (exclusive mode), so nothing
     /// else can play to it until that app lets go.
     DeviceBusy,
     /// The audio format can't be used, such as a rate outside 8 to 384 kHz.
     UnsupportedFormat,
+    /// Windows audio didn't answer in time: opening a device hung (after a
+    /// wake, say). Worth another try a little later.
+    NotResponding,
     /// A Windows call failed with this HRESULT.
     System {
         /// The call that failed.
@@ -383,6 +388,7 @@ impl fmt::Display for BackendError {
             BackendError::UnsupportedFormat => {
                 f.write_str("The device's audio format isn't supported.")
             }
+            BackendError::NotResponding => f.write_str("Windows audio didn't answer in time."),
             BackendError::System { call, code } => {
                 // `{:08X}` of a negative i32 prints its two's complement, the
                 // way Windows writes HRESULTs.
@@ -448,6 +454,18 @@ pub trait AudioBackend {
     /// Sets an output's volume slider position (0 to 100, on a cubic curve),
     /// live. A value that isn't finite is ignored.
     fn set_output_volume(&mut self, id: &str, position: f64);
+
+    /// Whether an output has settings of its own, connected or not: it was
+    /// turned on or off, or its delay or volume set, in this run or a saved
+    /// one.
+    fn has_output_settings(&self, id: &str) -> bool;
+
+    /// Gives output `to` the settings of output `from` (on or off, offset,
+    /// volume) and forgets `from`'s, for a device listed under a new
+    /// endpoint ID. While playing, `to` starts at once if it is on and
+    /// connected; if it can't start, it is turned off again and the error
+    /// returned.
+    fn move_output_settings(&mut self, from: &str, to: &str) -> Result<(), BackendError>;
 
     /// The fix under an output whose own volume in Windows is low or muted
     /// (spec S197): sets that volume to 75 % when it is low and unmutes it
@@ -567,6 +585,7 @@ mod tests {
             BackendError::DeviceGone,
             BackendError::DeviceBusy,
             BackendError::UnsupportedFormat,
+            BackendError::NotResponding,
             BackendError::System { call: "x", code: 1 },
         ];
         for error in errors {
