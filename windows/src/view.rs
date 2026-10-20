@@ -52,8 +52,9 @@ enum DialogPurpose {
 #[derive(Default)]
 struct UiState {
     sync_open: HashSet<String>,
-    delay_drafts: HashMap<String, String>,
-    airplay_delay_draft: TypedAirPlayDelay,
+    /// What is typed in each speaker's delay field, by speaker ID.
+    delay_drafts: HashMap<String, TypedDelay>,
+    airplay_delay_draft: TypedDelay,
     /// View > Show Virtual Devices; off at launch, like the Mac's default.
     show_virtual: bool,
     listed_virtual: ListedVirtual,
@@ -91,18 +92,19 @@ impl ListedVirtual {
     }
 }
 
-/// What is being typed in the AirPlay delay field. Typing only keeps the
-/// text: the delay's lower bound follows the sender's latency (2000 ms under
-/// it), so applying "2" and "25" on the way to "2500" would clamp them.
-/// Enter or leaving the field applies it.
+/// What is being typed in a delay field (a speaker's or the AirPlay delay).
+/// Typing only keeps the text: applying "2" and "22" on the way to "220"
+/// would re-time the output at each of them, and the AirPlay delay's lower
+/// bound (2000 ms under the sender's latency) would clamp them. Enter or
+/// leaving the field applies it; Escape drops it.
 #[derive(Default)]
-struct TypedAirPlayDelay {
+struct TypedDelay {
     /// The text, and the value the field showed when it was typed: the
     /// field follows a new value (a new sender latency) instead.
     draft: Option<(String, Option<f64>)>,
 }
 
-impl TypedAirPlayDelay {
+impl TypedDelay {
     fn edit(&mut self, text: &str, shown: Option<f64>) {
         self.draft = Some((text.to_owned(), shown));
     }
@@ -687,10 +689,17 @@ impl App {
             let mut ui = self.ui.borrow_mut();
             let show_virtual = ui.show_virtual;
             ui.listed_virtual.note(&state.speakers, show_virtual);
+            // A speaker that went takes what was typed for it along: back,
+            // it shows its saved delay.
+            ui.delay_drafts
+                .retain(|id, _| state.speakers.iter().any(|s| s.id == *id));
         }
         let ui = self.ui.borrow();
         let item = |speaker: &ui_model::Speaker, show_kind: bool| {
-            let draft = ui.delay_drafts.get(&speaker.id).map(String::as_str);
+            let draft = ui
+                .delay_drafts
+                .get(&speaker.id)
+                .and_then(|typed| typed.text(speaker.delay_ms));
             speaker_item(
                 &state,
                 speaker,
@@ -926,6 +935,10 @@ impl App {
         main.on_delay_stepped(move |id, delta| with_app(&w, |app| app.step_delay(&id, delta)));
         let w = weak.clone();
         main.on_delay_edited(move |id, text| with_app(&w, |app| app.edit_delay(&id, &text)));
+        let w = weak.clone();
+        main.on_delay_committed(move |id| with_app(&w, |app| app.commit_delay(&id)));
+        let w = weak.clone();
+        main.on_delay_cancelled(move |id| with_app(&w, |app| app.cancel_delay(&id)));
         let w = weak.clone();
         main.on_airplay_delay_stepped(move |delta| {
             with_app(&w, |app| app.step_airplay_delay(delta))
@@ -1379,15 +1392,24 @@ impl App {
         }
     }
 
+    /// Opens or closes a speaker's sync controls. Closing applies what was
+    /// typed in its field: the delay button doesn't take the focus, so the
+    /// field goes without losing it first.
     fn toggle_sync(&self, id: &str) {
-        {
+        let closed = {
             let mut ui = self.ui.borrow_mut();
-            if !ui.sync_open.remove(id) {
+            let closed = ui.sync_open.remove(id);
+            if !closed {
                 ui.sync_open.insert(id.to_string());
+                ui.delay_drafts.remove(id);
             }
-            ui.delay_drafts.remove(id);
+            closed
+        };
+        if closed {
+            self.commit_delay(id);
+        } else {
+            self.refresh();
         }
-        self.refresh();
     }
 
     fn show_virtual_devices(&self, on: bool) {
@@ -1510,25 +1532,40 @@ impl App {
         self.update(|b| b.set_speaker_delay(id, current + f64::from(delta)));
     }
 
-    /// Applies the typed offset as soon as it is a number ("+150", "−250").
-    /// Out of range, the field shows the value that was applied.
+    /// Keeps what is typed in a speaker's delay field ("+150", "−250");
+    /// nothing applies until Enter or leaving the field (see [`TypedDelay`]).
     fn edit_delay(&self, id: &str, text: &str) {
-        let draft = match ui_model::parse_delay_ms(text) {
-            Some(ms) => {
-                self.backend.borrow_mut().set_speaker_delay(id, ms);
-                if ui_model::parse_ms(text) == Some(ms) {
-                    text.to_string()
-                } else {
-                    format_offset_ms(ms)
-                }
-            }
-            None => text.to_string(),
-        };
+        let shown = self.snapshot().speaker(id).and_then(|s| s.delay_ms);
         self.ui
             .borrow_mut()
             .delay_drafts
-            .insert(id.to_string(), draft);
+            .entry(id.to_string())
+            .or_default()
+            .edit(text, shown);
         self.refresh();
+    }
+
+    /// Escape in a speaker's delay field: drops what was typed, so the field
+    /// shows the applied value again and leaving it applies nothing.
+    fn cancel_delay(&self, id: &str) {
+        self.ui.borrow_mut().delay_drafts.remove(id);
+        self.refresh();
+    }
+
+    /// Applies the typed offset on Enter or when the field loses the focus.
+    /// Unreadable text applies nothing and the field shows the applied value
+    /// again; out of range, it shows the value that was applied.
+    fn commit_delay(&self, id: &str) {
+        let shown = self.snapshot().speaker(id).and_then(|s| s.delay_ms);
+        let typed = self.ui.borrow_mut().delay_drafts.remove(id);
+        let ms = typed
+            .as_ref()
+            .and_then(|typed| typed.text(shown))
+            .and_then(ui_model::parse_delay_ms);
+        match ms {
+            Some(ms) => self.update(|b| b.set_speaker_delay(id, ms)),
+            None => self.refresh(),
+        }
     }
 
     fn step_airplay_delay(&self, delta: i32) {
@@ -1540,7 +1577,7 @@ impl App {
     }
 
     /// Keeps what is typed in the AirPlay delay field; nothing applies until
-    /// Enter or leaving the field (see [`TypedAirPlayDelay`]).
+    /// Enter or leaving the field (see [`TypedDelay`]).
     fn edit_airplay_delay(&self, text: &str) {
         let shown = self.snapshot().airplay_delay_ms;
         self.ui.borrow_mut().airplay_delay_draft.edit(text, shown);
@@ -2175,6 +2212,111 @@ mod tests {
         assert!(!app.snapshot().speaker("local:busy").unwrap().enabled);
     }
 
+    /// The delay field's text on the desk's row.
+    fn desk_delay_text(app: &App) -> String {
+        app.models
+            .all_speakers
+            .iter()
+            .chain(app.models.this_pc.iter())
+            .chain(app.models.connected.iter())
+            .find(|s| s.id == "local:desk")
+            .map(|s| s.delay_text.to_string())
+            .expect("the desk has a row")
+    }
+
+    #[test]
+    fn a_typed_speaker_delay_applies_only_on_enter_or_focus_loss() {
+        let app = app_over(MockBackend::new());
+        let applied = || app.snapshot().speaker("local:desk").unwrap().delay_ms;
+        assert_eq!(applied(), Some(120.0), "the example desk has a delay");
+        assert_eq!(desk_delay_text(&app), "+120");
+
+        // Typing "220" applies nothing on the way (2, 22, 220).
+        for text in ["2", "22", "220"] {
+            app.main
+                .invoke_delay_edited("local:desk".into(), text.into());
+            assert_eq!(desk_delay_text(&app), text, "the field keeps what is typed");
+            assert_eq!(applied(), Some(120.0), "typing {text} applies nothing");
+        }
+        app.main.invoke_delay_committed("local:desk".into());
+        assert_eq!(applied(), Some(220.0), "Enter applies what was typed");
+        assert_eq!(desk_delay_text(&app), "+220");
+
+        // Escape drops the typing; the focus loss after it applies nothing.
+        app.main
+            .invoke_delay_edited("local:desk".into(), "5".into());
+        app.main.invoke_delay_cancelled("local:desk".into());
+        assert_eq!(
+            desk_delay_text(&app),
+            "+220",
+            "Escape shows the saved value"
+        );
+        app.main.invoke_delay_committed("local:desk".into());
+        assert_eq!(
+            applied(),
+            Some(220.0),
+            "leaving after Escape applies nothing"
+        );
+
+        // Unreadable text reverts to the saved value.
+        app.main
+            .invoke_delay_edited("local:desk".into(), "abc".into());
+        app.main.invoke_delay_committed("local:desk".into());
+        assert_eq!(applied(), Some(220.0));
+        assert_eq!(desk_delay_text(&app), "+220", "unreadable text reverts");
+
+        // A step applies at once and drops half-typed text.
+        app.main
+            .invoke_delay_edited("local:desk".into(), "9".into());
+        app.main.invoke_delay_stepped("local:desk".into(), 10);
+        assert_eq!(applied(), Some(230.0), "a step applies at once");
+        assert_eq!(desk_delay_text(&app), "+230", "a step drops the typed text");
+        app.main.invoke_delay_committed("local:desk".into());
+        assert_eq!(applied(), Some(230.0), "the dropped text stays dropped");
+    }
+
+    #[test]
+    fn closing_the_sync_controls_applies_the_typed_delay() {
+        let app = app_over(MockBackend::new());
+        let applied = || app.snapshot().speaker("local:desk").unwrap().delay_ms;
+        app.main.invoke_sync_toggled("local:desk".into());
+        assert!(app.ui.borrow().sync_open.contains("local:desk"));
+        app.main
+            .invoke_delay_edited("local:desk".into(), "220".into());
+        assert_eq!(applied(), Some(120.0), "typing applies nothing");
+
+        // The delay button doesn't take the focus, so the field goes
+        // without losing it first: closing applies what was typed.
+        app.main.invoke_sync_toggled("local:desk".into());
+        assert!(!app.ui.borrow().sync_open.contains("local:desk"));
+        assert_eq!(applied(), Some(220.0), "closing applied the typed delay");
+        assert_eq!(desk_delay_text(&app), "+220");
+        assert!(app.ui.borrow().delay_drafts.is_empty(), "no draft is left");
+    }
+
+    #[test]
+    fn a_removed_speakers_typed_delay_is_dropped() {
+        let app = app_over(MockBackend::new());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "99".into());
+        assert_eq!(desk_delay_text(&app), "99");
+
+        // The desk is unplugged: its draft goes with it.
+        let mut unplugged = MockBackend::new();
+        unplugged.retain_speakers(|s| s.id != "local:desk");
+        *app.backend.borrow_mut() = Box::new(unplugged);
+        app.refresh();
+        assert!(
+            !app.ui.borrow().delay_drafts.contains_key("local:desk"),
+            "the removed speaker's draft is gone"
+        );
+
+        // Plugged back in, it shows its saved delay.
+        *app.backend.borrow_mut() = Box::new(MockBackend::new());
+        app.refresh();
+        assert_eq!(desk_delay_text(&app), "+120");
+    }
+
     #[test]
     fn escape_in_the_airplay_delay_field_leaves_the_applied_delay() {
         let app = app_over(MockBackend::new());
@@ -2341,7 +2483,7 @@ mod tests {
         // so applying "2", "25" and "250" on the way to "2500" would clamp
         // each of them.
         let shown = Some(2100.0);
-        let mut field = TypedAirPlayDelay::default();
+        let mut field = TypedDelay::default();
         for text in ["2", "25", "250", "2500"] {
             field.edit(text, shown);
             assert_eq!(field.text(shown), Some(text), "the field keeps the text");
@@ -2368,7 +2510,7 @@ mod tests {
     #[test]
     fn escape_drops_the_typed_airplay_delay() {
         let shown = Some(2100.0);
-        let mut field = TypedAirPlayDelay::default();
+        let mut field = TypedDelay::default();
         field.edit("9999", shown);
         field.cancel();
         assert_eq!(field.text(shown), None, "the field shows the value again");
@@ -2674,6 +2816,22 @@ mod tests {
             }),
             "Dismiss: Kitchen reconnecting"
         );
+        // The names say what happened: the speaker was turned off, and the
+        // unreadable file was kept.
+        assert_eq!(
+            dismiss_label(NoticeMessage::SpeakerFailed {
+                speaker: "Kitchen".into(),
+            }),
+            "Dismiss: Kitchen didn't start, turned off"
+        );
+        assert_eq!(
+            dismiss_label(NoticeMessage::SettingsKeptAside { file: "f".into() }),
+            "Dismiss: settings unreadable, copy kept"
+        );
+        assert_eq!(
+            dismiss_label(NoticeMessage::PairingsKeptAside { file: "f".into() }),
+            "Dismiss: pairings unreadable, copy kept"
+        );
         // Every kind gets a name of a few words, never the whole message.
         let messages = [
             NoticeMessage::NoSpeaker,
@@ -2805,7 +2963,14 @@ mod tests {
         // toggle, delay, options, two steps and its field.
         tab(window, 24);
         press(window, "5");
-        let draft = || app.ui.borrow().delay_drafts.get("local:desk").cloned();
+        let draft = || {
+            let shown = app.snapshot().speaker("local:desk").unwrap().delay_ms;
+            app.ui
+                .borrow()
+                .delay_drafts
+                .get("local:desk")
+                .and_then(|typed| typed.text(shown).map(str::to_owned))
+        };
         assert_eq!(
             draft().as_deref(),
             Some("5"),
@@ -2821,8 +2986,19 @@ mod tests {
             Some("50"),
             "the rebuilt row's field has the focus, the typed text and the cursor at its end"
         );
+        let applied = || app.snapshot().speaker("local:desk").unwrap().delay_ms;
+        assert_eq!(applied(), Some(120.0), "typing applied nothing");
         press(window, Key::Return);
         assert!(!enabled(&app, "local:desk"), "Enter left the speaker off");
+        assert_eq!(applied(), Some(50.0), "Enter applied the typed delay");
+
+        // Escape in the field drops the typing; Enter then applies nothing.
+        press(window, "9");
+        assert!(draft().is_some_and(|text| text.contains('9')));
+        press(window, Key::Escape);
+        assert_eq!(draft(), None, "Escape dropped the typed text");
+        press(window, Key::Return);
+        assert_eq!(applied(), Some(50.0), "Enter after Escape applied nothing");
     }
 
     #[test]
