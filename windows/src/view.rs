@@ -1650,6 +1650,12 @@ impl App {
     /// Saves the settings now, with the main window's frame: the app is
     /// about to quit.
     pub fn save_settings(&self) {
+        // Quit ends the event loop without a focus loss: apply what is typed.
+        let typed: Vec<String> = self.ui.borrow().delay_drafts.keys().cloned().collect();
+        for id in typed {
+            self.commit_delay(&id);
+        }
+        self.commit_airplay_delay();
         self.remember_view();
         self.backend.borrow_mut().save_settings();
     }
@@ -2514,6 +2520,37 @@ mod tests {
         assert_eq!(applied(), Some(220.0), "closing applied the typed delay");
         assert_eq!(desk_delay_text(&app), "+220");
         assert!(app.ui.borrow().delay_drafts.is_empty(), "no draft is left");
+    }
+
+    #[test]
+    fn quitting_applies_every_typed_delay_before_the_settings_are_saved() {
+        let app = app_over(MockBackend::new());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "400".into());
+        app.main.invoke_airplay_delay_edited("2100".into());
+        assert_eq!(
+            app.snapshot().speaker("local:desk").unwrap().delay_ms,
+            Some(120.0)
+        );
+
+        // Quit ends the event loop without a focus loss in either field.
+        app.save_settings();
+        let state = app.snapshot();
+        assert_eq!(state.speaker("local:desk").unwrap().delay_ms, Some(400.0));
+        assert_eq!(state.airplay_delay_ms, Some(2100.0));
+        assert!(app.ui.borrow().delay_drafts.is_empty(), "no draft is left");
+    }
+
+    #[test]
+    fn quitting_with_unreadable_typing_keeps_the_applied_delay() {
+        let app = app_over(MockBackend::new());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "abc".into());
+        app.main.invoke_airplay_delay_edited("".into());
+        app.save_settings();
+        let state = app.snapshot();
+        assert_eq!(state.speaker("local:desk").unwrap().delay_ms, Some(120.0));
+        assert_eq!(state.airplay_delay_ms, Some(1750.0));
     }
 
     #[test]

@@ -689,7 +689,7 @@ struct SyncControls: View {
                 step(-100)
                 step(-10)
                 TextField(text.delayFieldLabel, text: Binding(get: { draft.field.text },
-                                                              set: { draft.field.type($0) }))
+                                                              set: { draft.type($0, commit: commit) }))
                 .labelsHidden()
                 .textFieldStyle(.roundedBorder)
                 .multilineTextAlignment(.center)
@@ -711,7 +711,7 @@ struct SyncControls: View {
                 .focused($fieldFocused)
                 .onSubmit(commit)
                 // Escape drops the typing, so a later focus loss applies nothing.
-                .onExitCommand { draft.field.discard(saved: ms, format: shown) }
+                .onExitCommand { discard() }
                 .onChange(of: fieldFocused) { _, focused in if !focused { commit() } }
                 Text(text.millisecondsUnit).font(.callout).foregroundStyle(Brand.secondaryText)
                 step(10)
@@ -762,14 +762,20 @@ struct SyncControls: View {
     /// Apply the typed value, once (Return and the focus loss after it both
     /// get here).
     private func commit() {
+        draft.settle()
         if let value = draft.field.commit(saved: ms, sanitize: clamped, format: shown) { apply(value) }
+    }
+
+    private func discard() {
+        draft.settle()
+        draft.field.discard(saved: ms, format: shown)
     }
 
     private func step(_ delta: Int) -> some View {
         Button(text.delayStep(delta)) {
             // A step applies at once and drops any typing, so a focus loss
             // later doesn't apply the old typed text over it.
-            draft.field.discard(saved: ms, format: shown)
+            discard()
             apply(ms + Double(delta))
         }
             .accessibilityLabel(text.delayStepAccessibility(delta))

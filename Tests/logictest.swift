@@ -2435,6 +2435,35 @@ do {
     cue.type("40")
     check(cue.isPending(saved: 32, format: signed) && cue.isPending(saved: 50, format: signed),
           "delay field cue: a saved value changing under the typing keeps the draft")
+
+    // Quit with typing not yet applied: the quit path commits every held field.
+    var store: [String: Double] = ["usb": -225, "hdmi": 40, "dock": 10]
+    var fields = ["usb": DelayFieldDraft(), "hdmi": DelayFieldDraft(), "dock": DelayFieldDraft()]
+    let pending = PendingDelayDrafts()
+    func keystroke(_ id: String, _ text: String) {
+        fields[id]?.type(text)
+        pending.hold(id) {
+            if let v = fields[id]?.commit(saved: store[id] ?? 0, sanitize: offset, format: signed) { store[id] = v }
+        }
+    }
+    func pressReturn(_ id: String) {
+        pending.release(id)
+        if let v = fields[id]?.commit(saved: store[id] ?? 0, sanitize: offset, format: signed) { store[id] = v }
+    }
+    keystroke("usb", "4"); keystroke("usb", "40"); keystroke("usb", "400")
+    keystroke("hdmi", "abc")
+    keystroke("dock", "77"); pressReturn("dock")
+    check(store == ["usb": -225, "hdmi": 40, "dock": 77], "delay field quit: typing alone applies nothing",
+          "store: \(store)")
+    pending.commitAll()
+    check(store == ["usb": 400, "hdmi": 40, "dock": 77] && fields["usb"]?.text == "+400",
+          "delay field quit: a typed delay pending at quit is applied and saved; unreadable text keeps the saved value",
+          "store: \(store)")
+    keystroke("usb", "-3000")
+    pending.release("usb")   // Escape or a step button dropped it
+    pending.commitAll()
+    check(store["usb"] == 400, "delay field quit: a draft the field dropped applies nothing at quit",
+          "store: \(store)")
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
