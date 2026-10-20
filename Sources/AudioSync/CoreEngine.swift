@@ -318,6 +318,11 @@ final class CoreRenderer {
     /// the capture's clock (S207), in all.
     var spedFrames: Int64 { Int64(clamping: asc_renderer_sped_frames(handle)) }
 
+    /// Any thread: the largest lateness of a callback against the earliest
+    /// ones, in ms, and the callbacks more than 5 ms late (S209).
+    var lateMaxMs: Double { Double(asc_renderer_late_max_ns(handle)) / 1_000_000 }
+    var lateCallbacks: Int64 { Int64(clamping: asc_renderer_late_callbacks(handle)) }
+
     /// Any thread: the device frames the converter couldn't produce and that
     /// played as silence, in all; 0 unless the core's read sizing is wrong.
     var shortfallFrames: Int64 { Int64(clamping: asc_renderer_shortfall_frames(handle)) }
