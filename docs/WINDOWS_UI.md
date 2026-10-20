@@ -30,6 +30,17 @@ shorter, leaving the names more room; the window can't be made narrower than
 860 px or shorter than 440 px, which fits a 1366 x 768 screen at 150 %. Both
 columns scroll when the window is too short for them.
 
+A speaker row shows one of four states. Off: a grey toggle. On while
+streaming is off: an outlined toggle, "Will play" to Narrator. Playing: a
+filled toggle, a teal row and a bold name. On while streaming but unable to
+play right now: an outlined toggle, a plain row and name, and a note under the
+name that Narrator also reads as the toggle's value, "Waiting for device" when
+another app holds the output's device for itself, or "Reconnecting…" while
+AudioSync keeps trying to reach an AirPlay speaker. That speaker stays on, so
+selecting it turns it off; the row goes back to playing as soon as it plays
+again, and the notice explains what happened. Group rows show only the first
+three states.
+
 The windows read their data through the `Backend` trait in
 `windows/src/ui_model.rs`. On Windows that is the adapter over the WASAPI audio
 backend (`windows/src/adapter.rs`), which captures and plays for real. On other
@@ -70,7 +81,7 @@ Apple TV pairings have their own file (see the pairing prompt below).
 | Per-speaker delay (sync controls) | Same: −100, −10, a field that applies as you type, +10, +100, and the hint | Local outputs only, as on the Mac. The reference (the PC's own speakers or line out: the BuiltIn output with the smallest endpoint ID) has no delay field; every other local output shows a signed offset relative to it ("+150 ms", "−250 ms"), from −2000 to +20 000 ms, that applies with or without AirPlay, and the field takes a leading + or −. The hint names the reference, or, with none, says the lowest value plays first. The earliest output taking part plays at once and the others wait for it by the difference |
 | AirPlay delay | Same idea: one field in its own card under Connected Speakers, shown while the AirPlay sender runs | Both apps have it; on the Mac it is a row under the AirPlay speakers. Both show L, the sender's latency plus the stored adjustment. L follows the sender's latency, and a typed value applies on Enter or when the field loses the focus (not as you type, since its lower bound follows the latency) and stores the difference to the latency of that moment; Escape drops what was typed. While an AirPlay speaker is on, every local output waits L on top of its place relative to the reference |
 | Device volume hint | Same: a line under the volume slider of a local speaker that's on, when its own volume in Windows is low or muted: "Windows volume is 13%" with Set to 75%, "Muted in Windows" with Unmute, or "Muted in Windows, volume 13%" with Unmute at 75%. The tray flyout's row shows a small speaker glyph instead, and its description carries the hint | Low means below 25 %. AudioSync reads each switched-on output's volume and mute in Windows, whether or not it streams, and follows Windows' change notifications; it writes them only when you click the fix (75 % when low, never lower, and unmute when muted), and the row changes once Windows reports the change, so a device that ignores the write keeps the hint. The hint has no dismiss button: it goes when the volume or the mute changes, or the speaker is switched off. The glyph is in the secondary text color: Windows' own Mute glyph while muted (Segoe Fluent Icons has no speaker with a slash) and a speaker with one wave while low. AirPlay speakers and outputs that are off show nothing |
-| AirPlay problem with Retry | A notice, without Retry | A speaker that stops answering stays on while the sender keeps trying, with a notice that clears itself once it plays again; one that turns out to need a password or pairing is turned off with a notice saying so |
+| AirPlay problem with Retry | A notice; it has Retry only when AirPlay itself stopped or couldn't start (see Notices) | A speaker that stops answering stays on while the sender keeps trying, with a notice that clears itself once it plays again; one that turns out to need a password or pairing is turned off with a notice saying so |
 | Local Network hint | Not needed | Windows has no Local Network permission (Windows Firewall may ask once, the first time AudioSync looks for AirPlay speakers) |
 | Menu bar panel | Tray icon and flyout | Left click opens the flyout, double click the main window, right click a menu (Open AudioSync, Turn Streaming On/Off, Exit AudioSync). Escape or a click elsewhere closes the flyout |
 | Closing the window keeps the app in the menu bar | Closing it keeps the app in the tray | File > Exit (or Exit in the tray) quits |
