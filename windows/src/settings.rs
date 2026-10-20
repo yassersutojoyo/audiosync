@@ -83,7 +83,7 @@ pub const MAX_TEXT: usize = 1024;
 
 /// The main window's smallest size in logical pixels, as `ui/main.slint`
 /// sets it.
-pub const MIN_WINDOW: (f64, f64) = (860.0, 520.0);
+pub const MIN_WINDOW: (f64, f64) = (860.0, 440.0);
 
 /// The main window's largest size kept, in logical pixels.
 pub const MAX_WINDOW: (f64, f64) = (16_384.0, 16_384.0);

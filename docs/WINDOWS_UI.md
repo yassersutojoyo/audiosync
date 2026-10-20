@@ -27,7 +27,8 @@ across the sections: the toggle, the name with the kind below it (and the
 availability note, when there is one), the delay, the volume slider with its
 value, and the "…" options button. Below 960 px of width the volume sliders get
 shorter, leaving the names more room; the window can't be made narrower than
-860 px.
+860 px or shorter than 440 px, which fits a 1366 x 768 screen at 150 %. Both
+columns scroll when the window is too short for them.
 
 The windows read their data through the `Backend` trait in
 `windows/src/ui_model.rs`. On Windows that is the adapter over the WASAPI audio

@@ -242,9 +242,10 @@ export component MainWindow inherits Window {
 
     title: Strings.main-window-title;
     icon: @image-url("../res/audiosync-256.png");
-    // Wide enough for a speaker row's columns next to the left column.
+    // Wide enough for a speaker row's columns next to the left column, and
+    // short enough for a 1366 x 768 screen at 150 % (both columns scroll).
     min-width: 860px;
-    min-height: 520px;
+    min-height: 440px;
     preferred-width: 980px;
     preferred-height: 680px;
     // Below this width the volume sliders in the speaker rows are shorter.
@@ -424,74 +425,81 @@ export component MainWindow inherits Window {
             spacing: Tokens.spacing-window-margin;
             vertical-stretch: 1;
 
-            // Left column: what plays and how loud, each in its own card.
-            VerticalLayout {
-                width: 264px;
-                spacing: 8px;
-                alignment: start;
+            // Left column: what plays and how loud, each in its own card. It
+            // scrolls when the window is shorter than its cards (a small
+            // screen, or notices showing), as the speaker list does.
+            left-column := ScrollView {
+                width: 268px;
 
-                Card {
-                    VerticalLayout {
-                        spacing: 10px;
+                VerticalLayout {
+                    // Room for the scroll bar, as in the speaker list.
+                    padding-right: 4px;
+                    spacing: 8px;
+                    alignment: start;
 
-                        HorizontalLayout {
+                    Card {
+                        VerticalLayout {
                             spacing: 10px;
 
-                            Glyph {
-                                glyph: Glyphs.source;
-                                color: Tokens.teal-text;
-                                width: 20px;
+                            HorizontalLayout {
+                                spacing: 10px;
+
+                                Glyph {
+                                    glyph: Glyphs.source;
+                                    color: Tokens.teal-text;
+                                    width: 20px;
+                                }
+
+                                SectionTitle {
+                                    text: Strings.source-label;
+                                }
                             }
 
-                            SectionTitle {
-                                text: Strings.source-label;
-                            }
-                        }
-
-                        source := ComboBox {
-                            model: root.sources;
-                            current-index: root.source-index;
-                            accessible-label: Strings.source-label;
-                            selected => {
-                                root.source-selected(self.current-index);
-                                self.current-index = root.source-index;
+                            source := ComboBox {
+                                model: root.sources;
+                                current-index: root.source-index;
+                                accessible-label: Strings.source-label;
+                                selected => {
+                                    root.source-selected(self.current-index);
+                                    self.current-index = root.source-index;
+                                }
                             }
                         }
                     }
-                }
 
-                Card {
-                    VerticalLayout {
-                        spacing: 6px;
+                    Card {
+                        VerticalLayout {
+                            spacing: 6px;
 
-                        HorizontalLayout {
-                            spacing: 10px;
+                            HorizontalLayout {
+                                spacing: 10px;
 
-                            Glyph {
-                                glyph: Glyphs.volume-high;
-                                color: Tokens.teal-text;
-                                width: 20px;
+                                Glyph {
+                                    glyph: Glyphs.volume-high;
+                                    color: Tokens.teal-text;
+                                    width: 20px;
+                                }
+
+                                SectionTitle {
+                                    text: Strings.master-volume-title;
+                                }
                             }
 
-                            SectionTitle {
-                                text: Strings.master-volume-title;
-                            }
-                        }
-
-                        VolumeSlider {
-                            volume: root.master-volume;
-                            label: Strings.master-volume;
-                            changed(value) => {
-                                root.master-volume-changed(value);
+                            VolumeSlider {
+                                volume: root.master-volume;
+                                label: Strings.master-volume;
+                                changed(value) => {
+                                    root.master-volume-changed(value);
+                                }
                             }
                         }
                     }
-                }
 
-                EqualizerCard {
-                    on: root.equalizer-on;
-                    clicked => {
-                        root.equalizer-requested();
+                    EqualizerCard {
+                        on: root.equalizer-on;
+                        clicked => {
+                            root.equalizer-requested();
+                        }
                     }
                 }
             }
