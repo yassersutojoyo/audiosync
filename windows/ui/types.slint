@@ -8,7 +8,7 @@ export enum RowState { off, will-play, playing }
 export enum SpeakerKind { airplay, built-in, headphones, bluetooth, usb, hdmi, display-port, virtual, other }
 
 // Whether an AirPlay speaker can simply play.
-export enum Availability { open, needs-code, pairing, password-not-yet, pairing-not-yet, airplay2-not-yet, unsupported }
+export enum Availability { open, needs-code, pairing, waiting-to-pair, password-not-yet, pairing-not-yet, airplay2-not-yet, unsupported }
 
 // What went wrong with an AirPlay speaker, for its notice.
 export enum AirPlayProblem { not-responding, connection-lost, busy, refused, password-not-yet, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, unsupported }

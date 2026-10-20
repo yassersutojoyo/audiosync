@@ -1108,7 +1108,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         rows
     }
 
-    fn airplay_speaker(&self, speaker: AirPlayInfo) -> Speaker {
+    /// An AirPlay speaker's row. `prompted`: the speaker whose pairing has
+    /// the PIN prompt; another one pairing meanwhile waits for it.
+    fn airplay_speaker(&self, speaker: AirPlayInfo, prompted: Option<&str>) -> Speaker {
+        let waiting = prompted.is_some_and(|prompted| prompted != speaker.id);
         let id = airplay_key(&speaker.id);
         Speaker {
             auto_connect: self.auto_connect.contains(&id),
@@ -1118,7 +1121,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             enabled: speaker.enabled,
             volume: speaker.volume,
             delay_ms: None,
-            availability: if speaker.pairing {
+            availability: if speaker.pairing && waiting {
+                Availability::WaitingToPair
+            } else if speaker.pairing {
                 Availability::Pairing
             } else {
                 availability(speaker.availability)
@@ -1218,6 +1223,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             .into_iter()
             .find(|output| output.is_reference)
             .map(|output| output.name);
+        let pin_prompt = self.audio.airplay_pin_prompt();
+        let prompted = pin_prompt.as_ref().map(|prompt| prompt.id.as_str());
         AppState {
             reference_name,
             airplay_delay_ms: self.airplay_delay_ms(),
@@ -1234,7 +1241,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                     self.audio
                         .airplay_speakers()
                         .into_iter()
-                        .map(|speaker| self.airplay_speaker(speaker)),
+                        .map(|speaker| self.airplay_speaker(speaker, prompted)),
                 )
                 .collect(),
             groups: self.groups.clone(),
@@ -1249,10 +1256,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                     time: posted.time.clone(),
                 })
                 .collect(),
-            pin_prompt: self
-                .audio
-                .airplay_pin_prompt()
-                .map(|prompt| self.pin_prompt(prompt)),
+            pin_prompt: pin_prompt.map(|prompt| self.pin_prompt(prompt)),
         }
     }
 
@@ -2826,6 +2830,40 @@ mod tests {
         assert_eq!(row.availability, Availability::NeedsCode);
         assert!(!state.running, "nothing else is on");
         assert_eq!(fake.take_calls().last(), Some(&Call::Remove(id_of(&tv))));
+    }
+
+    #[test]
+    fn a_second_apple_tv_waits_to_pair_while_the_first_has_the_prompt() {
+        let (mut adapter, fake, first) = apple_tv_adapter();
+        let second = device(7, "Living Room TV", APPLE_TV_TXT);
+        fake.appear(&second);
+        adapter.poll();
+        let (first_id, second_id) = (ap(&first), ap(&second));
+        adapter.set_speaker_enabled(&first_id, true);
+        fake.pairing(&first, PairingEvent::PinRequested);
+        assert!(adapter.poll());
+        adapter.set_speaker_enabled(&second_id, true);
+        let availability = |adapter: &AudioAdapter<MockBackend>, id: &str| {
+            adapter.snapshot().speaker(id).unwrap().availability
+        };
+        assert_eq!(availability(&adapter, &first_id), Availability::Pairing);
+        assert_eq!(
+            availability(&adapter, &second_id),
+            Availability::WaitingToPair,
+            "the PIN dialog belongs to the first Apple TV"
+        );
+
+        adapter.cancel_pairing(&first_id);
+        fake.pairing(&second, PairingEvent::PinRequested);
+        adapter.poll();
+        assert_eq!(
+            adapter
+                .snapshot()
+                .pin_prompt
+                .map(|prompt| prompt.speaker_id),
+            Some(second_id.clone())
+        );
+        assert_eq!(availability(&adapter, &second_id), Availability::Pairing);
     }
 
     #[test]

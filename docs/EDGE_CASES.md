@@ -127,7 +127,7 @@ Manual: stream the whole system to an AirPlay speaker and a USB speaker, with th
 
 Expected: every speaker is listed, This Mac first and the rest by name; all of them can be on at once and play in sync. The menu bar panel scrolls once its rows don't fit (it shows at least six rows); the main window scrolls too.
 
-Code path: `SpeakerLayout.split` (`SpeakerLayout.swift`) orders the rows; the menu bar panel switches to a `ScrollView` above `maxListHeight` (`MenuBar.swift`). Each local speaker gets its own `OutputRenderer` and `CoreDelayReader` on the shared ring (`SyncEngine.addOutput`); all AirPlay speakers share one engine and are reconciled per speaker (`AirPlayReconcile.decide`).
+Code path: `SpeakerLayout.split` (`SpeakerLayout.swift`) orders the rows; the menu bar panel switches to a `ScrollView` above `maxListHeight` (`MenuBar.swift`). Each local speaker gets its own `OutputRenderer` and `CoreDelayReader` on the shared ring (`SyncEngine.addOutput`); all AirPlay speakers share one sender, which gets each speaker added or removed as it's switched (`syncNativeSpeakers`, `NativeAirPlayModel.plan`).
 
 Automated: "EC10 many speakers: sixteen speakers all listed, in name order", "EC10 many speakers: eight local speakers are attached together"; core `readers_are_independent` (`core/src/reader.rs`) and `readers_do_not_disturb_each_other` (`core/tests/reader_props.rs`).
 

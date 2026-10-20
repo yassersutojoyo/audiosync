@@ -452,7 +452,8 @@ fn keyboard_shortcuts_are_declared() {
 /// speaker kind, what a listed speaker can't do yet, the AirPlay delay field
 /// (spec S181), which shows only while the AirPlay sender runs, and the notice
 /// that the sender stopped after an internal error with its Retry button; an
-/// empty Connected Speakers list says just that it's empty.
+/// empty Connected Speakers list says just that it's empty, or that its
+/// virtual outputs are hidden.
 #[test]
 fn no_text_promises_airplay() {
     let strings = include_str!("../ui/strings.slint");
@@ -474,7 +475,7 @@ fn no_text_promises_airplay() {
     assert!(strings.contains("connected-none: @tr(\"No connected speakers\")"));
     assert!(
         include_str!("../ui/main.slint")
-            .contains("root.connected.length == 0 ? Strings.connected-none"),
+            .contains("root.connected.length > 0 ? \"\" : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
         "the empty Connected Speakers list uses the plain note"
     );
 }

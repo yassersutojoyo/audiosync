@@ -93,7 +93,7 @@ Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) desc
 - `NativeAirPlayModel.swift`, `NativeReceiver.swift`: what the sender lists and plays, and the decisions the app makes from it, PIN and password pairing among them (`AirPlayPairing.swift` holds the access kinds and turn-off reasons)
 - `TrackMetadata.swift`: the track's title, artist and album, and its artwork scaled to a small JPEG, for AirPlay speakers with a screen (`ReceiverInfo.swift` decides what they show)
 
-The app side: `AppDelegate.swift` holds app state, launch and quit (with its decisions in `AppLifecycle.swift` and the saved settings in `AppSettings.swift`), and its extensions split out windows (`+Windows`), groups and auto-connect (`+Groups`), local outputs (`+Outputs`), AirPlay speakers (`+AirPlay`, `+NativeAirPlay`) and streaming and notices (`+Engine`). The UI is SwiftUI in `MainWindow.swift` and `MenuBar.swift`, with the app menus in `MainMenu.swift`. Smaller pieces: `AudioDevices.swift` (Core Audio device helpers), `Volume.swift` (the loudness curve), `SpeakerGroups.swift`, `NowPlaying.swift` (Spotify and Music), `Diagnostics.swift` (the debug log) and `main.swift` (keeps one copy running).
+The app side: `AppDelegate.swift` holds app state, launch and quit (with its decisions in `AppLifecycle.swift` and the saved settings in `AppSettings.swift`), and its extensions split out windows (`+Windows`), groups and auto-connect (`+Groups`), local outputs (`+Outputs`), AirPlay speakers (`+AirPlay`, `+NativeAirPlay`) and streaming and notices (`+Engine`). The UI is SwiftUI in `MainWindow.swift` and `MenuBar.swift`, with the app menus in `MainMenu.swift`. Smaller pieces: `AudioDevices.swift` (Core Audio device helpers), `Volume.swift` (the loudness curve), `SpeakerGroups.swift`, `NowPlaying.swift` (Spotify and Music), `Diagnostics.swift` (the debug log) and `main.swift` (keeps one copy running, and quits cleanly on Ctrl-C or SIGTERM).
 
 The app's side of the Rust core (`core/`, imported through the `CAudioSyncCore` module in `Sources/CAudioSyncCore`): `CoreEngine.swift` wraps the core's engine parts, `EngineParts.swift` makes one set of them for each session, and `AudioSyncCore.swift` logs the core's version at launch.
 
@@ -105,7 +105,7 @@ Outside the app: `setup.sh` checks the tools and runs `build.sh`, which builds, 
 
 Two Rust folders sit next to the Swift package.
 
-`core/` is `audiosync-core`, the platform-independent audio core: the delay ring buffer, drift correction, resampling, the equalizer, volume, the sync policies and PCM16 conversion. It's written from [`ENGINE_SPEC.md`](ENGINE_SPEC.md), and [`core/NOTES.md`](../core/NOTES.md) records how it reads the spec where there was room to choose. The macOS app links it as described under Building. Its tests need only a Rust toolchain, no audio hardware:
+`core/` is `audiosync-core`, the platform-independent audio core: the delay ring buffer, drift correction, resampling, the equalizer, volume, the output stage's sample conversion and the sync policies. It's written from [`ENGINE_SPEC.md`](ENGINE_SPEC.md), and [`core/NOTES.md`](../core/NOTES.md) records how it reads the spec where there was room to choose. The macOS app links it as described under Building. Its tests need only a Rust toolchain, no audio hardware:
 
 ```bash
 cd core && cargo test

@@ -148,6 +148,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var airplayEmptySince: Date?
     /// A PIN or password prompt is open.
     var codePromptBusy = false
+    /// The open PIN or password prompt's window, while it runs (`closeCodePrompt`).
+    var codePromptWindow: NSWindow?
     var sentTrackInfo: SentTrackInfo?
 
     // MARK: - Local speakers (`+Outputs`)
@@ -412,8 +414,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         localNetworkProbe.onChange = { _ in }
         stopEngine()
         nativeAirPlay?.shutdown()   // AudioSync's own sender: every speaker gets its TEARDOWN
-        nowPlaying.stop()
-        localNetworkProbe.stop()
+        nowPlaying.stopWatching()
+        localNetworkProbe.stopBrowsing()
         deviceVolumes.stopFollowing()   // removes the listeners, writes nothing (S192, S195)
     }
 }

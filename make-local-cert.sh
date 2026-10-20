@@ -33,7 +33,7 @@
 #   security delete-keychain ~/Library/Keychains/audiosync-signing.keychain-db
 #   rm -rf ~/Library/Application\ Support/AudioSync/signing-keychain.pass
 #
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 
 NAME="AudioSync Local Code Signing"
 KEYCHAIN="$HOME/Library/Keychains/audiosync-signing.keychain-db"

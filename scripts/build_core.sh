@@ -29,7 +29,7 @@
 # Needs a Rust toolchain (https://rustup.rs) with the standard library for both
 # macOS targets, and python3; with rustup, a missing target is added here.
 # Usage: scripts/build_core.sh
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")/.."
 root=$(pwd)
 

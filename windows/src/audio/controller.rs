@@ -44,7 +44,7 @@ use std::time::{Duration, Instant};
 
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
 use audiosync_core::policy::delay::native_airplay_latency_ms;
-use audiosync_core::reader::Reader;
+use audiosync_core::reader::{Reader, ReaderCounters};
 use audiosync_core::render::{RendererControl, STOP_FADE_CAP};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
@@ -70,6 +70,9 @@ use super::routing::{
 use crate::debug_log::DebugLog;
 
 mod device_volume;
+
+#[cfg(test)]
+mod log_lines_tests;
 
 /// How often the debug log gets a status line while a session runs.
 const STATUS_INTERVAL: Duration = Duration::from_secs(5);
@@ -593,13 +596,11 @@ impl<D: Driver> Controller<D> {
                         self.setups.insert(endpoint.id.clone(), setup);
                     }
                     self.log.log(|| {
-                        let settings = self.policy.settings(&endpoint.id);
-                        format!(
-                            "output {} started: {}; delay {} ms, volume {} (gain {:.3})",
-                            label(&self.names, &endpoint.id),
-                            describe_stream(setup),
+                        describe_output_start(
+                            &label(&self.names, &endpoint.id),
+                            setup,
                             self.policy.hold_back_ms(&endpoint.id),
-                            settings.volume,
+                            self.policy.settings(&endpoint.id).volume,
                             params.gain,
                         )
                     });
@@ -787,54 +788,25 @@ impl<D: Driver> Controller<D> {
             return;
         };
         let frames = session.ring.frames_written();
-        let Some((since, frames_then)) = self.last_status else {
-            self.last_status = Some((now, frames));
+        let Some(span) = status_due(&mut self.last_status, now, frames) else {
             return;
         };
-        let elapsed = now.saturating_duration_since(since);
-        if elapsed < STATUS_INTERVAL {
-            return;
-        }
-        self.last_status = Some((now, frames));
         self.log.log(|| {
-            let seconds = elapsed.as_secs_f64();
-            let mut text = format!(
-                "status: capturing {}; {frames} frames captured, {:.0} frames/s over {seconds:.1} s",
-                describe_source(&session.source),
-                frames.saturating_sub(frames_then) as f64 / seconds,
-            );
-            for (id, playing) in &session.outputs {
-                let settings = self.policy.settings(id);
-                let counters = playing.control.counters();
-                text.push_str(&format!(
-                    "\n  output {}: delay {} ms ({} frames), volume {} (gain {:.3}), lag {} frames; \
-                     primes {}, resyncs {}, starved reads {} ({} frames), drift skips {} ({} frames), \
-                     drift silences {} ({} frames), rejected copies {}",
-                    label(&self.names, id),
-                    self.policy.hold_back_ms(id),
-                    playing.control.delay_frames(),
-                    settings.volume,
-                    playing.gain.get(),
-                    playing.control.lag_frames(),
-                    counters.primes,
-                    counters.resyncs,
-                    counters.starved_renders,
-                    counters.starved_frames,
-                    counters.drift_skips,
-                    counters.drift_skip_frames,
-                    counters.drift_silences,
-                    counters.drift_silence_frames,
-                    counters.rejected_copies,
-                ));
-            }
-            if session.outputs.is_empty() {
-                text.push_str("\n  no output plays");
-            }
-            if let Some(airplay) = self.airplay.as_ref().and_then(AirPlaySpeakers::status) {
-                text.push('\n');
-                text.push_str(&airplay);
-            }
-            text
+            let outputs: Vec<OutputStatus> = session
+                .outputs
+                .iter()
+                .map(|(id, playing)| OutputStatus {
+                    label: label(&self.names, id),
+                    hold_back_ms: self.policy.hold_back_ms(id),
+                    delay_frames: playing.control.delay_frames(),
+                    volume: self.policy.settings(id).volume,
+                    gain: playing.gain.get(),
+                    lag_frames: playing.control.lag_frames(),
+                    counters: playing.control.counters(),
+                })
+                .collect();
+            let airplay = self.airplay.as_ref().and_then(AirPlaySpeakers::status);
+            describe_status(&session.source, span, &outputs, airplay.as_deref())
         });
     }
 
@@ -947,17 +919,8 @@ impl<D: Driver> Controller<D> {
         let capture = self
             .driver
             .start_capture(activation, writer, processor, feed)?;
-        self.log.log(|| {
-            let airplay = if feeds_airplay {
-                "; it feeds the AirPlay sender"
-            } else {
-                ""
-            };
-            format!(
-                "capture started: {}{airplay}",
-                describe_capture(activation, capture.setup())
-            )
-        });
+        self.log
+            .log(|| describe_capture_start(activation, capture.setup(), feeds_airplay));
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.restart_timeline();
         }
@@ -1722,6 +1685,140 @@ fn describe_stream(setup: Option<StreamSetup>) -> String {
         "{} Hz, {} ch (mask 0x{:x}), {samples}; buffer {} frames ({buffer_ms:.1} ms)",
         format.rate, format.channels, format.channel_mask, setup.buffer_frames
     )
+}
+
+/// The log line of a capture that started: what it captures, the format
+/// Windows delivers it in, and whether it feeds the AirPlay sender.
+fn describe_capture_start(
+    activation: Activation,
+    setup: Option<CaptureAttempt>,
+    feeds_airplay: bool,
+) -> String {
+    let airplay = if feeds_airplay {
+        "; it feeds the AirPlay sender"
+    } else {
+        ""
+    };
+    format!(
+        "capture started: {}{airplay}",
+        describe_capture(activation, setup)
+    )
+}
+
+/// The log line of an output that started: the output as [`label`] names
+/// it, how its stream is set up, its hold-back in ms, its volume slider
+/// position and the gain it plays at.
+fn describe_output_start(
+    label: &str,
+    setup: Option<StreamSetup>,
+    hold_back_ms: f64,
+    volume: f64,
+    gain: f32,
+) -> String {
+    format!(
+        "output {label} started: {}; delay {hold_back_ms} ms, volume {volume} (gain {gain:.3})",
+        describe_stream(setup),
+    )
+}
+
+/// What a status line covers: the time since the last one, and the frames
+/// the capture had written by then and by now.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct StatusSpan {
+    elapsed: Duration,
+    frames_then: u64,
+    frames: u64,
+}
+
+/// Whether a status check at `now`, with `frames` captured so far, owes the
+/// log a status line. `last` is the mark of the last line: when it came and
+/// the frames captured then. The first check of a session only sets the
+/// mark; a later one owes a line once [`STATUS_INTERVAL`] has passed since
+/// the mark, and moves the mark to `now`.
+fn status_due(last: &mut Option<(Instant, u64)>, now: Instant, frames: u64) -> Option<StatusSpan> {
+    let Some((since, frames_then)) = *last else {
+        *last = Some((now, frames));
+        return None;
+    };
+    let elapsed = now.saturating_duration_since(since);
+    if elapsed < STATUS_INTERVAL {
+        return None;
+    }
+    *last = Some((now, frames));
+    Some(StatusSpan {
+        elapsed,
+        frames_then,
+        frames,
+    })
+}
+
+/// One playing output's part of a status line, as read from the atomics its
+/// audio thread keeps.
+#[derive(Clone, Debug, PartialEq)]
+struct OutputStatus {
+    /// The output as [`label`] names it.
+    label: String,
+    /// Its hold-back, in ms.
+    hold_back_ms: f64,
+    /// The delay its renderer was asked for, in session-rate frames.
+    delay_frames: i64,
+    /// Its volume slider position.
+    volume: f64,
+    /// The gain it plays at.
+    gain: f32,
+    /// Its reader's last published lag.
+    lag_frames: i64,
+    /// Its reader's counters.
+    counters: ReaderCounters,
+}
+
+/// A status line: what the session captures from `source` and how fast
+/// over `span`, then a line per output in `outputs` (or that none plays),
+/// then the AirPlay sender's status when it has one.
+fn describe_status(
+    source: &SourceId,
+    span: StatusSpan,
+    outputs: &[OutputStatus],
+    airplay: Option<&str>,
+) -> String {
+    let seconds = span.elapsed.as_secs_f64();
+    let mut text = format!(
+        "status: capturing {}; {} frames captured, {:.0} frames/s over {seconds:.1} s",
+        describe_source(source),
+        span.frames,
+        span.frames.saturating_sub(span.frames_then) as f64 / seconds,
+    );
+    for output in outputs {
+        let counters = output.counters;
+        text.push_str(&format!(
+            "\n  output {}: delay {} ms ({} frames), volume {} (gain {:.3}), lag {} frames; \
+             primes {}, resyncs {}, starved reads {} ({} frames), drift skips {} ({} frames), \
+             drift silences {} ({} frames), rejected copies {}",
+            output.label,
+            output.hold_back_ms,
+            output.delay_frames,
+            output.volume,
+            output.gain,
+            output.lag_frames,
+            counters.primes,
+            counters.resyncs,
+            counters.starved_renders,
+            counters.starved_frames,
+            counters.drift_skips,
+            counters.drift_skip_frames,
+            counters.drift_silences,
+            counters.drift_silence_frames,
+            counters.rejected_copies,
+        ));
+    }
+    if outputs.is_empty() {
+        text.push_str("\n  no output plays");
+    }
+    if let Some(airplay) = airplay {
+        text.push('\n');
+        text.push_str(airplay);
+    }
+    text
 }
 
 /// The equalizer settings as the log shows them.

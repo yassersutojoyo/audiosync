@@ -21,6 +21,8 @@ export global Strings {
     out property <string> will-play-help: @tr("Plays when streaming starts. Select to start streaming.");
     out property <string> status-off: @tr("Off");
     out property <string> connected-none: @tr("No connected speakers");
+    // Connected Speakers when its only outputs are virtual ones, hidden.
+    out property <string> connected-none-virtual-hidden: @tr("No connected speakers. Virtual devices are hidden; to list them, choose View > Show Virtual Devices.");
     out property <string> master-volume-title: @tr("Master Volume");
     out property <string> master-volume: @tr("Master volume");
     out property <string> dismiss-notice: @tr("Dismiss Notice");
@@ -353,6 +355,9 @@ export global Strings {
         }
         if a == Availability.pairing {
             return @tr("Pairing…");
+        }
+        if a == Availability.waiting-to-pair {
+            return @tr("Waiting to pair…");
         }
         if a == Availability.password-not-yet {
             return @tr("Password not supported yet");

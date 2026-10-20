@@ -13,7 +13,7 @@
 #                  over to the running one and exits.
 #   --signer NAME  every signature must be NAME's: the certificate's name, as
 #                  in "AudioSync Local Code Signing", or adhoc
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")/.."
 
 usage() {
@@ -93,9 +93,13 @@ expect "Poppins Medium in Resources/$fonts" cmp -s brand/fonts/Poppins-Medium.tt
 expect "AudioSync's LICENSE" cmp -s LICENSE "$resources/LICENSE"
 expect "ThirdParty/THIRD_PARTY_NOTICES.md" cmp -s THIRD_PARTY_NOTICES.md "$third_party/THIRD_PARTY_NOTICES.md"
 expect "ThirdParty/licenses/poppins/OFL.txt" cmp -s brand/fonts/OFL.txt "$third_party/licenses/poppins/OFL.txt"
-for notice in COPYRIGHT-library.html MIT.txt Apache-2.0.txt rustc-version.txt; do
+for notice in COPYRIGHT-library.html MIT.txt Apache-2.0.txt rustc-version.txt crates.txt; do
   expect "ThirdParty/licenses/rust/$notice" test -s "$third_party/licenses/rust/$notice"
 done
+# The crates the core links include the native AirPlay sender's; mdns-sd
+# (its discovery) stands for them.
+expect "crates.txt covers the AirPlay sender's crates (mdns-sd)" \
+  grep -q '^mdns-sd ' "$third_party/licenses/rust/crates.txt"
 expect "Frameworks/Sparkle.framework" test -f "$contents/Frameworks/Sparkle.framework/Versions/Current/Sparkle"
 expect "ThirdParty/licenses/sparkle/LICENSE" test -s "$third_party/licenses/sparkle/LICENSE"
 
