@@ -2812,6 +2812,39 @@ mod tests {
     }
 
     #[test]
+    fn a_busy_output_that_then_fails_another_way_is_told_busy_again_later() {
+        let mut backend = backend();
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let busy = BackendEvent::OutputBusy {
+            id: HEADPHONES.to_owned(),
+        };
+        assert_eq!(backend.poll(), std::slice::from_ref(&busy));
+        // At its next try the device fails another way: turned off, it no
+        // longer waits for the other app.
+        backend.fail_output(HEADPHONES, Some(BackendError::UnsupportedFormat));
+        let events: Vec<BackendEvent> =
+            (0..BUSY_RETRY_POLLS).flat_map(|_| backend.poll()).collect();
+        assert_eq!(
+            events,
+            [
+                BackendEvent::OutputFree {
+                    id: HEADPHONES.to_owned(),
+                },
+                BackendEvent::OutputFailed {
+                    id: HEADPHONES.to_owned(),
+                    error: BackendError::UnsupportedFormat,
+                },
+            ]
+        );
+        assert!(!backend.policy().settings(HEADPHONES).enabled);
+        // Turned on again while an app holds it once more: told again.
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        assert_eq!(backend.set_output_enabled(HEADPHONES, true), Ok(()));
+        assert_eq!(backend.poll(), [busy]);
+    }
+
+    #[test]
     fn a_busy_output_whose_device_goes_away_no_longer_waits() {
         let mut backend = backend();
         backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
@@ -2979,6 +3012,39 @@ mod tests {
         backend.refuse_captures(None);
         poll_quietly(&mut backend, RESTART_DELAY_POLLS + 1);
         assert_eq!(backend.running_source(), None, "no try once it stopped");
+    }
+
+    #[test]
+    fn a_capture_restart_that_times_out_is_the_last_try() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        // Windows never completed the activation: each try held the UI
+        // thread for the whole wait, so there is no other.
+        let timed_out = BackendError::System {
+            call: "ActivateAudioInterfaceAsync",
+            code: crate::audio::backend::TIMED_OUT,
+        };
+        backend.refuse_captures(Some(timed_out.clone()));
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(timed_out),
+            }]
+        );
+        assert_eq!(backend.driver().capture_attempts(), 1 + 1);
+        assert_eq!(backend.running_source(), None);
+        // Another Windows error is still tried again.
+        backend.refuse_captures(None);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::System {
+            call: "IAudioClient::Initialize",
+            code: -1,
+        }));
+        poll_quietly(&mut backend, 1 + 2 * RESTART_DELAY_POLLS);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
     }
 
     #[test]
