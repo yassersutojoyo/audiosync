@@ -13,7 +13,7 @@
 //! listed (S68). An output that can't start is turned off and reported (S69),
 //! except one whose device another app holds in exclusive mode: that one
 //! stays on, as the user chose, is reported once as busy, and is tried again
-//! at every poll until it plays.
+//! every few seconds until it plays.
 //!
 //! A capture lost because Windows audio restarted, or the device it captures
 //! through went away, ends its session and starts it again about a second
@@ -46,7 +46,7 @@
 //! sender's timeline (P143); a new L_s from the sender re-times every
 //! playing output.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -97,6 +97,13 @@ const ROUTING_INTERVAL: Duration = Duration::from_secs(3);
 /// that noticed: about a second later at the UI's two polls a second, so
 /// that the audio service is back.
 const RESTART_DELAY_POLLS: u32 = 2;
+
+/// An output whose device another app holds ([`BackendError::DeviceBusy`])
+/// is tried again this many polls after its last try: about every three
+/// seconds at the UI's two polls a second. Each try starts an output thread
+/// and opens the device while the UI thread waits, too much for every poll,
+/// and the user hears it within three seconds once the device is free.
+const BUSY_RETRY_POLLS: u32 = 6;
 
 /// A capture that started again counts as working once it has run this many
 /// polls (about five seconds); a loss before then means the restart failed,
@@ -333,8 +340,9 @@ pub struct Controller<D: Driver> {
     /// (spec S192 to S202), followed through Windows' notifications.
     device_volumes: device_volume::Followed,
     /// The outputs reported busy ([`BackendEvent::OutputBusy`]) that
-    /// haven't played since or been switched off.
-    busy: BTreeSet<String>,
+    /// haven't played since or been switched off, each with the polls left
+    /// before its next try ([`BUSY_RETRY_POLLS`]).
+    busy: BTreeMap<String, u32>,
 }
 
 impl<D: Driver> Controller<D> {
@@ -365,7 +373,7 @@ impl<D: Driver> Controller<D> {
             next_start: None,
             restart_wait: None,
             device_volumes: device_volume::Followed::default(),
-            busy: BTreeSet::new(),
+            busy: BTreeMap::new(),
         }
     }
 
@@ -629,8 +637,9 @@ impl<D: Driver> Controller<D> {
 
     /// Adds and removes renderers so the playing outputs are the enabled,
     /// connected ones. Returns the outputs that couldn't start; they are
-    /// turned off (S69). One whose device is gone, or held by another app,
-    /// stays on and is tried again at the next poll.
+    /// turned off (S69). One whose device is gone stays on and is tried
+    /// again at the next poll; one whose device another app holds stays on
+    /// and is tried again every few seconds ([`BUSY_RETRY_POLLS`]).
     fn sync_outputs(&mut self) -> Vec<(String, BackendError)> {
         let Some(session) = self.session.as_mut() else {
             return Vec::new();
@@ -667,6 +676,10 @@ impl<D: Driver> Controller<D> {
 
         let mut failures = Vec::new();
         for endpoint in plan.attach {
+            // A busy output waits for its next try.
+            if self.busy.get(&endpoint.id).is_some_and(|&wait| wait > 0) {
+                continue;
+            }
             let params = self.policy.params(&endpoint.id);
             let reader = Reader::new(Arc::clone(&session.ring), SESSION_RATE);
             reader.control().set_delay_frames(params.delay_frames);
@@ -677,7 +690,7 @@ impl<D: Driver> Controller<D> {
                 .start_renderer(&endpoint, reader, control.clone(), Arc::clone(&gain))
             {
                 Ok(handle) => {
-                    if self.busy.remove(&endpoint.id) {
+                    if self.busy.remove(&endpoint.id).is_some() {
                         self.log.log(|| {
                             format!(
                                 "output {}: the other app let go of its device",
@@ -722,13 +735,17 @@ impl<D: Driver> Controller<D> {
                 }
                 // Another app holds the device in exclusive mode: it stays
                 // on, as the user chose, and plays once that app lets go.
-                // Told once; the next polls try again quietly.
+                // Told once; the next tries, every few seconds, are quiet.
                 Err(BackendError::DeviceBusy) => {
-                    if self.busy.insert(endpoint.id.clone()) {
+                    let first = self
+                        .busy
+                        .insert(endpoint.id.clone(), BUSY_RETRY_POLLS)
+                        .is_none();
+                    if first {
                         self.log.log(|| {
                             format!(
                                 "output {} is busy: another app holds its device in exclusive \
-                                 mode; it stays on and is tried again at every poll",
+                                 mode; it stays on and is tried again every few seconds",
                                 label(&self.names, &endpoint.id)
                             )
                         });
@@ -1315,7 +1332,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         });
         self.policy.set_enabled(id, enabled);
         // Switched off, a busy output no longer waits for its device.
-        if !enabled && self.busy.remove(id) {
+        if !enabled && self.busy.remove(id).is_some() {
             self.pending
                 .push(BackendEvent::OutputFree { id: id.to_owned() });
         }
@@ -1551,6 +1568,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn poll(&mut self) -> Vec<BackendEvent> {
+        // A busy output's next try comes a poll closer.
+        for wait in self.busy.values_mut() {
+            *wait = wait.saturating_sub(1);
+        }
         // Outputs that faded out stop, and then an ended session's capture;
         // a start that waited for them goes ahead.
         self.reap(false);
@@ -2584,14 +2605,15 @@ mod tests {
             "it stays on, as the user chose"
         );
         assert_eq!(playing(&backend), [SPEAKERS]);
-        // Tried again at every poll, and told once.
-        for _ in 0..3 {
-            assert!(backend.poll().is_empty());
-        }
+        // Tried again every few seconds, and told once.
+        poll_quietly(&mut backend, 2 * BUSY_RETRY_POLLS);
         assert_eq!(playing(&backend), [SPEAKERS]);
         backend.fail_output(HEADPHONES, None);
+        // It plays at its next try.
+        let events: Vec<BackendEvent> =
+            (0..BUSY_RETRY_POLLS).flat_map(|_| backend.poll()).collect();
         assert_eq!(
-            backend.poll(),
+            events,
             [BackendEvent::OutputFree {
                 id: HEADPHONES.to_owned(),
             }]
@@ -2644,7 +2666,10 @@ mod tests {
         assert!(backend.policy().settings(HEADPHONES).enabled);
         assert_eq!(playing(&backend), [SPEAKERS]);
         backend.fail_output(HEADPHONES, None);
-        backend.poll();
+        // It plays at its next try.
+        for _ in 0..BUSY_RETRY_POLLS {
+            backend.poll();
+        }
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 

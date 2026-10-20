@@ -237,7 +237,7 @@ pub enum BackendEvent {
         error: BackendError,
     },
     /// An output could not start because another app holds its device in
-    /// exclusive mode. It stays on, is tried again at every poll, and plays
+    /// exclusive mode. It stays on, is tried again every few seconds, and plays
     /// once the device is free; [`BackendEvent::OutputFree`] tells then.
     OutputBusy {
         /// The endpoint ID.

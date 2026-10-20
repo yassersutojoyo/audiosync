@@ -2324,7 +2324,7 @@ mod tests {
         assert_eq!(playing(&adapter), [SPEAKERS]);
 
         adapter.audio_mut().fail_output(HEADPHONES, None);
-        adapter.poll();
+        poll_until_busy_retried(&mut adapter);
         assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
         assert!(messages(&adapter).is_empty(), "its cause is gone");
     }
@@ -2340,8 +2340,16 @@ mod tests {
         assert!(adapter.snapshot().running, "it plays once it's free");
         assert!(enabled(&adapter, SPEAKERS));
         adapter.audio_mut().fail_output(SPEAKERS, None);
-        adapter.poll();
+        poll_until_busy_retried(&mut adapter);
         assert_eq!(playing(&adapter), [SPEAKERS]);
+    }
+
+    /// Polls for as long as a busy speaker waits for its next try: about
+    /// three seconds, six polls.
+    fn poll_until_busy_retried(adapter: &mut AudioAdapter<MockBackend>) {
+        for _ in 0..6 {
+            adapter.poll();
+        }
     }
 
     #[test]
