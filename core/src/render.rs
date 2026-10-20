@@ -147,15 +147,17 @@ pub const STALE_STAMP_MS: u64 = 100;
 /// See [`STALE_STAMP_MS`].
 pub const STALE_STAMP_BLOCKS: u64 = 4;
 
-/// The most a late callback's lateness moves its reader's delay, in ms
-/// (S209): more than the spread of two Bluetooth sinks sharing a radio, so
-/// one stray callback costs no more than that.
+/// The most a callback's lateness moves its reader's delay, in ms (S209).
 pub const LATE_CAP_MS: u64 = 50;
 
-/// How fast the earliest lateness a renderer saw is forgotten, in ns per
-/// second of device frames (S209), so one stray early callback stops
-/// counting within [`LATE_CAP_MS`] seconds.
+/// How fast the earliest lateness a renderer saw rises, in ns per second of
+/// device frames (S209). The floor never lies more than [`LATE_CAP_MS`]
+/// below the current callback, so early callbacks stop counting within 50 s.
 pub const EARLIEST_LEAK_NS_PER_S: u64 = 1_000_000;
+
+/// A callback later than this, in ms, counts as late in
+/// [`Renderer::late_callbacks`] (S209).
+pub const LATE_COUNT_MS: u64 = 5;
 
 /// Where a renderer that follows the capture's clock stands (S207).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -252,6 +254,10 @@ struct Shared {
     slowed_frames: AtomicU64,
     /// Capture frames the converter was sped up by in all (S207).
     sped_frames: AtomicU64,
+    /// The largest lateness of a callback, in ns (S209).
+    late_max_ns: AtomicU64,
+    /// Callbacks later than [`LATE_COUNT_MS`] (S209).
+    late_callbacks: AtomicU64,
     /// The ring whose session lead counts this renderer, and its slot
     /// there, `None` when every slot was taken (S208).
     ring: Arc<Ring>,
@@ -317,6 +323,8 @@ impl RendererControl {
                 shortfall_frames: AtomicU64::new(0),
                 slowed_frames: AtomicU64::new(0),
                 sped_frames: AtomicU64::new(0),
+                late_max_ns: AtomicU64::new(0),
+                late_callbacks: AtomicU64::new(0),
                 ring,
                 slot,
             }),
@@ -423,6 +431,16 @@ impl RendererControl {
         self.shared.sped_frames.load(Ordering::Relaxed)
     }
 
+    /// [`Renderer::late_max_ns`], from any thread (S209).
+    pub fn late_max_ns(&self) -> u64 {
+        self.shared.late_max_ns.load(Ordering::Relaxed)
+    }
+
+    /// [`Renderer::late_callbacks`], from any thread (S209).
+    pub fn late_callbacks(&self) -> u64 {
+        self.shared.late_callbacks.load(Ordering::Relaxed)
+    }
+
     /// [`Renderer::shortfall_frames`], from any thread.
     pub fn shortfall_frames(&self) -> u64 {
         self.shared.shortfall_frames.load(Ordering::Relaxed)
@@ -504,9 +522,9 @@ pub struct Renderer {
     tracking: Tracking,
     /// [`TRACK_MS`] in device frames.
     track_frames: f64,
-    /// The earliest a callback came against the output time of its first
-    /// frame, `now - output time` in ns, with its leak (S209).
-    earliest: Option<i64>,
+    /// The lowest and second lowest `now - output time` seen, in ns, with
+    /// their leak (S209).
+    earliest: Option<[i64; 2]>,
 }
 
 impl fmt::Debug for Renderer {
@@ -629,6 +647,18 @@ impl Renderer {
         self.shared.sped_frames.load(Ordering::Relaxed)
     }
 
+    /// The largest lateness of a callback against the earliest ones, in ns
+    /// (S209), capped at [`LATE_CAP_MS`]. Stays 0 without output times.
+    pub fn late_max_ns(&self) -> u64 {
+        self.shared.late_max_ns.load(Ordering::Relaxed)
+    }
+
+    /// The callbacks that came more than [`LATE_COUNT_MS`] later than the
+    /// earliest ones (S209). Stays 0 without output times.
+    pub fn late_callbacks(&self) -> u64 {
+        self.shared.late_callbacks.load(Ordering::Relaxed)
+    }
+
     /// Sets the device's period, in device frames: the callback it asks for
     /// when it is on time (a Windows endpoint's period, which each wake
     /// refills). The lead then counts it, or a callback when that is larger,
@@ -684,6 +714,13 @@ impl Renderer {
             (Some(time), Some(now)) => self.lateness(time, now, frames),
             _ => 0,
         };
+        if late_ns > 0 {
+            let shared = &*self.shared;
+            shared.late_max_ns.fetch_max(late_ns, Ordering::Relaxed);
+            if late_ns > LATE_COUNT_MS * 1_000_000 {
+                shared.late_callbacks.fetch_add(1, Ordering::Relaxed);
+            }
+        }
         let late = late_ns as u128 * u128::from(self.capture_rate) / 1_000_000_000;
         self.reader
             .set_late_frames(i64::try_from(late).unwrap_or(i64::MAX));
@@ -770,14 +807,21 @@ impl Renderer {
             .clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
         let leak = (frames as u64).saturating_mul(EARLIEST_LEAK_NS_PER_S)
             / u64::from(self.device_rate.max(1));
-        let earliest = self.earliest.map_or(late, |earliest| {
-            earliest
-                .saturating_add(i64::try_from(leak).unwrap_or(i64::MAX))
-                .min(late)
+        let leak = i64::try_from(leak).unwrap_or(i64::MAX);
+        let cap = (LATE_CAP_MS * 1_000_000) as i64;
+        let [low, second] = self.earliest.map_or([late, i64::MAX], |[low, second]| {
+            let (low, second) = (low.saturating_add(leak), second.saturating_add(leak));
+            if late < low {
+                [late, low]
+            } else {
+                [low, second.min(late)]
+            }
         });
-        self.earliest = Some(earliest);
-        let behind = late.saturating_sub(earliest).max(0) as u64;
-        behind.min(LATE_CAP_MS * 1_000_000)
+        let floor = late.saturating_sub(cap);
+        self.earliest = Some([low.max(floor), second.max(floor)]);
+        // The floor is the second lowest, so one stray early callback, such
+        // as a device's first, never counts.
+        late.saturating_sub(second.max(floor)).clamp(0, cap) as u64
     }
 
     /// Trims the converter over a callback of `frames` device frames that

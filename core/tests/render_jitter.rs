@@ -40,6 +40,9 @@ struct Setup {
     late_ms: u64,
     /// Where the first callback falls in a capture block, as a fraction.
     phase: f64,
+    /// How much earlier than its frames the first callback says they play,
+    /// in ms, as a stray time stamp at a device's start.
+    first_early_ms: u64,
 }
 
 struct Output {
@@ -83,6 +86,8 @@ impl Output {
 struct Run {
     /// Each output's counters once settled and at the end.
     counters: Vec<(ReaderCounters, ReaderCounters)>,
+    /// Each output's largest lateness in ns and its late callbacks.
+    late: Vec<(u64, u64)>,
     /// Each output's settled delays, in ms.
     delays: Vec<Vec<f64>>,
 }
@@ -178,7 +183,12 @@ fn run(setups: &[Setup], seconds: u128, timed: bool) -> Run {
         // The device's own clock: 20 ms after the nominal time, however late
         // the callback came.
         let output_at = output.nominal(output.pulls) + SECOND / 50;
-        let (output_ns, now_ns) = (ns(output_at as i128), ns(pull_at as i128));
+        let stamped_at = if output.pulls == 0 {
+            output_at + u128::from(output.setup.first_early_ms) * SECOND / 1000
+        } else {
+            output_at
+        };
+        let (output_ns, now_ns) = (ns(stamped_at as i128), ns(pull_at as i128));
         if timed {
             output.renderer.render_timed_at(&mut out, output_ns, now_ns);
         } else {
@@ -202,6 +212,10 @@ fn run(setups: &[Setup], seconds: u128, timed: bool) -> Run {
             .zip(settled)
             .map(|(output, early)| (early, output.control.counters()))
             .collect(),
+        late: outputs
+            .iter()
+            .map(|o| (o.control.late_max_ns(), o.control.late_callbacks()))
+            .collect(),
         delays: outputs.into_iter().map(|output| output.delays).collect(),
     }
 }
@@ -215,24 +229,28 @@ const BLUETOOTH_PAIR: [Setup; 4] = [
         hold_back: 0,
         late_ms: 30,
         phase: 0.3,
+        first_early_ms: 0,
     },
     Setup {
         device_rate: 44_100,
         hold_back: 960,
         late_ms: 30,
         phase: 0.55,
+        first_early_ms: 0,
     },
     Setup {
         device_rate: 48_000,
         hold_back: 2_064,
         late_ms: 30,
         phase: 0.8,
+        first_early_ms: 0,
     },
     Setup {
         device_rate: 48_000,
         hold_back: 9_744,
         late_ms: 0,
         phase: 0.1,
+        first_early_ms: 0,
     },
 ];
 
@@ -258,6 +276,17 @@ fn late_bluetooth_callbacks_never_run_an_output_dry_or_correct_drift_once_settle
         // One re-anchor per re-time, and one when the session lead first
         // moves.
         assert!(end.resyncs <= retimes + 1, "{setup:?}: {end:?}");
+    }
+    for (setup, &(most, count)) in BLUETOOTH_PAIR.iter().zip(&seen.late) {
+        if setup.late_ms == 0 {
+            assert_eq!((most, count), (0, 0), "{setup:?}");
+        } else {
+            assert!(
+                (25_000_000..=30_000_000).contains(&most),
+                "{setup:?}: {most} ns"
+            );
+            assert!(count > 3_000, "{setup:?}: {count} late callbacks");
+        }
     }
 }
 
@@ -300,4 +329,44 @@ fn outputs_on_time_play_the_same_with_output_times_as_without() {
             "{setup:?}"
         );
     }
+}
+
+// covers: S209
+#[test]
+fn one_stray_early_callback_never_moves_an_output() {
+    // Its first callback says its frames play 80 ms later than they do, more
+    // than the dead band, as if that callback came 80 ms early.
+    let stray = |setups: &[Setup]| -> Vec<Setup> {
+        setups
+            .iter()
+            .map(|&setup| Setup {
+                first_early_ms: 80,
+                ..setup
+            })
+            .collect()
+    };
+    let late = stray(&BLUETOOTH_PAIR);
+    let seen = run(&late, 60, true);
+    for (setup, (early, end)) in late.iter().zip(&seen.counters) {
+        assert_eq!(
+            (
+                end.starved_renders - early.starved_renders,
+                end.drift_skips,
+                end.drift_silences,
+            ),
+            (0, 0, 0),
+            "{setup:?}: {end:?}"
+        );
+    }
+    let steady: Vec<Setup> = BLUETOOTH_PAIR
+        .iter()
+        .map(|&setup| Setup {
+            late_ms: 0,
+            ..setup
+        })
+        .collect();
+    let with_stray = run(&stray(&steady), 20, true);
+    let without = run(&steady, 20, true);
+    assert_eq!(with_stray.delays, without.delays);
+    assert!(with_stray.late.iter().all(|&late| late == (0, 0)));
 }
