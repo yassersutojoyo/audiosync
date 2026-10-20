@@ -474,8 +474,9 @@ pub struct Renderer {
     reader_delay: i64,
     /// The converter's fixed latency, in capture frames (S62).
     latency: i64,
-    /// The start lead is fixed: the host gave the period, or the first
-    /// callback came (S208).
+    /// The start lead is published: the host gave the period, or the
+    /// first callback came. Not before, so a renderer whose hold-back the
+    /// host hasn't set yet never moves the session lead (S208).
     start_lead_fixed: bool,
     /// A delay went to the reader; closed until the read that applies it.
     awaiting_resync: bool,
@@ -526,7 +527,7 @@ impl Renderer {
         let bound = reader_frames_bound(RENDER_CHUNK, capture_rate, device_rate);
         let read_frames = bound + bound / TRIM_SHARE + 2;
         let latency = resampler.latency_frames() as i64;
-        let renderer = Renderer {
+        Ok(Renderer {
             reader,
             reader_control: control.reader.clone(),
             resampler,
@@ -554,9 +555,7 @@ impl Renderer {
             frames_after_fade: None,
             tracking: RESTART,
             track_frames: f64::from(device_rate) * f64::from(TRACK_MS) / 1000.0,
-        };
-        renderer.publish_start_lead(RENDER_CHUNK);
-        Ok(renderer)
+        })
     }
 
     /// Channels per device frame.

@@ -1007,14 +1007,28 @@ fn the_session_lead_moves_the_other_outputs_only_when_it_changes() {
     let (mut built_in, built_in_control) = make(48_000, 0);
     play(&mut writer, &mut [&mut built_in], 50);
     assert_eq!(built_in_control.reader().delay_frames(), 480);
+    // Made as the Mac makes it, its hold-back set a moment later: until
+    // its first callback it doesn't count, so nothing moves meanwhile.
+    let reader = Reader::new(Arc::clone(&ring), RATE);
+    let late_control = RendererControl::new(&reader);
+    let mut late =
+        Renderer::new(reader, &late_control, Arc::clone(&gain), RATE, 44_100, 2).unwrap();
+    play(&mut writer, &mut [&mut built_in], 5);
+    assert_eq!(ring.session_leads().session_lead(), 480);
+    late_control.set_delay_frames(96_000);
+    play(&mut writer, &mut [&mut built_in, &mut late], 50);
+    assert_eq!(built_in_control.counters().resyncs, 0);
+    late_control.request_fade_out();
+    play(&mut writer, &mut [&mut built_in, &mut late], 5);
+    drop((late, late_control));
     // Held back beyond its start lead: nothing else moves.
     let (mut far, far_control) = make(48_000, 4_800);
     play(&mut writer, &mut [&mut built_in, &mut far], 50);
     assert_eq!(built_in_control.counters().resyncs, 0);
     assert_eq!(far_control.reader().delay_frames(), 4_800 + 480);
     // A converting output at hold-back 0 raises the session lead to its
-    // start lead: both others re-anchor once, their hold-backs unchanged,
-    // although its start lead moves again at its first callback.
+    // start lead at its first callback: both others re-anchor once, their
+    // hold-backs unchanged.
     let (mut near, near_control) = make(44_100, 0);
     play(&mut writer, &mut [&mut built_in, &mut far, &mut near], 50);
     assert_eq!(built_in_control.counters().resyncs, 1);
