@@ -105,8 +105,9 @@ struct TypedDelay {
 }
 
 impl TypedDelay {
+    /// Keeps what the field takes of `text` (`ui_model::delay_field_text`).
     fn edit(&mut self, text: &str, shown: Option<f64>) {
-        self.draft = Some((text.to_owned(), shown));
+        self.draft = Some((ui_model::delay_field_text(text), shown));
     }
 
     /// The text the field shows instead of `shown`, the applied value.
@@ -790,13 +791,21 @@ impl App {
                 .delay_drafts
                 .get(&speaker.id)
                 .and_then(|typed| typed.text(speaker.delay_ms));
-            speaker_item(
+            let mut row = speaker_item(
                 &state,
                 speaker,
                 show_kind,
                 ui.sync_open.contains(&speaker.id),
                 draft,
-            )
+            );
+            row.delay_range_hint = range_hint(
+                &strings,
+                draft,
+                ui_model::MIN_DELAY_MS,
+                ui_model::MAX_DELAY_MS,
+                format_offset_ms,
+            );
+            row
         };
         let (this_pc, connected) = state.layout();
         let lists = |s: &ui_model::Speaker| ui.listed_virtual.lists(s, ui.show_virtual);
@@ -908,6 +917,15 @@ impl App {
             .set_airplay_delay_pending(is_draft(typed, &airplay_delay));
         self.main
             .set_airplay_delay_text(typed.map_or(airplay_delay, str::to_owned).into());
+        // The range the Mac's field takes too; the sender clamps the stored
+        // adjustment on its own.
+        self.main.set_airplay_delay_range_hint(range_hint(
+            &strings,
+            typed,
+            0.0,
+            ui_model::MAX_DELAY_MS,
+            format_ms,
+        ));
 
         self.show_equalizer_state(&state.equalizer);
         drop(ui);
@@ -1525,9 +1543,23 @@ impl App {
         }
     }
 
-    /// Opens or closes a speaker's sync controls. Closing applies what was
-    /// typed in its field; other rows' controls stay open with their typing.
+    /// Opens or closes a speaker's sync controls (its delay button, or a
+    /// click on its row). What was typed in the other delay fields applies
+    /// first, their controls staying open; closing applies its own typing.
     fn toggle_sync(&self, id: &str) {
+        let mut others: Vec<String> = self
+            .ui
+            .borrow()
+            .delay_drafts
+            .keys()
+            .filter(|other| other.as_str() != id)
+            .cloned()
+            .collect();
+        others.sort();
+        for other in others {
+            self.commit_delay(&other);
+        }
+        self.commit_airplay_delay();
         let closed = {
             let mut ui = self.ui.borrow_mut();
             let closed = ui.sync_open.remove(id);
@@ -1685,12 +1717,13 @@ impl App {
         self.refresh();
     }
 
-    /// Enter in a speaker's delay field: applies what was typed and closes
-    /// that speaker's sync controls; other rows' stay open with their typing.
+    /// Enter or Ctrl+S in a speaker's delay field: applies what was typed and
+    /// keeps its sync controls open, the focus in the field, to try the next
+    /// value; other rows' stay open with their typing.
     fn enter_delay(&self, id: &str) {
-        self.ui.borrow_mut().sync_open.remove(id);
         self.commit_delay(id);
-        self.focus_delay_button(id);
+        self.main.set_focus_speaker_part(RowPart::Sync);
+        self.main.set_focus_speaker_id(id.into());
     }
 
     /// A click on the window outside every control (`apply`), or Escape in
@@ -1986,6 +2019,26 @@ fn format_ms(ms: f64) -> String {
     format!("{}", ms.round() as i64)
 }
 
+/// What a delay field says under it while it holds a number outside
+/// `min..=max`: the range and the value Enter applies instead. Empty
+/// otherwise, which also takes the field's red outline away.
+fn range_hint(
+    strings: &Strings,
+    typed: Option<&str>,
+    min: f64,
+    max: f64,
+    format: fn(f64) -> String,
+) -> SharedString {
+    match typed.and_then(ui_model::parse_ms) {
+        Some(ms) if !(min..=max).contains(&ms) => strings.invoke_delay_out_of_range(
+            format(min).into(),
+            format(max).into(),
+            format(ms.clamp(min, max)).into(),
+        ),
+        _ => SharedString::default(),
+    }
+}
+
 /// An offset as its field shows it, with its sign: "+150", "−250", "0".
 fn format_offset_ms(ms: f64) -> String {
     match ms.round() as i64 {
@@ -2090,6 +2143,8 @@ pub fn speaker_item(
         delay_ms: speaker.delay_ms.unwrap_or(0.0).round() as i32,
         delay_pending: is_draft(draft, &delay),
         delay_text: draft.map_or(delay, str::to_string).into(),
+        // Needs the strings: set by the caller (`App::refresh`).
+        delay_range_hint: SharedString::default(),
         reference_name: state.reference_name.as_deref().unwrap_or_default().into(),
         sync_open: sync_open && speaker.delay_ms.is_some(),
         auto_connect: speaker.auto_connect,
@@ -2586,7 +2641,7 @@ mod tests {
     }
 
     #[test]
-    fn the_delay_button_applies_its_rows_typed_delay_and_closes_only_its_controls() {
+    fn the_delay_button_applies_every_typed_delay_and_closes_only_its_controls() {
         let app = app_over(MockBackend::new());
         type_into_two_rows(&app, "-200");
 
@@ -2597,16 +2652,19 @@ mod tests {
             "closing applied it"
         );
         assert_eq!(desk_delay_text(&app), "+400");
+        assert_eq!(
+            delay_of(&app, "local:bt"),
+            Some(-200.0),
+            "the other open row's typing applied too"
+        );
         let ui = app.ui.borrow();
         assert!(!ui.sync_open.contains("local:desk"));
         assert!(ui.sync_open.contains("local:bt"), "the headset's stay open");
-        assert!(ui.delay_drafts.contains_key("local:bt"), "with its draft");
-        drop(ui);
-        assert_eq!(delay_of(&app, "local:bt"), Some(-250.0));
+        assert!(ui.delay_drafts.is_empty());
     }
 
     #[test]
-    fn enter_applies_its_rows_typed_delay_and_closes_only_its_controls() {
+    fn enter_applies_its_rows_typed_delay_and_keeps_every_control_open() {
         let app = app_over(MockBackend::new());
         type_into_two_rows(&app, "-200");
         app.main.invoke_delay_committed("local:desk".into());
@@ -2616,11 +2674,96 @@ mod tests {
             "Enter applied it"
         );
         let ui = app.ui.borrow();
-        assert!(!ui.sync_open.contains("local:desk"), "its controls closed");
-        assert!(ui.sync_open.contains("local:bt"), "the headset's stay open");
+        assert!(
+            ui.sync_open.contains("local:desk"),
+            "its controls stay open"
+        );
+        assert!(ui.sync_open.contains("local:bt"), "and the headset's");
         assert!(ui.delay_drafts.contains_key("local:bt"), "with its draft");
         drop(ui);
         assert_eq!(delay_of(&app, "local:bt"), Some(-250.0));
+    }
+
+    #[test]
+    fn a_click_on_a_rows_box_toggles_its_controls_and_applies_the_typing_first() {
+        let app = app_over(MockBackend::new());
+        draw_frames();
+        let window = app.main.window();
+        app.main.invoke_sync_toggled("local:bt".into());
+        app.main
+            .invoke_delay_edited("local:bt".into(), "-200".into());
+
+        // The blank part of the desk's row, right of its name.
+        click(window, 420.0, 510.0);
+        assert_eq!(
+            delay_of(&app, "local:bt"),
+            Some(-200.0),
+            "the headset's typing applied first"
+        );
+        let open = |app: &App| app.ui.borrow().sync_open.clone();
+        assert!(open(&app).contains("local:desk"), "the desk's opened");
+        assert!(open(&app).contains("local:bt"), "the headset's stay open");
+
+        app.main
+            .invoke_delay_edited("local:desk".into(), "400".into());
+        app.main.invoke_airplay_delay_edited("2100".into());
+        click(window, 420.0, 510.0);
+        assert_eq!(
+            delay_of(&app, "local:desk"),
+            Some(400.0),
+            "closing applied it"
+        );
+        assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0));
+        assert!(!open(&app).contains("local:desk"), "and closed it");
+
+        // The reference row has no delay: a click there is outside.
+        click(window, 420.0, 510.0);
+        app.main
+            .invoke_delay_edited("local:desk".into(), "300".into());
+        click(window, 420.0, 190.0);
+        assert_eq!(delay_of(&app, "local:desk"), Some(300.0));
+        assert!(open(&app).is_empty());
+    }
+
+    #[test]
+    fn a_click_on_the_no_airplay_note_applies_and_closes_every_sync_control() {
+        let mut backend = MockBackend::new();
+        backend.set_airplay_none_found(true);
+        backend.retain_speakers(|s| !s.id.starts_with("airplay:") && s.id != "local:bt");
+        let app = app_over(backend);
+        draw_frames();
+        app.main.invoke_sync_toggled("local:desk".into());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "400".into());
+        click(app.main.window(), 420.0, 610.0);
+        assert_eq!(delay_of(&app, "local:desk"), Some(400.0));
+        assert!(app.ui.borrow().sync_open.is_empty());
+    }
+
+    #[test]
+    fn a_delay_field_takes_only_digits_and_marks_a_number_out_of_range() {
+        let app = app_over(MockBackend::new());
+        app.main.invoke_sync_toggled("local:desk".into());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "1a2".into());
+        assert_eq!(desk_delay_text(&app), "12", "the letter was dropped");
+        assert_eq!(desk_row(&app).delay_range_hint, "");
+
+        app.main
+            .invoke_delay_edited("local:desk".into(), "+120910".into());
+        assert_eq!(
+            desk_row(&app).delay_range_hint,
+            "The range is \u{2212}2000 to +20000 ms. Enter applies +20000."
+        );
+        app.main.invoke_delay_committed("local:desk".into());
+        assert_eq!(delay_of(&app, "local:desk"), Some(20000.0));
+        assert_eq!(desk_row(&app).delay_range_hint, "", "nothing is typed now");
+
+        app.main.invoke_airplay_delay_edited("-5".into());
+        assert_eq!(
+            app.main.get_airplay_delay_range_hint(),
+            "The range is 0 to 20000 ms. Enter applies 0."
+        );
     }
 
     #[test]
@@ -2743,18 +2886,38 @@ mod tests {
 
         focus_desk_field();
         press(window, "9");
+        press(window, "x");
+        assert_eq!(desk_delay_text(&app), "+1209", "a letter can't be typed");
         press(window, Key::Return);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(1209.0),
             "Enter applied it"
         );
-        assert!(!app.ui.borrow().sync_open.contains("local:desk"));
+        assert!(
+            app.ui.borrow().sync_open.contains("local:desk"),
+            "and kept it open"
+        );
         assert_eq!(
             focus(),
-            Some(("local:desk".into(), RowPart::Delay)),
-            "its delay button has it"
+            Some(("local:desk".into(), RowPart::Sync)),
+            "the field keeps it"
         );
+
+        press(window, "1");
+        window.dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Control.into(),
+        });
+        press(window, "s");
+        window.dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Control.into(),
+        });
+        assert_eq!(
+            delay_of(&app, "local:desk"),
+            Some(12091.0),
+            "Ctrl+S applied it"
+        );
+        assert!(app.ui.borrow().sync_open.contains("local:desk"));
     }
 
     #[test]
@@ -3493,13 +3656,13 @@ mod tests {
         assert!(!enabled(&app, "local:desk"), "Enter left the speaker off");
         assert_eq!(applied(), Some(50.0), "Enter applied the typed delay");
         assert!(
-            !app.ui.borrow().sync_open.contains("local:desk"),
-            "and closed the controls"
+            app.ui.borrow().sync_open.contains("local:desk"),
+            "and kept the controls open"
         );
         assert_eq!(
             app.main_focus.borrow().speaker,
-            Some(("local:desk".into(), RowPart::Delay)),
-            "the desk's delay button has the focus"
+            Some(("local:desk".into(), RowPart::Sync)),
+            "the desk's field keeps the focus"
         );
     }
 

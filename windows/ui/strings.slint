@@ -571,6 +571,13 @@ export global Strings {
         return @tr("{} delay", name);
     }
 
+    // Under a delay field, in place of the Enter hint, while it holds a
+    // number out of the delay's range; also the field's Narrator
+    // description then.
+    public pure function delay-out-of-range(lowest: string, highest: string, applies: string) -> string {
+        return @tr("The range is {} to {} ms. Enter applies {}.", lowest, highest, applies);
+    }
+
     // An offset relative to the reference, with its sign: "+150 ms",
     // "−250 ms", "0 ms".
     public pure function delay-value(ms: int) -> string {
