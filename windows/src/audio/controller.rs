@@ -1127,6 +1127,8 @@ impl<D: Driver> Controller<D> {
                     gain: playing.gain.get(),
                     lag_frames: playing.control.lag_frames(),
                     counters: playing.control.counters(),
+                    slowed_frames: playing.control.slowed_frames(),
+                    shortfall_frames: playing.control.shortfall_frames(),
                 })
                 .collect();
             let airplay = self.airplay.as_ref().and_then(AirPlaySpeakers::status);
@@ -2291,6 +2293,10 @@ struct OutputStatus {
     lag_frames: i64,
     /// Its reader's counters.
     counters: ReaderCounters,
+    /// Capture frames its converter was slowed down by to keep the reader
+    /// off W (S206), and device frames it couldn't produce.
+    slowed_frames: u64,
+    shortfall_frames: u64,
 }
 
 /// A status line: what the session captures from `source` and how fast
@@ -2314,7 +2320,8 @@ fn describe_status(
         text.push_str(&format!(
             "\n  output {}: delay {} ms ({} frames), volume {} (gain {:.3}), lag {} frames; \
              primes {}, resyncs {}, starved reads {} ({} frames), drift skips {} ({} frames), \
-             drift silences {} ({} frames), rejected copies {}",
+             drift silences {} ({} frames), rejected copies {}, slowed {} frames, \
+             shortfall {} frames",
             output.label,
             output.hold_back_ms,
             output.delay_frames,
@@ -2330,6 +2337,8 @@ fn describe_status(
             counters.drift_silences,
             counters.drift_silence_frames,
             counters.rejected_copies,
+            output.slowed_frames,
+            output.shortfall_frames,
         ));
     }
     if outputs.is_empty() {
@@ -4063,7 +4072,8 @@ mod tests {
         );
         // Nothing reads the mock's ring, so every reader counter is 0.
         let counters = "lag 0 frames; primes 0, resyncs 0, starved reads 0 (0 frames), \
-                        drift skips 0 (0 frames), drift silences 0 (0 frames), rejected copies 0";
+                        drift skips 0 (0 frames), drift silences 0 (0 frames), rejected copies 0, \
+                        slowed 0 frames, shortfall 0 frames";
         let outputs = messages.iter().filter(|m| m.starts_with("  output "));
         assert!(outputs.clone().count() == 2 && outputs.clone().all(|m| m.ends_with(counters)));
         let _ = std::fs::remove_dir_all(dir);

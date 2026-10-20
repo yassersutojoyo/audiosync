@@ -754,6 +754,11 @@ impl Drop for HostAudio {
 /// When each host frame that starts a PCM packet is due to be heard on a
 /// receiver, in sender-clock seconds, from the sync packets of the same
 /// session (P95, P97). Packets of silence are skipped.
+///
+/// A packet's sync is the last one of its session at or before it in RTP
+/// order (P94), not the last one logged before it: the receiver logs syncs
+/// and audio on two threads, so a session's first sync can be logged after
+/// the packet it precedes.
 pub fn play_times(log: &Log, clock: &SenderClock) -> BTreeMap<u64, f64> {
     // A sync names the timestamp of the packet it precedes, which ties it
     // to that packet's session (SSRC).
@@ -761,18 +766,20 @@ pub fn play_times(log: &Log, clock: &SenderClock) -> BTreeMap<u64, f64> {
     for packet in &log.audio {
         by_timestamp.insert(packet.header.timestamp, packet.header.ssrc);
     }
-    let mut syncs: Vec<(Instant, u32, SyncPacket)> = log
+    let syncs: Vec<(u32, SyncPacket)> = log
         .syncs
         .iter()
-        .filter_map(|(at, _, sync)| Some((*at, *by_timestamp.get(&sync.next_rtp)?, *sync)))
+        .filter_map(|(_, _, sync)| Some((*by_timestamp.get(&sync.next_rtp)?, *sync)))
         .collect();
-    syncs.sort_by_key(|(at, ..)| *at);
     let mut times = BTreeMap::new();
     for packet in &log.audio {
-        let Some((_, _, sync)) = syncs
+        // How far the packet lies after a sync's packet, modulo 2^32; half
+        // the range or more means before it.
+        let after = |sync: &SyncPacket| packet.header.timestamp.wrapping_sub(sync.next_rtp);
+        let Some((_, sync)) = syncs
             .iter()
-            .rev()
-            .find(|(at, ssrc, _)| *ssrc == packet.header.ssrc && *at <= packet.at)
+            .filter(|(ssrc, sync)| *ssrc == packet.header.ssrc && after(sync) < 1 << 31)
+            .min_by_key(|(_, sync)| after(sync))
         else {
             continue;
         };

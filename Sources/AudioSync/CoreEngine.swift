@@ -308,6 +308,14 @@ final class CoreRenderer {
 
     /// The reader's counters (S158).
     var counters: CoreDelayReader.Counters { CoreDelayReader.Counters(asc_renderer_counters(handle)) }
+
+    /// Any thread: the capture frames the converter was slowed down by to keep
+    /// the reader off the newest frame (S206), in all.
+    var slowedFrames: Int64 { Int64(clamping: asc_renderer_slowed_frames(handle)) }
+
+    /// Any thread: the device frames the converter couldn't produce and that
+    /// played as silence, in all; 0 unless the core's read sizing is wrong.
+    var shortfallFrames: Int64 { Int64(clamping: asc_renderer_shortfall_frames(handle)) }
 }
 
 /// The core's volume curve: slider positions (0…100) and linear gain (S70, S71).

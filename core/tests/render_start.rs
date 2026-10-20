@@ -17,12 +17,13 @@
 //!
 //! A run whose clocks are in step lasts five seconds. A converting output's
 //! clock also runs 100 ppm fast or slow, for the first second after the
-//! start: a fast clock moves the reader about 5 frames a second closer to W,
-//! inside the dead band, so a reader at a short hold-back reaches W again
-//! once the lead's slack is used up (S53), 2.5 s after the start at the
-//! worst phase here. That is S206's known limit; the start is what S206 is
-//! about. An output at the capture rate is taken to run on the capture's
-//! clock.
+//! start in the start checks. A fast clock moves the reader about 5 frames a
+//! second closer to W, inside the dead band, so a reader at a short
+//! hold-back would reach W again once the lead's slack is used up (S53),
+//! 2.5 s after the start at the worst phase here; the renderer slows its
+//! converter instead (S206), which the 30-second runs of an earliest output
+//! on a clock off check. An output at the capture rate is taken to run on
+//! the capture's clock.
 
 use std::sync::Arc;
 
@@ -76,6 +77,10 @@ struct Outcome {
     open_at: Option<usize>,
     /// The reader's lag right after the callback that primed it.
     lag_after_prime: Option<i64>,
+    /// Capture frames the converter was slowed down by, in all and in the
+    /// one callback that slowed it most.
+    slowed: u64,
+    most_slowed: u64,
 }
 
 fn write_blocks(writer: &mut RingWriter, block: usize, count: usize) {
@@ -85,8 +90,14 @@ fn write_blocks(writer: &mut RingWriter, block: usize, count: usize) {
     }
 }
 
-/// Runs a renderer against a capture on its own clock, as `clocks` says.
+/// Runs a renderer against a capture on its own clock, as `clocks` says,
+/// for [`SECONDS`] with the clocks in step and one second with a clock off.
 fn run(clocks: Clocks) -> Outcome {
+    run_for(clocks, if clocks.drift_ppm == 0 { SECONDS } else { 1 })
+}
+
+/// [`run`] for `seconds` of the capture's clock.
+fn run_for(clocks: Clocks, seconds: u64) -> Outcome {
     let ring = Ring::for_rate(RATE).unwrap();
     let mut writer = ring.writer().unwrap();
     let reader = Reader::new(ring, RATE);
@@ -110,7 +121,6 @@ fn run(clocks: Clocks) -> Outcome {
         * u128::from(RATE)
         * (PPM as i128 - i128::from(clocks.drift_ppm)) as u128;
     let offset = (clocks.phase * write_period as f64) as u128;
-    let seconds = if clocks.drift_ppm == 0 { SECONDS } else { 1 };
     let end = u128::from(seconds) * u128::from(RATE) * u128::from(clocks.device_rate) * PPM;
     let (mut k, mut j) = (1u128, 0u128);
     let mut out = vec![9.0f32; clocks.callback * 2];
@@ -120,6 +130,8 @@ fn run(clocks: Clocks) -> Outcome {
         played: Vec::new(),
         open_at: None,
         lag_after_prime: None,
+        slowed: 0,
+        most_slowed: 0,
     };
     loop {
         let write_at = k * write_period;
@@ -128,7 +140,9 @@ fn run(clocks: Clocks) -> Outcome {
             break;
         }
         if pull_at < write_at {
+            let slowed = renderer.slowed_frames();
             renderer.render(&mut out);
+            outcome.most_slowed = outcome.most_slowed.max(renderer.slowed_frames() - slowed);
             outcome
                 .played
                 .extend(out.chunks_exact(2).map(|frame| frame[0]));
@@ -146,6 +160,7 @@ fn run(clocks: Clocks) -> Outcome {
     }
     outcome.counters = control.counters();
     outcome.shortfall = renderer.shortfall_frames();
+    outcome.slowed = renderer.slowed_frames();
     outcome
 }
 
@@ -165,6 +180,10 @@ fn assert_clean_start(clocks: Clocks) {
         "one prime and no correction: {clocks:?}"
     );
     assert_eq!(outcome.shortfall, 0, "{clocks:?}");
+    if clocks.drift_ppm == 0 {
+        // With the clocks in step the reader always holds enough.
+        assert_eq!(outcome.slowed, 0, "slowed down in step: {clocks:?}");
+    }
     let open = outcome.open_at.expect("the output faded in");
     // The converter rings for a few frames at the very start; after the
     // fade-in every frame is the source's level.
@@ -226,6 +245,86 @@ fn a_44_1_khz_output_fed_in_10_ms_blocks_never_runs_dry_after_its_start() {
 fn other_converted_rates_never_run_dry_after_their_start() {
     every_start(96_000, 512, 512, 0);
     every_start(32_000, 256, 512, 0);
+}
+
+/// Seconds the runs of an earliest converted output on a clock off last.
+const LONG_SECONDS: u64 = 30;
+
+// covers: S53, S206
+#[test]
+fn an_earliest_converted_output_on_a_clock_100_ppm_off_never_runs_dry() {
+    // A converting output at hold-back 0 plays at its lead, inside the dead
+    // band, so no step back keeps it off W. Its clock runs 100 ppm fast or
+    // slow for 30 seconds: a fast one may never run it dry, and neither
+    // makes a drift correction in that time (a slow one falls behind by
+    // about 144 frames, far inside the dead band), so the bound is none.
+    // A fast one slows the converter by the frames its clock gains, about
+    // 4.8 a second, so at most 144 in all, and by at most a 64th of a
+    // callback's reads at once. The callbacks take many phases against the
+    // blocks here: the Mac's Bluetooth speaker, larger callbacks, a
+    // synthetic pairing of 480-frame blocks with 512-frame callbacks, and
+    // other rates of the 44.1 kHz family. A real Windows endpoint at
+    // 44.1 kHz asks for 441-frame periods against 480-frame packets, one
+    // phase only: S206's known limit for callbacks with few phases.
+    for (device_rate, callback, block) in [
+        (44_100, 512, 512),
+        (44_100, 4096, 512),
+        // Synthetic: 10 ms capture blocks, Mac-sized callbacks.
+        (44_100, 512, 480),
+        (88_200, 512, 512),
+        (22_050, 256, 512),
+    ] {
+        let reads = reader_frames_bound(callback, RATE, device_rate) as u64;
+        for running in [false, true] {
+            for phase in PHASES {
+                for drift_ppm in [-100, 100] {
+                    let clocks = Clocks {
+                        device_rate,
+                        callback,
+                        block,
+                        delay: 0,
+                        running,
+                        phase,
+                        drift_ppm,
+                        tail: 0,
+                    };
+                    let outcome = run_for(clocks, LONG_SECONDS);
+                    let c = outcome.counters;
+                    assert_eq!(
+                        (c.starved_renders, c.starved_frames),
+                        (0, 0),
+                        "starved renders: {clocks:?}"
+                    );
+                    assert_eq!(
+                        (c.drift_skips, c.drift_silences, c.resyncs, c.primes),
+                        (0, 0, 0, 1),
+                        "one prime and no correction: {clocks:?}"
+                    );
+                    assert_eq!(outcome.shortfall, 0, "{clocks:?}");
+                    if drift_ppm < 0 {
+                        assert_eq!(outcome.slowed, 0, "slowed down: {clocks:?}");
+                    } else {
+                        assert!(
+                            outcome.slowed <= 144,
+                            "{} slowed: {clocks:?}",
+                            outcome.slowed
+                        );
+                    }
+                    assert!(
+                        outcome.most_slowed * 64 <= reads,
+                        "{} slowed in one callback: {clocks:?}",
+                        outcome.most_slowed
+                    );
+                    let open = outcome.open_at.expect("the output faded in");
+                    let gaps = outcome.played[open..]
+                        .iter()
+                        .filter(|&&sample| (sample - A).abs() > 1e-3)
+                        .count();
+                    assert_eq!(gaps, 0, "frames off the source's level: {clocks:?}");
+                }
+            }
+        }
+    }
 }
 
 // covers: S50, S188, S206
