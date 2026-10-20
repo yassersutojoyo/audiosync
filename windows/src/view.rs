@@ -1699,6 +1699,7 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::AirPlayStopped => strings.get_notice_airplay_stopped(),
         NoticeMessage::SettingsNotSaved => strings.get_notice_settings_not_saved(),
         NoticeMessage::PairingsNotSaved => strings.get_notice_pairings_not_saved(),
+        NoticeMessage::NoSoundOutput => strings.get_notice_no_sound_output(),
         NoticeMessage::HeardTwice {
             source,
             mute,

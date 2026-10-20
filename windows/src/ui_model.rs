@@ -277,6 +277,10 @@ pub enum NoticeMessage {
     /// forgotten now last only until AudioSync quits. Posted once until a
     /// write works again, which clears it.
     PairingsNotSaved,
+    /// Windows has no active sound output while an AirPlay speaker is on, so
+    /// apps have nowhere to play and nothing reaches the speaker. Clears
+    /// itself once an output is back or no AirPlay speaker is on.
+    NoSoundOutput,
     /// The source also plays straight from these outputs, undelayed, so it
     /// is heard twice. `source` is the app's name, or `None` for the whole
     /// system. `mute` names the outputs AudioSync doesn't play to, which the

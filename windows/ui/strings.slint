@@ -61,6 +61,9 @@ export global Strings {
     out property <string> notice-settings-not-saved: @tr("AudioSync couldn't save your settings, so changes you make now won't be kept after AudioSync quits.");
     // The file with the Apple TV pairings couldn't be written.
     out property <string> notice-pairings-not-saved: @tr("AudioSync couldn't save your speaker pairings, so pairings you add or forget now won't be kept after AudioSync quits.");
+    // Windows lists no active sound output (none connected, or all turned
+    // off) while a network speaker is on: apps have nowhere to play.
+    out property <string> notice-no-sound-output: @tr("Windows has no working sound output, so apps have nowhere to play and AudioSync has nothing to send to your speakers. Connect or turn on an output in Sound settings.");
 
     // Pairing with an Apple TV that asks for a PIN: the dialog and the
     // speaker menu.

@@ -3723,6 +3723,32 @@ mod tests {
     }
 
     #[test]
+    fn an_airplay_speaker_on_while_windows_has_no_output_gets_a_notice() {
+        let (mut adapter, _fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "Windows has outputs");
+        adapter.audio_mut().disconnect_output(SPEAKERS);
+        adapter.audio_mut().disconnect_output(HEADPHONES);
+        assert!(adapter.poll());
+        assert_eq!(messages(&adapter), [NoticeMessage::NoSoundOutput]);
+        // Dismissed, it stays away while nothing changes.
+        adapter.dismiss_all_notices();
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+        // An output back clears it; all gone again, it comes back.
+        adapter.audio_mut().connect_output(SPEAKERS, "Speakers");
+        adapter.poll();
+        adapter.audio_mut().disconnect_output(SPEAKERS);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::NoSoundOutput]);
+        // With the AirPlay speaker off there's nothing to tell.
+        adapter.set_speaker_enabled(&ap(&kitchen), false);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+    }
+
+    #[test]
     fn settings_that_cant_be_saved_get_one_notice_until_a_save_works() {
         let dir = test_dir("adapter-settings-unsaved");
         let path = dir.join(settings::FILE_NAME);

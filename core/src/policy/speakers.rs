@@ -313,6 +313,8 @@ pub enum NoticeSubject {
     SettingsFile,
     /// The speaker pairings' file: it couldn't be written (Windows).
     PairingsFile,
+    /// The system's sound outputs as a whole: none is active (Windows).
+    SoundOutput,
 }
 
 /// A privacy setting a notice can open (S153); the host maps it to its settings app.
