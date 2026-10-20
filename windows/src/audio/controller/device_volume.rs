@@ -9,12 +9,12 @@
 //! and again whenever Windows reports a change (the driver's notification
 //! only marks the endpoint; the read happens here, on the thread that polls).
 //! It lets go of an output switched off, unplugged, or at quit. While
-//! Windows audio hangs, an output whose listener doesn't register in time
-//! shows no device volume and is tried again some seconds later. The core
-//! (`audiosync_core::policy::device_volume`) decides what a reading means and
-//! what the fix writes; the only write is that fix, when the user clicks it,
-//! and the row follows what Windows reports afterwards, never the values
-//! written. None of this touches an audio thread, the renderers or
+//! Windows audio hangs, an output whose listener, read or fix doesn't answer
+//! in time shows no device volume and is tried again some seconds later. The
+//! core (`audiosync_core::policy::device_volume`) decides what a reading
+//! means and what the fix writes; the only write is that fix, when the user
+//! clicks it, and the row follows what Windows reports afterwards, never the
+//! values written. None of this touches an audio thread, the renderers or
 //! AudioSync's own volumes.
 
 use std::collections::BTreeMap;
@@ -30,11 +30,11 @@ use crate::audio::routing::EndpointVolume;
 #[derive(Debug, Default)]
 pub(super) struct Followed {
     readings: BTreeMap<String, DeviceVolume>,
-    /// The outputs to follow whose listener didn't register in time
-    /// ([`BackendError::NotResponding`]: Windows audio hangs), each with the
-    /// polls left before the next try ([`STALL_RETRY_POLLS`]). They show no
-    /// device volume meanwhile and aren't read, since a read would wait for
-    /// Windows audio too.
+    /// The outputs to follow whose listener, read or fix didn't answer in
+    /// time ([`BackendError::NotResponding`]: Windows audio hangs), each with
+    /// the polls left before the next try ([`STALL_RETRY_POLLS`]). They show
+    /// no device volume meanwhile and aren't read, since a read would wait
+    /// for Windows audio too.
     stalled: BTreeMap<String, u32>,
 }
 
@@ -53,7 +53,8 @@ impl Followed {
 }
 
 /// A reading as the core decides on it: both parts, or neither when Windows
-/// can't activate or read the endpoint's volume control (S194).
+/// can't activate or read the endpoint's volume control (S194). Callers deal
+/// with a read that didn't answer in time first ([`Controller::stalls`]).
 fn device_volume(volume: Result<EndpointVolume, BackendError>) -> DeviceVolume {
     volume.map_or(DeviceVolume::UNKNOWN, |volume| DeviceVolume {
         volume: Some(f64::from(volume.level)),
@@ -123,11 +124,19 @@ impl<D: Driver> Controller<D> {
             {
                 continue;
             }
+            let retried = self.device_volumes.stalled.contains_key(&id);
             let watched = self.driver.watch_endpoint_volume(&id);
-            if self.stalls(&id, &watched) {
+            // A listener that didn't register in time leaves the device
+            // unread: the read would wait for Windows audio too.
+            let read = if watched == Err(BackendError::NotResponding) {
+                Err(BackendError::NotResponding)
+            } else {
+                self.driver.endpoint_volume(&id)
+            };
+            if self.stalls(&id, &read) {
                 continue;
             }
-            let reading = device_volume(self.driver.endpoint_volume(&id));
+            let reading = device_volume(read);
             self.log.log(|| {
                 // Windows can set both parts whenever it can read them.
                 let settable = if reading == DeviceVolume::UNKNOWN {
@@ -145,6 +154,12 @@ impl<D: Driver> Controller<D> {
                     describe(reading)
                 )
             });
+            // Back after a stall, outside any change the user made: the row
+            // shows it once told.
+            if retried && reading.hint().is_some() {
+                self.pending
+                    .push(BackendEvent::DeviceVolumeChanged { id: id.clone() });
+            }
             self.device_volumes.readings.insert(id, reading);
         }
     }
@@ -160,13 +175,30 @@ impl<D: Driver> Controller<D> {
         }
     }
 
-    /// Whether output `id`'s listener didn't register in time (`watched`):
-    /// then it waits for its next try, [`STALL_RETRY_POLLS`] polls later,
-    /// with no device volume, and the log says so once until a try works.
-    fn stalls(&mut self, id: &str, watched: &Result<(), BackendError>) -> bool {
-        if *watched != Err(BackendError::NotResponding) {
+    /// Whether `result`, of a call on output `id`'s own volume, is Windows
+    /// audio not answering in time: then the output stalls
+    /// ([`Controller::stall_device_volume`]). Any other result ends a stall.
+    fn stalls<T>(&mut self, id: &str, result: &Result<T, BackendError>) -> bool {
+        if !matches!(result, Err(BackendError::NotResponding)) {
             self.device_volumes.stalled.remove(id);
             return false;
+        }
+        self.stall_device_volume(id);
+        true
+    }
+
+    /// Windows audio didn't answer in time for output `id`'s own volume: its
+    /// listener goes, its row shows no device volume (a hint it showed goes,
+    /// [`BackendEvent::DeviceVolumeChanged`]) and it isn't read, and it is
+    /// tried again [`STALL_RETRY_POLLS`] polls later. The log says so once
+    /// until a try works.
+    fn stall_device_volume(&mut self, id: &str) {
+        self.driver.unwatch_endpoint_volume(id);
+        if let Some(before) = self.device_volumes.readings.remove(id)
+            && before.hint().is_some()
+        {
+            self.pending
+                .push(BackendEvent::DeviceVolumeChanged { id: id.to_owned() });
         }
         let first = self
             .device_volumes
@@ -182,25 +214,19 @@ impl<D: Driver> Controller<D> {
                 )
             });
         }
-        true
     }
 
     /// Registers every followed output's listener again and reads it afresh,
     /// after Windows reported a change of the outputs (S202): a device
     /// unplugged and plugged in again between two listings is listed as
-    /// before, but its old listener went with it. One whose listener doesn't
-    /// register in time shows no device volume until a later try works.
+    /// before, but its old listener went with it. One whose listener or read
+    /// doesn't answer in time shows no device volume until a later try works.
     pub(super) fn renew_device_volumes(&mut self) {
         let followed: Vec<String> = self.device_volumes.readings.keys().cloned().collect();
         for id in followed {
             self.driver.unwatch_endpoint_volume(&id);
             let watched = self.driver.watch_endpoint_volume(&id);
             if self.stalls(&id, &watched) {
-                if let Some(before) = self.device_volumes.readings.remove(&id)
-                    && before.hint().is_some()
-                {
-                    self.pending.push(BackendEvent::DeviceVolumeChanged { id });
-                }
                 continue;
             }
             if let Err(error) = watched {
@@ -216,12 +242,17 @@ impl<D: Driver> Controller<D> {
     }
 
     /// Reads followed output `id` again, both parts: logs a change of its
-    /// decision (S201), and reports a change of what its row shows.
+    /// decision (S201), and reports a change of what its row shows. A read
+    /// that doesn't answer in time stalls the output instead.
     fn read_device_volume_again(&mut self, id: String) {
         let Some(before) = self.device_volumes.reading(&id) else {
             return;
         };
-        let reading = device_volume(self.driver.endpoint_volume(&id));
+        let read = self.driver.endpoint_volume(&id);
+        if self.stalls(&id, &read) {
+            return;
+        }
+        let reading = device_volume(read);
         if let Some((from, to)) = decision_change(Some(before.decision()), reading.decision()) {
             self.log.log(|| {
                 format!(
@@ -245,12 +276,25 @@ impl<D: Driver> Controller<D> {
     /// went (S201). The row keeps its reading until Windows reports the
     /// change, so a write the device ignores leaves the hint and the fix
     /// showing. An output that isn't followed, or has nothing to fix,
-    /// writes nothing.
+    /// writes nothing. While Windows audio doesn't answer in time, nothing
+    /// more is written, and the output stalls: what the device holds isn't
+    /// known until a later read.
     pub(super) fn fix_followed_device_volume(&mut self, id: &str) {
         if self.device_volumes.reading(id).is_none() {
             return;
         }
-        let fix = device_volume(self.driver.endpoint_volume(id)).fix();
+        let read = self.driver.endpoint_volume(id);
+        if let Err(error @ BackendError::NotResponding) = &read {
+            self.log.log(|| {
+                format!(
+                    "output {} device volume fix: nothing written: {error}",
+                    label(&self.names, id)
+                )
+            });
+            self.stall_device_volume(id);
+            return;
+        }
+        let fix = device_volume(read).fix();
         if fix.is_empty() {
             return;
         }
@@ -276,6 +320,12 @@ impl<D: Driver> Controller<D> {
                 written.join("; ")
             )
         });
+        let hung = |result: Option<&Result<(), BackendError>>| {
+            matches!(result, Some(Err(BackendError::NotResponding)))
+        };
+        if hung(level.as_ref().map(|(_, result)| result)) || hung(unmuted.as_ref()) {
+            self.stall_device_volume(id);
+        }
     }
 
     /// Lets go of every output's own volume: AudioSync quits.
