@@ -125,8 +125,10 @@ final class OutputRenderer: FadingOutput {
     var counters: CoreDelayReader.Counters { target?.renderer.counters ?? CoreDelayReader.Counters() }
 
     /// Capture frames the converter was slowed down by to keep the reader off
-    /// the newest frame (S206), and device frames it couldn't produce.
+    /// the newest frame or follow the capture's clock (S206, S207), sped up by
+    /// to follow it (S207), and device frames it couldn't produce.
     var slowedFrames: Int64 { target?.renderer.slowedFrames ?? 0 }
+    var spedFrames: Int64 { target?.renderer.spedFrames ?? 0 }
     var shortfallFrames: Int64 { target?.renderer.shortfallFrames ?? 0 }
 
     /// Where the fade was at the end of the latest callback.

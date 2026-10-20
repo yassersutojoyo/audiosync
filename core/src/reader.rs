@@ -129,6 +129,20 @@ impl ReadReport {
     }
 }
 
+/// Where a reader's next read would go on from ([`Reader::next_read`],
+/// S206, S207). Plain data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NextRead {
+    /// P: the frame index the read would start at.
+    pub position: i64,
+    /// `W - P`, with W loaded when asked; 0 when the read would be dry.
+    pub readable: i64,
+    /// De for a read of the frames asked about (S44 step 1).
+    pub delay: i64,
+    /// T, the dead band (S50).
+    pub tolerance: i64,
+}
+
 /// A reader's diagnostic counters (S158), plus one for rejected copies.
 /// Monotonic; a snapshot need not be consistent across fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -352,31 +366,49 @@ impl Reader {
     /// Changes nothing; called by the renderer that owns the reader, on its
     /// thread, never allocating, locking or blocking.
     pub fn readable_frames(&self, frames: usize, held: bool) -> Option<i64> {
+        self.next_read(frames, held).map(|next| next.readable)
+    }
+
+    /// Where the next read would go on from (S206, S207): its P, what it
+    /// can go on with ([`Reader::readable_frames`]), and its effective
+    /// delay and dead band, under the same conditions; `None` when it would
+    /// anchor at `W - De` instead. Changes nothing; called by the renderer
+    /// that owns the reader, on its thread, never allocating, locking or
+    /// blocking.
+    pub fn next_read(&self, frames: usize, held: bool) -> Option<NextRead> {
         let waits =
             self.shared.prime.load(Ordering::Relaxed) || self.shared.resync.load(Ordering::Relaxed);
         if !self.anchored || self.reanchor || waits {
             return None;
         }
+        let n = frames as i64;
+        let (capacity, margin) = (self.ring.capacity(), self.ring.margin());
+        let delay = effective_delay(self.applied_delay, n, self.lead, capacity, margin);
+        let tolerance = self.shared.tolerance.load(Ordering::Relaxed).max(0);
         let w = self.ring.frames_written() as i64;
-        let p = self.next;
-        if p >= w {
-            return Some(0);
+        let position = self.next;
+        let next = |readable| {
+            Some(NextRead {
+                position,
+                readable,
+                delay,
+                tolerance,
+            })
+        };
+        if position >= w {
+            return next(0);
         }
         let oldest = self.ring.oldest_readable(w as u64) as i64;
-        if oldest > 0 && p < oldest {
+        if oldest > 0 && position < oldest {
             return None;
         }
         if !held {
-            let n = frames as i64;
-            let (capacity, margin) = (self.ring.capacity(), self.ring.margin());
-            let de = effective_delay(self.applied_delay, n, self.lead, capacity, margin);
-            let t = self.shared.tolerance.load(Ordering::Relaxed).max(0);
-            let e = (w - p) - de;
-            if e > t || e < -t {
+            let e = (w - position) - delay;
+            if e > tolerance || e < -tolerance {
                 return None;
             }
         }
-        Some(w - p)
+        next(w - position)
     }
 
     /// A control handle for this reader.
@@ -1029,7 +1061,7 @@ mod tests {
         assert_eq!(out.read(N, 0).report.delay, N as i64);
     }
 
-    // covers: S206
+    // covers: S206, S207
     #[test]
     fn a_reader_tells_what_its_next_read_can_go_on_with() {
         let ring = ring(1 << 18);
@@ -1043,6 +1075,16 @@ mod tests {
         control.set_delay_frames(1200);
         assert_eq!(out.read_target(N).report.correction, Correction::Prime);
         assert_eq!(out.reader.readable_frames(N, false), Some(1200 - n));
+        // Where it goes on from, at which delay and dead band (S207).
+        assert_eq!(
+            out.reader.next_read(N, false),
+            Some(NextRead {
+                position: 9 * n - 1200,
+                readable: 1200 - n,
+                delay: 1200,
+                tolerance: control.tolerance_frames(),
+            })
+        );
         cap.write(N);
         assert_eq!(out.reader.readable_frames(N, true), Some(1200));
         // A resync waits: the next read anchors, held or not.

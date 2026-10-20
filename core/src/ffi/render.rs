@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use super::ring::{AscReaderCounters, AscRing, ring_of};
 use super::{host_slice, host_slice_mut, samples_for, stereo_samples};
+use crate::clock;
 use crate::convert;
 use crate::fade::{FadeState, fade_frames};
 use crate::reader::Reader;
@@ -474,7 +475,10 @@ pub unsafe extern "C" fn asc_renderer_render(
 
 /// Output thread: as `asc_renderer_render`, for a callback whose first frame
 /// is output at `output_time_ns` host nanoseconds, so that a stop's
-/// fade-out publishes when its last frame is output (S185). Real-time safe.
+/// fade-out publishes when its last frame is output (S185). The callback
+/// reads at the time of the call on the core's clock, the one
+/// `asc_ring_write` stamps the capture's blocks with, so a converting
+/// output follows the capture's clock (S207). Real-time safe.
 ///
 /// # Safety
 ///
@@ -489,7 +493,7 @@ pub unsafe extern "C" fn asc_renderer_render_timed(
     // SAFETY: by the caller's contract the handle and the buffer are null or
     // valid for this call.
     if let Some((renderer, buffer)) = unsafe { output_buffer(renderer, device, frames) } {
-        renderer.render_timed(buffer, output_time_ns);
+        renderer.render_timed_at(buffer, output_time_ns, clock::now_ns());
     }
 }
 
@@ -688,7 +692,8 @@ pub unsafe extern "C" fn asc_renderer_counters(renderer: *const AscRenderer) -> 
 }
 
 /// Any thread: the capture frames the renderer slowed its converter by to
-/// keep its reader off the newest frame (S206), in all; 0 for a null handle.
+/// keep its reader off the newest frame (S206) or to follow the capture's
+/// clock (S207), in all; 0 for a null handle.
 ///
 /// # Safety
 ///
@@ -697,6 +702,18 @@ pub unsafe extern "C" fn asc_renderer_counters(renderer: *const AscRenderer) -> 
 pub unsafe extern "C" fn asc_renderer_slowed_frames(renderer: *const AscRenderer) -> u64 {
     // SAFETY: by the caller's contract the handle is null or live.
     unsafe { control_side(renderer) }.map_or(0, RendererControl::slowed_frames)
+}
+
+/// Any thread: the capture frames the renderer sped its converter up by to
+/// follow the capture's clock (S207), in all; 0 for a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_sped_frames(renderer: *const AscRenderer) -> u64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::sped_frames)
 }
 
 /// Any thread: the device frames the converter couldn't produce and that
@@ -1094,6 +1111,7 @@ mod tests {
                 AscReaderCounters::from(control.counters())
             );
             assert_eq!(asc_renderer_slowed_frames(c), rust.slowed_frames());
+            assert_eq!(asc_renderer_sped_frames(c), rust.sped_frames());
             assert_eq!(asc_renderer_shortfall_frames(c), rust.shortfall_frames());
             assert!(asc_renderer_fade_rendered(c));
             assert!(
@@ -1201,6 +1219,7 @@ mod tests {
             assert_eq!(asc_renderer_lag_frames(null), 0);
             assert_eq!(asc_renderer_counters(null), AscReaderCounters::default());
             assert_eq!(asc_renderer_slowed_frames(null), 0);
+            assert_eq!(asc_renderer_sped_frames(null), 0);
             assert_eq!(asc_renderer_shortfall_frames(null), 0);
             asc_renderer_destroy(null);
             let renderer = asc_renderer_create(ring, 48_000, 48_000, 2, 1.0);

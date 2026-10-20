@@ -14,6 +14,7 @@ use std::ptr;
 use std::sync::Arc;
 
 use super::{host_slice, host_slice_mut, stereo_samples};
+use crate::clock;
 use crate::reader::{Correction, ReadReport, Reader, ReaderControl, ReaderCounters};
 use crate::ring::{self, MIN_MARGIN_FRAMES, Ring, RingWriter};
 
@@ -318,8 +319,9 @@ pub unsafe extern "C" fn asc_ring_writer_destroy(writer: *mut AscRingWriter) {
     drop(unsafe { Box::from_raw(writer) });
 }
 
-/// Capture thread: appends `frames` stereo frames (S35, S37, S38, S40).
-/// Real-time safe.
+/// Capture thread: appends `frames` stereo frames (S35, S37, S38, S40) as
+/// one block, stamped with the time it is written at on the core's clock
+/// (S207). Real-time safe.
 ///
 /// # Safety
 ///
@@ -343,7 +345,7 @@ pub unsafe extern "C" fn asc_ring_write(
     // SAFETY: by the caller's contract the handle is null or live and only
     // this call uses it now.
     if let Some(handle) = unsafe { writer.as_mut() } {
-        handle.writer.write(block, frames);
+        handle.writer.write_at(block, frames, clock::now_ns());
     }
 }
 

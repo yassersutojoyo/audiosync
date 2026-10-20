@@ -33,6 +33,20 @@ pub const MAX_CAPTURE_RATE: u32 = 384_000;
 /// The writer's blocks that [`Ring::block_frames`] looks back over (S206).
 pub const BLOCK_WINDOW: usize = 8;
 
+/// The stamp time that means no stamp (S207).
+const NO_STAMP: u64 = u64::MAX;
+
+/// The newest stamp of the capture's blocks (S207): W at the end of a block
+/// and the time the writer closed that block at, on the host's monotonic
+/// clock ([`crate::clock`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stamp {
+    /// W once the block was written.
+    pub written: u64,
+    /// When the writer closed the block, in nanoseconds.
+    pub time_ns: u64,
+}
+
 /// Why a ring could not be created or used at a rate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RingError {
@@ -84,6 +98,12 @@ pub struct Ring {
     /// one included, in frames; 0 before the first write and after a reset
     /// (S206).
     block_frames: AtomicU64,
+    /// The newest stamp (S207), published as a sequence lock: odd while
+    /// the writer stores `stamp_written` and `stamp_time`, even once they
+    /// are stored. `stamp_time` is [`NO_STAMP`] while there is none.
+    stamp_sequence: AtomicU64,
+    stamp_written: AtomicU64,
+    stamp_time: AtomicU64,
     /// Set while a [`RingWriter`] exists.
     writer_taken: AtomicBool,
 }
@@ -110,12 +130,18 @@ impl Ring {
             return Err(RingError::CapacityTooSmall);
         }
         let words: Box<[AtomicU32]> = (0..capacity * 2).map(|_| AtomicU32::new(0)).collect();
+        // The clock's origin is set here, before any audio thread stamps
+        // with it (S207).
+        crate::clock::now_ns();
         Ok(Arc::new(Ring {
             words,
             capacity: capacity as u64,
             margin: margin as u64,
             written: AtomicU64::new(0),
             block_frames: AtomicU64::new(0),
+            stamp_sequence: AtomicU64::new(0),
+            stamp_written: AtomicU64::new(0),
+            stamp_time: AtomicU64::new(NO_STAMP),
             writer_taken: AtomicBool::new(false),
         }))
     }
@@ -160,6 +186,25 @@ impl Ring {
     /// covers (S206). A relaxed load; the writer stores it with each write.
     pub fn block_frames(&self) -> usize {
         self.block_frames.load(Ordering::Relaxed) as usize
+    }
+
+    /// The newest stamp of the capture's blocks (S207), or `None` while
+    /// there is none (no block was stamped since the ring was made or
+    /// reset) or the writer is storing a new one right now. One try, never
+    /// waiting: the sequence number is loaded with acquire ordering, so the
+    /// pair stored before its even value is seen, and again after an
+    /// acquire fence, so a pair the writer stored into since (after its
+    /// release fence) is never taken; the pair's own loads are relaxed.
+    pub fn stamp(&self) -> Option<Stamp> {
+        let before = self.stamp_sequence.load(Ordering::Acquire);
+        let written = self.stamp_written.load(Ordering::Relaxed);
+        let time_ns = self.stamp_time.load(Ordering::Relaxed);
+        fence(Ordering::Acquire);
+        let after = self.stamp_sequence.load(Ordering::Relaxed);
+        if before % 2 == 1 || before != after || time_ns == NO_STAMP {
+            return None;
+        }
+        Some(Stamp { written, time_ns })
     }
 
     /// The readable index range `[max(0, W - C + M), W)` for the current W
@@ -283,6 +328,45 @@ impl RingWriter {
         self.publish_block();
     }
 
+    /// [`RingWriter::write`], with the block's end stamped at `time_ns`
+    /// ([`RingWriter::end_block_at`]).
+    pub fn write_at(&mut self, interleaved: &[f32], frames: usize, time_ns: u64) {
+        self.write_part(interleaved, frames);
+        self.end_block_at(time_ns);
+    }
+
+    /// [`RingWriter::end_block`], stamping the block with `time_ns` on the
+    /// host's monotonic clock, the time it is closed at (S207): the ring
+    /// publishes the stamp with W. An empty open block gets no stamp, and
+    /// [`u64::MAX`] is taken as `u64::MAX - 1`. Never waits, allocates or
+    /// locks.
+    pub fn end_block_at(&mut self, time_ns: u64) {
+        if self.open == 0 {
+            return;
+        }
+        self.end_block();
+        let written = self.ring.written.load(Ordering::Relaxed);
+        self.publish_stamp(written, time_ns.min(NO_STAMP - 1));
+    }
+
+    /// Publishes a stamp under the sequence lock (S207). Only this writer
+    /// stores the sequence number, so its own last store is the current
+    /// one. The odd number is stored before a release fence, so a reader
+    /// whose relaxed loads see any of the new pair sees at least that
+    /// number after its acquire fence; the even number is a release store,
+    /// so a reader that loads it with acquire sees the whole pair.
+    fn publish_stamp(&self, written: u64, time_ns: u64) {
+        let ring = &*self.ring;
+        let sequence = ring.stamp_sequence.load(Ordering::Relaxed);
+        ring.stamp_sequence
+            .store(sequence.wrapping_add(1), Ordering::Relaxed);
+        fence(Ordering::Release);
+        ring.stamp_written.store(written, Ordering::Relaxed);
+        ring.stamp_time.store(time_ns, Ordering::Relaxed);
+        ring.stamp_sequence
+            .store(sequence.wrapping_add(2), Ordering::Release);
+    }
+
     /// Publishes the largest of the last blocks and the open one.
     fn publish_block(&self) {
         let largest = self.blocks.iter().copied().fold(self.open, u64::max);
@@ -323,6 +407,7 @@ impl RingWriter {
         self.blocks = [0; BLOCK_WINDOW];
         self.next = 0;
         self.ring.block_frames.store(0, Ordering::Relaxed);
+        self.publish_stamp(0, NO_STAMP);
         self.ring.written.store(0, Ordering::Release);
         fence(Ordering::Release);
     }
@@ -558,6 +643,70 @@ mod tests {
             writer.write(&block(2180 + i, 1), 1);
         }
         assert_eq!(ring.block_frames(), 1);
+    }
+
+    // covers: S207
+    #[test]
+    fn the_newest_stamp_is_published_with_w() {
+        let ring = Ring::new(16_384, 8192).unwrap();
+        let mut writer = ring.writer().unwrap();
+        assert_eq!(ring.stamp(), None);
+        // An unstamped block publishes none; an empty block gets none.
+        writer.write(&block(0, 480), 480);
+        writer.end_block_at(5);
+        assert_eq!(ring.stamp(), None);
+        writer.write_at(&block(480, 480), 480, 10_000_000);
+        let stamp = Stamp {
+            written: 960,
+            time_ns: 10_000_000,
+        };
+        assert_eq!(ring.stamp(), Some(stamp));
+        // A block written in parts is stamped as it closes, with W then.
+        writer.write_part(&block(960, 300), 300);
+        assert_eq!(ring.stamp(), Some(stamp));
+        writer.write_part(&block(1260, 180), 180);
+        writer.end_block_at(20_000_000);
+        assert_eq!(
+            ring.stamp(),
+            Some(Stamp {
+                written: 1440,
+                time_ns: 20_000_000,
+            })
+        );
+        // The time that means none is taken as the one before it.
+        writer.write_at(&block(1440, 1), 1, u64::MAX);
+        assert_eq!(ring.stamp().map(|s| s.time_ns), Some(u64::MAX - 1));
+        // A reset clears it.
+        writer.reset();
+        assert_eq!(ring.stamp(), None);
+    }
+
+    // covers: S207, S128
+    #[test]
+    fn a_stamp_is_never_loaded_half_written() {
+        // The writer publishes stamps whose time is always 1000 times their
+        // W; a reader on another thread never sees a pair that isn't.
+        let ring = Ring::new(16_384, 8192).unwrap();
+        let mut writer = ring.writer().unwrap();
+        let samples = vec![0.0f32; 64];
+        let reader = {
+            let ring = Arc::clone(&ring);
+            std::thread::spawn(move || {
+                let mut seen = 0u64;
+                while ring.frames_written() < 200_000 {
+                    if let Some(stamp) = ring.stamp() {
+                        assert_eq!(stamp.time_ns, stamp.written * 1000, "{stamp:?}");
+                        seen += 1;
+                    }
+                }
+                seen
+            })
+        };
+        while ring.frames_written() < 200_000 {
+            let w = ring.frames_written() + 1;
+            writer.write_at(&samples, 1, w * 1000);
+        }
+        assert!(reader.join().unwrap() > 0);
     }
 
     // covers: S40

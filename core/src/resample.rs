@@ -15,8 +15,9 @@
 //! [`Resampler::latency_frames`] input frames, about half a millisecond.
 //! A renderer whose reader runs short can slow the converter down by whole
 //! input frames over a run of output frames ([`Resampler::slow_down`],
-//! S206); each such frame delays the content by one more input frame, and
-//! the counts keep pace from there.
+//! S206), and one that follows the capture's clock can also speed it up
+//! ([`Resampler::speed_up`], S207); each such frame delays the content by
+//! one input frame more or less, and the counts keep pace from there.
 //!
 //! All memory is allocated by [`Resampler::new`], sized for every supported
 //! input rate; [`Resampler::process`] never allocates, locks or blocks
@@ -90,15 +91,17 @@ pub struct Resampler {
     pos: usize,
     /// The center's fractional part, in units of `1 / den`.
     frac: u64,
-    /// A slow-down under way (S206): over `slow_steps` steps the center
-    /// falls `slow_units` units of `1 / den` behind its course, evenly, and
-    /// `slow_done` of those steps are made. After k of them `pos` and `frac`
-    /// stand [`Resampler::slowed_by`]`(k)` whole units behind the course and
-    /// the center lies the fraction [`Resampler::slow_fraction`] of a unit
+    /// A trim under way (S206, S207): over `trim_steps` steps the center
+    /// moves `trim_units` units of `1 / den` off its course, evenly, behind
+    /// it (a slow-down) or ahead of it (a speed-up, `trim_ahead`), and
+    /// `trim_done` of those steps are made. After k of them `pos` and `frac`
+    /// stand [`Resampler::trimmed_by`]`(k)` whole units off the course and
+    /// the center lies the fraction [`Resampler::trim_fraction`] of a unit
     /// after them.
-    slow_units: u64,
-    slow_steps: u64,
-    slow_done: u64,
+    trim_units: u64,
+    trim_steps: u64,
+    trim_done: u64,
+    trim_ahead: bool,
     /// Times a non-finite input sample reset the history (S125).
     resets: u64,
     #[cfg(test)]
@@ -200,9 +203,10 @@ impl Resampler {
             held: 0,
             pos: 0,
             frac: 0,
-            slow_units: 0,
-            slow_steps: 0,
-            slow_done: 0,
+            trim_units: 0,
+            trim_steps: 0,
+            trim_done: 0,
+            trim_ahead: false,
             resets: 0,
             #[cfg(test)]
             force_table: false,
@@ -253,9 +257,10 @@ impl Resampler {
         self.history[..self.held * 2].fill(0.0);
         self.pos = self.half - 1;
         self.frac = 0;
-        self.slow_units = 0;
-        self.slow_steps = 0;
-        self.slow_done = 0;
+        self.trim_units = 0;
+        self.trim_steps = 0;
+        self.trim_done = 0;
+        self.trim_ahead = false;
     }
 
     /// The input rate in Hz.
@@ -296,12 +301,17 @@ impl Resampler {
             return output_frames;
         }
         let steps = (output_frames - 1) as u128;
-        // A slow-down under way takes its share of these steps off.
-        let done = u128::from(self.slow_done);
-        let last_step = (done + steps).min(u128::from(self.slow_steps));
-        let slowed = self.slowed_by(last_step) - self.slowed_by(done.min(last_step));
-        let advance =
-            (u128::from(self.frac) + steps * u128::from(self.num) - slowed) / u128::from(self.den);
+        // A trim under way takes its share of these steps off or adds it.
+        let done = u128::from(self.trim_done);
+        let last_step = (done + steps).min(u128::from(self.trim_steps));
+        let trimmed = self.trimmed_by(last_step) - self.trimmed_by(done.min(last_step));
+        let course = u128::from(self.frac) + steps * u128::from(self.num);
+        let units = if self.trim_ahead {
+            course + trimmed
+        } else {
+            course - trimmed
+        };
+        let advance = units / u128::from(self.den);
         let last_pos = self.pos as u128 + advance;
         let needed = (last_pos + self.half as u128 + 1).saturating_sub(self.held as u128);
         usize::try_from(needed).unwrap_or(usize::MAX)
@@ -312,50 +322,86 @@ impl Resampler {
     /// frames), evenly, so those output frames need `frames` fewer input
     /// frames, and every later one is `frames` input frames later (S206).
     /// The frames in between are interpolated at their exact positions.
-    /// Returns whether it took the request: rates that are equal, a
-    /// slow-down still under way, no steps, or as many frames as the steps
+    /// Returns whether it took the request: rates that are equal, a trim
+    /// still under way, no frames or steps, or as many frames as the steps
     /// cover or more (a step would have to stand still or go back) change
     /// nothing.
     pub fn slow_down(&mut self, frames: usize, steps: usize) -> bool {
+        self.trim(frames, steps, false)
+    }
+
+    /// Makes the converter move `frames` input frames ahead of its course
+    /// over its next `steps` steps, evenly, so those output frames need
+    /// `frames` more input frames, and every later one is `frames` input
+    /// frames earlier (S207). The frames in between are interpolated at
+    /// their exact positions. Returns whether it took the request: rates
+    /// that are equal, a trim still under way, no frames or steps, or as
+    /// many frames as the steps cover or more (a step would have to double)
+    /// change nothing.
+    pub fn speed_up(&mut self, frames: usize, steps: usize) -> bool {
+        self.trim(frames, steps, true)
+    }
+
+    /// Starts a slow-down or, `ahead`, a speed-up (S206, S207).
+    fn trim(&mut self, frames: usize, steps: usize, ahead: bool) -> bool {
         let units = (frames as u128) * u128::from(self.den);
         let (Ok(units), Ok(steps)) = (u64::try_from(units), u64::try_from(steps)) else {
             return false;
         };
         let covered = u128::from(steps) * u128::from(self.num);
-        if self.passthrough || self.is_slowing() || steps == 0 || u128::from(units) >= covered {
+        if self.passthrough
+            || self.is_trimming()
+            || units == 0
+            || steps == 0
+            || u128::from(units) >= covered
+        {
             return false;
         }
-        self.slow_units = units;
-        self.slow_steps = steps;
-        self.slow_done = 0;
+        self.trim_units = units;
+        self.trim_steps = steps;
+        self.trim_done = 0;
+        self.trim_ahead = ahead;
         true
     }
 
-    /// Whether a slow-down is under way (S206).
-    pub fn is_slowing(&self) -> bool {
-        self.slow_done < self.slow_steps
+    /// Whether a slow-down or a speed-up is under way (S206, S207).
+    pub fn is_trimming(&self) -> bool {
+        self.trim_done < self.trim_steps
     }
 
-    /// The whole units of `1 / den` the slow-down under way has taken off
-    /// the course after `step` of its steps: `ceil(units × step / steps)`.
-    fn slowed_by(&self, step: u128) -> u128 {
-        if self.slow_steps == 0 {
+    /// The whole units of `1 / den` the trim under way has moved the course
+    /// by after `step` of its steps: `ceil(units × step / steps)` behind
+    /// it, `floor(units × step / steps)` ahead of it, so the center itself
+    /// always lies at or after `pos` and `frac`.
+    fn trimmed_by(&self, step: u128) -> u128 {
+        if self.trim_steps == 0 {
             return 0;
         }
-        (u128::from(self.slow_units) * step).div_ceil(u128::from(self.slow_steps))
+        let exact = u128::from(self.trim_units) * step;
+        let steps = u128::from(self.trim_steps);
+        if self.trim_ahead {
+            exact / steps
+        } else {
+            exact.div_ceil(steps)
+        }
     }
 
-    /// How far the center lies after `pos` and `frac` during a slow-down, as
-    /// a fraction of a unit of `1 / den`: the part of the slow-down's course
-    /// that [`Resampler::slowed_by`] rounded up. 0 outside a slow-down.
-    fn slow_fraction(&self) -> f64 {
-        if !self.is_slowing() {
+    /// How far the center lies after `pos` and `frac` during a trim, as a
+    /// fraction of a unit of `1 / den`: the part of the trim's course that
+    /// [`Resampler::trimmed_by`] rounded off. 0 outside a trim.
+    fn trim_fraction(&self) -> f64 {
+        if !self.is_trimming() {
             return 0.0;
         }
-        let done = u128::from(self.slow_done);
-        let exact = u128::from(self.slow_units) * done;
-        let ahead = self.slowed_by(done) * u128::from(self.slow_steps) - exact;
-        ahead as f64 / self.slow_steps as f64
+        let done = u128::from(self.trim_done);
+        let exact = u128::from(self.trim_units) * done;
+        let whole = self.trimmed_by(done) * u128::from(self.trim_steps);
+        let after = if self.trim_ahead {
+            exact - whole
+        } else {
+            whole - exact
+        };
+        after as f64 / self.trim_steps as f64
     }
 
     /// Converts interleaved stereo `input` into interleaved stereo `output`.
@@ -403,9 +449,9 @@ impl Resampler {
         let use_bank = self.use_bank && !self.force_table;
         #[cfg(not(test))]
         let use_bank = self.use_bank;
-        // During a slow-down the center may lie between two of the bank's
+        // During a trim the center may lie between two of the bank's
         // phases; its weights then come from the kernel table.
-        let between = self.slow_fraction();
+        let between = self.trim_fraction();
         let weights: &[f32] = if use_bank && between == 0.0 {
             let start = self.frac as usize * taps;
             &self.bank[start..start + taps]
@@ -425,13 +471,18 @@ impl Resampler {
             left += w * f[0];
             right += w * f[1];
         }
-        if self.is_slowing() {
-            // This step's share of the slow-down; `slow_down` keeps it at
-            // most a whole step, so the center never goes back.
-            let done = u128::from(self.slow_done);
-            let less = (self.slowed_by(done + 1) - self.slowed_by(done)) as u64;
-            self.slow_done += 1;
-            let units = self.frac + self.step_whole as u64 * self.den + self.step_frac - less;
+        if self.is_trimming() {
+            // This step's share of the trim; `trim` keeps it below a whole
+            // step, so the center never stands still or goes back.
+            let done = u128::from(self.trim_done);
+            let share = (self.trimmed_by(done + 1) - self.trimmed_by(done)) as u64;
+            self.trim_done += 1;
+            let course = self.frac + self.step_whole as u64 * self.den + self.step_frac;
+            let units = if self.trim_ahead {
+                course + share
+            } else {
+                course - share
+            };
             self.pos += (units / self.den) as usize;
             self.frac = units % self.den;
         } else {
@@ -869,10 +920,10 @@ mod tests {
         played
     }
 
-    // covers: S206
-    #[test]
-    fn a_slow_down_needs_that_many_fewer_frames_and_lands_exactly_that_much_later() {
-        const SLOWED: usize = 7;
+    /// Trims a converter by `frames` input frames over one 512-frame
+    /// callback, behind its course or, `ahead`, ahead of it, and checks
+    /// what that callback reads and what it and the frames after it play.
+    fn assert_trim_lands_exactly(frames: usize, ahead: bool) {
         for (input_rate, output_rate) in [
             (48_000u32, 44_100u32),
             (48_000, 96_000),
@@ -885,24 +936,35 @@ mod tests {
             let mut r = Resampler::new(input_rate, output_rate).unwrap();
             let mut at = 0;
             let mut played = pull(&mut r, &source, &mut at, 8 * 512, 512);
-            // One callback of 512 frames, slowed over its 511 steps; its
+            // One callback of 512 frames, trimmed over its 511 steps; its
             // reads come in two pieces, each sized exactly.
             let nominal = r.input_frames_for(512);
-            assert!(r.slow_down(SLOWED, 511));
-            assert!(r.is_slowing());
-            assert!(!r.slow_down(1, 511), "one slow-down at a time");
-            assert_eq!(r.input_frames_for(512), nominal - SLOWED);
+            if ahead {
+                assert!(r.speed_up(frames, 511));
+                assert_eq!(r.input_frames_for(512), nominal + frames);
+            } else {
+                assert!(r.slow_down(frames, 511));
+                assert_eq!(r.input_frames_for(512), nominal - frames);
+            }
+            assert!(r.is_trimming());
+            assert!(!r.slow_down(1, 511), "one trim at a time");
+            assert!(!r.speed_up(1, 511), "one trim at a time");
             played.extend(pull(&mut r, &source, &mut at, 512, 300));
-            assert!(!r.is_slowing());
+            assert!(!r.is_trimming());
             played.extend(pull(&mut r, &source, &mut at, 8 * 512, 512));
 
-            // From the end of the slow-down on, the output is exactly that of
-            // a converter whose input came SLOWED frames later.
-            let mut padded = vec![0.0f32; SLOWED * 2];
-            padded.extend_from_slice(&source[..at * 2]);
+            // From the end of the trim on, the output is exactly that of a
+            // converter whose input came that many frames later or earlier.
+            let shifted = if ahead {
+                source[frames * 2..].to_vec()
+            } else {
+                let mut padded = vec![0.0f32; frames * 2];
+                padded.extend_from_slice(&source[..at * 2]);
+                padded
+            };
             let mut reference = Resampler::new(input_rate, output_rate).unwrap();
             let mut from = 0;
-            let expected = pull(&mut reference, &padded, &mut from, played.len() / 2, 512);
+            let expected = pull(&mut reference, &shifted, &mut from, played.len() / 2, 512);
             let after = 9 * 512 * 2;
             assert_eq!(
                 played[after..],
@@ -916,7 +978,8 @@ mod tests {
             let (mut err, mut count) = (0.0, 0);
             for i in 0..512 {
                 let j = 8 * 512 + i;
-                let behind = SLOWED as f64 * i as f64 / 511.0;
+                let moved = frames as f64 * i as f64 / 511.0;
+                let behind = if ahead { -moved } else { moved };
                 let t = j as f64 * rate_in / rate_out - r.latency_frames() as f64 - behind;
                 let ideal = 0.5 * (2.0 * PI * freq * t / rate_in).sin();
                 err += (f64::from(played[j * 2]) - ideal).powi(2);
@@ -933,6 +996,35 @@ mod tests {
 
     // covers: S206
     #[test]
+    fn a_slow_down_needs_that_many_fewer_frames_and_lands_exactly_that_much_later() {
+        assert_trim_lands_exactly(7, false);
+    }
+
+    // covers: S207
+    #[test]
+    fn a_speed_up_needs_that_many_more_frames_and_lands_exactly_that_much_earlier() {
+        assert_trim_lands_exactly(7, true);
+        assert_trim_lands_exactly(1, true);
+    }
+
+    // covers: S207
+    #[test]
+    fn a_speed_up_is_refused_when_it_cannot_be_made() {
+        assert!(!Resampler::new(48_000, 48_000).unwrap().speed_up(1, 511));
+        // 512 steps of half an input frame cover 256 frames; a speed-up by
+        // as many would double every step.
+        let mut r = Resampler::new(48_000, 96_000).unwrap();
+        assert!(!r.speed_up(256, 512));
+        assert!(!r.speed_up(0, 512));
+        assert!(!r.speed_up(1, 0));
+        assert!(r.speed_up(255, 512));
+        assert!(!r.slow_down(1, 512), "one trim at a time");
+        r.reset();
+        assert!(!r.is_trimming());
+    }
+
+    // covers: S206
+    #[test]
     fn a_slow_down_is_refused_when_it_cannot_be_made() {
         // Equal rates have no converter to slow.
         assert!(!Resampler::new(48_000, 48_000).unwrap().slow_down(1, 511));
@@ -945,7 +1037,7 @@ mod tests {
         assert!(r.slow_down(255, 512));
         // A reset ends a slow-down under way.
         r.reset();
-        assert!(!r.is_slowing());
+        assert!(!r.is_trimming());
         assert_eq!(
             r.input_frames_for(512),
             Resampler::new(48_000, 96_000)

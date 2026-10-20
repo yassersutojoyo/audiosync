@@ -301,9 +301,11 @@ AscRingWriter *asc_ring_writer_create(AscRing *ring);
 void asc_ring_writer_destroy(AscRingWriter *writer);
 
 /*
- * Capture thread: appends `frames` stereo frames. Any count is accepted; once
- * the ring is full the oldest frames are overwritten, and a write larger than
- * the ring keeps only its last frames. Never waits for readers. Real-time safe.
+ * Capture thread: appends `frames` stereo frames as one block, stamped with
+ * the time of the call on the core's monotonic clock, so a converting output
+ * can follow the capture's clock (S207). Any count is accepted; once the ring
+ * is full the oldest frames are overwritten, and a write larger than the ring
+ * keeps only its last frames. Never waits for readers. Real-time safe.
  */
 void asc_ring_write(AscRingWriter *writer, const float *interleaved, size_t frames);
 
@@ -504,7 +506,10 @@ void asc_renderer_render(AscRenderer *renderer, float *device, size_t frames);
 /*
  * Output thread: as asc_renderer_render, for a callback whose first frame is
  * output at output_time_ns host nanoseconds, so that a stop's fade-out
- * publishes when its last frame is output. Real-time safe.
+ * publishes when its last frame is output. The callback reads at the time of
+ * the call on the core's clock, the one asc_ring_write stamps the capture's
+ * blocks with, so a converting output follows the capture's clock (S207).
+ * Real-time safe.
  */
 void asc_renderer_render_timed(AscRenderer *renderer, float *device, size_t frames, uint64_t output_time_ns);
 
@@ -560,8 +565,13 @@ int64_t asc_renderer_lag_frames(const AscRenderer *renderer);
 AscReaderCounters asc_renderer_counters(const AscRenderer *renderer);
 
 /* Any thread: the capture frames the renderer slowed its converter by to keep
-   its reader off the newest frame (S206), in all; 0 for a NULL handle. */
+   its reader off the newest frame (S206) or to follow the capture's clock
+   (S207), in all; 0 for a NULL handle. */
 uint64_t asc_renderer_slowed_frames(const AscRenderer *renderer);
+
+/* Any thread: the capture frames the renderer sped its converter up by to
+   follow the capture's clock (S207), in all; 0 for a NULL handle. */
+uint64_t asc_renderer_sped_frames(const AscRenderer *renderer);
 
 /* Any thread: the device frames the converter couldn't produce and that were
    played as silence, in all (0 unless the read sizing is wrong); 0 for a NULL

@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use audiosync_core::fade::FadeState;
 use audiosync_core::reader::{Reader, ReaderCounters};
-use audiosync_core::render::{Renderer, RendererControl, reader_frames_bound};
+use audiosync_core::render::{Renderer, RendererControl, SLOW_DOWN_SHARE, reader_frames_bound};
 use audiosync_core::resample::Resampler;
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
@@ -81,6 +81,8 @@ struct Outcome {
     /// one callback that slowed it most.
     slowed: u64,
     most_slowed: u64,
+    /// Capture frames the converter was sped up by, in all (S207).
+    sped: u64,
 }
 
 fn write_blocks(writer: &mut RingWriter, block: usize, count: usize) {
@@ -98,6 +100,20 @@ fn run(clocks: Clocks) -> Outcome {
 
 /// [`run`] for `seconds` of the capture's clock.
 fn run_for(clocks: Clocks, seconds: u64) -> Outcome {
+    simulate(clocks, seconds, false)
+}
+
+/// [`run_for`], with the capture's blocks and the device's callbacks stamped
+/// with the time they happen at (S207) when `stamped` is set, as the hosts
+/// do; unstamped, as a host that gives no time.
+fn simulate(clocks: Clocks, seconds: u64, stamped: bool) -> Outcome {
+    simulate_jittered(clocks, seconds, stamped, 0)
+}
+
+/// [`simulate`], with every stamp off the time it was taken at by up to
+/// `jitter_ns` either way, as a host's wake-ups are: the same draws for the
+/// same `clocks`, so a run is repeatable.
+fn simulate_jittered(clocks: Clocks, seconds: u64, stamped: bool, jitter_ns: u64) -> Outcome {
     let ring = Ring::for_rate(RATE).unwrap();
     let mut writer = ring.writer().unwrap();
     let reader = Reader::new(ring, RATE);
@@ -105,18 +121,51 @@ fn run_for(clocks: Clocks, seconds: u64) -> Outcome {
     control.set_delay_frames(clocks.delay);
     let gain = Arc::new(SharedGain::new(1.0));
     let mut renderer = Renderer::new(reader, &control, gain, RATE, clocks.device_rate, 2).unwrap();
-    if clocks.running {
-        write_blocks(&mut writer, clocks.block, RATE as usize / clocks.block);
-        let samples = vec![A; clocks.block * 2];
-        let tail = clocks.tail.min(clocks.block);
-        writer.write(&samples, clocks.block - tail);
-        writer.write(&samples, tail);
-    }
     // Time in units of 1 / (RATE × device rate × 10^6) seconds: block k is
     // written at k × block × device rate × 10^6, callback j is pulled at
-    // j × callback × RATE × (10^6 − drift) plus the phase.
+    // j × callback × RATE × (10^6 − drift) plus the phase. The host's clock
+    // reads a second more, so a running session's first second, written
+    // before 0, is stamped at the times it would have been written at.
     const PPM: u128 = 1_000_000;
     let write_period = clocks.block as u128 * u128::from(clocks.device_rate) * PPM;
+    let units_per_ns = i128::from(RATE) * i128::from(clocks.device_rate) / 1_000;
+    // A xorshift draw per stamp, seeded by the clocks.
+    let seed = 0x9E37_79B9_7F4A_7C15
+        ^ (clocks.phase * 1e6) as u64
+        ^ (clocks.drift_ppm as u64).rotate_left(20)
+        ^ (clocks.callback as u64).rotate_left(40)
+        ^ u64::from(clocks.running);
+    let draws = std::cell::Cell::new(seed | 1);
+    let jitter = || {
+        if jitter_ns == 0 {
+            return 0;
+        }
+        let mut x = draws.get();
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        draws.set(x);
+        (x % (2 * jitter_ns + 1)) as i128 - i128::from(jitter_ns)
+    };
+    let ns = |units: i128| (1_000_000_000 + units / units_per_ns + jitter()) as u64;
+    let samples = vec![A; clocks.block * 2];
+    let write = |writer: &mut RingWriter, frames: usize, at: i128| {
+        if stamped {
+            writer.write_at(&samples, frames, ns(at));
+        } else {
+            writer.write(&samples, frames);
+        }
+    };
+    if clocks.running {
+        let blocks = RATE as usize / clocks.block;
+        for k in 0..blocks {
+            let before = (blocks - k) as i128 * write_period as i128;
+            write(&mut writer, clocks.block, -before);
+        }
+        let tail = clocks.tail.min(clocks.block);
+        write(&mut writer, clocks.block - tail, 0);
+        write(&mut writer, tail, 0);
+    }
     let pull_period = clocks.callback as u128
         * u128::from(RATE)
         * (PPM as i128 - i128::from(clocks.drift_ppm)) as u128;
@@ -132,6 +181,7 @@ fn run_for(clocks: Clocks, seconds: u64) -> Outcome {
         lag_after_prime: None,
         slowed: 0,
         most_slowed: 0,
+        sped: 0,
     };
     loop {
         let write_at = k * write_period;
@@ -141,7 +191,11 @@ fn run_for(clocks: Clocks, seconds: u64) -> Outcome {
         }
         if pull_at < write_at {
             let slowed = renderer.slowed_frames();
-            renderer.render(&mut out);
+            if stamped {
+                renderer.render_at(&mut out, ns(pull_at as i128));
+            } else {
+                renderer.render(&mut out);
+            }
             outcome.most_slowed = outcome.most_slowed.max(renderer.slowed_frames() - slowed);
             outcome
                 .played
@@ -154,13 +208,14 @@ fn run_for(clocks: Clocks, seconds: u64) -> Outcome {
             }
             j += 1;
         } else {
-            write_blocks(&mut writer, clocks.block, 1);
+            write(&mut writer, clocks.block, write_at as i128);
             k += 1;
         }
     }
     outcome.counters = control.counters();
     outcome.shortfall = renderer.shortfall_frames();
     outcome.slowed = renderer.slowed_frames();
+    outcome.sped = renderer.sped_frames();
     outcome
 }
 
@@ -263,9 +318,11 @@ fn an_earliest_converted_output_on_a_clock_100_ppm_off_never_runs_dry() {
     // callback's reads at once. The callbacks take many phases against the
     // blocks here: the Mac's Bluetooth speaker, larger callbacks, a
     // synthetic pairing of 480-frame blocks with 512-frame callbacks, and
-    // other rates of the 44.1 kHz family. A real Windows endpoint at
-    // 44.1 kHz asks for 441-frame periods against 480-frame packets, one
-    // phase only: S206's known limit for callbacks with few phases.
+    // other rates of the 44.1 kHz family. These runs are unstamped, as a
+    // host that gives no time; the hosts stamp, which the stamped runs
+    // below check (S207). A real Windows endpoint at 44.1 kHz asks for
+    // 441-frame periods against 480-frame packets, one phase only, which
+    // the few-phase runs below check.
     for (device_rate, callback, block) in [
         (44_100, 512, 512),
         (44_100, 4096, 512),
@@ -321,6 +378,243 @@ fn an_earliest_converted_output_on_a_clock_100_ppm_off_never_runs_dry() {
                         .filter(|&&sample| (sample - A).abs() > 1e-3)
                         .count();
                     assert_eq!(gaps, 0, "frames off the source's level: {clocks:?}");
+                }
+            }
+        }
+    }
+}
+
+/// Seconds the runs of outputs whose callbacks take few phases last.
+const FEW_PHASES_SECONDS: u64 = 60;
+
+/// The device clocks of the few-phase runs, in ppm: 100 ppm off, and
+/// 300 ppm off, which takes a 441-frame output fed 480-frame blocks past
+/// a block's worth of slack inside the 60 seconds.
+const FEW_PHASES_DRIFTS_PPM: [i64; 4] = [-300, -100, 100, 300];
+
+/// The clock setups of the stamped runs: the many-phase ones of the
+/// unstamped runs above, the few-phase ones, and 1024-frame callbacks
+/// against 10 ms blocks.
+const STAMPED_SETUPS: [(u32, usize, usize); 9] = [
+    (44_100, 512, 512),
+    (44_100, 4096, 512),
+    (44_100, 512, 480),
+    (88_200, 512, 512),
+    (22_050, 256, 512),
+    (44_100, 441, 480),
+    (96_000, 512, 512),
+    (32_000, 256, 512),
+    (44_100, 1024, 480),
+];
+
+/// Asserts that a stamped run of `clocks` for `seconds`, its stamps off by
+/// up to `jitter_ns`, started once, faded in, and from then on played the
+/// source without a dry read, a correction or a gap; that no callback
+/// slowed its converter by more than S206 allows; and that the converter
+/// was trimmed by what the clock gained or lost (48 000 x seconds x ppm /
+/// 10^6 capture frames, 288 a minute at 100 ppm), plus what it was trimmed
+/// the other way, which is at most `other_way`, plus 16 frames and the
+/// frames of the jitter, which the reference may be off by.
+fn assert_follows_the_capture(clocks: Clocks, seconds: u64, jitter_ns: u64, other_way: u64) {
+    let drift = u64::from(RATE) * seconds * clocks.drift_ppm.unsigned_abs() / 1_000_000;
+    let outcome = simulate_jittered(clocks, seconds, true, jitter_ns);
+    let c = outcome.counters;
+    assert_eq!(
+        (c.starved_renders, c.starved_frames),
+        (0, 0),
+        "starved renders: {clocks:?}"
+    );
+    assert_eq!(
+        (c.drift_skips, c.drift_silences, c.resyncs, c.primes),
+        (0, 0, 0, 1),
+        "one prime and no correction: {clocks:?}"
+    );
+    assert_eq!(outcome.shortfall, 0, "{clocks:?}");
+    let reads = reader_frames_bound(clocks.callback, RATE, clocks.device_rate) as u64;
+    assert!(
+        outcome.most_slowed * SLOW_DOWN_SHARE as u64 <= reads,
+        "{} slowed in one callback: {clocks:?}",
+        outcome.most_slowed
+    );
+    let (trimmed, back) = if clocks.drift_ppm >= 0 {
+        (outcome.slowed, outcome.sped)
+    } else {
+        (outcome.sped, outcome.slowed)
+    };
+    assert!(
+        back <= other_way,
+        "{back} frames trimmed the other way: {clocks:?}"
+    );
+    assert!(
+        trimmed <= drift + back + 16 + jitter_ns * u64::from(RATE) / 1_000_000_000,
+        "{trimmed} frames trimmed: {clocks:?}"
+    );
+    let open = outcome.open_at.expect("the output faded in");
+    let gaps = outcome.played[open..]
+        .iter()
+        .filter(|&&sample| (sample - A).abs() > 1e-3)
+        .count();
+    assert_eq!(gaps, 0, "frames off the source's level: {clocks:?}");
+}
+
+// covers: S53, S206, S207
+#[test]
+fn callbacks_with_few_phases_on_a_clock_off_never_run_dry() {
+    // A Windows endpoint at 44.1 kHz asks for 441-frame periods against
+    // 480-frame packets, which take one phase against each other: W − P is
+    // the same at every callback until the clock has gained or lost a
+    // block, about every 100 s at 100 ppm, and a fast clock then takes a
+    // block's worth of slack at once; the second time, the reader runs dry
+    // (before S207, inside these 60 seconds at 300 ppm). A 96 kHz output
+    // with 512-frame callbacks against 512-frame blocks takes two phases, a
+    // 32 kHz one with 256-frame callbacks three, and ran dry at 100 ppm
+    // too. With the blocks and callbacks stamped, the renderer sees the
+    // clock gain or lose long before that and trims its converter by what
+    // it gains or loses (S207): over 60 seconds, 100 and 300 ppm fast or
+    // slow, at hold-back 0 and held back by 25 ms (inside the dead band, so
+    // no step back keeps it off W either), for every phase, a fresh session
+    // and a running one, no read runs dry and no drift correction is made.
+    for (device_rate, callback, block) in
+        [(44_100, 441, 480), (96_000, 512, 512), (32_000, 256, 512)]
+    {
+        for delay in [0, 1_200] {
+            for running in [false, true] {
+                for phase in PHASES {
+                    for drift_ppm in FEW_PHASES_DRIFTS_PPM {
+                        let clocks = Clocks {
+                            device_rate,
+                            callback,
+                            block,
+                            delay,
+                            running,
+                            phase,
+                            drift_ppm,
+                            tail: 0,
+                        };
+                        assert_follows_the_capture(clocks, FEW_PHASES_SECONDS, 0, 0);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// covers: S53, S206, S207
+#[test]
+fn an_earliest_converted_output_on_a_clock_off_follows_the_capture_with_stamps() {
+    // The setups of the unstamped runs above, and the rest of the stamped
+    // ones, as the hosts run them, with stamps (S207): over 30 seconds, 100
+    // and 300 ppm fast or slow, at hold-back 0 and 25 ms, for every phase,
+    // a fresh session and a running one, no read runs dry, no drift
+    // correction is made, and the converter is trimmed one way only, by
+    // what the clock gains or loses.
+    for (device_rate, callback, block) in STAMPED_SETUPS {
+        for delay in [0, 1_200] {
+            for running in [false, true] {
+                for phase in PHASES {
+                    for drift_ppm in FEW_PHASES_DRIFTS_PPM {
+                        let clocks = Clocks {
+                            device_rate,
+                            callback,
+                            block,
+                            delay,
+                            running,
+                            phase,
+                            drift_ppm,
+                            tail: 0,
+                        };
+                        assert_follows_the_capture(clocks, LONG_SECONDS, 0, 0);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Runs every stamped setup at hold-back 0 on a clock in step and on one
+/// 100 or 300 ppm off, fresh and running, for every phase, for
+/// [`FEW_PHASES_SECONDS`] with its stamps off by up to `jitter_ns` either
+/// way, and asserts that it follows the capture with at most `other_way`
+/// frames trimmed the other way.
+fn every_jittered_run(jitter_ns: u64, other_way: u64) {
+    for (device_rate, callback, block) in STAMPED_SETUPS {
+        for running in [false, true] {
+            for phase in PHASES {
+                for drift_ppm in [-300, -100, 0, 100, 300] {
+                    let clocks = Clocks {
+                        device_rate,
+                        callback,
+                        block,
+                        delay: 0,
+                        running,
+                        phase,
+                        drift_ppm,
+                        tail: 0,
+                    };
+                    assert_follows_the_capture(clocks, FEW_PHASES_SECONDS, jitter_ns, other_way);
+                }
+            }
+        }
+    }
+}
+
+// covers: S207
+#[test]
+fn stamps_a_fifth_of_a_millisecond_off_barely_trim_the_other_way() {
+    // A host's wake-ups, and so its stamps, fall a little off the times of
+    // the blocks and callbacks. A fifth of a millisecond either way moves
+    // the fill by up to ten frames at a time; averaged over half a second,
+    // or 16 callbacks when those are large, that trims the converter the
+    // other way by a few frames a minute at most.
+    every_jittered_run(200_000, 8);
+}
+
+// covers: S207
+#[test]
+fn stamps_a_millisecond_off_never_run_an_output_dry() {
+    // A millisecond either way moves the fill by up to 48 frames at a time,
+    // past the dead zone both ways, so the converter is trimmed back and
+    // forth, a few hundred frames a minute in all at worst, a frame at a
+    // time and interpolated; still no read runs dry and no correction is
+    // made.
+    every_jittered_run(1_000_000, 500);
+}
+
+// covers: S207
+#[test]
+fn an_output_that_needs_no_trim_plays_the_same_with_stamps() {
+    // Stamps change nothing for an output on a clock in step, whatever its
+    // hold-back, nor for one held back beyond the dead band and a lead,
+    // which a step back keeps off W as before (S52): over 60 seconds, those
+    // play the very same frames stamped or not, and are never trimmed.
+    for (device_rate, callback, block) in
+        [(44_100, 441, 480), (44_100, 512, 512), (96_000, 512, 512)]
+    {
+        for (delay, drifts) in [(0, &[0][..]), (1_200, &[0]), (4_800, &[-100, 0, 100])] {
+            for &drift_ppm in drifts {
+                for phase in [0.0, 0.5, 0.95] {
+                    let clocks = Clocks {
+                        device_rate,
+                        callback,
+                        block,
+                        delay,
+                        running: true,
+                        phase,
+                        drift_ppm,
+                        tail: 0,
+                    };
+                    let stamped = simulate(clocks, FEW_PHASES_SECONDS, true);
+                    let plain = simulate(clocks, FEW_PHASES_SECONDS, false);
+                    assert_eq!(
+                        (stamped.slowed, stamped.sped),
+                        (0, 0),
+                        "trimmed: {clocks:?}"
+                    );
+                    assert!(
+                        stamped.played == plain.played,
+                        "played otherwise: {clocks:?}"
+                    );
+                    assert_eq!(stamped.counters, plain.counters, "{clocks:?}");
                 }
             }
         }
