@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -113,10 +113,23 @@ enum Command {
 
 /// Follows the volume of the endpoints it is asked to, through listeners
 /// that a thread of its own holds. Dropping it unregisters them all.
+///
+/// A registration is a Windows call that can hang (Windows audio still
+/// waking up, say), and the thread that asks for it is the UI thread, so it
+/// waits for the answer as long as an output thread's start at most
+/// ([`READY_TIMEOUT`]). One that doesn't come in time is given up: the
+/// endpoint isn't followed for now, and the listener thread drops that
+/// listener as soon as its call returns. Until then the thread is stuck, so
+/// further registrations fail at once instead of each waiting again.
 pub(super) struct VolumeWatcher {
     commands: Option<mpsc::Sender<Command>>,
     /// The flag of each endpoint followed.
     flags: BTreeMap<String, Arc<AtomicBool>>,
+    /// How long a registration's answer is waited for.
+    answer_timeout: Duration,
+    /// Where the answer to the registration given up last comes, until it
+    /// does.
+    late: Option<mpsc::Receiver<Result<(), BackendError>>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -125,9 +138,10 @@ impl VolumeWatcher {
         VolumeWatcher::start_with(READY_TIMEOUT, listen)
     }
 
-    /// The watcher whose listener thread runs `body`.
+    /// The watcher whose listener thread runs `body`, waiting
+    /// `answer_timeout` at most for each registration's answer.
     fn start_with(
-        _answer_timeout: Duration,
+        answer_timeout: Duration,
         body: impl FnOnce(&mpsc::Receiver<Command>, Ready) + Send + 'static,
     ) -> Result<VolumeWatcher, BackendError> {
         let (commands, received) = mpsc::channel();
@@ -137,14 +151,22 @@ impl VolumeWatcher {
         Ok(VolumeWatcher {
             commands: Some(commands),
             flags: BTreeMap::new(),
+            answer_timeout,
+            late: None,
             thread: Some(thread),
         })
     }
 
     /// Registers a change listener for the endpoint `id`; waits for the
-    /// listener thread's answer.
+    /// listener thread's answer, for the answer timeout at most. Returns
+    /// [`BackendError::NotResponding`] when the answer doesn't come in time,
+    /// or at once while the thread is still in a registration given up
+    /// before; the endpoint isn't followed then.
     pub(super) fn watch(&mut self, id: &str) -> Result<(), BackendError> {
         self.unwatch(id);
+        if self.stuck() {
+            return Err(BackendError::NotResponding);
+        }
         let flag = Arc::new(AtomicBool::new(false));
         let (reply, answer) = mpsc::channel();
         let gone = BackendError::System {
@@ -159,9 +181,32 @@ impl VolumeWatcher {
                 reply,
             })
             .map_err(|_| gone.clone())?;
-        answer.recv().map_err(|_| gone)??;
+        match answer.recv_timeout(self.answer_timeout) {
+            Ok(answered) => answered?,
+            Err(RecvTimeoutError::Disconnected) => return Err(gone),
+            Err(RecvTimeoutError::Timeout) => {
+                // The thread handles its requests in order, so it drops the
+                // listener right after it registers it, if it ever does.
+                let _ = commands.send(Command::Unwatch(id.to_owned()));
+                self.late = Some(answer);
+                return Err(BackendError::NotResponding);
+            }
+        }
         self.flags.insert(id.to_owned(), flag);
         Ok(())
+    }
+
+    /// Whether the listener thread is still in the registration given up
+    /// last: its answer hasn't come yet.
+    fn stuck(&mut self) -> bool {
+        let still = self
+            .late
+            .as_ref()
+            .is_some_and(|late| matches!(late.try_recv(), Err(TryRecvError::Empty)));
+        if !still {
+            self.late = None;
+        }
+        still
     }
 
     /// Unregisters the endpoint's listener, if it has one.
@@ -186,9 +231,13 @@ impl VolumeWatcher {
 impl Drop for VolumeWatcher {
     fn drop(&mut self) {
         // The thread ends, unregistering every listener, once the channel
-        // closes.
+        // closes. One still in a Windows call is left to do that once the
+        // call returns: waiting for it would hold AudioSync's exit.
         self.commands = None;
-        if let Some(thread) = self.thread.take() {
+        let stuck = self.stuck();
+        if let Some(thread) = self.thread.take()
+            && !stuck
+        {
             let _ = thread.join();
         }
     }
@@ -209,7 +258,9 @@ fn listen(commands: &mpsc::Receiver<Command>, ready: Ready) {
         // Nobody waits for this listener thread anymore.
         return;
     }
-    serve(commands, |id, flag| Registration::new(&enumerator, id, flag));
+    serve(commands, |id, flag| {
+        Registration::new(&enumerator, id, flag)
+    });
 }
 
 /// Registers listeners through `register` and drops them on request, until
@@ -305,7 +356,10 @@ mod tests {
         }
 
         fn list(&self) -> Vec<String> {
-            self.0.lock().unwrap_or_else(PoisonError::into_inner).clone()
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
         }
 
         /// Waits up to [`LIMIT`] for the list to read `expected`.
@@ -368,8 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn a_volume_listener_that_doesnt_answer_in_time_is_given_up_and_its_late_registration_undone()
-    {
+    fn a_volume_listener_that_doesnt_answer_in_time_is_given_up_and_its_late_registration_undone() {
         let (gate, hold) = mpsc::channel();
         let done = Done::default();
         let watcher =

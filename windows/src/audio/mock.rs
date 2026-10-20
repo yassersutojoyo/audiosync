@@ -503,11 +503,7 @@ impl Driver for MockDriver {
     }
 
     fn endpoint_volume(&mut self, id: &str) -> Option<EndpointVolume> {
-        self.device_volumes
-            .record
-            .lock()
-            .reads
-            .push(id.to_owned());
+        self.device_volumes.record.lock().reads.push(id.to_owned());
         if !self.is_connected(id) {
             return None;
         }
