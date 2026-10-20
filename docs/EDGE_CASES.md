@@ -129,7 +129,7 @@ Expected: every speaker is listed, This Mac first and the rest by name; all of t
 
 Code path: `SpeakerLayout.split` (`SpeakerLayout.swift`) orders the rows; the menu bar panel switches to a `ScrollView` above `maxListHeight` (`MenuBar.swift`). Each local speaker gets its own `OutputRenderer` and `CoreDelayReader` on the shared ring (`SyncEngine.addOutput`); all AirPlay speakers share one sender, which gets each speaker added or removed as it's switched (`syncNativeSpeakers`, `NativeAirPlayModel.plan`).
 
-Automated: "EC10 many speakers: sixteen speakers all listed, in name order", "EC10 many speakers: eight local speakers are attached together"; core `readers_are_independent` (`core/src/reader.rs`) and `readers_do_not_disturb_each_other` (`core/tests/reader_props.rs`).
+Automated: "EC10 many speakers: sixteen speakers all listed, in name order", "EC10 many speakers: eight local speakers are attached together"; core `readers_are_independent` (`core/src/reader.rs`) and `readers_do_not_disturb_each_other` (`core/tests/reader_props.rs`); Windows `ec10_eight_local_outputs_switched_on_together_all_play_on_their_own_renderers` (`windows/src/audio/controller.rs`).
 
 Manual: with six or more speakers available (AirPlay speakers, or local and virtual devices with Show Virtual Devices on), switch them all on. Expected: the panel scrolls and every row is reachable, all speakers play in sync, AudioSync's CPU use stays modest in Activity Monitor.
 
