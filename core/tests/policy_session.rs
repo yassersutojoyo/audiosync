@@ -305,11 +305,7 @@ fn every_error_state_has_its_reaction() {
         enabled_left: 0,
     });
     assert!(!unreachable.alert && unreachable.stop_session);
-    for reason in [
-        DropReason::Unreachable,
-        DropReason::PasswordUnsupported,
-        DropReason::NeedsCode,
-    ] {
+    for reason in [DropReason::Unreachable, DropReason::NeedsCode] {
         assert!(!reason.alerts(), "only a rejected code alerts: {reason:?}");
     }
     assert!(DropReason::CodeRejected.alerts());

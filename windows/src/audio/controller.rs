@@ -66,8 +66,8 @@ use super::airplay::{
     AirPlayLink, AirPlaySpeakers, FeedLease, FeedSlot, SenderStarter, StartedSender,
 };
 use super::backend::{
-    AirPlayInfo, AirPlayPinPrompt, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
-    OutputInfo, SourceId, SourceInfo, StopReason, TIMED_OUT,
+    AirPlayInfo, AirPlayPasswordPrompt, AirPlayPinPrompt, AirPlayProblem, AudioBackend,
+    BackendError, BackendEvent, OutputInfo, SourceId, SourceInfo, StopReason, TIMED_OUT,
 };
 use super::capture::{
     Activation, CaptureAttempt, LoopbackMode, SampleType, WHOLE_SYSTEM_NAME, decide_activation,
@@ -1867,6 +1867,41 @@ impl<D: Driver> AudioBackend for Controller<D> {
 
     fn airplay_pin_prompt(&self) -> Option<AirPlayPinPrompt> {
         self.airplay.as_ref().and_then(AirPlaySpeakers::pin_prompt)
+    }
+
+    fn begin_airplay_attempt(&mut self, id: &str) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.begin_attempt(id);
+        }
+    }
+
+    fn ask_airplay_password(&mut self, id: &str) -> Result<(), AirPlayProblem> {
+        match self.airplay.as_mut() {
+            Some(airplay) => airplay.ask_password(id),
+            None => Err(AirPlayProblem::Unsupported),
+        }
+    }
+
+    fn submit_airplay_password(&mut self, id: &str, password: &str) -> bool {
+        let taken = self
+            .airplay
+            .as_mut()
+            .is_some_and(|airplay| airplay.submit_password(id, password));
+        self.sync_airplay_rule();
+        taken
+    }
+
+    fn cancel_airplay_password(&mut self, id: &str) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.cancel_password(id);
+        }
+        self.sync_airplay_rule();
+    }
+
+    fn airplay_password_prompt(&self) -> Option<AirPlayPasswordPrompt> {
+        self.airplay
+            .as_ref()
+            .and_then(AirPlaySpeakers::password_prompt)
     }
 
     fn set_airplay_volume(&mut self, id: &str, position: f64) {
@@ -4846,7 +4881,7 @@ mod tests {
                 BackendEvent::AirPlayChanged,
                 BackendEvent::AirPlayFailed {
                     id: id.clone(),
-                    problem: AirPlayProblem::PasswordNotYet,
+                    problem: AirPlayProblem::NeedsPassword,
                 }
             ]
         );

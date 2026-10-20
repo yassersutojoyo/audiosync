@@ -20,6 +20,8 @@ use audiosync_core::eq::{self, EqSettings};
 use audiosync_core::policy::device_volume::Hint;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
+mod password;
+
 use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
@@ -31,7 +33,8 @@ use crate::ui_model::{
 use crate::{
     AboutDialog, AirPlayProblem, Availability, DeviceVolumeHint, EqualizerWindow, GroupItem,
     GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, NoticeKind,
-    Palette, PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind, Strings, TrayFlyout,
+    Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind,
+    Strings, TrayFlyout,
 };
 
 /// The digits the PIN field keeps of what was typed: four at most.
@@ -488,6 +491,10 @@ pub struct App {
     /// The PIN dialog shows a made-up pairing (the PIN preview), which no
     /// refresh closes.
     pin_preview: Cell<bool>,
+    /// The password prompt of a speaker protected by a password.
+    password_dialog: PasswordDialog,
+    /// The speaker the password dialog is open for, while it is.
+    password_for: RefCell<Option<String>>,
     about: AboutDialog,
     guide: GuideWindow,
     /// The paragraphs the guide shows.
@@ -621,6 +628,8 @@ impl App {
             pin_dialog: PinDialog::new()?,
             pin_for: RefCell::new(None),
             pin_preview: Cell::new(false),
+            password_dialog: PasswordDialog::new()?,
+            password_for: RefCell::new(None),
             about: AboutDialog::new()?,
             guide: GuideWindow::new()?,
             guide_steps: Rc::new(VecModel::default()),
@@ -649,6 +658,7 @@ impl App {
         app.connect_flyout();
         app.connect_equalizer();
         app.connect_dialogs();
+        app.connect_password_dialog();
         app.connect_guide();
         app.restore_view();
         app.refresh();
@@ -774,6 +784,9 @@ impl App {
             .global::<Palette>()
             .set_color_scheme(scheme);
         self.pin_dialog.global::<Palette>().set_color_scheme(scheme);
+        self.password_dialog
+            .global::<Palette>()
+            .set_color_scheme(scheme);
         self.about.global::<Palette>().set_color_scheme(scheme);
         self.guide.global::<Palette>().set_color_scheme(scheme);
         self.theme_override.set(Some(dark));
@@ -986,6 +999,7 @@ impl App {
         }
         self.refresh_guide(&state);
         self.show_pin_prompt(state.pin_prompt.as_ref());
+        self.show_password_prompt(state.password_prompt.as_ref());
 
         for window in [&self.main as &dyn WindowState, &self.flyout] {
             window.show_state(&state, &status, source_index);
@@ -2187,7 +2201,6 @@ fn availability(a: ui_model::Availability) -> Availability {
         ui_model::Availability::NeedsCode => Availability::NeedsCode,
         ui_model::Availability::Pairing => Availability::Pairing,
         ui_model::Availability::WaitingToPair => Availability::WaitingToPair,
-        ui_model::Availability::PasswordNotYet => Availability::PasswordNotYet,
         ui_model::Availability::PairingNotYet => Availability::PairingNotYet,
         ui_model::Availability::AirPlay2NotYet => Availability::Airplay2NotYet,
         ui_model::Availability::Unsupported => Availability::Unsupported,
@@ -2201,7 +2214,7 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::ConnectionLost => AirPlayProblem::ConnectionLost,
         P::Busy => AirPlayProblem::Busy,
         P::Refused => AirPlayProblem::Refused,
-        P::PasswordNotYet => AirPlayProblem::PasswordNotYet,
+        P::NeedsPassword => AirPlayProblem::NeedsPassword,
         P::NeedsPin => AirPlayProblem::NeedsPin,
         P::PairingFailed => AirPlayProblem::PairingFailed,
         P::PairingNotYet => AirPlayProblem::PairingNotYet,
@@ -3652,6 +3665,53 @@ mod tests {
         press(window, Key::Escape);
         assert!(!window.is_visible(), "Escape on Cancel closed the dialog");
         assert!(!app.pin_preview.get(), "through its Cancel path");
+    }
+
+    /// The App over the example data with Kitchen asking for its password.
+    fn app_asking_password(wrong: bool) -> Rc<App> {
+        let mut backend = MockBackend::new();
+        backend.ask_password("airplay:kitchen", wrong);
+        app_over(backend)
+    }
+
+    #[test]
+    fn the_password_dialog_pairs_with_what_was_typed() {
+        let app = app_asking_password(false);
+        let window = app.password_dialog.window();
+        assert!(window.is_visible(), "it opens with the prompt");
+        assert!(!app.password_dialog.get_wrong());
+        press(window, Key::Return);
+        assert!(window.is_visible(), "Enter waits for a password");
+        for key in ["p", "w"] {
+            press(window, key);
+        }
+        press(window, Key::Return);
+        assert!(!window.is_visible());
+        assert_eq!(
+            app.password_dialog.get_password(),
+            "",
+            "not kept in the field"
+        );
+        let state = app.snapshot();
+        assert_eq!(state.password_prompt, None);
+        assert!(state.speaker("airplay:kitchen").unwrap().enabled);
+    }
+
+    #[test]
+    fn escape_on_the_password_dialog_cancels_from_the_field_or_a_button() {
+        for tabs in [0, 2] {
+            let app = app_asking_password(true);
+            let window = app.password_dialog.window();
+            assert!(app.password_dialog.get_wrong(), "says it was turned down");
+            press(window, "x");
+            tab(window, tabs);
+            press(window, Key::Escape);
+            assert!(!window.is_visible(), "Escape closed it ({tabs} tabs)");
+            assert_eq!(app.password_dialog.get_password(), "");
+            let state = app.snapshot();
+            assert_eq!(state.password_prompt, None);
+            assert!(!state.speaker("airplay:kitchen").unwrap().enabled);
+        }
     }
 
     #[test]

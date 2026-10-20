@@ -97,8 +97,9 @@ pub struct OutputInfo {
 pub enum AirPlayAvailability {
     /// It can.
     Open,
-    /// It asks for a password; AudioSync can't send one yet.
-    PasswordNotYet,
+    /// It asks for a password: switching it on asks the user for it, which
+    /// AudioSync keeps in memory until it quits.
+    NeedsPassword,
     /// An Apple TV that asks for a PIN once: switching it on pairs it, and
     /// its credentials are kept from then on.
     NeedsPin,
@@ -150,6 +151,18 @@ pub struct AirPlayPinPrompt {
     pub wrong_pin: bool,
 }
 
+/// The password prompt of a speaker the user switched on: it asks for a
+/// password, or turned the one typed down.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AirPlayPasswordPrompt {
+    /// The speaker's ID.
+    pub id: String,
+    /// The name it announces.
+    pub name: String,
+    /// The speaker turned the last password down.
+    pub wrong: bool,
+}
+
 /// Where a pairing is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PairingPhase {
@@ -174,8 +187,9 @@ pub enum AirPlayProblem {
     /// It turned the stream down, or answered in a way AudioSync doesn't
     /// understand; AudioSync keeps trying.
     Refused,
-    /// It asks for a password, which AudioSync can't send yet.
-    PasswordNotYet,
+    /// It asks for a password AudioSync doesn't have, or turned the one it
+    /// had down. Switching it on asks for it.
+    NeedsPassword,
     /// An Apple TV that needs pairing with a PIN first (or again, after it
     /// stopped accepting AudioSync's credentials). Switching it on pairs it.
     NeedsPin,
@@ -208,7 +222,7 @@ impl AirPlayAvailability {
     pub fn problem(self) -> Option<AirPlayProblem> {
         match self {
             AirPlayAvailability::Open => None,
-            AirPlayAvailability::PasswordNotYet => Some(AirPlayProblem::PasswordNotYet),
+            AirPlayAvailability::NeedsPassword => Some(AirPlayProblem::NeedsPassword),
             AirPlayAvailability::NeedsPin => Some(AirPlayProblem::NeedsPin),
             AirPlayAvailability::PairingNotYet => Some(AirPlayProblem::PairingNotYet),
             AirPlayAvailability::AirPlay2NotYet => Some(AirPlayProblem::AirPlay2NotYet),
@@ -524,6 +538,28 @@ pub trait AudioBackend {
 
     /// The PIN prompt to show, if a pairing has one.
     fn airplay_pin_prompt(&self) -> Option<AirPlayPinPrompt>;
+
+    /// The user switched the speaker on themselves and it is on: until it
+    /// plays, a session that asks for a password, or turns the one
+    /// AudioSync has down, asks the user for it instead of turning the
+    /// speaker off. Auto-connect and restored switches never call this.
+    fn begin_airplay_attempt(&mut self, id: &str);
+
+    /// Asks the user for the password of a speaker they switched on that
+    /// returned [`AirPlayProblem::NeedsPassword`]:
+    /// [`AudioBackend::airplay_password_prompt`] shows it.
+    fn ask_airplay_password(&mut self, id: &str) -> Result<(), AirPlayProblem>;
+
+    /// The password the user typed for the speaker: kept in memory until
+    /// AudioSync quits, never logged, and the speaker is turned on. Returns
+    /// whether it was taken: not empty, while its prompt is open.
+    fn submit_airplay_password(&mut self, id: &str, password: &str) -> bool;
+
+    /// The user cancelled the speaker's password prompt: it is off.
+    fn cancel_airplay_password(&mut self, id: &str);
+
+    /// The password prompt to show, if one waits and no PIN prompt is open.
+    fn airplay_password_prompt(&self) -> Option<AirPlayPasswordPrompt>;
 
     /// Sets an AirPlay speaker's volume slider position (0 to 100), live. A
     /// value that isn't finite is ignored.
