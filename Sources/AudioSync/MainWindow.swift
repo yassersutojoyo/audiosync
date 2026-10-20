@@ -56,9 +56,14 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         model.actions.refreshExternalState()
     }
 
+    /// Finish a half-typed delay: the field loses the focus and commits.
+    func finishEditing() {
+        window.makeFirstResponder(nil)
+    }
+
     func windowWillClose(_ notification: Notification) {
         // Finish a half-typed delay before the field goes away.
-        window.makeFirstResponder(nil)
+        finishEditing()
         onScreen = false
         model.actions.mainWindowVisible(false)
     }
@@ -641,9 +646,11 @@ struct AirPlayDelayRow: View {
     }
 }
 
-/// A delay's controls: coarse/fine steppers plus a typed value in whole ms
-/// that applies as you type (no Return needed). Text the field can't read is
-/// ignored, and Return shows the stored value again (S181).
+/// A delay's controls: coarse/fine steppers that apply at once, plus a typed
+/// value in whole ms that applies on Return or when the field loses focus, so
+/// the outputs re-time once rather than at every keystroke. Text the field
+/// can't read applies nothing and the stored value shows again (S181,
+/// `DelayFieldDraft`).
 struct SyncControls: View {
     /// Which delay the controls edit.
     enum Kind: Equatable {
@@ -661,28 +668,26 @@ struct SyncControls: View {
     let text: AppText
     @ObservedObject var draft: SyncDraft
     let apply: (Double) -> Void
+    @FocusState private var fieldFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 4) {
                 step(-100)
                 step(-10)
-                TextField(text.delayFieldLabel, text: Binding(get: { draft.text }, set: { value in
-                    draft.text = value
-                    guard let typed = LocalDelay.wholeMs(value), let v = clamped(typed) else { return }
-                    draft.lastApplied = v
-                    apply(v)
-                    // Out of range: show what was applied (onChange won't fire if
-                    // the clamped value equals the current one).
-                    if v != typed { draft.text = shown(v) }
-                }))
+                TextField(text.delayFieldLabel, text: Binding(get: { draft.field.text },
+                                                              set: { draft.field.type($0) }))
                 .labelsHidden()
                 .textFieldStyle(.roundedBorder)
                 .multilineTextAlignment(.center)
                 .font(.callout.monospacedDigit())
                 .frame(width: 72)
                 .accessibilityLabel(label)
-                .onSubmit { draft.text = shown(ms) }
+                .focused($fieldFocused)
+                .onSubmit(commit)
+                // Escape drops the typing, so a later focus loss applies nothing.
+                .onExitCommand { draft.field.discard(saved: ms, format: shown) }
+                .onChange(of: fieldFocused) { _, focused in if !focused { commit() } }
                 Text(text.millisecondsUnit).font(.callout).foregroundStyle(Brand.secondaryText)
                 step(10)
                 step(100)
@@ -692,8 +697,10 @@ struct SyncControls: View {
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .onAppear { sync(ms) }
-        .onChange(of: ms) { _, value in sync(value) }
+        .onAppear { draft.field.show(ms, format: shown) }
+        .onChange(of: ms) { _, value in draft.field.show(value, format: shown) }
+        // Collapsing the controls mid-typing still applies what was typed.
+        .onDisappear(perform: commit)
     }
 
     private var hint: String {
@@ -719,14 +726,19 @@ struct SyncControls: View {
         }
     }
 
-    /// Show the applied value unless it is the one being typed.
-    private func sync(_ value: Double) {
-        if draft.lastApplied != value { draft.text = shown(value) }
-        draft.lastApplied = nil
+    /// Apply the typed value, once (Return and the focus loss after it both
+    /// get here).
+    private func commit() {
+        if let value = draft.field.commit(saved: ms, sanitize: clamped, format: shown) { apply(value) }
     }
 
     private func step(_ delta: Int) -> some View {
-        Button(text.delayStep(delta)) { apply(ms + Double(delta)) }
+        Button(text.delayStep(delta)) {
+            // A step applies at once and drops any typing, so a focus loss
+            // later doesn't apply the old typed text over it.
+            draft.field.discard(saved: ms, format: shown)
+            apply(ms + Double(delta))
+        }
             .accessibilityLabel(text.delayStepAccessibility(delta))
             .controlSize(.small)
             .font(.caption.monospacedDigit())
