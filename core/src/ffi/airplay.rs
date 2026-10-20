@@ -51,15 +51,19 @@
 //! [`asc_airplay_next_event`] reports [`AIRPLAY_EVENT_FAILED`] once; the
 //! host then destroys it and may create a new sender. A panic in an input
 //! write marks the input and its sender dead. Destroying a dead handle
-//! still frees it.
+//! still frees it. The failure's detail says where the panic happened, as
+//! a source file and line, never what it said (S205): a panic hook,
+//! installed once by the first [`asc_airplay_create`] in front of the one
+//! that was there before, notes each panic's location.
 
+use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::ptr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::audio::SAMPLE_RATE;
@@ -152,7 +156,8 @@ pub const AIRPLAY_EVENT_LATENCY: i32 = 3;
 pub const AIRPLAY_EVENT_TIMELINE: i32 = 4;
 /// The sender stopped working: a bug ended one of its calls, its driver
 /// thread or its discovery. It lists, plays and reports nothing more; the
-/// host destroys it and may create a new one. Reported once, with no ID.
+/// host destroys it and may create a new one. Reported once, with no ID;
+/// the detail says where the panic happened, or is "" (S205).
 pub const AIRPLAY_EVENT_FAILED: i32 = 5;
 /// The receiver of a PIN pairing shows a PIN (P48, P51): the host asks the
 /// user for it and hands it to [`asc_airplay_submit_pin`]. The pairing
@@ -268,7 +273,8 @@ pub struct AscAirPlayEvent {
     pub receiver_latency_frames: i64,
     /// A timeline event after a restart (P143).
     pub restarted: bool,
-    /// An error event's error, for a debug log (no secrets).
+    /// An error event's error, or a failure event's panic location
+    /// (S205), for a debug log (no secrets).
     pub detail: *const c_char,
 }
 
@@ -348,7 +354,10 @@ pub struct AscAirPlay {
     master: f64,
     /// Set when a call on this handle or its input panicked; shared with
     /// the input.
-    dead: Arc<AtomicBool>,
+    death: Arc<Death>,
+    /// How many panics the process had noted when this handle was created
+    /// ([`PANICS`]).
+    panics_before: u64,
     /// [`AIRPLAY_EVENT_FAILED`] was handed out.
     failure_reported: bool,
 }
@@ -532,7 +541,7 @@ impl AscAirPlay {
             SenderEvent::Pairing { key, event } => self.pairing_event(receiver_id(&key), event),
             // Discovery's browser died (a bug in it): the sender no
             // longer lists anything new, so it counts as dead too.
-            SenderEvent::DiscoveryFailed => self.dead.store(true, Ordering::Release),
+            SenderEvent::DiscoveryFailed => self.death.dead.store(true, Ordering::Release),
         }
     }
 
@@ -800,7 +809,7 @@ impl AscAirPlay {
             }
             Pending::Failed => {
                 event.kind = AIRPLAY_EVENT_FAILED;
-                (String::new(), String::new())
+                (String::new(), self.failure_detail())
             }
             Pending::Pairing {
                 kind,
@@ -826,8 +835,111 @@ impl AscAirPlay {
     /// A call panicked, or the driver thread ended (see the module's
     /// Panics).
     fn is_dead(&self) -> bool {
-        self.dead.load(Ordering::Acquire) || !self.sender.is_running()
+        self.death.dead.load(Ordering::Acquire) || !self.sender.is_running()
     }
+
+    /// The detail of [`AIRPLAY_EVENT_FAILED`] (S205): `panic at
+    /// <file>:<line>` for the panic a call on this handle or its input
+    /// caught; when none did (the driver thread or discovery ended), the
+    /// latest panic the process noted since this handle was created, which,
+    /// with one sender, is the one that ended it; "" when there was none.
+    fn failure_detail(&self) -> String {
+        let at = self.death.at.get().cloned().or_else(|| {
+            if PANICS.load(Ordering::SeqCst) == self.panics_before {
+                return None;
+            }
+            LATEST_PANIC.lock().ok().and_then(|latest| latest.clone())
+        });
+        at.map_or_else(String::new, |at| format!("panic at {at}"))
+    }
+}
+
+/// A sender's death (see the module's Panics), shared by its handle and its
+/// input.
+struct Death {
+    /// Set by a panic in a call on the handle or its input, or by
+    /// discovery's browser dying.
+    dead: AtomicBool,
+    /// Where the first panic a call caught happened (`<file>:<line>`).
+    at: OnceLock<String>,
+}
+
+impl Death {
+    fn new() -> Self {
+        Death {
+            dead: AtomicBool::new(false),
+            at: OnceLock::new(),
+        }
+    }
+
+    /// A call on this thread caught a panic: the sender is dead, and the
+    /// location the panic hook noted for it is kept for the failure's
+    /// detail. Runs only after a panic, which has allocated already; the
+    /// location was allocated with it, and keeping it allocates nothing.
+    fn panicked(&self) {
+        if let Some(at) = caught_panic_location() {
+            // Only the first panic's: a later one may follow from it.
+            let _ = self.at.set(at);
+        }
+        self.dead.store(true, Ordering::Release);
+    }
+}
+
+/// How many panics the hook noted in this process, on any thread.
+static PANICS: AtomicU64 = AtomicU64::new(0);
+
+/// Where the latest panic the hook noted happened, on any thread.
+static LATEST_PANIC: Mutex<Option<String>> = Mutex::new(None);
+
+thread_local! {
+    /// Where the latest panic on this thread happened, until a call here
+    /// that caught it takes it. Touched only while a panic is handled, so
+    /// a thread without one (the capture thread) never sets it up.
+    static PANIC_AT: Cell<Option<String>> = const { Cell::new(None) };
+}
+
+/// A panic's source location as the failure's detail gives it:
+/// `<file>:<line>`, the file from its crate's folder on (the folder before
+/// the last `src` in its path, or just its name without one), with forward
+/// slashes; a build machine's home folder never shows (S205).
+fn panic_location(file: &str, line: u32) -> String {
+    let parts: Vec<&str> = file.split(['/', '\\']).collect();
+    let from = match parts.iter().rposition(|part| *part == "src") {
+        Some(src) => src.saturating_sub(1),
+        None => parts.len() - 1,
+    };
+    format!("{}:{line}", parts[from..].join("/"))
+}
+
+/// Installs, once, the panic hook that notes where each panic happened, for
+/// the failure's detail; it then runs the hook that was there before (the
+/// default one prints the panic to standard error). It notes the location
+/// only: a panic's message may hold anything (S205).
+fn note_panic_locations() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let previous = panic::take_hook();
+        panic::set_hook(Box::new(move |info| {
+            if let Some(location) = info.location() {
+                let at = panic_location(location.file(), location.line());
+                // Never waits: with another panic noting its own, this
+                // one's location is only on its thread.
+                if let Ok(mut latest) = LATEST_PANIC.try_lock() {
+                    *latest = Some(at.clone());
+                }
+                // Not while the thread's locals are going away.
+                let _ = PANIC_AT.try_with(|slot| slot.set(Some(at)));
+                PANICS.fetch_add(1, Ordering::SeqCst);
+            }
+            previous(info);
+        }));
+    });
+}
+
+/// The location the hook noted for the latest panic on this thread, which a
+/// call here just caught; taken, so it is never reported twice.
+fn caught_panic_location() -> Option<String> {
+    PANIC_AT.try_with(Cell::take).ok().flatten()
 }
 
 /// Tests: the panic a test asked for (`tests::panic_in_next_call`);
@@ -863,7 +975,7 @@ unsafe fn catching<T: Copy>(
     }));
     outcome.unwrap_or_else(|_| {
         // SAFETY: still live; the closure's borrow ended with it.
-        unsafe { &*airplay }.dead.store(true, Ordering::Release);
+        unsafe { &*airplay }.death.panicked();
         failed
     })
 }
@@ -873,7 +985,7 @@ unsafe fn catching<T: Copy>(
 /// # Safety
 ///
 /// As [`catching`].
-unsafe fn live<T: Copy>(
+pub(crate) unsafe fn live<T: Copy>(
     airplay: *mut AscAirPlay,
     failed: T,
     body: impl FnOnce(&mut AscAirPlay) -> T,
@@ -980,9 +1092,9 @@ pub struct AscAirPlayInput {
     /// A stop asked the input to fade out (S189); cleared by the next rate
     /// request.
     closing: AtomicBool,
-    /// Its sender's dead flag: set by a panic in a write, which then
-    /// writes nothing more.
-    dead: Arc<AtomicBool>,
+    /// Its sender's death: set by a panic in a write, which then writes
+    /// nothing more.
+    death: Arc<Death>,
 }
 
 /// Starts an AirPlay sender: its stream, silent until audio comes through
@@ -991,6 +1103,8 @@ pub struct AscAirPlayInput {
 /// Null when the thread can't start.
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_airplay_create() -> *mut AscAirPlay {
+    note_panic_locations();
+    let panics_before = PANICS.load(Ordering::SeqCst);
     let created = panic::catch_unwind(|| {
         injected_panic();
         match Sender::start(SenderConfig::default()) {
@@ -1010,13 +1124,18 @@ pub extern "C" fn asc_airplay_create() -> *mut AscAirPlay {
                 pairing: HashMap::new(),
                 ending: HashMap::new(),
                 master: 100.0,
-                dead: Arc::new(AtomicBool::new(false)),
+                death: Arc::new(Death::new()),
+                panics_before,
                 failure_reported: false,
             })),
             Err(_) => ptr::null_mut(),
         }
     });
-    created.unwrap_or(ptr::null_mut())
+    created.unwrap_or_else(|_| {
+        // No handle to report it: the location goes.
+        drop(caught_panic_location());
+        ptr::null_mut()
+    })
 }
 
 /// Stops the sender and frees it: every speaker is torn down, discovery
@@ -1693,7 +1812,7 @@ pub unsafe extern "C" fn asc_airplay_take_input(airplay: *mut AscAirPlay) -> *mu
                 },
                 requested: AtomicU64::new(0),
                 closing: AtomicBool::new(false),
-                dead: airplay.dead.clone(),
+                death: airplay.death.clone(),
             }))
         })
     }
@@ -1723,8 +1842,8 @@ pub unsafe extern "C" fn asc_airplay_input_set_rate(
     }
     // SAFETY: the handle is live; this call borrows only the atomics, which
     // writes read but never borrow mutably.
-    let (requested, closing, dead) =
-        unsafe { (&(*input).requested, &(*input).closing, &(*input).dead) };
+    let (requested, closing, death) =
+        unsafe { (&(*input).requested, &(*input).closing, &(*input).death) };
     let set = panic::catch_unwind(|| {
         injected_panic();
         // A new capture: open again after a stop's fade-out (S189).
@@ -1739,7 +1858,7 @@ pub unsafe extern "C" fn asc_airplay_input_set_rate(
         }
     });
     set.unwrap_or_else(|_| {
-        dead.store(true, Ordering::Release);
+        death.panicked();
         false
     })
 }
@@ -1776,9 +1895,9 @@ pub unsafe extern "C" fn asc_airplay_input_write(
     };
     // SAFETY: the handle is live; writes run on one thread at a time and
     // borrow only the `feed` field, which rate requests never touch.
-    let (requested, closing, dead) =
-        unsafe { (&(*input).requested, &(*input).closing, &(*input).dead) };
-    if dead.load(Ordering::Acquire) {
+    let (requested, closing, death) =
+        unsafe { (&(*input).requested, &(*input).closing, &(*input).death) };
+    if death.dead.load(Ordering::Acquire) {
         return 0;
     }
     let requested = requested.load(Ordering::Acquire);
@@ -1790,7 +1909,7 @@ pub unsafe extern "C" fn asc_airplay_input_write(
         feed.write(block, requested, closing)
     }));
     written.unwrap_or_else(|_| {
-        dead.store(true, Ordering::Release);
+        death.panicked();
         0
     })
 }
@@ -2862,6 +2981,15 @@ mod tests {
         }
     }
 
+    /// `event` with an empty detail: a failure's detail is checked on its
+    /// own (S205).
+    fn without_detail(event: &Event) -> Event {
+        Event {
+            detail: String::new(),
+            ..event.clone()
+        }
+    }
+
     fn failed(events: &[Event]) -> bool {
         events
             .iter()
@@ -2897,7 +3025,11 @@ mod tests {
             assert!(!asc_airplay_next_receiver(handle, &mut receiver));
         }
         let events = events_until(handle, |seen| !seen.is_empty());
-        assert_eq!(events, [failure_event()], "the failure, once, and only it");
+        assert_eq!(
+            events.iter().map(without_detail).collect::<Vec<_>>(),
+            [failure_event()],
+            "the failure, once, and only it"
+        );
         let mut raw = blank_event();
         // SAFETY: as above; a local out struct.
         let more = unsafe { asc_airplay_next_event(handle, &mut raw) };
@@ -2942,7 +3074,11 @@ mod tests {
             );
         }
         let events = events_until(handle, failed);
-        assert_eq!(events.last(), Some(&failure_event()), "{events:?}");
+        assert_eq!(
+            events.last().map(without_detail),
+            Some(failure_event()),
+            "{events:?}"
+        );
         // SAFETY: each destroyed once, by this thread.
         unsafe {
             asc_airplay_input_destroy(&mut input);
@@ -2958,7 +3094,11 @@ mod tests {
             .sender
             .start_discovery_with(Box::new(Panicking));
         let events = events_until(handle, failed);
-        assert_eq!(events.last(), Some(&failure_event()), "{events:?}");
+        assert_eq!(
+            events.last().map(without_detail),
+            Some(failure_event()),
+            "{events:?}"
+        );
         assert_eq!(
             events
                 .iter()
@@ -3071,6 +3211,30 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    #[test]
+    fn panic_locations_keep_the_crate_and_drop_the_home_folder() {
+        for (file, short) in [
+            ("src/ffi/airplay.rs", "src/ffi/airplay.rs"),
+            (r"src\ffi\airplay.rs", "src/ffi/airplay.rs"),
+            (
+                "/Users/<you>/Projects/audiosync/airplay/src/sender/driver.rs",
+                "airplay/src/sender/driver.rs",
+            ),
+            (
+                r"C:\Users\<you>\.cargo\registry\src\index.crates.io-0000\mdns-sd-0.21.5\src\service_daemon.rs",
+                "mdns-sd-0.21.5/src/service_daemon.rs",
+            ),
+            (
+                "/rustc/0123abcd/library/core/src/option.rs",
+                "core/src/option.rs",
+            ),
+            ("/home/<you>/generated/out/bindings.rs", "bindings.rs"),
+            ("lib.rs", "lib.rs"),
+        ] {
+            assert_eq!(panic_location(file, 42), format!("{short}:42"), "{file}");
+        }
+    }
+
     /// A browser whose daemon is already gone, as one a bug ended leaves it.
     struct Dead;
 
@@ -3094,7 +3258,11 @@ mod tests {
             .sender
             .start_discovery_with(Box::new(Dead));
         let events = events_until(handle, failed);
-        assert_eq!(events.last(), Some(&failure_event()), "{events:?}");
+        assert_eq!(
+            events.last().map(without_detail),
+            Some(failure_event()),
+            "{events:?}"
+        );
         let mut raw = blank_event();
         // SAFETY: as above; a local out struct.
         unsafe {
