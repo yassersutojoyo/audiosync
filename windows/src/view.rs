@@ -37,6 +37,8 @@ use crate::{
     Strings, TrayFlyout,
 };
 
+mod help_window;
+
 /// The digits the PIN field keeps of what was typed: four at most.
 fn pin_digits(text: &str) -> String {
     text.chars().filter(char::is_ascii_digit).take(4).collect()
@@ -502,6 +504,8 @@ pub struct App {
     /// The guide is open for the double-audio notice and follows it (not
     /// for a made-up preview notice).
     guide_follows_notice: Cell<bool>,
+    /// The AudioSync Guide (Help > AudioSync Guide), `help_window.rs`.
+    help: crate::HelpWindow,
     log: DebugLog,
     ui: RefCell<UiState>,
     /// What has the keyboard focus in the main window's lists.
@@ -634,6 +638,7 @@ impl App {
             guide: GuideWindow::new()?,
             guide_steps: Rc::new(VecModel::default()),
             guide_follows_notice: Cell::new(false),
+            help: crate::HelpWindow::new()?,
             log,
             ui: RefCell::default(),
             main_focus: RefCell::default(),
@@ -660,6 +665,7 @@ impl App {
         app.connect_dialogs();
         app.connect_password_dialog();
         app.connect_guide();
+        app.connect_help();
         app.restore_view();
         app.refresh();
         let weak = Rc::downgrade(&app);
@@ -789,6 +795,7 @@ impl App {
             .set_color_scheme(scheme);
         self.about.global::<Palette>().set_color_scheme(scheme);
         self.guide.global::<Palette>().set_color_scheme(scheme);
+        self.help.global::<Palette>().set_color_scheme(scheme);
         self.theme_override.set(Some(dark));
     }
 
@@ -998,6 +1005,7 @@ impl App {
             self.main.invoke_focus_streaming_switch();
         }
         self.refresh_guide(&state);
+        self.refresh_help(&state);
         self.show_pin_prompt(state.pin_prompt.as_ref());
         self.show_password_prompt(state.password_prompt.as_ref());
 
@@ -2522,7 +2530,7 @@ mod tests {
 
     /// Draws a frame of every headless window, as the event loop would after
     /// an event: lists are laid out then, and their new rows built.
-    fn draw_frames() {
+    pub(super) fn draw_frames() {
         slint::platform::update_timers_and_animations();
         let windows: Vec<_> = HEADLESS_WINDOWS
             .with(|windows| windows.borrow().iter().filter_map(Weak::upgrade).collect());
@@ -2537,7 +2545,7 @@ mod tests {
     }
 
     /// Presses and releases `key` in `window`, then draws a frame.
-    fn press(window: &slint::Window, key: impl Into<SharedString>) {
+    pub(super) fn press(window: &slint::Window, key: impl Into<SharedString>) {
         let text: SharedString = key.into();
         window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
         window.dispatch_event(WindowEvent::KeyReleased { text });
@@ -2555,14 +2563,14 @@ mod tests {
     }
 
     /// Presses Tab `times` times in `window`.
-    fn tab(window: &slint::Window, times: usize) {
+    pub(super) fn tab(window: &slint::Window, times: usize) {
         for _ in 0..times {
             press(window, Key::Tab);
         }
     }
 
     /// The App over `backend`, with headless windows.
-    fn app_over(backend: MockBackend) -> Rc<App> {
+    pub(super) fn app_over(backend: MockBackend) -> Rc<App> {
         // The platform is set per thread: a thread that already built an
         // App has it, which is fine.
         let _ = slint::platform::set_platform(Box::new(Headless));

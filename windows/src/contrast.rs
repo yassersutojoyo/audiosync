@@ -129,6 +129,7 @@ const UI_FILES: &[(&str, &str)] = &[
     ("dialogs.slint", include_str!("../ui/dialogs.slint")),
     ("about.slint", include_str!("../ui/about.slint")),
     ("guide.slint", include_str!("../ui/guide.slint")),
+    ("help.slint", include_str!("../ui/help.slint")),
 ];
 
 /// Token colors that are not text on a token background: the wordmark's
@@ -455,7 +456,9 @@ fn keyboard_shortcuts_are_declared() {
 /// short name for the dismiss button, and the
 /// note that discovery has found no speaker yet, which shows only while it
 /// runs; an empty Connected Speakers list otherwise says just that it's
-/// empty, or that its virtual outputs are hidden.
+/// empty, or that its virtual outputs are hidden. Six strings of the
+/// AudioSync Guide name AirPlay too, with the receivers the sender plays and
+/// the ones it can't yet.
 #[test]
 fn no_text_promises_airplay() {
     let strings = include_str!("../ui/strings.slint");
@@ -470,7 +473,17 @@ fn no_text_promises_airplay() {
                     .contains("notice-airplay-stopped: @tr(\"AirPlay stopped or couldn't start.")
                 || line.contains("notice-retry-label: @tr(\"Retry starting AirPlay\")")
                 || line.contains("return @tr(\"AirPlay stopped\");")
-                || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet."),
+                || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
+                || [
+                    "help-intro",
+                    "help-start",
+                    "help-sync",
+                    "help-volume",
+                    "help-airplay-title",
+                    "help-airplay",
+                ]
+                .iter()
+                .any(|name| line.contains(&format!("out property <string> {name}: @tr("))),
             "strings.slint: {}",
             line.trim()
         );
@@ -638,6 +651,53 @@ fn the_double_audio_guide_is_wired_and_worded_in_strings() {
         let body = &strings[start..];
         let body = &body[..body.find("\n    }").expect("the function ends")];
         assert!(body.contains("@tr(\""), "{function} is translatable");
+    }
+}
+
+/// Help > AudioSync Guide (F1) opens the Guide, which spells out no text of
+/// its own, closes on Escape, and keeps every paragraph's full height.
+#[test]
+fn the_audiosync_guide_is_wired_and_worded_in_strings() {
+    let main = include_str!("../ui/main.slint");
+    let item = main
+        .find("title: Strings.help-title;")
+        .expect("the Help menu has the Guide");
+    let item = &main[item..item + 200];
+    assert!(item.contains("@keys(F1)") && item.contains("root.help-requested();"));
+    assert!(main.contains("export { HelpWindow } from \"help.slint\";"));
+
+    let help = include_str!("../ui/help.slint");
+    assert!(!help.contains("text: \""), "help.slint spells out no text");
+    assert!(help.contains("Key.Escape") && help.contains("root.close-requested();"));
+    let wrapping = help.matches("wrap: word-wrap;").count();
+    assert_eq!(
+        help.matches("min-height: self.preferred-height;").count(),
+        wrapping,
+        "every wrapping text in the Guide keeps the height of all its lines"
+    );
+    // Each section is a group Narrator names by its heading.
+    let sections = help.matches("HelpSection {").count();
+    assert!(sections >= 8, "{sections} sections");
+    assert_eq!(help.matches("title: Strings.help-").count(), sections + 1);
+
+    let strings = include_str!("../ui/strings.slint");
+    let lines: Vec<&str> = strings
+        .lines()
+        .filter(|line| line.contains("out property <string> help-"))
+        .collect();
+    assert!(lines.len() > sections * 2, "a title and a text per section");
+    for line in lines {
+        assert!(line.contains(": @tr(\""), "translatable: {line}");
+        assert!(!line.contains('—'), "no em dash: {line}");
+        let name = line
+            .split("help-")
+            .nth(1)
+            .and_then(|rest| rest.split(':').next())
+            .unwrap_or_default();
+        assert!(
+            help.contains(&format!("Strings.help-{name};")),
+            "help.slint shows help-{name}"
+        );
     }
 }
 

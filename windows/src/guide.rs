@@ -140,6 +140,15 @@ pub fn current(notices: &[Notice]) -> Option<Guide> {
     notices.iter().find_map(|notice| guide(&notice.message))
 }
 
+/// The ID of the double-audio notice among `notices`, if one is showing:
+/// the notice whose guide Show How in the AudioSync Guide opens.
+pub fn notice_with_guide(notices: &[Notice]) -> Option<u64> {
+    notices
+        .iter()
+        .find(|notice| guide(&notice.message).is_some())
+        .map(|notice| notice.id)
+}
+
 /// A made-up double-audio notice to look at the guide without streaming:
 /// `app` for one app, `system` for the whole system. With `AUDIOSYNC_DEBUG=1`,
 /// the app opens the guide for it at launch when `AUDIOSYNC_PREVIEW_GUIDE`
@@ -336,6 +345,23 @@ mod tests {
         // The app quit, or streaming stopped: the notice is gone.
         notices.remove(1);
         assert_eq!(current(&notices), None);
+    }
+
+    #[test]
+    fn show_how_in_the_audiosync_guide_finds_the_double_audio_notice() {
+        let notice = |id: u64, message: NoticeMessage| Notice {
+            id,
+            subject: "subject".to_owned(),
+            message,
+            time: "09.41".to_owned(),
+        };
+        let mut notices = vec![notice(4, NoticeMessage::NoSpeaker)];
+        assert_eq!(notice_with_guide(&notices), None);
+        notices.push(notice(7, twice(None, &["TV"], &[], None)));
+        assert_eq!(notice_with_guide(&notices), Some(7));
+        // A double-audio notice that names no output has no guide.
+        notices[1].message = twice(None, &[], &[], None);
+        assert_eq!(notice_with_guide(&notices), None);
     }
 
     #[test]

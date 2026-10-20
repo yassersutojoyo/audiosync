@@ -15,6 +15,7 @@ export { EqualizerWindow } from "equalizer.slint";
 export { TrayFlyout } from "flyout.slint";
 export { GroupNameDialog, PasswordDialog, PinDialog } from "dialogs.slint";
 export { GuideWindow } from "guide.slint";
+export { HelpWindow } from "help.slint";
 export { Strings } from "strings.slint";
 // The style's palette, for the theme preview (src/view.rs).
 export { Palette } from "std-widgets.slint";
@@ -313,6 +314,8 @@ export component MainWindow inherits Window {
     callback close-requested();
     callback exit-requested();
     callback about-requested();
+    // Help > AudioSync Guide: open the Guide.
+    callback help-requested();
 
     // Slint leaves nothing focused when a refresh removes the focused
     // control (a notice dismissed with the keyboard, a speaker unplugged):
@@ -457,6 +460,16 @@ export component MainWindow inherits Window {
 
         Menu {
             title: Strings.menu-help;
+
+            MenuItem {
+                title: Strings.help-title;
+                shortcut: @keys(F1);
+                activated => {
+                    root.help-requested();
+                }
+            }
+
+            MenuSeparator { }
 
             MenuItem {
                 title: Strings.menu-about;
