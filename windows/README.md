@@ -23,7 +23,8 @@ There's no Windows release yet. Every CI run of
 `.github/workflows/windows.yml` keeps an `audiosync.exe` for x64 and one for
 ARM64 as workflow artifacts for a week (you need to be signed in to GitHub to
 download them), or you can build it yourself (below). It's a single exe with
-no installer: put it in a folder of its own and run it.
+no installer: put it in a folder of its own, keep `THIRD-PARTY-NOTICES.txt`
+from the same download next to it, and run it.
 
 - **What you need:** Windows 11 (build 22000 or later) on x64 or ARM64. On
   anything older the app says so and exits.
@@ -32,8 +33,9 @@ no installer: put it in a folder of its own and run it.
   for this preview.
 - **Firewall:** the first time AudioSync looks for AirPlay speakers, Windows
   Firewall may ask whether it can use the network. Allow it on private
-  networks. If your Wi-Fi or Ethernet is set to Public, Windows blocks the
-  search and no AirPlay speakers show up: switch the network to Private
+  networks. If your Wi-Fi or Ethernet is set to Public, Windows will probably
+  block the search and no AirPlay speakers show up; switching the network to
+  Private usually fixes it
   (Settings > Network & internet > your connection > Network profile type).
 - **One copy at a time:** starting it again while it runs brings the running
   copy's window to the front instead of opening a second one.
