@@ -2952,6 +2952,45 @@ mod tests {
         assert_eq!(backend.feed_capture_level(4, 0.25), [0.25; 8], "off");
     }
 
+    /// EC10: eight local outputs switched on together, while streaming
+    /// runs and before it starts.
+    #[test]
+    fn ec10_eight_local_outputs_switched_on_together_all_play_on_their_own_renderers() {
+        let mut backend = MockBackend::empty();
+        let ids: Vec<String> = (1..=8).map(|n| format!("output-{n}")).collect();
+        for (n, id) in ids.iter().enumerate() {
+            backend.connect_output(id, &format!("Output {}", n + 1));
+        }
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        for (n, id) in ids.iter().enumerate() {
+            backend.set_output_volume(id, 20.0 + 10.0 * n as f64);
+            backend.set_output_enabled(id, true).unwrap();
+        }
+        assert!(backend.poll().is_empty());
+        assert_eq!(playing(&backend), ids);
+        assert_eq!(backend.driver().renderers_running(), 8, "one renderer each");
+        let mut started = backend.driver().renderers_started().to_vec();
+        started.sort();
+        assert_eq!(started, ids, "each started once");
+        // Each reads through its own controls: eight different gains.
+        let mut gains: Vec<f32> = ids
+            .iter()
+            .map(|id| backend.playing_params(id).unwrap().gain)
+            .collect();
+        gains.dedup();
+        assert_eq!(gains.len(), 8, "{gains:?}");
+
+        // All eight start together with the next session too.
+        backend.stop();
+        backend.poll();
+        assert_eq!(backend.driver().renderers_running(), 0);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(backend.poll().is_empty());
+        assert_eq!(playing(&backend), ids);
+        assert_eq!(backend.driver().renderers_running(), 8);
+    }
+
     #[test]
     fn enabled_outputs_count_the_ones_not_connected() {
         let mut backend = backend();
