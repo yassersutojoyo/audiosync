@@ -25,7 +25,8 @@ if [ "${1:-}" = "--install" ]; then
   esac
   archive="shellcheck-v$VERSION.$platform.tar.xz"
   mkdir -p "$dir"
-  curl -fsSL -o "$dir/$archive" "https://github.com/koalaman/shellcheck/releases/download/v$VERSION/$archive"
+  # Plain --retry skips DNS failures (exit 6), which a CI runner has hit.
+  curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$dir/$archive" "https://github.com/koalaman/shellcheck/releases/download/v$VERSION/$archive"
   echo "$sum  $dir/$archive" | shasum -a 256 -c - >/dev/null
   tar -xJf "$dir/$archive" -C "$dir"
   mv "$dir/shellcheck-v$VERSION/shellcheck" "$dir/shellcheck"
