@@ -152,6 +152,9 @@ export global Strings {
     out property <string> equalizer-presets: @tr("Presets");
 
     // About dialog
+    out property <string> about-copyright: "Copyright © 2026 Yasser Sutojoyo Kusumo";
+    out property <string> about-license: @tr("Licensed under GPL-3.0-or-later. Comes with no warranty.");
+
     public pure function version(version: string) -> string {
         return @tr("Version {}", version);
     }
