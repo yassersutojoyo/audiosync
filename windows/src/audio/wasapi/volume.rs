@@ -173,6 +173,9 @@ impl Late {
 /// now, a write may still happen, and a listener registered late is dropped
 /// as soon as its call returns. Until that call returns the thread is stuck,
 /// so further calls fail at once instead of each waiting again.
+///
+/// Dropping it waits for the thread to end as long as an answer at most:
+/// unregistering a listener answers nothing, and can hang too.
 pub(super) struct VolumeWatcher {
     commands: Option<mpsc::Sender<Command>>,
     /// The flag of each endpoint followed.
@@ -182,6 +185,8 @@ pub(super) struct VolumeWatcher {
     /// The call given up last, until it returns.
     late: Option<Late>,
     thread: Option<JoinHandle<()>>,
+    /// Disconnects when the thread ends, whichever way it does.
+    ended: mpsc::Receiver<()>,
 }
 
 impl VolumeWatcher {
@@ -192,7 +197,10 @@ impl VolumeWatcher {
         body: impl FnOnce(&mpsc::Receiver<Command>, Ready) + Send + 'static,
     ) -> Result<VolumeWatcher, BackendError> {
         let (commands, received) = mpsc::channel();
+        let (running, ended) = mpsc::channel::<()>();
         let (thread, ()) = spawn_ready_within("audiosync-volumes", answer_timeout, move |ready| {
+            // Goes when the thread ends, a panic included.
+            let _running = running;
             body(&received, ready);
         })?;
         Ok(VolumeWatcher {
@@ -201,6 +209,7 @@ impl VolumeWatcher {
             answer_timeout,
             late: None,
             thread: Some(thread),
+            ended,
         })
     }
 
@@ -371,12 +380,17 @@ impl Volumes {
 impl Drop for VolumeWatcher {
     fn drop(&mut self) {
         // The thread ends, unregistering every listener, once the channel
-        // closes. One still in a Windows call is left to do that once the
-        // call returns: waiting for it would hold AudioSync's exit.
+        // closes. One still in a call given up before isn't waited for at
+        // all; any other is waited for as long as an answer at most, since
+        // unregistering can hang too (the requests queued before this one
+        // included). A thread that doesn't end in time is left to finish
+        // once its calls return: waiting for it would hold AudioSync's exit.
         self.commands = None;
         let stuck = self.stuck();
         if let Some(thread) = self.thread.take()
             && !stuck
+            && let Err(RecvTimeoutError::Disconnected) =
+                self.ended.recv_timeout(self.answer_timeout)
         {
             let _ = thread.join();
         }
