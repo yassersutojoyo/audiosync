@@ -66,11 +66,11 @@ body:
     attributes:
       label: Debug log
       description: |
-        Start AudioSync with its debug log on, make the problem happen, quit, and drag the log file in here. The log starts over at every launch.
+        Quit AudioSync (on Windows, from the tray icon's menu), start it again with its debug log on, make the problem happen, quit, and drag the log file in here. The log starts over at every launch.
 
         Mac, in Terminal: `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, the log is `/tmp/audiosync-debug.log`.
         Windows, in PowerShell in the folder with the exe: `$env:AUDIOSYNC_DEBUG=1; .\audiosync.exe`, the log is `%TEMP%\audiosync-debug.log`.
 
-        The log lists your outputs and the AirPlay speakers on your network by name, and speakers are often named after people. Look it over and replace any name you'd rather not post before attaching it.
+        The log lists your outputs and the AirPlay speakers on your network by name, and speakers are often named after people. It also lists each AirPlay speaker's ID, which is usually its hardware address. Look it over and replace anything you'd rather not post before attaching it.
     validations:
       required: true
