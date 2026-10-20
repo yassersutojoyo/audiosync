@@ -2122,7 +2122,7 @@ pub mod tests {
     }
 
     #[test]
-    fn a_cancelled_pairings_late_success_keeps_its_credentials_and_the_next_pairing() {
+    fn a_cancelled_pairings_late_success_pairs_the_next_pairing_without_a_pin() {
         let fake = FakeAirPlay::new();
         let mut airplay = speakers(&fake);
         let tv = device(6, "Den TV", APPLE_TV_TXT);
@@ -2139,14 +2139,57 @@ pub mod tests {
                 1,
             )),
         );
+        // The Apple TV is paired now: the pairing started since ends there,
+        // as a pairing that paired, instead of asking for a second PIN.
+        assert_eq!(
+            airplay.poll(),
+            [
+                BackendEvent::AirPlayChanged,
+                BackendEvent::AirPlayPaired { id: id.clone() }
+            ]
+        );
+        assert!(
+            !fake.take_calls().contains(&Call::StartPairing(id.clone())),
+            "no second pairing starts on the sender"
+        );
+        assert_eq!(airplay.pin_prompt(), None, "no second PIN shows");
+        assert!(!airplay.submit_pin(&id, "4821"), "no pairing runs");
+        assert_eq!(
+            airplay.enabled_ids(),
+            std::slice::from_ref(&id),
+            "paired, it is on"
+        );
+        let row = &airplay.speakers()[0];
+        assert!(row.paired && !row.pairing);
+        assert_eq!(row.availability, AirPlayAvailability::Open);
+    }
+
+    #[test]
+    fn a_cancelled_pairings_late_success_with_nothing_waiting_leaves_the_speaker_off() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        pairing_started(&fake, &mut airplay, &tv);
+        cancel_and_start_again(&fake, &mut airplay, &tv);
+        // The pairing started since is cancelled too, before it started.
+        airplay.cancel_pairing(&id);
+        fake.take_calls();
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(crate::audio::pairings::tests::credentials(
+                "0123456789ABCDEF",
+                1,
+            )),
+        );
         assert_eq!(
             airplay.poll(),
             [BackendEvent::AirPlayChanged],
-            "the credentials are stored, but the user cancelled that pairing"
+            "the credentials are stored, but the user cancelled both pairings"
         );
         assert!(airplay.speakers()[0].paired, "its credentials are real");
         assert!(airplay.enabled_ids().is_empty());
-        the_new_pairing_goes_on(&fake, &mut airplay, &tv);
+        assert!(fake.take_calls().is_empty(), "nothing starts");
     }
 
     #[test]

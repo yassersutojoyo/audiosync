@@ -3513,24 +3513,9 @@ mod tests {
         }
     }
 
-    // A pairing replaced by a new one may have succeeded just before: its
-    // credentials are real, so they are stored and the receiver is listed
-    // as able to play, but its success isn't reported as the new pairing's,
-    // which keeps running and still takes its PIN.
-    #[test]
-    fn a_late_success_from_a_replaced_pairing_stores_it_and_keeps_the_next_one() {
-        let (_receiver, port) = silent_receiver();
-        let id = "02005E005316";
-        let c_id = c"02005E005316";
-        let mut handle = listing(vec![apple_tv_at(id, "Den TV", port)]);
-        let key = inside(handle).listed[id].device.key.clone();
-        waiting_events(handle);
-        // SAFETY: a live handle, used by this thread only; a local C string.
-        unsafe {
-            assert!(asc_airplay_start_pairing(handle, c_id.as_ptr()));
-            assert!(asc_airplay_start_pairing(handle, c_id.as_ptr()));
-        }
-        inside(handle).take_in(SenderEvent::Pairing {
+    /// A late success from a cancelled pairing, as the sender reports it.
+    fn late_success(key: DeviceKey) -> SenderEvent {
+        SenderEvent::Pairing {
             key,
             event: PairingEvent::Paired(
                 audiosync_airplay::pairing::Credentials::new(
@@ -3539,22 +3524,123 @@ mod tests {
                 )
                 .expect("valid credentials"),
             ),
-        });
+        }
+    }
+
+    /// After a late success: the credentials are stored, the receiver is
+    /// listed as able to play, and the host was told `told` of pairings.
+    fn stored_and_told(handle: *mut AscAirPlay, id: &str, told: Vec<(i32, String, i32)>) {
         assert_eq!(next(handle, 1)[0].availability, AIRPLAY_AVAILABLE, "stored");
         assert!(inside(handle).store.contains(id));
-        assert_eq!(
-            pairing_events(&waiting_events(handle)),
-            vec![],
-            "the replaced pairing's success isn't the new one's"
+        assert_eq!(pairing_events(&waiting_events(handle)), told);
+    }
+
+    // A pairing replaced by a new one may have succeeded just before. Its
+    // credentials are real, so they are stored and the receiver is listed
+    // as able to play; and the Apple TV is paired now, so the new pairing,
+    // still waiting for that end, never starts (no second PIN): the host
+    // hears of it as a pairing that paired.
+    #[test]
+    fn a_late_success_from_a_replaced_pairing_finishes_the_new_one_as_paired() {
+        let (_receiver, port) = silent_receiver();
+        let id = "02005E005316";
+        let c_id = c"02005E005316";
+        let mut handle = listing(vec![apple_tv_at(id, "Den TV", port)]);
+        let key = inside(handle).listed[id].device.key.clone();
+        waiting_events(handle);
+        // The first pairing is marked as running without a pairing on the
+        // sender, so no real end of it can arrive before the one below.
+        inside(handle).pairing.insert(id.to_owned(), key.clone());
+        // SAFETY: a live handle, used by this thread only; a local C string.
+        unsafe { assert!(asc_airplay_start_pairing(handle, c_id.as_ptr())) };
+        assert!(
+            matches!(inside(handle).ending.get(id), Some(Some(_))),
+            "the new pairing waits for the replaced one's end"
+        );
+        inside(handle).take_in(late_success(key));
+        stored_and_told(handle, id, vec![(AIRPLAY_EVENT_PAIRED, id.to_owned(), 0)]);
+        assert!(
+            !inside(handle).ending.contains_key(id),
+            "nothing waits any more"
         );
         // SAFETY: as above; local C strings.
         unsafe {
             assert!(
-                asc_airplay_submit_pin(handle, c_id.as_ptr(), c"1234".as_ptr()),
-                "the new pairing still runs"
+                !asc_airplay_submit_pin(handle, c_id.as_ptr(), c"1234".as_ptr()),
+                "no pairing runs to take a PIN"
             );
             asc_airplay_destroy(&mut handle);
         }
+    }
+
+    // The user cancels a pairing and starts it again at once, but the
+    // cancelled pairing had already succeeded. The pairing started since
+    // waits for that end and then never starts, so no second PIN shows for
+    // an Apple TV that is paired: the host hears of it as a pairing that
+    // paired, and the credentials are stored.
+    #[test]
+    fn a_late_success_from_a_cancelled_pairing_finishes_the_next_one_as_paired() {
+        let (_receiver, port) = silent_receiver();
+        let id = "02005E005318";
+        let c_id = c"02005E005318";
+        let mut handle = listing(vec![apple_tv_at(id, "Den TV", port)]);
+        let key = inside(handle).listed[id].device.key.clone();
+        waiting_events(handle);
+        // Marked as running without a pairing on the sender (see above).
+        inside(handle).pairing.insert(id.to_owned(), key.clone());
+        // SAFETY: a live handle, used by this thread only; a local C string.
+        unsafe {
+            asc_airplay_cancel_pairing(handle, c_id.as_ptr());
+            assert!(asc_airplay_start_pairing(handle, c_id.as_ptr()));
+        }
+        assert!(
+            matches!(inside(handle).ending.get(id), Some(Some(_))),
+            "the new pairing waits for the cancelled one's end"
+        );
+        inside(handle).take_in(late_success(key));
+        stored_and_told(handle, id, vec![(AIRPLAY_EVENT_PAIRED, id.to_owned(), 0)]);
+        assert!(
+            !inside(handle).ending.contains_key(id),
+            "nothing waits any more"
+        );
+        // SAFETY: as above; local C strings.
+        unsafe {
+            assert!(
+                !asc_airplay_submit_pin(handle, c_id.as_ptr(), c"1234".as_ptr()),
+                "no pairing runs to take a PIN"
+            );
+            asc_airplay_destroy(&mut handle);
+        }
+    }
+
+    // With no pairing waiting for it (the one started since was cancelled
+    // too), a cancelled pairing's success is stored and the receiver listed
+    // again, but the host hears nothing of it.
+    #[test]
+    fn a_late_success_with_no_pairing_waiting_is_only_stored() {
+        let (_receiver, port) = silent_receiver();
+        let id = "02005E005319";
+        let c_id = c"02005E005319";
+        let mut handle = listing(vec![apple_tv_at(id, "Den TV", port)]);
+        let key = inside(handle).listed[id].device.key.clone();
+        waiting_events(handle);
+        inside(handle).pairing.insert(id.to_owned(), key.clone());
+        // SAFETY: a live handle, used by this thread only; a local C string.
+        unsafe {
+            asc_airplay_cancel_pairing(handle, c_id.as_ptr());
+            assert!(asc_airplay_start_pairing(handle, c_id.as_ptr()));
+            asc_airplay_cancel_pairing(handle, c_id.as_ptr());
+        }
+        assert!(
+            matches!(inside(handle).ending.get(id), Some(None)),
+            "nothing waits for the cancelled pairing's end"
+        );
+        inside(handle).take_in(late_success(key));
+        stored_and_told(handle, id, vec![]);
+        assert!(!inside(handle).ending.contains_key(id));
+        assert!(!inside(handle).pairing.contains_key(id), "none started");
+        // SAFETY: a live handle, used by this thread only.
+        unsafe { asc_airplay_destroy(&mut handle) };
     }
 
     // The host takes the receiver changes first, then the events. An Apple
