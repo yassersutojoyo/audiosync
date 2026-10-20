@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  A free, open-source Airfoil alternative for macOS: play your Mac's audio on HomePods, AirPlay speakers and every local output at once, in sync.
+  A free, open-source Airfoil alternative for macOS: play your Mac's audio on AirPlay speakers and every local output at once, in sync.
 </p>
 
 <p align="center">
@@ -29,7 +29,7 @@
   </picture>
 </p>
 
-I built this because I wanted my Mac's audio on every speaker in the house at once. The catch is that a HomePod always plays a little late (AirPlay buffers about two seconds), so a HomePod and a desk speaker playing the same song sound like an echo. AudioSync captures the audio once, streams it to your AirPlay speakers, and plays a delayed copy on each local output, every one with its own offset, until the whole room sounds like one speaker.
+I built this because I wanted my Mac's audio on every speaker in the house at once. The catch is that an AirPlay speaker always plays a little late (AirPlay buffers about two seconds), so an AirPlay speaker and a desk speaker playing the same song sound like an echo. AudioSync captures the audio once, streams it to your AirPlay speakers, and plays a delayed copy on each local output, every one with its own offset, until the whole room sounds like one speaker.
 
 It's a small Mac app written in Swift, with a main window and a menu bar panel, free and open source under the GPL. It's an early alpha, so expect rough edges. A Windows 11 version is on the way too ([more below](#coming-to-windows)).
 
@@ -47,7 +47,7 @@ I rebuilt a lot of the insides for this version:
 
 ## Multi-room audio on macOS
 
-The source can be all system audio, a single app (with its helper processes, like a browser's audio service), or an input device such as a microphone, line-in or audio interface (first two channels). It plays to one or more HomePods, Apple TVs and other AirPlay receivers, plus anything macOS can play to: built-in speakers, the headphone jack, HDMI/DisplayPort, USB DACs and Bluetooth.
+The source can be all system audio, a single app (with its helper processes, like a browser's audio service), or an input device such as a microphone, line-in or audio interface (first two channels). It plays to one or more AirPlay speakers and Apple TVs, plus anything macOS can play to: built-in speakers, the headphone jack, HDMI/DisplayPort, USB DACs and Bluetooth.
 
 Each local speaker gets its own delay relative to the Mac's built-in speakers (−2 to +20 s), and it applies whether or not an AirPlay speaker is on. There's one AirPlay delay for lining the Mac up with the AirPlay speakers, and the AirPlay speakers are kept in step with each other. On top of that you get per-speaker and master volume, a 10-band equalizer with a preamp and presets, Now Playing for Spotify and Music (also shown on AirPlay TVs and other speakers with a screen), speaker groups, auto-connect, and launch at login. An Apple TV that asks for a PIN pairs once, and an older AirPlay speaker with a password asks for it when you turn it on.
 
@@ -151,6 +151,7 @@ An Apple TV that asks for a PIN pairs once, with the PIN it shows, and a speaker
 
 - Everything is about two seconds late because of the AirPlay buffer. Fine for music, not for video or games.
 - AirPlay goes out as classic AirPlay (AirPlay 1), which most AirPlay 2 speakers still take; a speaker that only speaks AirPlay 2 isn't listed yet.
+- I haven't tried the new AirPlay sender in 0.5.0 on a HomePod yet. If your HomePod doesn't show up or doesn't play, please [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with the debug log: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync` in Terminal, make it happen again, and attach `/tmp/audiosync-debug.log`.
 - Now Playing only works with Spotify and Music; macOS doesn't let other apps read the system-wide Now Playing info.
 
 ## License and credits
