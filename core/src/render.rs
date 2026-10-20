@@ -163,6 +163,11 @@ struct Shared {
     faded: AtomicBool,
     /// Where the fade was at the end of the latest callback ([`state_code`]).
     state: AtomicU8,
+    /// Device frames the resampler could not produce and that were played
+    /// as silence. Stays 0 unless [`reader_frames_bound`] is wrong.
+    shortfall_frames: AtomicU64,
+    /// Capture frames the converter was slowed down by in all (S206).
+    slowed_frames: AtomicU64,
 }
 
 /// A fade state as the renderer publishes it.
@@ -181,8 +186,9 @@ fn take(flag: &AtomicBool) -> bool {
 }
 
 /// The control thread's handle to a [`Renderer`]: its delay (S187), its
-/// fade-out before a stop (S185), whether that fade-out has played, and the
-/// reader's lag and counters. Cheap to clone; every method is a lock-free
+/// fade-out before a stop (S185), whether that fade-out has played, the
+/// reader's lag and counters, and the frames the renderer slowed its
+/// converter by or couldn't convert. Cheap to clone; every method is a lock-free
 /// atomic operation (S190).
 #[derive(Debug, Clone)]
 pub struct RendererControl {
@@ -204,6 +210,8 @@ impl RendererControl {
                 fade_rendered: AtomicBool::new(false),
                 faded: AtomicBool::new(false),
                 state: AtomicU8::new(state_code(FadeState::Closed)),
+                shortfall_frames: AtomicU64::new(0),
+                slowed_frames: AtomicU64::new(0),
             }),
             reader,
         }
@@ -290,6 +298,16 @@ impl RendererControl {
     pub fn counters(&self) -> ReaderCounters {
         self.reader.counters()
     }
+
+    /// [`Renderer::slowed_frames`], from any thread (S206).
+    pub fn slowed_frames(&self) -> u64 {
+        self.shared.slowed_frames.load(Ordering::Relaxed)
+    }
+
+    /// [`Renderer::shortfall_frames`], from any thread.
+    pub fn shortfall_frames(&self) -> u64 {
+        self.shared.shortfall_frames.load(Ordering::Relaxed)
+    }
 }
 
 /// The stop's fade-out, as the renderer sees it.
@@ -352,11 +370,6 @@ pub struct Renderer {
     correction_due: bool,
     /// Device frames rendered after the stop's fade's last frame.
     frames_after_fade: Option<u64>,
-    /// Device frames the resampler could not produce and that were played
-    /// as silence. Stays 0 unless [`reader_frames_bound`] is wrong.
-    shortfall_frames: u64,
-    /// Capture frames the converter was slowed down by in all (S206).
-    slowed_frames: u64,
 }
 
 impl fmt::Debug for Renderer {
@@ -413,8 +426,6 @@ impl Renderer {
             awaiting_resync: false,
             correction_due: false,
             frames_after_fade: None,
-            shortfall_frames: 0,
-            slowed_frames: 0,
         })
     }
 
@@ -452,14 +463,14 @@ impl Renderer {
 
     /// Device frames played as silence because the resampler lacked input.
     pub fn shortfall_frames(&self) -> u64 {
-        self.shortfall_frames
+        self.shared.shortfall_frames.load(Ordering::Relaxed)
     }
 
     /// Capture frames the converter was slowed down by to keep the reader
     /// off W (S206), in all; each one plays the output one capture frame
     /// later. Stays 0 without conversion.
     pub fn slowed_frames(&self) -> u64 {
-        self.slowed_frames
+        self.shared.slowed_frames.load(Ordering::Relaxed)
     }
 
     /// Sets the device's period, in device frames: the callback it asks for
@@ -517,7 +528,9 @@ impl Renderer {
                 .process(&self.stereo[..need * 2], &mut self.converted[..n * 2]);
             if produced < n {
                 self.converted[produced * 2..n * 2].fill(0.0);
-                self.shortfall_frames += (n - produced) as u64;
+                self.shared
+                    .shortfall_frames
+                    .fetch_add((n - produced) as u64, Ordering::Relaxed);
             }
             let piece = &mut out[done * channels..(done + n) * channels];
             map_to_device(&self.converted[..n * 2], n, 1.0, piece, channels);
@@ -582,7 +595,9 @@ impl Renderer {
             return;
         }
         if self.resampler.slow_down(short, frames - 1) {
-            self.slowed_frames += short as u64;
+            self.shared
+                .slowed_frames
+                .fetch_add(short as u64, Ordering::Relaxed);
         }
     }
 

@@ -289,6 +289,7 @@ final class StreamEngine {
     private static func logStopped(_ uid: String, _ renderer: OutputRenderer, why reason: String) {
         renderer.onDeviceGone = nil
         DBG.log("[AudioSync] output stopped (\(reason)): \(uid), \(renderer.stopNote), "
-                + "\(renderer.framesRendered.load(ordering: .relaxed)) frames rendered, \(renderer.counters)")
+                + "\(renderer.framesRendered.load(ordering: .relaxed)) frames rendered, \(renderer.counters), "
+                + "slowed \(renderer.slowedFrames) frames, shortfall \(renderer.shortfallFrames) frames")
     }
 }

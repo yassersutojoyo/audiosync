@@ -559,6 +559,15 @@ int64_t asc_renderer_lag_frames(const AscRenderer *renderer);
 /* Any thread: the reader's counters; all zero for a NULL handle. */
 AscReaderCounters asc_renderer_counters(const AscRenderer *renderer);
 
+/* Any thread: the capture frames the renderer slowed its converter by to keep
+   its reader off the newest frame (S206), in all; 0 for a NULL handle. */
+uint64_t asc_renderer_slowed_frames(const AscRenderer *renderer);
+
+/* Any thread: the device frames the converter couldn't produce and that were
+   played as silence, in all (0 unless the read sizing is wrong); 0 for a NULL
+   handle. */
+uint64_t asc_renderer_shortfall_frames(const AscRenderer *renderer);
+
 /* ---- Delay helpers ------------------------------------------------------- */
 
 /*

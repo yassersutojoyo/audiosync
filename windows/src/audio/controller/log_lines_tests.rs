@@ -376,6 +376,8 @@ fn a_status_line_shows_what_a_real_reader_and_render_pipeline_count() {
         gain: gain.get(),
         lag_frames: control.lag_frames(),
         counters: control.counters(),
+        slowed_frames: control.slowed_frames(),
+        shortfall_frames: control.shortfall_frames(),
     };
     let app = SourceId::App { root_pid: APP_PID };
     // A capture and a render thread in step: anchored once, nothing to
@@ -389,7 +391,8 @@ fn a_status_line_shows_what_a_real_reader_and_render_pipeline_count() {
              48000 frames/s over 5.0 s\n  \
              output \"HDMI\" ({HDMI_ID}): delay 10 ms (480 frames), volume 50 (gain 0.250), \
              lag 485 frames; primes 1, resyncs 0, starved reads 0 (0 frames), \
-             drift skips 0 (0 frames), drift silences 0 (0 frames), rejected copies 0\n\
+             drift skips 0 (0 frames), drift silences 0 (0 frames), rejected copies 0, \
+             slowed 0 frames, shortfall 0 frames\n\
              AirPlay: L = 2000 ms"
         )
     );

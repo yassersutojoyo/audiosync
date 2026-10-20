@@ -313,15 +313,16 @@ impl Resampler {
     /// frames, and every later one is `frames` input frames later (S206).
     /// The frames in between are interpolated at their exact positions.
     /// Returns whether it took the request: rates that are equal, a
-    /// slow-down still under way, no steps, or more frames than the steps
-    /// cover (a step would have to stand still or go back) change nothing.
+    /// slow-down still under way, no steps, or as many frames as the steps
+    /// cover or more (a step would have to stand still or go back) change
+    /// nothing.
     pub fn slow_down(&mut self, frames: usize, steps: usize) -> bool {
         let units = (frames as u128) * u128::from(self.den);
         let (Ok(units), Ok(steps)) = (u64::try_from(units), u64::try_from(steps)) else {
             return false;
         };
         let covered = u128::from(steps) * u128::from(self.num);
-        if self.passthrough || self.is_slowing() || steps == 0 || u128::from(units) > covered {
+        if self.passthrough || self.is_slowing() || steps == 0 || u128::from(units) >= covered {
             return false;
         }
         self.slow_units = units;
@@ -935,11 +936,13 @@ mod tests {
     fn a_slow_down_is_refused_when_it_cannot_be_made() {
         // Equal rates have no converter to slow.
         assert!(!Resampler::new(48_000, 48_000).unwrap().slow_down(1, 511));
-        // 48 → 96 kHz steps half an input frame: 511 steps cover 255 frames.
+        // 48 → 96 kHz steps half an input frame: 512 steps cover 256 frames,
+        // and slowing by all of them would make every step stand still.
         let mut r = Resampler::new(48_000, 96_000).unwrap();
-        assert!(!r.slow_down(256, 511));
+        assert!(!r.slow_down(257, 512));
+        assert!(!r.slow_down(256, 512));
         assert!(!r.slow_down(1, 0));
-        assert!(r.slow_down(255, 511));
+        assert!(r.slow_down(255, 512));
         // A reset ends a slow-down under way.
         r.reset();
         assert!(!r.is_slowing());

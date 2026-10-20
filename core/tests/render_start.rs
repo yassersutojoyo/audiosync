@@ -261,12 +261,15 @@ fn an_earliest_converted_output_on_a_clock_100_ppm_off_never_runs_dry() {
     // A fast one slows the converter by the frames its clock gains, about
     // 4.8 a second, so at most 144 in all, and by at most a 64th of a
     // callback's reads at once. The callbacks take many phases against the
-    // blocks here: the Mac's Bluetooth speaker, larger callbacks, the
-    // Windows capture's 10 ms blocks with 512-frame callbacks, and other
-    // rates of the 44.1 kHz family.
+    // blocks here: the Mac's Bluetooth speaker, larger callbacks, a
+    // synthetic pairing of 480-frame blocks with 512-frame callbacks, and
+    // other rates of the 44.1 kHz family. A real Windows endpoint at
+    // 44.1 kHz asks for 441-frame periods against 480-frame packets, one
+    // phase only: S206's known limit for callbacks with few phases.
     for (device_rate, callback, block) in [
         (44_100, 512, 512),
         (44_100, 4096, 512),
+        // Synthetic: 10 ms capture blocks, Mac-sized callbacks.
         (44_100, 512, 480),
         (88_200, 512, 512),
         (22_050, 256, 512),
