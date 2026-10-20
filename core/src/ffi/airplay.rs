@@ -859,17 +859,22 @@ impl AscAirPlay {
 
     /// The detail of [`AIRPLAY_EVENT_FAILED`] (S205): `panic at
     /// <file>:<line>` for the panic a call on this handle or its input
-    /// caught; when none did (the driver thread or discovery ended), the
-    /// latest panic the process noted since this handle was created, which,
-    /// with one sender, is the one that ended it; "" when there was none.
+    /// caught; when none did (the driver thread or discovery ended),
+    /// `latest panic at <file>:<line>` for the latest panic the process
+    /// noted since this handle was created, which, with one sender, is
+    /// usually the one that ended it; "" when there was none.
     fn failure_detail(&self) -> String {
-        let at = self.death.at.get().cloned().or_else(|| {
-            if PANICS.load(Ordering::SeqCst) == self.panics_before {
-                return None;
-            }
-            LATEST_PANIC.lock().ok().and_then(|latest| latest.clone())
-        });
-        at.map_or_else(String::new, |at| format!("panic at {at}"))
+        if let Some(at) = self.death.at.get() {
+            return format!("panic at {at}");
+        }
+        if PANICS.load(Ordering::SeqCst) == self.panics_before {
+            return String::new();
+        }
+        LATEST_PANIC
+            .lock()
+            .ok()
+            .and_then(|latest| latest.clone())
+            .map_or_else(String::new, |at| format!("latest panic at {at}"))
     }
 }
 
@@ -3275,11 +3280,12 @@ mod tests {
     }
 
     // A panic on the sender's own driver thread: no call caught it, so the
-    // detail is the latest panic the process saw since the sender started
+    // detail is the latest panic the process saw since the sender started,
+    // and says so, since a session thread may have recovered from that one
     // (other tests panic in parallel here, so only its form is checked).
     // covers: S205
     #[test]
-    fn a_failure_after_the_driver_panicked_says_where_a_panic_happened() {
+    fn a_failure_after_the_driver_panicked_says_where_the_latest_panic_happened() {
         let mut handle = asc_airplay_create();
         // SAFETY: a live handle, used by this thread only.
         unsafe { &*handle }
@@ -3288,7 +3294,11 @@ mod tests {
         let events = events_until(handle, failed);
         let failure = events.last().expect("the failure");
         assert_eq!(failure.kind, AIRPLAY_EVENT_FAILED, "{events:?}");
-        assert!(is_panic_location(&failure.detail, ".rs"), "{failure:?}");
+        let detail = failure
+            .detail
+            .strip_prefix("latest ")
+            .unwrap_or_else(|| panic!("not marked as the latest panic: {failure:?}"));
+        assert!(is_panic_location(detail, ".rs"), "{failure:?}");
         assert!(!failure.detail.contains("a bug in"), "{failure:?}");
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
