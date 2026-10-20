@@ -235,7 +235,7 @@ if let path = opt.baseline {
 
 // MARK: - Producer (stands in for the capture tap)
 
-// The engine's parts as a session makes them: the ring sized as SyncEngine's
+// The engine's parts as a session makes them: the ring sized as StreamEngine's
 // (no equalizer: capture isn't measured).
 guard let parts = EngineParts.make() else {
     fail("the core's session parts could not be made")
@@ -305,10 +305,9 @@ for dev in chosen {
     guard let r = parts.makeRenderer(captureRate: rate) else {
         fail("\(dev.name): the core could not make a renderer")
     }
-    r.setGain(0)   // silent before the first render callback can run
+    r.setGain(linear: 0)   // silent before the first render callback can run
     do {
-        try r.start(deviceID: dev.id, inputSampleRate: rate,
-                    delayMs: opt.delayAccuracy ? 2000 : opt.delayMs)
+        try r.start(on: dev.id, captureRate: rate, delayMs: opt.delayAccuracy ? 2000 : opt.delayMs)
     } catch {
         fail("\(dev.name): output did not start: \(error)")
     }
@@ -330,7 +329,7 @@ if opt.delayAccuracy {
     Thread.sleep(forTimeInterval: 1.0)
     for (i, r) in renderers.enumerated() {
         for target in [150.0, 500.0, 2000.0, 3000.0] {
-            r.setDelayMs(target)
+            r.setDelay(ms: target)
             Thread.sleep(forTimeInterval: 0.5)
             let s = sampleLag(r, count: 20, every: 0.05)
             delayAccuracy.append([
@@ -343,7 +342,7 @@ if opt.delayAccuracy {
         }
     }
 }
-for r in renderers { r.setDelayMs(opt.delayMs) }
+for r in renderers { r.setDelay(ms: opt.delayMs) }
 Thread.sleep(forTimeInterval: 1.5)   // settle on the run delay before measuring
 
 // MARK: - Measurement windows
@@ -502,7 +501,7 @@ while seconds(since: runStart) < opt.seconds - 1e-3 {
 
 // MARK: - Shut down
 
-for r in renderers { r.stop() }
+for r in renderers { r.halt() }
 for o in overloads { o.remove() }
 producing.store(false, ordering: .relaxed)
 Thread.sleep(forTimeInterval: 0.3)

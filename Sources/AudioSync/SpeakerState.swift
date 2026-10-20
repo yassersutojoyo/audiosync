@@ -83,26 +83,26 @@ enum LocalOutputSync {
     }
 }
 
-/// The calls the local-output sync makes on the running engine. `SyncEngine`
+/// The calls the local-output sync makes on the running engine. `StreamEngine`
 /// conforms; the logic tests drive the sync with a double whose attach throws.
 protocol LocalOutputEngine: AnyObject {
     /// The UIDs with a running renderer.
     var activeOutputUIDs: [String] { get }
-    /// Starts a renderer for `uid` on the device `deviceID`; throws when it won't start.
-    func addOutput(uid: String, deviceID: AudioObjectID, delayMs: Double, gain: Double) throws
+    /// Starts a renderer for `uid` on `device`; throws when it won't start.
+    func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws
     /// Stops the renderer of `uid`.
-    func removeOutput(uid: String)
+    func detachOutput(uid: String)
     /// Stops the renderers of `uids` together, so they fade out at once and
     /// cost one wait (S186).
-    func removeOutputs(uids: [String])
+    func detachOutputs(uids: [String])
     /// Sets the linear gain of the renderer of `uid`.
     func setGain(uid: String, g: Double)
 }
 
 extension LocalOutputEngine {
-    /// One `removeOutput` per UID, for an engine without fades.
-    func removeOutputs(uids: [String]) {
-        for uid in uids { removeOutput(uid: uid) }
+    /// One `detachOutput` per UID, for an engine without fades.
+    func detachOutputs(uids: [String]) {
+        for uid in uids { detachOutput(uid: uid) }
     }
 }
 
@@ -140,14 +140,14 @@ extension LocalOutputSync {
             guard let device = deviceByUID[uid] else { continue }   // not listed yet: a later call attaches it
             let holdBack = holdBacks[uid] ?? 0
             do {
-                try engine.addOutput(uid: uid, deviceID: device.id, delayMs: holdBack, gain: gain(uid))
+                try engine.attachOutput(uid: uid, device: device.id, delayMs: holdBack, gain: gain(uid))
                 applied.attached[uid] = holdBack
             } catch let startError {
                 DBG.log("[AudioSync] local output \(uid) failed to start: \(startError)")
                 applied.failures.append(Failure(uid: uid, deviceName: device.name))
             }
         }
-        engine.removeOutputs(uids: steps.detach)   // together, so they fade out at once (S186)
+        engine.detachOutputs(uids: steps.detach)   // together, so they fade out at once (S186)
         applied.detached = steps.detach
         return applied
     }

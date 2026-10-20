@@ -36,7 +36,7 @@ extension AppDelegate {
         }
         // E.g. a format change: rebuild at the new rate. The start waits for
         // the old outputs' fade-outs (at most 500 ms, S186).
-        if engine.running { engine.stop() }
+        if engine.isRunning { engine.stop() }
         do {
             try engine.start(source: audioSource)
         } catch {
@@ -107,7 +107,7 @@ extension AppDelegate {
         var playingSince: Date?
         var said: CaptureCheck?   // post a notice only when the verdict changes, so a dismissed one stays dismissed
         func check() {
-            guard session == scheduledFor, engine.running else { return }
+            guard session == scheduledFor, engine.isRunning else { return }
             let now = Date()
             if sourceKnownPlaying() { playingSince = playingSince ?? now } else { playingSince = nil }
             let verdict = CaptureCheck.verdict(framesCaptured: engine.framesCaptured,

@@ -49,10 +49,10 @@ for dev in devices {
         check(false, "\(dev.name): output can be made")
         continue
     }
-    r.setGain(0)   // silent
+    r.setGain(linear: 0)   // silent
     do {
-        try r.start(deviceID: dev.id, inputSampleRate: rate, delayMs: 2000)
-        r.setGain(0)
+        try r.start(on: dev.id, captureRate: rate, delayMs: 2000)
+        r.setGain(linear: 0)
     } catch let startError {
         check(false, "\(dev.name): output starts", "\(startError)")
         continue
@@ -81,7 +81,7 @@ for dev in devices {
     // Lag ≈ delay − one device buffer, ± one producer chunk; each change
     // fades out and back in (S187) and lands exactly (S46).
     for ms in [2000.0, 500.0, 3000.0, 150.0] {
-        r.setDelayMs(ms)
+        r.setDelay(ms: ms)
         Thread.sleep(forTimeInterval: 0.4)
         let lagMs = Double(r.lagFrames) / rate * 1000
         check(abs(lagMs - ms) < 60, "\(dev.name): delay \(Int(ms)) ms",
@@ -110,7 +110,7 @@ for dev in devices {
         usleep(250)
     }
     let renderedWhileFading = r.framesRendered.load(ordering: .relaxed) - renderedBefore
-    r.stop()
+    r.halt()
     let playedFirst = fadedAfterNs != nil && r.stopNote == "stopped once its fade-out had played"
     var fadeDetail = "\(fadeStates); "
     if let fadedAfterNs {
@@ -126,8 +126,8 @@ for dev in devices {
     // S186: a switch-off the way the session makes it returns once the fade
     // has played, never later than 500 ms after the request.
     do {
-        try r.start(deviceID: dev.id, inputSampleRate: rate, delayMs: 150)
-        r.setGain(0)
+        try r.start(on: dev.id, captureRate: rate, delayMs: 150)
+        r.setGain(linear: 0)
         Thread.sleep(forTimeInterval: 0.4)
         let retirement = OutputRetirement()
         let began = Date()
@@ -141,7 +141,7 @@ for dev in devices {
     } catch {
         check(false, "\(dev.name): stop returns once the fade has played, within 500 ms", "restart: \(error)")
     }
-    r.stop()
+    r.halt()
 }
 
 producing.store(false, ordering: .relaxed)

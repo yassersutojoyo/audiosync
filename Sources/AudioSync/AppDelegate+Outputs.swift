@@ -3,7 +3,7 @@ import AppKit
 // Speaker and source state, the local output list and output sync.
 
 /// The running engine, as the local-output sync drives it.
-extension SyncEngine: LocalOutputEngine {}
+extension StreamEngine: LocalOutputEngine {}
 
 extension AppDelegate {
 
@@ -17,7 +17,7 @@ extension AppDelegate {
     func setLocalEnabled(_ uid: String, _ on: Bool) {
         if on { clearNotices([SpeakerKey.make(id: uid, airplay: false)]) }   // a new attempt
         if on { enabledLocal.insert(uid) } else { enabledLocal.remove(uid) }
-        if StreamingPolicy.startsStreaming(turnedOn: on, streaming: engine.running) {
+        if StreamingPolicy.startsStreaming(turnedOn: on, streaming: engine.isRunning) {
             startEngine(origin: .user)   // picking a speaker starts streaming to it
         } else {
             syncLocalOutputs(origin: .user)
@@ -28,7 +28,7 @@ extension AppDelegate {
 
     /// With every speaker switched off there is nothing to stream to.
     func stopIfIdle() {
-        if StreamingPolicy.isIdle(streaming: engine.running, enabledAirPlay: playableAirPlay,
+        if StreamingPolicy.isIdle(streaming: engine.isRunning, enabledAirPlay: playableAirPlay,
                                   enabledLocal: enabledLocal) {
             stopEngine()
         }
@@ -107,7 +107,7 @@ extension AppDelegate {
     /// reference, whether an AirPlay speaker is chosen, or L may have changed.
     /// One whose hold-back is the same gets no call, so it doesn't resync.
     func retimeLocalOutputs() {
-        guard engine.running else {
+        guard engine.isRunning else {
             localHoldBacks = [:]
             return
         }
@@ -143,7 +143,7 @@ extension AppDelegate {
     }
 
     func setSource(_ source: AudioSource) {
-        let change = SourceSwitch.decide(from: audioSource, to: source, streaming: engine.running)
+        let change = SourceSwitch.decide(from: audioSource, to: source, streaming: engine.isRunning)
         guard change != .none else { return }
         audioSource = source
         updateNowPlayingTarget()
@@ -197,7 +197,7 @@ extension AppDelegate {
     func syncLocalOutputs(available provided: [AudioDevices.Device]? = nil, origin: StartOrigin = .user) {
         let listing = provided ?? devices.allOutputDevices()
         noteLocalDeviceList(listing)   // the reference follows the list, streaming or not
-        guard engine.running else { return }   // stopped: startEngine syncs them once it runs
+        guard engine.isRunning else { return }   // stopped: startEngine syncs them once it runs
 
         let applied = LocalOutputSync.apply(enabled: enabledLocal, listing: listing, to: engine,
                                             holdBacks: localHoldBackTargets(), gain: { effectiveGain($0) })

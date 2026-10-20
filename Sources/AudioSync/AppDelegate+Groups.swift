@@ -25,10 +25,10 @@ extension AppDelegate {
         let present = group.members.filter(isAvailable)
         guard !present.isEmpty else { return }
         // While streaming is off, a click starts it, even for a group already chosen.
-        let turnOn = SpeakerState(enabled: present.allSatisfy(isEnabled), streaming: engine.running).clickTurnsOn
+        let turnOn = SpeakerState(enabled: present.allSatisfy(isEnabled), streaming: engine.isRunning).clickTurnsOn
         // A new attempt for each member this click starts; while streaming is
         // off that is every member, chosen or not.
-        if turnOn { clearNotices(present.filter { !engine.running || !isEnabled($0) }) }
+        if turnOn { clearNotices(present.filter { !engine.isRunning || !isEnabled($0) }) }
         var attempts: [String] = []   // AirPlay members this click turns on
         for key in present {
             guard let (sid, airplay) = SpeakerKey.parse(key) else { continue }
@@ -41,15 +41,15 @@ extension AppDelegate {
             // streaming is off nothing is pairing, and the click starts all.
             if !turnOn {
                 endNativeAttempt(sid)   // a pairing under way stops
-            } else if !engine.running || !enabledAirPlay.contains(sid) {
+            } else if !engine.isRunning || !enabledAirPlay.contains(sid) {
                 attempts.append(sid)
             }
             if turnOn { enabledAirPlay.insert(sid) } else { enabledAirPlay.remove(sid) }
         }
         beginNativeAttempts(attempts)   // before the sender's speakers follow
-        if turnOn && !engine.running {
+        if turnOn && !engine.isRunning {
             startEngine(origin: .user)
-        } else if engine.running {
+        } else if engine.isRunning {
             applyAirPlaySelection()   // the sender's speakers follow the group's switches
             syncLocalOutputs(origin: .user)
             stopIfIdle()
@@ -119,9 +119,9 @@ extension AppDelegate {
             // Switched on automatically: an AirPlay speaker's code request becomes a notice.
             if airplay { enabledAirPlay.insert(id) } else { enabledLocal.insert(id) }
         }
-        if !engine.running, !userStopped, !autoStartFailed {
+        if !engine.isRunning, !userStopped, !autoStartFailed {
             startEngine(origin: .automatic)
-        } else if engine.running {
+        } else if engine.isRunning {
             applyAirPlaySelection()   // the speakers just switched on join the session under way
             syncLocalOutputs(origin: .automatic)
         }

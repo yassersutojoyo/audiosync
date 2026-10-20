@@ -298,7 +298,7 @@ extension AppDelegate {
     /// removes them all when streaming stops (`NativeAirPlayModel.plan`).
     func syncNativeSpeakers() {
         guard let native = nativeAirPlay else { return }
-        let plan = native.model.plan(streaming: engine.running, enabled: enabledAirPlay)
+        let plan = native.model.plan(streaming: engine.isRunning, enabled: enabledAirPlay)
         guard !plan.isEmpty else { return }
         for id in plan.remove {
             native.remove(id)
@@ -324,7 +324,7 @@ extension AppDelegate {
         if on { clearNotices([SpeakerKey.make(id: id, airplay: true)]) }   // a new attempt
         if on { enabledAirPlay.insert(id) } else { enabledAirPlay.remove(id) }
         if on { beginNativeAttempts([id]) } else { endNativeAttempt(id) }
-        if StreamingPolicy.startsStreaming(turnedOn: on, streaming: engine.running) {
+        if StreamingPolicy.startsStreaming(turnedOn: on, streaming: engine.isRunning) {
             startEngine(origin: .user)
         } else {
             syncNativeSpeakers()

@@ -191,7 +191,7 @@ extension AppDelegate {
     /// are left alone, so the views redraw only what moved. Every update also
     /// decides whether Now Playing polls and AirPlay receivers get the track.
     func pushModel() {
-        publish(\.running, engine.running)
+        publish(\.running, engine.isRunning)
         publish(\.sourceID, audioSource.defaultsValue)
         publish(\.master, masterVolume)
         publish(\.airplay, airplaySnapshot())
@@ -211,7 +211,7 @@ extension AppDelegate {
         publish(\.showVirtualDevices, showVirtualDevices)
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
-        menuBar?.setRunning(engine.running)
+        menuBar?.setRunning(engine.isRunning)
         syncTrackInfo()
     }
 
@@ -371,7 +371,7 @@ extension AppDelegate {
 
     @objc func showGuide(_ sender: Any?) { openGuideWindow() }
 
-    @objc func toggleStreaming(_ sender: Any?) { setStreaming(!engine.running) }
+    @objc func toggleStreaming(_ sender: Any?) { setStreaming(!engine.isRunning) }
 
     @objc func newGroup(_ sender: Any?) { promptNewGroup() }
 
@@ -403,7 +403,7 @@ extension AppDelegate {
         var itemEnabled = true
         switch menuItem.action {
         case #selector(toggleStreaming(_:)):
-            menuItem.title = engine.running ? text.menuTurnStreamingOff : text.menuTurnStreamingOn
+            menuItem.title = engine.isRunning ? text.menuTurnStreamingOff : text.menuTurnStreamingOn
         case #selector(chooseAppearance(_:)):
             menuItem.state = (menuItem.representedObject as? String) == appearance.rawValue ? .on : .off
         case #selector(toggleLaunchAtLogin(_:)):
