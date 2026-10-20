@@ -1239,6 +1239,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         AppState {
             reference_name,
             airplay_delay_ms: self.airplay_delay_ms(),
+            airplay_none_found: false,
             running: self.running(),
             sources: self.source_rows(),
             source_id: self.chosen.key(),
@@ -3228,6 +3229,154 @@ mod tests {
         second.appear(&kitchen);
         adapter.poll();
         assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_some());
+    }
+
+    /// Twenty seconds of polls: the UI polls twice a second.
+    const POLLS_IN_20_S: u32 = 40;
+
+    fn poll_times(adapter: &mut AudioAdapter<MockBackend>, polls: u32) {
+        for _ in 0..polls {
+            adapter.poll();
+        }
+    }
+
+    /// Whether the speaker list says that no AirPlay speaker was found.
+    fn none_found_hint(adapter: &AudioAdapter<MockBackend>) -> bool {
+        adapter.snapshot().airplay_none_found
+    }
+
+    /// A sender that browses but finds nothing (a firewall that blocks
+    /// discovery, a Public network) must not leave an empty list without a
+    /// hint; it is a note in the list, not a notice.
+    #[test]
+    fn twenty_seconds_of_discovery_without_an_airplay_speaker_show_a_hint() {
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        assert!(!none_found_hint(&adapter), "not at launch");
+        poll_times(&mut adapter, POLLS_IN_20_S - 1);
+        assert!(!none_found_hint(&adapter), "not before 20 seconds");
+        assert!(adapter.poll(), "the snapshot changes as the hint shows");
+        assert!(
+            none_found_hint(&adapter),
+            "an empty AirPlay list after 20 seconds needs a hint"
+        );
+        assert!(messages(&adapter).is_empty(), "a note, not a notice");
+    }
+
+    #[test]
+    fn the_none_found_hint_goes_once_a_speaker_appears_and_comes_back_20_seconds_after_all_are_gone()
+     {
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        poll_times(&mut adapter, POLLS_IN_20_S);
+        assert!(none_found_hint(&adapter));
+
+        // Any receiver shows that discovery works, even one AudioSync can't
+        // play yet.
+        let study = device(2, "Study", PASSWORD_TXT);
+        fake.appear(&study);
+        assert!(adapter.poll(), "the snapshot changes as the hint goes");
+        assert!(!none_found_hint(&adapter), "a speaker was found");
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(
+            !none_found_hint(&adapter),
+            "it stays away while one is listed"
+        );
+
+        fake.gone(&study);
+        poll_times(&mut adapter, POLLS_IN_20_S - 1);
+        assert!(
+            !none_found_hint(&adapter),
+            "not before another 20 seconds without one"
+        );
+        adapter.poll();
+        assert!(
+            none_found_hint(&adapter),
+            "back after 20 seconds without one"
+        );
+    }
+
+    #[test]
+    fn a_speaker_found_within_20_seconds_keeps_the_none_found_hint_away() {
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        poll_times(&mut adapter, POLLS_IN_20_S - 5);
+        fake.appear(&device(1, "Kitchen", OPEN_TXT));
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&adapter));
+    }
+
+    /// While discovery is dead, the AirPlay notice and its Retry say so: the
+    /// list never adds the hint, even once that notice is dismissed.
+    #[test]
+    fn no_none_found_hint_while_discovery_is_dead() {
+        // Without AirPlay at all.
+        let mut without_airplay = adapter();
+        poll_times(&mut without_airplay, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&without_airplay), "no AirPlay");
+
+        // Discovery couldn't start.
+        let fake = FakeAirPlay::new();
+        let mut adapter = adapter_starting_airplay(vec![Some(StartedSender {
+            link: fake.link(),
+            feed: None,
+            browsing: false,
+        })]);
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&adapter), "discovery couldn't start");
+        adapter.dismiss_all_notices();
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(
+            !none_found_hint(&adapter),
+            "discovery couldn't start, notice dismissed"
+        );
+
+        // No sender at all.
+        let mut adapter = adapter_starting_airplay(vec![None]);
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&adapter), "no sender");
+
+        // A sender that stopped after an internal error.
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        fake.stop_running();
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&adapter), "the sender stopped");
+    }
+
+    #[test]
+    fn the_none_found_hint_goes_when_discovery_stops_and_counts_again_after_retry() {
+        let first = FakeAirPlay::new();
+        let second = FakeAirPlay::new();
+        let mut adapter = adapter_starting_airplay(vec![
+            Some(StartedSender::browsing(first.link(), None)),
+            Some(StartedSender::browsing(second.link(), None)),
+        ]);
+        poll_times(&mut adapter, POLLS_IN_20_S);
+        assert!(none_found_hint(&adapter));
+
+        first.push(SenderEvent::DiscoveryFailed);
+        assert!(adapter.poll());
+        assert!(
+            !none_found_hint(&adapter),
+            "the AirPlay notice and its Retry take over"
+        );
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&adapter));
+
+        adapter.retry_airplay();
+        poll_times(&mut adapter, POLLS_IN_20_S - 1);
+        assert!(
+            !none_found_hint(&adapter),
+            "the new sender gets its own 20 seconds"
+        );
+        adapter.poll();
+        assert!(none_found_hint(&adapter));
     }
 
     #[test]
