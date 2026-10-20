@@ -68,7 +68,7 @@ use crate::audio::capture::WHOLE_SYSTEM_NAME;
 use crate::audio::routing::{DirectPath, DirectReason};
 use crate::debug_log::DebugLog;
 use crate::settings::{
-    self, SavedEqualizer, SavedGroup, SavedSource, SavedSpeaker, Settings, SettingsFile,
+    self, KeptAside, SavedEqualizer, SavedGroup, SavedSource, SavedSpeaker, Settings, SettingsFile,
 };
 use crate::ui_model::{
     self, AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, PinPhase,
@@ -205,6 +205,15 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// AirPlay speakers saved as on that the backend couldn't switch on at
     /// launch (no AirPlay sender): their saved settings stay as they are.
     airplay_unrestored: BTreeSet<String>,
+    /// The last save of the settings file failed; its notice was posted
+    /// then, once until a save works again.
+    settings_unsaved: bool,
+    /// An output listing worked at least once, so an empty list means
+    /// Windows has no active output.
+    outputs_known: bool,
+    /// The notice that Windows has no active output was posted for the
+    /// current spell without one ([`AudioAdapter::check_sound_output`]).
+    no_output_noticed: bool,
     /// The outputs waiting for a device another app holds
     /// ([`BackendEvent::OutputBusy`]), by endpoint ID: their rows say so
     /// rather than show them playing.
@@ -275,6 +284,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             ),
             must_save: false,
             airplay_unrestored: BTreeSet::new(),
+            settings_unsaved: false,
+            outputs_known: false,
+            no_output_noticed: false,
             busy: BTreeSet::new(),
             reconnecting: BTreeSet::new(),
             view: ViewSettings::default(),
@@ -452,35 +464,69 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Writes the settings file if anything changed since it was last read
     /// or written. A failed write is logged and tried again at the next
-    /// change; the settings stay in effect for this run. Nothing is written
-    /// while an older file's delays wait for their migration.
-    fn persist(&mut self) {
+    /// change; the settings stay in effect for this run, and the user is
+    /// told once, until a save works again and clears that notice. A file
+    /// ignored at launch that the save kept aside is told once too, with the
+    /// copy's name. Nothing is written while an older file's delays wait for
+    /// their migration. Returns whether the notices changed.
+    fn persist(&mut self) -> bool {
         if self.delays_to_migrate {
-            return;
+            return false;
         }
         let current = self.current_settings();
         if current == self.saved && !self.must_save {
-            return;
+            return false;
         }
         self.must_save = false;
-        match self.settings_file.save(&current) {
+        let saved = self.settings_file.save(&current);
+        let mut notices_changed = saved.is_ok() == self.settings_unsaved;
+        if saved.is_ok() && self.settings_unsaved {
+            self.notices.clear(&[NoticeSubject::SettingsFile]);
+        }
+        self.settings_unsaved = saved.is_err();
+        match saved {
             Ok(kept) if self.settings_file.path().is_some() => {
-                if kept.is_some() {
+                if let Some(kept) = kept {
                     self.log.log(|| {
-                        format!(
-                            "settings: a newer AudioSync's file was kept as {} before saving over it",
-                            crate::settings::NEWER_FILE_NAME
-                        )
+                        let name = kept.file_name();
+                        match kept {
+                            KeptAside::Newer(_) => format!(
+                                "settings: a newer AudioSync's file was kept as {name} before \
+                                 saving over it"
+                            ),
+                            KeptAside::Ignored(_) => format!(
+                                "settings: the file ignored at launch was kept as {name} before \
+                                 saving over it"
+                            ),
+                        }
                     });
+                    // The user's settings were replaced by the defaults at
+                    // launch: told once, with where the old file is.
+                    if let KeptAside::Ignored(_) = kept {
+                        let file = kept.file_name();
+                        self.post(
+                            NoticeSubject::SettingsKeptAside,
+                            NoticeMessage::SettingsKeptAside { file },
+                        );
+                        notices_changed = true;
+                    }
                 }
                 self.log.log(|| "settings: saved".to_owned());
             }
             Ok(_) => {}
-            Err(error) => self.log.log(|| {
-                format!("settings: couldn't be saved ({error}); they last until AudioSync quits")
-            }),
+            Err(error) => {
+                self.log.log(|| {
+                    format!(
+                        "settings: couldn't be saved ({error}); they last until AudioSync quits"
+                    )
+                });
+                if notices_changed {
+                    self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
+                }
+            }
         }
         self.saved = current;
+        notices_changed
     }
 
     /// The audio backend, to change the mock's pretend world in tests.
@@ -601,12 +647,34 @@ impl<A: AudioBackend> AudioAdapter<A> {
         // An older file's delays are migrated before auto-connect outputs
         // start, so they start at their migrated hold-backs.
         if self.audio.list_outputs().is_ok() {
+            self.outputs_known = true;
             self.migrate_delays_if_due();
         }
         self.take_events();
         self.outputs_listed();
         self.airplay_listed();
         self.refresh_sources();
+        self.check_sound_output();
+    }
+
+    /// Posts the notice that Windows has no active sound output while none
+    /// is listed and an AirPlay speaker is on (apps then have nowhere to
+    /// play, so nothing reaches the speaker), once each time that starts,
+    /// and clears it once it ends. Returns whether the notices changed.
+    fn check_sound_output(&mut self) -> bool {
+        let none = self.outputs_known
+            && self.audio.outputs().is_empty()
+            && !self.audio.enabled_airplay().is_empty();
+        if none == self.no_output_noticed {
+            return false;
+        }
+        self.no_output_noticed = none;
+        if none {
+            self.post(NoticeSubject::SoundOutput, NoticeMessage::NoSoundOutput);
+        } else {
+            self.notices.clear(&[NoticeSubject::SoundOutput]);
+        }
+        true
     }
 
     /// Takes in the outputs as last listed: remembers their names, clears the
@@ -1011,6 +1079,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn handle(&mut self, event: BackendEvent) {
         match event {
             BackendEvent::OutputsChanged => {
+                self.outputs_known = true;
                 self.migrate_delays_if_due();
                 self.outputs_listed();
             }
@@ -1093,6 +1162,22 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             // The next snapshot shows it; no notice, no focus change (S198).
             BackendEvent::DeviceVolumeChanged { .. } => {}
+            // Told once while the writes keep failing (the backend reports
+            // only the changes); a write that works clears it.
+            BackendEvent::PairingStore { saved: false } => {
+                self.post(NoticeSubject::PairingsFile, NoticeMessage::PairingsNotSaved);
+            }
+            BackendEvent::PairingStore { saved: true } => {
+                self.notices.clear(&[NoticeSubject::PairingsFile]);
+            }
+            // The pairings in it were missing since launch: told once, with
+            // where the old file is.
+            BackendEvent::PairingsKeptAside { file } => {
+                self.post(
+                    NoticeSubject::PairingsKeptAside,
+                    NoticeMessage::PairingsKeptAside { file },
+                );
+            }
         }
     }
 
@@ -1721,13 +1806,14 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     /// poll, so a slider drag is saved about twice a second at most.
     fn poll(&mut self) -> bool {
         let mut changed = self.take_events();
+        changed |= self.check_sound_output();
         self.polls += 1;
         if self.polls >= SOURCE_POLLS {
             self.polls = 0;
             changed |= self.refresh_sources();
         }
         changed |= self.count_airplay_quiet();
-        self.persist();
+        changed |= self.persist();
         changed
     }
 
@@ -1740,7 +1826,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn save_settings(&mut self) {
-        self.persist();
+        let _ = self.persist();
     }
 }
 
@@ -3991,15 +4077,17 @@ mod tests {
         adapter.poll();
         adapter.set_master_volume(65.0);
         adapter.poll();
-        let kept = dir.join(settings::NEWER_FILE_NAME);
-        assert_eq!(std::fs::read_to_string(kept).expect("kept"), newer);
+        assert_eq!(
+            crate::data_folder::copies_kept_aside(&dir, "settings.newer"),
+            [newer.into_bytes()]
+        );
         assert!(log.flush(TEST_FLUSH));
         let messages = read_messages(&dir.join(FILE_NAME));
         assert_in_order(
             &messages,
             &[
                 "settings: ignored: a newer AudioSync wrote it",
-                "settings: a newer AudioSync's file was kept as settings.newer.json",
+                "settings: a newer AudioSync's file was kept as settings.newer-",
                 "settings: saved",
                 "settings: saved",
             ],
@@ -4009,6 +4097,178 @@ mod tests {
             .filter(|message| message.contains("was kept as"))
             .count();
         assert_eq!(kept_lines, 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_airplay_speaker_on_while_windows_has_no_output_gets_a_notice() {
+        let (mut adapter, _fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "Windows has outputs");
+        adapter.audio_mut().disconnect_output(SPEAKERS);
+        adapter.audio_mut().disconnect_output(HEADPHONES);
+        assert!(adapter.poll());
+        assert_eq!(messages(&adapter), [NoticeMessage::NoSoundOutput]);
+        // Dismissed, it stays away while nothing changes.
+        adapter.dismiss_all_notices();
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+        // An output back clears it; all gone again, it comes back.
+        adapter.audio_mut().connect_output(SPEAKERS, "Speakers");
+        adapter.poll();
+        adapter.audio_mut().disconnect_output(SPEAKERS);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::NoSoundOutput]);
+        // With the AirPlay speaker off there's nothing to tell.
+        adapter.set_speaker_enabled(&ap(&kitchen), false);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+    }
+
+    #[test]
+    fn settings_that_cant_be_saved_get_one_notice_until_a_save_works() {
+        let dir = test_dir("adapter-settings-unsaved");
+        let path = dir.join(settings::FILE_NAME);
+        // A folder where the temporary file goes: every save fails.
+        let blocked = crate::data_folder::temporary_path(&path);
+        std::fs::create_dir(&blocked).expect("blocked");
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.set_master_volume(64.0);
+        assert!(adapter.poll(), "the notice shows");
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        // Told once: dismissed, it stays away while the saves keep failing.
+        adapter.dismiss_all_notices();
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+        // A save that works ends it; a failure after that tells again, and
+        // the next save that works clears the notice.
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        adapter.set_master_volume(66.0);
+        adapter.poll();
+        assert_eq!(SettingsFile::at(path.clone()).load().0.master_volume, 66.0);
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_master_volume(67.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        adapter.set_master_volume(68.0);
+        assert!(adapter.poll(), "the notice goes");
+        assert!(messages(&adapter).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_pairing_that_cant_be_saved_gets_a_notice_until_a_write_works() {
+        use crate::audio::pairings::tests::sealer;
+        let dir = test_dir("adapter-pairings-unsaved");
+        let path = dir.join(crate::audio::pairings::FILE_NAME);
+        // A folder where the file goes: nothing can be written there.
+        std::fs::create_dir(&path).expect("the folder is made");
+        let mut audio = launch_audio();
+        let fake = FakeAirPlay::new();
+        let (store, _) = PairingStore::open(path.clone(), sealer());
+        audio.set_airplay_with_pairings(fake.link(), None, store);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        fake.appear(&tv);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEF", 0x11)),
+        );
+        assert!(adapter.poll());
+        assert_eq!(messages(&adapter), [NoticeMessage::PairingsNotSaved]);
+        assert!(
+            adapter.snapshot().speaker(&id).unwrap().enabled,
+            "paired for this run all the same"
+        );
+        // Writable again: the next write clears the notice.
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        adapter.forget_pairing(&id);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn settings_unreadable_at_launch_get_a_notice_once_they_are_kept_aside() {
+        let dir = test_dir("adapter-settings-kept-aside");
+        let path = dir.join(settings::FILE_NAME);
+        let held = dir.join("held");
+        std::fs::write(&held, "the user's settings").expect("written");
+        // Another program holds the file at launch (a folder stands in its
+        // place), and lets go of it before the first save.
+        std::fs::create_dir(&path).expect("the folder is made");
+        let mut adapter = launch(launch_audio(), &path);
+        assert!(messages(&adapter).is_empty(), "nothing kept aside yet");
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(&held, &path).expect("moved back");
+        adapter.set_master_volume(64.0);
+        assert!(adapter.poll(), "the notice shows");
+        let shown = messages(&adapter);
+        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert!(file.starts_with("settings.ignored-"), "{file}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(file)).expect("kept"),
+            "the user's settings"
+        );
+        // Told once: dismissed, it stays away at the next saves.
+        adapter.dismiss_all_notices();
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pairings_unreadable_at_launch_get_a_notice_once_they_are_kept_aside() {
+        use crate::audio::pairings::tests::sealer;
+        let dir = test_dir("adapter-pairings-kept-aside");
+        let path = dir.join(crate::audio::pairings::FILE_NAME);
+        // Another program holds the file at launch (a folder stands in its
+        // place), and lets go of it before the first pairing.
+        std::fs::create_dir(&path).expect("the folder is made");
+        let mut audio = launch_audio();
+        let fake = FakeAirPlay::new();
+        let (store, _) = PairingStore::open(path.clone(), sealer());
+        audio.set_airplay_with_pairings(fake.link(), None, store);
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::write(&path, b"the pairings made before").expect("written");
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        fake.appear(&tv);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEF", 0x11)),
+        );
+        assert!(adapter.poll());
+        let shown = messages(&adapter);
+        let [NoticeMessage::PairingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert!(file.starts_with("airplay-pairings.ignored-"), "{file}");
+        assert_eq!(
+            std::fs::read(dir.join(file)).expect("kept"),
+            b"the pairings made before"
+        );
+        // Told once: dismissed, it stays away at the next writes.
+        adapter.dismiss_all_notices();
+        adapter.forget_pairing(&id);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

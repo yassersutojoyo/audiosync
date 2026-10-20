@@ -582,6 +582,15 @@ pub struct AirPlaySpeakers {
     /// The sender stopped after an internal error, or its discovery did;
     /// reported once, until a new sender replaces it.
     stopped: bool,
+    /// The last write of the pairings' file failed.
+    store_unsaved: bool,
+    /// Whether the pairings' file can be written changed since the last
+    /// poll, which reports it ([`BackendEvent::PairingStore`]).
+    store_change: Option<bool>,
+    /// The file name of the copy a write of the pairings' file kept aside
+    /// since the last poll, which reports it
+    /// ([`BackendEvent::PairingsKeptAside`]).
+    store_kept_aside: Option<String>,
     log: DebugLog,
 }
 
@@ -609,7 +618,26 @@ impl AirPlaySpeakers {
             master,
             latency,
             stopped: false,
+            store_unsaved: false,
+            store_change: None,
+            store_kept_aside: None,
             log,
+        }
+    }
+
+    /// Takes in whether a write of the pairings' file worked: a change from
+    /// working to failing, or back, is reported at the next poll, so the
+    /// user is told once while the writes keep failing. A file ignored at
+    /// launch that the write kept aside is reported at the next poll too
+    /// (the store tells that once).
+    fn store_written(&mut self, saved: bool) {
+        if saved == self.store_unsaved {
+            self.store_unsaved = !saved;
+            self.store_change = Some(saved);
+        }
+        if let Some(kept) = self.store.take_kept_aside() {
+            let file = kept.file_name().unwrap_or_default().to_string_lossy();
+            self.store_kept_aside = Some(file.into_owned());
         }
     }
 
@@ -924,19 +952,21 @@ impl AirPlaySpeakers {
     pub fn forget_pairing(&mut self, id: &str) {
         self.stop_pairing(id, "the user forgot the pairing");
         match self.store.remove(id) {
-            Ok(true) => self.log.log(|| {
-                format!(
-                    "AirPlay pairing {}: credentials forgotten",
-                    self.label(id)
-                )
-            }),
+            Ok(true) => {
+                self.store_written(true);
+                self.log
+                    .log(|| format!("AirPlay pairing {}: credentials forgotten", self.label(id)));
+            }
             Ok(false) => return,
-            Err(error) => self.log.log(|| {
-                format!(
-                    "AirPlay pairing {}: credentials forgotten for this run, but the store couldn't be written: {error}",
-                    self.label(id)
-                )
-            }),
+            Err(error) => {
+                self.store_written(false);
+                self.log.log(|| {
+                    format!(
+                        "AirPlay pairing {}: credentials forgotten for this run, but the store couldn't be written: {error}",
+                        self.label(id)
+                    )
+                });
+            }
         }
         if self.settings(id).enabled {
             self.entry(id).enabled = false;
@@ -1157,6 +1187,12 @@ impl AirPlaySpeakers {
         if !self.link.is_running() {
             changed |= self.sender_stopped(&mut events);
         }
+        if let Some(saved) = self.store_change.take() {
+            events.push(BackendEvent::PairingStore { saved });
+        }
+        if let Some(file) = self.store_kept_aside.take() {
+            events.push(BackendEvent::PairingsKeptAside { file });
+        }
         if changed {
             events.insert(0, BackendEvent::AirPlayChanged);
         }
@@ -1302,7 +1338,9 @@ impl AirPlaySpeakers {
 
     /// Stores the credentials a pairing with the speaker `id` gave.
     fn keep_credentials(&mut self, id: &str, credentials: Credentials) {
-        match self.store.insert(id, credentials) {
+        let stored = self.store.insert(id, credentials);
+        self.store_written(stored.is_ok());
+        match stored {
             Ok(()) => self.log.log(|| {
                 format!(
                     "AirPlay pairing {}: credentials stored, encrypted for this Windows user",
@@ -1402,6 +1440,7 @@ impl AirPlaySpeakers {
                 if problem == AirPlayProblem::PairingNotYet && self.store.contains(id) {
                     problem = AirPlayProblem::NeedsPin;
                     let forgotten = self.store.remove(id);
+                    self.store_written(forgotten.is_ok());
                     self.log.log(|| {
                         let saved = match &forgotten {
                             Ok(_) => String::new(),
@@ -1994,6 +2033,61 @@ pub mod tests {
             fake.take_calls()[1..],
             [Call::Credentials(id, "0123456789ABCDEF".to_owned())]
         );
+    }
+
+    #[test]
+    fn a_pairing_the_store_cant_write_is_reported_once_until_a_write_works() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{credentials, sealer};
+
+        // A folder where the file goes: nothing can be written there.
+        let path = crate::debug_log::test_dir("airplay-pairing-unsaved").join(FILE_NAME);
+        std::fs::create_dir(&path).expect("the folder is made");
+        let fake = FakeAirPlay::new();
+        let (store, _) = PairingStore::open(path.clone(), sealer());
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        pin_shown(&fake, &mut airplay, &tv);
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEF", 0xA5)),
+        );
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::PairingStore { saved: false }),
+            "{events:?}"
+        );
+        assert_eq!(
+            airplay.enabled_ids(),
+            std::slice::from_ref(&id),
+            "paired for this run all the same"
+        );
+        // Told once while the writes keep failing.
+        airplay.forget_pairing(&id);
+        let events = airplay.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::PairingStore { .. })),
+            "{events:?}"
+        );
+        // Writable again: the next write works, and that is told too.
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        fake.take_calls();
+        pin_shown(&fake, &mut airplay, &tv);
+        assert!(airplay.submit_pin(&id, "1234"));
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEE", 0x5A)),
+        );
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::PairingStore { saved: true }),
+            "{events:?}"
+        );
+        assert!(path.is_file(), "the pairing is written");
     }
 
     #[test]

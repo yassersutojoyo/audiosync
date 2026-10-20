@@ -309,6 +309,18 @@ pub enum NoticeSubject {
     /// The AirPlay sender as a whole: it stopped after an internal error, or
     /// its discovery did.
     AirPlay,
+    /// The user's settings file: it couldn't be written (Windows).
+    SettingsFile,
+    /// The speaker pairings' file: it couldn't be written (Windows).
+    PairingsFile,
+    /// The user's settings file couldn't be read at launch and was kept
+    /// aside before the first save over it (Windows).
+    SettingsKeptAside,
+    /// The speaker pairings' file couldn't be read at launch and was kept
+    /// aside before the first write over it (Windows).
+    PairingsKeptAside,
+    /// The system's sound outputs as a whole: none is active (Windows).
+    SoundOutput,
 }
 
 /// A privacy setting a notice can open (S153); the host maps it to its settings app.
