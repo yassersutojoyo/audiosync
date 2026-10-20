@@ -222,6 +222,28 @@ fn a_leaving_output_retimes_the_others_back() {
 
 // covers: S177
 #[test]
+fn a_late_speaker_switched_on_and_off_three_times_retimes_each_other_output_six_times() {
+    let toggles = |airplay: Option<f64>| {
+        let mut retimer = Retimer::default();
+        retimer.update(&[r(), usb()], airplay);
+        let mut calls = Vec::new();
+        for _ in 0..3 {
+            calls.extend(retimer.update(&[r(), usb(), bluetooth()], airplay));
+            calls.extend(retimer.update(&[r(), usb()], airplay));
+        }
+        calls
+    };
+    let without_airplay = toggles(None);
+    for id in ["builtin", "usb"] {
+        let count = without_airplay.iter().filter(|(c, _)| c == id).count();
+        assert_eq!(count, 6, "{id}: the speaker sets the base each time");
+    }
+    // With an AirPlay speaker chosen, −L is the base: nothing moves.
+    assert!(toggles(Some(L)).is_empty());
+}
+
+// covers: S177
+#[test]
 fn only_outputs_whose_hold_back_changed_are_retimed() {
     let mut retimer = Retimer::default();
     retimer.update(&[r(), usb(), bluetooth()], None);
