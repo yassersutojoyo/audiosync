@@ -717,7 +717,10 @@ mod tests {
         // writes is over, so the writer runs until the reader has read enough.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while ring.frames_written() < 200_000 || seen.load(Ordering::Relaxed) < 10_000 {
-            assert!(std::time::Instant::now() < deadline, "the reader never ran");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the reader made fewer than 10,000 stamp loads in 20 s"
+            );
             if reader.is_finished() {
                 break;
             }
