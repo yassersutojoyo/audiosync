@@ -523,14 +523,16 @@ export component VolumeSlider inherits HorizontalLayout {
 }
 
 // Around a delay field: a teal outline while the field holds typing not yet
-// applied (Enter or leaving the field applies it). The space is kept either
-// way, so the row doesn't shift when the outline comes and goes.
+// applied (Enter applies it), a red one while that typing is a number out of
+// range. The space is kept either way, so the row doesn't shift when the
+// outline comes and goes.
 component DraftOutline inherits Rectangle {
     in property <bool> pending;
+    in property <bool> out-of-range;
 
     border-radius: Tokens.radius-control + 2px;
     border-width: 2px;
-    border-color: root.pending ? Tokens.teal-text : transparent;
+    border-color: root.out-of-range ? Tokens.error-text : root.pending ? Tokens.teal-text : transparent;
 
     HorizontalLayout {
         padding: 2px;
@@ -539,19 +541,22 @@ component DraftOutline inherits Rectangle {
     }
 }
 
-// Under a delay field that holds typing not yet applied. Narrator hears it as
-// the field's description instead. Teal text: 5.07:1 or more on a dark
-// playing row, 5.35:1 or more on a light one. A wrapper, like QuietText, so
-// Narrator skips it. Hidden, it keeps its line, so the text below doesn't
-// jump on the first keystroke or when the value applies.
+// Under a delay field that holds typing not yet applied, or, in red, the
+// range when that typing is out of it (`range-hint`, empty otherwise).
+// Narrator hears it as the field's description instead. Teal text: 5.07:1
+// or more on a dark playing row, 5.35:1 or more on a light one; red text
+// passes 4.5:1 on the same backgrounds (the contrast test). A wrapper, like
+// QuietText, so Narrator skips it. Hidden, it keeps its line, so the text
+// below doesn't jump on the first keystroke or when the value applies.
 component DraftHint inherits HorizontalLayout {
     in property <bool> shown;
+    in property <string> range-hint;
 
     Text {
-        visible: root.shown;
-        text: Strings.delay-draft-hint;
+        visible: root.shown || root.range-hint != "";
+        text: root.range-hint != "" ? root.range-hint : Strings.delay-draft-hint;
         font-size: Tokens.font-size-caption;
-        color: Tokens.teal-text;
+        color: root.range-hint != "" ? Tokens.error-text : Tokens.teal-text;
         wrap: word-wrap;
         accessible-role: none;
     }
@@ -559,13 +564,16 @@ component DraftHint inherits HorizontalLayout {
 
 // The per-speaker sync offset relative to the reference output: coarse and
 // fine steps that apply at once, and a field ("+150", "−250") that applies on
-// Enter, the delay button or a click outside every control, so typing "220"
-// doesn't re-time the output at 2 and 22 ms on the way.
+// Enter or Ctrl+S (the controls stay open), on a click on the row or its delay
+// button, or on a click outside every row, so typing "220" doesn't re-time the
+// output at 2 and 22 ms on the way. The field takes digits after one sign.
 export component SyncControls inherits VerticalLayout {
     in property <string> name;
     in property <string> delay-text;
     // The field holds typing not yet applied: an outline and a hint say so.
     in property <bool> pending;
+    // Typing out of range: the range and what Enter applies; empty otherwise.
+    in property <string> range-hint;
     // The reference output's name; empty without one.
     in property <string> reference-name;
     callback stepped(int);
@@ -624,18 +632,24 @@ export component SyncControls inherits VerticalLayout {
             }
 
             // Text input, so a leading "+" or "−" can be typed. Typing not
-            // yet applied gets a teal outline around it.
+            // yet applied gets a teal outline around it, out of range a red one.
             DraftOutline {
                 pending: root.pending;
+                out-of-range: root.range-hint != "";
 
                 field := LineEdit {
                     width: 72px;
                     text: root.delay-text;
                     horizontal-alignment: center;
                     accessible-label: Strings.delay-of(root.name);
-                    accessible-description: root.pending ? Strings.delay-draft-hint : "";
+                    accessible-description: root.range-hint != "" ? root.range-hint : root.pending ? Strings.delay-draft-hint : "";
                     edited(text) => {
                         root.edited(text);
+                        // A character the field can't take: the app kept the
+                        // text without it, which the field shows again.
+                        if field.text != root.delay-text {
+                            field.text = root.delay-text;
+                        }
                     }
                     accepted => {
                         root.committed();
@@ -668,6 +682,7 @@ export component SyncControls inherits VerticalLayout {
 
     DraftHint {
         shown: root.pending;
+        range-hint: root.range-hint;
     }
 
     SecondaryText {
@@ -677,12 +692,15 @@ export component SyncControls inherits VerticalLayout {
 
 // The AirPlay delay: how long the local speakers wait for the AirPlay
 // speakers. Steps and a field, under its own title. Like a speaker's sync
-// controls, the field applies on Enter or a click outside every control: its
-// lower bound follows the sender's latency, so a half-typed number would clamp.
+// controls, the field applies on Enter, Ctrl+S or a click outside every
+// speaker row: its lower bound follows the sender's latency, so a half-typed
+// number would clamp.
 export component AirPlayDelayControls inherits VerticalLayout {
     in property <string> delay-text;
     // The field holds typing not yet applied: an outline and a hint say so.
     in property <bool> pending;
+    // Typing out of range: the range and what Enter applies; empty otherwise.
+    in property <string> range-hint;
     callback stepped(int);
     callback edited(string);
     // Enter in the field: apply what was typed.
@@ -737,15 +755,21 @@ export component AirPlayDelayControls inherits VerticalLayout {
 
                     DraftOutline {
                         pending: root.pending;
+                        out-of-range: root.range-hint != "";
 
                         field := LineEdit {
                             width: 72px;
                             text: root.delay-text;
                             horizontal-alignment: center;
                             accessible-label: Strings.airplay-delay-title;
-                            accessible-description: root.pending ? Strings.delay-draft-hint : Strings.airplay-delay-hint;
+                            accessible-description: root.range-hint != "" ? root.range-hint : root.pending ? Strings.delay-draft-hint : Strings.airplay-delay-hint;
                             edited(text) => {
                                 root.edited(text);
+                                // A character the field can't take: the app
+                                // kept the text without it.
+                                if field.text != root.delay-text {
+                                    field.text = root.delay-text;
+                                }
                             }
                             accepted => {
                                 root.committed();
@@ -772,6 +796,7 @@ export component AirPlayDelayControls inherits VerticalLayout {
 
             DraftHint {
                 shown: root.pending;
+                range-hint: root.range-hint;
             }
 
             SecondaryText {
@@ -789,7 +814,8 @@ export component SpeakerRow inherits Rectangle {
     // A narrow window: a shorter volume slider leaves the name more room.
     in property <bool> compact;
     callback toggled();
-    // A click on the row's blank space, which this row's TouchArea takes.
+    // A click on the blank space of a row without a delay, which this row's
+    // TouchArea takes; on a row with one, the click toggles its sync controls.
     callback blank-clicked();
     callback volume-changed(float);
     callback sync-toggled();
@@ -860,10 +886,16 @@ export component SpeakerRow inherits Rectangle {
     animate background { duration: Fluent.fast; }
 
     // Around the row's content, so the hover fill stays on over the row's
-    // own controls (they still get their clicks and drags first).
+    // own controls (they still get their clicks and drags first). A click on
+    // the row's box works like its delay button; a row without a delay is
+    // outside every sync control. The delay button stays the keyboard's way.
     hover := TouchArea {
         clicked => {
-            root.blank-clicked();
+            if root.item.has-delay {
+                root.sync-toggled();
+            } else {
+                root.blank-clicked();
+            }
         }
         menu := ContextMenuArea {
             Menu {
@@ -1127,6 +1159,7 @@ export component SpeakerRow inherits Rectangle {
                         name: root.item.name;
                         delay-text: root.item.delay-text;
                         pending: root.item.delay-pending;
+                        range-hint: root.item.delay-range-hint;
                         reference-name: root.item.reference-name;
                         init => {
                             // The field keeps what was typed (the app's draft).

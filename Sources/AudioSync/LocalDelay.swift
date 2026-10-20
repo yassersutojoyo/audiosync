@@ -109,6 +109,17 @@ enum LocalDelay {
         return sign * n
     }
 
+    /// What a delay field keeps of a keystroke or a paste: digits, after one
+    /// leading "+" or "−" (or hyphen-minus); anything else can't be typed.
+    static func fieldText(_ typed: String) -> String {
+        var kept = ""
+        for (index, character) in typed.enumerated()
+        where ("0"..."9").contains(character) || (index == 0 && "+−-".contains(character)) {
+            kept.append(character)
+        }
+        return kept
+    }
+
     /// An offset typed in a speaker's delay field, clamped to S175's range;
     /// nil for text the field ignores.
     static func parseOffset(_ text: String) -> Double? { wholeMs(text).flatMap(sanitizedOffset) }
@@ -182,25 +193,27 @@ struct AirPlayDelay: Equatable {
 }
 
 /// A delay field's typed text (S181). Keystrokes only change the text; the
-/// value applies on commit (its panel closing, see `DelayPanels`), once, so
-/// typing "220" doesn't re-time the outputs at 2 and 22 ms on the way. Text the field
-/// can't read, or the saved value typed again, applies nothing, and the
-/// field shows the saved value again.
+/// value applies on commit (Return, Command-S, its panel closing; see
+/// `DelayPanels`), once, so typing "220" doesn't re-time the outputs at 2 and
+/// 22 ms on the way. Text the field can't read, or the saved value typed
+/// again, applies nothing, and the field shows the saved value again.
 struct DelayFieldDraft: Equatable {
     /// What the field shows.
     private(set) var text = ""
     /// The text holds typing not yet committed.
     private(set) var isEditing = false
 
-    /// A keystroke: the text changes, nothing applies.
+    /// A keystroke or a paste: the text becomes what the field keeps of it
+    /// (`LocalDelay.fieldText`), nothing applies.
     mutating func type(_ value: String) {
-        text = value
+        text = LocalDelay.fieldText(value)
         isEditing = true
     }
 
-    /// Return or its panel closing: the value to apply (clamped to the delay's
-    /// range by `sanitize`, and shown that way), or nil when there is
-    /// nothing to apply. A second commit without typing in between returns nil.
+    /// Return, Command-S or its panel closing: the value to apply (clamped
+    /// to the delay's range by `sanitize`, and shown that way), or nil when
+    /// there is nothing to apply. A second commit without typing in between
+    /// returns nil.
     mutating func commit(saved: Double, sanitize: (Double) -> Double?,
                          format: (Double) -> String) -> Double? {
         guard isEditing else { return nil }
@@ -218,6 +231,14 @@ struct DelayFieldDraft: Equatable {
     /// marks so typing doesn't look applied.
     func isPending(saved: Double, format: (Double) -> String) -> Bool {
         isEditing && text != format(saved)
+    }
+
+    /// The typed number is outside the delay's range, so a commit applies the
+    /// nearest value in it: the field gets a red outline. Empty text or a
+    /// lone sign is typing on its way, not an error.
+    func isOutOfRange(sanitize: (Double) -> Double?) -> Bool {
+        guard isEditing, let typed = LocalDelay.wholeMs(text) else { return false }
+        return sanitize(typed) != typed
     }
 
     /// The saved value changed (or the field appeared): show it, unless the
@@ -238,22 +259,33 @@ struct DelayFieldDraft: Equatable {
     mutating func drop() { isEditing = false }
 }
 
-/// The delay panels that are open (S181). Return or a row's delay value
-/// closes that row's panel, applying its typing; a click in the window
-/// outside every control closes them all, applying each one's; Escape drops
-/// every typed delay and closes them all. Only closing applies, so leaving
-/// the field for another control applies nothing.
+/// The delay panels that are open (S181). A click on a row's delay value or
+/// anywhere on its row toggles that row's panel, and every other panel's
+/// typing applies first, those panels staying open. A click in the window
+/// outside every speaker row closes them all, applying each one's typing;
+/// Escape drops every typed delay and closes them all. Return and Command-S
+/// apply without closing; leaving a field for another control applies nothing.
 struct DelayPanels: Equatable {
     private(set) var open: Set<String> = []
 
     func isOpen(_ id: String) -> Bool { open.contains(id) }
 
-    /// Its delay value was clicked.
-    mutating func toggle(_ id: String) {
+    /// Its delay value or its row was clicked: the other open panels, whose
+    /// typing applies before this one opens or closes.
+    @discardableResult
+    mutating func toggle(_ id: String) -> Set<String> {
+        let others = open.subtracting([id])
         if open.remove(id) == nil { open.insert(id) }
+        return others
     }
 
-    mutating func close(_ id: String) { open.remove(id) }
-
     mutating func closeAll() { open = [] }
+
+    /// The panel a click on the note under a speaker list toggles: the note
+    /// belongs to the last row's box, so that row's panel, or nil (a click
+    /// outside every row) when that row has no delay or the note is alone.
+    static func noteTarget(under rows: [(id: String, hasDelay: Bool)]) -> String? {
+        guard let last = rows.last, last.hasDelay else { return nil }
+        return last.id
+    }
 }
