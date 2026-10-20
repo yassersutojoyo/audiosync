@@ -370,8 +370,14 @@ impl AppState {
         self.speakers.iter().find(|s| s.id == id)
     }
 
+    /// A speaker that is on while streaming is on plays, unless it waits.
     pub fn speaker_state(&self, speaker: &Speaker) -> SpeakerState {
-        SpeakerState::new(speaker.enabled, self.running)
+        match SpeakerState::new(speaker.enabled, self.running) {
+            SpeakerState::Playing => speaker
+                .waiting
+                .map_or(SpeakerState::Playing, SpeakerState::Waiting),
+            state => state,
+        }
     }
 
     /// The members of `group` that are present right now.
