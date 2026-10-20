@@ -258,7 +258,9 @@ pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 /// accepted too, as RFC 2326 §4 asks of receivers of RTSP text. Empty lines
 /// before a start line are skipped, and a head that isn't UTF-8 is read with
 /// each invalid sequence replaced by U+FFFD, so a stray byte in a header
-/// value doesn't end the session (P140 then judges what is left).
+/// value doesn't end the session (P140 then judges what is left). A
+/// control character other than tab inside a header value does: that line
+/// is malformed, since values go back out in the sender's own headers.
 #[derive(Debug, Default)]
 pub struct Parser {
     buffer: Vec<u8>,
@@ -361,7 +363,7 @@ fn parse_headers<'a>(lines: impl Iterator<Item = &'a str>) -> Result<Headers, Pa
             // A continuation line extends the previous value (RFC 2326 §4.2).
             let (_, value) = entries.last_mut().ok_or(ParseError::HeaderLine)?;
             value.push(' ');
-            value.push_str(line.trim());
+            value.push_str(header_value(line)?);
             continue;
         }
         let (name, value) = line.split_once(':').ok_or(ParseError::HeaderLine)?;
@@ -369,9 +371,21 @@ fn parse_headers<'a>(lines: impl Iterator<Item = &'a str>) -> Result<Headers, Pa
         if name.is_empty() {
             return Err(ParseError::HeaderLine);
         }
-        entries.push((name.to_owned(), value.trim().to_owned()));
+        entries.push((name.to_owned(), header_value(value)?.to_owned()));
     }
     Ok(Headers(entries))
+}
+
+/// A header value as read: trimmed, and with no control character but tab
+/// left in it. Values such as a nonce or a session ID go back out in the
+/// sender's own headers, where a CR, an LF or a NUL could end the header
+/// or start another, so a value holding one makes its line malformed.
+fn header_value(text: &str) -> Result<&str, ParseError> {
+    let value = text.trim();
+    if value.bytes().any(|byte| byte < b' ' && byte != b'\t') {
+        return Err(ParseError::HeaderLine);
+    }
+    Ok(value)
 }
 
 fn parse_start(line: &str, headers: Headers) -> Result<Message, ParseError> {
