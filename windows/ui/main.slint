@@ -201,6 +201,9 @@ export component MainWindow inherits Window {
     // The AirPlay delay, shown while an AirPlay sender runs: what its field
     // shows (the applied value, or what is being typed).
     in property <bool> airplay-delay-shown;
+    // Connected Speakers lists nothing only because Show Virtual Devices is
+    // off and its outputs are virtual.
+    in property <bool> connected-virtual-hidden;
     in property <string> airplay-delay-text;
 
     callback power-toggled(bool);
@@ -214,6 +217,7 @@ export component MainWindow inherits Window {
     callback delay-edited(string, string);
     callback airplay-delay-stepped(int);
     callback airplay-delay-edited(string);
+    callback airplay-delay-committed();
     callback auto-connect-toggled(string, bool);
     callback forget-pairing-requested(string);
     // The fix under a speaker's device-volume hint.
@@ -579,7 +583,7 @@ export component MainWindow inherits Window {
                             root.device-volume-fix-requested(id);
                         }
                         compact: root.compact;
-                        note: root.connected.length == 0 ? Strings.connected-none : "";
+                        note: root.connected.length > 0 ? "" : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
                         toggled(id) => {
                             root.speaker-toggled(id);
                         }
@@ -607,6 +611,9 @@ export component MainWindow inherits Window {
                         }
                         edited(text) => {
                             root.airplay-delay-edited(text);
+                        }
+                        committed => {
+                            root.airplay-delay-committed();
                         }
                     }
                 }
