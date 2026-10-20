@@ -234,6 +234,7 @@ fn every_control_has_an_accessible_label() {
         "Slider",
         "ComboBox",
         "LineEdit",
+        "TextField",
         "CheckBox",
         "SpinBox",
     ];
@@ -803,14 +804,17 @@ fn the_hint_and_the_fix_name_the_output_for_narrator() {
         .find("options := IconButton {")
         .expect("the options button");
     assert!(
-        slider < hint_at && hint_at < fix_at && fix_at < options,
+        slider < hint_at && hint_at < fix_at && !(slider..fix_at).contains(&options),
         "the hint and the fix come right after the slider"
     );
     let shown = row
         .find("if root.item.device-volume != DeviceVolumeHint.none:")
         .expect("the hint shows only with a hint to show");
     assert!(slider < shown && shown < hint_at);
-    let part = &row[shown..options];
+    let sync = row
+        .find("if root.item.has-delay && root.item.sync-open:")
+        .expect("the sync controls");
+    let part = &row[shown..sync];
     assert!(part.contains("accessible-role: text;"));
     assert!(part.contains(
         "text: Strings.device-volume-hint(root.item.device-volume, \
@@ -946,4 +950,21 @@ fn a_flyout_row_shows_the_speakers_note() {
         Some("text: Strings.row-note(root.state);"),
         "the QuietText shows the note"
     );
+}
+
+/// Selected text keeps 4.5:1: every text box is a TextField, which selects
+/// in the "surface" on "tealText" pair, and none is the style's LineEdit,
+/// whose accent selection measures 4.21:1 under white text.
+#[test]
+fn selected_text_in_a_text_box_reaches_4_5_to_1() {
+    for (file, source) in UI_FILES {
+        assert!(
+            blocks(source, "LineEdit").is_empty(),
+            "{file} uses LineEdit"
+        );
+    }
+    let field = component_body(include_str!("../ui/widgets.slint"), "TextField");
+    assert!(field.contains("selection-background-color: Tokens.teal-text;"));
+    assert!(field.contains("selection-foreground-color: Tokens.surface;"));
+    assert!(CONTRAST_PAIRS.contains(&("surface", "tealText")));
 }

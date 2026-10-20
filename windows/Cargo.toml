@@ -20,9 +20,9 @@ audiosync-airplay = { path = "../airplay" }
 # Used under GPL-3.0-only (Slint is also offered under royalty-free and
 # commercial licenses), checked for the 1.18 line; see THIRD_PARTY_NOTICES.md.
 # unstable-winit-030: the winit window behind a Slint window, to focus it and
-# to close the tray flyout when it loses focus. Pinned to the 1.18 line, like
-# Slint itself.
-slint = { version = "~1.18.1", features = ["unstable-winit-030"] }
+# to close the tray flyout when it loses focus. Pinned exactly: the brand accent
+# goes through Slint's private_unstable_api (src/view.rs), which any release may change.
+slint = { version = "=1.18.1", features = ["unstable-winit-030"] }
 # The settings file in the app's data folder, as JSON (both MIT OR
 # Apache-2.0); Slint's crates already bring serde into the app.
 serde = { version = "1.0.229", features = ["derive"] }
@@ -80,4 +80,5 @@ tray-icon = { version = "0.26.1", default-features = false }
 
 [build-dependencies]
 embed-resource = "3.0.12"
-slint-build = "~1.18.1"
+# The same Slint as the slint dependency, pinned for the same reason.
+slint-build = "=1.18.1"

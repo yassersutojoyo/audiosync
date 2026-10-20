@@ -2,6 +2,7 @@
 //! developed on. Only the Windows versions ship; elsewhere the app skips the
 //! version check and reports errors on stderr.
 
+use crate::debug_log::DebugLog;
 use crate::os_version::OsVersion;
 
 /// The version of the running Windows, or `None` when it can't be read (and
@@ -242,6 +243,185 @@ pub fn notice_time() -> String {
     }
 }
 
+/// The smallest outer size, in physical pixels, of a window whose inner size
+/// may not go below `min` logical pixels at `dpi`, with a frame (borders,
+/// title and menu bar) of `frame` physical pixels.
+pub fn min_track_size(min: (f64, f64), dpi: u32, frame: (i32, i32)) -> (i32, i32) {
+    let scale = f64::from(dpi) / 96.0;
+    let side = |logical: f64, frame: i32| (logical * scale).ceil() as i32 + frame;
+    (side(min.0, frame.0), side(min.1, frame.1))
+}
+
+/// `min` (logical pixels, each below 65 536) in the one number a window
+/// subclass carries, and back.
+fn pack_min_size(min: (f64, f64)) -> usize {
+    let side = |logical: f64| logical.round().clamp(0.0, 65_535.0) as usize;
+    (side(min.0) << 16) | side(min.1)
+}
+
+fn unpack_min_size(packed: usize) -> (f64, f64) {
+    ((packed >> 16) as f64, (packed & 0xffff) as f64)
+}
+
+/// Holds `window` at an inner size of at least `min` logical pixels, also
+/// against another program's MoveWindow or SetWindowPos: Windows asks the
+/// window for its smallest size (WM_GETMINMAXINFO) on every resize, and a
+/// subclass answers after winit, whose minimum Slint resets when its layout
+/// changes. `false` while the native window doesn't exist yet; repeating it
+/// only updates the size.
+#[cfg(windows)]
+pub fn hold_min_size(window: &slint::Window, min: (f64, f64)) -> bool {
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Shell::SetWindowSubclass;
+
+    window
+        .with_winit_window(|window| {
+            let Ok(handle) = window.window_handle() else {
+                return false;
+            };
+            let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+                return false;
+            };
+            let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
+            // SAFETY: `hwnd` is this thread's live window, and the procedure
+            // only touches the structures its two messages point to.
+            let held = unsafe {
+                SetWindowSubclass(
+                    hwnd,
+                    Some(min_size_procedure),
+                    MIN_SIZE_SUBCLASS,
+                    pack_min_size(min),
+                )
+            }
+            .as_bool();
+            log_min_size_once(MinSizeEvent::Installed, || {
+                if held {
+                    format!("main window: minimum {} x {} held natively", min.0, min.1)
+                } else {
+                    "main window: the minimum size subclass did not install".to_owned()
+                }
+            });
+            held
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+pub fn hold_min_size(_window: &slint::Window, _min: (f64, f64)) -> bool {
+    false
+}
+
+/// Gives the window subclass behind `hold_min_size` the debug log, so a
+/// launch shows whether it installed and which messages reach it.
+pub fn set_min_size_log(log: DebugLog) {
+    MIN_SIZE_LOG.with(|slot| *slot.borrow_mut() = Some(log));
+}
+
+#[derive(Clone, Copy)]
+enum MinSizeEvent {
+    Installed = 1,
+    MinMaxInfo = 2,
+    Clamped = 4,
+}
+
+thread_local! {
+    // A window procedure takes no context of ours; it runs on this thread.
+    static MIN_SIZE_LOG: std::cell::RefCell<Option<DebugLog>> = const { std::cell::RefCell::new(None) };
+    static MIN_SIZE_LOGGED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// Logs `event` the first time it happens on this thread.
+fn log_min_size_once(event: MinSizeEvent, message: impl FnOnce() -> String) {
+    let bit = event as u8;
+    if MIN_SIZE_LOGGED.with(|logged| logged.replace(logged.get() | bit)) & bit != 0 {
+        return;
+    }
+    MIN_SIZE_LOG.with(|slot| {
+        if let Some(log) = slot.borrow().as_ref() {
+            log.log(message);
+        }
+    });
+}
+
+#[cfg(windows)]
+const MIN_SIZE_SUBCLASS: usize = 0x4153_4d4e;
+
+#[cfg(windows)]
+unsafe extern "system" fn min_size_procedure(
+    hwnd: windows::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+    _id: usize,
+    packed: usize,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
+    use windows::Win32::UI::Shell::DefSubclassProc;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GWL_STYLE, GetMenu, GetWindowLongW, IsIconic, IsZoomed, MINMAXINFO,
+        SWP_NOSIZE, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPOS, WM_GETMINMAXINFO,
+        WM_WINDOWPOSCHANGING,
+    };
+
+    // SAFETY: passes the message on unchanged, as a subclass must.
+    let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+    if (message != WM_GETMINMAXINFO && message != WM_WINDOWPOSCHANGING) || lparam.0 == 0 {
+        return result;
+    }
+    // SAFETY: `hwnd` is the live window this message is for.
+    let (dpi, style, ex_style, has_menu, minimized, maximized) = unsafe {
+        (
+            GetDpiForWindow(hwnd),
+            WINDOW_STYLE(GetWindowLongW(hwnd, GWL_STYLE) as u32),
+            WINDOW_EX_STYLE(GetWindowLongW(hwnd, GWL_EXSTYLE) as u32),
+            !GetMenu(hwnd).is_invalid(),
+            IsIconic(hwnd).as_bool(),
+            IsZoomed(hwnd).as_bool(),
+        )
+    };
+    let mut rect = RECT::default();
+    // SAFETY: `rect` is a valid, writable RECT.
+    if unsafe { AdjustWindowRectExForDpi(&mut rect, style, has_menu, ex_style, dpi) }.is_err() {
+        return result;
+    }
+    let frame = (rect.right - rect.left, rect.bottom - rect.top);
+    let (width, height) = min_track_size(unpack_min_size(packed), dpi, frame);
+    if message == WM_GETMINMAXINFO {
+        log_min_size_once(MinSizeEvent::MinMaxInfo, || {
+            format!("main window: WM_GETMINMAXINFO arrived, minimum {width} x {height} px")
+        });
+        // SAFETY: for WM_GETMINMAXINFO, `lparam` points to the MINMAXINFO
+        // that Windows reads back once the message returns.
+        let info = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
+        info.ptMinTrackSize.x = info.ptMinTrackSize.x.max(width);
+        info.ptMinTrackSize.y = info.ptMinTrackSize.y.max(height);
+        return result;
+    }
+    // A move that doesn't go through WM_GETMINMAXINFO, as winit may answer
+    // WM_WINDOWPOSCHANGING itself. Minimizing shrinks the window on purpose.
+    // SAFETY: for WM_WINDOWPOSCHANGING, `lparam` points to the WINDOWPOS
+    // that Windows applies once the message returns.
+    let position = unsafe { &mut *(lparam.0 as *mut WINDOWPOS) };
+    if minimized || maximized || position.flags.contains(SWP_NOSIZE) {
+        return result;
+    }
+    let clamped = (position.cx.max(width), position.cy.max(height));
+    if clamped != (position.cx, position.cy) {
+        let asked = (position.cx, position.cy);
+        log_min_size_once(MinSizeEvent::Clamped, || {
+            format!(
+                "main window: a move to {} x {} px kept at {} x {} px",
+                asked.0, asked.1, clamped.0, clamped.1
+            )
+        });
+        (position.cx, position.cy) = clamped;
+    }
+    result
+}
+
 /// Brings a window that is showing to the front and gives it the keyboard
 /// focus, restoring it first when it is minimized (Windows doesn't focus a
 /// minimized window).
@@ -385,4 +565,28 @@ pub fn is_on_a_monitor(x: i32, y: i32) -> bool {
 #[cfg(not(windows))]
 pub fn is_on_a_monitor(_x: i32, _y: i32) -> bool {
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_smallest_outer_size_scales_the_inner_minimum_and_adds_the_frame() {
+        // 860 x 440 at 150 %, with a 16 x 59 pixel frame and menu bar.
+        assert_eq!(min_track_size((860.0, 440.0), 144, (16, 59)), (1306, 719));
+        assert_eq!(min_track_size((860.0, 440.0), 96, (0, 0)), (860, 440));
+        // A fraction of a pixel rounds up, so the inner size never falls short.
+        assert_eq!(min_track_size((101.0, 101.0), 120, (0, 0)), (127, 127));
+    }
+
+    #[test]
+    fn the_minimum_survives_the_subclass_round_trip() {
+        let min = crate::settings::MIN_WINDOW;
+        assert_eq!(unpack_min_size(pack_min_size(min)), min);
+        assert_eq!(
+            unpack_min_size(pack_min_size((0.0, 65_535.0))),
+            (0.0, 65_535.0)
+        );
+    }
 }

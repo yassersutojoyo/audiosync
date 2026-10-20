@@ -34,7 +34,7 @@ use crate::{
     AboutDialog, AirPlayProblem, Availability, DeviceVolumeHint, EqualizerWindow, GroupItem,
     GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, NoticeKind,
     Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind,
-    Strings, TrayFlyout,
+    Strings, Tokens, TrayFlyout,
 };
 
 mod help_window;
@@ -560,6 +560,7 @@ fn set_size_once_native(
         };
         let window = window_owner.window();
         if window.with_winit_window(|_| ()).is_some() {
+            keep_main_min_size(window);
             window.set_size(size);
             if maximized {
                 window.set_maximized(true);
@@ -568,6 +569,30 @@ fn set_size_once_native(
             set_size_once_native(main, size, maximized, tries - 1);
         }
     });
+}
+
+/// What a titled window does on gaining the focus besides taking its frame.
+#[derive(Clone, Copy, PartialEq)]
+enum Titled {
+    Window,
+    /// Keeps only the close button and fits the PIN dialog.
+    Dialog,
+    /// Holds `settings::MIN_WINDOW`.
+    Main,
+}
+
+/// Holds the main window at `settings::MIN_WINDOW` natively (a MoveWindow
+/// from another program shrank it to 286 x 193), growing it first if it is
+/// smaller.
+fn keep_main_min_size(window: &slint::Window) {
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::dpi::LogicalSize;
+
+    let (width, height) = crate::settings::MIN_WINDOW;
+    window.with_winit_window(|window| {
+        window.set_min_inner_size(Some(LogicalSize::new(width, height)));
+    });
+    crate::platform::hold_min_size(window, crate::settings::MIN_WINDOW);
 }
 
 /// The saved main window `frame` as it opens on the monitor with
@@ -612,6 +637,7 @@ fn fitted_main_frame(
 impl App {
     /// The windows over `backend`; what they do themselves goes to `log`.
     pub fn new(backend: Box<dyn Backend>, log: DebugLog) -> Result<Rc<App>, slint::PlatformError> {
+        crate::platform::set_min_size_log(log.clone());
         let models = Models {
             sources: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
@@ -802,6 +828,7 @@ impl App {
     /// Gives a window that is showing its Windows 11 frame (`backdrop`), and
     /// logs whether DWM took it. `true` when it did.
     pub fn apply_frame(&self, window: &slint::Window, name: &'static str, frame: Frame) -> bool {
+        self.use_brand_accent(window);
         if let Some(dark) = self.theme_override.get() {
             use slint::winit_030::WinitWindowAccessor;
             use slint::winit_030::winit::window::Theme;
@@ -826,19 +853,83 @@ impl App {
         applied
     }
 
+    /// Gives the standard controls (buttons, sliders, switches, fields) the
+    /// brand teal for their accent instead of the Windows accent color. Slint
+    /// keeps one accent for the whole app and reads the Windows one again
+    /// whenever it creates a native window or the theme changes, so this runs
+    /// after each (`apply_frame`, `follow_frame`). The Fluent style keeps its
+    /// own lightness and takes only the hue: dark teal on light, mint on dark.
+    pub fn use_brand_accent(&self, window: &slint::Window) {
+        use slint::private_unstable_api::re_exports::WindowInner;
+        let teal = self.main.global::<Tokens>().get_teal();
+        WindowInner::from_pub(window)
+            .context()
+            .set_accent_color(teal);
+    }
+
     /// Gives a titled window (every window but the flyout) its frame each
     /// time it gains the focus, which covers a native window created after
-    /// `show` returned.
+    /// `show` returned, and the brand accent again after a theme change.
     fn follow_frame(self: &Rc<Self>, window: fn(&App) -> &slint::Window, name: &'static str) {
+        self.follow_titled_frame(window, name, Titled::Window);
+    }
+
+    /// `follow_frame` for a dialog, which also keeps only the close button
+    /// in its title bar, as Windows dialogs do.
+    fn follow_dialog_frame(
+        self: &Rc<Self>,
+        window: fn(&App) -> &slint::Window,
+        name: &'static str,
+    ) {
+        self.follow_titled_frame(window, name, Titled::Dialog);
+    }
+
+    fn follow_titled_frame(
+        self: &Rc<Self>,
+        window: fn(&App) -> &slint::Window,
+        name: &'static str,
+        kind: Titled,
+    ) {
         use slint::winit_030::winit::event::WindowEvent;
+        use slint::winit_030::winit::window::WindowButtons;
         use slint::winit_030::{EventResult, WinitWindowAccessor};
 
         let weak = Rc::downgrade(self);
+        // The main window's first event comes once its native window exists,
+        // with or without the focus; outside this filter, as it resizes.
+        let min_held = std::cell::Cell::new(kind != Titled::Main);
         window(self).on_winit_window_event(move |_, event| {
-            if let WindowEvent::Focused(true) = event {
-                with_app(&weak, |app| {
-                    app.apply_frame(window(app), name, Frame::Titled);
+            if !min_held.replace(true) {
+                let weak = weak.clone();
+                Timer::single_shot(Duration::ZERO, move || {
+                    with_app(&weak, |app| {
+                        keep_main_min_size(window(app));
+                    });
                 });
+            }
+            match event {
+                WindowEvent::Focused(true) => with_app(&weak, |app| {
+                    if kind == Titled::Main {
+                        keep_main_min_size(window(app));
+                    }
+                    if kind == Titled::Dialog {
+                        window(app).with_winit_window(|window| {
+                            window.set_enabled_buttons(WindowButtons::CLOSE);
+                        });
+                        // A PIN dialog opened before the event loop ran had
+                        // no native window to fit yet.
+                        app.fit_pin_dialog();
+                    }
+                    app.apply_frame(window(app), name, Frame::Titled);
+                }),
+                // Slint reads the Windows accent after this filter returns.
+                WindowEvent::ThemeChanged(_) => {
+                    let weak = weak.clone();
+                    Timer::single_shot(Duration::ZERO, move || {
+                        with_app(&weak, |app| app.use_brand_accent(window(app)));
+                    });
+                }
+                _ => {}
             }
             EventResult::Propagate
         });
@@ -910,6 +1001,7 @@ impl App {
         self.main
             .set_connected_virtual_hidden(only_virtual_outputs_hidden(&connected, lists));
         self.main.set_airplay_none_found(state.airplay_none_found);
+        self.flyout.set_airplay_none_found(state.airplay_none_found);
         let listed = |s: &&ui_model::Speaker| lists(s);
         let this_pc: Vec<SpeakerItem> = this_pc
             .into_iter()
@@ -1165,7 +1257,7 @@ impl App {
     }
 
     fn connect_main(self: &Rc<Self>) {
-        self.follow_frame(|app| app.main.window(), "main window");
+        self.follow_titled_frame(|app| app.main.window(), "main window", Titled::Main);
         let main = &self.main;
         let weak = Rc::downgrade(self);
 
@@ -1406,8 +1498,8 @@ impl App {
     }
 
     fn connect_dialogs(self: &Rc<Self>) {
-        self.follow_frame(|app| app.group_dialog.window(), "group name dialog");
-        self.follow_frame(|app| app.about.window(), "about dialog");
+        self.follow_dialog_frame(|app| app.group_dialog.window(), "group name dialog");
+        self.follow_dialog_frame(|app| app.about.window(), "about dialog");
         let weak = Rc::downgrade(self);
         let w = weak.clone();
         self.group_dialog
@@ -1419,7 +1511,7 @@ impl App {
             })
         });
 
-        self.follow_frame(|app| app.pin_dialog.window(), "PIN dialog");
+        self.follow_dialog_frame(|app| app.pin_dialog.window(), "PIN dialog");
         let dialog = self.pin_dialog.as_weak();
         self.pin_dialog.on_pin_edited(move |text| {
             if let Some(dialog) = dialog.upgrade() {
@@ -1476,6 +1568,7 @@ impl App {
                 dialog.set_pin(SharedString::new());
             }
             dialog.invoke_prepare();
+            self.fit_pin_dialog();
         }
     }
 
@@ -1485,7 +1578,21 @@ impl App {
             return;
         }
         self.pin_dialog.invoke_prepare();
+        self.fit_pin_dialog();
         crate::platform::bring_to_front(self.pin_dialog.window());
+    }
+
+    /// Grows the PIN dialog to its layout's lowest height at its width. The
+    /// window is made at the height the layout has before the message wraps,
+    /// and Windows doesn't grow it when the message gets longer (a wrong PIN).
+    fn fit_pin_dialog(&self) {
+        let window = self.pin_dialog.window();
+        let size = window.size().to_logical(window.scale_factor());
+        let fit = self.pin_dialog.get_fit_height();
+        // Before the native window exists there is no width to fit to.
+        if size.width > 0.0 && size.height < fit {
+            window.set_size(slint::LogicalSize::new(size.width, fit));
+        }
     }
 
     /// Pair: the PIN goes to the pairing; the dialog stays open until it
@@ -2209,6 +2316,8 @@ pub fn speaker_kind(kind: ui_model::SpeakerKind) -> SpeakerKind {
         K::Headphones => SpeakerKind::Headphones,
         K::Bluetooth => SpeakerKind::Bluetooth,
         K::Usb => SpeakerKind::Usb,
+        K::UsbHeadphones => SpeakerKind::UsbHeadphones,
+        K::UsbSpeakers => SpeakerKind::UsbSpeakers,
         K::Hdmi => SpeakerKind::Hdmi,
         K::DisplayPort => SpeakerKind::DisplayPort,
         K::Virtual => SpeakerKind::Virtual,
@@ -2897,7 +3006,7 @@ mod tests {
             .invoke_delay_edited("local:bt".into(), "-200".into());
 
         // The blank part of the desk's row, right of its name.
-        click(window, 420.0, 510.0);
+        click(window, 420.0, 625.0);
         assert_eq!(
             delay_of(&app, "local:bt"),
             Some(-200.0),
@@ -2910,7 +3019,7 @@ mod tests {
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
         app.main.invoke_airplay_delay_edited("2100".into());
-        click(window, 420.0, 510.0);
+        click(window, 420.0, 625.0);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),
@@ -2920,7 +3029,7 @@ mod tests {
         assert!(!open(&app).contains("local:desk"), "and closed it");
 
         // The reference row has no delay: a click there is outside.
-        click(window, 420.0, 510.0);
+        click(window, 420.0, 625.0);
         app.main
             .invoke_delay_edited("local:desk".into(), "300".into());
         click(window, 420.0, 190.0);
@@ -3016,7 +3125,7 @@ mod tests {
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
         // The note, moved down by the open controls.
-        click(app.main.window(), 420.0, 610.0);
+        click(app.main.window(), 420.0, 645.0);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),
@@ -3373,6 +3482,53 @@ mod tests {
             maximized: false,
         };
         assert_eq!(fitted_main_frame(small, laptop, 1.0, true), small);
+    }
+
+    /// Windows makes the PIN dialog at the height its layout has before the
+    /// message wraps, and keeps it there when the message grows (after a
+    /// wrong PIN): the buttons were cut off. The dialog now grows to fit.
+    #[test]
+    fn the_pin_dialog_grows_to_show_its_buttons_after_a_wrong_pin() {
+        let app = app_over(MockBackend::new());
+        app.preview_pin(false);
+        let dialog = &app.pin_dialog;
+        // About the client height Windows gave it: too short for the
+        // wrong-PIN message at this width.
+        dialog
+            .window()
+            .set_size(slint::LogicalSize::new(380.0, 150.0));
+        dialog.set_wrong_pin(true);
+        app.fit_pin_dialog();
+        let size = dialog
+            .window()
+            .size()
+            .to_logical(dialog.window().scale_factor());
+        assert_eq!(size.width, 380.0);
+        let fit = dialog.get_fit_height();
+        assert!(
+            size.height >= fit,
+            "window {} high, layout needs {fit}",
+            size.height
+        );
+        let bottom = dialog.get_buttons_bottom();
+        assert!(
+            bottom > 0.0 && bottom <= size.height,
+            "buttons end at {bottom}, window {} high",
+            size.height
+        );
+    }
+
+    #[test]
+    fn a_usb_device_with_a_form_still_reads_as_usb() {
+        let app = app_over(MockBackend::new());
+        for kind in [
+            ui_model::SpeakerKind::Usb,
+            ui_model::SpeakerKind::UsbHeadphones,
+            ui_model::SpeakerKind::UsbSpeakers,
+        ] {
+            let label = app.strings().invoke_speaker_kind(speaker_kind(kind));
+            assert_eq!(label.as_str(), "USB", "{kind:?}");
+        }
     }
 
     #[test]
@@ -3770,6 +3926,29 @@ mod tests {
     }
 
     #[test]
+    fn a_group_name_longer_than_its_field_keeps_the_cursor_in_view() {
+        let app = app_over(MockBackend::new());
+        app.ask_new_group();
+        let window = app.group_dialog.window();
+        // Wider than the 1000 px the headless windows draw at.
+        let name = "Living Room and Kitchen and Bedroom and Office Speakers, ".repeat(4);
+        let name = name.trim_end();
+        for character in name.chars() {
+            press(window, character.to_string());
+            assert!(
+                app.group_dialog.get_name_caret_in_view(),
+                "the cursor is in view after {:?}",
+                app.group_dialog.get_name()
+            );
+        }
+        assert_eq!(app.group_dialog.get_name(), name);
+        press(window, Key::Home);
+        assert!(app.group_dialog.get_name_caret_in_view(), "at the start");
+        press(window, Key::End);
+        assert!(app.group_dialog.get_name_caret_in_view(), "at the end");
+    }
+
+    #[test]
     fn escape_closes_the_about_dialog() {
         let app = app_over(MockBackend::new());
         let window = app.about.window();
@@ -3891,7 +4070,7 @@ mod tests {
         let app = main_window_over(backend);
         let window = app.main.window();
         // The streaming switch, then the newest notice's dismiss button.
-        tab(window, 2);
+        tab(window, 3);
         press(window, " ");
         assert_eq!(app.snapshot().notices.len(), 1, "Space dismissed it");
         press(window, " ");
@@ -4222,17 +4401,19 @@ mod tests {
         assert!(!enabled(&app, "local:cable"));
 
         // Off and no longer shown, Connected Speakers is empty: the focus
-        // goes to This PC's first row's options, so the next Tab stop is
-        // the headphones' toggle, not the source after the streaming switch.
+        // goes to This PC's first row's options. Three Tabs on: its volume,
+        // its device volume fix (the mock's speaker device sits at 13 %),
+        // then the headphones' toggle, not the source after the streaming
+        // switch.
         app.main.invoke_show_virtual_devices_toggled(false);
         draw_frames();
         let headphones = enabled(&app, "local:headphones");
-        tab(window, 1);
+        tab(window, 3);
         press(window, " ");
         assert_ne!(
             enabled(&app, "local:headphones"),
             headphones,
-            "the next stop after the speakers' options is the headphones' toggle"
+            "after the speakers' volume and its fix, the headphones' toggle"
         );
     }
 

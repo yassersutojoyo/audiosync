@@ -58,8 +58,13 @@ pub enum OutputKind {
     Headphones,
     /// A Bluetooth device.
     Bluetooth,
-    /// A USB device.
+    /// A USB device whose form Windows doesn't tell (a line out, or not
+    /// known).
     Usb,
+    /// USB headphones or a USB headset.
+    UsbHeadphones,
+    /// USB speakers.
+    UsbSpeakers,
     /// A display or TV over HDMI.
     Hdmi,
     /// A display over DisplayPort.

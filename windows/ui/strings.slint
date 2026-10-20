@@ -26,6 +26,8 @@ export global Strings {
     out property <string> reconnecting: @tr("Reconnecting…");
     out property <string> status-off: @tr("Off");
     out property <string> connected-none: @tr("No connected speakers");
+    // The flyout's speaker list when it has no speaker and no group.
+    out property <string> no-speakers: @tr("No speakers found");
     // Connected Speakers when its only outputs are virtual ones, hidden.
     out property <string> connected-none-virtual-hidden: @tr("No connected speakers. Virtual devices are hidden; to list them, choose View > Show Virtual Devices.");
     // Under Connected Speakers once AirPlay discovery has run for 20 seconds
@@ -47,6 +49,13 @@ export global Strings {
     // Under a delay field while it holds typing not yet applied; also the
     // field's Narrator description then.
     out property <string> delay-draft-hint: @tr("Press Enter to apply");
+    // A text field's right-click menu.
+    out property <string> edit-undo: @tr("Undo");
+    out property <string> edit-redo: @tr("Redo");
+    out property <string> edit-cut: @tr("Cut");
+    out property <string> edit-copy: @tr("Copy");
+    out property <string> edit-paste: @tr("Paste");
+    out property <string> edit-select-all: @tr("Select all");
     out property <string> source-label: @tr("Audio Source");
     out property <string> equalizer: @tr("Equalizer");
     out property <string> groups: @tr("Groups");
@@ -607,7 +616,7 @@ export global Strings {
         if kind == SpeakerKind.bluetooth {
             return @tr("Bluetooth");
         }
-        if kind == SpeakerKind.usb {
+        if kind == SpeakerKind.usb || kind == SpeakerKind.usb-headphones || kind == SpeakerKind.usb-speakers {
             return @tr("USB");
         }
         if kind == SpeakerKind.hdmi {
@@ -740,7 +749,7 @@ export global Strings {
         if reference == "" {
             return root.sync-hint-no-reference;
         }
-        return @tr("Relative to {}. Heard this speaker first? Raise the value. Heard it late? Lower the value; a Bluetooth speaker often needs less than 0.", reference);
+        return @tr("Relative to {}. Heard this speaker first? Raise the value. Heard it late? Lower it.", reference);
     }
 
     // The label of a delay step button: "−100", "+10".

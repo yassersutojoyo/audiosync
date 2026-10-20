@@ -141,9 +141,20 @@ impl Tray {
 
         // The flyout closes when it loses focus, like the system flyouts.
         app.flyout.window().on_winit_window_event(|window, event| {
-            if let WindowEvent::Focused(false) = event {
-                FLYOUT_CLOSED_AT.with(|at| at.set(Some(Instant::now())));
-                let _ = window.hide();
+            match event {
+                WindowEvent::Focused(false) => {
+                    FLYOUT_CLOSED_AT.with(|at| at.set(Some(Instant::now())));
+                    let _ = window.hide();
+                }
+                // Slint reads the Windows accent after this filter returns.
+                WindowEvent::ThemeChanged(_) => {
+                    slint::Timer::single_shot(Duration::ZERO, || {
+                        if let Some(app) = APP.with(|cell| cell.borrow().upgrade()) {
+                            app.use_brand_accent(app.flyout.window());
+                        }
+                    });
+                }
+                _ => {}
             }
             EventResult::Propagate
         });

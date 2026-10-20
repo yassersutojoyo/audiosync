@@ -2156,6 +2156,8 @@ fn speaker_kind(kind: OutputKind) -> SpeakerKind {
         OutputKind::Headphones => SpeakerKind::Headphones,
         OutputKind::Bluetooth => SpeakerKind::Bluetooth,
         OutputKind::Usb => SpeakerKind::Usb,
+        OutputKind::UsbHeadphones => SpeakerKind::UsbHeadphones,
+        OutputKind::UsbSpeakers => SpeakerKind::UsbSpeakers,
         OutputKind::Hdmi => SpeakerKind::Hdmi,
         OutputKind::DisplayPort => SpeakerKind::DisplayPort,
         OutputKind::Virtual => SpeakerKind::Virtual,
@@ -2555,6 +2557,27 @@ mod tests {
             [
                 ("Buds".to_owned(), SpeakerKind::Bluetooth),
                 ("TV".to_owned(), SpeakerKind::Hdmi)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_usb_device_keeps_its_form_and_stays_under_connected_speakers() {
+        let mut audio = MockBackend::empty();
+        audio.connect_output_as("headset", "Headset", OutputKind::UsbHeadphones);
+        audio.connect_output_as("desk", "Desk Speakers", OutputKind::UsbSpeakers);
+        audio.connect_output_as("dac", "DAC", OutputKind::Usb);
+        let state = AudioAdapter::new(audio, String::new, DebugLog::default()).snapshot();
+        let (this_pc, connected) = state.layout();
+        assert!(this_pc.is_empty(), "{this_pc:?}");
+        let rows: Vec<(String, SpeakerKind)> =
+            connected.iter().map(|s| (s.name.clone(), s.kind)).collect();
+        assert_eq!(
+            rows,
+            [
+                ("DAC".to_owned(), SpeakerKind::Usb),
+                ("Desk Speakers".to_owned(), SpeakerKind::UsbSpeakers),
+                ("Headset".to_owned(), SpeakerKind::UsbHeadphones)
             ]
         );
     }

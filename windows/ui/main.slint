@@ -19,6 +19,8 @@ export { HelpWindow } from "help.slint";
 export { Strings } from "strings.slint";
 // The style's palette, for the theme preview (src/view.rs).
 export { Palette } from "std-widgets.slint";
+// The brand teal, for the standard controls' accent (src/view.rs).
+export { Tokens } from "tokens.slint";
 export { AirPlayProblem, Availability, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
 
 // A titled card of speaker rows, with a note when it has none.
@@ -26,7 +28,6 @@ component SpeakerSection inherits VerticalLayout {
     in property <string> title;
     in property <[SpeakerItem]> speakers;
     in property <string> note;
-    in property <bool> compact;
     callback toggled(string);
     callback volume-changed(string, float);
     callback sync-toggled(string);
@@ -66,7 +67,6 @@ component SpeakerSection inherits VerticalLayout {
 
             SpeakerRow {
                 item: speaker;
-                compact: root.compact;
                 init => {
                     if speaker.id == root.focus-id {
                         root.focus-id = "";
@@ -223,7 +223,7 @@ component EqualizerCard inherits Rectangle {
 
         Glyph {
             glyph: Glyphs.chevron-right;
-            font-size: 10px;
+            font-size: Tokens.font-size-caption;
             color: Tokens.secondary-text;
         }
     }
@@ -343,14 +343,12 @@ export component MainWindow inherits Window {
 
     title: Strings.main-window-title;
     icon: @image-url("../res/audiosync-256.png");
-    // Wide enough for a speaker row's columns next to the left column, and
+    // Wide enough for a speaker row next to the left column, and
     // short enough for a 1366 x 768 screen at 150 % (both columns scroll).
     min-width: 860px;
     min-height: 440px;
     preferred-width: 980px;
     preferred-height: 680px;
-    // Below this width the volume sliders in the speaker rows are shorter.
-    property <bool> compact: root.width < 960px;
     background: Tokens.background;
     default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
@@ -659,7 +657,8 @@ export component MainWindow inherits Window {
                 speaker-list := VerticalLayout {
                     spacing: Tokens.spacing-section-gap;
                     padding-bottom: 4px;
-                    padding-right: 4px;
+                    // The Fluent scroll bar is 14 px wide and drawn over the content.
+                    padding-right: 14px;
                     // Rows keep their height when the list is shorter than the view.
                     alignment: start;
 
@@ -672,7 +671,6 @@ export component MainWindow inherits Window {
                         device-volume-fix(id) => {
                             root.device-volume-fix-requested(id);
                         }
-                        compact: root.compact;
                         focus-id <=> root.focus-speaker-id;
                         focus-part <=> root.focus-speaker-part;
                         focus-changed(id, part) => {
@@ -771,7 +769,6 @@ export component MainWindow inherits Window {
                         device-volume-fix(id) => {
                             root.device-volume-fix-requested(id);
                         }
-                        compact: root.compact;
                         focus-id <=> root.focus-speaker-id;
                         focus-part <=> root.focus-speaker-part;
                         focus-changed(id, part) => {
