@@ -347,7 +347,7 @@ fn read_all(chunks: &[&[u8]]) -> (Vec<Message>, Option<ParseError>) {
     (messages, None)
 }
 
-// covers: P140
+// covers: P140, P146
 #[test]
 fn rtsp_answers_cut_split_or_fed_a_byte_at_a_time_read_the_same() {
     for &message in RTSP_CORPUS {
@@ -571,7 +571,7 @@ fn rtsp_parser_survives_mutated_synthetic_and_random_bytes() {
     );
 }
 
-// covers: P140
+// covers: P140, P146
 #[test]
 fn rtsp_parser_caps_heads_and_bodies() {
     // A head that never ends, and one with a header past the cap.
@@ -1959,7 +1959,7 @@ fn assert_protocol_error(run: &PairRun) {
     );
 }
 
-// covers: P140
+// covers: P140, P148
 #[test]
 fn a_pairing_answer_over_the_body_cap_is_refused_unread() {
     // The largest real answer, B and the salt, is far below the cap as a
@@ -1984,7 +1984,7 @@ fn a_pairing_answer_over_the_body_cap_is_refused_unread() {
     assert_protocol_error(&answered_with(&padded_answer(MAX_PAIRING_BODY_BYTES + 1)));
 }
 
-// covers: P140
+// covers: P140, P148
 #[test]
 fn a_pairing_answer_whose_shared_objects_expand_without_bound_is_refused() {
     // A few shared levels read like any other answer.

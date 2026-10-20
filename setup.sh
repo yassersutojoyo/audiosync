@@ -14,6 +14,9 @@ set -o errexit -o nounset -o pipefail
 step() { printf '\n\033[1;36m▶ %s\033[0m\n' "$1"; }
 
 command -v swift >/dev/null || { echo "Xcode Command Line Tools are required: xcode-select --install"; exit 1; }
+# cargo may be in ~/.cargo/bin or next to Homebrew's keg-only rustup, off PATH.
+# shellcheck source=scripts/cargo_path.sh disable=SC1091
+source "$(dirname -- "$0")/scripts/cargo_path.sh"
 command -v cargo >/dev/null || { echo "A Rust toolchain is required: https://rustup.rs"; exit 1; }
 
 step "Building and installing AudioSync"

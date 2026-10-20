@@ -472,6 +472,11 @@ pub trait AudioBackend {
     /// empty while there is no AirPlay sender.
     fn airplay_speakers(&self) -> Vec<AirPlayInfo>;
 
+    /// Whether an AirPlay sender runs and browses for receivers: false
+    /// without a sender, and once one stopped or its discovery did or
+    /// couldn't start (reported as [`BackendEvent::AirPlayStopped`]).
+    fn airplay_browsing(&self) -> bool;
+
     /// The IDs of the AirPlay speakers turned on, listed or not, sorted.
     fn enabled_airplay(&self) -> Vec<String>;
 

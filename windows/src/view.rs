@@ -541,6 +541,7 @@ impl App {
         let lists = |s: &ui_model::Speaker| ui.listed_virtual.lists(s, ui.show_virtual);
         self.main
             .set_connected_virtual_hidden(only_virtual_outputs_hidden(&connected, lists));
+        self.main.set_airplay_none_found(state.airplay_none_found);
         let listed = |s: &&ui_model::Speaker| lists(s);
         let this_pc: Vec<SpeakerItem> = this_pc
             .into_iter()
