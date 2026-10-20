@@ -157,30 +157,24 @@ fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
     )))
 }
 
-/// Starts the AirPlay sender and its discovery, and hands both to the audio
-/// backend, with the way to start a new one when the user retries after it
-/// stopped. Without a sender the app runs on with local outputs only;
-/// without discovery no AirPlay speaker is listed.
+/// Starts the AirPlay sender and its discovery through the audio backend,
+/// which keeps the way to start a new one when the user retries. Without a
+/// sender the app runs on with local outputs only; without discovery no
+/// AirPlay speaker is listed.
 #[cfg(windows)]
 fn start_airplay(audio: &mut audio::wasapi::WasapiBackend, log: &DebugLog) {
-    let Some((link, feed)) = start_sender(log) else {
-        return;
-    };
-    audio.set_airplay_with_pairings(link, feed, open_pairings(log));
-    let log = log.clone();
-    audio.set_airplay_starter(Box::new(move || start_sender(&log)));
+    let starter_log = log.clone();
+    audio.start_airplay(
+        Box::new(move || start_sender(&starter_log)),
+        open_pairings(log),
+    );
 }
 
-/// A new AirPlay sender browsing for receivers, and the feed for its input;
-/// `None` when it couldn't start.
+/// A new AirPlay sender, browsing for receivers when its discovery could
+/// start, and the feed for its input; `None` when it couldn't start.
 #[cfg(windows)]
-fn start_sender(
-    log: &DebugLog,
-) -> Option<(
-    Box<dyn audio::airplay::AirPlayLink>,
-    Option<audio::airplay::FeedSlot>,
-)> {
-    use audio::airplay::{FeedSlot, SenderLink};
+fn start_sender(log: &DebugLog) -> Option<audio::airplay::StartedSender> {
+    use audio::airplay::{FeedSlot, SenderLink, StartedSender};
     let (link, input) = match SenderLink::start() {
         Ok(started) => started,
         Err(error) => {
@@ -188,11 +182,21 @@ fn start_sender(
             return None;
         }
     };
-    match link.start_discovery() {
-        Ok(()) => log.log(|| "AirPlay: browsing for receivers".to_owned()),
-        Err(error) => log.log(|| format!("AirPlay: discovery couldn't start: {error}")),
-    }
-    Some((Box::new(link), Some(FeedSlot::new(input))))
+    let browsing = match link.start_discovery() {
+        Ok(()) => {
+            log.log(|| "AirPlay: browsing for receivers".to_owned());
+            true
+        }
+        Err(error) => {
+            log.log(|| format!("AirPlay: discovery couldn't start: {error}"));
+            false
+        }
+    };
+    Some(StartedSender {
+        link: Box::new(link),
+        feed: Some(FeedSlot::new(input)),
+        browsing,
+    })
 }
 
 /// The paired Apple TVs' credentials, from the file in the app's data

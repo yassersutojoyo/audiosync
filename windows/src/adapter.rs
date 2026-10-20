@@ -1744,9 +1744,11 @@ mod tests {
     use audiosync_airplay::sender::{SenderEvent, SpeakerState as AirPlayState};
 
     use super::*;
+    use crate::audio::airplay::StartedSender;
     use crate::audio::airplay::tests::{APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, device, id_of};
     use crate::audio::capture::LoopbackMode;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
+    use crate::audio::pairings::PairingStore;
     use crate::audio::pairings::tests::credentials;
     use crate::audio::routing::HOLD_CHECKS;
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
@@ -3111,9 +3113,9 @@ mod tests {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
         let next = FakeAirPlay::new();
         let started = next.clone();
-        adapter
-            .audio
-            .set_airplay_starter(Box::new(move || Some((started.link(), None))));
+        adapter.audio.set_airplay_starter(Box::new(move || {
+            Some(StartedSender::browsing(started.link(), None))
+        }));
         adapter.set_speaker_enabled(&ap(&kitchen), true);
         adapter.set_speaker_volume(&ap(&kitchen), 30.0);
         fake.state(&kitchen, AirPlayState::Playing);
@@ -3166,6 +3168,58 @@ mod tests {
         adapter.poll();
         adapter.retry_airplay();
         assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+    }
+
+    /// An adapter whose AirPlay sender comes from `senders` in turn: the
+    /// first at launch, the others at each Retry.
+    fn adapter_starting_airplay(senders: Vec<Option<StartedSender>>) -> AudioAdapter<MockBackend> {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let mut senders = senders.into_iter();
+        audio.start_airplay(
+            Box::new(move || senders.next().flatten()),
+            PairingStore::in_memory(),
+        );
+        AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default())
+    }
+
+    #[test]
+    fn a_sender_that_cant_start_at_launch_leaves_a_notice_whose_retry_starts_one() {
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![None, Some(StartedSender::browsing(fake.link(), None))]);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+
+        adapter.retry_airplay();
+        assert!(messages(&adapter).is_empty(), "Retry clears the notice");
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_some());
+    }
+
+    #[test]
+    fn a_discovery_that_cant_start_at_launch_leaves_a_notice_whose_retry_starts_a_sender() {
+        let first = FakeAirPlay::new();
+        let second = FakeAirPlay::new();
+        let mut adapter = adapter_starting_airplay(vec![
+            Some(StartedSender {
+                link: first.link(),
+                feed: None,
+                browsing: false,
+            }),
+            Some(StartedSender::browsing(second.link(), None)),
+        ]);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+
+        adapter.retry_airplay();
+        assert!(messages(&adapter).is_empty());
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        second.appear(&kitchen);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_some());
     }
 
     #[test]

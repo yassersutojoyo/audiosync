@@ -59,7 +59,9 @@ use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 
 use super::SESSION_RATE;
-use super::airplay::{AirPlayLink, AirPlaySpeakers, FeedLease, FeedSlot, SenderStarter};
+use super::airplay::{
+    AirPlayLink, AirPlaySpeakers, FeedLease, FeedSlot, SenderStarter, StartedSender,
+};
 use super::backend::{
     AirPlayInfo, AirPlayPinPrompt, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
     OutputInfo, SourceId, SourceInfo, StopReason,
@@ -313,8 +315,12 @@ pub struct Controller<D: Driver> {
     airplay: Option<AirPlaySpeakers>,
     /// The sender's feed, which each capture borrows.
     feed: Option<FeedSlot>,
-    /// Starts a new sender when the user retries after the sender stopped.
+    /// Starts a new sender when the user retries after the sender stopped
+    /// or couldn't start.
     starter: Option<SenderStarter>,
+    /// The paired Apple TVs' credentials while no sender ever started: the
+    /// first one that does gets them.
+    waiting_store: Option<PairingStore>,
     /// Outputs fading out before they stop.
     retiring: Vec<Retiring<D>>,
     /// A start that waits for the last session's outputs to fade out: the
@@ -354,6 +360,7 @@ impl<D: Driver> Controller<D> {
             airplay: None,
             feed: None,
             starter: None,
+            waiting_store: None,
             retiring: Vec::new(),
             next_start: None,
             restart_wait: None,
@@ -364,8 +371,55 @@ impl<D: Driver> Controller<D> {
 
     /// Starts a new AirPlay sender through `starter` when the user retries
     /// after the one running stopped.
+    #[cfg(test)]
     pub fn set_airplay_starter(&mut self, starter: SenderStarter) {
         self.starter = Some(starter);
+    }
+
+    /// Starts the AirPlay sender through `starter`, with the paired Apple
+    /// TVs' credentials in `store`, and keeps `starter` to start a new one
+    /// when the user retries. A sender that can't start, or whose discovery
+    /// can't, is reported as [`BackendEvent::AirPlayStopped`], whose Retry
+    /// tries again.
+    pub fn start_airplay(&mut self, mut starter: SenderStarter, store: PairingStore) {
+        let started = starter();
+        self.starter = Some(starter);
+        self.waiting_store = Some(store);
+        match started {
+            Some(started) => self.use_sender(started),
+            None => {
+                self.log
+                    .log(|| "AirPlay: no sender runs; AirPlay stays off until Retry".to_owned());
+                self.pending.push(BackendEvent::AirPlayStopped);
+            }
+        }
+    }
+
+    /// Plays to AirPlay through `started`: the first sender, or one that
+    /// replaces a sender that stopped. One whose discovery couldn't start
+    /// lists nothing, so it counts as stopped and is reported.
+    fn use_sender(&mut self, started: StartedSender) {
+        let StartedSender {
+            link,
+            feed,
+            browsing,
+        } = started;
+        match self.airplay.as_mut() {
+            Some(airplay) => {
+                airplay.replace_link(link);
+                self.feed = feed;
+            }
+            None => {
+                let store = self
+                    .waiting_store
+                    .take()
+                    .unwrap_or_else(PairingStore::in_memory);
+                self.set_airplay_with_pairings(link, feed, store);
+            }
+        }
+        if !browsing && let Some(airplay) = self.airplay.as_mut() {
+            airplay.discovery_unavailable(&mut self.pending);
+        }
     }
 
     /// Sends what the backend does to `log`.
@@ -1454,35 +1508,34 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn retry_airplay(&mut self) {
-        let starter = match (&self.airplay, self.starter.as_mut()) {
-            (Some(airplay), _) if !airplay.is_stopped() => {
-                // A late click (the other window hadn't refreshed yet): the
-                // sender runs, so there is nothing to replace.
-                self.log
-                    .log(|| "AirPlay: Retry, but the sender runs".to_owned());
-                return;
-            }
-            (Some(_), Some(starter)) => starter,
-            _ => {
-                self.log
-                    .log(|| "AirPlay: Retry, but no sender ran to replace".to_owned());
-                return;
-            }
+        if self
+            .airplay
+            .as_ref()
+            .is_some_and(|airplay| !airplay.is_stopped())
+        {
+            // A late click (the other window hadn't refreshed yet): the
+            // sender runs, so there is nothing to replace.
+            self.log
+                .log(|| "AirPlay: Retry, but the sender runs".to_owned());
+            return;
+        }
+        let Some(starter) = self.starter.as_mut() else {
+            self.log
+                .log(|| "AirPlay: Retry, but there is no way to start a sender".to_owned());
+            return;
         };
         self.log
             .log(|| "AirPlay: Retry: starting a new sender".to_owned());
-        let Some((link, feed)) = starter() else {
+        let Some(started) = starter() else {
             self.pending.push(BackendEvent::AirPlayStopped);
             return;
         };
-        // A running capture feeds the old sender: it starts again with the
-        // new sender's feed (the capture can't swap it while it runs).
+        // A running capture feeds the old sender, or none: it starts again
+        // with the new sender's feed (the capture can't swap it while it
+        // runs).
         let source = self.session.as_ref().map(|session| session.source.clone());
         self.end_session();
-        if let Some(airplay) = self.airplay.as_mut() {
-            airplay.replace_link(link);
-        }
-        self.feed = feed;
+        self.use_sender(started);
         self.sync_airplay_rule();
         if let Some(source) = source
             && let Err(error) = self.begin_session(&source)
@@ -3776,5 +3829,107 @@ mod tests {
             ],
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A starter that hands out `senders` in turn, then fails.
+    fn starter_of(senders: Vec<Option<StartedSender>>) -> SenderStarter {
+        let mut senders = senders.into_iter();
+        Box::new(move || senders.next().flatten())
+    }
+
+    fn not_browsing(fake: &FakeAirPlay) -> Option<StartedSender> {
+        Some(StartedSender {
+            link: fake.link(),
+            feed: None,
+            browsing: false,
+        })
+    }
+
+    #[test]
+    fn an_airplay_sender_that_cant_start_at_launch_is_reported_and_retry_starts_one() {
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        let feed = FeedSlot::new(input);
+        backend.start_airplay(
+            starter_of(vec![
+                None,
+                Some(StartedSender::browsing(fake.link(), Some(feed))),
+            ]),
+            PairingStore::in_memory(),
+        );
+        assert_eq!(backend.poll(), [BackendEvent::AirPlayStopped]);
+        assert!(backend.poll().is_empty(), "told once");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(!backend.driver().capture_feeds_airplay());
+
+        backend.retry_airplay();
+        assert_eq!(backend.poll(), [BackendEvent::AirPlayChanged]);
+        assert!(
+            backend.driver().capture_feeds_airplay(),
+            "the capture feeds the new sender"
+        );
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        backend.poll();
+        assert_eq!(backend.airplay_speakers().len(), 1);
+    }
+
+    #[test]
+    fn an_airplay_sender_whose_discovery_cant_start_is_reported_and_retry_starts_a_new_one() {
+        let mut backend = backend();
+        let first = FakeAirPlay::new();
+        let second = FakeAirPlay::new();
+        backend.start_airplay(
+            starter_of(vec![
+                not_browsing(&first),
+                Some(StartedSender::browsing(second.link(), None)),
+            ]),
+            PairingStore::in_memory(),
+        );
+        assert_eq!(backend.poll(), [BackendEvent::AirPlayStopped]);
+        assert!(backend.poll().is_empty(), "told once");
+
+        backend.retry_airplay();
+        backend.poll();
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        second.appear(&kitchen);
+        backend.poll();
+        assert_eq!(backend.airplay_speakers().len(), 1);
+    }
+
+    #[test]
+    fn a_retry_whose_discovery_still_cant_start_is_reported_again() {
+        let mut backend = backend();
+        let first = FakeAirPlay::new();
+        let second = FakeAirPlay::new();
+        let third = FakeAirPlay::new();
+        backend.start_airplay(
+            starter_of(vec![
+                not_browsing(&first),
+                not_browsing(&second),
+                Some(StartedSender::browsing(third.link(), None)),
+            ]),
+            PairingStore::in_memory(),
+        );
+        assert_eq!(backend.poll(), [BackendEvent::AirPlayStopped]);
+        backend.retry_airplay();
+        let events = backend.poll();
+        assert!(events.contains(&BackendEvent::AirPlayStopped), "{events:?}");
+        // And Retry still works after that.
+        backend.retry_airplay();
+        assert!(!backend.poll().contains(&BackendEvent::AirPlayStopped));
+    }
+
+    #[test]
+    fn a_retry_whose_sender_still_cant_start_is_reported_again() {
+        let mut backend = backend();
+        backend.start_airplay(starter_of(vec![None, None]), PairingStore::in_memory());
+        assert_eq!(backend.poll(), [BackendEvent::AirPlayStopped]);
+        backend.retry_airplay();
+        assert_eq!(backend.poll(), [BackendEvent::AirPlayStopped]);
+        assert!(backend.airplay_speakers().is_empty());
     }
 }
