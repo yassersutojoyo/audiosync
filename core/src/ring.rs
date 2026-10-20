@@ -645,6 +645,70 @@ mod tests {
         assert_eq!(ring.block_frames(), 1);
     }
 
+    // covers: S207
+    #[test]
+    fn the_newest_stamp_is_published_with_w() {
+        let ring = Ring::new(16_384, 8192).unwrap();
+        let mut writer = ring.writer().unwrap();
+        assert_eq!(ring.stamp(), None);
+        // An unstamped block publishes none; an empty block gets none.
+        writer.write(&block(0, 480), 480);
+        writer.end_block_at(5);
+        assert_eq!(ring.stamp(), None);
+        writer.write_at(&block(480, 480), 480, 10_000_000);
+        let stamp = Stamp {
+            written: 960,
+            time_ns: 10_000_000,
+        };
+        assert_eq!(ring.stamp(), Some(stamp));
+        // A block written in parts is stamped as it closes, with W then.
+        writer.write_part(&block(960, 300), 300);
+        assert_eq!(ring.stamp(), Some(stamp));
+        writer.write_part(&block(1260, 180), 180);
+        writer.end_block_at(20_000_000);
+        assert_eq!(
+            ring.stamp(),
+            Some(Stamp {
+                written: 1440,
+                time_ns: 20_000_000,
+            })
+        );
+        // The time that means none is taken as the one before it.
+        writer.write_at(&block(1440, 1), 1, u64::MAX);
+        assert_eq!(ring.stamp().map(|s| s.time_ns), Some(u64::MAX - 1));
+        // A reset clears it.
+        writer.reset();
+        assert_eq!(ring.stamp(), None);
+    }
+
+    // covers: S207, S128
+    #[test]
+    fn a_stamp_is_never_loaded_half_written() {
+        // The writer publishes stamps whose time is always 1000 times their
+        // W; a reader on another thread never sees a pair that isn't.
+        let ring = Ring::new(16_384, 8192).unwrap();
+        let mut writer = ring.writer().unwrap();
+        let samples = vec![0.0f32; 64];
+        let reader = {
+            let ring = Arc::clone(&ring);
+            std::thread::spawn(move || {
+                let mut seen = 0u64;
+                while ring.frames_written() < 200_000 {
+                    if let Some(stamp) = ring.stamp() {
+                        assert_eq!(stamp.time_ns, stamp.written * 1000, "{stamp:?}");
+                        seen += 1;
+                    }
+                }
+                seen
+            })
+        };
+        while ring.frames_written() < 200_000 {
+            let w = ring.frames_written() + 1;
+            writer.write_at(&samples, 1, w * 1000);
+        }
+        assert!(reader.join().unwrap() > 0);
+    }
+
     // covers: S40
     #[test]
     fn readable_window_is_w_minus_c_plus_m_to_w() {

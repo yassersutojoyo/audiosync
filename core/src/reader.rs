@@ -1061,7 +1061,7 @@ mod tests {
         assert_eq!(out.read(N, 0).report.delay, N as i64);
     }
 
-    // covers: S206
+    // covers: S206, S207
     #[test]
     fn a_reader_tells_what_its_next_read_can_go_on_with() {
         let ring = ring(1 << 18);

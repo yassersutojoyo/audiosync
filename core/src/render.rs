@@ -1021,4 +1021,82 @@ mod tests {
         let made = Renderer::new(reader, &control, gain, 48_000, 1_000_000, 2);
         assert_eq!(made.err(), Some(RenderError::UnsupportedRate));
     }
+
+    /// A capture writing 480 frames and a 44.1 kHz device asking for 441,
+    /// both every 10 ms, in step, on one made-up clock that `step` moves.
+    struct Stepped {
+        writer: crate::ring::RingWriter,
+        renderer: Renderer,
+        control: RendererControl,
+        block: Vec<f32>,
+        out: Vec<f32>,
+        now: u64,
+    }
+
+    impl Stepped {
+        fn new() -> Stepped {
+            let ring = Ring::for_rate(48_000).unwrap();
+            let writer = ring.writer().unwrap();
+            let reader = Reader::new(ring, 48_000);
+            let control = RendererControl::new(&reader);
+            let gain = Arc::new(SharedGain::new(1.0));
+            let renderer = Renderer::new(reader, &control, gain, 48_000, 44_100, 2).unwrap();
+            Stepped {
+                writer,
+                renderer,
+                control,
+                block: vec![0.5; 480 * 2],
+                out: vec![0.0; 441 * 2],
+                now: 0,
+            }
+        }
+
+        /// 10 ms: a block, then a callback 1 ms after it.
+        fn step(&mut self, count: usize) {
+            for _ in 0..count {
+                self.now += 10_000_000;
+                self.writer.write_at(&self.block, 480, self.now);
+                self.renderer.render_at(&mut self.out, self.now + 1_000_000);
+            }
+        }
+    }
+
+    // covers: S207
+    #[test]
+    fn the_tracking_restarts_when_the_capture_stalls_or_the_output_leaves_its_reach() {
+        let mut s = Stepped::new();
+        // Half a second after the reader anchors, the reference is kept.
+        s.step(30);
+        assert!(matches!(s.renderer.tracking, Tracking::Measuring { .. }));
+        s.step(30);
+        let Tracking::Following { reference, average } = s.renderer.tracking else {
+            panic!("not following: {:?}", s.renderer.tracking);
+        };
+        assert!((average - reference).abs() <= 1.0, "{average} {reference}");
+        // A callback 150 ms after the newest stamp: the capture stalled, and
+        // the tracking measures anew once it writes again.
+        s.now += 150_000_000;
+        s.renderer.render_at(&mut s.out, s.now);
+        assert_eq!(s.renderer.tracking, RESTART);
+        s.step(60);
+        assert!(matches!(s.renderer.tracking, Tracking::Following { .. }));
+        // Held back by 100 ms, beyond its lead and the dead band: no trim
+        // reaches it, and the tracking stays restarted.
+        s.control.set_delay_frames(4800);
+        s.step(100);
+        assert_eq!(s.control.counters().resyncs, 1);
+        assert_eq!(s.renderer.tracking, RESTART);
+        assert_eq!(
+            (s.renderer.slowed_frames(), s.renderer.sped_frames()),
+            (0, 0)
+        );
+        // A callback without a time changes nothing either way.
+        s.control.set_delay_frames(0);
+        s.step(100);
+        assert!(matches!(s.renderer.tracking, Tracking::Following { .. }));
+        let kept = s.renderer.tracking;
+        s.writer.write_at(&s.block.clone(), 480, s.now + 10_000_000);
+        s.renderer.render(&mut s.out);
+        assert_eq!(s.renderer.tracking, kept);
+    }
 }
