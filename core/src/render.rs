@@ -501,6 +501,19 @@ impl Renderer {
         self.render_inner(out, Some(output_time_ns));
     }
 
+    /// [`Renderer::render`] for a callback that reads at `now_ns` on the
+    /// host's monotonic clock, the one the capture stamps its blocks with
+    /// (S207). Not used yet.
+    pub fn render_at(&mut self, out: &mut [f32], _now_ns: u64) {
+        self.render_inner(out, None);
+    }
+
+    /// Capture frames the converter was sped up by (S207), in all. Not used
+    /// yet.
+    pub fn sped_frames(&self) -> u64 {
+        0
+    }
+
     fn render_inner(&mut self, out: &mut [f32], time: Option<u64>) {
         let channels = self.channels;
         let frames = out.len() / channels;

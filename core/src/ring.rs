@@ -283,6 +283,19 @@ impl RingWriter {
         self.publish_block();
     }
 
+    /// [`RingWriter::write`], with the block's end stamped at `time_ns`
+    /// ([`RingWriter::end_block_at`]).
+    pub fn write_at(&mut self, interleaved: &[f32], frames: usize, time_ns: u64) {
+        self.write_part(interleaved, frames);
+        self.end_block_at(time_ns);
+    }
+
+    /// [`RingWriter::end_block`], stamping the block's end with the host's
+    /// monotonic time `time_ns` (S207). Not used yet.
+    pub fn end_block_at(&mut self, _time_ns: u64) {
+        self.end_block();
+    }
+
     /// Publishes the largest of the last blocks and the open one.
     fn publish_block(&self) {
         let largest = self.blocks.iter().copied().fold(self.open, u64::max);
