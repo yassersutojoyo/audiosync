@@ -3555,6 +3555,11 @@ mod tests {
     /// After a late success: the credentials are stored, the receiver is
     /// listed as able to play, and the host was told `told` of pairings.
     fn stored_and_told(handle: *mut AscAirPlay, id: &str, told: Vec<(i32, String, i32)>) {
+        assert_eq!(
+            pairing_events(&waiting_events(handle)),
+            vec![],
+            "nothing is told before the receiver change it follows"
+        );
         assert_eq!(next(handle, 1)[0].availability, AIRPLAY_AVAILABLE, "stored");
         assert!(inside(handle).store.contains(id));
         assert_eq!(pairing_events(&waiting_events(handle)), told);
