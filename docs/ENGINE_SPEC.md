@@ -91,10 +91,10 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
 ## 5. Delay reader
 
 - **S41** *Observed* (`logictest.swift:220-237`). Reader interface: `read(into: dst, frames: N, delayFrames: D, toleranceFrames: T)` fills `dst` with exactly N stereo frames; `requestResync()` asks the reader to re-anchor to the requested delay, which the next `read` with unread frames does (S46). A reader is bound to one ring. *Now covered by the core.*
-- **S42** *Observed* (`logictest.swift:238`, lag of the block's last frame is `max(D, 512) − 512`; ring suite "B delay=0 not silent (floored to one block)", "B delay=0 near-live, not silent — measured=0"). The effective delay is `De = max(D, N)`: in steady state the first frame of each block is exactly De frames behind W as loaded at the start of the read. A delay shorter than one block is floored to one block. *Required:* De is also capped at `C − M − N`. *Now covered by the core.*
+- **S42** *Observed* (`logictest.swift:238`, lag of the block's last frame is `max(D, 512) − 512`; ring suite "B delay=0 not silent (floored to one block)", "B delay=0 near-live, not silent — measured=0"). The effective delay is `De = max(D, N)`: in steady state the first frame of each block is exactly De frames behind W as loaded at the start of the read. A delay shorter than one block is floored to one block. *Required:* De is also capped at `C − M − N`, and a renderer's reader is floored at the renderer's lead too (S206). *Now covered by the core.*
 - **S43** *Required.* Reader state: `P`, the index of the next frame to read (initially 0); `F`, one past the highest frame index ever emitted (initially 0); `anchored` (initially false); an atomic resync flag; atomic `D` written by the control thread.
 - **S44** *Required* (normative algorithm; it satisfies every Observed clause in this section). One `read(N, D, T)`:
-  1. `W = framesWritten` (acquire); `De = min(max(D, N), C − M − N)`; `oldest = max(0, W − C + M)`.
+  1. `W = framesWritten` (acquire); `De = min(max(D, N, Lr), C − M − N)`, where Lr is the lead the reader's renderer gives it (S206; 0 for a reader without one); `oldest = max(0, W − C + M)`.
   2. Anchor or correct. The first of these cases that applies decides:
      - *Prime*, when not anchored (the first read, or the first after `resetPrime`, S159): if `W ≤ De`, output N frames of silence, publish `lagFrames = W − P` and end the read, leaving P, F and the resync flag as they are (S45). Else `P = W − De`, `anchored = true`, and clear the resync flag.
      - *Dry*, when `P ≥ W` (P never passes W, so the reader has reached W and the writer has written nothing since): output N frames of silence, publish `lagFrames = 0` and end the read; this is a starved render of N frames (S158). Nothing else changes: no drift correction is made, whatever D is, and a set resync flag stays set for the first read that finds `P < W` (S46).
@@ -137,6 +137,11 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
 - **S67** *Observed* (`enginetest.swift:51-53`, "<device>: renders audio"). A started renderer renders more than 24 000 frames in its first second (the device's IO cycle runs continuously, even at gain 0 and even while the reader outputs silence).
 - **S68** *Observed* (`AppDelegate.swift:259-263`, `:300-307`; `AppDelegate+Outputs.swift:200-223`). When a device disappears or its IO stops for good, its renderer stops and the engine reports `outputLost(uid)` on the main thread. The UID stays enabled; the host's 3 s reconcile adds the output again, with its current delay and gain, once the device is listed again.
 - **S69** *Observed* (`AppDelegate+Outputs.swift`, `syncLocalOutputs`; `SpeakerState.swift`, `LocalOutputSync.apply` and `report`; tests "S69 start failure: …"). If adding an output fails, the host removes the UID from the enabled set (so it is not retried every poll), posts one notice per failed speaker (plus an alert when the user caused it), and stops the session if nothing else is enabled.
+- **S206** *Required* (the Mac's debug logs of 2026-10-20: every session on a Bluetooth speaker running at 44.1 kHz at hold-back 0, 26 of 26, counted 1 to 14 starved renders of 3 to 501 frames right after the output started and none afterwards, a 5.5-minute session as many as a 2-second one, while the 48 kHz outputs counted none; core tests "render start: …"). Device callbacks against the capture's blocks. A renderer gives its reader a lead Lr in Rc frames, recomputed at the start of every callback, which S44 step 1 uses as a floor of the effective delay: `De = min(max(D, N, Lr), C − M − N)`.
+  - *Without conversion* (S62), Lr is the largest callback the renderer has rendered so far, in frames. An output whose callbacks are one read each (512 frames or fewer) keeps S42's floor of one block; one whose callbacks take several reads has room for all of them.
+  - *With conversion*, Lr is the bound on the capture frames the largest callback so far can ask the reader for (the frames those device frames span, plus one step and the rounding, the bound S62's sizing stays within) plus the frames of the writer's latest block. The ring publishes the frame count of each write when it makes it (S38), as a relaxed atomic the readers load (S190). A converting output's callbacks never line up with the capture's blocks: when a callback begins, the next block may be almost a whole block from being written, and the callback reads what it needs at once. At the floor of one read such an output ran dry after every start, a few frames to most of a block at a time, until the silence of those starved renders had pushed it back by about a block; each one closed and reopened it (S184), which was heard as a crackle at every switch-on. With 512-frame callbacks at 44.1 kHz fed from 48 kHz in 512-frame blocks, Lr = 563 + 512 = 1075 frames, about 22 ms.
+  - The lead is a floor of the effective delay, never added to it. An output whose hold-back is at least Lr (every output held back for AirPlay, S176, and every other one held back by more than those 22 ms) is anchored exactly at its hold-back, as before. Only an output at a shorter hold-back, such as the reference without AirPlay, plays Lr behind W, about where the starved renders used to leave it. A change of Lr moves no reader by itself: the dead band absorbs it (S50), and the next prime, resync or correction lands on it.
+  - *Drift is judged once per callback.* When a callback takes several reads (pieces of at most 512 device frames, S62), only its first read may correct drift (S50 to S53). The others read with corrections held, as in S188, and a correction they report as due is ignored, because their error also counts the frames the same callback has already read: with callbacks of more than about T + N capture frames, every callback used to step back and fade out.
 
 ### Fades at stream boundaries
 
@@ -873,6 +878,28 @@ The checks for S182 to S191 in the Rust core, test functions with `// covers:` m
 The Mac's checks for S182 to S191 were written first and failed against a scaffold that answered as the Mac code of that day behaved (a stop stopped capture first and every output at once, nothing faded and nothing waited); they pass now that the Mac app renders through the core's renderer (`AscRenderer`) and waits for the fades, and are listed in the logic and engine tables above, as "fade: …" and the three "\<device\>" rows. The fifo suite's two fade checks, the pipe's fade-in after an open and its fade-out on a stop request, went with the FIFO feed on 2026-10-20.
 
 By ear on real AirPlay receivers, outside these suites: with a speaker playing, a stop and a source change make no click on the speaker when the engine stops or the native sender flushes it, and the first sound after a start or a source change fades in (S189).
+
+### render start: core (`cargo test` in `core/`)
+
+The checks for S206 (`core/tests/render_start.rs`). The capture writes fixed blocks at 48 kHz on its own clock and the device pulls fixed callbacks on its own, both exact, over several phases between the two clocks, with the output switched on in a running session and started with a new one; the ring holds a constant 0.5.
+
+| Test | Clauses |
+|---|---|
+| a_44_1_khz_output_at_hold_back_0_never_runs_dry_after_its_start | S206 |
+| a_44_1_khz_output_with_4096_frame_callbacks_never_runs_dry_or_corrects | S206 |
+| a_44_1_khz_output_fed_in_10_ms_blocks_never_runs_dry_after_its_start | S206 |
+| other_converted_rates_never_run_dry_after_their_start | S206 |
+| a_callback_of_several_reads_at_the_capture_rate_judges_drift_once | S50, S188, S206 |
+| an_output_at_the_capture_rate_with_one_read_per_callback_keeps_its_floor_of_one_block | S42, S206 |
+| a_converted_output_whose_hold_back_covers_the_lead_keeps_its_timing | S206 |
+| a_reader_is_floored_at_its_lead (`core/src/reader.rs`) | S42, S44, S206 |
+| a_write_publishes_its_frame_count (`core/src/ring.rs`) | S38, S206 |
+
+### render start: Windows (`cargo test` in `windows/`)
+
+| Test | Clauses |
+|---|---|
+| a_converting_output_at_hold_back_0_never_runs_dry_after_its_start | S206 |
 
 ### device volume: core (`cargo test` in `core/`)
 
