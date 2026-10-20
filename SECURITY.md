@@ -18,7 +18,7 @@ AudioSync sends no telemetry. Its network traffic is AirPlay discovery (mDNS bro
 
 ### Pairing
 
-An Apple TV that asks for a PIN pairs once, when you turn it on. The PIN goes only to the sender and is never logged. The resulting credentials are kept per receiver in `~/Library/Application Support/AudioSync/airplay-pairings.dat`, readable and writable only by your user. A speaker password is kept in memory for the current run only and never written to disk or logged.
+An Apple TV that asks for a PIN pairs once, when you turn it on. The PIN goes only to the sender and is never logged. The resulting credentials are kept per receiver in `~/Library/Application Support/AudioSync/Pairings/airplay-pairings.dat`, readable and writable only by your user. That file isn't encrypted, so AudioSync keeps the `Pairings` folder (and only that folder) out of Time Machine backups. A speaker password is kept in memory for the current run only and never written to disk or logged. The sender wipes its own copies of a password or PIN from memory once it no longer needs them. The text field you type it into and the strings the app passes it to the sender in aren't wiped.
 
 Who can stream to a HomePod is decided by its Allow Speaker & TV Access setting (Home app → Home Settings → Speakers & TV). Use "Anyone on the Same Network" on a network you trust, and avoid "Everyone".
 

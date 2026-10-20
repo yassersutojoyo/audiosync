@@ -12,6 +12,7 @@ use audiosync_airplay::ids::{Entropy, EntropyUnavailable, OsEntropy, SessionIds}
 use audiosync_airplay::metadata::{Metadata, MetadataError, MetadataSupport, TrackInfo};
 use audiosync_airplay::rtsp::{JackKind, JackStatus, Method};
 use audiosync_airplay::sdp::{self, Codec};
+use audiosync_airplay::secret::Secret;
 use audiosync_airplay::session::{
     MediaDestinations, Output, ReceiverPorts, SessionConfig, SessionEvent, State, UdpSendResult,
     Verifier,
@@ -900,7 +901,7 @@ fn rtsp_teardown_sends_the_session_and_closes_after_the_answer_or_2_s() {
 
 fn password_config(password: &str) -> audiosync_airplay::session::SessionConfig {
     let mut config = config();
-    config.password = Some(password.to_owned());
+    config.password = Some(Secret::from(password));
     config
 }
 

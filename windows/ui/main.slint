@@ -7,7 +7,7 @@
 import { ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { GroupItem, NoticeItem, RowState, SpeakerItem } from "types.slint";
+import { GroupItem, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
 import { AirPlayDelayControls, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, NoticeStack, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
@@ -18,7 +18,7 @@ export { GuideWindow } from "guide.slint";
 export { Strings } from "strings.slint";
 // The style's palette, for the theme preview (src/view.rs).
 export { Palette } from "std-widgets.slint";
-export { AirPlayProblem, Availability, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, NoticeItem, PinPhase, RowState, SpeakerItem, SpeakerKind } from "types.slint";
+export { AirPlayProblem, Availability, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, NoticeItem, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
 
 // A titled card of speaker rows, with a note when it has none.
 component SpeakerSection inherits VerticalLayout {
@@ -34,6 +34,12 @@ component SpeakerSection inherits VerticalLayout {
     callback auto-connect-toggled(string, bool);
     callback forget-pairing(string);
     callback device-volume-fix(string);
+    // The part of a row with the keyboard focus changed; none: it lost it.
+    callback focus-changed(string, RowPart);
+    // A row built while this is its speaker's ID takes the keyboard focus
+    // on focus-part and clears the ID (see MainWindow).
+    in-out property <string> focus-id;
+    in-out property <RowPart> focus-part;
 
     spacing: 8px;
     accessible-role: groupbox;
@@ -56,6 +62,15 @@ component SpeakerSection inherits VerticalLayout {
             SpeakerRow {
                 item: speaker;
                 compact: root.compact;
+                init => {
+                    if speaker.id == root.focus-id {
+                        root.focus-id = "";
+                        self.take-focus(root.focus-part);
+                    }
+                }
+                focus-changed(part) => {
+                    root.focus-changed(speaker.id, part);
+                }
                 toggled => {
                     root.toggled(speaker.id);
                 }
@@ -204,6 +219,8 @@ export component MainWindow inherits Window {
     // Connected Speakers lists nothing only because Show Virtual Devices is
     // off and its outputs are virtual.
     in property <bool> connected-virtual-hidden;
+    // AirPlay discovery runs but has found no speaker for 20 seconds.
+    in property <bool> airplay-none-found;
     in property <string> airplay-delay-text;
 
     callback power-toggled(bool);
@@ -240,11 +257,34 @@ export component MainWindow inherits Window {
     callback exit-requested();
     callback about-requested();
 
+    // Slint leaves nothing focused when a refresh removes the focused
+    // control (a notice dismissed with the keyboard, a speaker unplugged):
+    // Narrator goes quiet and Tab starts over. So the rows report their
+    // keyboard focus, and when a refresh rebuilds the list that has it, the
+    // app (src/view.rs) asks for the focus back: on the notice at this
+    // index, or the speaker or group row with this ID (the same row, or its
+    // neighbour when it went), which takes it on the given part as it is
+    // built and clears the request; else on the streaming switch.
+    callback notice-focus-changed(int, bool);
+    callback dismiss-all-focus-changed(bool);
+    callback speaker-focus-changed(string, RowPart);
+    callback group-focus-changed(string, RowPart);
+    in-out property <int> focus-notice-index: -1;
+    in-out property <string> focus-speaker-id;
+    in-out property <RowPart> focus-speaker-part;
+    in-out property <string> focus-group-id;
+    in-out property <RowPart> focus-group-part;
+
+    public function focus-streaming-switch() {
+        power.focus();
+    }
+
     title: Strings.main-window-title;
     icon: @image-url("../res/audiosync-256.png");
-    // Wide enough for a speaker row's columns next to the left column.
+    // Wide enough for a speaker row's columns next to the left column, and
+    // short enough for a 1366 x 768 screen at 150 % (both columns scroll).
     min-width: 860px;
-    min-height: 520px;
+    min-height: 440px;
     preferred-width: 980px;
     preferred-height: 680px;
     // Below this width the volume sliders in the speaker rows are shorter.
@@ -406,6 +446,13 @@ export component MainWindow inherits Window {
 
         if root.notices.length > 0: NoticeStack {
             notices: root.notices;
+            focus-index <=> root.focus-notice-index;
+            notice-focus-changed(id, focused) => {
+                root.notice-focus-changed(id, focused);
+            }
+            dismiss-all-focus-changed(focused) => {
+                root.dismiss-all-focus-changed(focused);
+            }
             dismissed(id) => {
                 root.notice-dismissed(id);
             }
@@ -424,74 +471,81 @@ export component MainWindow inherits Window {
             spacing: Tokens.spacing-window-margin;
             vertical-stretch: 1;
 
-            // Left column: what plays and how loud, each in its own card.
-            VerticalLayout {
-                width: 264px;
-                spacing: 8px;
-                alignment: start;
+            // Left column: what plays and how loud, each in its own card. It
+            // scrolls when the window is shorter than its cards (a small
+            // screen, or notices showing), as the speaker list does.
+            left-column := ScrollView {
+                width: 268px;
 
-                Card {
-                    VerticalLayout {
-                        spacing: 10px;
+                VerticalLayout {
+                    // Room for the scroll bar, as in the speaker list.
+                    padding-right: 4px;
+                    spacing: 8px;
+                    alignment: start;
 
-                        HorizontalLayout {
+                    Card {
+                        VerticalLayout {
                             spacing: 10px;
 
-                            Glyph {
-                                glyph: Glyphs.source;
-                                color: Tokens.teal-text;
-                                width: 20px;
+                            HorizontalLayout {
+                                spacing: 10px;
+
+                                Glyph {
+                                    glyph: Glyphs.source;
+                                    color: Tokens.teal-text;
+                                    width: 20px;
+                                }
+
+                                SectionTitle {
+                                    text: Strings.source-label;
+                                }
                             }
 
-                            SectionTitle {
-                                text: Strings.source-label;
-                            }
-                        }
-
-                        source := ComboBox {
-                            model: root.sources;
-                            current-index: root.source-index;
-                            accessible-label: Strings.source-label;
-                            selected => {
-                                root.source-selected(self.current-index);
-                                self.current-index = root.source-index;
+                            source := ComboBox {
+                                model: root.sources;
+                                current-index: root.source-index;
+                                accessible-label: Strings.source-label;
+                                selected => {
+                                    root.source-selected(self.current-index);
+                                    self.current-index = root.source-index;
+                                }
                             }
                         }
                     }
-                }
 
-                Card {
-                    VerticalLayout {
-                        spacing: 6px;
+                    Card {
+                        VerticalLayout {
+                            spacing: 6px;
 
-                        HorizontalLayout {
-                            spacing: 10px;
+                            HorizontalLayout {
+                                spacing: 10px;
 
-                            Glyph {
-                                glyph: Glyphs.volume-high;
-                                color: Tokens.teal-text;
-                                width: 20px;
+                                Glyph {
+                                    glyph: Glyphs.volume-high;
+                                    color: Tokens.teal-text;
+                                    width: 20px;
+                                }
+
+                                SectionTitle {
+                                    text: Strings.master-volume-title;
+                                }
                             }
 
-                            SectionTitle {
-                                text: Strings.master-volume-title;
-                            }
-                        }
-
-                        VolumeSlider {
-                            volume: root.master-volume;
-                            label: Strings.master-volume;
-                            changed(value) => {
-                                root.master-volume-changed(value);
+                            VolumeSlider {
+                                volume: root.master-volume;
+                                label: Strings.master-volume;
+                                changed(value) => {
+                                    root.master-volume-changed(value);
+                                }
                             }
                         }
                     }
-                }
 
-                EqualizerCard {
-                    on: root.equalizer-on;
-                    clicked => {
-                        root.equalizer-requested();
+                    EqualizerCard {
+                        on: root.equalizer-on;
+                        clicked => {
+                            root.equalizer-requested();
+                        }
                     }
                 }
             }
@@ -518,6 +572,11 @@ export component MainWindow inherits Window {
                             root.device-volume-fix-requested(id);
                         }
                         compact: root.compact;
+                        focus-id <=> root.focus-speaker-id;
+                        focus-part <=> root.focus-speaker-part;
+                        focus-changed(id, part) => {
+                            root.speaker-focus-changed(id, part);
+                        }
                         note: root.this-pc.length == 0 ? Strings.this-pc-none : "";
                         toggled(id) => {
                             root.speaker-toggled(id);
@@ -560,6 +619,15 @@ export component MainWindow inherits Window {
 
                                 GroupRow {
                                     item: group;
+                                    init => {
+                                        if group.id == root.focus-group-id {
+                                            root.focus-group-id = "";
+                                            self.take-focus(root.focus-group-part);
+                                        }
+                                    }
+                                    focus-changed(part) => {
+                                        root.group-focus-changed(group.id, part);
+                                    }
                                     toggled => {
                                         root.group-toggled(group.id);
                                     }
@@ -584,7 +652,14 @@ export component MainWindow inherits Window {
                             root.device-volume-fix-requested(id);
                         }
                         compact: root.compact;
-                        note: root.connected.length > 0 ? "" : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
+                        focus-id <=> root.focus-speaker-id;
+                        focus-part <=> root.focus-speaker-part;
+                        focus-changed(id, part) => {
+                            root.speaker-focus-changed(id, part);
+                        }
+                        // While AirPlay finds nothing, the note says what to
+                        // check, after the hidden virtual outputs' note.
+                        note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + Strings.airplay-none-found : Strings.airplay-none-found) : root.connected.length > 0 ? "" : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
                         toggled(id) => {
                             root.speaker-toggled(id);
                         }

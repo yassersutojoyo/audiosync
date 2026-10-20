@@ -1,12 +1,13 @@
 // The app's small dialogs: the one that names a group (New Speaker Group and
-// Rename Group) and the code prompt of an Apple TV pairing. Enter confirms,
-// Escape cancels.
+// Rename Group) and the PIN prompt of an Apple TV pairing. Enter confirms,
+// Escape cancels wherever the focus is: in the content's key scope or on a
+// button (DialogButton).
 
-import { Button, LineEdit } from "std-widgets.slint";
+import { LineEdit } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { PinPhase } from "types.slint";
-import { Card, Fluent, Glyph, Glyphs } from "widgets.slint";
+import { Card, DialogButton, Fluent, Glyph, Glyphs } from "widgets.slint";
 
 export component GroupNameDialog inherits Dialog {
     in property <string> heading;
@@ -78,29 +79,33 @@ export component GroupNameDialog inherits Dialog {
         }
     }
 
-    Button {
+    DialogButton {
         text: root.confirm-label;
         primary: true;
         dialog-button-role: accept;
-        accessible-label: root.confirm-label;
         clicked => {
             root.confirmed(root.name);
         }
+        escape-pressed => {
+            root.cancelled();
+        }
     }
 
-    Button {
+    DialogButton {
         text: Strings.cancel;
         dialog-button-role: reject;
-        accessible-label: Strings.cancel;
         clicked => {
+            root.cancelled();
+        }
+        escape-pressed => {
             root.cancelled();
         }
     }
 }
 
-// The code prompt of an Apple TV pairing: the TV shows a 4-digit code and the
+// The PIN prompt of an Apple TV pairing: the TV shows a 4-digit PIN and the
 // user types it here. Enter pairs once four digits are in, Escape cancels.
-// After a wrong code it stays open, says so, and takes the new code. The
+// After a wrong PIN it stays open, says so, and takes the new PIN. The
 // Rust side keeps the field to digits (src/view.rs).
 export component PinDialog inherits Dialog {
     in property <string> speaker;
@@ -114,7 +119,7 @@ export component PinDialog inherits Dialog {
     property <string> message: Strings.pin-message(root.speaker, root.phase, root.wrong-pin);
     property <bool> can-pair: root.phase == PinPhase.ready && root.pin.character-count == 4;
 
-    title: Strings.pin-dialog-title;
+    title: Strings.pin-dialog-title(root.speaker);
     icon: @image-url("../res/audiosync-256.png");
     background: Tokens.background;
     default-font-family: Fluent.font;
@@ -203,7 +208,7 @@ export component PinDialog inherits Dialog {
                         read-only: root.phase != PinPhase.ready;
                         font-size: 20px;
                         horizontal-alignment: center;
-                        accessible-label: Strings.pin-field-label;
+                        accessible-label: Strings.pin-field-label(root.speaker);
                         accessible-description: root.message;
                         init => {
                             self.focus();
@@ -226,22 +231,26 @@ export component PinDialog inherits Dialog {
         }
     }
 
-    Button {
+    DialogButton {
         text: Strings.pair;
         primary: true;
-        enabled: root.can-pair;
+        active: root.can-pair;
         dialog-button-role: accept;
-        accessible-label: Strings.pair;
         clicked => {
             root.confirmed(root.pin);
         }
+        escape-pressed => {
+            root.cancelled();
+        }
     }
 
-    Button {
+    DialogButton {
         text: Strings.cancel;
         dialog-button-role: reject;
-        accessible-label: Strings.cancel;
         clicked => {
+            root.cancelled();
+        }
+        escape-pressed => {
             root.cancelled();
         }
     }

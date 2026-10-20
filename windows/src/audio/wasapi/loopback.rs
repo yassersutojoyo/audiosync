@@ -21,7 +21,7 @@ use audiosync_core::eq::EqProcessor;
 use audiosync_core::ring::RingWriter;
 
 use crate::audio::airplay::FeedLease;
-use windows::Win32::Foundation::{E_FAIL, ERROR_TIMEOUT, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows::Win32::Foundation::{E_FAIL, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
@@ -46,7 +46,7 @@ use super::com::{
     wave_format,
 };
 use super::processes::ProcessWatch;
-use crate::audio::backend::BackendError;
+use crate::audio::backend::{BackendError, TIMED_OUT};
 use crate::audio::capture::{
     Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, GapFill, LoopbackMode,
     StreamFormat,
@@ -178,10 +178,17 @@ fn run(
     if let Err(error) = unsafe { stream.client.Start() } {
         return ready.fail(system_error("IAudioClient::Start", &error));
     }
-    ready.ok(CaptureAttempt {
+    let waited = ready.ok(CaptureAttempt {
         format: stream.format,
         autoconvert: stream.autoconvert,
     });
+    if !waited {
+        // Nobody waits for this capture anymore, and nothing would stop it:
+        // it stops at once rather than capture unseen.
+        // SAFETY: stops the stream started above.
+        let _ = unsafe { stream.client.Stop() };
+        return;
+    }
     let result = capture_loop(&stream, &mut converter, stop);
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };
@@ -327,7 +334,7 @@ fn activate(activation: Activation) -> Result<IAudioClient, BackendError> {
         // Windows may still read `args`, so it stays allocated.
         return Err(BackendError::System {
             call: "ActivateAudioInterfaceAsync",
-            code: HRESULT::from_win32(ERROR_TIMEOUT.0).0,
+            code: TIMED_OUT,
         });
     }
     // SAFETY: the activation completed, so nothing else reads `args`.
@@ -485,6 +492,12 @@ fn capture_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_timed_out_activation_carries_the_windows_timeout_code() {
+        use windows::Win32::Foundation::ERROR_TIMEOUT;
+        assert_eq!(TIMED_OUT, HRESULT::from_win32(ERROR_TIMEOUT.0).0);
+    }
 
     #[test]
     fn activation_args_never_clear_their_variant() {

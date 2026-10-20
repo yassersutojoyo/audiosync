@@ -37,7 +37,7 @@ pub mod srp;
 
 use std::collections::VecDeque;
 use std::fmt;
-use std::io::Cursor;
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::net::SocketAddr;
 use std::time::Instant;
 
@@ -50,6 +50,7 @@ use crate::error::UnsupportedReason;
 use crate::error::{ErrorKind, SessionError, Warning};
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
 use crate::rtsp::{self, Message, Method, ParseError, Parser, Request, Response};
+use crate::secret::Secret;
 use crate::session::{CONNECT_TIMEOUT, RESPONSE_TIMEOUT, STATUS_CONFLICT, Verifier};
 
 use keys::{KEY_BYTES, RECEIVER_DATA_BYTES};
@@ -76,6 +77,24 @@ const BLOB_VERSION: u8 = 1;
 const BLOB_VERSION_WITH_KEY: u8 = 2;
 /// Characters of a client ID: 16 uppercase hex digits (P49).
 pub const CLIENT_ID_CHARS: usize = 16;
+/// The largest pairing answer body the pairing reads (P49, P52, P53). The
+/// largest real one, B and the salt, is about 340 bytes as a binary plist
+/// and under 1 KiB as XML. A larger body is refused unread: the plist
+/// crate parses any nesting, but dropping a value nested tens of thousands
+/// deep recurses once per level and overflows the stack of the thread that
+/// reads it, which aborts the process. Within this cap a value nests at
+/// most about 800 levels, whose drop takes under 300 KiB of stack even in
+/// a debug build, a seventh of the driver thread's 2 MiB.
+pub const MAX_PAIRING_BODY_BYTES: usize = 4 * 1024;
+/// How many bytes the plist parser may read from one pairing answer body,
+/// its rereads included. A binary plist may refer to one object from many
+/// places and the parser reads it again for each reference, so a body
+/// within the cap can still stand for millions of values; this budget
+/// bounds the work and the size of what it builds. Parsing a body reads
+/// it at most a few times over (binary, else XML, else ASCII).
+const PLIST_READ_BUDGET: usize = 8 * MAX_PAIRING_BODY_BYTES;
+/// The detail of an answer refused by the cap or the read budget.
+const BODY_TOO_LARGE: &str = "pair-setup answer too large to read";
 
 /// The credentials of one paired Apple TV (P54): the client ID and the
 /// 32-byte secret a, which also seeds the Ed25519 key the Apple TV now
@@ -422,8 +441,8 @@ pub struct Pairing {
     ids: SessionIds,
     client_id: String,
     /// The speaker's password, if the host has one (P39, P46). Never
-    /// logged: `Debug` leaves it out.
-    password: Option<String>,
+    /// logged: `Debug` leaves it out. Wiped from memory when dropped.
+    password: Option<Secret>,
     auth: Option<Auth>,
     state: PairingState,
     parser: Parser,
@@ -483,7 +502,7 @@ impl Pairing {
     /// Without one, such a 401 ends the pairing with PasswordRequired, a
     /// 401 to OPTIONS before `/pair-pin-start`. Call it right after
     /// [`Pairing::new`], before the connect completes.
-    pub fn with_password(mut self, password: Option<String>) -> Pairing {
+    pub fn with_password(mut self, password: Option<Secret>) -> Pairing {
         self.password = password;
         self
     }
@@ -763,7 +782,7 @@ impl Pairing {
             auth.count = auth.count.wrapping_add(1);
             let value = digest::authorization(
                 &auth.challenge,
-                password,
+                password.expose(),
                 method,
                 uri,
                 auth.count,
@@ -966,20 +985,27 @@ impl Pairing {
     /// The answer to the first `/pair-setup-pin`: `pk` (B) and `salt`
     /// (P49). Then the PIN is awaited (P51).
     fn on_identified(&mut self, response: &Response) {
-        let fields = read_plist(&response.body).and_then(|body| {
-            let b_pub = body.get("pk")?.as_data()?.to_vec();
-            let salt = body.get("salt")?.as_data()?.to_vec();
-            Some((b_pub, salt))
-        });
-        let Some((b_pub, salt)) = fields else {
-            self.fail_status(
-                ErrorKind::ProtocolError,
-                Method::Post,
-                response.code,
-                Some("pair-setup answer without pk and salt"),
-                false,
-            );
-            return;
+        let fields = read_answer(
+            &response.body,
+            "pair-setup answer without pk and salt",
+            |body| {
+                let b_pub = body.get("pk")?.as_data()?.to_vec();
+                let salt = body.get("salt")?.as_data()?.to_vec();
+                Some((b_pub, salt))
+            },
+        );
+        let (b_pub, salt) = match fields {
+            Ok(fields) => fields,
+            Err(detail) => {
+                self.fail_status(
+                    ErrorKind::ProtocolError,
+                    Method::Post,
+                    response.code,
+                    Some(detail),
+                    false,
+                );
+                return;
+            }
         };
         if salt.is_empty() || srp::check_server_value(&SrpGroup::RFC5054_2048, &b_pub).is_err() {
             self.fail_status(
@@ -1001,20 +1027,23 @@ impl Pairing {
     /// The answer to A and M1: `proof` (M2), checked as RFC 2945 defines it
     /// (P52). Then a_pub goes out sealed (P53).
     fn on_proved(&mut self, response: &Response, now: Instant) {
-        let proof = read_plist(&response.body).and_then(|body| {
+        let proof = read_answer(&response.body, "pair-setup answer without proof", |body| {
             body.get("proof")
                 .and_then(Value::as_data)
                 .map(<[u8]>::to_vec)
         });
-        let Some(proof) = proof else {
-            self.fail_status(
-                ErrorKind::ProtocolError,
-                Method::Post,
-                response.code,
-                Some("pair-setup answer without proof"),
-                false,
-            );
-            return;
+        let proof = match proof {
+            Ok(proof) => proof,
+            Err(detail) => {
+                self.fail_status(
+                    ErrorKind::ProtocolError,
+                    Method::Post,
+                    response.code,
+                    Some(detail),
+                    false,
+                );
+                return;
+            }
         };
         // Constant time; a length mismatch compares unequal.
         let matches: bool = proof.as_slice().ct_eq(&self.secrets.m2[..]).into();
@@ -1040,10 +1069,10 @@ impl Pairing {
 
     /// The last answer: paired (P53). When its body is {`epk`, `authTag`}
     /// and opens to an Ed25519 public key, the receiver's key goes into the
-    /// credentials; a missing body, or one that doesn't open, changes
-    /// nothing. The host gets the credentials (P54).
+    /// credentials; a missing body, one too large to read or one that
+    /// doesn't open changes nothing. The host gets the credentials (P54).
     fn on_sealed(&mut self, response: &Response) {
-        let receiver_key = read_plist(&response.body).and_then(|body| {
+        let receiver_key = read_plist(&response.body).ok().and_then(|body| {
             let sealed = body.get("epk")?.as_data()?;
             let tag = body.get("authTag")?.as_data()?;
             keys::open_receiver_key(&self.secrets.key[..], sealed, tag)
@@ -1068,11 +1097,79 @@ impl Pairing {
     }
 }
 
-/// A binary (or XML) property list body as a dictionary.
-fn read_plist(body: &[u8]) -> Option<Dictionary> {
-    Value::from_reader(Cursor::new(body))
-        .ok()?
-        .into_dictionary()
+/// Why a pairing answer's body gave no dictionary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BodyError {
+    /// Over [`MAX_PAIRING_BODY_BYTES`], or reading out past
+    /// [`PLIST_READ_BUDGET`].
+    TooLarge,
+    /// Not a property list, or not a dictionary.
+    Unreadable,
+}
+
+/// A binary (or XML) property list body as a dictionary. A body over
+/// [`MAX_PAIRING_BODY_BYTES`] is refused before the parser sees it, and the
+/// parser stops once it has read [`PLIST_READ_BUDGET`] bytes.
+fn read_plist(body: &[u8]) -> Result<Dictionary, BodyError> {
+    if body.len() > MAX_PAIRING_BODY_BYTES {
+        return Err(BodyError::TooLarge);
+    }
+    let mut reader = Budgeted {
+        cursor: Cursor::new(body),
+        left: PLIST_READ_BUDGET,
+        spent: false,
+    };
+    let value = Value::from_reader(&mut reader);
+    if reader.spent {
+        return Err(BodyError::TooLarge);
+    }
+    value
+        .ok()
+        .and_then(Value::into_dictionary)
+        .ok_or(BodyError::Unreadable)
+}
+
+/// The values `read` takes from a pairing answer's dictionary, or the
+/// detail of the protocol error: `missing` when the body isn't a
+/// dictionary or lacks them, [`BODY_TOO_LARGE`] when it was refused unread.
+fn read_answer<T>(
+    body: &[u8],
+    missing: &'static str,
+    read: impl FnOnce(&Dictionary) -> Option<T>,
+) -> Result<T, &'static str> {
+    match read_plist(body) {
+        Ok(dictionary) => read(&dictionary).ok_or(missing),
+        Err(BodyError::TooLarge) => Err(BODY_TOO_LARGE),
+        Err(BodyError::Unreadable) => Err(missing),
+    }
+}
+
+/// A body for the plist parser that ends in an error once `left` bytes
+/// have been read, rereads included, and notes that it did.
+struct Budgeted<'a> {
+    cursor: Cursor<&'a [u8]>,
+    left: usize,
+    spent: bool,
+}
+
+impl Read for Budgeted<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let len = buf.len().min(self.left);
+        let count = self.cursor.read(&mut buf[..len])?;
+        let unread = self.cursor.position() < self.cursor.get_ref().len() as u64;
+        if count == 0 && !buf.is_empty() && unread {
+            self.spent = true;
+            return Err(io::Error::other("the plist read budget is spent"));
+        }
+        self.left -= count;
+        Ok(count)
+    }
+}
+
+impl Seek for Budgeted<'_> {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.cursor.seek(position)
+    }
 }
 
 /// The legacy pair-verify of a paired Apple TV (P55, P56), for one

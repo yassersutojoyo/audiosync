@@ -110,7 +110,7 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_ERROR 2    /* an error ended a speaker's session: .error */
 #define ASC_AIRPLAY_EVENT_LATENCY 3  /* a speaker's latencies: .latency_ms, .receiver_latency_frames */
 #define ASC_AIRPLAY_EVENT_TIMELINE 4 /* the base latency L or the timeline changed: .latency_ms */
-#define ASC_AIRPLAY_EVENT_FAILED 5   /* the sender or its discovery stopped working (a bug); destroy it, create a new one */
+#define ASC_AIRPLAY_EVENT_FAILED 5   /* the sender or its discovery stopped working (a bug); destroy it, create a new one; .detail where a panic was, or "" */
 #define ASC_AIRPLAY_EVENT_PIN_NEEDED 6      /* a pairing's Apple TV shows a PIN: ask the user, then asc_airplay_submit_pin */
 #define ASC_AIRPLAY_EVENT_PASSWORD_NEEDED 7 /* a pairing needs the password (.error PASSWORD_REQUIRED) or got a wrong one (WRONG_PASSWORD, forgotten) */
 #define ASC_AIRPLAY_EVENT_PAIRING_FAILED 8  /* a pairing ended without credentials: .error (WRONG_PIN, NOT_RESPONDING, ...) */
@@ -655,7 +655,11 @@ const char *asc_device_volume_decision_name(uint32_t decision_code);
  * values, except that
  * asc_airplay_next_event reports ASC_AIRPLAY_EVENT_FAILED once; the host
  * then destroys it (which still frees it) and may create a new sender. A
- * panic in an input write makes the input and its sender dead.
+ * panic in an input write makes the input and its sender dead. The failure's
+ * detail is where the panic happened, "panic at <file>:<line>" (the file
+ * from its crate's folder on), never what it said, or "" when no panic is
+ * known; the first asc_airplay_create installs a panic hook that notes the
+ * locations and then runs the hook that was there before.
  */
 typedef struct AscAirPlay AscAirPlay;
 
@@ -700,7 +704,7 @@ typedef struct AscAirPlayEvent {
     double latency_ms;               /* a latency event's L + d_s, a timeline event's L */
     int64_t receiver_latency_frames; /* a latency event's Audio-Latency; -1 when it sent none */
     bool restarted;                  /* a timeline event after a restart */
-    const char *detail;              /* an error event's error, for a debug log (no secrets) */
+    const char *detail;              /* an error event's error, a failure event's panic location; for a debug log (no secrets) */
 } AscAirPlayEvent;
 
 /*

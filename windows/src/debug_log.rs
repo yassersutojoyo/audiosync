@@ -57,6 +57,15 @@ impl DebugLog {
         DebugLog::new(log_path(setting.as_deref(), &std::env::temp_dir()))
     }
 
+    /// [`DebugLog::from_env`] that keeps what the file holds: for a second
+    /// launch, which adds its line to the running copy's log.
+    #[cfg_attr(not(windows), expect(dead_code, reason = "only Windows hands over"))]
+    pub fn appending_from_env() -> DebugLog {
+        let setting = std::env::var_os(ENV_VAR);
+        let path = log_path(setting.as_deref(), &std::env::temp_dir());
+        DebugLog::open(path, MAX_BYTES, false)
+    }
+
     /// A log written to `path`, emptied first, or one that writes nothing
     /// for `None` and when the file can't be created.
     pub fn new(path: Option<PathBuf>) -> DebugLog {
@@ -66,11 +75,18 @@ impl DebugLog {
     /// [`DebugLog::new`] that stops growing at `max_bytes` instead of
     /// [`MAX_BYTES`].
     fn with_limit(path: Option<PathBuf>, max_bytes: u64) -> DebugLog {
+        DebugLog::open(path, max_bytes, true)
+    }
+
+    /// A log written to `path`, emptied first when `empty` is set.
+    fn open(path: Option<PathBuf>, max_bytes: u64, empty: bool) -> DebugLog {
         // Emptied, then reopened for appending: every write lands at the
         // end even if something else truncates or writes the file meanwhile.
         let file = path.and_then(|path| {
-            File::create(&path).ok()?;
-            OpenOptions::new().append(true).open(path).ok()
+            if empty {
+                File::create(&path).ok()?;
+            }
+            OpenOptions::new().append(true).create(true).open(path).ok()
         });
         let Some(file) = file else {
             return DebugLog::default();
@@ -356,6 +372,23 @@ mod tests {
         log.log(|| "this launch".to_owned());
         assert!(log.flush(TEST_FLUSH));
         assert_eq!(read_messages(&path), ["this launch"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_second_launch_adds_to_the_running_copys_log() {
+        let dir = test_dir("log-second-launch");
+        let path = dir.join(FILE_NAME);
+        let running = DebugLog::new(Some(path.clone()));
+        running.log(|| "the running copy".to_owned());
+        assert!(running.flush(TEST_FLUSH));
+        let second = DebugLog::open(Some(path.clone()), MAX_BYTES, false);
+        second.log(|| "the second launch".to_owned());
+        assert!(second.flush(TEST_FLUSH));
+        assert_eq!(
+            read_messages(&path),
+            ["the running copy", "the second launch"]
+        );
         let _ = fs::remove_dir_all(dir);
     }
 

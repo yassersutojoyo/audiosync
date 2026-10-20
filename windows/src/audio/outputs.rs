@@ -449,6 +449,20 @@ impl OutputPolicy {
         self.settings.entry(id.to_owned()).or_insert(defaults)
     }
 
+    /// Whether output `id` has settings of its own: it was switched on or
+    /// off, or its delay or volume set, at some point (saved ones count).
+    pub fn has_settings(&self, id: &str) -> bool {
+        self.settings.contains_key(id)
+    }
+
+    /// Forgets the settings of output `id`, and returns them: the defaults
+    /// when it had none.
+    pub fn take_settings(&mut self, id: &str) -> OutputSettings {
+        let settings = self.settings(id);
+        self.settings.remove(id);
+        settings
+    }
+
     /// Turns output `id` on or off.
     pub fn set_enabled(&mut self, id: &str, enabled: bool) {
         self.entry(id).enabled = enabled;

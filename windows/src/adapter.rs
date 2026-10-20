@@ -24,13 +24,25 @@
 //! gone. Once dismissed, it stays away for the same source and those outputs
 //! (or fewer of them) until that app quits.
 //!
+//! AirPlay discovery that runs but has found no speaker for 20 seconds is
+//! no notice: the snapshot says so ([`AppState::airplay_none_found`]), and
+//! the speaker list carries a note about the network and Windows Firewall.
+//! It goes once a speaker is listed and comes back after another 20 seconds
+//! without one; while discovery is dead, the AirPlay notice with its Retry
+//! says so instead.
+//!
 //! The user's choices outlive a restart (`crate::settings`): the adapter
 //! reads the settings file before the first listing and hands the saved
 //! switches, volumes and delays to the audio backend, which keeps them by ID
 //! for a device that isn't there yet; at each poll it writes the file again
 //! if anything changed. Like the Mac app, a launch doesn't start streaming
 //! by itself, except through an auto-connect speaker that is there. Saved
-//! settings of a device that is gone stay in the file for when it is back.
+//! settings of a device that is gone stay in the file for when it is back;
+//! one saved as on that no listing has shown since launch doesn't count as a
+//! speaker that is on until it is listed. A device Windows lists under a new
+//! endpoint ID (a USB device plugged into another USB port) takes over what
+//! was set for its old ID, which is forgotten, when exactly one gone output
+//! with something set has its name and kind.
 //!
 //! Speakers are named by the core's speaker keys: `lc:` and the endpoint ID
 //! for a local output, `ap:` and the speaker's ID for an AirPlay speaker, so
@@ -61,17 +73,24 @@ use crate::audio::capture::WHOLE_SYSTEM_NAME;
 use crate::audio::routing::{DirectPath, DirectReason};
 use crate::debug_log::DebugLog;
 use crate::settings::{
-    self, SavedEqualizer, SavedGroup, SavedSource, SavedSpeaker, Settings, SettingsFile,
+    self, KeptAside, SavedEqualizer, SavedGroup, SavedSource, SavedSpeaker, Settings, SettingsFile,
 };
 use crate::ui_model::{
     self, AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, PinPhase,
-    PinPrompt, Source, SourceKind, Speaker, SpeakerKind, ViewSettings, clamp_delay_ms,
+    PinPrompt, Source, SourceKind, Speaker, SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
 /// seconds: it takes a snapshot of the running processes, and apps that play
 /// audio come and go rarely.
 const SOURCE_POLLS: u32 = 6;
+
+/// After this many polls, 20 seconds, of AirPlay discovery without a single
+/// AirPlay speaker found, the speaker list says so and what to check: a
+/// Windows Firewall that blocks AudioSync, or a network Windows counts as
+/// Public while AudioSync is allowed on Private ones only, keeps the
+/// receivers' answers out, and the list would just stay empty.
+const NONE_FOUND_POLLS: u32 = 40;
 
 /// The UI's ID of the whole-system source.
 const SYSTEM_KEY: &str = "system";
@@ -150,10 +169,21 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The last name of every output listed, for a notice about one that is
     /// gone.
     names: BTreeMap<String, String>,
+    /// The last kind of every output listed, to tell a device listed under
+    /// a new endpoint ID.
+    kinds: BTreeMap<String, OutputKind>,
+    /// The endpoint IDs a device left when what was set for it followed it
+    /// to a new one ([`AudioAdapter::move_output`]), until they are listed
+    /// again: the same device's old IDs, not other devices of its name.
+    left_behind: BTreeSet<String>,
     /// The AirPlay speaker IDs of the last listing, to tell which appeared.
     airplay_listed: BTreeSet<String>,
     /// The last name of every AirPlay speaker listed.
     airplay_names: BTreeMap<String, String>,
+    /// Polls in a row with AirPlay discovery running and no AirPlay speaker
+    /// listed; from [`NONE_FOUND_POLLS`] on, the speaker list says none was
+    /// found.
+    airplay_quiet_polls: u32,
     /// The speaker keys marked auto-connect.
     auto_connect: BTreeSet<String>,
     groups: Vec<Group>,
@@ -187,6 +217,23 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// AirPlay speakers saved as on that the backend couldn't switch on at
     /// launch (no AirPlay sender): their saved settings stay as they are.
     airplay_unrestored: BTreeSet<String>,
+    /// The last save of the settings file failed; its notice was posted
+    /// then, once until a save works again.
+    settings_unsaved: bool,
+    /// An output listing worked at least once, so an empty list means
+    /// Windows has no active output.
+    outputs_known: bool,
+    /// The notice that Windows has no active output was posted for the
+    /// current spell without one ([`AudioAdapter::check_sound_output`]).
+    no_output_noticed: bool,
+    /// The outputs waiting for a device another app holds
+    /// ([`BackendEvent::OutputBusy`]), by endpoint ID: their rows say so
+    /// rather than show them playing.
+    busy: BTreeSet<String>,
+    /// The AirPlay speakers AudioSync keeps trying to reach
+    /// ([`BackendEvent::AirPlayTrouble`]), by ID: their rows say so rather
+    /// than show them playing.
+    reconnecting: BTreeSet<String>,
     /// The windows' own settings.
     view: ViewSettings,
 }
@@ -226,7 +273,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
             chosen: Chosen::WholeSystem,
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
+            kinds: BTreeMap::new(),
+            left_behind: BTreeSet::new(),
             airplay_listed: BTreeSet::new(),
+            airplay_quiet_polls: 0,
             airplay_names: BTreeMap::new(),
             auto_connect: BTreeSet::new(),
             groups: Vec::new(),
@@ -248,6 +298,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
             ),
             must_save: false,
             airplay_unrestored: BTreeSet::new(),
+            settings_unsaved: false,
+            outputs_known: false,
+            no_output_noticed: false,
+            busy: BTreeSet::new(),
+            reconnecting: BTreeSet::new(),
             view: ViewSettings::default(),
         };
         adapter.restore(saved);
@@ -423,35 +478,69 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Writes the settings file if anything changed since it was last read
     /// or written. A failed write is logged and tried again at the next
-    /// change; the settings stay in effect for this run. Nothing is written
-    /// while an older file's delays wait for their migration.
-    fn persist(&mut self) {
+    /// change; the settings stay in effect for this run, and the user is
+    /// told once, until a save works again and clears that notice. A file
+    /// ignored at launch that the save kept aside is told once too, with the
+    /// copy's name. Nothing is written while an older file's delays wait for
+    /// their migration. Returns whether the notices changed.
+    fn persist(&mut self) -> bool {
         if self.delays_to_migrate {
-            return;
+            return false;
         }
         let current = self.current_settings();
         if current == self.saved && !self.must_save {
-            return;
+            return false;
         }
         self.must_save = false;
-        match self.settings_file.save(&current) {
+        let saved = self.settings_file.save(&current);
+        let mut notices_changed = saved.is_ok() == self.settings_unsaved;
+        if saved.is_ok() && self.settings_unsaved {
+            self.notices.clear(&[NoticeSubject::SettingsFile]);
+        }
+        self.settings_unsaved = saved.is_err();
+        match saved {
             Ok(kept) if self.settings_file.path().is_some() => {
-                if kept.is_some() {
+                if let Some(kept) = kept {
                     self.log.log(|| {
-                        format!(
-                            "settings: a newer AudioSync's file was kept as {} before saving over it",
-                            crate::settings::NEWER_FILE_NAME
-                        )
+                        let name = kept.file_name();
+                        match kept {
+                            KeptAside::Newer(_) => format!(
+                                "settings: a newer AudioSync's file was kept as {name} before \
+                                 saving over it"
+                            ),
+                            KeptAside::Ignored(_) => format!(
+                                "settings: the file ignored at launch was kept as {name} before \
+                                 saving over it"
+                            ),
+                        }
                     });
+                    // The user's settings were replaced by the defaults at
+                    // launch: told once, with where the old file is.
+                    if let KeptAside::Ignored(_) = kept {
+                        let file = kept.file_name();
+                        self.post(
+                            NoticeSubject::SettingsKeptAside,
+                            NoticeMessage::SettingsKeptAside { file },
+                        );
+                        notices_changed = true;
+                    }
                 }
                 self.log.log(|| "settings: saved".to_owned());
             }
             Ok(_) => {}
-            Err(error) => self.log.log(|| {
-                format!("settings: couldn't be saved ({error}); they last until AudioSync quits")
-            }),
+            Err(error) => {
+                self.log.log(|| {
+                    format!(
+                        "settings: couldn't be saved ({error}); they last until AudioSync quits"
+                    )
+                });
+                if notices_changed {
+                    self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
+                }
+            }
         }
         self.saved = current;
+        notices_changed
     }
 
     /// The audio backend, to change the mock's pretend world in tests.
@@ -464,9 +553,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.audio.running_source().is_some()
     }
 
-    /// Speakers turned on, local and AirPlay, connected or not.
+    /// Speakers turned on, local and AirPlay, connected or not (S162).
     fn enabled_count(&self) -> usize {
-        self.audio.enabled_outputs().len() + self.audio.enabled_airplay().len()
+        self.enabled_local() + self.audio.enabled_airplay().len()
+    }
+
+    /// Local outputs turned on that were listed at some point in this run,
+    /// connected now or not (S162). One saved as on that no listing showed
+    /// since launch doesn't count: the user can't see it or switch it off,
+    /// so it would keep streaming on and the notice asking for a speaker
+    /// away (the old endpoint ID of a device that moved to another USB port,
+    /// say). It stays on, and counts once it is listed.
+    fn enabled_local(&self) -> usize {
+        self.audio
+            .enabled_outputs()
+            .iter()
+            .filter(|id| self.names.contains_key(*id))
+            .count()
     }
 
     /// The streaming policy after `event` (S162), from the speakers on.
@@ -474,7 +577,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         streaming_after(
             event,
             self.running(),
-            self.audio.enabled_outputs().len(),
+            self.enabled_local(),
             self.audio.enabled_airplay().len(),
         )
     }
@@ -530,6 +633,41 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// Whether AirPlay discovery has run for 20 seconds without finding a
+    /// speaker. Never while it is dead: the AirPlay notice and its Retry
+    /// say so then.
+    fn airplay_none_found(&self) -> bool {
+        self.airplay_quiet_polls >= NONE_FOUND_POLLS
+    }
+
+    /// Counts one more poll with AirPlay discovery running and no AirPlay
+    /// speaker listed, or starts over; returns whether the speaker list's
+    /// note that none was found showed or went.
+    fn count_airplay_quiet(&mut self) -> bool {
+        let shown = self.airplay_none_found();
+        let browsing = self.audio.airplay_browsing();
+        if browsing && self.airplay_listed.is_empty() {
+            self.airplay_quiet_polls = self.airplay_quiet_polls.saturating_add(1);
+        } else {
+            self.airplay_quiet_polls = 0;
+        }
+        let shows = self.airplay_none_found();
+        if shows != shown {
+            self.log.log(|| {
+                if shows {
+                    "AirPlay: discovery has found no receiver in 20 s; the speaker list asks to \
+                     check the network and Windows Firewall"
+                        .to_owned()
+                } else if browsing {
+                    "AirPlay: a receiver is listed; the no-receiver note goes".to_owned()
+                } else {
+                    "AirPlay: discovery stopped; the no-receiver note goes".to_owned()
+                }
+            });
+        }
+        shows != shown
+    }
+
     /// Lists the outputs and the sources again.
     fn list_devices(&mut self) {
         // A failed listing keeps the last list; the backend tries again at
@@ -537,26 +675,55 @@ impl<A: AudioBackend> AudioAdapter<A> {
         // An older file's delays are migrated before auto-connect outputs
         // start, so they start at their migrated hold-backs.
         if self.audio.list_outputs().is_ok() {
+            self.outputs_known = true;
             self.migrate_delays_if_due();
         }
         self.take_events();
         self.outputs_listed();
         self.airplay_listed();
         self.refresh_sources();
+        self.check_sound_output();
     }
 
-    /// Takes in the outputs as last listed: remembers their names, clears the
-    /// notice about a lost output that is back, and switches on the
-    /// auto-connect speakers that appeared.
+    /// Posts the notice that Windows has no active sound output while none
+    /// is listed and an AirPlay speaker is on (apps then have nowhere to
+    /// play, so nothing reaches the speaker), once each time that starts,
+    /// and clears it once it ends. Returns whether the notices changed.
+    fn check_sound_output(&mut self) -> bool {
+        let none = self.outputs_known
+            && self.audio.outputs().is_empty()
+            && !self.audio.enabled_airplay().is_empty();
+        if none == self.no_output_noticed {
+            return false;
+        }
+        self.no_output_noticed = none;
+        if none {
+            self.post(NoticeSubject::SoundOutput, NoticeMessage::NoSoundOutput);
+        } else {
+            self.notices.clear(&[NoticeSubject::SoundOutput]);
+        }
+        true
+    }
+
+    /// Takes in the outputs as last listed: remembers their names and kinds,
+    /// clears the notice about a lost output that is back, hands what was
+    /// set for a device that moved to its new endpoint ID, and switches on
+    /// the auto-connect speakers that appeared.
     fn outputs_listed(&mut self) {
+        let outputs = self.audio.outputs();
         let mut listed = BTreeSet::new();
         let mut appeared = Vec::new();
-        for output in self.audio.outputs() {
+        let mut fresh = BTreeSet::new();
+        for output in &outputs {
             if !self.listed.contains(&output.id) {
                 appeared.push(output.id.clone());
+                if !self.names.contains_key(&output.id) || self.left_behind.contains(&output.id) {
+                    fresh.insert(output.id.clone());
+                }
             }
-            self.names.insert(output.id.clone(), output.name);
-            listed.insert(output.id);
+            self.names.insert(output.id.clone(), output.name.clone());
+            self.kinds.insert(output.id.clone(), output.kind);
+            listed.insert(output.id.clone());
         }
         self.listed = listed;
         for id in &appeared {
@@ -564,7 +731,108 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 matches!(message, NoticeMessage::SpeakerLost { .. })
             });
         }
+        // Listed again, an ID left behind is an output of its own once more.
+        for id in &appeared {
+            self.left_behind.remove(id);
+        }
+        self.follow_moved_outputs(&outputs, &appeared, &fresh);
         self.auto_connect(&appeared);
+    }
+
+    /// Whether the user set anything for output `endpoint_id`: settings, an
+    /// auto-connect mark or a group.
+    fn has_choices(&self, endpoint_id: &str) -> bool {
+        let key = speaker_key(endpoint_id);
+        self.audio.has_output_settings(endpoint_id)
+            || self.auto_connect.contains(&key)
+            || self.groups.iter().any(|group| group.members.contains(&key))
+    }
+
+    /// Hands what the user set for an output that is gone to one that
+    /// appeared under a new endpoint ID with nothing set, when both are most
+    /// likely the same device: Windows lists a USB device plugged into
+    /// another USB port under another endpoint ID. The new one must be
+    /// `fresh`: an endpoint ID not listed before in this run, or one a
+    /// device left behind when its settings followed it to another port (it
+    /// came back). It must be the only output that appeared with its name
+    /// and kind (which follows its form factor and bus). And exactly one
+    /// output with that name and kind, listed earlier in this run and not
+    /// now, with or without anything set, must be gone, and have something
+    /// set: with two gone, the new ID could be either device. An ID a
+    /// device left behind isn't another device, so it doesn't count.
+    fn follow_moved_outputs(
+        &mut self,
+        outputs: &[OutputInfo],
+        appeared: &[String],
+        fresh: &BTreeSet<String>,
+    ) {
+        let new: Vec<&OutputInfo> = outputs
+            .iter()
+            .filter(|output| appeared.contains(&output.id))
+            .collect();
+        for output in &new {
+            let same = |name: &str, kind: Option<&OutputKind>| {
+                name == output.name && kind == Some(&output.kind)
+            };
+            let twins = new
+                .iter()
+                .filter(|other| same(&other.name, Some(&other.kind)))
+                .count();
+            if twins > 1 || !fresh.contains(&output.id) || self.has_choices(&output.id) {
+                continue;
+            }
+            let gone: Vec<String> = self
+                .names
+                .iter()
+                .filter(|(id, name)| {
+                    !self.listed.contains(*id)
+                        && !self.left_behind.contains(*id)
+                        && same(name, self.kinds.get(*id))
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+            if let [from] = gone.as_slice()
+                && self.has_choices(from)
+            {
+                self.move_output(from, &output.id);
+            }
+        }
+    }
+
+    /// Moves what the user set for output `from` to output `to`: see
+    /// [`AudioAdapter::follow_moved_outputs`]. `from` is forgotten, here and
+    /// in the settings file, and its notice goes.
+    fn move_output(&mut self, from: &str, to: &str) {
+        self.log.log(|| {
+            format!(
+                "{} is listed under a new endpoint ID ({to}, was {from}): what was set for it \
+                 follows it",
+                self.output_name(to)
+            )
+        });
+        let result = self.audio.move_output_settings(from, to);
+        let (from_key, to_key) = (speaker_key(from), speaker_key(to));
+        if self.auto_connect.remove(&from_key) {
+            self.auto_connect.insert(to_key.clone());
+        }
+        for group in &mut self.groups {
+            if let Some(place) = group.members.iter().position(|key| *key == from_key) {
+                if group.members.contains(&to_key) {
+                    group.members.remove(place);
+                } else {
+                    group.members[place] = to_key.clone();
+                }
+            }
+        }
+        if self.saved.outputs.remove(from).is_some() {
+            self.must_save = true;
+        }
+        self.left_behind.insert(from.to_owned());
+        self.busy.remove(from);
+        self.notices.clear(&[speaker_subject(from)]);
+        if result.is_err() {
+            self.output_failed(to, false);
+        }
     }
 
     /// Takes in the AirPlay speakers as last listed: remembers their names,
@@ -925,12 +1193,29 @@ impl<A: AudioBackend> AudioAdapter<A> {
         for event in events {
             self.handle(event);
         }
+        self.forget_stale_waits();
         any
+    }
+
+    /// Only a speaker that is on while streaming is on waits: turned off, or
+    /// streaming stopped, its next start is a new attempt that hasn't waited
+    /// yet.
+    fn forget_stale_waits(&mut self) {
+        if !self.running() {
+            self.busy.clear();
+            self.reconnecting.clear();
+            return;
+        }
+        let outputs = self.audio.enabled_outputs();
+        self.busy.retain(|id| outputs.contains(id));
+        let airplay = self.audio.enabled_airplay();
+        self.reconnecting.retain(|id| airplay.contains(id));
     }
 
     fn handle(&mut self, event: BackendEvent) {
         match event {
             BackendEvent::OutputsChanged => {
+                self.outputs_known = true;
                 self.migrate_delays_if_due();
                 self.outputs_listed();
             }
@@ -943,7 +1228,24 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     self.post(speaker_subject(&id), NoticeMessage::SpeakerLost { speaker });
                 }
             }
-            BackendEvent::OutputFailed { id, .. } => self.output_failed(&id, false),
+            BackendEvent::OutputFailed { id, .. } => {
+                self.busy.remove(&id);
+                self.output_failed(&id, false);
+            }
+            // It stays on, and plays once the other app lets go of its
+            // device; the notice then clears itself, and its row waits
+            // meanwhile.
+            BackendEvent::OutputBusy { id } => {
+                self.busy.insert(id.clone());
+                let speaker = self.output_name(&id);
+                self.post(speaker_subject(&id), NoticeMessage::SpeakerBusy { speaker });
+            }
+            BackendEvent::OutputFree { id } => {
+                self.busy.remove(&id);
+                self.clear_if(speaker_subject(&id), |message| {
+                    matches!(message, NoticeMessage::SpeakerBusy { .. })
+                });
+            }
             BackendEvent::Stopped { reason } => {
                 let message = match reason {
                     StopReason::SourceQuit => {
@@ -962,11 +1264,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::HeardTwice { paths } => self.heard_twice_changed(paths),
             BackendEvent::AirPlayChanged => self.airplay_listed(),
             BackendEvent::AirPlayPlaying { id } => {
+                self.reconnecting.remove(&id);
                 self.clear_if(airplay_subject(&id), |message| {
                     matches!(message, NoticeMessage::AirPlayRetrying { .. })
                 });
             }
             BackendEvent::AirPlayTrouble { id, problem } => {
+                self.reconnecting.insert(id.clone());
                 let speaker = self.airplay_name(&id);
                 self.post(
                     airplay_subject(&id),
@@ -976,8 +1280,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     },
                 );
             }
-            BackendEvent::AirPlayFailed { id, problem } => self.airplay_cant_play(&id, problem),
+            BackendEvent::AirPlayFailed { id, problem } => {
+                self.reconnecting.remove(&id);
+                self.airplay_cant_play(&id, problem);
+            }
             BackendEvent::AirPlayPaired { id } => {
+                self.reconnecting.remove(&id);
                 self.log
                     .log(|| format!("{} is paired and on", self.airplay_name(&id)));
                 self.notices.clear(&[airplay_subject(&id)]);
@@ -985,10 +1293,27 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             // Its Retry starts a new sender (`retry_airplay`).
             BackendEvent::AirPlayStopped => {
+                self.reconnecting.clear();
                 self.post(NoticeSubject::AirPlay, NoticeMessage::AirPlayStopped);
             }
             // The next snapshot shows it; no notice, no focus change (S198).
             BackendEvent::DeviceVolumeChanged { .. } => {}
+            // Told once while the writes keep failing (the backend reports
+            // only the changes); a write that works clears it.
+            BackendEvent::PairingStore { saved: false } => {
+                self.post(NoticeSubject::PairingsFile, NoticeMessage::PairingsNotSaved);
+            }
+            BackendEvent::PairingStore { saved: true } => {
+                self.notices.clear(&[NoticeSubject::PairingsFile]);
+            }
+            // The pairings in it were missing since launch: told once, with
+            // where the old file is.
+            BackendEvent::PairingsKeptAside { file } => {
+                self.post(
+                    NoticeSubject::PairingsKeptAside,
+                    NoticeMessage::PairingsKeptAside { file },
+                );
+            }
         }
     }
 
@@ -1131,6 +1456,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             paired: speaker.paired,
             // An AirPlay speaker's volume is its own slider (S192).
             device_volume: None,
+            waiting: (speaker.enabled && self.reconnecting.contains(&speaker.id))
+                .then_some(Waiting::Reconnecting),
         }
     }
 
@@ -1165,6 +1492,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             device_volume: output
                 .device_volume
                 .and_then(|device_volume| device_volume.hint()),
+            waiting: (output.enabled && self.busy.contains(&output.id))
+                .then_some(Waiting::ForDevice),
         }
     }
 
@@ -1228,6 +1557,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         AppState {
             reference_name,
             airplay_delay_ms: self.airplay_delay_ms(),
+            airplay_none_found: self.airplay_none_found(),
             running: self.running(),
             sources: self.source_rows(),
             source_id: self.chosen.key(),
@@ -1270,6 +1600,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 self.gate.user_switched_off();
                 self.audio.stop();
             }
+            self.forget_stale_waits();
             return;
         }
         let action = self.streaming_after(SpeakerEvent::StartRequested);
@@ -1611,12 +1942,14 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     /// poll, so a slider drag is saved about twice a second at most.
     fn poll(&mut self) -> bool {
         let mut changed = self.take_events();
+        changed |= self.check_sound_output();
         self.polls += 1;
         if self.polls >= SOURCE_POLLS {
             self.polls = 0;
             changed |= self.refresh_sources();
         }
-        self.persist();
+        changed |= self.count_airplay_quiet();
+        changed |= self.persist();
         changed
     }
 
@@ -1629,7 +1962,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn save_settings(&mut self) {
-        self.persist();
+        let _ = self.persist();
     }
 }
 
@@ -1733,9 +2066,11 @@ mod tests {
     use audiosync_airplay::sender::{SenderEvent, SpeakerState as AirPlayState};
 
     use super::*;
+    use crate::audio::airplay::StartedSender;
     use crate::audio::airplay::tests::{APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, device, id_of};
     use crate::audio::capture::LoopbackMode;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
+    use crate::audio::pairings::PairingStore;
     use crate::audio::pairings::tests::credentials;
     use crate::audio::routing::HOLD_CHECKS;
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
@@ -2147,6 +2482,20 @@ mod tests {
     }
 
     #[test]
+    fn capture_lost_to_a_windows_audio_restart_comes_back_without_a_notice() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio_mut().fail_capture(BackendError::DeviceGone);
+        for _ in 0..3 {
+            adapter.poll();
+            assert!(adapter.snapshot().running, "streaming stays on");
+        }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert_eq!(adapter.audio.driver().captures_started().len(), 2);
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+    }
+
+    #[test]
     fn capture_that_cant_start_leaves_streaming_off_with_a_notice() {
         let mut adapter = adapter();
         adapter
@@ -2275,6 +2624,335 @@ mod tests {
         adapter.poll();
         assert_eq!(playing(&adapter), [SPEAKERS]);
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    #[test]
+    fn a_speaker_whose_stream_dies_before_its_device_leaves_the_list_is_reported() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
+        // The stream dies and can't open again while Windows still lists the
+        // device: no notice yet, as for a format change.
+        adapter.audio_mut().end_renderer(HEADPHONES);
+        adapter
+            .audio_mut()
+            .fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+
+        // Then Windows drops it from the list.
+        adapter.audio_mut().disconnect_output_unnoticed(HEADPHONES);
+        assert!(adapter.poll());
+        assert!(adapter.snapshot().speaker(&key(HEADPHONES)).is_none());
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "Headphones".into(),
+        };
+        assert_eq!(messages(&adapter), [lost]);
+    }
+
+    /// The endpoint IDs Windows gives one USB DAC in three USB ports.
+    const DAC_PORT_1: &str = "usb-dac-port-1";
+    const DAC_PORT_2: &str = "usb-dac-port-2";
+    const DAC_PORT_3: &str = "usb-dac-port-3";
+
+    /// Plugs the USB DAC in under `endpoint_id`, and polls.
+    fn plug_dac(adapter: &mut AudioAdapter<MockBackend>, endpoint_id: &str) {
+        adapter
+            .audio_mut()
+            .connect_output_as(endpoint_id, "USB DAC", OutputKind::Usb);
+        adapter.poll();
+    }
+
+    fn unplug(adapter: &mut AudioAdapter<MockBackend>, endpoint_id: &str) {
+        adapter.audio_mut().disconnect_output(endpoint_id);
+        adapter.poll();
+    }
+
+    #[test]
+    fn a_speaker_on_that_wasnt_listed_since_launch_doesnt_count_as_on() {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.add_app(PLAYER_PID, "player.exe");
+        // Saved as on under an endpoint ID Windows no longer lists: the DAC
+        // went to another USB port while AudioSync wasn't running.
+        audio.set_output_enabled(DAC_PORT_1, true).unwrap();
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.set_running(true);
+        assert!(!adapter.snapshot().running);
+        assert_eq!(messages(&adapter), [NoticeMessage::NoSpeaker]);
+
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+        // Every speaker the user can see is off: streaming stops.
+        adapter.set_speaker_enabled(&key(SPEAKERS), false);
+        assert!(!adapter.snapshot().running);
+
+        // It kept its switch: listed, it counts and plays.
+        plug_dac(&mut adapter, DAC_PORT_1);
+        assert!(enabled(&adapter, DAC_PORT_1));
+        adapter.set_running(true);
+        assert_eq!(playing(&adapter), [DAC_PORT_1]);
+    }
+
+    #[test]
+    fn a_usb_speaker_plugged_into_another_port_keeps_its_settings_under_its_new_id() {
+        let mut adapter = adapter();
+        plug_dac(&mut adapter, DAC_PORT_1);
+        turn_on(&mut adapter, DAC_PORT_1);
+        adapter.set_speaker_volume(&key(DAC_PORT_1), 35.0);
+        adapter.set_speaker_delay(&key(DAC_PORT_1), 120.0);
+        adapter.set_auto_connect(&key(DAC_PORT_1), true);
+        adapter.new_group("Desk").unwrap();
+        adapter.poll();
+
+        // Into another port: Windows lists it under a new endpoint ID.
+        unplug(&mut adapter, DAC_PORT_1);
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "USB DAC".into(),
+        };
+        assert_eq!(messages(&adapter), [lost]);
+        plug_dac(&mut adapter, DAC_PORT_2);
+        let dac = speaker_of(&adapter, &key(DAC_PORT_2));
+        assert!(dac.enabled);
+        assert_eq!(dac.volume, 35.0);
+        assert_eq!(dac.delay_ms, Some(120.0));
+        assert!(dac.auto_connect);
+        assert_eq!(adapter.snapshot().groups[0].members, [key(DAC_PORT_2)]);
+        assert_eq!(playing(&adapter), [DAC_PORT_2]);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert_eq!(
+            adapter.audio.enabled_outputs(),
+            [DAC_PORT_2],
+            "the old ID is forgotten"
+        );
+        let saved = adapter.current_settings();
+        assert!(!saved.outputs.contains_key(DAC_PORT_1));
+        assert!(!saved.auto_connect.contains(&key(DAC_PORT_1)));
+
+        // Back in the first port, the settings follow it again.
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_dac(&mut adapter, DAC_PORT_1);
+        let dac = speaker_of(&adapter, &key(DAC_PORT_1));
+        assert!(dac.enabled);
+        assert_eq!(dac.volume, 35.0);
+        assert_eq!(playing(&adapter), [DAC_PORT_1]);
+        // And into a third: the IDs it left behind hold nothing anymore.
+        unplug(&mut adapter, DAC_PORT_1);
+        plug_dac(&mut adapter, DAC_PORT_3);
+        assert!(enabled(&adapter, DAC_PORT_3));
+        assert_eq!(playing(&adapter), [DAC_PORT_3]);
+    }
+
+    #[test]
+    fn settings_follow_a_new_id_only_from_the_one_absent_speaker_of_its_name() {
+        let mut adapter = adapter();
+        // Two DACs of the same model, both on: one plugged in under a new ID
+        // while the other is still listed stays a new speaker.
+        plug_dac(&mut adapter, DAC_PORT_1);
+        turn_on(&mut adapter, DAC_PORT_1);
+        plug_dac(&mut adapter, DAC_PORT_2);
+        assert!(!enabled(&adapter, DAC_PORT_2));
+        turn_on(&mut adapter, DAC_PORT_2);
+
+        // Both unplugged, a third port could be either: a new speaker.
+        unplug(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_dac(&mut adapter, DAC_PORT_3);
+        assert!(!enabled(&adapter, DAC_PORT_3));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1, DAC_PORT_2]);
+    }
+
+    #[test]
+    fn a_new_id_doesnt_take_settings_when_an_untouched_twin_left_too() {
+        let mut adapter = adapter();
+        // Two DACs of the same model: only the first was ever set.
+        plug_dac(&mut adapter, DAC_PORT_1);
+        turn_on(&mut adapter, DAC_PORT_1);
+        adapter.set_speaker_volume(&key(DAC_PORT_1), 35.0);
+        plug_dac(&mut adapter, DAC_PORT_2);
+
+        // Both unplugged, the untouched one into a third port: it could be
+        // either of them, so it is a new speaker.
+        unplug(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_dac(&mut adapter, DAC_PORT_3);
+        assert!(!enabled(&adapter, DAC_PORT_3));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1]);
+
+        // The first one, back in its port, still has its settings.
+        plug_dac(&mut adapter, DAC_PORT_1);
+        let dac = speaker_of(&adapter, &key(DAC_PORT_1));
+        assert!(dac.enabled);
+        assert_eq!(dac.volume, 35.0);
+    }
+
+    #[test]
+    fn a_port_a_moved_speaker_left_counts_as_new_only_until_it_is_listed_again() {
+        let mut adapter = adapter();
+        plug_dac(&mut adapter, DAC_PORT_1);
+        turn_on(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_1);
+        plug_dac(&mut adapter, DAC_PORT_2);
+        assert!(enabled(&adapter, DAC_PORT_2), "its settings followed it");
+
+        // A second DAC of the model, in the port the first one left, while
+        // the first one is still listed: a new speaker.
+        plug_dac(&mut adapter, DAC_PORT_1);
+        assert!(!enabled(&adapter, DAC_PORT_1));
+        // Both unplugged, the second one back in that port: listed before,
+        // it is that second DAC again, not the first one.
+        unplug(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_dac(&mut adapter, DAC_PORT_1);
+        assert!(!enabled(&adapter, DAC_PORT_1));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_2]);
+    }
+
+    /// Two displays of the same model on HDMI.
+    const MONITOR_A: &str = "hdmi-monitor-a";
+    const MONITOR_B: &str = "hdmi-monitor-b";
+
+    fn connect_monitor(adapter: &mut AudioAdapter<MockBackend>, endpoint_id: &str) {
+        adapter
+            .audio_mut()
+            .connect_output_as(endpoint_id, "LG HDR 4K", OutputKind::Hdmi);
+        adapter.poll();
+    }
+
+    #[test]
+    fn a_twin_listed_before_that_comes_back_first_doesnt_take_the_others_settings() {
+        let mut adapter = adapter();
+        connect_monitor(&mut adapter, MONITOR_A);
+        connect_monitor(&mut adapter, MONITOR_B);
+        turn_on(&mut adapter, MONITOR_A);
+        adapter.set_auto_connect(&key(MONITOR_A), true);
+        adapter.new_group("Desk").unwrap();
+        adapter.poll();
+
+        // The displays sleep: both leave the list, and the one never set
+        // wakes first, under the endpoint ID it had.
+        unplug(&mut adapter, MONITOR_A);
+        unplug(&mut adapter, MONITOR_B);
+        connect_monitor(&mut adapter, MONITOR_B);
+        let b = speaker_of(&adapter, &key(MONITOR_B));
+        assert!(!b.enabled);
+        assert!(!b.auto_connect);
+        assert_eq!(adapter.audio.enabled_outputs(), [MONITOR_A]);
+        assert_eq!(adapter.snapshot().groups[0].members, [key(MONITOR_A)]);
+        let saved = adapter.current_settings();
+        assert!(saved.auto_connect.contains(&key(MONITOR_A)));
+
+        // The other one wakes too, with everything that was set for it.
+        connect_monitor(&mut adapter, MONITOR_A);
+        let a = speaker_of(&adapter, &key(MONITOR_A));
+        assert!(a.enabled);
+        assert!(a.auto_connect);
+        assert!(!speaker_of(&adapter, &key(MONITOR_B)).enabled);
+    }
+
+    #[test]
+    fn a_new_speaker_of_another_kind_doesnt_take_the_settings_of_one_with_its_name() {
+        let mut adapter = adapter();
+        plug_dac(&mut adapter, DAC_PORT_1);
+        turn_on(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_1);
+        adapter
+            .audio_mut()
+            .connect_output_as(DAC_PORT_2, "USB DAC", OutputKind::Bluetooth);
+        adapter.poll();
+        assert!(!enabled(&adapter, DAC_PORT_2));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1]);
+    }
+
+    #[test]
+    fn a_speaker_another_app_holds_stays_on_with_a_notice_until_it_is_free() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter
+            .audio_mut()
+            .fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.poll();
+        assert!(enabled(&adapter, HEADPHONES), "it stays on");
+        assert!(adapter.snapshot().running);
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::SpeakerBusy {
+                speaker: "Headphones".into(),
+            }]
+        );
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+
+        adapter.audio_mut().fail_output(HEADPHONES, None);
+        poll_until_busy_retried(&mut adapter);
+        assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
+        assert!(messages(&adapter).is_empty(), "its cause is gone");
+    }
+
+    fn state_of(adapter: &AudioAdapter<MockBackend>, id: &str) -> SpeakerState {
+        let state = adapter.snapshot();
+        state.speaker_state(state.speaker(id).expect("listed"))
+    }
+
+    #[test]
+    fn a_busy_speaker_row_waits_for_its_device_until_it_plays_or_is_turned_off() {
+        let waiting = SpeakerState::Waiting(ui_model::Waiting::ForDevice);
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter
+            .audio_mut()
+            .fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), waiting);
+        assert_eq!(state_of(&adapter, &key(SPEAKERS)), SpeakerState::Playing);
+        // The row keeps saying so after the notice is dismissed.
+        adapter.dismiss_all_notices();
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), waiting);
+        // Free again, it plays.
+        adapter.audio_mut().fail_output(HEADPHONES, None);
+        poll_until_busy_retried(&mut adapter);
+        assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), SpeakerState::Playing);
+
+        // Busy again after a new start, then turned off: off, and turned on
+        // with its device free it doesn't wait.
+        adapter
+            .audio_mut()
+            .fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        adapter.set_speaker_enabled(&key(HEADPHONES), false);
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), waiting);
+        adapter.set_speaker_enabled(&key(HEADPHONES), false);
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), SpeakerState::Off);
+        adapter.audio_mut().fail_output(HEADPHONES, None);
+        turn_on(&mut adapter, HEADPHONES);
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), SpeakerState::Playing);
+    }
+
+    #[test]
+    fn the_only_speaker_being_busy_keeps_streaming_on() {
+        let mut adapter = adapter();
+        adapter
+            .audio_mut()
+            .fail_output(SPEAKERS, Some(BackendError::DeviceBusy));
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.poll();
+        assert!(adapter.snapshot().running, "it plays once it's free");
+        assert!(enabled(&adapter, SPEAKERS));
+        adapter.audio_mut().fail_output(SPEAKERS, None);
+        poll_until_busy_retried(&mut adapter);
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+    }
+
+    /// Polls for as long as a busy speaker waits for its next try: about
+    /// three seconds, six polls.
+    fn poll_until_busy_retried(adapter: &mut AudioAdapter<MockBackend>) {
+        for _ in 0..6 {
+            adapter.poll();
+        }
     }
 
     #[test]
@@ -3006,6 +3684,41 @@ mod tests {
     }
 
     #[test]
+    fn a_retrying_airplay_speaker_row_says_reconnecting_until_it_plays() {
+        let reconnecting = SpeakerState::Waiting(ui_model::Waiting::Reconnecting);
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
+        // The row keeps saying so after the notice is dismissed.
+        adapter.dismiss_all_notices();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
+        // It plays again.
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+        // Retrying, then turned off: off, and turned on again a new attempt.
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
+        adapter.set_speaker_enabled(&ap(&kitchen), false);
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Off);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+        // Streaming stopped and started again: no stale wait either.
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
+        adapter.set_running(false);
+        adapter.set_running(true);
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+    }
+
+    #[test]
     fn a_sender_that_stops_running_leaves_a_notice() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
         adapter.set_speaker_enabled(&ap(&kitchen), true);
@@ -3046,9 +3759,9 @@ mod tests {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
         let next = FakeAirPlay::new();
         let started = next.clone();
-        adapter
-            .audio
-            .set_airplay_starter(Box::new(move || Some((started.link(), None))));
+        adapter.audio.set_airplay_starter(Box::new(move || {
+            Some(StartedSender::browsing(started.link(), None))
+        }));
         adapter.set_speaker_enabled(&ap(&kitchen), true);
         adapter.set_speaker_volume(&ap(&kitchen), 30.0);
         fake.state(&kitchen, AirPlayState::Playing);
@@ -3101,6 +3814,206 @@ mod tests {
         adapter.poll();
         adapter.retry_airplay();
         assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+    }
+
+    /// An adapter whose AirPlay sender comes from `senders` in turn: the
+    /// first at launch, the others at each Retry.
+    fn adapter_starting_airplay(senders: Vec<Option<StartedSender>>) -> AudioAdapter<MockBackend> {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let mut senders = senders.into_iter();
+        audio.start_airplay(
+            Box::new(move || senders.next().flatten()),
+            PairingStore::in_memory(),
+        );
+        AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default())
+    }
+
+    #[test]
+    fn a_sender_that_cant_start_at_launch_leaves_a_notice_whose_retry_starts_one() {
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![None, Some(StartedSender::browsing(fake.link(), None))]);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+
+        adapter.retry_airplay();
+        assert!(messages(&adapter).is_empty(), "Retry clears the notice");
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_some());
+    }
+
+    #[test]
+    fn a_discovery_that_cant_start_at_launch_leaves_a_notice_whose_retry_starts_a_sender() {
+        let first = FakeAirPlay::new();
+        let second = FakeAirPlay::new();
+        let mut adapter = adapter_starting_airplay(vec![
+            Some(StartedSender {
+                link: first.link(),
+                feed: None,
+                browsing: false,
+            }),
+            Some(StartedSender::browsing(second.link(), None)),
+        ]);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+
+        adapter.retry_airplay();
+        assert!(messages(&adapter).is_empty());
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        second.appear(&kitchen);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_some());
+    }
+
+    /// Twenty seconds of polls: the UI polls twice a second.
+    const POLLS_IN_20_S: u32 = 40;
+
+    fn poll_times(adapter: &mut AudioAdapter<MockBackend>, polls: u32) {
+        for _ in 0..polls {
+            adapter.poll();
+        }
+    }
+
+    /// Whether the speaker list says that no AirPlay speaker was found.
+    fn none_found_hint(adapter: &AudioAdapter<MockBackend>) -> bool {
+        adapter.snapshot().airplay_none_found
+    }
+
+    /// A sender that browses but finds nothing (a firewall that blocks
+    /// discovery, a Public network) must not leave an empty list without a
+    /// hint; it is a note in the list, not a notice.
+    #[test]
+    fn twenty_seconds_of_discovery_without_an_airplay_speaker_show_a_hint() {
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        assert!(!none_found_hint(&adapter), "not at launch");
+        poll_times(&mut adapter, POLLS_IN_20_S - 1);
+        assert!(!none_found_hint(&adapter), "not before 20 seconds");
+        assert!(adapter.poll(), "the snapshot changes as the hint shows");
+        assert!(
+            none_found_hint(&adapter),
+            "an empty AirPlay list after 20 seconds needs a hint"
+        );
+        assert!(messages(&adapter).is_empty(), "a note, not a notice");
+    }
+
+    #[test]
+    fn the_none_found_hint_goes_once_a_speaker_appears_and_comes_back_20_seconds_after_all_are_gone()
+     {
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        poll_times(&mut adapter, POLLS_IN_20_S);
+        assert!(none_found_hint(&adapter));
+
+        // Any receiver shows that discovery works, even one AudioSync can't
+        // play yet.
+        let study = device(2, "Study", PASSWORD_TXT);
+        fake.appear(&study);
+        assert!(adapter.poll(), "the snapshot changes as the hint goes");
+        assert!(!none_found_hint(&adapter), "a speaker was found");
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(
+            !none_found_hint(&adapter),
+            "it stays away while one is listed"
+        );
+
+        fake.gone(&study);
+        poll_times(&mut adapter, POLLS_IN_20_S - 1);
+        assert!(
+            !none_found_hint(&adapter),
+            "not before another 20 seconds without one"
+        );
+        adapter.poll();
+        assert!(
+            none_found_hint(&adapter),
+            "back after 20 seconds without one"
+        );
+    }
+
+    #[test]
+    fn a_speaker_found_within_20_seconds_keeps_the_none_found_hint_away() {
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        poll_times(&mut adapter, POLLS_IN_20_S - 5);
+        fake.appear(&device(1, "Kitchen", OPEN_TXT));
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&adapter));
+    }
+
+    /// While discovery is dead, the AirPlay notice and its Retry say so: the
+    /// list never adds the hint, even once that notice is dismissed.
+    #[test]
+    fn no_none_found_hint_while_discovery_is_dead() {
+        // Without AirPlay at all.
+        let mut without_airplay = adapter();
+        poll_times(&mut without_airplay, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&without_airplay), "no AirPlay");
+
+        // Discovery couldn't start.
+        let fake = FakeAirPlay::new();
+        let mut adapter = adapter_starting_airplay(vec![Some(StartedSender {
+            link: fake.link(),
+            feed: None,
+            browsing: false,
+        })]);
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&adapter), "discovery couldn't start");
+        adapter.dismiss_all_notices();
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(
+            !none_found_hint(&adapter),
+            "discovery couldn't start, notice dismissed"
+        );
+
+        // No sender at all.
+        let mut adapter = adapter_starting_airplay(vec![None]);
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&adapter), "no sender");
+
+        // A sender that stopped after an internal error.
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        fake.stop_running();
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&adapter), "the sender stopped");
+    }
+
+    #[test]
+    fn the_none_found_hint_goes_when_discovery_stops_and_counts_again_after_retry() {
+        let first = FakeAirPlay::new();
+        let second = FakeAirPlay::new();
+        let mut adapter = adapter_starting_airplay(vec![
+            Some(StartedSender::browsing(first.link(), None)),
+            Some(StartedSender::browsing(second.link(), None)),
+        ]);
+        poll_times(&mut adapter, POLLS_IN_20_S);
+        assert!(none_found_hint(&adapter));
+
+        first.push(SenderEvent::DiscoveryFailed);
+        assert!(adapter.poll());
+        assert!(
+            !none_found_hint(&adapter),
+            "the AirPlay notice and its Retry take over"
+        );
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&adapter));
+
+        adapter.retry_airplay();
+        poll_times(&mut adapter, POLLS_IN_20_S - 1);
+        assert!(
+            !none_found_hint(&adapter),
+            "the new sender gets its own 20 seconds"
+        );
+        adapter.poll();
+        assert!(none_found_hint(&adapter));
     }
 
     #[test]
@@ -3538,15 +4451,17 @@ mod tests {
         adapter.poll();
         adapter.set_master_volume(65.0);
         adapter.poll();
-        let kept = dir.join(settings::NEWER_FILE_NAME);
-        assert_eq!(std::fs::read_to_string(kept).expect("kept"), newer);
+        assert_eq!(
+            crate::data_folder::copies_kept_aside(&dir, "settings.newer"),
+            [newer.into_bytes()]
+        );
         assert!(log.flush(TEST_FLUSH));
         let messages = read_messages(&dir.join(FILE_NAME));
         assert_in_order(
             &messages,
             &[
                 "settings: ignored: a newer AudioSync wrote it",
-                "settings: a newer AudioSync's file was kept as settings.newer.json",
+                "settings: a newer AudioSync's file was kept as settings.newer-",
                 "settings: saved",
                 "settings: saved",
             ],
@@ -3556,6 +4471,178 @@ mod tests {
             .filter(|message| message.contains("was kept as"))
             .count();
         assert_eq!(kept_lines, 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_airplay_speaker_on_while_windows_has_no_output_gets_a_notice() {
+        let (mut adapter, _fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "Windows has outputs");
+        adapter.audio_mut().disconnect_output(SPEAKERS);
+        adapter.audio_mut().disconnect_output(HEADPHONES);
+        assert!(adapter.poll());
+        assert_eq!(messages(&adapter), [NoticeMessage::NoSoundOutput]);
+        // Dismissed, it stays away while nothing changes.
+        adapter.dismiss_all_notices();
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+        // An output back clears it; all gone again, it comes back.
+        adapter.audio_mut().connect_output(SPEAKERS, "Speakers");
+        adapter.poll();
+        adapter.audio_mut().disconnect_output(SPEAKERS);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::NoSoundOutput]);
+        // With the AirPlay speaker off there's nothing to tell.
+        adapter.set_speaker_enabled(&ap(&kitchen), false);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+    }
+
+    #[test]
+    fn settings_that_cant_be_saved_get_one_notice_until_a_save_works() {
+        let dir = test_dir("adapter-settings-unsaved");
+        let path = dir.join(settings::FILE_NAME);
+        // A folder where the temporary file goes: every save fails.
+        let blocked = crate::data_folder::temporary_path(&path);
+        std::fs::create_dir(&blocked).expect("blocked");
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.set_master_volume(64.0);
+        assert!(adapter.poll(), "the notice shows");
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        // Told once: dismissed, it stays away while the saves keep failing.
+        adapter.dismiss_all_notices();
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+        // A save that works ends it; a failure after that tells again, and
+        // the next save that works clears the notice.
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        adapter.set_master_volume(66.0);
+        adapter.poll();
+        assert_eq!(SettingsFile::at(path.clone()).load().0.master_volume, 66.0);
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_master_volume(67.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        adapter.set_master_volume(68.0);
+        assert!(adapter.poll(), "the notice goes");
+        assert!(messages(&adapter).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_pairing_that_cant_be_saved_gets_a_notice_until_a_write_works() {
+        use crate::audio::pairings::tests::sealer;
+        let dir = test_dir("adapter-pairings-unsaved");
+        let path = dir.join(crate::audio::pairings::FILE_NAME);
+        // A folder where the file goes: nothing can be written there.
+        std::fs::create_dir(&path).expect("the folder is made");
+        let mut audio = launch_audio();
+        let fake = FakeAirPlay::new();
+        let (store, _) = PairingStore::open(path.clone(), sealer());
+        audio.set_airplay_with_pairings(fake.link(), None, store);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        fake.appear(&tv);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEF", 0x11)),
+        );
+        assert!(adapter.poll());
+        assert_eq!(messages(&adapter), [NoticeMessage::PairingsNotSaved]);
+        assert!(
+            adapter.snapshot().speaker(&id).unwrap().enabled,
+            "paired for this run all the same"
+        );
+        // Writable again: the next write clears the notice.
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        adapter.forget_pairing(&id);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn settings_unreadable_at_launch_get_a_notice_once_they_are_kept_aside() {
+        let dir = test_dir("adapter-settings-kept-aside");
+        let path = dir.join(settings::FILE_NAME);
+        let held = dir.join("held");
+        std::fs::write(&held, "the user's settings").expect("written");
+        // Another program holds the file at launch (a folder stands in its
+        // place), and lets go of it before the first save.
+        std::fs::create_dir(&path).expect("the folder is made");
+        let mut adapter = launch(launch_audio(), &path);
+        assert!(messages(&adapter).is_empty(), "nothing kept aside yet");
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(&held, &path).expect("moved back");
+        adapter.set_master_volume(64.0);
+        assert!(adapter.poll(), "the notice shows");
+        let shown = messages(&adapter);
+        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert!(file.starts_with("settings.ignored-"), "{file}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(file)).expect("kept"),
+            "the user's settings"
+        );
+        // Told once: dismissed, it stays away at the next saves.
+        adapter.dismiss_all_notices();
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pairings_unreadable_at_launch_get_a_notice_once_they_are_kept_aside() {
+        use crate::audio::pairings::tests::sealer;
+        let dir = test_dir("adapter-pairings-kept-aside");
+        let path = dir.join(crate::audio::pairings::FILE_NAME);
+        // Another program holds the file at launch (a folder stands in its
+        // place), and lets go of it before the first pairing.
+        std::fs::create_dir(&path).expect("the folder is made");
+        let mut audio = launch_audio();
+        let fake = FakeAirPlay::new();
+        let (store, _) = PairingStore::open(path.clone(), sealer());
+        audio.set_airplay_with_pairings(fake.link(), None, store);
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::write(&path, b"the pairings made before").expect("written");
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        fake.appear(&tv);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEF", 0x11)),
+        );
+        assert!(adapter.poll());
+        let shown = messages(&adapter);
+        let [NoticeMessage::PairingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert!(file.starts_with("airplay-pairings.ignored-"), "{file}");
+        assert_eq!(
+            std::fs::read(dir.join(file)).expect("kept"),
+            b"the pairings made before"
+        );
+        // Told once: dismissed, it stays away at the next writes.
+        adapter.dismiss_all_notices();
+        adapter.forget_pairing(&id);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

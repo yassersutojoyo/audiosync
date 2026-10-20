@@ -236,6 +236,20 @@ pub enum BackendEvent {
         /// Why it could not start.
         error: BackendError,
     },
+    /// An output could not start because another app holds its device in
+    /// exclusive mode. It stays on, is tried again every few seconds, and plays
+    /// once the device is free; [`BackendEvent::OutputFree`] tells then.
+    OutputBusy {
+        /// The endpoint ID.
+        id: String,
+    },
+    /// An output reported busy no longer waits for its device: it plays
+    /// now, it was switched off, streaming stopped, or its device went
+    /// away.
+    OutputFree {
+        /// The endpoint ID.
+        id: String,
+    },
     /// Playback stopped on its own.
     Stopped {
         /// Why it stopped.
@@ -284,10 +298,25 @@ pub enum BackendEvent {
         /// The endpoint ID.
         id: String,
     },
-    /// The AirPlay sender stopped after an internal error, so no AirPlay
-    /// speaker is listed or plays, or its discovery did, so none is listed;
-    /// [`AudioBackend::retry_airplay`] starts a new sender.
+    /// The AirPlay sender stopped after an internal error or couldn't
+    /// start, so no AirPlay speaker is listed or plays, or its discovery
+    /// did, so none is listed; [`AudioBackend::retry_airplay`] starts a new
+    /// sender.
     AirPlayStopped,
+    /// Whether the pairings' file could be written, reported when that
+    /// changes: `false` once a write failed (the pairings added or forgotten
+    /// since last only until AudioSync quits), `true` once one worked again.
+    PairingStore {
+        /// The last write worked.
+        saved: bool,
+    },
+    /// The pairings' file the store ignored at launch (it couldn't be read,
+    /// decrypted or parsed) was kept aside before the first write over it,
+    /// so the user can be told where. Reported once.
+    PairingsKeptAside {
+        /// The copy's file name, in the app's data folder.
+        file: String,
+    },
 }
 
 /// Why playback stopped on its own.
@@ -298,6 +327,11 @@ pub enum StopReason {
     /// Capture failed and could not go on.
     CaptureFailed(BackendError),
 }
+
+/// The HRESULT of a wait that timed out, `HRESULT_FROM_WIN32(ERROR_TIMEOUT)`:
+/// the code of a [`BackendError::System`] for an activation Windows never
+/// completed within AudioSync's wait.
+pub const TIMED_OUT: i32 = 0x8007_05B4_u32 as i32;
 
 /// Why something failed. The UI words each variant in its own, translated
 /// text; [`fmt::Display`] gives English for logs.
@@ -313,10 +347,18 @@ pub enum BackendError {
     SourceGone,
     /// The chosen process is not an app (the System or Idle process).
     NotAnApp,
-    /// The output device is not connected, or Windows audio is not running.
+    /// The output device is not connected, Windows audio is not running, or
+    /// Windows is rebuilding the device's endpoint (after a wake, or a change
+    /// of its format): worth another try.
     DeviceGone,
+    /// Another app holds the device for itself (exclusive mode), so nothing
+    /// else can play to it until that app lets go.
+    DeviceBusy,
     /// The audio format can't be used, such as a rate outside 8 to 384 kHz.
     UnsupportedFormat,
+    /// Windows audio didn't answer in time: opening a device hung (after a
+    /// wake, say). Worth another try a little later.
+    NotResponding,
     /// A Windows call failed with this HRESULT.
     System {
         /// The call that failed.
@@ -342,9 +384,11 @@ impl fmt::Display for BackendError {
             BackendError::DeviceGone => {
                 f.write_str("The device isn't connected, or Windows audio isn't running.")
             }
+            BackendError::DeviceBusy => f.write_str("Another app is using the device exclusively."),
             BackendError::UnsupportedFormat => {
                 f.write_str("The device's audio format isn't supported.")
             }
+            BackendError::NotResponding => f.write_str("Windows audio didn't answer in time."),
             BackendError::System { call, code } => {
                 // `{:08X}` of a negative i32 prints its two's complement, the
                 // way Windows writes HRESULTs.
@@ -411,6 +455,18 @@ pub trait AudioBackend {
     /// live. A value that isn't finite is ignored.
     fn set_output_volume(&mut self, id: &str, position: f64);
 
+    /// Whether an output has settings of its own, connected or not: it was
+    /// turned on or off, or its delay or volume set, in this run or a saved
+    /// one.
+    fn has_output_settings(&self, id: &str) -> bool;
+
+    /// Gives output `to` the settings of output `from` (on or off, offset,
+    /// volume) and forgets `from`'s, for a device listed under a new
+    /// endpoint ID. While playing, `to` starts at once if it is on and
+    /// connected; if it can't start, it is turned off again and the error
+    /// returned.
+    fn move_output_settings(&mut self, from: &str, to: &str) -> Result<(), BackendError>;
+
     /// The fix under an output whose own volume in Windows is low or muted
     /// (spec S197): sets that volume to 75 % when it is low and unmutes it
     /// when it is muted, once each. Nothing else ever writes a device volume.
@@ -433,6 +489,11 @@ pub trait AudioBackend {
     /// The AirPlay speakers on the network, by name, with their settings;
     /// empty while there is no AirPlay sender.
     fn airplay_speakers(&self) -> Vec<AirPlayInfo>;
+
+    /// Whether an AirPlay sender runs and browses for receivers: false
+    /// without a sender, and once one stopped or its discovery did or
+    /// couldn't start (reported as [`BackendEvent::AirPlayStopped`]).
+    fn airplay_browsing(&self) -> bool;
 
     /// The IDs of the AirPlay speakers turned on, listed or not, sorted.
     fn enabled_airplay(&self) -> Vec<String>;
@@ -522,7 +583,9 @@ mod tests {
             BackendError::SourceGone,
             BackendError::NotAnApp,
             BackendError::DeviceGone,
+            BackendError::DeviceBusy,
             BackendError::UnsupportedFormat,
+            BackendError::NotResponding,
             BackendError::System { call: "x", code: 1 },
         ];
         for error in errors {
