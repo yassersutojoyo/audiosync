@@ -82,6 +82,13 @@ pub enum Availability {
         expect(dead_code, reason = "only the Windows backend pairs")
     )]
     Pairing,
+    /// It was switched on while another Apple TV has the PIN prompt; its
+    /// pairing gets the prompt once that one ends.
+    #[cfg_attr(
+        all(not(windows), not(test)),
+        expect(dead_code, reason = "only the Windows backend pairs")
+    )]
+    WaitingToPair,
     /// It asks for a password, which AudioSync for Windows can't send yet.
     PasswordNotYet,
     /// It needs pairing with a PIN, which AudioSync for Windows can't do yet.
@@ -190,9 +197,9 @@ pub struct PinPrompt {
 impl Speaker {
     /// Whether the speaker lists show it. A virtual output (a loopback
     /// driver, a voice changer, a meeting app's device) is listed only while
-    /// Show Virtual Devices is on or while it is turned on. Unlike the Mac,
-    /// which also keeps one listed once it was shown, turning a listed
-    /// virtual output off with Show Virtual Devices off removes its row.
+    /// Show Virtual Devices is on or while it is turned on. The main window
+    /// also keeps one listed once it was shown (`ListedVirtual` in
+    /// src/view.rs), so turning it off doesn't remove its row.
     pub fn is_listed(&self, show_virtual: bool) -> bool {
         show_virtual || self.enabled || self.kind != SpeakerKind::Virtual
     }
@@ -657,6 +664,12 @@ impl MockBackend {
         );
         self.next_id += 1;
         self.state.notices.truncate(NOTICE_CAPACITY);
+    }
+
+    /// Adds a speaker the example data lacks, such as a virtual output.
+    #[cfg(test)]
+    pub fn add_speaker(&mut self, speaker: Speaker) {
+        self.state.speakers.push(speaker);
     }
 
     fn speaker_mut(&mut self, id: &str) -> Option<&mut Speaker> {

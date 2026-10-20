@@ -51,7 +51,10 @@ echo "▶ shellcheck"
 scripts/shellcheck.sh || status=1
 
 echo "▶ private references (scripts/privacy_check.py)"
-{ python3 -I scripts/privacy_check.py --self-test && python3 -I scripts/privacy_check.py; } || status=1
+# --verify-names checks scripts/forbidden-names.txt against the local plain
+# list (info/forbidden-names in the git directory) and skips without one.
+{ python3 -I scripts/privacy_check.py --self-test && python3 -I scripts/privacy_check.py \
+  && python3 -I scripts/privacy_check.py --verify-names; } || status=1
 
 echo "▶ side effects in debug logging"
 # DBG.log takes an autoclosure that only runs with AUDIOSYNC_DEBUG=1, so a
@@ -87,13 +90,14 @@ if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
   echo "▶ logic"
   # The local delay model (LocalDelay.swift) and the device volume hint
   # (DeviceVolume.swift) ask the core, and the texts (Localization.swift)
-  # name the capture's errors, which bring the engine's parts along: the
+  # name the capture's and the engine's start errors, which bring the
+  # engine's parts along (SyncEngine.swift with its StartError): the
   # logic suite links the core too.
   build logic Tests/logictest.swift TrackMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
     AirPlayPairing.swift Notices.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \
     AudioDevices.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift \
     NativeReceiver.swift NativeAirPlayModel.swift WindowRules.swift AppSettings.swift AppLifecycle.swift LocalDelay.swift DeviceVolume.swift \
-    Localization.swift ProcessTapCapture.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
+    Localization.swift ProcessTapCapture.swift SyncEngine.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
   "$OUT/logic/run" || status=1
   echo "▶ core (the app's wrappers of the core)"
   build core Tests/coretest.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"

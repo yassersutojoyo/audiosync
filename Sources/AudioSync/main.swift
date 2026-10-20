@@ -72,10 +72,11 @@ let exitSignalQueue = DispatchQueue(label: "audiosync.exit-signals", qos: .userI
 let exitSignalSources = AppLifecycle.exitSignals.map { number -> DispatchSourceSignal in
     signal(number, SIG_IGN)   // the default action would end the process before the source sees it
     let source = DispatchSource.makeSignalSource(signal: number, queue: exitSignalQueue)
+    let status = AppLifecycle.exitStatus(signal: number)   // 143 or 130: the caller sees the interrupt
     source.setEventHandler { @Sendable in
         // A launch arriving during the shutdown should not be told we're here.
         AppDelegate.exiting.store(true, ordering: .relaxed)
-        exit(0)
+        exit(status)
     }
     source.resume()
     return source

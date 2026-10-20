@@ -177,7 +177,17 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the commit-message check reads the pushed range
+      # The forbidden-name rule (salted hashes in scripts/forbidden-names.txt;
+      # the self-test proves it on made-up names) stays off until the clean
+      # slate removes those names from the tree and the history. Then
+      # --forbidden-names joins the tree check and the commit-message check.
       - name: No private references (home paths on either host, LAN names, private IPs, private names)
         run: |
           python3 -I scripts/privacy_check.py --self-test
           python3 -I scripts/privacy_check.py
+      - name: Commit messages of this push or pull request (forbidden names)
+        env:
+          RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}
+        run: python3 -I scripts/privacy_check.py --commits "$RANGE"
