@@ -195,3 +195,18 @@ fn the_deepest_answer_within_the_body_cap_is_read_on_a_quarter_of_the_stack() {
         .expect("the pairing doesn't panic");
     assert_protocol_error(&events, state);
 }
+
+// The parser falls back to the ASCII format when XML fails, where "(" opens
+// an array in one byte, so the body cap allows the deepest nesting of all:
+// about 2,000 levels. That must still be read and dropped on the driver
+// thread's own stack.
+// covers: P140, P148
+#[test]
+fn the_deepest_ascii_answer_within_the_body_cap_is_read_on_the_driver_stack() {
+    let levels = MAX_PAIRING_BODY_BYTES / 2;
+    let mut body = b"(".repeat(levels);
+    body.extend(b")".repeat(levels));
+    assert_eq!(body.len(), MAX_PAIRING_BODY_BYTES);
+    let (events, state) = pair_on_a_driver_thread(body);
+    assert_protocol_error(&events, state);
+}

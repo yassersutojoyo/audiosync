@@ -859,17 +859,22 @@ impl AscAirPlay {
 
     /// The detail of [`AIRPLAY_EVENT_FAILED`] (S205): `panic at
     /// <file>:<line>` for the panic a call on this handle or its input
-    /// caught; when none did (the driver thread or discovery ended), the
-    /// latest panic the process noted since this handle was created, which,
-    /// with one sender, is the one that ended it; "" when there was none.
+    /// caught; when none did (the driver thread or discovery ended),
+    /// `latest panic at <file>:<line>` for the latest panic the process
+    /// noted since this handle was created, which, with one sender, is
+    /// usually the one that ended it; "" when there was none.
     fn failure_detail(&self) -> String {
-        let at = self.death.at.get().cloned().or_else(|| {
-            if PANICS.load(Ordering::SeqCst) == self.panics_before {
-                return None;
-            }
-            LATEST_PANIC.lock().ok().and_then(|latest| latest.clone())
-        });
-        at.map_or_else(String::new, |at| format!("panic at {at}"))
+        if let Some(at) = self.death.at.get() {
+            return format!("panic at {at}");
+        }
+        if PANICS.load(Ordering::SeqCst) == self.panics_before {
+            return String::new();
+        }
+        LATEST_PANIC
+            .lock()
+            .ok()
+            .and_then(|latest| latest.clone())
+            .map_or_else(String::new, |at| format!("latest panic at {at}"))
     }
 }
 

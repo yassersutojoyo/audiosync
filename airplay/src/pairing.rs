@@ -82,9 +82,12 @@ pub const CLIENT_ID_CHARS: usize = 16;
 /// and under 1 KiB as XML. A larger body is refused unread: the plist
 /// crate parses any nesting, but dropping a value nested tens of thousands
 /// deep recurses once per level and overflows the stack of the thread that
-/// reads it, which aborts the process. Within this cap a value nests at
-/// most about 800 levels, whose drop takes under 300 KiB of stack even in
-/// a debug build, a seventh of the driver thread's 2 MiB.
+/// reads it, which aborts the process. Within this cap a binary value
+/// nests at most about 800 levels, whose drop takes under 300 KiB of stack
+/// even in a debug build. The ASCII format, which the parser tries when XML
+/// fails, opens an array in one byte, so "((...))" nests about 2,000
+/// levels: roughly 0.8 to 1.3 MiB of drop recursion in a debug build, still
+/// under the driver thread's 2 MiB.
 pub const MAX_PAIRING_BODY_BYTES: usize = 4 * 1024;
 /// How many bytes the plist parser may read from one pairing answer body,
 /// its rereads included. A binary plist may refer to one object from many
