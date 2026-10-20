@@ -86,8 +86,8 @@ saved by an older version are converted once, so everything sounds as it did.
 
 Not supported yet: speakers that ask for a password, speakers that need
 another kind of pairing (the Apple TV code above is the one AudioSync does),
-and speakers that only play AirPlay 2. They're listed with a note saying so, and AudioSync never
-connects to them. Windows Firewall may ask whether AudioSync can use the
+and speakers that only play AirPlay 2. They're listed with a note saying so,
+and AudioSync never connects to them. Windows Firewall may ask whether AudioSync can use the
 network the first time it looks for speakers; it needs private networks for
 AirPlay.
 
