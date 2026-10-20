@@ -134,9 +134,13 @@ final class CoreDelayReader {
     /// keeps counting while the writer runs ahead between reads.
     var lagFrames: Int64 { sourceRing.framesWritten - nextFrame.load(ordering: .acquiring) }
 
-    var counters: Counters {
-        let c = asc_reader_counters(handle)
-        return Counters(
+    var counters: Counters { Counters(asc_reader_counters(handle)) }
+}
+
+extension CoreDelayReader.Counters {
+    /// The core's counters, clamped to Int64.
+    init(_ c: AscReaderCounters) {
+        self.init(
             primes: Int64(clamping: c.primes), resyncs: Int64(clamping: c.resyncs),
             driftSkips: Int64(clamping: c.drift_skips), driftSkipFrames: Int64(clamping: c.drift_skip_frames),
             driftSilences: Int64(clamping: c.drift_silences),
@@ -206,6 +210,104 @@ final class CoreGainStage {
                 into device: UnsafeMutablePointer<Float>, channels: Int) -> Int {
         asc_gain_stage_render(handle, stereo, frames, device, channels)
     }
+}
+
+/// A local output's renderer on the core, for one start on one device: its
+/// own delay reader on the ring, the conversion to the device rate, the
+/// channel mapping, the gain and the 20 ms fades (S62–S65, S182–S188). It
+/// starts closed and fades in on its first audio; a delay change fades out
+/// and back in (S187); `requestFadeOut` fades it out before its output stops,
+/// and the timed render publishes when that fade's last frame is output
+/// (S185).
+final class CoreRenderer {
+    /// Where the fade was at the end of the latest callback.
+    enum FadeState: Equatable { case closed, fadingIn, open, fadingOut }
+
+    /// F, 20 ms at the device rate (S182).
+    let fadeFrames: Int
+    /// Interleaved channels per device frame.
+    let channels: Int
+
+    private let handle: OpaquePointer
+    private let captureRate: UInt32
+
+    /// Nil when the core can't make it: no channels, or a rate outside
+    /// 8 000…384 000 Hz. The delay is 0 until one is set.
+    init?(ring: CoreDelayRing, captureRate: Double, deviceRate: Double, channels: Int, gain: Double) {
+        guard channels > 0, let capture = CoreRate.hz(captureRate), let device = CoreRate.hz(deviceRate),
+              let renderer = asc_renderer_create(ring.handle, capture, device, channels,
+                                                 Float(Self.clampedGain(gain)))
+        else { return nil }
+        handle = renderer
+        self.captureRate = capture
+        self.channels = channels
+        fadeFrames = asc_renderer_fade_frames(renderer)
+    }
+
+    /// Once the output thread no longer renders (its unit is gone).
+    deinit { asc_renderer_destroy(handle) }
+
+    private static func clampedGain(_ gain: Double) -> Double { gain.isFinite ? max(0, min(1.5, gain)) : 0 }
+
+    /// Output thread: fills `frames` interleaved device frames whose first is
+    /// output at host time `outputTimeNs`. Real-time safe.
+    @inline(__always)
+    func render(into device: UnsafeMutablePointer<Float>, frames: Int, outputTimeNs: UInt64) {
+        asc_renderer_render_timed(handle, device, frames, outputTimeNs)
+    }
+
+    /// Any thread: the linear gain, clamped to 0…1.5, ramped to across the
+    /// next callback (S64).
+    func setGain(_ gain: Double) {
+        asc_renderer_set_gain(handle, Float(Self.clampedGain(gain)))
+    }
+
+    /// Any thread: a new delay, converted at the capture rate as the core
+    /// converts it (S3). While audio plays it lands after a fade-out and
+    /// fades back in (S187). A non-finite delay is ignored (false).
+    @discardableResult
+    func setDelay(ms: Double) -> Bool {
+        var frames: Int64 = 0
+        guard asc_delay_ms_to_frames(ms, captureRate, &frames) else { return false }
+        asc_renderer_set_delay_frames(handle, frames)
+        return true
+    }
+
+    /// The newest delay asked for, in capture-rate frames.
+    var delayFrames: Int64 { asc_renderer_delay_frames(handle) }
+
+    /// Any thread: fade out from the next callback, then exact zeros until
+    /// the output stops (S185).
+    func requestFadeOut() { asc_renderer_request_fade_out(handle) }
+
+    /// The host time at which the fade-out's last frame is output, once it
+    /// has been rendered.
+    var fadeEndNs: UInt64? {
+        var end: UInt64 = 0
+        return asc_renderer_fade_end_time_ns(handle, &end) ? end : nil
+    }
+
+    /// Whether the fade-out has played by host time `nowNs`, once the
+    /// device's and stream's latency `latencyNs` is added to its last
+    /// frame's output time (S185).
+    func hasFaded(latencyNs: UInt64, nowNs: UInt64) -> Bool {
+        asc_renderer_faded_by_time(handle, latencyNs, nowNs)
+    }
+
+    var fadeState: FadeState {
+        switch asc_renderer_fade_state(handle) {
+        case Int32(ASC_FADE_FADING_IN): return .fadingIn
+        case Int32(ASC_FADE_OPEN): return .open
+        case Int32(ASC_FADE_FADING_OUT): return .fadingOut
+        default: return .closed
+        }
+    }
+
+    /// The reader's lag after its latest read, W − P (S56).
+    var lagFrames: Int64 { asc_renderer_lag_frames(handle) }
+
+    /// The reader's counters (S158).
+    var counters: CoreDelayReader.Counters { CoreDelayReader.Counters(asc_renderer_counters(handle)) }
 }
 
 /// The core's volume curve: slider positions (0…100) and linear gain (S70, S71).

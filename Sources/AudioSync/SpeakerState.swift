@@ -92,8 +92,18 @@ protocol LocalOutputEngine: AnyObject {
     func addOutput(uid: String, deviceID: AudioObjectID, delayMs: Double, gain: Double) throws
     /// Stops the renderer of `uid`.
     func removeOutput(uid: String)
+    /// Stops the renderers of `uids` together, so they fade out at once and
+    /// cost one wait (S186).
+    func removeOutputs(uids: [String])
     /// Sets the linear gain of the renderer of `uid`.
     func setGain(uid: String, g: Double)
+}
+
+extension LocalOutputEngine {
+    /// One `removeOutput` per UID, for an engine without fades.
+    func removeOutputs(uids: [String]) {
+        for uid in uids { removeOutput(uid: uid) }
+    }
 }
 
 extension LocalOutputSync {
@@ -137,10 +147,8 @@ extension LocalOutputSync {
                 applied.failures.append(Failure(uid: uid, deviceName: device.name))
             }
         }
-        for detachedUID in steps.detach {
-            engine.removeOutput(uid: detachedUID)
-            applied.detached.append(detachedUID)
-        }
+        engine.removeOutputs(uids: steps.detach)   // together, so they fade out at once (S186)
+        applied.detached = steps.detach
         return applied
     }
 

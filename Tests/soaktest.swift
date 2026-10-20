@@ -532,7 +532,9 @@ for i in 0..<renderers.count {
     let means = total { $0.lagErrMean[i] }
     let lagAbs = means.map(abs).max() ?? 0
     let rendered = total { $0.rendered[i] }.reduce(0, +)
-    let renderedRatio = duration > 0 ? Double(rendered) / (duration * rate) : 0
+    // Frames at the rate each output renders at, its device's (S62).
+    let renderRate = renderers[i].renderRate > 0 ? renderers[i].renderRate : rate
+    let renderedRatio = duration > 0 ? Double(rendered) / (duration * renderRate) : 0
     let dropouts = total { $0.dropouts[i] }.reduce(0, +)
     worstDropouts = max(worstDropouts, dropouts)
     worstStarved = max(worstStarved, c.starvedRenders)

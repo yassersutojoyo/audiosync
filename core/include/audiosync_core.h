@@ -461,6 +461,104 @@ void asc_gain_stage_apply(AscGainStage *stage, float *interleaved, size_t frames
 size_t asc_gain_stage_render(AscGainStage *stage, const float *stereo, size_t frames, float *device,
                              size_t channels);
 
+/* ---- Renderer: a local output with its fades (S62-S65, S182-S188) ------- */
+
+/*
+ * One local output's renderer for one start on one device: its own delay
+ * reader on the ring, the converter to the device rate, the channel mapping,
+ * the gain and the 20 ms fades. It starts closed and fades in on its first
+ * audio; a stop's fade-out and every delay change fade (S184 to S188). The
+ * render calls run on the output thread; every other call runs on any thread
+ * and is a lock-free atomic operation.
+ */
+typedef struct AscRenderer AscRenderer;
+
+/* The longest a host waits for its outputs' fade-outs at a stop or a removal (S186). */
+#define ASC_STOP_FADE_CAP_MS 500
+
+/* asc_renderer_fade_state: exact zeros, fading in, full level, fading out. */
+#define ASC_FADE_CLOSED 0
+#define ASC_FADE_FADING_IN 1
+#define ASC_FADE_OPEN 2
+#define ASC_FADE_FADING_OUT 3
+
+/*
+ * Control thread: a renderer reading `ring`, captured at capture_rate, for a
+ * device running at device_rate with `channels` interleaved channels, at
+ * linear gain `gain`; its delay is 0 until one is set. NULL for a NULL ring,
+ * no channels, or a rate outside 8000...384000 Hz.
+ */
+AscRenderer *asc_renderer_create(AscRing *ring, uint32_t capture_rate, uint32_t device_rate, size_t channels,
+                                 float gain);
+
+/* Destroys a renderer, once the output thread no longer calls it. */
+void asc_renderer_destroy(AscRenderer *renderer);
+
+/*
+ * Output thread: fills `frames` frames of frames x channels interleaved
+ * floats: read at the output's delay, converted to the device rate, mapped
+ * onto the channels, at the gain, faded. Real-time safe.
+ */
+void asc_renderer_render(AscRenderer *renderer, float *device, size_t frames);
+
+/*
+ * Output thread: as asc_renderer_render, for a callback whose first frame is
+ * output at output_time_ns host nanoseconds, so that a stop's fade-out
+ * publishes when its last frame is output. Real-time safe.
+ */
+void asc_renderer_render_timed(AscRenderer *renderer, float *device, size_t frames, uint64_t output_time_ns);
+
+/* Any thread: the linear gain (negative or non-finite counts as 0), ramped to across the next callback. */
+void asc_renderer_set_gain(AscRenderer *renderer, float gain);
+
+/* Any thread: the gain last set. */
+float asc_renderer_gain(const AscRenderer *renderer);
+
+/*
+ * Any thread: a new delay in capture-rate frames. A renderer that plays
+ * fades out first and hands it to its reader after the fade-out's last
+ * frame, then fades in on the new timeline; a closed one takes it at once.
+ */
+void asc_renderer_set_delay_frames(AscRenderer *renderer, int64_t frames);
+
+/* Any thread: the newest delay asked for, in capture-rate frames. */
+int64_t asc_renderer_delay_frames(const AscRenderer *renderer);
+
+/*
+ * Any thread, before the output stops: fade out over 20 ms of device frames
+ * from the next callback, then render exact zeros until the output stops.
+ */
+void asc_renderer_request_fade_out(AscRenderer *renderer);
+
+/* Any thread: whether the requested fade-out's last frame has been rendered. */
+bool asc_renderer_fade_rendered(const AscRenderer *renderer);
+
+/*
+ * Any thread: the host time in nanoseconds at which the requested fade-out's
+ * last frame is output; false, leaving *time_ns alone, until a timed render
+ * has rendered it.
+ */
+bool asc_renderer_fade_end_time_ns(const AscRenderer *renderer, uint64_t *time_ns);
+
+/*
+ * Any thread: whether the requested fade-out has played by host time now_ns,
+ * that is its last frame's output time plus latency_ns (the device's and its
+ * stream's latency) has passed.
+ */
+bool asc_renderer_faded_by_time(const AscRenderer *renderer, uint64_t latency_ns, uint64_t now_ns);
+
+/* Any thread: where the fade was at the end of the latest callback, an ASC_FADE_* code. */
+int32_t asc_renderer_fade_state(const AscRenderer *renderer);
+
+/* Any thread: the frames of a fade at the device rate, 20 ms (960 at 48 kHz). */
+size_t asc_renderer_fade_frames(const AscRenderer *renderer);
+
+/* Any thread: the reader's lag, W - P after its latest read (S56). */
+int64_t asc_renderer_lag_frames(const AscRenderer *renderer);
+
+/* Any thread: the reader's counters; all zero for a NULL handle. */
+AscReaderCounters asc_renderer_counters(const AscRenderer *renderer);
+
 /* ---- Delay helpers ------------------------------------------------------- */
 
 /*

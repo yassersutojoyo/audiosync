@@ -34,7 +34,9 @@ extension AppDelegate {
                 return
             }
         }
-        if engine.running { engine.stop() }   // e.g. a format change: rebuild at the new rate
+        // E.g. a format change: rebuild at the new rate. The start waits for
+        // the old outputs' fade-outs (at most 500 ms, S186).
+        if engine.running { engine.stop() }
         do {
             try engine.start(source: audioSource)
         } catch {
@@ -89,7 +91,7 @@ extension AppDelegate {
     /// Streaming off: the session stops, and AudioSync's own sender's
     /// speakers leave (`syncNativeSpeakers`); their switches stay as they are.
     func stopEngine() {
-        engine.stop()   // the capture and the local outputs end
+        engine.stop()   // the outputs and the AirPlay input fade out, then capture and the outputs end (S186)
         syncNativeSpeakers()   // nothing streams: AudioSync's own sender's speakers leave
         clearNotices([Notice.capture])   // about this session's audio, which just ended
         refreshStreamingViews()

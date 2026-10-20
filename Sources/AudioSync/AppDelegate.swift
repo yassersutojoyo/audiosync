@@ -408,8 +408,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 
-    /// Quit (S110): stop the session, then tear AudioSync's own AirPlay
-    /// sender down, which ends every speaker's session.
+    /// Quit (S110, S186): stop the session, letting the outputs and the
+    /// AirPlay inputs fade out (at most 0.5 s), then tear AudioSync's own
+    /// AirPlay sender down, which ends every speaker's session.
     func applicationWillTerminate(_ notification: Notification) {
         Self.exiting.store(true, ordering: .relaxed)
         DBG.log("[AudioSync] quitting")
@@ -417,6 +418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // Nothing needs to reach the views any more.
         localNetworkProbe.onChange = { _ in }
         stopEngine()
+        engine.finishStopping()   // local outputs finish their fades and capture halts before the sender's teardown
         nativeAirPlay?.shutdown()   // AudioSync's own sender: every speaker gets its TEARDOWN
         nowPlaying.stopWatching()
         localNetworkProbe.stopBrowsing()

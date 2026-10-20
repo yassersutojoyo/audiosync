@@ -6,13 +6,49 @@
 //! A gain stage has two sides in separate fields: the [`SharedGain`] that any
 //! thread sets with a relaxed atomic store (S133), and the [`GainStage`] that
 //! the output thread runs.
+//!
+//! A renderer handle is a whole local output's renderer with its fades
+//! (S62 to S65, S183 to S188): the [`Renderer`] its output thread runs, and
+//! the [`RendererControl`] and [`SharedGain`] that every other call uses,
+//! whose methods are lock-free atomic operations (S190). A call borrows only
+//! the fields it needs, so a render and a control call may run at the same
+//! time.
 
 use std::ptr;
+use std::sync::Arc;
 
+use super::ring::{AscReaderCounters, AscRing, ring_of};
 use super::{host_slice, host_slice_mut, samples_for, stereo_samples};
 use crate::convert;
+use crate::fade::{FadeState, fade_frames};
+use crate::reader::Reader;
+use crate::render::{Renderer, RendererControl, STOP_FADE_CAP};
 use crate::resample::Resampler;
+use crate::ring;
 use crate::volume::{GainStage, SharedGain};
+
+/// The longest a host waits for its outputs' fade-outs at a stop or a
+/// removal, in milliseconds (S186); the header's `ASC_STOP_FADE_CAP_MS`.
+pub const STOP_FADE_CAP_MS: u32 = STOP_FADE_CAP.as_millis() as u32;
+
+/// `asc_renderer_fade_state` while the renderer renders exact zeros.
+pub const FADE_CLOSED: i32 = 0;
+/// `asc_renderer_fade_state` while the renderer fades in.
+pub const FADE_FADING_IN: i32 = 1;
+/// `asc_renderer_fade_state` while frames pass at full level.
+pub const FADE_OPEN: i32 = 2;
+/// `asc_renderer_fade_state` while the renderer fades out.
+pub const FADE_FADING_OUT: i32 = 3;
+
+/// A local output's renderer behind an opaque C pointer: the renderer its
+/// output thread runs, and the control and gain that any thread uses.
+pub struct AscRenderer {
+    control: RendererControl,
+    gain: Arc<SharedGain>,
+    /// F at the device rate (S182), fixed at creation.
+    fade_frames: usize,
+    renderer: Renderer,
+}
 
 /// A streaming resampler behind an opaque C pointer (S62, S85).
 pub struct AscResampler {
@@ -323,9 +359,341 @@ pub unsafe extern "C" fn asc_gain_stage_render(
     written
 }
 
+/// Control thread: a renderer reading `ring`, captured at `capture_rate`,
+/// for a device that runs at `device_rate` with `channels` interleaved
+/// channels, at linear gain `gain`. It starts closed, at a delay of 0 until
+/// one is set. Null for a null ring, no channels, or a rate outside 8000 to
+/// 384 000 Hz.
+///
+/// # Safety
+///
+/// `ring` is null or a live ring handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_create(
+    ring: *mut AscRing,
+    capture_rate: u32,
+    device_rate: u32,
+    channels: usize,
+    gain: f32,
+) -> *mut AscRenderer {
+    if !ring::is_supported_rate(capture_rate) || !ring::is_supported_rate(device_rate) {
+        return ptr::null_mut();
+    }
+    // SAFETY: by the caller's contract the handle is null or live.
+    let Some(ring) = (unsafe { ring_of(ring) }) else {
+        return ptr::null_mut();
+    };
+    let reader = Reader::new(Arc::clone(ring), capture_rate);
+    let control = RendererControl::new(&reader);
+    let gain = Arc::new(SharedGain::new(gain));
+    match Renderer::new(
+        reader,
+        &control,
+        Arc::clone(&gain),
+        capture_rate,
+        device_rate,
+        channels,
+    ) {
+        Ok(renderer) => Box::into_raw(Box::new(AscRenderer {
+            control,
+            gain,
+            fade_frames: fade_frames(device_rate),
+            renderer,
+        })),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Destroys a renderer.
+///
+/// # Safety
+///
+/// `renderer` is null or a pointer returned by [`asc_renderer_create`] that
+/// was not destroyed yet, and no other call on it runs now or later.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_destroy(renderer: *mut AscRenderer) {
+    if renderer.is_null() {
+        return;
+    }
+    // SAFETY: the pointer came from Box::into_raw in asc_renderer_create,
+    // and by the caller's contract it is destroyed once, with no call in
+    // progress.
+    drop(unsafe { Box::from_raw(renderer) });
+}
+
+/// The output thread's side of a renderer and a device buffer of `frames`
+/// frames.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer whose output-thread calls run on
+/// one thread at a time; `device` is null or points to `frames` × the
+/// renderer's channels aligned, writable floats that nothing else touches
+/// during `'a`.
+unsafe fn output_buffer<'a>(
+    renderer: *mut AscRenderer,
+    device: *mut f32,
+    frames: usize,
+) -> Option<(&'a mut Renderer, &'a mut [f32])> {
+    if renderer.is_null() {
+        return None;
+    }
+    // SAFETY: output-thread calls run on one thread at a time and are the
+    // only ones that borrow the `renderer` field.
+    let renderer = unsafe { &mut (*renderer).renderer };
+    let samples = samples_for(frames, renderer.channels())?;
+    // SAFETY: by the caller's contract the buffer is null or holds `samples`
+    // writable floats that only this call touches.
+    let buffer = unsafe { host_slice_mut(device, samples) }?;
+    Some((renderer, buffer))
+}
+
+/// Output thread: fills `frames` frames of the renderer's channels,
+/// interleaved: read at the output's delay, converted to the device rate,
+/// mapped onto the channels, at the gain, with the fade after them (S62 to
+/// S65, S183 to S188). Real-time safe.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer whose output-thread calls run on
+/// one thread at a time; `device` is null or points to `frames` × the
+/// renderer's channels aligned, writable floats that nothing else touches
+/// during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_render(
+    renderer: *mut AscRenderer,
+    device: *mut f32,
+    frames: usize,
+) {
+    // SAFETY: by the caller's contract the handle and the buffer are null or
+    // valid for this call.
+    if let Some((renderer, buffer)) = unsafe { output_buffer(renderer, device, frames) } {
+        renderer.render(buffer);
+    }
+}
+
+/// Output thread: as `asc_renderer_render`, for a callback whose first frame
+/// is output at `output_time_ns` host nanoseconds, so that a stop's
+/// fade-out publishes when its last frame is output (S185). Real-time safe.
+///
+/// # Safety
+///
+/// As [`asc_renderer_render`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_render_timed(
+    renderer: *mut AscRenderer,
+    device: *mut f32,
+    frames: usize,
+    output_time_ns: u64,
+) {
+    // SAFETY: by the caller's contract the handle and the buffer are null or
+    // valid for this call.
+    if let Some((renderer, buffer)) = unsafe { output_buffer(renderer, device, frames) } {
+        renderer.render_timed(buffer, output_time_ns);
+    }
+}
+
+/// The control side of a renderer.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+unsafe fn control_side<'a>(renderer: *const AscRenderer) -> Option<&'a RendererControl> {
+    if renderer.is_null() {
+        return None;
+    }
+    // SAFETY: the handle is live; this borrows only the `control` field,
+    // whose methods are atomic operations.
+    Some(unsafe { &(*renderer).control })
+}
+
+/// Any thread: the linear gain (negative or non-finite counts as 0), ramped
+/// to across the next callback (S64).
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_set_gain(renderer: *mut AscRenderer, gain: f32) {
+    if renderer.is_null() {
+        return;
+    }
+    // SAFETY: the handle is live; this borrows only the `gain` field, which
+    // the output thread only reads, atomically.
+    unsafe { &(*renderer).gain }.set(gain);
+}
+
+/// Any thread: the gain last set.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_gain(renderer: *const AscRenderer) -> f32 {
+    if renderer.is_null() {
+        return 0.0;
+    }
+    // SAFETY: the handle is live; this borrows only the `gain` field.
+    unsafe { &(*renderer).gain }.get()
+}
+
+/// Any thread: a new delay in capture-rate frames (negative counts as 0).
+/// A renderer that plays fades out first and hands it to its reader after
+/// the fade-out's last frame; one that is closed hands it on at its next
+/// callback (S187).
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_set_delay_frames(renderer: *mut AscRenderer, frames: i64) {
+    // SAFETY: by the caller's contract the handle is null or live.
+    if let Some(control) = unsafe { control_side(renderer) } {
+        control.set_delay_frames(frames);
+    }
+}
+
+/// Any thread: the newest delay asked for, in capture-rate frames.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_delay_frames(renderer: *const AscRenderer) -> i64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::delay_frames)
+}
+
+/// Any thread: asks the renderer to fade out over F device frames from its
+/// next callback and render exact zeros after them until it stops (S185).
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_request_fade_out(renderer: *mut AscRenderer) {
+    // SAFETY: by the caller's contract the handle is null or live.
+    if let Some(control) = unsafe { control_side(renderer) } {
+        control.request_fade_out();
+    }
+}
+
+/// Any thread: whether the requested fade-out's last frame has been rendered.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_fade_rendered(renderer: *const AscRenderer) -> bool {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.is_some_and(RendererControl::fade_rendered)
+}
+
+/// Any thread: the host time in nanoseconds at which the requested
+/// fade-out's last frame is output, from the time its callback was given;
+/// false, leaving `time_ns` alone, until a timed render has rendered it.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer; `time_ns` is null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_fade_end_time_ns(
+    renderer: *const AscRenderer,
+    time_ns: *mut u64,
+) -> bool {
+    // SAFETY: by the caller's contract the handle is null or live.
+    let Some(end) = unsafe { control_side(renderer) }.and_then(RendererControl::fade_end_time_ns)
+    else {
+        return false;
+    };
+    if !time_ns.is_null() {
+        // SAFETY: non-null, and writable by the caller's contract.
+        unsafe { time_ns.write(end) };
+    }
+    true
+}
+
+/// Any thread: whether the requested fade-out has played by host time
+/// `now_ns`: its last frame's output time plus `latency_ns`, the device's
+/// and its stream's latency, has passed (S185, the Mac).
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_faded_by_time(
+    renderer: *const AscRenderer,
+    latency_ns: u64,
+    now_ns: u64,
+) -> bool {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }
+        .is_some_and(|control| control.faded_by_time(latency_ns, now_ns))
+}
+
+/// Any thread: where the fade was at the end of the latest callback, an
+/// `ASC_FADE_*` code; closed before the first one.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_fade_state(renderer: *const AscRenderer) -> i32 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    match unsafe { control_side(renderer) }.map(RendererControl::fade_state) {
+        Some(FadeState::FadingIn) => FADE_FADING_IN,
+        Some(FadeState::Open) => FADE_OPEN,
+        Some(FadeState::FadingOut) => FADE_FADING_OUT,
+        Some(FadeState::Closed) | None => FADE_CLOSED,
+    }
+}
+
+/// Any thread: F, the frames of a fade at the device rate (S182); 0 for a
+/// null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_fade_frames(renderer: *const AscRenderer) -> usize {
+    if renderer.is_null() {
+        return 0;
+    }
+    // SAFETY: the handle is live; `fade_frames` never changes after creation.
+    unsafe { (*renderer).fade_frames }
+}
+
+/// Any thread: the reader's last published `lagFrames` (S56).
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_lag_frames(renderer: *const AscRenderer) -> i64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::lag_frames)
+}
+
+/// Any thread: the reader's counters (S158); all zero for a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_counters(renderer: *const AscRenderer) -> AscReaderCounters {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or_else(AscReaderCounters::default, |control| {
+        control.counters().into()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ffi::ring::{
+        AscRingWriter, asc_ring_capacity_for_rate, asc_ring_create, asc_ring_destroy,
+        asc_ring_write, asc_ring_writer_create, asc_ring_writer_destroy,
+    };
 
     fn wave(frames: usize, seed: u32) -> Vec<f32> {
         (0..frames * 2)
@@ -644,5 +1012,181 @@ mod tests {
             asc_gain_stage_destroy(stage);
         }
         assert_eq!(block, [0.5; 8]);
+    }
+
+    /// A ring for 48 kHz and its writer, through the C interface.
+    fn c_ring() -> (*mut AscRing, *mut AscRingWriter) {
+        let ring = asc_ring_create(asc_ring_capacity_for_rate(48_000));
+        // SAFETY: `ring` is live.
+        let writer = unsafe { asc_ring_writer_create(ring) };
+        assert!(!ring.is_null() && !writer.is_null());
+        (ring, writer)
+    }
+
+    // covers: S183, S187
+    #[test]
+    fn a_renderer_through_the_c_interface_renders_like_the_rust_one() {
+        let (ring, writer) = c_ring();
+        // SAFETY: `ring` is live.
+        let shared = Arc::clone(unsafe { ring_of(ring) }.unwrap());
+        let reader = Reader::new(shared, 48_000);
+        let control = RendererControl::new(&reader);
+        let gain = Arc::new(SharedGain::new(0.8));
+        let mut rust = Renderer::new(reader, &control, gain, 48_000, 44_100, 2).unwrap();
+        // SAFETY: `ring` is live.
+        let c = unsafe { asc_renderer_create(ring, 48_000, 44_100, 2, 0.8) };
+        assert!(!c.is_null());
+        control.set_delay_frames(4800);
+        let mut rust_out = vec![0.0f32; 512 * 2];
+        let mut c_out = vec![0.0f32; 512 * 2];
+        // SAFETY: every handle is live and used from this one thread; every
+        // buffer holds the frames passed with it.
+        unsafe {
+            assert_eq!(asc_renderer_fade_frames(c), 882);
+            asc_renderer_set_delay_frames(c, 4800);
+            let history = wave(9600, 7);
+            asc_ring_write(writer, history.as_ptr(), 9600);
+            for callback in 0..40u32 {
+                let block = wave(557, callback);
+                asc_ring_write(writer, block.as_ptr(), 557);
+                if callback == 12 {
+                    // A delay change fades out and back in on the new delay.
+                    control.set_delay_frames(2400);
+                    asc_renderer_set_delay_frames(c, 2400);
+                }
+                if callback == 30 {
+                    control.request_fade_out();
+                    asc_renderer_request_fade_out(c);
+                }
+                rust.render(&mut rust_out);
+                asc_renderer_render(c, c_out.as_mut_ptr(), 512);
+                assert_eq!(rust_out, c_out, "callback {callback}");
+            }
+            assert_eq!(asc_renderer_delay_frames(c), 2400);
+            assert_eq!(asc_renderer_lag_frames(c), control.lag_frames());
+            assert_eq!(
+                asc_renderer_counters(c),
+                AscReaderCounters::from(control.counters())
+            );
+            assert!(asc_renderer_fade_rendered(c));
+            assert!(
+                c_out.iter().all(|&s| s == 0.0),
+                "closed after the stop's fade-out"
+            );
+            // Untimed renders publish no output time.
+            assert!(!asc_renderer_fade_end_time_ns(c, ptr::null_mut()));
+            asc_renderer_destroy(c);
+            asc_ring_writer_destroy(writer);
+            asc_ring_destroy(ring);
+        }
+    }
+
+    // covers: S184, S185
+    #[test]
+    fn a_c_renderer_fades_in_publishes_its_fade_end_and_counts_as_faded_after_the_latency() {
+        let (ring, writer) = c_ring();
+        // SAFETY: `ring` is live.
+        let renderer = unsafe { asc_renderer_create(ring, 48_000, 48_000, 2, 1.0) };
+        let level = vec![0.5f32; 512 * 2];
+        let mut out = vec![0.0f32; 512 * 2];
+        let period = 10_666_667u64;
+        let start = 7_000_000_000u64;
+        let latency = 4_000_000u64;
+        let mut states = Vec::new();
+        // SAFETY: the handles are live and used from this one thread; the
+        // buffers hold the frames passed with them.
+        unsafe {
+            assert_eq!(asc_renderer_fade_state(renderer), FADE_CLOSED);
+            asc_renderer_set_delay_frames(renderer, 4800);
+            for _ in 0..20 {
+                asc_ring_write(writer, level.as_ptr(), 512);
+            }
+            let mut first = Vec::new();
+            for callback in 0..5u64 {
+                asc_ring_write(writer, level.as_ptr(), 512);
+                if callback == 2 {
+                    asc_renderer_request_fade_out(renderer);
+                }
+                asc_renderer_render_timed(
+                    renderer,
+                    out.as_mut_ptr(),
+                    512,
+                    start + callback * period,
+                );
+                states.push(asc_renderer_fade_state(renderer));
+                if callback == 0 {
+                    first = out.clone();
+                }
+            }
+            // The first audio fades in from (almost) nothing.
+            assert!(first[0] > 0.0 && first[0] < 1e-4 && first[2 * 511] < 0.5);
+            assert_eq!(
+                states,
+                [
+                    FADE_FADING_IN,
+                    FADE_OPEN,
+                    FADE_FADING_OUT,
+                    FADE_CLOSED,
+                    FADE_CLOSED
+                ]
+            );
+            let end = start + 3 * period + 447 * 1_000_000_000 / 48_000;
+            let mut published = 0u64;
+            assert!(asc_renderer_fade_end_time_ns(renderer, &mut published));
+            assert_eq!(published, end);
+            assert!(!asc_renderer_faded_by_time(
+                renderer,
+                latency,
+                end + latency - 1
+            ));
+            assert!(asc_renderer_faded_by_time(renderer, latency, end + latency));
+            asc_renderer_destroy(renderer);
+            asc_ring_writer_destroy(writer);
+            asc_ring_destroy(ring);
+        }
+    }
+
+    #[test]
+    fn null_renderers_and_bad_arguments_do_nothing() {
+        let (ring, writer) = c_ring();
+        let mut block = [0.5f32; 8];
+        let mut end = 7u64;
+        // SAFETY: every call gets a null handle, a null buffer or a count no
+        // buffer can hold, which the interface allows; `ring` is live.
+        unsafe {
+            assert!(asc_renderer_create(ptr::null_mut(), 48_000, 48_000, 2, 1.0).is_null());
+            assert!(asc_renderer_create(ring, 48_000, 48_000, 0, 1.0).is_null());
+            assert!(asc_renderer_create(ring, 1_000, 48_000, 2, 1.0).is_null());
+            assert!(asc_renderer_create(ring, 48_000, 1_000_000, 2, 1.0).is_null());
+            let null = ptr::null_mut::<AscRenderer>();
+            asc_renderer_render(null, block.as_mut_ptr(), 4);
+            asc_renderer_render_timed(null, block.as_mut_ptr(), 4, 1);
+            asc_renderer_set_gain(null, 1.0);
+            asc_renderer_set_delay_frames(null, 100);
+            asc_renderer_request_fade_out(null);
+            assert_eq!(asc_renderer_gain(null), 0.0);
+            assert_eq!(asc_renderer_delay_frames(null), 0);
+            assert!(!asc_renderer_fade_rendered(null));
+            assert!(!asc_renderer_fade_end_time_ns(null, &mut end));
+            assert!(!asc_renderer_faded_by_time(null, 0, u64::MAX));
+            assert_eq!(asc_renderer_fade_state(null), FADE_CLOSED);
+            assert_eq!(asc_renderer_fade_frames(null), 0);
+            assert_eq!(asc_renderer_lag_frames(null), 0);
+            assert_eq!(asc_renderer_counters(null), AscReaderCounters::default());
+            asc_renderer_destroy(null);
+            let renderer = asc_renderer_create(ring, 48_000, 48_000, 2, 1.0);
+            asc_renderer_render(renderer, ptr::null_mut(), 4);
+            asc_renderer_render(renderer, block.as_mut_ptr(), usize::MAX);
+            asc_renderer_render_timed(renderer, ptr::null_mut(), 4, 1);
+            asc_renderer_render(renderer, ptr::null_mut(), 0);
+            asc_renderer_set_gain(renderer, f32::NAN);
+            assert_eq!(asc_renderer_gain(renderer), 0.0);
+            asc_renderer_destroy(renderer);
+            asc_ring_writer_destroy(writer);
+            asc_ring_destroy(ring);
+        }
+        assert_eq!(block, [0.5; 8]);
+        assert_eq!(end, 7);
+        assert_eq!(STOP_FADE_CAP_MS, 500);
     }
 }

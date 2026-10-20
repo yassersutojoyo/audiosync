@@ -51,6 +51,17 @@ enum NativeAirPlayTap {
         _ = users.wrappingSubtract(1, ordering: .sequentiallyConsistent)
     }
 
+    /// Control thread, at a session stop: the input fades out over the next
+    /// 20 ms of blocks it is given and hands zeros after them, until the next
+    /// capture build's `prepare` fades it in again (S186, S189).
+    static func requestFadeOut() {
+        _ = users.wrappingAdd(1, ordering: .sequentiallyConsistent)
+        if let raw = slot.load(ordering: .sequentiallyConsistent) {
+            asc_airplay_input_request_fade_out(OpaquePointer(raw))
+        }
+        _ = users.wrappingSubtract(1, ordering: .sequentiallyConsistent)
+    }
+
     /// Installs `input`, at the capture rate already known if a capture was
     /// built before. Published first, so a `prepare` running meanwhile either
     /// finds it or its rate is read here.

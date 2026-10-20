@@ -10,7 +10,7 @@ The part of the engine that runs all the time while you listen:
 
 Capture itself isn't in it (a process tap needs the recording permission and real audio), and neither is the AirPlay sender or a real AirPlay speaker. A producer thread stands in for the tap: it writes 512-frame blocks paced by the system's uptime clock, into a ring buffer the same size as the app's. Until 2026-10-20 the harness also ran the core's PCM pipe feed into a paced local reader; that feed went with the bundled AirPlay engine it fed.
 
-The ring, the delay readers and the gain stages are the Rust core's (`core/`), made the way a session in the app makes them (see [DEVELOPMENT.md](DEVELOPMENT.md)). Until 2026-10-19 the scripts could also run the Swift engine the core replaced; its last baseline, from 2026-10-17, is in the git history of `Tests/baseline/swift.json`.
+The ring, the outputs' renderers (delay readers, rate conversion, gain and fades) are the Rust core's (`core/`), made the way a session in the app makes them (see [DEVELOPMENT.md](DEVELOPMENT.md)). Until 2026-10-19 the scripts could also run the Swift engine the core replaced; its last baseline, from 2026-10-17, is in the git history of `Tests/baseline/swift.json`.
 
 ## Staying silent
 
