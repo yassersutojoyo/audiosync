@@ -123,8 +123,9 @@ the same control of a row once its list is rebuilt (a delay field keeps what
 you typed), the options button of the row next to one that went, or, once
 its list is empty, the options button of the other speaker list's first row,
 then of the first group (a group that went: the first speaker's), and the
-streaming switch only when no row is left, so Narrator keeps talking, Tab goes on from there, and Space
-or Enter never toggles something you didn't aim at. The tray flyout keeps
+streaming switch only when no row is left, so Narrator keeps talking, Tab
+goes on from there, and Space or Enter never toggles something you didn't
+aim at. The tray flyout keeps
 the focus inside itself the same way, so Escape still closes it.
 
 ## Narrator and contrast
