@@ -6,6 +6,8 @@
 //! boundary in that build. It is not in `include/audiosync_core.h`, and
 //! the app's library never has it.
 
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use crate::ffi::AscAirPlay;
 use crate::ffi::airplay::live;
 

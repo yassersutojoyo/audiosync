@@ -904,10 +904,18 @@ thread_local! {
 /// slashes; a build machine's home folder never shows (S205).
 fn panic_location(file: &str, line: u32) -> String {
     let parts: Vec<&str> = file.split(['/', '\\']).collect();
-    let from = match parts.iter().rposition(|part| *part == "src") {
+    let mut from = match parts.iter().rposition(|part| *part == "src") {
         Some(src) => src.saturating_sub(1),
         None => parts.len() - 1,
     };
+    // A `src` right below a home folder (a clone in ~/src) would keep the
+    // account name: the file name alone then.
+    let home = parts
+        .iter()
+        .position(|part| part.eq_ignore_ascii_case("users") || *part == "home");
+    if home.is_some_and(|home| from <= home + 1) {
+        from = parts.len() - 1;
+    }
     format!("{}:{line}", parts[from..].join("/"))
 }
 
@@ -3229,6 +3237,11 @@ mod tests {
                 "core/src/option.rs",
             ),
             ("/home/<you>/generated/out/bindings.rs", "bindings.rs"),
+            (
+                "/Users/<you>/src/audiosync/core/target/release/build/out/gen.rs",
+                "gen.rs",
+            ),
+            (r"C:\Users\<you>\src\gen.rs", "gen.rs"),
             ("lib.rs", "lib.rs"),
         ] {
             assert_eq!(panic_location(file, 42), format!("{short}:42"), "{file}");
