@@ -2599,6 +2599,74 @@ mod tests {
         assert!(!window.is_visible(), "Escape on a focused button");
     }
 
+    #[test]
+    fn a_notices_dismiss_button_names_it_in_a_few_words() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let dismiss_label = |message: NoticeMessage| {
+            let notice = ui_model::Notice {
+                id: 1,
+                subject: "test".into(),
+                message,
+                time: "09.40".into(),
+            };
+            let item = notice_item(&strings, &notice);
+            strings.invoke_dismiss_notice(item.title).to_string()
+        };
+        assert_eq!(
+            dismiss_label(NoticeMessage::HeardTwice {
+                source: Some("Music Player".into()),
+                mute: vec!["Speakers".into()],
+                shared: vec!["Headphones".into()],
+                default_output: None,
+            }),
+            "Dismiss: double audio"
+        );
+        assert_eq!(
+            dismiss_label(NoticeMessage::AirPlayRetrying {
+                speaker: "Kitchen".into(),
+                problem: ui_model::AirPlayProblem::ConnectionLost,
+            }),
+            "Dismiss: Kitchen reconnecting"
+        );
+        // Every kind gets a name of a few words, never the whole message.
+        let messages = [
+            NoticeMessage::NoSpeaker,
+            NoticeMessage::SourceQuit { source: "A".into() },
+            NoticeMessage::SourceNotRunning { source: "A".into() },
+            NoticeMessage::SourceRefused { source: "A".into() },
+            NoticeMessage::CaptureFailed,
+            NoticeMessage::CaptureLost,
+            NoticeMessage::SpeakerFailed {
+                speaker: "A".into(),
+            },
+            NoticeMessage::SpeakerLost {
+                speaker: "A".into(),
+            },
+            NoticeMessage::SpeakerBusy {
+                speaker: "A".into(),
+            },
+            NoticeMessage::AirPlayCantPlay {
+                speaker: "A".into(),
+                problem: ui_model::AirPlayProblem::Refused,
+            },
+            NoticeMessage::AirPlayStopped,
+            NoticeMessage::SettingsNotSaved,
+            NoticeMessage::PairingsNotSaved,
+            NoticeMessage::SettingsKeptAside { file: "f".into() },
+            NoticeMessage::PairingsKeptAside { file: "f".into() },
+            NoticeMessage::NoSoundOutput,
+        ];
+        for message in messages {
+            let label = dismiss_label(message.clone());
+            let words = label.split_whitespace().count();
+            assert!(
+                (3..=6).contains(&words),
+                "{message:?}: \"{label}\" is not a short name"
+            );
+        }
+    }
+
     /// The App over `backend`, with its main window shown and drawn once.
     fn main_window_over(backend: MockBackend) -> Rc<App> {
         let app = app_over(backend);
@@ -2868,8 +2936,77 @@ mod tests {
         );
         assert_eq!(
             on("pc", RowPart::Toggle).target(&before, &lists(&[], &["a", "b", "c"])),
-            Some(MainFocusTarget::StreamingSwitch),
-            "its list is empty now"
+            options("a"),
+            "its list is empty now: the other list's first row"
         );
+        assert_eq!(
+            on("a", RowPart::Toggle).target(&lists(&["pc"], &["a"]), &lists(&["pc"], &[])),
+            options("pc"),
+            "the same from the other list"
+        );
+        let with_group = |this_pc: &[&str], connected: &[&str]| MainLists {
+            groups: vec![GroupItem {
+                id: "g".into(),
+                ..GroupItem::default()
+            }],
+            ..lists(this_pc, connected)
+        };
+        assert_eq!(
+            on("pc", RowPart::Volume).target(&with_group(&["pc"], &[]), &with_group(&[], &[])),
+            Some(MainFocusTarget::Group("g".into(), RowPart::Options)),
+            "no speaker row left: the first group's options"
+        );
+        assert_eq!(
+            on("pc", RowPart::Toggle).target(&lists(&["pc"], &[]), &lists(&[], &[])),
+            Some(MainFocusTarget::StreamingSwitch),
+            "no row left at all"
+        );
+    }
+
+    #[test]
+    fn the_last_row_of_a_list_hands_the_focus_to_the_other_lists_first_row() {
+        // This PC's two outputs, and under Connected Speakers only a
+        // virtual output that is off, listed while Show Virtual Devices is
+        // on.
+        let mut backend = MockBackend::new();
+        backend.retain_speakers(|s| s.kind.is_this_pc());
+        backend.delete_group("group:1");
+        let mut cable = backend
+            .snapshot()
+            .speaker("local:headphones")
+            .unwrap()
+            .clone();
+        cable.id = "local:cable".into();
+        cable.name = "Cable Input".into();
+        cable.kind = ui_model::SpeakerKind::Virtual;
+        cable.enabled = false;
+        backend.add_speaker(cable);
+        let app = app_over(backend);
+        app.main.invoke_show_virtual_devices_toggled(true);
+        app.main.show().expect("the main window shows headless");
+        draw_frames();
+        let window = app.main.window();
+        // As in the example's order without the group's row and Bedroom's:
+        // the cable row's toggle.
+        tab(window, 12);
+        press(window, " ");
+        assert!(enabled(&app, "local:cable"), "the cable row has the focus");
+        press(window, " ");
+        assert!(!enabled(&app, "local:cable"));
+
+        // Off and no longer shown, Connected Speakers is empty: the focus
+        // goes to This PC's first row's options, so the next Tab stop is
+        // the headphones' toggle, not the source after the streaming switch.
+        app.main.invoke_show_virtual_devices_toggled(false);
+        draw_frames();
+        let headphones = enabled(&app, "local:headphones");
+        tab(window, 1);
+        press(window, " ");
+        assert_ne!(
+            enabled(&app, "local:headphones"),
+            headphones,
+            "the next stop after the speakers' options is the headphones' toggle"
+        );
+        assert!(!app.snapshot().running, "streaming stays off");
     }
 }
