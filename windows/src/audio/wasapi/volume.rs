@@ -517,14 +517,29 @@ mod tests {
         }
     }
 
-    /// A fake listener, dropped as the real one unregisters.
+    /// Waits for a word on `gate`, as a Windows call that hangs until
+    /// Windows audio answers; an error once the test sends no more.
+    fn wait_on(gate: &Mutex<mpsc::Receiver<()>>) -> Result<(), BackendError> {
+        gate.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .recv()
+            .map_err(|_| BackendError::NotResponding)
+    }
+
+    /// A fake listener, dropped as the real one unregisters: at once, or,
+    /// with a `gate`, once a word comes on it, as an unregistration that
+    /// hangs until Windows audio answers.
     struct FakeRegistration {
         id: String,
         done: Done,
+        gate: Option<Arc<Mutex<mpsc::Receiver<()>>>>,
     }
 
     impl Drop for FakeRegistration {
         fn drop(&mut self) {
+            if let Some(gate) = &self.gate {
+                let _ = wait_on(gate);
+            }
             self.done.push(format!("-{}", self.id));
         }
     }
@@ -537,15 +552,17 @@ mod tests {
 
     /// Fake endpoints whose every call waits for a word on `gate`, as a
     /// Windows call that hangs until Windows audio answers, and then lists
-    /// what it did in `done`.
+    /// what it did in `done`; with `unregistering_hangs`, dropping one of
+    /// their listeners waits the same way.
     struct Hanging {
-        gate: mpsc::Receiver<()>,
+        gate: Arc<Mutex<mpsc::Receiver<()>>>,
         done: Done,
+        unregistering_hangs: bool,
     }
 
     impl Hanging {
         fn call(&self, entry: String) -> Result<(), BackendError> {
-            self.gate.recv().map_err(|_| BackendError::NotResponding)?;
+            wait_on(&self.gate)?;
             self.done.push(entry);
             Ok(())
         }
@@ -563,6 +580,7 @@ mod tests {
             Ok(FakeRegistration {
                 id: id.to_owned(),
                 done: self.done.clone(),
+                gate: self.unregistering_hangs.then(|| Arc::clone(&self.gate)),
             })
         }
 
@@ -586,9 +604,34 @@ mod tests {
         gate: mpsc::Receiver<()>,
         done: Done,
     ) -> impl FnOnce(&mpsc::Receiver<Command>, Ready) + Send + 'static {
+        serving(Hanging {
+            gate: Arc::new(Mutex::new(gate)),
+            done,
+            unregistering_hangs: false,
+        })
+    }
+
+    /// [`hanging`], whose listeners' unregistration waits for a word on
+    /// `gate` too.
+    fn hanging_unregistration(
+        gate: mpsc::Receiver<()>,
+        done: Done,
+    ) -> impl FnOnce(&mpsc::Receiver<Command>, Ready) + Send + 'static {
+        serving(Hanging {
+            gate: Arc::new(Mutex::new(gate)),
+            done,
+            unregistering_hangs: true,
+        })
+    }
+
+    /// A listener thread that starts at once and makes its calls on
+    /// `endpoints`.
+    fn serving(
+        endpoints: Hanging,
+    ) -> impl FnOnce(&mpsc::Receiver<Command>, Ready) + Send + 'static {
         move |commands, ready| {
             if ready.ok(()) {
-                serve(commands, &Hanging { gate, done });
+                serve(commands, &endpoints);
             }
         }
     }
@@ -742,6 +785,49 @@ mod tests {
         });
         assert_eq!(written, Err(BackendError::NotResponding));
         within(move || drop(watcher));
+    }
+
+    #[test]
+    fn a_volume_thread_that_hangs_unregistering_a_listener_doesnt_hold_quitting() {
+        let (gate, hold) = mpsc::channel();
+        let done = Done::default();
+        let mut watcher =
+            VolumeWatcher::start_with(TIMEOUT, hanging_unregistration(hold, done.clone()))
+                .expect("it starts");
+        gate.send(()).expect("the thread waits");
+        assert_eq!(watcher.watch("speakers"), Ok(()));
+        // A read hangs and is given up, then answers after all: the thread
+        // is free again.
+        let (mut watcher, read) = within(move || {
+            let mut watcher = watcher;
+            let read = watcher.read("speakers");
+            (watcher, read)
+        });
+        assert_eq!(read, Err(BackendError::NotResponding));
+        gate.send(()).expect("the thread waits");
+        wait_until_answered(&mut watcher);
+        done.wait_for(&["+speakers", "read speakers"]);
+        // Windows audio hangs again as the outputs stop following their
+        // volumes and AudioSync quits: the unregistration, which answers
+        // nothing, holds the thread, and the watcher goes after a bounded
+        // wait instead of waiting for it.
+        watcher.unwatch("speakers");
+        within(move || drop(watcher));
+        // Once Windows audio answers, the thread still unregisters.
+        gate.send(()).expect("the thread waits");
+        done.wait_for(&["+speakers", "read speakers", "-speakers"]);
+
+        // The same when the listener is only dropped as the thread ends.
+        let (gate, hold) = mpsc::channel();
+        let done = Done::default();
+        let mut watcher =
+            VolumeWatcher::start_with(TIMEOUT, hanging_unregistration(hold, done.clone()))
+                .expect("it starts");
+        gate.send(()).expect("the thread waits");
+        assert_eq!(watcher.watch("headphones"), Ok(()));
+        within(move || drop(watcher));
+        gate.send(()).expect("the thread waits");
+        done.wait_for(&["+headphones", "-headphones"]);
     }
 
     #[test]
