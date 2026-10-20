@@ -244,7 +244,8 @@ pub enum BackendEvent {
         id: String,
     },
     /// An output reported busy no longer waits for its device: it plays
-    /// now, or it was switched off.
+    /// now, it was switched off, streaming stopped, or its device went
+    /// away.
     OutputFree {
         /// The endpoint ID.
         id: String,

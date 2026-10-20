@@ -618,6 +618,17 @@ impl<D: Driver> Controller<D> {
         self.present = listed;
         self.policy.set_listed(&self.present);
         self.listing_ok = true;
+        // A busy output whose device is gone no longer waits for it: it
+        // stays on and is tried again once it is listed (S68).
+        let present = &self.present;
+        let pending = &mut self.pending;
+        self.busy.retain(|id, _| {
+            let listed = present.iter().any(|endpoint| endpoint.id == *id);
+            if !listed {
+                pending.push(BackendEvent::OutputFree { id: id.clone() });
+            }
+            listed
+        });
         // A device that came back is read afresh; one gone is let go.
         self.follow_device_volumes();
         (changed, Ok(()))
@@ -1035,6 +1046,15 @@ impl<D: Driver> Controller<D> {
         self.restart_tries_left = RESTART_TRIES - 1;
     }
 
+    /// Ends the wait of every output reported busy, once streaming stopped:
+    /// nothing plays to them now. A later session tells again of one whose
+    /// device is still held.
+    fn release_busy(&mut self) {
+        for id in std::mem::take(&mut self.busy).into_keys() {
+            self.pending.push(BackendEvent::OutputFree { id });
+        }
+    }
+
     /// Whether an ended session's outputs are still fading out.
     fn last_session_fading(&self) -> bool {
         self.retiring.iter().any(|entry| entry.session.is_some())
@@ -1087,6 +1107,7 @@ impl<D: Driver> Controller<D> {
                     }
                 });
                 self.airplay_streaming(false);
+                self.release_busy();
                 self.pending.push(BackendEvent::Stopped {
                     reason: StopReason::CaptureFailed(error),
                 });
@@ -1338,6 +1359,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.restart_wait = None;
         self.end_session();
         self.airplay_streaming(false);
+        self.release_busy();
     }
 
     fn running_source(&self) -> Option<SourceId> {
@@ -1625,6 +1647,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 .log(|| format!("the capture ended: {}", describe_stop(&reason)));
             self.end_session();
             self.airplay_streaming(false);
+            self.release_busy();
             self.pending.push(BackendEvent::Stopped { reason });
         }
 
