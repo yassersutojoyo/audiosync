@@ -741,7 +741,7 @@ def forbidden_self_test():
     Returns (number of cases, failures). Covers the usual spellings in file
     contents, file paths and commit messages (glued affixes, every joiner, a
     wrapped commit line), near misses, a `title` name, the allow and
-    allow-commit rules, a bad allow pattern, masking, the switch being off,
+    allow-commit rules, a bad allow pattern, masking, a run without the rule,
     the hash file keeping its salt, flags and allow lines, plain-list checks
     and a new branch's all-zero base.
     """
@@ -845,7 +845,7 @@ def forbidden_self_test():
         failures += [f"false positive: {hit}" for hit in sorted(hits - expected)]
         failures += [f"a hit spells the name: {hit}" for hit in hits if leaks_a_name(hit)]
         if check(root, files):
-            failures.append("forbidden names were checked with the switch off")
+            failures.append("forbidden names were checked without the rule")
 
         named = commit(root, "Port the Skarn Vole mixer\n\nDetails follow.")
         plain_msg = commit(root, "Tidy the docs\n\nA gloamy tavern, no names.")

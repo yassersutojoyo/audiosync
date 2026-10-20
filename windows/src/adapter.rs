@@ -6,10 +6,13 @@
 //! `audiosync-core` (`policy::session`): switching a speaker on starts
 //! streaming, switching the last one off stops it, an output that can't start
 //! is turned off, a source that quits ends the session. AirPlay speakers count
-//! like any other speaker; one that can't play from AudioSync (a password,
-//! AirPlay 2 only) is listed with that note and stays off, with a notice when
-//! the user tries it. An Apple TV that asks for a PIN is paired when the user
-//! switches it on (never by auto-connect, which only posts a notice): the
+//! like any other speaker; one that can't play from AudioSync (AirPlay 2
+//! only) is listed with that note and stays off, with a notice when the user
+//! tries it. One that asks for a password asks the user for it when they
+//! switch it on (the snapshot's [`PasswordPrompt`]), never on auto-connect,
+//! which posts a notice instead. An Apple TV that asks for a PIN is paired
+//! when the user switches it on (never by auto-connect, which only posts a
+//! notice): the
 //! snapshot's [`PinPrompt`] asks the UI for the PIN, and once paired the
 //! speaker is on and streaming starts like for any speaker switched on. What
 //! happens on its own comes from
@@ -76,8 +79,9 @@ use crate::settings::{
     self, KeptAside, SavedEqualizer, SavedGroup, SavedSource, SavedSpeaker, Settings, SettingsFile,
 };
 use crate::ui_model::{
-    self, AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, PinPhase,
-    PinPrompt, Source, SourceKind, Speaker, SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
+    self, AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage,
+    PasswordPrompt, PinPhase, PinPrompt, Source, SourceKind, Speaker, SpeakerKind, ViewSettings,
+    Waiting, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -1117,8 +1121,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// user, and stops streaming when nothing else is on (S136).
     fn airplay_cant_play(&mut self, id: &str, problem: AirPlayProblem) {
         let reason = match problem {
-            AirPlayProblem::PasswordNotYet => DropReason::PasswordUnsupported,
-            AirPlayProblem::PairingNotYet
+            AirPlayProblem::NeedsPassword
+            | AirPlayProblem::PairingNotYet
             | AirPlayProblem::NeedsPin
             | AirPlayProblem::PairingFailed => DropReason::NeedsCode,
             _ => DropReason::Unreachable,
@@ -1171,7 +1175,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             // A new attempt.
             self.notices.clear(&[airplay_subject(id)]);
         }
-        if let Err(problem) = self.audio.set_airplay_enabled(id, on) {
+        if let Err(problem) = self.switch_airplay_by_user(id, on) {
             self.airplay_switch_failed(id, problem);
             return;
         }
@@ -1183,10 +1187,34 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.take_events();
     }
 
+    /// Switches an AirPlay speaker on or off for the user: one switched on
+    /// starts an attempt, which may prompt for a password
+    /// ([`AudioBackend::begin_airplay_attempt`]).
+    fn switch_airplay_by_user(&mut self, id: &str, on: bool) -> Result<(), AirPlayProblem> {
+        self.audio.set_airplay_enabled(id, on)?;
+        if on {
+            self.audio.begin_airplay_attempt(id);
+        }
+        Ok(())
+    }
+
     /// An AirPlay speaker the user switched on didn't turn on: an Apple TV
-    /// that asks for a PIN is paired (it turns on once paired); any other
+    /// that asks for a PIN is paired (it turns on once paired), one that asks
+    /// for a password prompts for it (it turns on once typed); any other
     /// stays off with a notice.
     fn airplay_switch_failed(&mut self, id: &str, problem: AirPlayProblem) {
+        if problem == AirPlayProblem::NeedsPassword {
+            self.log.log(|| {
+                format!(
+                    "{} asks for a password: the prompt opens",
+                    self.airplay_name(id)
+                )
+            });
+            if let Err(problem) = self.audio.ask_airplay_password(id) {
+                self.airplay_cant_play(id, problem);
+            }
+            return;
+        }
         if problem == AirPlayProblem::NeedsPin {
             self.log.log(|| {
                 format!(
@@ -1624,6 +1652,14 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 })
                 .collect(),
             pin_prompt: pin_prompt.map(|prompt| self.pin_prompt(prompt)),
+            password_prompt: self
+                .audio
+                .airplay_password_prompt()
+                .map(|prompt| PasswordPrompt {
+                    speaker_id: airplay_key(&prompt.id),
+                    name: prompt.name,
+                    wrong: prompt.wrong,
+                }),
         }
     }
 
@@ -1818,7 +1854,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                         }
                         self.notices.clear(&[airplay_subject(id)]);
                     }
-                    if let Err(problem) = self.audio.set_airplay_enabled(id, turn_on) {
+                    if let Err(problem) = self.switch_airplay_by_user(id, turn_on) {
                         self.airplay_switch_failed(id, problem);
                     }
                 }
@@ -1959,6 +1995,41 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.take_events();
     }
 
+    /// The password itself is never logged.
+    fn submit_password(&mut self, id: &str, password: &str) {
+        let Some(SpeakerKey::AirPlay(airplay_id)) = SpeakerKey::parse(id) else {
+            return;
+        };
+        let taken = self.audio.submit_airplay_password(&airplay_id, password);
+        self.log.log(|| {
+            let what = if taken { "taken" } else { "not taken" };
+            format!(
+                "the user typed the password for {}: {what}",
+                self.airplay_name(&airplay_id)
+            )
+        });
+        if taken {
+            self.notices.clear(&[airplay_subject(&airplay_id)]);
+            self.start_if_switched_on();
+        }
+        self.take_events();
+    }
+
+    fn cancel_password(&mut self, id: &str) {
+        let Some(SpeakerKey::AirPlay(airplay_id)) = SpeakerKey::parse(id) else {
+            return;
+        };
+        self.log.log(|| {
+            format!(
+                "the user cancelled the password prompt of {}",
+                self.airplay_name(&airplay_id)
+            )
+        });
+        self.audio.cancel_airplay_password(&airplay_id);
+        self.stop_if_idle();
+        self.take_events();
+    }
+
     fn forget_pairing(&mut self, id: &str) {
         let Some(SpeakerKey::AirPlay(airplay_id)) = SpeakerKey::parse(id) else {
             return;
@@ -2063,7 +2134,7 @@ fn airplay_subject(id: &str) -> NoticeSubject {
 fn availability(availability: AirPlayAvailability) -> Availability {
     match availability {
         AirPlayAvailability::Open => Availability::Open,
-        AirPlayAvailability::PasswordNotYet => Availability::PasswordNotYet,
+        AirPlayAvailability::NeedsPassword => Availability::NeedsCode,
         AirPlayAvailability::NeedsPin => Availability::NeedsCode,
         AirPlayAvailability::PairingNotYet => Availability::PairingNotYet,
         AirPlayAvailability::AirPlay2NotYet => Availability::AirPlay2NotYet,
@@ -2079,7 +2150,7 @@ fn ui_problem(problem: AirPlayProblem) -> ui_model::AirPlayProblem {
         AirPlayProblem::ConnectionLost => P::ConnectionLost,
         AirPlayProblem::Busy => P::Busy,
         AirPlayProblem::Refused => P::Refused,
-        AirPlayProblem::PasswordNotYet => P::PasswordNotYet,
+        AirPlayProblem::NeedsPassword => P::NeedsPassword,
         AirPlayProblem::NeedsPin => P::NeedsPin,
         AirPlayProblem::PairingFailed => P::PairingFailed,
         AirPlayProblem::PairingNotYet => P::PairingNotYet,
@@ -3532,7 +3603,7 @@ mod tests {
         assert!(!row.enabled);
         assert_eq!(
             state.speaker(&ap(&study)).unwrap().availability,
-            Availability::PasswordNotYet
+            Availability::NeedsCode
         );
         let (this_pc, connected) = state.layout();
         assert!(this_pc.is_empty());
@@ -3783,18 +3854,105 @@ mod tests {
         );
     }
 
+    /// Study switched on by the user, with its password prompt open.
+    fn study_asks(adapter: &mut AudioAdapter<MockBackend>, fake: &FakeAirPlay, study: &Device) {
+        adapter.set_speaker_enabled(&ap(study), true);
+        let state = adapter.snapshot();
+        assert_eq!(
+            state.password_prompt,
+            Some(PasswordPrompt {
+                speaker_id: ap(study),
+                name: "Study".to_owned(),
+                wrong: false,
+            })
+        );
+        assert!(!state.speaker(&ap(study)).unwrap().enabled);
+        assert!(!state.running);
+        assert!(fake.take_calls().is_empty(), "nothing connects before it");
+        assert!(messages(adapter).is_empty());
+    }
+
     #[test]
-    fn an_airplay_speaker_that_cant_play_stays_off_with_a_notice() {
+    fn a_password_speaker_asks_for_its_password_and_plays_with_it() {
         let (mut adapter, fake, _, study) = airplay_adapter();
+        study_asks(&mut adapter, &fake, &study);
+        adapter.submit_password(&ap(&study), "hunter2");
+        let state = adapter.snapshot();
+        assert_eq!(state.password_prompt, None);
+        let row = state.speaker(&ap(&study)).unwrap();
+        assert!(row.enabled);
+        assert_eq!(row.availability, Availability::Open);
+        assert!(state.running, "switched on, it streams");
+        assert!(
+            fake.take_calls()
+                .contains(&Call::Password(id_of(&study), "hunter2".to_owned())),
+            "the password reaches the sender"
+        );
+    }
+
+    #[test]
+    fn a_wrong_password_asks_again_and_cancel_leaves_the_speaker_off() {
+        let (mut adapter, fake, _, study) = airplay_adapter();
+        study_asks(&mut adapter, &fake, &study);
+        adapter.submit_password(&ap(&study), "hunter1");
+        fake.fail(&study, ErrorKind::WrongPassword);
+        adapter.poll();
+        let prompt = adapter.snapshot().password_prompt.expect("asked again");
+        assert!(prompt.wrong);
+        assert!(messages(&adapter).is_empty(), "the prompt says so");
+
+        adapter.cancel_password(&ap(&study));
+        let state = adapter.snapshot();
+        assert_eq!(state.password_prompt, None);
+        assert!(!state.speaker(&ap(&study)).unwrap().enabled);
+        assert!(!state.running, "nothing else is on");
+        assert!(messages(&adapter).is_empty(), "no notice for a cancel");
+    }
+
+    #[test]
+    fn a_password_changed_on_the_speaker_prompts_on_the_next_switch_on() {
+        let (mut adapter, fake, _, study) = airplay_adapter();
+        study_asks(&mut adapter, &fake, &study);
+        adapter.submit_password(&ap(&study), "hunter2");
+        fake.state(&study, AirPlayState::Playing);
+        adapter.poll();
+        adapter.set_speaker_enabled(&ap(&study), false);
         adapter.set_speaker_enabled(&ap(&study), true);
-        assert!(!adapter.snapshot().speaker(&ap(&study)).unwrap().enabled);
-        assert!(!adapter.snapshot().running);
-        assert!(fake.take_calls().is_empty(), "never connected");
+        assert_eq!(adapter.snapshot().password_prompt, None, "kept this run");
+        fake.fail(&study, ErrorKind::WrongPassword);
+        adapter.poll();
+        let prompt = adapter.snapshot().password_prompt.expect("asked again");
+        assert!(prompt.wrong, "says the old one was turned down");
+        assert!(messages(&adapter).is_empty());
+    }
+
+    #[test]
+    fn a_password_discovery_didnt_announce_prompts_on_the_first_switch_on() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.fail(&kitchen, ErrorKind::PasswordRequired);
+        adapter.poll();
+        let prompt = adapter.snapshot().password_prompt.expect("asked at once");
+        assert!(!prompt.wrong);
+        assert!(messages(&adapter).is_empty());
+    }
+
+    #[test]
+    fn auto_connect_never_asks_for_a_password() {
+        let (mut adapter, fake, _, study) = airplay_adapter();
+        adapter.set_auto_connect(&ap(&study), true);
+        fake.gone(&study);
+        adapter.poll();
+        fake.appear(&study);
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert_eq!(state.password_prompt, None);
+        assert!(!state.speaker(&ap(&study)).unwrap().enabled);
         assert_eq!(
             messages(&adapter),
             [NoticeMessage::AirPlayCantPlay {
                 speaker: "Study".to_owned(),
-                problem: ui_model::AirPlayProblem::PasswordNotYet,
+                problem: ui_model::AirPlayProblem::NeedsPassword,
             }]
         );
     }

@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use audiosync_core::fade::FadeState;
 use audiosync_core::reader::{Reader, ReaderCounters};
-use audiosync_core::render::{Renderer, RendererControl};
+use audiosync_core::render::{EARLIEST_LEAK_NS_PER_S, LATE_CAP_MS, Renderer, RendererControl};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 
@@ -43,6 +43,8 @@ struct Setup {
     /// How much earlier than its frames the first callback says they play,
     /// in ms, as a stray time stamp at a device's start.
     first_early_ms: u64,
+    /// How many of the first callbacks are that early.
+    early_callbacks: u128,
 }
 
 struct Output {
@@ -56,6 +58,8 @@ struct Output {
     /// The capture-to-output delay of every settled open callback's last
     /// frame, in ms.
     delays: Vec<f64>,
+    /// When each of those callbacks played, in s.
+    played: Vec<f64>,
 }
 
 impl Output {
@@ -90,6 +94,8 @@ struct Run {
     late: Vec<(u64, u64)>,
     /// Each output's settled delays, in ms.
     delays: Vec<Vec<f64>>,
+    /// When each of those delays played, in s.
+    played: Vec<Vec<f64>>,
 }
 
 /// The host clock in ns at time `at`, a second ahead so that the session's
@@ -138,6 +144,7 @@ fn run(setups: &[Setup], seconds: u128, timed: bool) -> Run {
                 next_at: 0,
                 seed: 0x9E37_79B9_7F4A_7C15 ^ (i as u64 + 1).rotate_left(29),
                 delays: Vec::new(),
+                played: Vec::new(),
             };
             output.schedule();
             output
@@ -183,7 +190,7 @@ fn run(setups: &[Setup], seconds: u128, timed: bool) -> Run {
         // The device's own clock: 20 ms after the nominal time, however late
         // the callback came.
         let output_at = output.nominal(output.pulls) + SECOND / 50;
-        let stamped_at = if output.pulls == 0 {
+        let stamped_at = if output.pulls < output.setup.early_callbacks {
             output_at + u128::from(output.setup.first_early_ms) * SECOND / 1000
         } else {
             output_at
@@ -200,6 +207,7 @@ fn run(setups: &[Setup], seconds: u128, timed: bool) -> Run {
             let captured_at = f64::from(out[last * 2]) * 1e6 / f64::from(RATE);
             let delay = played_at as f64 / SECOND as f64 - captured_at;
             output.delays.push(delay * 1000.0);
+            output.played.push(played_at as f64 / SECOND as f64);
         }
         output.pulls += 1;
         output.last_at = pull_at;
@@ -216,6 +224,7 @@ fn run(setups: &[Setup], seconds: u128, timed: bool) -> Run {
             .iter()
             .map(|o| (o.control.late_max_ns(), o.control.late_callbacks()))
             .collect(),
+        played: outputs.iter().map(|o| o.played.clone()).collect(),
         delays: outputs.into_iter().map(|output| output.delays).collect(),
     }
 }
@@ -230,6 +239,7 @@ const BLUETOOTH_PAIR: [Setup; 4] = [
         late_ms: 30,
         phase: 0.3,
         first_early_ms: 0,
+        early_callbacks: 1,
     },
     Setup {
         device_rate: 44_100,
@@ -237,6 +247,7 @@ const BLUETOOTH_PAIR: [Setup; 4] = [
         late_ms: 30,
         phase: 0.55,
         first_early_ms: 0,
+        early_callbacks: 1,
     },
     Setup {
         device_rate: 48_000,
@@ -244,6 +255,7 @@ const BLUETOOTH_PAIR: [Setup; 4] = [
         late_ms: 30,
         phase: 0.8,
         first_early_ms: 0,
+        early_callbacks: 1,
     },
     Setup {
         device_rate: 48_000,
@@ -251,6 +263,7 @@ const BLUETOOTH_PAIR: [Setup; 4] = [
         late_ms: 0,
         phase: 0.1,
         first_early_ms: 0,
+        early_callbacks: 1,
     },
 ];
 
@@ -369,4 +382,71 @@ fn one_stray_early_callback_never_moves_an_output() {
     let without = run(&steady, 20, true);
     assert_eq!(with_stray.delays, without.delays);
     assert!(with_stray.late.iter().all(|&late| late == (0, 0)));
+}
+
+// covers: S209
+#[test]
+fn two_early_callbacks_in_a_row_move_an_output_at_most_the_cap_until_the_floor_leaks_back() {
+    // Both early callbacks set the floor, so later on-time callbacks count
+    // as late by up to the cap until the floor has risen back to them.
+    let block_ms = BLOCK as f64 * 1000.0 / f64::from(RATE);
+    let cap_ms = LATE_CAP_MS as f64;
+    let recovered_s = (LATE_CAP_MS * 1_000_000 / EARLIEST_LEAK_NS_PER_S) as f64;
+    let steady: Vec<Setup> = BLUETOOTH_PAIR
+        .iter()
+        .map(|&setup| Setup {
+            late_ms: 0,
+            ..setup
+        })
+        .collect();
+    for setups in [steady, BLUETOOTH_PAIR.to_vec()] {
+        let two_early: Vec<Setup> = setups
+            .iter()
+            .map(|&setup| Setup {
+                first_early_ms: 80,
+                early_callbacks: 2,
+                ..setup
+            })
+            .collect();
+        let without = run(&setups, 60, true);
+        let seen = run(&two_early, 60, true);
+        for (i, setup) in two_early.iter().enumerate() {
+            let (early, end) = &seen.counters[i];
+            assert_eq!(
+                (
+                    end.starved_renders - early.starved_renders,
+                    end.drift_skips - early.drift_skips,
+                    end.drift_silences - early.drift_silences,
+                ),
+                (0, 0, 0),
+                "{setup:?}: {end:?}"
+            );
+            assert!(seen.late[i].0 >= (LATE_CAP_MS - 1) * 1_000_000, "{setup:?}");
+            let tuned = &without.delays[i];
+            let mut low = tuned.iter().copied().fold(f64::INFINITY, f64::min);
+            let mut high = tuned.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let delays = &seen.delays[i];
+            let most = delays.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            assert!(
+                most - high <= cap_ms,
+                "{setup:?}: {:.2} ms past its tuned delay",
+                most - high
+            );
+            let after: Vec<f64> = delays
+                .iter()
+                .zip(&seen.played[i])
+                .filter(|&(_, &at)| at >= recovered_s)
+                .map(|(&delay, _)| delay)
+                .collect();
+            assert!(after.len() > 500, "{setup:?}: {} delays", after.len());
+            for delay in after {
+                low = low.min(delay);
+                high = high.max(delay);
+            }
+            assert!(
+                high - low <= block_ms + 2.0,
+                "{setup:?}: from {recovered_s} s on, delays from {low:.2} to {high:.2} ms"
+            );
+        }
+    }
 }
