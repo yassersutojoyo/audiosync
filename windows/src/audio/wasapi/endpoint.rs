@@ -392,3 +392,72 @@ fn render_loop(stream: &RenderStream, pipeline: &mut RenderPipeline, signals: &S
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use audiosync_core::ring::Ring;
+    use windows::Win32::System::Threading::INFINITE;
+
+    use super::*;
+    use crate::audio::SESSION_RATE;
+
+    /// How long the fake Windows audio hangs before it answers again.
+    const HANG: Duration = Duration::from_secs(3);
+
+    #[test]
+    fn a_render_thread_that_hangs_stopping_its_stream_doesnt_hold_quitting() {
+        let ring = Ring::for_rate(SESSION_RATE).expect("a ring");
+        let reader = Reader::new(ring, SESSION_RATE);
+        let control = RendererControl::new(&reader);
+        let stop = Arc::new(Event::manual_reset().expect("an event"));
+        let abort = Arc::new(AtomicBool::new(false));
+        let (answer, hung) = mpsc::channel::<()>();
+        let (stopped, done) = mpsc::channel();
+        let thread = {
+            let stop = Arc::clone(&stop);
+            let abort = Arc::clone(&abort);
+            thread::spawn(move || {
+                // The thread owns the reader, as the real one does.
+                let _reader = reader;
+                // SAFETY: waits on an event that outlives this thread's use
+                // of it.
+                unsafe { WaitForSingleObject(stop.raw(), INFINITE) };
+                // Stopping the stream hangs until Windows audio answers.
+                let _ = hung.recv();
+                let _ = stopped.send(abort.load(Ordering::Acquire));
+            })
+        };
+        let renderer = EndpointRenderer {
+            stop,
+            abort,
+            ended: Arc::new(AtomicBool::new(false)),
+            control,
+            thread: Some(thread),
+            setup: StreamSetup {
+                format: RenderFormat {
+                    rate: 48_000,
+                    channels: 2,
+                    channel_mask: 0x3,
+                    convert: false,
+                },
+                buffer_frames: 480,
+            },
+        };
+        let answers = thread::spawn(move || {
+            thread::sleep(HANG);
+            drop(answer);
+        });
+        let started = Instant::now();
+        drop(renderer);
+        let waited = started.elapsed();
+        assert!(waited < HANG / 2, "the drop waited {waited:?}");
+        // Once Windows audio answers, the thread still stops its stream,
+        // having been told to stop at once.
+        assert_eq!(done.recv_timeout(HANG * 3), Ok(true));
+        answers.join().expect("the answer comes");
+    }
+}

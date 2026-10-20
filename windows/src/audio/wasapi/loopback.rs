@@ -491,7 +491,59 @@ fn capture_loop(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use audiosync_core::ring::Ring;
+    use windows::Win32::System::Threading::INFINITE;
+
     use super::*;
+    use crate::audio::SESSION_RATE;
+
+    /// How long the fake Windows audio hangs before it answers again.
+    const HANG: Duration = Duration::from_secs(3);
+
+    #[test]
+    fn a_capture_thread_that_hangs_stopping_its_stream_doesnt_hold_quitting() {
+        let ring = Ring::for_rate(SESSION_RATE).expect("a ring");
+        let writer = ring.writer().expect("the only writer");
+        let stop = Arc::new(Event::manual_reset().expect("an event"));
+        let (answer, hung) = mpsc::channel::<()>();
+        let (stopped, done) = mpsc::channel();
+        let thread = {
+            let stop = Arc::clone(&stop);
+            thread::spawn(move || {
+                // The thread owns the ring's writer, as the real one does.
+                let _writer = writer;
+                // SAFETY: waits on an event that outlives this thread's use
+                // of it.
+                unsafe { WaitForSingleObject(stop.raw(), INFINITE) };
+                // Stopping the stream hangs until Windows audio answers.
+                let _ = hung.recv();
+                let _ = stopped.send(());
+            })
+        };
+        let capture = LoopbackCapture {
+            stop,
+            failure: Arc::new(AtomicI32::new(0)),
+            ended: Arc::new(AtomicBool::new(false)),
+            thread: Some(thread),
+            source: None,
+            setup: CAPTURE_ATTEMPTS[0],
+        };
+        let answers = thread::spawn(move || {
+            thread::sleep(HANG);
+            drop(answer);
+        });
+        let started = Instant::now();
+        drop(capture);
+        let waited = started.elapsed();
+        assert!(waited < HANG / 2, "the drop waited {waited:?}");
+        // Once Windows audio answers, the thread still stops its stream.
+        assert_eq!(done.recv_timeout(HANG * 3), Ok(()));
+        answers.join().expect("the answer comes");
+    }
 
     #[test]
     fn a_timed_out_activation_carries_the_windows_timeout_code() {
