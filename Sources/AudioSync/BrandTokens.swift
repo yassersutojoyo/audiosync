@@ -117,8 +117,7 @@ enum BrandTokens {
         static let row: CGFloat = 9
         static let control: CGFloat = 7
         static let panel: CGFloat = 14
-        static let siteLarge: CGFloat = 30
-        static let siteMedium: CGFloat = 22
-        static let pill: CGFloat = 999
+        static let sitePanel: CGFloat = 18
+        static let siteControl: CGFloat = 12
     }
 }
