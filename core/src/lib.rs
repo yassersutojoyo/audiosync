@@ -12,6 +12,7 @@ pub mod convert;
 pub mod eq;
 pub mod fade;
 pub mod ffi;
+pub mod lead;
 #[cfg(feature = "ffi-panic-probe")]
 pub mod panic_probe;
 pub mod policy;

@@ -18,6 +18,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering, fence};
 
+use crate::lead::SessionLeads;
+
 /// Smallest safety margin M, in frames (S40).
 pub const MIN_MARGIN_FRAMES: usize = 8192;
 
@@ -106,6 +108,8 @@ pub struct Ring {
     stamp_time: AtomicU64,
     /// Set while a [`RingWriter`] exists.
     writer_taken: AtomicBool,
+    /// The start leads and hold-backs of the renderers reading it (S208).
+    leads: SessionLeads,
 }
 
 impl fmt::Debug for Ring {
@@ -143,6 +147,7 @@ impl Ring {
             stamp_written: AtomicU64::new(0),
             stamp_time: AtomicU64::new(NO_STAMP),
             writer_taken: AtomicBool::new(false),
+            leads: SessionLeads::new(),
         }))
     }
 
@@ -170,6 +175,12 @@ impl Ring {
     /// M, in frames.
     pub fn margin(&self) -> usize {
         self.margin as usize
+    }
+
+    /// The slots its renderers publish their start leads and hold-backs
+    /// in, for the session lead (S208).
+    pub fn session_leads(&self) -> &SessionLeads {
+        &self.leads
     }
 
     /// W, the frames written since the last reset, loaded with acquire

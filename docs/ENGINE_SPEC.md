@@ -941,13 +941,16 @@ The checks for S206 and S207 (`core/tests/render_start.rs`). The capture writes 
 | an_output_that_needs_no_trim_plays_the_same_with_stamps | S207 |
 | a_callback_of_several_reads_at_the_capture_rate_judges_drift_once | S50, S188, S206 |
 | an_output_at_the_capture_rate_with_one_read_per_callback_keeps_its_floor_of_one_block | S42, S206 |
-| a_converted_output_whose_hold_back_covers_the_lead_keeps_its_timing | S206 |
+| a_converted_output_whose_hold_back_covers_the_lead_keeps_its_timing | S206, S208 |
 | a_converted_output_started_right_after_a_short_write_never_runs_dry | S206 |
 | one_late_wake_never_raises_a_48_khz_outputs_floor_for_good | S42, S187, S206 |
 | one_late_wake_never_raises_a_converted_outputs_lead_for_good | S187, S206 |
 | with_its_period_given_a_late_wake_raises_the_lead_for_its_own_callback | S187, S206 |
 | an_earliest_converted_output_and_one_held_back_play_exactly_their_hold_backs_apart | S176, S206, S208 |
 | a_converted_output_joining_as_the_earliest_keeps_the_hold_backs_apart | S177, S208 |
+| the_session_lead_moves_the_other_outputs_only_when_it_changes | S208 |
+| the_session_lead_is_the_most_a_lead_exceeds_its_hold_back (`core/src/lead.rs`) | S208 |
+| a_renderer_past_the_last_slot_gets_none (`core/src/lead.rs`) | S208 |
 | a_reader_is_floored_at_its_lead (`core/src/reader.rs`) | S42, S44, S206 |
 | a_reader_tells_what_its_next_read_can_go_on_with (`core/src/reader.rs`) | S206, S207 |
 | a_slow_down_needs_that_many_fewer_frames_and_lands_exactly_that_much_later (`core/src/resample.rs`) | S206 |
