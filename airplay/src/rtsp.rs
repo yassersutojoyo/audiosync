@@ -258,15 +258,32 @@ pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 /// accepted too, as RFC 2326 §4 asks of receivers of RTSP text. Empty lines
 /// before a start line are skipped, and a head that isn't UTF-8 is read with
 /// each invalid sequence replaced by U+FFFD, so a stray byte in a header
-/// value doesn't end the session (P140 then judges what is left).
+/// value doesn't end the session (P140 then judges what is left). A
+/// control character other than tab inside a header value does: that line
+/// is malformed, since values go back out in the sender's own headers.
 #[derive(Debug, Default)]
 pub struct Parser {
     buffer: Vec<u8>,
+    /// How much of `buffer` the search for the end of the head has gone
+    /// through without finding it; the next search goes on from there.
+    searched: usize,
+    /// The head of the message at the front of `buffer`, read once while
+    /// its body is still arriving.
+    head: Option<Head>,
+}
+
+/// A message head read while its body is still arriving.
+#[derive(Debug)]
+struct Head {
+    start: String,
+    headers: Headers,
+    body_start: usize,
+    body_len: usize,
 }
 
 impl Parser {
     pub fn new() -> Parser {
-        Parser { buffer: Vec::new() }
+        Parser::default()
     }
 
     /// Appends bytes read from the connection.
@@ -281,46 +298,25 @@ impl Parser {
 
     /// The next complete message, `Ok(None)` while one is still incomplete.
     /// After an error the stream can't be trusted and should be closed.
+    /// The head is read once: while its body arrives, a call only checks
+    /// whether all of it is there.
     pub fn next_message(&mut self) -> Result<Option<Message>, ParseError> {
-        let stray = self
-            .buffer
-            .iter()
-            .take_while(|&&byte| byte == b'\r' || byte == b'\n')
-            .count();
-        if stray > 0 {
-            self.buffer.drain(..stray);
-        }
-        let Some((head_len, body_start)) = find_head_end(&self.buffer) else {
-            if self.buffer.len() > MAX_HEAD_BYTES {
-                return Err(ParseError::TooLarge);
-            }
-            return Ok(None);
+        let head = match self.head.take() {
+            Some(head) => head,
+            None => match self.read_head()? {
+                Some(head) => head,
+                None => return Ok(None),
+            },
         };
-        if head_len > MAX_HEAD_BYTES {
-            return Err(ParseError::TooLarge);
-        }
-        let head = String::from_utf8_lossy(&self.buffer[..head_len]).into_owned();
-        let mut lines = head
-            .split('\n')
-            .map(|line| line.strip_suffix('\r').unwrap_or(line));
-        let start = lines.next().unwrap_or("");
-        let headers = parse_headers(lines)?;
-        let body_len = match headers.get("Content-Length") {
-            None => 0,
-            Some(value) => value
-                .trim()
-                .parse::<usize>()
-                .map_err(|_| ParseError::ContentLength)?,
-        };
-        if body_len > MAX_BODY_BYTES {
-            return Err(ParseError::TooLarge);
-        }
-        if self.buffer.len() < body_start + body_len {
+        let end = head.body_start + head.body_len;
+        if self.buffer.len() < end {
+            self.head = Some(head);
             return Ok(None);
         }
-        let message = parse_start(start, headers)?;
-        let body = self.buffer[body_start..body_start + body_len].to_vec();
-        self.buffer.drain(..body_start + body_len);
+        let message = parse_start(&head.start, head.headers)?;
+        let body = self.buffer[head.body_start..end].to_vec();
+        self.buffer.drain(..end);
+        self.searched = 0;
         Ok(Some(match message {
             Message::Request(mut request) => {
                 request.body = body;
@@ -332,11 +328,60 @@ impl Parser {
             }
         }))
     }
+
+    /// The head at the front of the buffer once all of it is there, after
+    /// the empty lines before it are skipped.
+    fn read_head(&mut self) -> Result<Option<Head>, ParseError> {
+        let stray = self
+            .buffer
+            .iter()
+            .take_while(|&&byte| byte == b'\r' || byte == b'\n')
+            .count();
+        if stray > 0 {
+            self.buffer.drain(..stray);
+            self.searched = 0;
+        }
+        let Some((head_len, body_start)) = find_head_end(&self.buffer, self.searched) else {
+            self.searched = self.buffer.len();
+            if self.buffer.len() > MAX_HEAD_BYTES {
+                return Err(ParseError::TooLarge);
+            }
+            return Ok(None);
+        };
+        if head_len > MAX_HEAD_BYTES {
+            return Err(ParseError::TooLarge);
+        }
+        let head = String::from_utf8_lossy(&self.buffer[..head_len]);
+        let mut lines = head
+            .split('\n')
+            .map(|line| line.strip_suffix('\r').unwrap_or(line));
+        let start = lines.next().unwrap_or("").to_owned();
+        let headers = parse_headers(lines)?;
+        let body_len = match headers.get("Content-Length") {
+            None => 0,
+            Some(value) => value
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| ParseError::ContentLength)?,
+        };
+        if body_len > MAX_BODY_BYTES {
+            return Err(ParseError::TooLarge);
+        }
+        Ok(Some(Head {
+            start,
+            headers,
+            body_start,
+            body_len,
+        }))
+    }
 }
 
-/// The length of the head (without its blank line) and where the body starts.
-fn find_head_end(buffer: &[u8]) -> Option<(usize, usize)> {
-    let mut index = 0;
+/// The length of the head (without its blank line) and where the body
+/// starts. The first `searched` bytes were searched before without finding
+/// the end, and a newline before the last two of them had then every byte
+/// its blank line needs, so the search goes on from there.
+fn find_head_end(buffer: &[u8], searched: usize) -> Option<(usize, usize)> {
+    let mut index = searched.saturating_sub(2).min(buffer.len());
     while let Some(offset) = buffer[index..].iter().position(|&byte| byte == b'\n') {
         let newline = index + offset;
         let rest = &buffer[newline + 1..];
@@ -361,7 +406,7 @@ fn parse_headers<'a>(lines: impl Iterator<Item = &'a str>) -> Result<Headers, Pa
             // A continuation line extends the previous value (RFC 2326 §4.2).
             let (_, value) = entries.last_mut().ok_or(ParseError::HeaderLine)?;
             value.push(' ');
-            value.push_str(line.trim());
+            value.push_str(header_value(line)?);
             continue;
         }
         let (name, value) = line.split_once(':').ok_or(ParseError::HeaderLine)?;
@@ -369,9 +414,21 @@ fn parse_headers<'a>(lines: impl Iterator<Item = &'a str>) -> Result<Headers, Pa
         if name.is_empty() {
             return Err(ParseError::HeaderLine);
         }
-        entries.push((name.to_owned(), value.trim().to_owned()));
+        entries.push((name.to_owned(), header_value(value)?.to_owned()));
     }
     Ok(Headers(entries))
+}
+
+/// A header value as read: trimmed, and with no control character but tab
+/// left in it. Values such as a nonce or a session ID go back out in the
+/// sender's own headers, where a CR, an LF or a NUL could end the header
+/// or start another, so a value holding one makes its line malformed.
+fn header_value(text: &str) -> Result<&str, ParseError> {
+    let value = text.trim();
+    if value.bytes().any(|byte| byte < b' ' && byte != b'\t') {
+        return Err(ParseError::HeaderLine);
+    }
+    Ok(value)
 }
 
 fn parse_start(line: &str, headers: Headers) -> Result<Message, ParseError> {
