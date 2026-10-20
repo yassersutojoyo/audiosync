@@ -164,6 +164,28 @@ pub struct Speaker {
     /// A local output that is on, whose own volume in Windows is low or
     /// muted (spec S196): the hint under its volume slider, with the fix.
     pub device_volume: Option<Hint>,
+    /// Why a speaker that is on can't play right now, while streaming is
+    /// on; it plays again by itself. `None` while it plays or is off.
+    pub waiting: Option<Waiting>,
+}
+
+/// Why a speaker that is on can't play right now. Its row says so instead
+/// of showing it as playing; it stays on and plays again by itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(
+        dead_code,
+        reason = "only the Windows backend reports a waiting speaker"
+    )
+)]
+pub enum Waiting {
+    /// Another app holds its device for itself (exclusive mode); it plays
+    /// once that app lets go.
+    ForDevice,
+    /// An AirPlay speaker that stopped playing, which AudioSync keeps trying
+    /// to reach.
+    Reconnecting,
 }
 
 /// Where a pairing's PIN prompt is.
@@ -291,6 +313,16 @@ pub enum SpeakerState {
     /// Chosen, and plays once streaming starts.
     WillPlay,
     Playing,
+    /// On while streaming is on, but it can't play right now (a speaker
+    /// only, never a group).
+    #[cfg_attr(
+        all(not(windows), not(test)),
+        expect(
+            dead_code,
+            reason = "only the Windows backend reports a waiting speaker"
+        )
+    )]
+    Waiting(Waiting),
 }
 
 impl SpeakerState {
@@ -302,9 +334,10 @@ impl SpeakerState {
         }
     }
 
-    /// What a click on the row does: anything but playing turns on.
+    /// What a click on the row does: off or waiting for streaming turns on;
+    /// playing, or on but waiting for its device, turns off.
     pub fn click_turns_on(self) -> bool {
-        self != SpeakerState::Playing
+        matches!(self, SpeakerState::Off | SpeakerState::WillPlay)
     }
 }
 
@@ -337,8 +370,14 @@ impl AppState {
         self.speakers.iter().find(|s| s.id == id)
     }
 
+    /// A speaker that is on while streaming is on plays, unless it waits.
     pub fn speaker_state(&self, speaker: &Speaker) -> SpeakerState {
-        SpeakerState::new(speaker.enabled, self.running)
+        match SpeakerState::new(speaker.enabled, self.running) {
+            SpeakerState::Playing => speaker
+                .waiting
+                .map_or(SpeakerState::Playing, SpeakerState::Waiting),
+            state => state,
+        }
     }
 
     /// The members of `group` that are present right now.
@@ -569,6 +608,7 @@ impl MockBackend {
             availability: Availability::Open,
             paired: false,
             device_volume: None,
+            waiting: None,
         };
         let mut speakers = vec![
             // The reference: no delay of its own.
@@ -862,6 +902,29 @@ mod tests {
     }
 
     #[test]
+    fn a_speaker_on_that_cant_play_waits_instead_of_playing() {
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let mut state = backend.snapshot();
+        let mut kitchen = state.speaker("airplay:kitchen").unwrap().clone();
+        kitchen.waiting = Some(Waiting::Reconnecting);
+        assert_eq!(
+            state.speaker_state(&kitchen),
+            SpeakerState::Waiting(Waiting::Reconnecting)
+        );
+        assert!(
+            !SpeakerState::Waiting(Waiting::ForDevice).click_turns_on(),
+            "it is on, so a click turns it off"
+        );
+        // Without streaming it just plays once streaming starts; off is off.
+        state.running = false;
+        assert_eq!(state.speaker_state(&kitchen), SpeakerState::WillPlay);
+        state.running = true;
+        kitchen.enabled = false;
+        assert_eq!(state.speaker_state(&kitchen), SpeakerState::Off);
+    }
+
+    #[test]
     fn this_pc_comes_first_then_the_rest_by_name() {
         let state = MockBackend::new().snapshot();
         let (this_pc, connected) = state.layout();
@@ -892,6 +955,7 @@ mod tests {
             availability: Availability::Open,
             paired: false,
             device_volume: None,
+            waiting: None,
         };
         assert!(!speaker(SpeakerKind::Virtual, false).is_listed(false));
         assert!(speaker(SpeakerKind::Virtual, false).is_listed(true));

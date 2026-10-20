@@ -29,6 +29,17 @@ value, and the "…" options button. Below 960 px of width the volume sliders ge
 shorter, leaving the names more room; the window can't be made narrower than
 860 px.
 
+A speaker row shows one of four states. Off: a grey toggle. On while
+streaming is off: an outlined toggle, "Will play" to Narrator. Playing: a
+filled toggle, a teal row and a bold name. On while streaming but unable to
+play right now: an outlined toggle, a plain row and name, and a note under the
+name that Narrator also reads as the toggle's value, "Waiting for device" when
+another app holds the output's device for itself, or "Reconnecting…" while
+AudioSync keeps trying to reach an AirPlay speaker. That speaker stays on, so
+selecting it turns it off; the row goes back to playing as soon as it plays
+again, and the notice explains what happened. Group rows show only the first
+three states.
+
 The windows read their data through the `Backend` trait in
 `windows/src/ui_model.rs`. On Windows that is the adapter over the WASAPI audio
 backend (`windows/src/adapter.rs`), which captures and plays for real. On other
