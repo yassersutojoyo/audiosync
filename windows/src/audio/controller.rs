@@ -2733,6 +2733,83 @@ mod tests {
     }
 
     #[test]
+    fn stopping_ends_the_wait_for_a_busy_output() {
+        let mut backend = backend();
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let busy = BackendEvent::OutputBusy {
+            id: HEADPHONES.to_owned(),
+        };
+        assert_eq!(backend.poll(), [busy.clone()]);
+        backend.stop();
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputFree {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+        assert!(backend.policy().settings(HEADPHONES).enabled, "it stays on");
+        // Started again while the other app still holds it: told again.
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(backend.poll(), [busy]);
+    }
+
+    #[test]
+    fn a_session_that_ends_by_itself_ends_the_wait_for_a_busy_output() {
+        let mut backend = backend();
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        backend.quit_app(PLAYER_PID);
+        let events = backend.poll();
+        assert!(
+            events.contains(&BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }),
+            "{events:?}"
+        );
+        assert!(
+            events.contains(&BackendEvent::OutputFree {
+                id: HEADPHONES.to_owned(),
+            }),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    fn a_busy_output_whose_device_goes_away_no_longer_waits() {
+        let mut backend = backend();
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        backend.disconnect_output(HEADPHONES);
+        let events = backend.poll();
+        assert!(
+            events.contains(&BackendEvent::OutputFree {
+                id: HEADPHONES.to_owned(),
+            }),
+            "{events:?}"
+        );
+        assert!(
+            backend.policy().settings(HEADPHONES).enabled,
+            "it stays on (S68)"
+        );
+        // Back and still held by the other app: told again.
+        backend.connect_output(HEADPHONES, "Headphones");
+        let events = backend.poll();
+        assert!(
+            events.contains(&BackendEvent::OutputBusy {
+                id: HEADPHONES.to_owned(),
+            }),
+            "{events:?}"
+        );
+    }
+
+    #[test]
     fn an_output_that_cant_start_is_turned_off_and_reported() {
         let mut backend = backend();
         let error = BackendError::System {
