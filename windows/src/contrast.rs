@@ -451,7 +451,7 @@ fn keyboard_shortcuts_are_declared() {
 /// so no text promises it: the translatable strings naming AirPlay are the
 /// speaker kind, what a listed speaker can't do yet, the AirPlay delay field
 /// (spec S181), which shows only while the AirPlay sender runs, and the notice
-/// that the sender stopped after an internal error with its Retry button; an
+/// that the sender stopped or couldn't start, with its Retry button; an
 /// empty Connected Speakers list says just that it's empty, or that its
 /// virtual outputs are hidden.
 #[test]
@@ -464,9 +464,8 @@ fn no_text_promises_airplay() {
                 || line.contains("not supported yet")
                 || line.contains("doesn't support yet")
                 || line.contains("property <string> airplay-delay-")
-                || line.contains(
-                    "notice-airplay-stopped: @tr(\"AirPlay stopped working after an internal error"
-                )
+                || line
+                    .contains("notice-airplay-stopped: @tr(\"AirPlay stopped or couldn't start.")
                 || line.contains("notice-retry-label: @tr(\"Retry starting AirPlay\")"),
             "strings.slint: {}",
             line.trim()

@@ -33,7 +33,7 @@ I built this because I wanted my Mac's audio on every speaker in the house at on
 
 It's a small Mac app written in Swift, with a main window and a menu bar panel, free and MIT-licensed. It's an early alpha, so expect rough edges.
 
-There's a Windows 11 version on the way too, written in Rust. It's built to play all system audio, or one app, to the PC's own speakers, headphones and Bluetooth outputs, each with its own delay, and to AirPlay speakers that still take AirPlay 1, through AudioSync's own AirPlay sender. An Apple TV that asks for a code gets a PIN prompt. Receivers that only do AirPlay 2, or that ask for a password, don't work from Windows yet, and I haven't tried the AirPlay part on a real speaker or Apple TV. It isn't out yet.
+There's a Windows 11 version on the way too, written in Rust. It's built to play all system audio, or one app, to the PC's own speakers, headphones and Bluetooth outputs, each with its own delay, and to AirPlay speakers that still take AirPlay 1, through AudioSync's own AirPlay sender. An Apple TV that asks for a code gets a PIN prompt. Receivers that only do AirPlay 2, or that ask for a password, don't work from Windows yet, and I haven't tried the AirPlay part on a real speaker or Apple TV. It isn't out yet, but if you want to try a preview build, [windows/README.md](windows/README.md#trying-the-preview-exe) says where to get it and what to expect the first time (it needs Windows 11, isn't code-signed yet, and wants a Private network for AirPlay).
 
 ## Multi-room audio on macOS
 
