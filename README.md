@@ -35,9 +35,8 @@ It's a small Mac app written in Swift, with a main window and a menu bar panel, 
 
 ## What's in the download, and what's next
 
-The download today is 0.4.1. It streams to AirPlay through a bundled AirPlay engine (OwnTone) that runs next to the app. Since then I've rebuilt the insides, and the next version brings that work out of `main`:
+The download today is 0.4.1. Since then I've rebuilt a lot of the insides, and the next version brings that work out of `main`:
 
-- AudioSync's own AirPlay sender, built into the app. The bundled engine is gone, so the app is much smaller and runs nothing next to itself.
 - A new audio engine written in Rust, shared with the Windows version.
 - Delays that work with local speakers alone, with the Mac's built-in speakers as the reference. No AirPlay speaker needed to line up a Bluetooth speaker with your Mac.
 - A hint on any speaker you switched on that sits at 25% or less, or muted, in macOS, with a one-click fix.
@@ -50,17 +49,19 @@ The rest of this README describes the app as it is on `main`, which is what the 
 
 The source can be all system audio, a single app (with its helper processes, like a browser's audio service), or an input device such as a microphone, line-in or audio interface (first two channels). It plays to one or more HomePods, Apple TVs and other AirPlay receivers, plus anything macOS can play to: built-in speakers, the headphone jack, HDMI/DisplayPort, USB DACs and Bluetooth.
 
-Each local speaker gets its own delay relative to the Mac's built-in speakers (−2 to +20 s), and it applies whether or not an AirPlay speaker is on. There's one AirPlay delay for lining the Mac up with the AirPlay speakers, and the AirPlay sender keeps the AirPlay speakers in step with each other. On top of that you get per-speaker and master volume, a 10-band equalizer with a preamp and presets, Now Playing for Spotify and Music (also shown on AirPlay TVs and other speakers with a screen), speaker groups, auto-connect, and launch at login. AirPlay goes out through AudioSync's own sender, built into the app, so there's nothing else to install or configure. An Apple TV that asks for a PIN pairs once, and an older AirPlay speaker with a password asks for it when you turn it on.
+Each local speaker gets its own delay relative to the Mac's built-in speakers (−2 to +20 s), and it applies whether or not an AirPlay speaker is on. There's one AirPlay delay for lining the Mac up with the AirPlay speakers, and the AirPlay speakers are kept in step with each other. On top of that you get per-speaker and master volume, a 10-band equalizer with a preamp and presets, Now Playing for Spotify and Music (also shown on AirPlay TVs and other speakers with a screen), speaker groups, auto-connect, and launch at login. An Apple TV that asks for a PIN pairs once, and an older AirPlay speaker with a password asks for it when you turn it on.
 
 macOS also keeps its own volume for every output, and only the default one is in the Sound menu. If a speaker you switched on sits at 25% or less there, or is muted, its row tells you, and one click sets it to 75% or unmutes it.
 
 ## Coming to Windows
 
-There's a Windows 11 version too, written in Rust with a [Slint](https://slint.dev) interface, for x64 and ARM64 PCs. It uses the same Rust audio engine and the same AirPlay sender as the Mac app, and by now it does most of what the Mac app does:
+There's a Windows 11 version too, written in Rust with a [Slint](https://slint.dev) interface, for x64 and ARM64 PCs. It shares the Rust audio engine with the Mac app, and by now it does most of what the Mac app does.
+
+The part I'm proudest of: AirPlay on Windows goes out through AudioSync's own AirPlay sender, written from scratch in Rust and built right into the app. There's no separate AirPlay engine to bundle, install or keep running, and it finds speakers on its own, without Bonjour or other Apple software on the PC. Here's what it does today:
 
 - It captures everything the PC plays (except AudioSync itself), or just one app.
 - It plays to several of the PC's outputs at once, in sync: speakers, headphones, USB, HDMI and Bluetooth, each with its own delay relative to the built-in output, and its own volume under a master volume.
-- It plays to AirPlay speakers through AudioSync's own sender, and the PC's outputs wait for them so everything stays in step. An Apple TV that asks for a code gets a PIN prompt and remembers the pairing.
+- It plays to AirPlay speakers through that built-in sender, and the PC's outputs wait for them so everything stays in step. An Apple TV that asks for a code gets a PIN prompt and remembers the pairing.
 - Groups, auto-connect, and the same ten-band equalizer with a preamp and presets.
 - The same hint as on the Mac when a speaker you turned on sits very low or muted in Windows, with the same one-click fix.
 - A tray icon with a flyout, like the Mac's menu bar panel. Closing the window keeps it running there.
@@ -82,7 +83,7 @@ To be clear: Airfoil is a product of Rogue Amoeba. AudioSync isn't affiliated wi
 
 ## Install
 
-Download `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest) and drag the app to Applications. It runs on macOS 15 (Sequoia) or later, AirPlay included. That's 0.4.1 for now, with the bundled AirPlay engine; the changes above come with the next version, or you can build `main` yourself.
+Download `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest) and drag the app to Applications. It runs on macOS 15 (Sequoia) or later, AirPlay included. That's 0.4.1 for now; the changes above come with the next version, or you can build `main` yourself.
 
 I don't have a paid Apple developer account, so releases aren't notarized and macOS blocks the first launch. Open AudioSync once, dismiss the warning, then go to System Settings → Privacy & Security and click Open Anyway next to the message about AudioSync. (Or run `xattr -dr com.apple.quarantine /Applications/AudioSync.app`.) Each release lists SHA-256 checksums for its files.
 
@@ -114,7 +115,7 @@ The main window opens when AudioSync starts (not when it launches at login; clic
 
 The switch at the top turns all streaming on or off. Switching it off keeps your speakers chosen (they show as "will play") and they come back when you switch it on again.
 
-The Mac's built-in speakers are the reference, so they have no delay. Every other local speaker has a delay relative to them (like ⏱ +150 ms), and it always applies, with or without AirPlay. If a speaker plays before the built-in speakers, raise its delay; if it plays after them, lower it, below zero if needed. Bluetooth speakers and headphones run late, so they usually end up around −150 to −300 ms. Then, with an AirPlay speaker on, there's the AirPlay delay under Connected Speakers (it starts at the latency the AirPlay sender reports, a little under two seconds): if the Mac plays first and the HomePod echoes behind it, raise it; if the HomePod plays first, lower it. Stop when you hear one clean sound; the values are saved. Music with clear claps or drums makes it easier, and so does adding speakers one at a time. Delays you set in an older version are carried over once.
+The Mac's built-in speakers are the reference, so they have no delay. Every other local speaker has a delay relative to them (like ⏱ +150 ms), and it always applies, with or without AirPlay. If a speaker plays before the built-in speakers, raise its delay; if it plays after them, lower it, below zero if needed. Bluetooth speakers and headphones run late, so they usually end up around −150 to −300 ms. Then, with an AirPlay speaker on, there's the AirPlay delay under Connected Speakers (it starts at the latency AirPlay reports, a little under two seconds): if the Mac plays first and the HomePod echoes behind it, raise it; if the HomePod plays first, lower it. Stop when you hear one clean sound; the values are saved. Music with clear claps or drums makes it easier, and so does adding speakers one at a time. Delays you set in an older version are carried over once.
 
 <p align="center">
   <picture>
@@ -131,7 +132,7 @@ A few other things worth knowing:
 - The gear menu has New Group from Active Speakers, Refresh Devices, Show Virtual Devices (loopback drivers, meeting apps and other virtual outputs stay hidden until you turn this on or already use one), Appearance, Launch at Login and the AudioSync Guide.
 - Clicking any speaker while streaming is off starts streaming. Click a delay to nudge it by ±10/±100 ms or type a value (a leading − for a negative one).
 - Speakers that want a PIN or password (an Apple TV, or a receiver with Require Password on) are marked "Asks for a code". You get a prompt when you turn one on yourself. An Apple TV pairs once and then connects without a code; a password is asked for once each time AudioSync starts.
-- If the AirPlay sender can't start, or stops after an error, Connected Speakers says so and offers a Retry button.
+- If AirPlay can't start, or stops after an error, Connected Speakers says so and offers a Retry button.
 
 <p align="center">
   <picture>
@@ -142,14 +143,14 @@ A few other things worth knowing:
 
 ## How it works, briefly
 
-System or app audio comes in through a Core Audio process tap (which also mutes the original output, so you only hear the synced copies); input devices are read directly. The audio goes through the equalizer into a shared buffer. Each local speaker has its own output unit reading that buffer at its own delay and correcting clock drift. The same audio goes to AudioSync's own AirPlay sender (the one the Windows app uses), which streams it to the speakers over AirPlay.
+System or app audio comes in through a Core Audio process tap (which also mutes the original output, so you only hear the synced copies); input devices are read directly. The audio goes through the equalizer into a shared buffer. Each local speaker has its own output unit reading that buffer at its own delay and correcting clock drift. The same audio is streamed to the AirPlay speakers.
 
 An Apple TV that asks for a PIN pairs once, with the PIN it shows, and a speaker with a password asks for it when you turn it on. [`SECURITY.md`](SECURITY.md) goes into the details.
 
 ## Known limitations
 
 - Everything is about two seconds late because of the AirPlay buffer. Fine for music, not for video or games.
-- AudioSync's own sender streams over classic AirPlay (AirPlay 1), which most AirPlay 2 speakers still take; a speaker that only speaks AirPlay 2 isn't listed yet.
+- On `main`, AirPlay goes out as classic AirPlay (AirPlay 1), which most AirPlay 2 speakers still take; a speaker that only speaks AirPlay 2 isn't listed yet.
 - Now Playing only works with Spotify and Music; macOS doesn't let other apps read the system-wide Now Playing info.
 
 ## License and credits
