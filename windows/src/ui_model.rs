@@ -82,6 +82,13 @@ pub enum Availability {
         expect(dead_code, reason = "only the Windows backend pairs")
     )]
     Pairing,
+    /// It was switched on while another Apple TV has the PIN prompt; its
+    /// pairing gets the prompt once that one ends.
+    #[cfg_attr(
+        all(not(windows), not(test)),
+        expect(dead_code, reason = "only the Windows backend pairs")
+    )]
+    WaitingToPair,
     /// It asks for a password, which AudioSync for Windows can't send yet.
     PasswordNotYet,
     /// It needs pairing with a PIN, which AudioSync for Windows can't do yet.

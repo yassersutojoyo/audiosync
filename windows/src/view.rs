@@ -51,11 +51,52 @@ enum DialogPurpose {
 struct UiState {
     sync_open: HashSet<String>,
     delay_drafts: HashMap<String, String>,
-    /// What is being typed in the AirPlay delay field, and the value shown
-    /// then: the field follows a new value (a new sender latency) instead.
-    airplay_delay_draft: Option<(String, Option<f64>)>,
+    airplay_delay_draft: TypedAirPlayDelay,
     /// View > Show Virtual Devices; off at launch, like the Mac's default.
     show_virtual: bool,
+}
+
+/// What is being typed in the AirPlay delay field. Typing only keeps the
+/// text: the delay's lower bound follows the sender's latency (2000 ms under
+/// it), so applying "2" and "25" on the way to "2500" would clamp them.
+/// Enter or leaving the field applies it.
+#[derive(Default)]
+struct TypedAirPlayDelay {
+    /// The text, and the value the field showed when it was typed: the
+    /// field follows a new value (a new sender latency) instead.
+    draft: Option<(String, Option<f64>)>,
+}
+
+impl TypedAirPlayDelay {
+    fn edit(&mut self, text: &str, shown: Option<f64>) {
+        self.draft = Some((text.to_owned(), shown));
+    }
+
+    /// The text the field shows instead of `shown`, the applied value.
+    fn text(&self, shown: Option<f64>) -> Option<&str> {
+        self.draft
+            .as_ref()
+            .filter(|(_, typed_at)| *typed_at == shown)
+            .map(|(text, _)| text.as_str())
+    }
+
+    /// Ends the typing: the number to apply, if the typed text is one. The
+    /// field then shows the applied value.
+    fn commit(&mut self, shown: Option<f64>) -> Option<f64> {
+        let number = self.text(shown).and_then(ui_model::parse_ms);
+        self.draft = None;
+        number
+    }
+
+    fn clear(&mut self) {
+        self.draft = None;
+    }
+}
+
+/// Whether Connected Speakers lists nothing only because its outputs are
+/// virtual ones that View > Show Virtual Devices hides: its note says so.
+fn only_virtual_outputs_hidden(connected: &[&ui_model::Speaker], show_virtual: bool) -> bool {
+    !connected.is_empty() && connected.iter().all(|s| !s.is_listed(show_virtual))
 }
 
 struct Models {
@@ -454,6 +495,8 @@ impl App {
             )
         };
         let (this_pc, connected) = state.layout();
+        self.main
+            .set_connected_virtual_hidden(only_virtual_outputs_hidden(&connected, ui.show_virtual));
         let listed = |s: &&ui_model::Speaker| s.is_listed(ui.show_virtual);
         let this_pc: Vec<SpeakerItem> = this_pc
             .into_iter()
@@ -522,14 +565,10 @@ impl App {
         self.main
             .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
         let airplay_delay = state.airplay_delay_ms.unwrap_or(0.0);
-        let airplay_draft = ui
-            .airplay_delay_draft
-            .as_ref()
-            .filter(|(_, shown)| *shown == state.airplay_delay_ms)
-            .map(|(text, _)| text.clone());
         self.main.set_airplay_delay_text(
-            airplay_draft
-                .unwrap_or_else(|| format_ms(airplay_delay))
+            ui.airplay_delay_draft
+                .text(state.airplay_delay_ms)
+                .map_or_else(|| format_ms(airplay_delay), str::to_owned)
                 .into(),
         );
 
@@ -615,6 +654,8 @@ impl App {
         });
         let w = weak.clone();
         main.on_airplay_delay_edited(move |text| with_app(&w, |app| app.edit_airplay_delay(&text)));
+        let w = weak.clone();
+        main.on_airplay_delay_committed(move || with_app(&w, App::commit_airplay_delay));
         let w = weak.clone();
         main.on_auto_connect_toggled(move |id, on| {
             with_app(&w, |app| app.update(|b| b.set_auto_connect(&id, on)))
@@ -1184,23 +1225,27 @@ impl App {
         let Some(current) = self.snapshot().airplay_delay_ms else {
             return;
         };
-        self.ui.borrow_mut().airplay_delay_draft = None;
+        self.ui.borrow_mut().airplay_delay_draft.clear();
         self.update(|b| b.set_airplay_delay(current + f64::from(delta)));
     }
 
-    /// Applies the typed AirPlay delay as soon as it is a number. Clamped,
-    /// the field shows the value that was applied.
+    /// Keeps what is typed in the AirPlay delay field; nothing applies until
+    /// Enter or leaving the field (see [`TypedAirPlayDelay`]).
     fn edit_airplay_delay(&self, text: &str) {
-        if let Some(ms) = ui_model::parse_ms(text) {
-            self.backend.borrow_mut().set_airplay_delay(ms);
-        }
-        let applied = self.snapshot().airplay_delay_ms;
-        let draft = match ui_model::parse_ms(text) {
-            Some(ms) if applied != Some(ms) => format_ms(applied.unwrap_or(0.0)),
-            _ => text.to_string(),
-        };
-        self.ui.borrow_mut().airplay_delay_draft = Some((draft, applied));
+        let shown = self.snapshot().airplay_delay_ms;
+        self.ui.borrow_mut().airplay_delay_draft.edit(text, shown);
         self.refresh();
+    }
+
+    /// Applies the typed AirPlay delay on Enter or when the field loses the
+    /// focus. Clamped, the field shows the value that was applied.
+    fn commit_airplay_delay(&self) {
+        let shown = self.snapshot().airplay_delay_ms;
+        let typed = self.ui.borrow_mut().airplay_delay_draft.commit(shown);
+        match typed {
+            Some(ms) => self.update(|b| b.set_airplay_delay(ms)),
+            None => self.refresh(),
+        }
     }
 
     fn change_equalizer(&self, change: impl FnOnce(&mut EqSettings)) {
@@ -1398,6 +1443,7 @@ fn availability(a: ui_model::Availability) -> Availability {
         ui_model::Availability::Open => Availability::Open,
         ui_model::Availability::NeedsCode => Availability::NeedsCode,
         ui_model::Availability::Pairing => Availability::Pairing,
+        ui_model::Availability::WaitingToPair => Availability::WaitingToPair,
         ui_model::Availability::PasswordNotYet => Availability::PasswordNotYet,
         ui_model::Availability::PairingNotYet => Availability::PairingNotYet,
         ui_model::Availability::AirPlay2NotYet => Availability::Airplay2NotYet,
@@ -1723,6 +1769,55 @@ mod tests {
         let row = speaker_item(&state, desk, true, true, Some("12"));
         assert_eq!(row.delay_text.as_str(), "12");
         assert_eq!(row.delay_ms, 120);
+    }
+
+    #[test]
+    fn a_typed_airplay_delay_applies_only_when_committed() {
+        // With a sender latency above 2 s the delay can't go under 2100 ms,
+        // so applying "2", "25" and "250" on the way to "2500" would clamp
+        // each of them.
+        let shown = Some(2100.0);
+        let mut field = TypedAirPlayDelay::default();
+        for text in ["2", "25", "250", "2500"] {
+            field.edit(text, shown);
+            assert_eq!(field.text(shown), Some(text), "the field keeps the text");
+        }
+        assert_eq!(field.commit(shown), Some(2500.0), "Enter applies it");
+        assert_eq!(field.text(shown), None, "then the field shows the value");
+        assert_eq!(
+            field.commit(shown),
+            None,
+            "leaving the field applies nothing more"
+        );
+
+        field.edit("abc", shown);
+        assert_eq!(field.commit(shown), None, "not a number: nothing applies");
+        field.edit("3000", shown);
+        assert_eq!(field.text(Some(2400.0)), None);
+        assert_eq!(
+            field.commit(Some(2400.0)),
+            None,
+            "a new sender latency replaced the typed text"
+        );
+    }
+
+    #[test]
+    fn connected_speakers_say_when_only_virtual_outputs_are_hidden() {
+        let state = MockBackend::new().snapshot();
+        let mut cable = state.speaker("local:desk").unwrap().clone();
+        cable.kind = ui_model::SpeakerKind::Virtual;
+        cable.enabled = false;
+        assert!(only_virtual_outputs_hidden(&[&cable], false));
+        assert!(
+            !only_virtual_outputs_hidden(&[&cable], true),
+            "shown, it is listed"
+        );
+        assert!(!only_virtual_outputs_hidden(&[], false), "nothing at all");
+        let desk = state.speaker("local:desk").unwrap();
+        assert!(
+            !only_virtual_outputs_hidden(&[&cable, desk], false),
+            "another speaker is listed"
+        );
     }
 
     #[test]
