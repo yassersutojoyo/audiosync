@@ -2428,6 +2428,127 @@ mod tests {
         assert_eq!(messages(&adapter), [lost]);
     }
 
+    /// The endpoint IDs Windows gives one USB DAC in three USB ports.
+    const DAC_PORT_1: &str = "usb-dac-port-1";
+    const DAC_PORT_2: &str = "usb-dac-port-2";
+    const DAC_PORT_3: &str = "usb-dac-port-3";
+
+    /// Plugs the USB DAC in under `endpoint_id`, and polls.
+    fn plug_dac(adapter: &mut AudioAdapter<MockBackend>, endpoint_id: &str) {
+        adapter
+            .audio_mut()
+            .connect_output_as(endpoint_id, "USB DAC", OutputKind::Usb);
+        adapter.poll();
+    }
+
+    fn unplug(adapter: &mut AudioAdapter<MockBackend>, endpoint_id: &str) {
+        adapter.audio_mut().disconnect_output(endpoint_id);
+        adapter.poll();
+    }
+
+    #[test]
+    fn a_speaker_on_that_wasnt_listed_since_launch_doesnt_count_as_on() {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.add_app(PLAYER_PID, "player.exe");
+        // Saved as on under an endpoint ID Windows no longer lists: the DAC
+        // went to another USB port while AudioSync wasn't running.
+        audio.set_output_enabled(DAC_PORT_1, true).unwrap();
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.set_running(true);
+        assert!(!adapter.snapshot().running);
+        assert_eq!(messages(&adapter), [NoticeMessage::NoSpeaker]);
+
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+        // Every speaker the user can see is off: streaming stops.
+        adapter.set_speaker_enabled(&key(SPEAKERS), false);
+        assert!(!adapter.snapshot().running);
+
+        // It kept its switch: listed, it counts and plays.
+        plug_dac(&mut adapter, DAC_PORT_1);
+        assert!(enabled(&adapter, DAC_PORT_1));
+        adapter.set_running(true);
+        assert_eq!(playing(&adapter), [DAC_PORT_1]);
+    }
+
+    #[test]
+    fn a_usb_speaker_plugged_into_another_port_keeps_its_settings_under_its_new_id() {
+        let mut adapter = adapter();
+        plug_dac(&mut adapter, DAC_PORT_1);
+        turn_on(&mut adapter, DAC_PORT_1);
+        adapter.set_speaker_volume(&key(DAC_PORT_1), 35.0);
+        adapter.set_speaker_delay(&key(DAC_PORT_1), 120.0);
+        adapter.set_auto_connect(&key(DAC_PORT_1), true);
+        adapter.new_group("Desk").unwrap();
+        adapter.poll();
+
+        // Into another port: Windows lists it under a new endpoint ID.
+        unplug(&mut adapter, DAC_PORT_1);
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "USB DAC".into(),
+        };
+        assert_eq!(messages(&adapter), [lost]);
+        plug_dac(&mut adapter, DAC_PORT_2);
+        let dac = speaker_of(&adapter, &key(DAC_PORT_2));
+        assert!(dac.enabled);
+        assert_eq!(dac.volume, 35.0);
+        assert_eq!(dac.delay_ms, Some(120.0));
+        assert!(dac.auto_connect);
+        assert_eq!(adapter.snapshot().groups[0].members, [key(DAC_PORT_2)]);
+        assert_eq!(playing(&adapter), [DAC_PORT_2]);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert_eq!(
+            adapter.audio.enabled_outputs(),
+            [DAC_PORT_2],
+            "the old ID is forgotten"
+        );
+        let saved = adapter.current_settings();
+        assert!(!saved.outputs.contains_key(DAC_PORT_1));
+        assert!(!saved.auto_connect.contains(&key(DAC_PORT_1)));
+
+        // Back in the first port, the settings follow it again.
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_dac(&mut adapter, DAC_PORT_1);
+        let dac = speaker_of(&adapter, &key(DAC_PORT_1));
+        assert!(dac.enabled);
+        assert_eq!(dac.volume, 35.0);
+        assert_eq!(playing(&adapter), [DAC_PORT_1]);
+    }
+
+    #[test]
+    fn settings_follow_a_new_id_only_from_the_one_absent_speaker_of_its_name() {
+        let mut adapter = adapter();
+        // Two DACs of the same model, both on: one plugged in under a new ID
+        // while the other is still listed stays a new speaker.
+        plug_dac(&mut adapter, DAC_PORT_1);
+        turn_on(&mut adapter, DAC_PORT_1);
+        plug_dac(&mut adapter, DAC_PORT_2);
+        assert!(!enabled(&adapter, DAC_PORT_2));
+        turn_on(&mut adapter, DAC_PORT_2);
+
+        // Both unplugged, a third port could be either: a new speaker.
+        unplug(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_dac(&mut adapter, DAC_PORT_3);
+        assert!(!enabled(&adapter, DAC_PORT_3));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1, DAC_PORT_2]);
+    }
+
+    #[test]
+    fn a_new_speaker_of_another_kind_doesnt_take_the_settings_of_one_with_its_name() {
+        let mut adapter = adapter();
+        plug_dac(&mut adapter, DAC_PORT_1);
+        turn_on(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_1);
+        adapter
+            .audio_mut()
+            .connect_output_as(DAC_PORT_2, "USB DAC", OutputKind::Bluetooth);
+        adapter.poll();
+        assert!(!enabled(&adapter, DAC_PORT_2));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1]);
+    }
+
     #[test]
     fn a_speaker_another_app_holds_stays_on_with_a_notice_until_it_is_free() {
         let mut adapter = adapter();
