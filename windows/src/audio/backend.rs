@@ -236,6 +236,20 @@ pub enum BackendEvent {
         /// Why it could not start.
         error: BackendError,
     },
+    /// An output could not start because another app holds its device in
+    /// exclusive mode. It stays on, is tried again every few seconds, and plays
+    /// once the device is free; [`BackendEvent::OutputFree`] tells then.
+    OutputBusy {
+        /// The endpoint ID.
+        id: String,
+    },
+    /// An output reported busy no longer waits for its device: it plays
+    /// now, it was switched off, streaming stopped, or its device went
+    /// away.
+    OutputFree {
+        /// The endpoint ID.
+        id: String,
+    },
     /// Playback stopped on its own.
     Stopped {
         /// Why it stopped.
@@ -284,9 +298,10 @@ pub enum BackendEvent {
         /// The endpoint ID.
         id: String,
     },
-    /// The AirPlay sender stopped after an internal error, so no AirPlay
-    /// speaker is listed or plays, or its discovery did, so none is listed;
-    /// [`AudioBackend::retry_airplay`] starts a new sender.
+    /// The AirPlay sender stopped after an internal error or couldn't
+    /// start, so no AirPlay speaker is listed or plays, or its discovery
+    /// did, so none is listed; [`AudioBackend::retry_airplay`] starts a new
+    /// sender.
     AirPlayStopped,
 }
 
@@ -315,6 +330,9 @@ pub enum BackendError {
     NotAnApp,
     /// The output device is not connected, or Windows audio is not running.
     DeviceGone,
+    /// Another app holds the device for itself (exclusive mode), so nothing
+    /// else can play to it until that app lets go.
+    DeviceBusy,
     /// The audio format can't be used, such as a rate outside 8 to 384 kHz.
     UnsupportedFormat,
     /// A Windows call failed with this HRESULT.
@@ -342,6 +360,7 @@ impl fmt::Display for BackendError {
             BackendError::DeviceGone => {
                 f.write_str("The device isn't connected, or Windows audio isn't running.")
             }
+            BackendError::DeviceBusy => f.write_str("Another app is using the device exclusively."),
             BackendError::UnsupportedFormat => {
                 f.write_str("The device's audio format isn't supported.")
             }
@@ -522,6 +541,7 @@ mod tests {
             BackendError::SourceGone,
             BackendError::NotAnApp,
             BackendError::DeviceGone,
+            BackendError::DeviceBusy,
             BackendError::UnsupportedFormat,
             BackendError::System { call: "x", code: 1 },
         ];

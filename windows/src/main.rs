@@ -31,6 +31,8 @@ mod placement;
 mod platform;
 #[cfg(any(windows, test))]
 mod settings;
+#[cfg(any(windows, test))]
+mod single_instance;
 // Generated from brand/tokens.json: rustfmt leaves it as the generator wrote it.
 #[cfg(test)]
 #[rustfmt::skip]
@@ -67,6 +69,36 @@ const PREVIEW_THEME_VAR: &str = "AUDIOSYNC_PREVIEW_THEME";
 const PREVIEW_PIN_VAR: &str = "AUDIOSYNC_PREVIEW_PIN";
 
 fn main() -> ExitCode {
+    // Before the log, which a launch empties, and before any audio, tray or
+    // window: a second launch only hands over to the running copy.
+    #[cfg(windows)]
+    let launched = std::time::Instant::now();
+    #[cfg(windows)]
+    let (instance, waited_for) = match single_instance::acquire() {
+        single_instance::Acquired::First(instance) => (instance, None),
+        single_instance::Acquired::Second => {
+            // A copy that is quitting doesn't answer; once it's gone, this
+            // launch starts instead, as on the Mac.
+            let (outcome, first) = single_instance::second_launch(
+                single_instance::hand_over,
+                || match single_instance::acquire() {
+                    single_instance::Acquired::First(instance) => Some(instance),
+                    single_instance::Acquired::Second => None,
+                },
+                || launched.elapsed(),
+                std::thread::sleep,
+            );
+            match first {
+                Some(instance) => (instance, Some(outcome)),
+                None => {
+                    let log = DebugLog::appending_from_env();
+                    log.log(|| outcome.log_line(std::process::id()));
+                    log.flush(LOG_FLUSH_AT_EXIT);
+                    return ExitCode::SUCCESS;
+                }
+            }
+        }
+    };
     let log = DebugLog::from_env();
     log.log(|| {
         format!(
@@ -84,7 +116,23 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    match run(&log) {
+    #[cfg(windows)]
+    if let Some(outcome) = waited_for {
+        log.log(|| outcome.took_over_line());
+    }
+    #[cfg(windows)]
+    match &instance {
+        Ok(_) => log.log(|| "single instance: this is the only copy in the session".to_owned()),
+        Err(error) => {
+            log.log(|| format!("single instance: a second launch can't reach this copy ({error})"))
+        }
+    }
+
+    match run(
+        &log,
+        #[cfg(windows)]
+        instance.as_ref().ok(),
+    ) {
         Ok(()) => {
             log.log(|| "exiting".to_owned());
             log.flush(LOG_FLUSH_AT_EXIT);
@@ -157,30 +205,24 @@ fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
     )))
 }
 
-/// Starts the AirPlay sender and its discovery, and hands both to the audio
-/// backend, with the way to start a new one when the user retries after it
-/// stopped. Without a sender the app runs on with local outputs only;
-/// without discovery no AirPlay speaker is listed.
+/// Starts the AirPlay sender and its discovery through the audio backend,
+/// which keeps the way to start a new one when the user retries. Without a
+/// sender the app runs on with local outputs only; without discovery no
+/// AirPlay speaker is listed.
 #[cfg(windows)]
 fn start_airplay(audio: &mut audio::wasapi::WasapiBackend, log: &DebugLog) {
-    let Some((link, feed)) = start_sender(log) else {
-        return;
-    };
-    audio.set_airplay_with_pairings(link, feed, open_pairings(log));
-    let log = log.clone();
-    audio.set_airplay_starter(Box::new(move || start_sender(&log)));
+    let starter_log = log.clone();
+    audio.start_airplay(
+        Box::new(move || start_sender(&starter_log)),
+        open_pairings(log),
+    );
 }
 
-/// A new AirPlay sender browsing for receivers, and the feed for its input;
-/// `None` when it couldn't start.
+/// A new AirPlay sender, browsing for receivers when its discovery could
+/// start, and the feed for its input; `None` when it couldn't start.
 #[cfg(windows)]
-fn start_sender(
-    log: &DebugLog,
-) -> Option<(
-    Box<dyn audio::airplay::AirPlayLink>,
-    Option<audio::airplay::FeedSlot>,
-)> {
-    use audio::airplay::{FeedSlot, SenderLink};
+fn start_sender(log: &DebugLog) -> Option<audio::airplay::StartedSender> {
+    use audio::airplay::{FeedSlot, SenderLink, StartedSender};
     let (link, input) = match SenderLink::start() {
         Ok(started) => started,
         Err(error) => {
@@ -188,11 +230,21 @@ fn start_sender(
             return None;
         }
     };
-    match link.start_discovery() {
-        Ok(()) => log.log(|| "AirPlay: browsing for receivers".to_owned()),
-        Err(error) => log.log(|| format!("AirPlay: discovery couldn't start: {error}")),
-    }
-    Some((Box::new(link), Some(FeedSlot::new(input))))
+    let browsing = match link.start_discovery() {
+        Ok(()) => {
+            log.log(|| "AirPlay: browsing for receivers".to_owned());
+            true
+        }
+        Err(error) => {
+            log.log(|| format!("AirPlay: discovery couldn't start: {error}"));
+            false
+        }
+    };
+    Some(StartedSender {
+        link: Box::new(link),
+        feed: Some(FeedSlot::new(input)),
+        browsing,
+    })
 }
 
 /// The paired Apple TVs' credentials, from the file in the app's data
@@ -218,9 +270,42 @@ fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
     Ok(Box::new(ui_model::MockBackend::new()))
 }
 
+#[cfg(windows)]
+thread_local! {
+    /// The app and its log, for a second launch's request to show the main
+    /// window.
+    static RUNNING_APP: std::cell::RefCell<Option<(std::rc::Weak<view::App>, DebugLog)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A second launch asked for the main window: shown as by the tray's Open.
+#[cfg(windows)]
+fn show_main_for_second_launch() {
+    let running = RUNNING_APP.with(|cell| {
+        let cell = cell.borrow();
+        let (app, log) = cell.as_ref()?;
+        Some((app.upgrade()?, log.clone()))
+    });
+    if let Some((app, log)) = running {
+        log.log(|| "a second launch asked for the main window: shown".to_owned());
+        app.show_main();
+    }
+}
+
 /// Shows the main window and runs the UI until the user exits.
-fn run(log: &DebugLog) -> Result<(), StartError> {
+fn run(
+    log: &DebugLog,
+    #[cfg(windows)] instance: Option<&single_instance::Instance>,
+) -> Result<(), StartError> {
     let app = view::App::new(backend(log)?, log.clone())?;
+
+    #[cfg(windows)]
+    if let Some(instance) = instance {
+        RUNNING_APP.with(|cell| {
+            *cell.borrow_mut() = Some((std::rc::Rc::downgrade(&app), log.clone()));
+        });
+        instance.listen(show_main_for_second_launch);
+    }
 
     // With a tray icon, closing the main window keeps AudioSync running in
     // the notification area; without one (or off Windows), it quits.

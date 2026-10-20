@@ -91,7 +91,7 @@ pub enum Availability {
     WaitingToPair,
     /// It asks for a password, which AudioSync for Windows can't send yet.
     PasswordNotYet,
-    /// It needs pairing with a PIN, which AudioSync for Windows can't do yet.
+    /// It needs a kind of pairing AudioSync for Windows can't do yet.
     #[cfg_attr(
         all(not(windows), not(test)),
         expect(dead_code, reason = "only the Windows backend lists real receivers")
@@ -251,6 +251,9 @@ pub enum NoticeMessage {
     /// A speaker's device went away while it played. It stays on and plays
     /// again once the device is back.
     SpeakerLost { speaker: String },
+    /// Another app holds a speaker's device for itself (exclusive mode). It
+    /// stays on and plays once that app lets go; the notice then clears.
+    SpeakerBusy { speaker: String },
     /// An AirPlay speaker stopped playing; it stays on while AudioSync keeps
     /// trying to reach it.
     AirPlayRetrying {
@@ -262,9 +265,9 @@ pub enum NoticeMessage {
         speaker: String,
         problem: AirPlayProblem,
     },
-    /// AudioSync's AirPlay sender stopped after an internal error, so
-    /// AirPlay speakers aren't listed or playing. The notice offers Retry
-    /// ([`Backend::retry_airplay`]).
+    /// AudioSync's AirPlay sender stopped after an internal error or
+    /// couldn't start, so AirPlay speakers aren't listed or playing. The
+    /// notice offers Retry ([`Backend::retry_airplay`]).
     AirPlayStopped,
     /// The source also plays straight from these outputs, undelayed, so it
     /// is heard twice. `source` is the app's name, or `None` for the whole

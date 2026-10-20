@@ -11,15 +11,14 @@
 //! speaker joins, so no PIN is asked again. A wrong PIN starts a new pairing
 //! (the Apple TV shows a new PIN); any other failure leaves the speaker off
 //! with a notice. A pairing the user cancels and starts again at once waits
-//! for the cancelled one's end, and nothing the cancelled one reports
-//! reaches the UI, though credentials it got are kept. A speaker the user
-//! turns on joins the
-//! sender's stream while streaming is on, and leaves it when it is turned off
-//! or streaming stops. Its volume and its own delay d_s go to the sender as
-//! they change. Errors come back as backend events, which the UI turns into
-//! notices: a speaker that needs the user (a password, pairing, a format it
-//! can't take) is turned off, while one that stopped answering stays on as
-//! the sender keeps trying (spec P142).
+//! for the cancelled one's end, and nothing the cancelled one reports reaches
+//! the UI, though credentials it got are kept. A speaker the user turns on
+//! joins the sender's stream while streaming is on, and leaves it when it is
+//! turned off or streaming stops. Its volume and its own delay d_s go to the
+//! sender as they change. Errors come back as backend events, which the UI
+//! turns into notices: a speaker that needs the user (a password, pairing, a
+//! format it can't take) is turned off, while one that stopped answering
+//! stays on as the sender keeps trying (spec P142).
 //!
 //! An AirPlay speaker counts as chosen (S79) while it is on and either listed
 //! by discovery as able to play, or playing: a receiver whose announcement
@@ -43,10 +42,12 @@
 //! lifetime; each capture session borrows it through a [`FeedSlot`] and gives
 //! it back when the capture ends.
 //!
-//! A sender that stopped after an internal error, or whose discovery did,
-//! is reported once as [`BackendEvent::AirPlayStopped`]; the user's Retry
-//! replaces it with a new one from a [`SenderStarter`], and the speakers
-//! that were on keep their settings and play again once listed.
+//! A sender that stopped after an internal error, or whose discovery did or
+//! couldn't start, is reported once as [`BackendEvent::AirPlayStopped`]; the
+//! user's Retry replaces it with a new one from a [`SenderStarter`], and the
+//! speakers that were on keep their settings and play again once listed. A
+//! sender that couldn't start at all is reported the same way (by the
+//! controller), and Retry starts one.
 //!
 //! The sender sits behind [`AirPlayLink`], so the backend logic is tested
 //! with a fake; [`SenderLink`] is the real one.
@@ -135,9 +136,32 @@ pub trait AirPlayLink {
     fn is_running(&self) -> bool;
 }
 
-/// Starts a new sender, with the feed for its input, to replace one that
-/// stopped; `None` when it couldn't start (it logs why).
-pub type SenderStarter = Box<dyn FnMut() -> Option<(Box<dyn AirPlayLink>, Option<FeedSlot>)>>;
+/// A sender a [`SenderStarter`] started.
+pub struct StartedSender {
+    /// The sender.
+    pub link: Box<dyn AirPlayLink>,
+    /// The feed for its input.
+    pub feed: Option<FeedSlot>,
+    /// Whether it browses for receivers: false when its discovery couldn't
+    /// start, so it lists nothing.
+    pub browsing: bool,
+}
+
+impl StartedSender {
+    /// A sender that browses for receivers, with `feed` for its input.
+    #[cfg(test)]
+    pub fn browsing(link: Box<dyn AirPlayLink>, feed: Option<FeedSlot>) -> StartedSender {
+        StartedSender {
+            link,
+            feed,
+            browsing: true,
+        }
+    }
+}
+
+/// Starts a sender: at launch, and when the user retries after one stopped
+/// or couldn't start; `None` when it couldn't start (it logs why).
+pub type SenderStarter = Box<dyn FnMut() -> Option<StartedSender>>;
 
 /// The real sender.
 pub struct SenderLink {
@@ -630,11 +654,27 @@ impl AirPlaySpeakers {
                     .to_owned()
             });
         }
+        self.mark_stopped(events);
+        changed
+    }
+
+    /// The sender's discovery couldn't start, so it lists nothing: reported
+    /// as when discovery stops later, so that Retry starts a new sender.
+    pub fn discovery_unavailable(&mut self, events: &mut Vec<BackendEvent>) {
+        self.log.log(|| {
+            "AirPlay: discovery couldn't start, so no receiver is listed; Retry starts a new sender"
+                .to_owned()
+        });
+        self.mark_stopped(events);
+    }
+
+    /// Counts the sender as stopped, reported once until a new one replaces
+    /// it.
+    fn mark_stopped(&mut self, events: &mut Vec<BackendEvent>) {
         if !self.stopped {
             self.stopped = true;
             events.push(BackendEvent::AirPlayStopped);
         }
-        changed
     }
 
     /// Sends what happens to `log`.
@@ -1109,10 +1149,7 @@ impl AirPlaySpeakers {
                         "AirPlay: discovery stopped after an internal error; Retry starts a new sender"
                             .to_owned()
                     });
-                    if !self.stopped {
-                        self.stopped = true;
-                        events.push(BackendEvent::AirPlayStopped);
-                    }
+                    self.mark_stopped(&mut events);
                 }
             }
         }
@@ -1707,6 +1744,13 @@ pub mod tests {
             self.0.borrow_mut().stopped = true;
         }
 
+        /// The stopped fake runs again on the same link. A real sender never
+        /// does (Retry replaces it), but a test then sees what the stop alone
+        /// cleared, without `replace_link` clearing it too.
+        pub fn run_again(&self) {
+            self.0.borrow_mut().stopped = false;
+        }
+
         /// The calls so far, and forgets them.
         pub fn take_calls(&self) -> Vec<Call> {
             std::mem::take(&mut self.0.borrow_mut().calls)
@@ -2280,6 +2324,52 @@ pub mod tests {
         assert_eq!(
             airplay.pin_prompt().map(|prompt| prompt.phase),
             Some(PairingPhase::WaitingForPin)
+        );
+    }
+
+    #[test]
+    fn a_pairing_starts_at_once_after_the_sender_stopped_during_a_cancel() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        pairing_started(&fake, &mut airplay, &tv);
+        airplay.cancel_pairing(&id);
+        airplay.start_pairing(&id).unwrap();
+        assert_eq!(
+            fake.take_calls(),
+            [Call::CancelPairing(id.clone())],
+            "the new pairing waits for the cancelled one's end"
+        );
+        assert!(airplay.speakers()[0].pairing);
+        // The sender stops before the cancelled pairing reported its end:
+        // that end never comes, and the waiting pairing is gone with it.
+        fake.stop_running();
+        assert_eq!(
+            airplay.poll(),
+            [BackendEvent::AirPlayChanged, BackendEvent::AirPlayStopped]
+        );
+        assert!(fake.take_calls().is_empty(), "nothing starts on a stop");
+        assert_eq!(airplay.pin_prompt(), None);
+
+        // On the same link, with no `replace_link` to clear it as well,
+        // nothing of the cancelled pairing is left waiting.
+        fake.run_again();
+        fake.appear(&tv);
+        airplay.poll();
+        assert!(!airplay.speakers()[0].pairing, "no pairing stays parked");
+        airplay.start_pairing(&id).unwrap();
+        assert_eq!(
+            fake.take_calls(),
+            [Call::StartPairing(id.clone())],
+            "it starts at once"
+        );
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(
+            airplay.pin_prompt().map(|prompt| prompt.phase),
+            Some(PairingPhase::WaitingForPin),
+            "its PIN request is its own, not the cancelled pairing's"
         );
     }
 

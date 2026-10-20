@@ -944,6 +944,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 }
             }
             BackendEvent::OutputFailed { id, .. } => self.output_failed(&id, false),
+            // It stays on, and plays once the other app lets go of its
+            // device; the notice then clears itself.
+            BackendEvent::OutputBusy { id } => {
+                let speaker = self.output_name(&id);
+                self.post(speaker_subject(&id), NoticeMessage::SpeakerBusy { speaker });
+            }
+            BackendEvent::OutputFree { id } => {
+                self.clear_if(speaker_subject(&id), |message| {
+                    matches!(message, NoticeMessage::SpeakerBusy { .. })
+                });
+            }
             BackendEvent::Stopped { reason } => {
                 let message = match reason {
                     StopReason::SourceQuit => {
@@ -1733,9 +1744,11 @@ mod tests {
     use audiosync_airplay::sender::{SenderEvent, SpeakerState as AirPlayState};
 
     use super::*;
+    use crate::audio::airplay::StartedSender;
     use crate::audio::airplay::tests::{APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, device, id_of};
     use crate::audio::capture::LoopbackMode;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
+    use crate::audio::pairings::PairingStore;
     use crate::audio::pairings::tests::credentials;
     use crate::audio::routing::HOLD_CHECKS;
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
@@ -2147,6 +2160,20 @@ mod tests {
     }
 
     #[test]
+    fn capture_lost_to_a_windows_audio_restart_comes_back_without_a_notice() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio_mut().fail_capture(BackendError::DeviceGone);
+        for _ in 0..3 {
+            adapter.poll();
+            assert!(adapter.snapshot().running, "streaming stays on");
+        }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert_eq!(adapter.audio.driver().captures_started().len(), 2);
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+    }
+
+    #[test]
     fn capture_that_cant_start_leaves_streaming_off_with_a_notice() {
         let mut adapter = adapter();
         adapter
@@ -2275,6 +2302,54 @@ mod tests {
         adapter.poll();
         assert_eq!(playing(&adapter), [SPEAKERS]);
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    #[test]
+    fn a_speaker_another_app_holds_stays_on_with_a_notice_until_it_is_free() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter
+            .audio_mut()
+            .fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.poll();
+        assert!(enabled(&adapter, HEADPHONES), "it stays on");
+        assert!(adapter.snapshot().running);
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::SpeakerBusy {
+                speaker: "Headphones".into(),
+            }]
+        );
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+
+        adapter.audio_mut().fail_output(HEADPHONES, None);
+        poll_until_busy_retried(&mut adapter);
+        assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
+        assert!(messages(&adapter).is_empty(), "its cause is gone");
+    }
+
+    #[test]
+    fn the_only_speaker_being_busy_keeps_streaming_on() {
+        let mut adapter = adapter();
+        adapter
+            .audio_mut()
+            .fail_output(SPEAKERS, Some(BackendError::DeviceBusy));
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.poll();
+        assert!(adapter.snapshot().running, "it plays once it's free");
+        assert!(enabled(&adapter, SPEAKERS));
+        adapter.audio_mut().fail_output(SPEAKERS, None);
+        poll_until_busy_retried(&mut adapter);
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+    }
+
+    /// Polls for as long as a busy speaker waits for its next try: about
+    /// three seconds, six polls.
+    fn poll_until_busy_retried(adapter: &mut AudioAdapter<MockBackend>) {
+        for _ in 0..6 {
+            adapter.poll();
+        }
     }
 
     #[test]
@@ -3046,9 +3121,9 @@ mod tests {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
         let next = FakeAirPlay::new();
         let started = next.clone();
-        adapter
-            .audio
-            .set_airplay_starter(Box::new(move || Some((started.link(), None))));
+        adapter.audio.set_airplay_starter(Box::new(move || {
+            Some(StartedSender::browsing(started.link(), None))
+        }));
         adapter.set_speaker_enabled(&ap(&kitchen), true);
         adapter.set_speaker_volume(&ap(&kitchen), 30.0);
         fake.state(&kitchen, AirPlayState::Playing);
@@ -3101,6 +3176,58 @@ mod tests {
         adapter.poll();
         adapter.retry_airplay();
         assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+    }
+
+    /// An adapter whose AirPlay sender comes from `senders` in turn: the
+    /// first at launch, the others at each Retry.
+    fn adapter_starting_airplay(senders: Vec<Option<StartedSender>>) -> AudioAdapter<MockBackend> {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let mut senders = senders.into_iter();
+        audio.start_airplay(
+            Box::new(move || senders.next().flatten()),
+            PairingStore::in_memory(),
+        );
+        AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default())
+    }
+
+    #[test]
+    fn a_sender_that_cant_start_at_launch_leaves_a_notice_whose_retry_starts_one() {
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![None, Some(StartedSender::browsing(fake.link(), None))]);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+
+        adapter.retry_airplay();
+        assert!(messages(&adapter).is_empty(), "Retry clears the notice");
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_some());
+    }
+
+    #[test]
+    fn a_discovery_that_cant_start_at_launch_leaves_a_notice_whose_retry_starts_a_sender() {
+        let first = FakeAirPlay::new();
+        let second = FakeAirPlay::new();
+        let mut adapter = adapter_starting_airplay(vec![
+            Some(StartedSender {
+                link: first.link(),
+                feed: None,
+                browsing: false,
+            }),
+            Some(StartedSender::browsing(second.link(), None)),
+        ]);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+
+        adapter.retry_airplay();
+        assert!(messages(&adapter).is_empty());
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        second.appear(&kitchen);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_some());
     }
 
     #[test]
