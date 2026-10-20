@@ -7,6 +7,7 @@
 
 pub mod airplay_pairings;
 pub mod channels;
+pub mod clock;
 pub mod convert;
 pub mod eq;
 pub mod fade;
