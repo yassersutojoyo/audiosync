@@ -128,14 +128,17 @@ An Apple TV that asks for a code is paired the first time you switch it on:
 type the 4-digit code it shows, and AudioSync remembers the pairing; Forget
 Pairing in the speaker's menu undoes it.
 
+A speaker protected by a password asks for it when you switch it on.
+AudioSync keeps it in memory until you quit, so it asks again on the next
+launch, as on the Mac. A wrong password gets you the prompt again.
+
 If AirPlay stops after an internal error, or can't start (at launch too), a
 notice says "AirPlay stopped or couldn't start" with a Retry button that
 starts it again.
 
-Not supported yet: speakers that ask for a password, speakers that need
-another kind of pairing (the Apple TV code is the one AudioSync does),
-and speakers that only play AirPlay 2. They're listed with a note saying so,
-and AudioSync never connects to them.
+Not supported yet: speakers that need another kind of pairing (the Apple
+TV code is the one AudioSync does), and speakers that only play AirPlay 2.
+They're listed with a note saying so, and AudioSync never connects to them.
 
 ## On a Mac
 

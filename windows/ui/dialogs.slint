@@ -1,5 +1,6 @@
 // The app's small dialogs: the one that names a group (New Speaker Group and
-// Rename Group) and the PIN prompt of an Apple TV pairing. Enter confirms,
+// Rename Group), the PIN prompt of an Apple TV pairing and the password
+// prompt of a speaker protected by a password. Enter confirms,
 // Escape cancels wherever the focus is: in the content's key scope or on a
 // button (DialogButton).
 
@@ -238,6 +239,149 @@ export component PinDialog inherits Dialog {
         dialog-button-role: accept;
         clicked => {
             root.confirmed(root.pin);
+        }
+        escape-pressed => {
+            root.cancelled();
+        }
+    }
+
+    DialogButton {
+        text: Strings.cancel;
+        dialog-button-role: reject;
+        clicked => {
+            root.cancelled();
+        }
+        escape-pressed => {
+            root.cancelled();
+        }
+    }
+}
+
+// The password prompt of an AirPlay speaker protected by a password. Enter
+// connects once something is typed, Escape cancels. After a password the
+// speaker turned down it opens again, says so, and takes a new one.
+export component PasswordDialog inherits Dialog {
+    in property <string> speaker;
+    in property <bool> wrong;
+    in-out property <string> password;
+    callback confirmed(string);
+    callback cancelled();
+
+    property <string> message: Strings.password-message(root.speaker, root.wrong);
+    property <bool> can-connect: root.password != "";
+
+    title: Strings.password-dialog-title(root.speaker);
+    icon: @image-url("../res/audiosync-256.png");
+    background: Tokens.background;
+    default-font-family: Fluent.font;
+    default-font-size: Tokens.font-size-body;
+    preferred-width: 380px;
+
+    // Bumped each time the dialog opens or wants a new password, so the
+    // field takes the cursor.
+    property <int> focus-request;
+
+    public function prepare() {
+        root.focus-request += 1;
+    }
+
+    FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.cancelled();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            padding: 18px;
+
+            Card {
+                inner-padding: 14px;
+
+                VerticalLayout {
+                    spacing: 12px;
+
+                    HorizontalLayout {
+                        spacing: 10px;
+
+                        Glyph {
+                            glyph: Glyphs.network;
+                            font-size: 20px;
+                            color: Tokens.teal-text;
+                        }
+
+                        Text {
+                            text: root.speaker;
+                            font-family: Fluent.display-font;
+                            font-size: Tokens.font-size-body;
+                            font-weight: 600;
+                            color: Tokens.text;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                            accessible-role: none;
+                        }
+                    }
+
+                    // A turned-down password sits on the notice color, as a
+                    // wrong PIN does.
+                    Rectangle {
+                        background: root.wrong ? Tokens.notice : transparent;
+                        border-radius: Fluent.radius-control;
+
+                        HorizontalLayout {
+                            padding: root.wrong ? 8px : 0px;
+                            spacing: 8px;
+
+                            if root.wrong: Glyph {
+                                glyph: Glyphs.warning;
+                                font-size: 14px;
+                                vertical-alignment: top;
+                            }
+
+                            Text {
+                                text: root.message;
+                                color: Tokens.text;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                    }
+
+                    LineEdit {
+                        property <int> focus-request: root.focus-request;
+                        text <=> root.password;
+                        placeholder-text: Strings.password-field-placeholder;
+                        input-type: InputType.password;
+                        accessible-label: Strings.password-field-label(root.speaker);
+                        accessible-description: root.message;
+                        init => {
+                            self.focus();
+                        }
+                        changed focus-request => {
+                            self.focus();
+                            self.select-all();
+                        }
+                        accepted => {
+                            if root.can-connect {
+                                root.confirmed(root.password);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    DialogButton {
+        text: Strings.connect;
+        primary: true;
+        active: root.can-connect;
+        dialog-button-role: accept;
+        clicked => {
+            root.confirmed(root.password);
         }
         escape-pressed => {
             root.cancelled();

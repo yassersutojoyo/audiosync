@@ -370,9 +370,7 @@ pub fn source_pick(current: &AudioSource, picked: &AudioSource, streaming: bool)
 pub enum DropReason {
     /// The AirPlay sender can't reach it.
     Unreachable,
-    /// It wants a password, which AudioSync can't send it.
-    PasswordUnsupported,
-    /// It needs a code that hasn't been entered.
+    /// It needs a PIN or password that hasn't been entered.
     NeedsCode,
     /// It still needs a code after pairing: the code was rejected.
     CodeRejected,
