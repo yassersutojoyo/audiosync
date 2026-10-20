@@ -387,10 +387,16 @@ impl Drop for VolumeWatcher {
         // once its calls return: waiting for it would hold AudioSync's exit.
         self.commands = None;
         let stuck = self.stuck();
+        // Another audio thread already left hanging means Windows audio is
+        // stuck: wait only briefly, so quitting doesn't add 5 s per thread.
+        let wait = if super::com::WINDOWS_AUDIO.any() {
+            super::com::STUCK_GRACE
+        } else {
+            self.answer_timeout
+        };
         if let Some(thread) = self.thread.take()
             && !stuck
-            && let Err(RecvTimeoutError::Disconnected) =
-                self.ended.recv_timeout(self.answer_timeout)
+            && let Err(RecvTimeoutError::Disconnected) = self.ended.recv_timeout(wait)
         {
             let _ = thread.join();
         }
