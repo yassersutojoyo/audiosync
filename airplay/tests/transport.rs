@@ -11,12 +11,14 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use audiosync_airplay::audio::write_pcm_payload;
+use audiosync_airplay::clock::SenderClock;
 use audiosync_airplay::discovery::{
     BrowseEvent, Browser, DeviceId, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
 use audiosync_airplay::metadata::TrackInfo;
-use audiosync_airplay::rtp::RtpHeader;
+use audiosync_airplay::rtp::{RtpHeader, SyncPacket};
 use audiosync_airplay::rtsp::Method;
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
@@ -26,7 +28,8 @@ use audiosync_airplay::sender::{
 use audiosync_airplay::volume::Volume;
 
 use common::net::{
-    Behavior, Events, HostAudio, LOOPBACK, NetReceiver, play_times, serial, step_error, wait_until,
+    AudioPacket, Behavior, Events, HostAudio, LOOPBACK, Log, NetReceiver, host_samples,
+    play_times, serial, step_error, wait_until,
 };
 use common::{PasswordGate, START};
 
@@ -396,6 +399,77 @@ fn a_lost_speaker_leaves_the_others_playing_and_rejoins_in_step() {
         "the rejoin starts with a first-flagged sync"
     );
     sender.shutdown();
+}
+
+/// A PCM packet of session `ssrc` whose payload starts with host frame
+/// `frame`, as the fake receiver logs it at `at`.
+fn pcm_packet(at: Instant, ssrc: u32, timestamp: u32, frame: u64) -> AudioPacket {
+    let frames: Vec<[i16; 2]> = (0..352).map(|i| host_samples(frame + i)).collect();
+    let mut payload = vec![0u8; 1408];
+    write_pcm_payload(&frames, &mut payload);
+    AudioPacket {
+        at,
+        from: SocketAddr::new(LOOPBACK, 6000),
+        header: RtpHeader {
+            marker: false,
+            seq: 0,
+            timestamp,
+            ssrc,
+        },
+        payload,
+    }
+}
+
+// The fake receiver logs syncs and audio on two threads, so a busy machine
+// can log a session's first sync after the packet it precedes (P94). The
+// play time of each packet still comes from the sync before it in its own
+// session, in RTP order, not from whichever was logged first.
+#[test]
+fn play_times_follow_the_rtp_order_of_syncs_not_the_order_they_were_logged() {
+    let clock = SenderClock::new(Instant::now());
+    let (early, late) = (
+        clock.origin() + Duration::from_millis(1),
+        clock.origin() + Duration::from_millis(9),
+    );
+    let ssrc = 0x0102_0304;
+    // The session's timestamps wrap between its first two packets.
+    let first = u32::MAX - 351;
+    let sync = |next_rtp: u32, heard: f64, first: bool| SyncPacket {
+        first,
+        seq: 0,
+        rtp_heard: next_rtp.wrapping_sub(88_200),
+        time: clock.ntp_at(heard),
+        next_rtp,
+    };
+    let from = SocketAddr::new(LOOPBACK, 6001);
+    let log = Log {
+        audio: vec![
+            pcm_packet(early, ssrc, first, 1_000),
+            pcm_packet(early, ssrc, first.wrapping_add(352), 1_352),
+            pcm_packet(early, ssrc, first.wrapping_add(704), 1_704),
+            // Another session, without a sync of its own.
+            pcm_packet(late, 0x0A0B_0C0D, first.wrapping_add(352), 5_000),
+        ],
+        syncs: vec![
+            (late, from, sync(first, 10.0, true)),
+            (late, from, sync(first.wrapping_add(704), 20.0, false)),
+        ],
+        ..Log::default()
+    };
+    let times = play_times(&log, &clock);
+    let expected = [
+        (1_000, 12.0),
+        (1_352, 12.0 + 352.0 / 44_100.0),
+        (1_704, 22.0),
+    ];
+    assert_eq!(
+        times.keys().copied().collect::<Vec<_>>(),
+        expected.map(|(frame, _)| frame),
+        "{times:?}"
+    );
+    for (frame, heard) in expected {
+        assert!((times[&frame] - heard).abs() < 1e-6, "{frame}: {times:?}");
+    }
 }
 
 // covers: P142
