@@ -547,7 +547,8 @@ pub struct AirPlaySpeakers {
     /// end every one for the speaker is the cancelled pairing's: it never
     /// reaches the UI or the pairing in `pairings`. A pairing the user
     /// starts meanwhile waits in `pairings` and starts on the sender once
-    /// that end comes (a pairing ends once), so the two never run at once.
+    /// that end comes (a pairing ends once), so the two never run at once;
+    /// when that end is a success, it never starts and ends as paired.
     ending: BTreeSet<String>,
     /// The next `PairingRun::shown_order`.
     next_shown_order: u64,
@@ -766,7 +767,8 @@ impl AirPlaySpeakers {
     /// Starts pairing with an Apple TV that asks for a PIN, which the user
     /// switched on. A pairing already running for it goes on; one the user
     /// cancelled just before that hasn't reported its end yet goes first,
-    /// and this one starts on the sender once it has (see `ending`).
+    /// and this one starts on the sender once it has, or, when that one
+    /// paired after all, ends there as paired with no PIN (see `ending`).
     /// Paired, the speaker is turned on ([`BackendEvent::AirPlayPaired`]).
     pub fn start_pairing(&mut self, id: &str) -> Result<(), AirPlayProblem> {
         let Some(listed) = self.listed.get(id) else {
@@ -1133,7 +1135,7 @@ impl AirPlaySpeakers {
         events: &mut Vec<BackendEvent>,
     ) -> bool {
         if self.ending.contains(id) {
-            return self.ending_pairing_event(id, event);
+            return self.ending_pairing_event(id, event, events);
         }
         self.log.log(|| {
             format!(
@@ -1164,9 +1166,7 @@ impl AirPlaySpeakers {
                 // pairing's come while it is `ending`) leave the speaker
                 // off.
                 if wanted {
-                    self.entry(id).enabled = true;
-                    self.reconcile();
-                    events.push(BackendEvent::AirPlayPaired { id: id.to_owned() });
+                    self.turn_on_paired(id, events);
                 }
                 true
             }
@@ -1211,8 +1211,16 @@ impl AirPlaySpeakers {
     /// The credentials it got are real, so they are kept, while the speaker
     /// stays as the user left it. Its end (it paired, failed or stopped: a
     /// pairing ends once) starts the pairing the user started since, if
-    /// any. Returns whether the speaker list changed.
-    fn ending_pairing_event(&mut self, id: &str, event: PairingEvent) -> bool {
+    /// any; but when it paired, the Apple TV asks for no PIN any more, so
+    /// that pairing never starts on the sender and ends there as paired:
+    /// the speaker is turned on ([`BackendEvent::AirPlayPaired`]), as for a
+    /// pairing that paired. Returns whether the speaker list changed.
+    fn ending_pairing_event(
+        &mut self,
+        id: &str,
+        event: PairingEvent,
+        events: &mut Vec<BackendEvent>,
+    ) -> bool {
         self.log.log(|| {
             format!(
                 "AirPlay pairing {}: the cancelled pairing reported: {}; not shown",
@@ -1220,7 +1228,7 @@ impl AirPlaySpeakers {
                 pairing_summary(&event)
             )
         });
-        let changed = match event {
+        let paired = match event {
             // Its PIN is no one's to type now.
             PairingEvent::PinRequested => return false,
             PairingEvent::Paired(credentials) => {
@@ -1231,10 +1239,28 @@ impl AirPlaySpeakers {
             PairingEvent::Failed { .. } | PairingEvent::Stopped => false,
         };
         self.ending.remove(id);
-        if let Some(device) = self.pairings.get(id).map(|run| run.device.clone()) {
+        if paired {
+            if self.pairings.remove(id).is_some() {
+                self.log.log(|| {
+                    format!(
+                        "AirPlay pairing {}: paired by the cancelled pairing, so the one started since asks for no PIN",
+                        self.label(id)
+                    )
+                });
+                self.turn_on_paired(id, events);
+            }
+        } else if let Some(device) = self.pairings.get(id).map(|run| run.device.clone()) {
             self.begin_pairing(id, &device);
         }
-        changed
+        paired
+    }
+
+    /// The pairing the user started for the speaker `id` paired: it is
+    /// turned on.
+    fn turn_on_paired(&mut self, id: &str, events: &mut Vec<BackendEvent>) {
+        self.entry(id).enabled = true;
+        self.reconcile();
+        events.push(BackendEvent::AirPlayPaired { id: id.to_owned() });
     }
 
     /// Stores the credentials a pairing with the speaker `id` gave.
@@ -2122,7 +2148,7 @@ pub mod tests {
     }
 
     #[test]
-    fn a_cancelled_pairings_late_success_keeps_its_credentials_and_the_next_pairing() {
+    fn a_cancelled_pairings_late_success_pairs_the_next_pairing_without_a_pin() {
         let fake = FakeAirPlay::new();
         let mut airplay = speakers(&fake);
         let tv = device(6, "Den TV", APPLE_TV_TXT);
@@ -2139,14 +2165,57 @@ pub mod tests {
                 1,
             )),
         );
+        // The Apple TV is paired now: the pairing started since ends there,
+        // as a pairing that paired, instead of asking for a second PIN.
+        assert_eq!(
+            airplay.poll(),
+            [
+                BackendEvent::AirPlayChanged,
+                BackendEvent::AirPlayPaired { id: id.clone() }
+            ]
+        );
+        assert!(
+            !fake.take_calls().contains(&Call::StartPairing(id.clone())),
+            "no second pairing starts on the sender"
+        );
+        assert_eq!(airplay.pin_prompt(), None, "no second PIN shows");
+        assert!(!airplay.submit_pin(&id, "4821"), "no pairing runs");
+        assert_eq!(
+            airplay.enabled_ids(),
+            std::slice::from_ref(&id),
+            "paired, it is on"
+        );
+        let row = &airplay.speakers()[0];
+        assert!(row.paired && !row.pairing);
+        assert_eq!(row.availability, AirPlayAvailability::Open);
+    }
+
+    #[test]
+    fn a_cancelled_pairings_late_success_with_nothing_waiting_leaves_the_speaker_off() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        pairing_started(&fake, &mut airplay, &tv);
+        cancel_and_start_again(&fake, &mut airplay, &tv);
+        // The pairing started since is cancelled too, before it started.
+        airplay.cancel_pairing(&id);
+        fake.take_calls();
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(crate::audio::pairings::tests::credentials(
+                "0123456789ABCDEF",
+                1,
+            )),
+        );
         assert_eq!(
             airplay.poll(),
             [BackendEvent::AirPlayChanged],
-            "the credentials are stored, but the user cancelled that pairing"
+            "the credentials are stored, but the user cancelled both pairings"
         );
         assert!(airplay.speakers()[0].paired, "its credentials are real");
         assert!(airplay.enabled_ids().is_empty());
-        the_new_pairing_goes_on(&fake, &mut airplay, &tv);
+        assert!(fake.take_calls().is_empty(), "nothing starts");
     }
 
     #[test]

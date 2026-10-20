@@ -832,8 +832,10 @@ int32_t asc_airplay_open_pairings(AscAirPlay *airplay, const char *path);
  * the pairing ended. It uses the password handed over for `id`, if any. A
  * pairing already running for it is replaced (cancelled). A new pairing
  * starts once the one cancelled before it has ended, and nothing that one
- * reports reaches the host or ends the new one. Returns false, starting
- * nothing, when the handle or id is NULL or id isn't listed.
+ * reports reaches the host or ends the new one; when that one ended paired
+ * after all, the new one never starts and ASC_AIRPLAY_EVENT_PAIRED follows
+ * instead, with no PIN asked. Returns false, starting nothing, when the
+ * handle or id is NULL or id isn't listed.
  */
 bool asc_airplay_start_pairing(AscAirPlay *airplay, const char *id);
 
