@@ -213,6 +213,13 @@ struct DelayFieldDraft: Equatable {
         return value
     }
 
+    /// The field holds typed text that isn't the saved value as the field
+    /// shows it: a draft that applies only on Return or focus loss, which the
+    /// field marks so typing doesn't look applied.
+    func isPending(saved: Double, format: (Double) -> String) -> Bool {
+        isEditing && text != format(saved)
+    }
+
     /// The saved value changed (or the field appeared): show it, unless the
     /// user is typing.
     mutating func show(_ saved: Double, format: (Double) -> String) {

@@ -132,6 +132,13 @@ impl TypedDelay {
     }
 }
 
+/// Whether a delay field holds a draft: `typed`, the text it shows instead of
+/// the applied value, isn't `applied` as the field shows it. A draft applies
+/// only on Enter or leaving the field, so the field marks it.
+fn is_draft(typed: Option<&str>, applied: &str) -> bool {
+    typed.is_some_and(|text| text != applied)
+}
+
 /// Whether Connected Speakers lists nothing only because its outputs are
 /// virtual ones that View > Show Virtual Devices hides: its note says so.
 fn only_virtual_outputs_hidden(
@@ -895,13 +902,12 @@ impl App {
         self.main.set_show_virtual_devices(ui.show_virtual);
         self.main
             .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
-        let airplay_delay = state.airplay_delay_ms.unwrap_or(0.0);
-        self.main.set_airplay_delay_text(
-            ui.airplay_delay_draft
-                .text(state.airplay_delay_ms)
-                .map_or_else(|| format_ms(airplay_delay), str::to_owned)
-                .into(),
-        );
+        let airplay_delay = format_ms(state.airplay_delay_ms.unwrap_or(0.0));
+        let typed = ui.airplay_delay_draft.text(state.airplay_delay_ms);
+        self.main
+            .set_airplay_delay_pending(is_draft(typed, &airplay_delay));
+        self.main
+            .set_airplay_delay_text(typed.map_or(airplay_delay, str::to_owned).into());
 
         self.show_equalizer_state(&state.equalizer);
         drop(ui);
@@ -2021,7 +2027,7 @@ pub fn speaker_item(
     sync_open: bool,
     draft: Option<&str>,
 ) -> SpeakerItem {
-    let delay = speaker.delay_ms.unwrap_or(0.0);
+    let delay = format_offset_ms(speaker.delay_ms.unwrap_or(0.0));
     let (device_volume, device_volume_percent) = device_volume_hint(speaker.device_volume);
     SpeakerItem {
         id: speaker.id.as_str().into(),
@@ -2031,10 +2037,9 @@ pub fn speaker_item(
         state: row_state(state.speaker_state(speaker)),
         volume: speaker.volume as f32,
         has_delay: speaker.delay_ms.is_some(),
-        delay_ms: delay.round() as i32,
-        delay_text: draft
-            .map_or_else(|| format_offset_ms(delay), str::to_string)
-            .into(),
+        delay_ms: speaker.delay_ms.unwrap_or(0.0).round() as i32,
+        delay_pending: is_draft(draft, &delay),
+        delay_text: draft.map_or(delay, str::to_string).into(),
         reference_name: state.reference_name.as_deref().unwrap_or_default().into(),
         sync_open: sync_open && speaker.delay_ms.is_some(),
         auto_connect: speaker.auto_connect,
@@ -2384,14 +2389,61 @@ mod tests {
 
     /// The delay field's text on the desk's row.
     fn desk_delay_text(app: &App) -> String {
+        desk_row(app).delay_text.to_string()
+    }
+
+    /// The desk's row.
+    fn desk_row(app: &App) -> SpeakerItem {
         app.models
             .all_speakers
             .iter()
             .chain(app.models.this_pc.iter())
             .chain(app.models.connected.iter())
             .find(|s| s.id == "local:desk")
-            .map(|s| s.delay_text.to_string())
             .expect("the desk has a row")
+    }
+
+    #[test]
+    fn a_draft_is_typed_text_other_than_the_applied_value() {
+        assert!(!is_draft(None, "+120"), "nothing typed");
+        assert!(!is_draft(Some("+120"), "+120"), "the applied value typed");
+        assert!(is_draft(Some("220"), "+120"));
+        assert!(is_draft(Some("120"), "+120"), "the text differs");
+        assert!(is_draft(Some("abc"), "+120"), "unreadable text");
+        assert!(is_draft(Some(""), "0"), "an emptied field");
+    }
+
+    #[test]
+    fn a_speakers_delay_field_marks_typing_until_it_applies_or_reverts() {
+        let app = app_over(MockBackend::new());
+        let pending = || desk_row(&app).delay_pending;
+        assert!(!pending(), "the applied value is no draft");
+
+        app.main
+            .invoke_delay_edited("local:desk".into(), "220".into());
+        assert!(pending(), "typing is a draft");
+        app.main.invoke_delay_committed("local:desk".into());
+        assert!(!pending(), "Enter clears it");
+
+        app.main
+            .invoke_delay_edited("local:desk".into(), "5".into());
+        app.main.invoke_delay_cancelled("local:desk".into());
+        assert!(!pending(), "Escape clears it");
+
+        app.main
+            .invoke_delay_edited("local:desk".into(), "abc".into());
+        assert!(pending(), "unreadable text is a draft");
+        app.main.invoke_delay_committed("local:desk".into());
+        assert!(!pending(), "Enter on unreadable text restores the value");
+
+        app.main
+            .invoke_delay_edited("local:desk".into(), "9".into());
+        app.main.invoke_delay_stepped("local:desk".into(), 10);
+        assert!(!pending(), "a step clears it");
+
+        app.main
+            .invoke_delay_edited("local:desk".into(), "+230".into());
+        assert!(!pending(), "the applied value typed again is no draft");
     }
 
     #[test]
@@ -2495,8 +2547,10 @@ mod tests {
         let shown = || app.main.get_airplay_delay_text().to_string();
         assert_eq!(shown(), format_ms(1750.0));
 
+        assert!(!app.main.get_airplay_delay_pending());
         app.main.invoke_airplay_delay_edited("9999".into());
         assert_eq!(shown(), "9999", "the field keeps what is typed");
+        assert!(app.main.get_airplay_delay_pending(), "typing is a draft");
         assert_eq!(
             app.snapshot().airplay_delay_ms,
             applied,
@@ -2505,6 +2559,10 @@ mod tests {
 
         app.main.invoke_airplay_delay_cancelled();
         assert_eq!(shown(), format_ms(1750.0), "Escape shows the applied value");
+        assert!(
+            !app.main.get_airplay_delay_pending(),
+            "Escape clears the draft"
+        );
 
         app.main.invoke_airplay_delay_committed();
         assert_eq!(

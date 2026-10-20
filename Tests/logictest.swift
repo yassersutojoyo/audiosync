@@ -2363,6 +2363,32 @@ do {
 
     air.show(1900, format: plain)
     check(air.text == "1900", "delay field: a new saved value shows when nothing is being typed")
+
+    // The draft cue: typed text that isn't the saved value, until it applies or reverts.
+    var cue = DelayFieldDraft()
+    cue.show(120, format: signed)
+    check(!cue.isPending(saved: 120, format: signed), "delay field cue: the saved value shows no draft")
+    cue.type("+120")
+    check(!cue.isPending(saved: 120, format: signed), "delay field cue: the saved value as typed shows no draft")
+    cue.type("22")
+    let typing = cue.isPending(saved: 120, format: signed)
+    _ = cue.commit(saved: 120, sanitize: offset, format: signed)
+    check(typing && !cue.isPending(saved: 22, format: signed),
+          "delay field cue: typing shows a draft and Return clears it")
+    cue.type("abc")
+    let unreadable = cue.isPending(saved: 22, format: signed)
+    _ = cue.commit(saved: 22, sanitize: offset, format: signed)
+    check(unreadable && !cue.isPending(saved: 22, format: signed),
+          "delay field cue: unreadable text shows a draft until Return restores the saved value")
+    cue.type("5")
+    cue.discard(saved: 22, format: signed)   // Escape
+    check(!cue.isPending(saved: 22, format: signed), "delay field cue: Escape clears the draft")
+    cue.type("5")
+    cue.discard(saved: 32, format: signed)   // a step button
+    check(!cue.isPending(saved: 32, format: signed), "delay field cue: a step clears the draft")
+    cue.type("40")
+    check(cue.isPending(saved: 32, format: signed) && cue.isPending(saved: 50, format: signed),
+          "delay field cue: a saved value changing under the typing keeps the draft")
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)

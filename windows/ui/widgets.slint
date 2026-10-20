@@ -521,6 +521,37 @@ export component VolumeSlider inherits HorizontalLayout {
     }
 }
 
+// Around a delay field: a teal outline while the field holds typing not yet
+// applied (Enter or leaving the field applies it). The space is kept either
+// way, so the row doesn't shift when the outline comes and goes.
+component DraftOutline inherits Rectangle {
+    in property <bool> pending;
+
+    border-radius: Tokens.radius-control + 2px;
+    border-width: 2px;
+    border-color: root.pending ? Tokens.teal-text : transparent;
+
+    HorizontalLayout {
+        padding: 2px;
+
+        @children
+    }
+}
+
+// Under a delay field that holds typing not yet applied. Narrator hears it as
+// the field's description instead. Teal text: 5.07:1 or more on a dark
+// playing row, 5.35:1 or more on a light one. A wrapper, like QuietText, so
+// Narrator skips it.
+component DraftHint inherits HorizontalLayout {
+    Text {
+        text: Strings.delay-draft-hint;
+        font-size: Tokens.font-size-caption;
+        color: Tokens.teal-text;
+        wrap: word-wrap;
+        accessible-role: none;
+    }
+}
+
 // The per-speaker sync offset relative to the reference output: coarse and
 // fine steps that apply at once, and a field ("+150", "−250") that applies on
 // Enter or when it loses the focus, so typing "220" doesn't re-time the
@@ -528,6 +559,8 @@ export component VolumeSlider inherits HorizontalLayout {
 export component SyncControls inherits VerticalLayout {
     in property <string> name;
     in property <string> delay-text;
+    // The field holds typing not yet applied: an outline and a hint say so.
+    in property <bool> pending;
     // The reference output's name; empty without one.
     in property <string> reference-name;
     callback stepped(int);
@@ -586,22 +619,28 @@ export component SyncControls inherits VerticalLayout {
                 }
             }
 
-            // Text input, so a leading "+" or "−" can be typed.
-            field := LineEdit {
-                width: 72px;
-                text: root.delay-text;
-                horizontal-alignment: center;
-                accessible-label: Strings.delay-of(root.name);
-                edited(text) => {
-                    root.edited(text);
-                }
-                accepted => {
-                    root.committed();
-                }
-                changed has-focus => {
-                    root.focused-controls += self.has-focus ? 1 : -1;
-                    if !self.has-focus {
+            // Text input, so a leading "+" or "−" can be typed. Typing not
+            // yet applied gets a teal outline around it.
+            DraftOutline {
+                pending: root.pending;
+
+                field := LineEdit {
+                    width: 72px;
+                    text: root.delay-text;
+                    horizontal-alignment: center;
+                    accessible-label: Strings.delay-of(root.name);
+                    accessible-description: root.pending ? Strings.delay-draft-hint : "";
+                    edited(text) => {
+                        root.edited(text);
+                    }
+                    accepted => {
                         root.committed();
+                    }
+                    changed has-focus => {
+                        root.focused-controls += self.has-focus ? 1 : -1;
+                        if !self.has-focus {
+                            root.committed();
+                        }
                     }
                 }
             }
@@ -626,6 +665,8 @@ export component SyncControls inherits VerticalLayout {
         }
     }
 
+    if root.pending: DraftHint { }
+
     SecondaryText {
         text: Strings.sync-hint(root.reference-name);
     }
@@ -637,6 +678,8 @@ export component SyncControls inherits VerticalLayout {
 // bound follows the sender's latency, so a half-typed number would clamp.
 export component AirPlayDelayControls inherits VerticalLayout {
     in property <string> delay-text;
+    // The field holds typing not yet applied: an outline and a hint say so.
+    in property <bool> pending;
     callback stepped(int);
     callback edited(string);
     // Enter, or the field lost the focus: apply what was typed.
@@ -689,21 +732,25 @@ export component AirPlayDelayControls inherits VerticalLayout {
                         }
                     }
 
-                    field := LineEdit {
-                        width: 72px;
-                        text: root.delay-text;
-                        horizontal-alignment: center;
-                        accessible-label: Strings.airplay-delay-title;
-                        accessible-description: Strings.airplay-delay-hint;
-                        edited(text) => {
-                            root.edited(text);
-                        }
-                        accepted => {
-                            root.committed();
-                        }
-                        changed has-focus => {
-                            if !self.has-focus {
+                    DraftOutline {
+                        pending: root.pending;
+
+                        field := LineEdit {
+                            width: 72px;
+                            text: root.delay-text;
+                            horizontal-alignment: center;
+                            accessible-label: Strings.airplay-delay-title;
+                            accessible-description: root.pending ? Strings.delay-draft-hint : Strings.airplay-delay-hint;
+                            edited(text) => {
+                                root.edited(text);
+                            }
+                            accepted => {
                                 root.committed();
+                            }
+                            changed has-focus => {
+                                if !self.has-focus {
+                                    root.committed();
+                                }
                             }
                         }
                     }
@@ -724,6 +771,8 @@ export component AirPlayDelayControls inherits VerticalLayout {
                     }
                 }
             }
+
+            if root.pending: DraftHint { }
 
             SecondaryText {
                 text: Strings.airplay-delay-hint;
@@ -1057,6 +1106,7 @@ export component SpeakerRow inherits Rectangle {
                     SyncControls {
                         name: root.item.name;
                         delay-text: root.item.delay-text;
+                        pending: root.item.delay-pending;
                         reference-name: root.item.reference-name;
                         init => {
                             // The field keeps what was typed (the app's draft).

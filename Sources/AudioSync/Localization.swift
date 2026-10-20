@@ -67,6 +67,9 @@ struct UIStrings {
     let receiverUnnamedSource = "Live audio"
     let receiverAlbum = "From your Mac"
     let delayFieldLabel = "Delay in milliseconds"
+    /// Under a delay field while it holds typing not yet applied; also the
+    /// field's VoiceOver hint then.
+    let delayDraftHint = "Press Return to apply"
 
     func statusStreaming(speakers: Int) -> String {
         switch speakers {
