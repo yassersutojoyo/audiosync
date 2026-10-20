@@ -200,12 +200,16 @@ extension AppDelegate {
         guard engine.isRunning else { return }   // stopped: startEngine syncs them once it runs
 
         let applied = LocalOutputSync.apply(enabled: enabledLocal, listing: listing, to: engine,
+                                            bound: localBoundDevices,
                                             holdBacks: localHoldBackTargets(), gain: { effectiveGain($0) })
         for (uid, holdBack) in applied.attached {
             localHoldBacks[uid] = holdBack
             clearNotices([SpeakerKey.make(id: uid, airplay: false)])
         }
         for uid in applied.detached { localHoldBacks[uid] = nil }
+        // Only running outputs keep a bound ID; a lost or stopped one gets a new one when it starts.
+        let running = Set(engine.activeOutputUIDs)
+        localBoundDevices = localBoundDevices.filter { running.contains($0.key) }.merging(applied.devices) { $1 }
 
         // A speaker that won't start is switched off: it no longer holds the
         // others back, and the next reconcile doesn't try it again.

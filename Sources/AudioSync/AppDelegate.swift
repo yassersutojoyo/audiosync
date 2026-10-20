@@ -169,6 +169,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var localReference: String?
     /// The hold-back each running local output was last given, by UID (S177).
     var localHoldBacks: [String: Double] = [:]
+    /// The device ID each local output was last started on, by UID, so a
+    /// sync notices a device that came back under a new ID (EC1).
+    var localBoundDevices: [String: AudioObjectID] = [:]
 
     // MARK: - Session
 

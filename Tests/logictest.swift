@@ -1659,6 +1659,18 @@ do {
           "EC1 replug: the speaker is attached again once its device is listed")
     check(LocalOutputSync.plan(enabled: [], active: ["usb"], available: ["usb"]) == P(attach: [], detach: ["usb"]),
           "EC1 switch off: a speaker turned off is detached")
+    check(LocalOutputSync.plan(enabled: ["usb"], active: ["usb"], available: ["usb"],
+                               bound: ["usb": 52], listed: ["usb": 99]) == P(attach: ["usb"], detach: [], restart: ["usb"]),
+          "EC1 new ID: a playing speaker whose device came back under a new ID is restarted on it")
+    check(LocalOutputSync.plan(enabled: ["usb"], active: ["usb"], available: ["usb"],
+                               bound: ["usb": 52], listed: ["usb": 52]) == P(attach: [], detach: []),
+          "EC1 new ID: a speaker still on the listed device ID is left alone")
+    check(LocalOutputSync.plan(enabled: ["usb"], active: ["usb"], available: [],
+                               bound: ["usb": 52], listed: [:]) == P(attach: [], detach: []),
+          "EC1 new ID: a playing speaker whose device isn't listed is left alone until it is")
+    check(LocalOutputSync.plan(enabled: [], active: ["usb"], available: ["usb"],
+                               bound: ["usb": 52], listed: ["usb": 99]) == P(attach: [], detach: ["usb"]),
+          "EC1 new ID: a speaker switched off is detached, not restarted")
     check(LocalOutputSync.plan(enabled: ["bt", "usb"], active: ["usb"], available: ["usb"]) == P(attach: [], detach: []),
           "EC2 Bluetooth: a disconnected headset waits; the other speaker keeps playing")
     check(LocalOutputSync.plan(enabled: ["bt", "usb"], active: ["usb"], available: ["bt", "usb"]) == P(attach: ["bt"], detach: []),
@@ -2782,6 +2794,35 @@ do {
     check(batching.calls == [["a", "c"]] && leftTogether.detached == ["a", "c"],
           "S186 switch-off: the speakers a sync switches off are detached together",
           "calls \(batching.calls), detached \(leftTogether.detached)")
+
+    // EC1: the USB DAC came back under a new device ID and no "is alive"
+    // notice stopped its renderer; the sync restarts it on the new ID.
+    let stale = RefusingEngine(active: ["usb"], refusing: [])
+    let healed = LocalOutputSync.apply(enabled: ["usb"], listing: [usbAgain], to: stale, bound: ["usb": 52],
+                                       holdBacks: ["usb": 30], gain: { _ in 0.5 })
+    check(stale.removed == ["usb"] && stale.tried == ["usb"] && stale.deviceIDs["usb"] == 99
+            && healed.restarted == ["usb"] && healed.attached == ["usb": 30] && healed.detached.isEmpty
+            && healed.devices == ["usb": 99] && stale.activeOutputUIDs == ["usb"],
+          "EC1 new ID: a sync stops the renderer bound to the old ID and starts it on the new one",
+          "removed \(stale.removed), tried \(stale.tried), applied \(healed)")
+    let steady = LocalOutputSync.apply(enabled: ["usb"], listing: [usbAgain], to: stale, bound: healed.devices,
+                                       holdBacks: ["usb": 30], gain: { _ in 0.5 })
+    check(steady == LocalOutputSync.Applied() && stale.tried == ["usb"],
+          "EC1 new ID: the next sync leaves the restarted speaker alone",
+          "\(steady)")
+
+    // EC1 + S69: the restart on the new ID won't start. The speaker is
+    // reported and switched off, and nothing is left bound to either ID.
+    let refused = RefusingEngine(active: ["usb"], refusing: ["usb"])
+    let failedRestart = LocalOutputSync.apply(enabled: ["usb"], listing: [usbAgain], to: refused, bound: ["usb": 52],
+                                              holdBacks: [:], gain: { _ in 1 })
+    let afterRestart = LocalOutputSync.report(failedRestart.failures, enabled: ["usb"], origin: .automatic)
+    check(refused.removed == ["usb"] && refused.activeOutputUIDs.isEmpty && failedRestart.restarted == ["usb"]
+            && failedRestart.failures == [F(uid: "usb", deviceName: "USB DAC")]
+            && failedRestart.attached.isEmpty && failedRestart.devices.isEmpty && failedRestart.detached.isEmpty
+            && afterRestart?.enabled == [] && afterRestart?.notices.map(\.uid) == ["usb"],
+          "EC1 new ID: a restart that won't start is reported and switched off, with no device left bound",
+          "removed \(refused.removed), applied \(failedRestart), report \(String(describing: afterRestart))")
 }
 
 // MARK: Launch, second launch and session events (AppLifecycle.swift)
