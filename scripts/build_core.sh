@@ -43,21 +43,9 @@ out="$target_dir/universal-apple-darwin/release"
 # The app's LSMinimumSystemVersion: the core must not need a newer macOS.
 export MACOSX_DEPLOYMENT_TARGET=15.0
 
-# rustup's installer puts cargo in ~/.cargo/bin and Homebrew's rustup keeps it
-# next to the rustup binary; neither has to be on the PATH of the build's shell.
-rustup_dir() {
-  local rustup
-  rustup=$(command -v rustup 2>/dev/null) || return 0
-  dirname "$(realpath "$rustup")"
-}
-if ! command -v cargo >/dev/null 2>&1; then
-  for dir in "${CARGO_HOME:-$HOME/.cargo}/bin" "$(rustup_dir)"; do
-    if [ -n "$dir" ] && [ -x "$dir/cargo" ]; then
-      PATH="$dir:$PATH"
-      break
-    fi
-  done
-fi
+# cargo may be in ~/.cargo/bin or next to Homebrew's keg-only rustup, off PATH.
+# shellcheck source=scripts/cargo_path.sh disable=SC1091
+source "$root/scripts/cargo_path.sh"
 if ! command -v cargo >/dev/null 2>&1; then
   echo "❌ cargo not found: the audio core (core/) needs a Rust toolchain." >&2
   echo "   Install it with rustup (https://rustup.rs), then run the build again." >&2

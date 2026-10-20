@@ -27,7 +27,11 @@ printf '#!/bin/sh\n' > "$tmp/keg/bin/rustup"
 printf '#!/bin/sh\n' > "$tmp/keg/bin/cargo"
 chmod +x "$tmp/keg/bin/rustup" "$tmp/keg/bin/cargo"
 ln -s "$tmp/keg/bin/rustup" "$tmp/linked/rustup"
-check "cargo next to a linked rustup" "$tmp/keg/bin/cargo" "$tmp/linked:/usr/bin:/bin" "$tmp/home1"
+if [ -L "$tmp/linked/rustup" ]; then
+  check "cargo next to a linked rustup" "$tmp/keg/bin/cargo" "$tmp/linked:/usr/bin:/bin" "$tmp/home1"
+else
+  echo "  SKIP  cargo next to a linked rustup (ln -s made a copy here, as Git Bash does by default)"
+fi
 
 # rustup's installer: cargo in ~/.cargo/bin, nothing on PATH.
 mkdir -p "$tmp/home2/.cargo/bin"
