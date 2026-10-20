@@ -18,8 +18,8 @@ Each component stays under its own license. The app carries, in
   the Rust crates compiled into the audio core (`licenses/rust/`, the crates in
   `crates.txt`)
 
-**Earlier versions.** AudioSync releases up to 0.4.1 bundled an AirPlay
-engine, OwnTone (GPL-2.0-or-later), and the libraries it used, and attached
+**Earlier versions.** AudioSync releases up to 0.4.1 bundled an open-source
+AirPlay engine (GPL-2.0-or-later) and the libraries it used, and attached
 their sources to each release. The written offer that came with those builds
 still holds: if you received one, you can get the complete corresponding
 source of its GPL- and LGPL-licensed components from the maintainer by opening

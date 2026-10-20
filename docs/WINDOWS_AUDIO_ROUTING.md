@@ -127,4 +127,4 @@ The known miss: a software device that forwards its sound to speakers you hear, 
 
 ## AirPlay on Windows
 
-AirPlay isn't part of this routing question. AudioSync is getting its own AirPlay sender, written in Rust: [WINDOWS_AIRPLAY.md](WINDOWS_AIRPLAY.md) covers the Windows side, and [AIRPLAY_SURVEY.md](AIRPLAY_SURVEY.md) the existing projects, the public specs and the planned design.
+AirPlay isn't part of this routing question. AudioSync has its own AirPlay sender, written in Rust, in [`airplay/`](../airplay); [AIRPLAY_SPEC.md](AIRPLAY_SPEC.md) describes what it does.

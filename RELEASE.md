@@ -46,7 +46,7 @@ The Mac app bundles no third-party GPL or LGPL code: it is AudioSync's own code 
 
 The Windows preview is different: it compiles in Slint, used under GPL-3.0-only, so that exe as a whole goes out under GPL-3.0 only. A release that carries the Windows zips also attaches their source: run `cargo vendor` in `windows/` at the release commit and attach the repository tree at that commit plus the `vendor/` folder as one archive, with the `[source]` snippet that `cargo vendor` prints saved as `windows/.cargo/config.toml` so the archive builds offline, for example `AudioSync-$VERSION-windows-source.tar.gz`, listed in `SHA256SUMS.txt` like the other files.
 
-Releases up to 0.4.1 bundled an AirPlay engine (OwnTone, GPL-2.0-or-later) and its libraries, and attached their sources. The written offer for those builds in `THIRD_PARTY_NOTICES.md` still has to be honored, so their source archives stay in a private backup for at least three years.
+Releases up to 0.4.1 bundled an open-source AirPlay engine (GPL-2.0-or-later) and its libraries, and attached their sources. The written offer for those builds in `THIRD_PARTY_NOTICES.md` still has to be honored, so their source archives stay in a private backup for at least three years.
 
 ## Notarized releases (not used yet)
 

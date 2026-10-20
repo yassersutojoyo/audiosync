@@ -51,9 +51,9 @@ struct AppSettings: Equatable {
         /// engine. Never written now; a value left there has no effect, is
         /// noted once and removed (`RetiredEngineChoice`).
         static let retiredEngineChoice = "engineImpl"
-        /// "native" or "owntone", from builds that offered a choice of AirPlay
-        /// sender. Never written now; a value left there has no effect, is
-        /// noted once and removed (`RetiredAirPlayChoice`).
+        /// "native" or the old engine's value, from builds that offered a
+        /// choice of AirPlay sender. Never written now; a value left there has
+        /// no effect, is noted once and removed (`RetiredAirPlayChoice`).
         static let retiredAirPlayChoice = "airplayImpl"
         /// Each local speaker's offset in ms relative to the reference
         /// (−2000…20 000), by device UID (S175). Missing is 0.
@@ -274,7 +274,7 @@ enum RetiredEngineChoice {
 }
 
 /// The AirPlay sender choice of older builds: the `airplayImpl` setting and
-/// the `AUDIOSYNC_AIRPLAY` environment variable, "native" or "owntone".
+/// the `AUDIOSYNC_AIRPLAY` environment variable, "native" or the old engine's value.
 /// AudioSync's own sender is the only one now, so either one is only noted in
 /// the debug log: the variable at every launch that has it, the setting once,
 /// since that launch removes it (`SettingsStore.retiredChoiceNotes`).

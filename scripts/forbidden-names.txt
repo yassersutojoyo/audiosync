@@ -18,6 +18,7 @@
 #   matches (the line the name starts on).
 # A rule must never spell a forbidden name.
 salt 9d7fa04b6cd0d89114bcc45cd6ac4fdb
+allow Tests/logictest.swift (stored: "[a-z]+"\)|"airplayImpl": "[a-z]+"|airplayImpl setting \\"[a-z]+\\")
 2a207e5296bfa17eb91769f660a1fa14e42644cc3c9ec871937f9d34e5db6161
 311450b1888924ec7f0cdc93c205487be752dbbdb0b1aee10434508e9ad9dc01
 33056c41b07ae28c63bf40bfce8116d2624e6baa5f7c8caa13e329f185dd4d9c title
