@@ -329,6 +329,42 @@ fn the_parser_skips_stray_line_ends_and_reads_bad_bytes_lossily() {
     );
 }
 
+// covers: P140
+#[test]
+fn header_values_with_control_characters_are_malformed() {
+    // Values such as the nonce and the session ID go back out in the
+    // sender's own headers, so a control character in one could end or
+    // add a header there. A tab is fine.
+    let parse = |headers: &[u8]| {
+        let mut parser = Parser::new();
+        parser.push(&[&b"RTSP/1.0 200 OK\r\nCSeq: 1\r\n"[..], headers, b"\r\n"].concat());
+        parser.next_message()
+    };
+    for headers in [
+        &b"Session: DEADBEEF\rInjected: 1\r\n"[..],
+        b"WWW-Authenticate: Digest realm=\"raop\", nonce=\"a\rb\"\r\n",
+        b"Server: Fake\x00Receiver\r\n",
+        b"Server: Fake\x1BReceiver\r\n",
+        b"Audio-Latency: \x0111025\r\n",
+        b"X-Folded: first\r\n  sec\x08ond\r\n",
+        b"X-Folded: first\n\tsec\rond\n",
+    ] {
+        assert_eq!(
+            parse(headers),
+            Err(ParseError::HeaderLine),
+            "{:?}",
+            String::from_utf8_lossy(headers)
+        );
+    }
+    let Ok(Some(Message::Response(parsed))) = parse(b"X-Tab: a\tb\r\n") else {
+        panic!("a tab inside a value is fine");
+    };
+    assert_eq!(parsed.headers.get("X-Tab"), Some("a\tb"));
+    let mut parser = Parser::new();
+    parser.push(b"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\nX-Apple-Session: a\rb\r\n\r\n");
+    assert_eq!(parser.next_message(), Err(ParseError::HeaderLine));
+}
+
 // covers: P117
 #[test]
 fn volume_text_is_fixed_point_with_six_decimals() {

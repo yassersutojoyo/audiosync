@@ -24,6 +24,13 @@
 //! gone. Once dismissed, it stays away for the same source and those outputs
 //! (or fewer of them) until that app quits.
 //!
+//! AirPlay discovery that runs but has found no speaker for 20 seconds is
+//! no notice: the snapshot says so ([`AppState::airplay_none_found`]), and
+//! the speaker list carries a note about the network and Windows Firewall.
+//! It goes once a speaker is listed and comes back after another 20 seconds
+//! without one; while discovery is dead, the AirPlay notice with its Retry
+//! says so instead.
+//!
 //! The user's choices outlive a restart (`crate::settings`): the adapter
 //! reads the settings file before the first listing and hands the saved
 //! switches, volumes and delays to the audio backend, which keeps them by ID
@@ -65,13 +72,20 @@ use crate::settings::{
 };
 use crate::ui_model::{
     self, AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, PinPhase,
-    PinPrompt, Source, SourceKind, Speaker, SpeakerKind, ViewSettings, clamp_delay_ms,
+    PinPrompt, Source, SourceKind, Speaker, SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
 /// seconds: it takes a snapshot of the running processes, and apps that play
 /// audio come and go rarely.
 const SOURCE_POLLS: u32 = 6;
+
+/// After this many polls, 20 seconds, of AirPlay discovery without a single
+/// AirPlay speaker found, the speaker list says so and what to check: a
+/// Windows Firewall that blocks AudioSync, or a network Windows counts as
+/// Public while AudioSync is allowed on Private ones only, keeps the
+/// receivers' answers out, and the list would just stay empty.
+const NONE_FOUND_POLLS: u32 = 40;
 
 /// The UI's ID of the whole-system source.
 const SYSTEM_KEY: &str = "system";
@@ -154,6 +168,10 @@ pub struct AudioAdapter<A: AudioBackend> {
     airplay_listed: BTreeSet<String>,
     /// The last name of every AirPlay speaker listed.
     airplay_names: BTreeMap<String, String>,
+    /// Polls in a row with AirPlay discovery running and no AirPlay speaker
+    /// listed; from [`NONE_FOUND_POLLS`] on, the speaker list says none was
+    /// found.
+    airplay_quiet_polls: u32,
     /// The speaker keys marked auto-connect.
     auto_connect: BTreeSet<String>,
     groups: Vec<Group>,
@@ -187,6 +205,14 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// AirPlay speakers saved as on that the backend couldn't switch on at
     /// launch (no AirPlay sender): their saved settings stay as they are.
     airplay_unrestored: BTreeSet<String>,
+    /// The outputs waiting for a device another app holds
+    /// ([`BackendEvent::OutputBusy`]), by endpoint ID: their rows say so
+    /// rather than show them playing.
+    busy: BTreeSet<String>,
+    /// The AirPlay speakers AudioSync keeps trying to reach
+    /// ([`BackendEvent::AirPlayTrouble`]), by ID: their rows say so rather
+    /// than show them playing.
+    reconnecting: BTreeSet<String>,
     /// The windows' own settings.
     view: ViewSettings,
 }
@@ -227,6 +253,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
             airplay_listed: BTreeSet::new(),
+            airplay_quiet_polls: 0,
             airplay_names: BTreeMap::new(),
             auto_connect: BTreeSet::new(),
             groups: Vec::new(),
@@ -248,6 +275,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             ),
             must_save: false,
             airplay_unrestored: BTreeSet::new(),
+            busy: BTreeSet::new(),
+            reconnecting: BTreeSet::new(),
             view: ViewSettings::default(),
         };
         adapter.restore(saved);
@@ -528,6 +557,41 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if self.notices.get(&subject).is_some_and(|p| kind(&p.message)) {
             self.notices.clear(&[subject]);
         }
+    }
+
+    /// Whether AirPlay discovery has run for 20 seconds without finding a
+    /// speaker. Never while it is dead: the AirPlay notice and its Retry
+    /// say so then.
+    fn airplay_none_found(&self) -> bool {
+        self.airplay_quiet_polls >= NONE_FOUND_POLLS
+    }
+
+    /// Counts one more poll with AirPlay discovery running and no AirPlay
+    /// speaker listed, or starts over; returns whether the speaker list's
+    /// note that none was found showed or went.
+    fn count_airplay_quiet(&mut self) -> bool {
+        let shown = self.airplay_none_found();
+        let browsing = self.audio.airplay_browsing();
+        if browsing && self.airplay_listed.is_empty() {
+            self.airplay_quiet_polls = self.airplay_quiet_polls.saturating_add(1);
+        } else {
+            self.airplay_quiet_polls = 0;
+        }
+        let shows = self.airplay_none_found();
+        if shows != shown {
+            self.log.log(|| {
+                if shows {
+                    "AirPlay: discovery has found no receiver in 20 s; the speaker list asks to \
+                     check the network and Windows Firewall"
+                        .to_owned()
+                } else if browsing {
+                    "AirPlay: a receiver is listed; the no-receiver note goes".to_owned()
+                } else {
+                    "AirPlay: discovery stopped; the no-receiver note goes".to_owned()
+                }
+            });
+        }
+        shows != shown
     }
 
     /// Lists the outputs and the sources again.
@@ -925,7 +989,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
         for event in events {
             self.handle(event);
         }
+        self.forget_stale_waits();
         any
+    }
+
+    /// Only a speaker that is on while streaming is on waits: turned off, or
+    /// streaming stopped, its next start is a new attempt that hasn't waited
+    /// yet.
+    fn forget_stale_waits(&mut self) {
+        if !self.running() {
+            self.busy.clear();
+            self.reconnecting.clear();
+            return;
+        }
+        let outputs = self.audio.enabled_outputs();
+        self.busy.retain(|id| outputs.contains(id));
+        let airplay = self.audio.enabled_airplay();
+        self.reconnecting.retain(|id| airplay.contains(id));
     }
 
     fn handle(&mut self, event: BackendEvent) {
@@ -943,14 +1023,20 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     self.post(speaker_subject(&id), NoticeMessage::SpeakerLost { speaker });
                 }
             }
-            BackendEvent::OutputFailed { id, .. } => self.output_failed(&id, false),
+            BackendEvent::OutputFailed { id, .. } => {
+                self.busy.remove(&id);
+                self.output_failed(&id, false);
+            }
             // It stays on, and plays once the other app lets go of its
-            // device; the notice then clears itself.
+            // device; the notice then clears itself, and its row waits
+            // meanwhile.
             BackendEvent::OutputBusy { id } => {
+                self.busy.insert(id.clone());
                 let speaker = self.output_name(&id);
                 self.post(speaker_subject(&id), NoticeMessage::SpeakerBusy { speaker });
             }
             BackendEvent::OutputFree { id } => {
+                self.busy.remove(&id);
                 self.clear_if(speaker_subject(&id), |message| {
                     matches!(message, NoticeMessage::SpeakerBusy { .. })
                 });
@@ -973,11 +1059,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::HeardTwice { paths } => self.heard_twice_changed(paths),
             BackendEvent::AirPlayChanged => self.airplay_listed(),
             BackendEvent::AirPlayPlaying { id } => {
+                self.reconnecting.remove(&id);
                 self.clear_if(airplay_subject(&id), |message| {
                     matches!(message, NoticeMessage::AirPlayRetrying { .. })
                 });
             }
             BackendEvent::AirPlayTrouble { id, problem } => {
+                self.reconnecting.insert(id.clone());
                 let speaker = self.airplay_name(&id);
                 self.post(
                     airplay_subject(&id),
@@ -987,8 +1075,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     },
                 );
             }
-            BackendEvent::AirPlayFailed { id, problem } => self.airplay_cant_play(&id, problem),
+            BackendEvent::AirPlayFailed { id, problem } => {
+                self.reconnecting.remove(&id);
+                self.airplay_cant_play(&id, problem);
+            }
             BackendEvent::AirPlayPaired { id } => {
+                self.reconnecting.remove(&id);
                 self.log
                     .log(|| format!("{} is paired and on", self.airplay_name(&id)));
                 self.notices.clear(&[airplay_subject(&id)]);
@@ -996,6 +1088,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             // Its Retry starts a new sender (`retry_airplay`).
             BackendEvent::AirPlayStopped => {
+                self.reconnecting.clear();
                 self.post(NoticeSubject::AirPlay, NoticeMessage::AirPlayStopped);
             }
             // The next snapshot shows it; no notice, no focus change (S198).
@@ -1142,6 +1235,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             paired: speaker.paired,
             // An AirPlay speaker's volume is its own slider (S192).
             device_volume: None,
+            waiting: (speaker.enabled && self.reconnecting.contains(&speaker.id))
+                .then_some(Waiting::Reconnecting),
         }
     }
 
@@ -1176,6 +1271,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             device_volume: output
                 .device_volume
                 .and_then(|device_volume| device_volume.hint()),
+            waiting: (output.enabled && self.busy.contains(&output.id))
+                .then_some(Waiting::ForDevice),
         }
     }
 
@@ -1239,6 +1336,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         AppState {
             reference_name,
             airplay_delay_ms: self.airplay_delay_ms(),
+            airplay_none_found: self.airplay_none_found(),
             running: self.running(),
             sources: self.source_rows(),
             source_id: self.chosen.key(),
@@ -1281,6 +1379,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 self.gate.user_switched_off();
                 self.audio.stop();
             }
+            self.forget_stale_waits();
             return;
         }
         let action = self.streaming_after(SpeakerEvent::StartRequested);
@@ -1627,6 +1726,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             self.polls = 0;
             changed |= self.refresh_sources();
         }
+        changed |= self.count_airplay_quiet();
         self.persist();
         changed
     }
@@ -2327,6 +2427,49 @@ mod tests {
         poll_until_busy_retried(&mut adapter);
         assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
         assert!(messages(&adapter).is_empty(), "its cause is gone");
+    }
+
+    fn state_of(adapter: &AudioAdapter<MockBackend>, id: &str) -> SpeakerState {
+        let state = adapter.snapshot();
+        state.speaker_state(state.speaker(id).expect("listed"))
+    }
+
+    #[test]
+    fn a_busy_speaker_row_waits_for_its_device_until_it_plays_or_is_turned_off() {
+        let waiting = SpeakerState::Waiting(ui_model::Waiting::ForDevice);
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter
+            .audio_mut()
+            .fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), waiting);
+        assert_eq!(state_of(&adapter, &key(SPEAKERS)), SpeakerState::Playing);
+        // The row keeps saying so after the notice is dismissed.
+        adapter.dismiss_all_notices();
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), waiting);
+        // Free again, it plays.
+        adapter.audio_mut().fail_output(HEADPHONES, None);
+        poll_until_busy_retried(&mut adapter);
+        assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), SpeakerState::Playing);
+
+        // Busy again after a new start, then turned off: off, and turned on
+        // with its device free it doesn't wait.
+        adapter
+            .audio_mut()
+            .fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        adapter.set_speaker_enabled(&key(HEADPHONES), false);
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), waiting);
+        adapter.set_speaker_enabled(&key(HEADPHONES), false);
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), SpeakerState::Off);
+        adapter.audio_mut().fail_output(HEADPHONES, None);
+        turn_on(&mut adapter, HEADPHONES);
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), SpeakerState::Playing);
     }
 
     #[test]
@@ -3081,6 +3224,41 @@ mod tests {
     }
 
     #[test]
+    fn a_retrying_airplay_speaker_row_says_reconnecting_until_it_plays() {
+        let reconnecting = SpeakerState::Waiting(ui_model::Waiting::Reconnecting);
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
+        // The row keeps saying so after the notice is dismissed.
+        adapter.dismiss_all_notices();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
+        // It plays again.
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+        // Retrying, then turned off: off, and turned on again a new attempt.
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
+        adapter.set_speaker_enabled(&ap(&kitchen), false);
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Off);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+        // Streaming stopped and started again: no stale wait either.
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
+        adapter.set_running(false);
+        adapter.set_running(true);
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+    }
+
+    #[test]
     fn a_sender_that_stops_running_leaves_a_notice() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
         adapter.set_speaker_enabled(&ap(&kitchen), true);
@@ -3228,6 +3406,154 @@ mod tests {
         second.appear(&kitchen);
         adapter.poll();
         assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_some());
+    }
+
+    /// Twenty seconds of polls: the UI polls twice a second.
+    const POLLS_IN_20_S: u32 = 40;
+
+    fn poll_times(adapter: &mut AudioAdapter<MockBackend>, polls: u32) {
+        for _ in 0..polls {
+            adapter.poll();
+        }
+    }
+
+    /// Whether the speaker list says that no AirPlay speaker was found.
+    fn none_found_hint(adapter: &AudioAdapter<MockBackend>) -> bool {
+        adapter.snapshot().airplay_none_found
+    }
+
+    /// A sender that browses but finds nothing (a firewall that blocks
+    /// discovery, a Public network) must not leave an empty list without a
+    /// hint; it is a note in the list, not a notice.
+    #[test]
+    fn twenty_seconds_of_discovery_without_an_airplay_speaker_show_a_hint() {
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        assert!(!none_found_hint(&adapter), "not at launch");
+        poll_times(&mut adapter, POLLS_IN_20_S - 1);
+        assert!(!none_found_hint(&adapter), "not before 20 seconds");
+        assert!(adapter.poll(), "the snapshot changes as the hint shows");
+        assert!(
+            none_found_hint(&adapter),
+            "an empty AirPlay list after 20 seconds needs a hint"
+        );
+        assert!(messages(&adapter).is_empty(), "a note, not a notice");
+    }
+
+    #[test]
+    fn the_none_found_hint_goes_once_a_speaker_appears_and_comes_back_20_seconds_after_all_are_gone()
+     {
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        poll_times(&mut adapter, POLLS_IN_20_S);
+        assert!(none_found_hint(&adapter));
+
+        // Any receiver shows that discovery works, even one AudioSync can't
+        // play yet.
+        let study = device(2, "Study", PASSWORD_TXT);
+        fake.appear(&study);
+        assert!(adapter.poll(), "the snapshot changes as the hint goes");
+        assert!(!none_found_hint(&adapter), "a speaker was found");
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(
+            !none_found_hint(&adapter),
+            "it stays away while one is listed"
+        );
+
+        fake.gone(&study);
+        poll_times(&mut adapter, POLLS_IN_20_S - 1);
+        assert!(
+            !none_found_hint(&adapter),
+            "not before another 20 seconds without one"
+        );
+        adapter.poll();
+        assert!(
+            none_found_hint(&adapter),
+            "back after 20 seconds without one"
+        );
+    }
+
+    #[test]
+    fn a_speaker_found_within_20_seconds_keeps_the_none_found_hint_away() {
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        poll_times(&mut adapter, POLLS_IN_20_S - 5);
+        fake.appear(&device(1, "Kitchen", OPEN_TXT));
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&adapter));
+    }
+
+    /// While discovery is dead, the AirPlay notice and its Retry say so: the
+    /// list never adds the hint, even once that notice is dismissed.
+    #[test]
+    fn no_none_found_hint_while_discovery_is_dead() {
+        // Without AirPlay at all.
+        let mut without_airplay = adapter();
+        poll_times(&mut without_airplay, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&without_airplay), "no AirPlay");
+
+        // Discovery couldn't start.
+        let fake = FakeAirPlay::new();
+        let mut adapter = adapter_starting_airplay(vec![Some(StartedSender {
+            link: fake.link(),
+            feed: None,
+            browsing: false,
+        })]);
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&adapter), "discovery couldn't start");
+        adapter.dismiss_all_notices();
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(
+            !none_found_hint(&adapter),
+            "discovery couldn't start, notice dismissed"
+        );
+
+        // No sender at all.
+        let mut adapter = adapter_starting_airplay(vec![None]);
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&adapter), "no sender");
+
+        // A sender that stopped after an internal error.
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        fake.stop_running();
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&adapter), "the sender stopped");
+    }
+
+    #[test]
+    fn the_none_found_hint_goes_when_discovery_stops_and_counts_again_after_retry() {
+        let first = FakeAirPlay::new();
+        let second = FakeAirPlay::new();
+        let mut adapter = adapter_starting_airplay(vec![
+            Some(StartedSender::browsing(first.link(), None)),
+            Some(StartedSender::browsing(second.link(), None)),
+        ]);
+        poll_times(&mut adapter, POLLS_IN_20_S);
+        assert!(none_found_hint(&adapter));
+
+        first.push(SenderEvent::DiscoveryFailed);
+        assert!(adapter.poll());
+        assert!(
+            !none_found_hint(&adapter),
+            "the AirPlay notice and its Retry take over"
+        );
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+        poll_times(&mut adapter, 3 * POLLS_IN_20_S);
+        assert!(!none_found_hint(&adapter));
+
+        adapter.retry_airplay();
+        poll_times(&mut adapter, POLLS_IN_20_S - 1);
+        assert!(
+            !none_found_hint(&adapter),
+            "the new sender gets its own 20 seconds"
+        );
+        adapter.poll();
+        assert!(none_found_hint(&adapter));
     }
 
     #[test]

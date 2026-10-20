@@ -690,6 +690,7 @@ impl App {
         let lists = |s: &ui_model::Speaker| ui.listed_virtual.lists(s, ui.show_virtual);
         self.main
             .set_connected_virtual_hidden(only_virtual_outputs_hidden(&connected, lists));
+        self.main.set_airplay_none_found(state.airplay_none_found);
         let listed = |s: &&ui_model::Speaker| lists(s);
         let this_pc: Vec<SpeakerItem> = this_pc
             .into_iter()
@@ -1723,6 +1724,8 @@ pub fn row_state(state: SpeakerState) -> RowState {
         SpeakerState::Off => RowState::Off,
         SpeakerState::WillPlay => RowState::WillPlay,
         SpeakerState::Playing => RowState::Playing,
+        SpeakerState::Waiting(ui_model::Waiting::ForDevice) => RowState::WaitingForDevice,
+        SpeakerState::Waiting(ui_model::Waiting::Reconnecting) => RowState::Reconnecting,
     }
 }
 
@@ -2060,6 +2063,62 @@ mod tests {
             !listed(),
             "Show Virtual Devices changed: off and hidden again, it is forgotten"
         );
+    }
+
+    #[test]
+    fn a_speaker_that_cant_play_right_now_shows_waiting_not_playing() {
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let state = backend.snapshot();
+        let mut busy = state.speaker("local:speakers").unwrap().clone();
+        busy.id = "local:busy".into();
+        busy.waiting = Some(ui_model::Waiting::ForDevice);
+        let mut retrying = state.speaker("airplay:kitchen").unwrap().clone();
+        retrying.id = "airplay:retrying".into();
+        retrying.waiting = Some(ui_model::Waiting::Reconnecting);
+        backend.add_speaker(busy);
+        backend.add_speaker(retrying);
+        let app = app_over(backend);
+        let row = |id: &str| {
+            app.models
+                .all_speakers
+                .iter()
+                .find(|s| s.id == id)
+                .expect("listed")
+        };
+        assert_eq!(row("local:speakers").state, RowState::Playing);
+        assert_eq!(row("local:busy").state, RowState::WaitingForDevice);
+        assert_eq!(row("airplay:retrying").state, RowState::Reconnecting);
+
+        // Narrator hears the row's state and what a click does; the note
+        // under the name says the same.
+        let strings = app.strings();
+        let read = |state: RowState| {
+            (
+                strings.invoke_value(state).to_string(),
+                strings.invoke_help(state).to_string(),
+                strings.invoke_row_note(state).to_string(),
+            )
+        };
+        let turn_off = strings.get_turn_off().to_string();
+        let waiting = "Waiting for device".to_owned();
+        assert_eq!(
+            read(RowState::WaitingForDevice),
+            (waiting.clone(), turn_off.clone(), waiting)
+        );
+        let reconnecting = "Reconnecting\u{2026}".to_owned();
+        assert_eq!(
+            read(RowState::Reconnecting),
+            (reconnecting.clone(), turn_off.clone(), reconnecting)
+        );
+        assert_eq!(
+            read(RowState::Playing),
+            ("On".to_owned(), turn_off, String::new())
+        );
+
+        // A click turns a waiting speaker off: it is on.
+        app.main.invoke_speaker_toggled("local:busy".into());
+        assert!(!app.snapshot().speaker("local:busy").unwrap().enabled);
     }
 
     #[test]

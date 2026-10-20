@@ -1485,6 +1485,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .unwrap_or_default()
     }
 
+    fn airplay_browsing(&self) -> bool {
+        self.airplay
+            .as_ref()
+            .is_some_and(|airplay| !airplay.is_stopped())
+    }
+
     fn enabled_airplay(&self) -> Vec<String> {
         self.airplay
             .as_ref()

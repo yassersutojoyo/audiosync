@@ -451,9 +451,10 @@ fn keyboard_shortcuts_are_declared() {
 /// so no text promises it: the translatable strings naming AirPlay are the
 /// speaker kind, what a listed speaker can't do yet, the AirPlay delay field
 /// (spec S181), which shows only while the AirPlay sender runs, and the notice
-/// that the sender stopped or couldn't start, with its Retry button; an
-/// empty Connected Speakers list says just that it's empty, or that its
-/// virtual outputs are hidden.
+/// that the sender stopped or couldn't start, with its Retry button, and the
+/// note that discovery has found no speaker yet, which shows only while it
+/// runs; an empty Connected Speakers list otherwise says just that it's
+/// empty, or that its virtual outputs are hidden.
 #[test]
 fn no_text_promises_airplay() {
     let strings = include_str!("../ui/strings.slint");
@@ -466,7 +467,8 @@ fn no_text_promises_airplay() {
                 || line.contains("property <string> airplay-delay-")
                 || line
                     .contains("notice-airplay-stopped: @tr(\"AirPlay stopped or couldn't start.")
-                || line.contains("notice-retry-label: @tr(\"Retry starting AirPlay\")"),
+                || line.contains("notice-retry-label: @tr(\"Retry starting AirPlay\")")
+                || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet."),
             "strings.slint: {}",
             line.trim()
         );
@@ -476,6 +478,10 @@ fn no_text_promises_airplay() {
         include_str!("../ui/main.slint")
             .contains("root.connected.length > 0 ? \"\" : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
         "the empty Connected Speakers list uses the plain note"
+    );
+    assert!(
+        include_str!("../ui/main.slint").contains("note: root.airplay-none-found ? ("),
+        "the note that no AirPlay speaker was found shows only when the backend says so"
     );
 }
 

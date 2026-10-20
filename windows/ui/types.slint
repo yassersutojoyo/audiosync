@@ -1,7 +1,10 @@
 // The data the Rust side passes to the windows (see src/view.rs).
 
-// How a speaker or group row shows: playing only while streaming is on.
-export enum RowState { off, will-play, playing }
+// How a speaker or group row shows: playing only while streaming is on. A
+// speaker that is on while streaming is on but can't play right now waits
+// for its device (another app holds it) or is reconnecting (AirPlay); a
+// group never waits.
+export enum RowState { off, will-play, playing, waiting-for-device, reconnecting }
 
 // The part of a speaker or group row that has, or is to take, the keyboard
 // focus: its toggle, delay button, volume, sync controls or options. A row

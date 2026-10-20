@@ -352,7 +352,8 @@ export component DialogButton inherits FocusScope {
 }
 
 // The round toggle at the start of a speaker or group row: filled while it
-// plays, outlined while it waits for streaming, grey while off.
+// plays, outlined while it waits (for streaming, or for a device or an
+// AirPlay speaker while streaming), grey while off.
 export component SpeakerBadge inherits Rectangle {
     in property <string> glyph;
     in property <RowState> state;
@@ -759,8 +760,10 @@ export component SpeakerRow inherits Rectangle {
     }
 
     // The line under the name: the kind of a connected speaker, and the note
-    // of one that can't simply play.
-    property <string> caption: Strings.speaker-caption(root.item.show-kind ? Strings.speaker-kind(root.item.kind) : "", Strings.availability(root.item.availability));
+    // of one that can't simply play, or that is on but can't play right now
+    // ("Waiting for device", "Reconnecting…").
+    property <string> note: Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.row-note(root.item.state);
+    property <string> caption: Strings.speaker-caption(root.item.show-kind ? Strings.speaker-kind(root.item.kind) : "", root.note);
 
     border-radius: Fluent.radius-control;
     background: root.item.state == RowState.playing ? Tokens.playing-row : hover.has-hover ? Fluent.hover : transparent;

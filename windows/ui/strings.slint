@@ -19,10 +19,18 @@ export global Strings {
     out property <string> off: @tr("Off");
     out property <string> will-play: @tr("Will play");
     out property <string> will-play-help: @tr("Plays when streaming starts. Select to start streaming.");
+    // A speaker that is on while streaming is on, but can't play right now:
+    // another app holds its device, or AudioSync keeps trying to reach an
+    // AirPlay speaker. Its row says so instead of showing it as playing.
+    out property <string> waiting-for-device: @tr("Waiting for device");
+    out property <string> reconnecting: @tr("Reconnecting…");
     out property <string> status-off: @tr("Off");
     out property <string> connected-none: @tr("No connected speakers");
     // Connected Speakers when its only outputs are virtual ones, hidden.
     out property <string> connected-none-virtual-hidden: @tr("No connected speakers. Virtual devices are hidden; to list them, choose View > Show Virtual Devices.");
+    // Under Connected Speakers once AirPlay discovery has run for 20 seconds
+    // without finding a speaker (a firewall or a Public network blocks it).
+    out property <string> airplay-none-found: @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).");
     out property <string> master-volume-title: @tr("Master Volume");
     out property <string> master-volume: @tr("Master volume");
     out property <string> dismiss-all-notices: @tr("Dismiss All");
@@ -351,7 +359,22 @@ export global Strings {
         if state == RowState.will-play {
             return root.will-play;
         }
+        if state == RowState.waiting-for-device || state == RowState.reconnecting {
+            return root.row-note(state);
+        }
         return root.on;
+    }
+
+    // The note under the name of a speaker that is on but can't play right
+    // now; empty otherwise.
+    public pure function row-note(state: RowState) -> string {
+        if state == RowState.waiting-for-device {
+            return root.waiting-for-device;
+        }
+        if state == RowState.reconnecting {
+            return root.reconnecting;
+        }
+        return "";
     }
 
     // What selecting a row does, read after its value.

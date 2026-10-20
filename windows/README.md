@@ -37,6 +37,9 @@ from the same download next to it, and run it.
   block the search and no AirPlay speakers show up; switching the network to
   Private usually fixes it
   (Settings > Network & internet > your connection > Network profile type).
+  You can also allow AudioSync on Public networks in Windows Security >
+  Firewall & network protection > Allow an app through firewall. If no
+  AirPlay speaker turns up within 20 seconds, the speaker list says so.
 - **One copy at a time:** starting it again while it runs brings the running
   copy's window to the front instead of opening a second one.
 - **Closing and quitting:** closing the window keeps AudioSync running in the
