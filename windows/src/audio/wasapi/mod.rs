@@ -1,5 +1,5 @@
-//! The WASAPI driver: process loopback capture, one render stream per
-//! output, endpoint listing and notifications, the process snapshot, the
+//! The WASAPI driver: process loopback and input device capture, one render
+//! stream per output, endpoint listing and notifications, the process snapshot, the
 //! read-only endpoint snapshot of the double-audio check, and each output's
 //! own volume and mute (read, followed, and set only by the fix the user
 //! clicks).
@@ -27,9 +27,9 @@ use audiosync_core::volume::SharedGain;
 
 use super::airplay::FeedLease;
 use super::backend::BackendError;
-use super::capture::Activation;
+use super::capture::CaptureTarget;
 use super::controller::{Controller, Driver};
-use super::outputs::{Endpoint, Listing};
+use super::outputs::{Endpoint, EndpointReading, Listing};
 use super::process::ProcessTable;
 use super::routing::{EndpointAudio, EndpointVolume};
 
@@ -77,6 +77,10 @@ impl Driver for WasapiDriver {
         self.watcher.take_changed()
     }
 
+    fn inputs(&mut self) -> Result<Vec<EndpointReading>, BackendError> {
+        devices::capture_endpoints()
+    }
+
     fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError> {
         routing::endpoint_audio()
     }
@@ -112,12 +116,12 @@ impl Driver for WasapiDriver {
 
     fn start_capture(
         &mut self,
-        activation: Activation,
+        target: CaptureTarget,
         writer: RingWriter,
         equalizer: EqProcessor,
         airplay: Option<FeedLease>,
     ) -> Result<loopback::LoopbackCapture, BackendError> {
-        loopback::start(activation, writer, equalizer, airplay)
+        loopback::start(target, writer, equalizer, airplay)
     }
 
     fn start_renderer(

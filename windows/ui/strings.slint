@@ -216,6 +216,16 @@ export global Strings {
         return @tr("{} is not running. Open it first, or pick another source.", source);
     }
 
+    // Streaming was turned on while the chosen input device was unplugged.
+    public pure function notice-input-not-connected(source: string) -> string {
+        return @tr("{} is not connected. Plug it in, or pick another source.", source);
+    }
+
+    // The input device being captured was unplugged while streaming.
+    public pure function notice-input-disconnected(source: string) -> string {
+        return @tr("{} was disconnected, so streaming has stopped. Plug it in again, or pick another source.", source);
+    }
+
     // The chosen app started AudioSync, or AudioSync started it, so capturing
     // it would capture AudioSync's own output and echo.
     public pure function notice-source-refused(source: string) -> string {
@@ -401,6 +411,12 @@ export global Strings {
         }
         if kind == NoticeKind.source-refused {
             return @tr("can't capture {}", name);
+        }
+        if kind == NoticeKind.input-not-connected {
+            return @tr("{} not connected", name);
+        }
+        if kind == NoticeKind.input-disconnected {
+            return @tr("{} disconnected", name);
         }
         if kind == NoticeKind.capture-failed {
             return @tr("capture didn't start");

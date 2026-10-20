@@ -73,7 +73,8 @@ use crate::audio::capture::WHOLE_SYSTEM_NAME;
 use crate::audio::routing::{DirectPath, DirectReason};
 use crate::debug_log::DebugLog;
 use crate::settings::{
-    self, KeptAside, SavedEqualizer, SavedGroup, SavedSource, SavedSpeaker, Settings, SettingsFile,
+    self, KeptAside, SavedEqualizer, SavedGroup, SavedInput, SavedSource, SavedSpeaker, Settings,
+    SettingsFile,
 };
 use crate::ui_model::{
     self, AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage, PinPhase,
@@ -106,6 +107,11 @@ enum Chosen {
         executable: String,
         name: String,
     },
+    /// An input device, kept while it is unplugged.
+    Input {
+        endpoint_id: String,
+        name: String,
+    },
 }
 
 impl Chosen {
@@ -117,6 +123,10 @@ impl Chosen {
                 executable: source.executable.clone(),
                 name: source.name.clone(),
             },
+            SourceId::Input { ref endpoint_id } => Chosen::Input {
+                endpoint_id: endpoint_id.clone(),
+                name: source.name.clone(),
+            },
         }
     }
 
@@ -125,6 +135,9 @@ impl Chosen {
             Chosen::WholeSystem => SourceId::WholeSystem,
             Chosen::App { root_pid, .. } => SourceId::App {
                 root_pid: *root_pid,
+            },
+            Chosen::Input { endpoint_id, .. } => SourceId::Input {
+                endpoint_id: endpoint_id.clone(),
             },
         }
     }
@@ -138,6 +151,7 @@ impl Chosen {
                 executable,
                 ..
             } => app_key(*root_pid, executable),
+            Chosen::Input { endpoint_id, .. } => input_key(endpoint_id),
         }
     }
 }
@@ -312,7 +326,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         adapter.list_devices();
         adapter.log.log(|| match &adapter.chosen {
             Chosen::WholeSystem => format!("source chosen: {WHOLE_SYSTEM_NAME} (the default)"),
-            Chosen::App { name, .. } => {
+            Chosen::App { name, .. } | Chosen::Input { name, .. } => {
                 format!("source chosen: {name} ({}), as saved", adapter.chosen.key())
             }
         });
@@ -372,9 +386,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .map_or(1, |last| last.saturating_add(1));
         self.equalizer = saved.equalizer.settings();
         self.audio.set_equalizer(self.equalizer);
-        self.chosen = match &saved.source {
-            SavedSource::System => Chosen::WholeSystem,
-            SavedSource::App { executable, name } => Chosen::App {
+        self.chosen = match (&saved.input_device, &saved.source) {
+            (Some(input), _) => Chosen::Input {
+                endpoint_id: input.id.clone(),
+                name: if input.name.is_empty() {
+                    input.id.clone()
+                } else {
+                    input.name.clone()
+                },
+            },
+            (None, SavedSource::System) => Chosen::WholeSystem,
+            (None, SavedSource::App { executable, name }) => Chosen::App {
                 // No process yet: the first listing finds the app if it
                 // runs, by its executable.
                 root_pid: 0,
@@ -450,13 +472,20 @@ impl<A: AudioBackend> AudioAdapter<A> {
         Settings {
             version: settings::VERSION,
             source: match &self.chosen {
-                Chosen::WholeSystem => SavedSource::System,
+                Chosen::WholeSystem | Chosen::Input { .. } => SavedSource::System,
                 Chosen::App {
                     executable, name, ..
                 } => SavedSource::App {
                     executable: executable.clone(),
                     name: name.clone(),
                 },
+            },
+            input_device: match &self.chosen {
+                Chosen::Input { endpoint_id, name } => Some(SavedInput {
+                    id: endpoint_id.clone(),
+                    name: name.clone(),
+                }),
+                _ => None,
             },
             master_volume: self.audio.master_volume(),
             outputs,
@@ -645,7 +674,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn chosen_name(&self) -> String {
         match &self.chosen {
             Chosen::WholeSystem => WHOLE_SYSTEM_NAME.to_owned(),
-            Chosen::App { name, .. } => name.clone(),
+            Chosen::App { name, .. } | Chosen::Input { name, .. } => name.clone(),
         }
     }
 
@@ -968,13 +997,20 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 *name = listed_name.clone();
             }
         }
+        if let Chosen::Input { endpoint_id, name } = &mut chosen
+            && let Some(listed) = sources.iter().find(|source| {
+                matches!(&source.id, SourceId::Input { endpoint_id: id } if id == endpoint_id)
+            })
+        {
+            name.clone_from(&listed.name);
+        }
         if sources != self.sources {
             self.log.log(|| {
                 let listed: Vec<String> = sources.iter().map(describe_source).collect();
                 format!("sources listed: {}", listed.join("; "))
             });
         }
-        if chosen != self.chosen {
+        if chosen.key() != self.chosen.key() {
             self.log
                 .log(|| format!("the chosen app now runs as {}", chosen.key()));
         }
@@ -984,14 +1020,20 @@ impl<A: AudioBackend> AudioAdapter<A> {
         changed
     }
 
-    /// The source to start: the whole system, or the chosen app where it runs
-    /// now. The app needn't play yet: capture hears it once it does.
+    /// The source to start: the whole system, the chosen app where it runs
+    /// now, or the chosen input device while it is connected. The app needn't
+    /// play yet: capture hears it once it does.
     fn chosen_source(&mut self) -> Result<SourceId, BackendError> {
         if self.chosen == Chosen::WholeSystem {
             return Ok(SourceId::WholeSystem);
         }
         self.refresh_sources();
         let key = self.chosen.key();
+        if matches!(self.chosen, Chosen::Input { .. })
+            && !self.sources.iter().any(|source| source_key(source) == key)
+        {
+            return Err(BackendError::InputGone);
+        }
         if let Chosen::App {
             root_pid,
             executable,
@@ -1078,6 +1120,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn start_problem(&self, error: &BackendError) -> NoticeMessage {
         let app = matches!(self.chosen, Chosen::App { .. });
         match error {
+            BackendError::InputGone => NoticeMessage::InputNotConnected {
+                source: self.chosen_name(),
+            },
             BackendError::SourceGone if app => NoticeMessage::SourceNotRunning {
                 source: self.chosen_name(),
             },
@@ -1293,6 +1338,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
                             source: self.chosen_name(),
                         }
                     }
+                    StopReason::CaptureFailed(BackendError::InputGone) => {
+                        NoticeMessage::InputDisconnected {
+                            source: self.chosen_name(),
+                        }
+                    }
                     StopReason::CaptureFailed(_) => NoticeMessage::CaptureLost,
                 };
                 self.post(NoticeSubject::Source, message);
@@ -1402,7 +1452,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let message = NoticeMessage::HeardTwice {
             source: match &self.chosen {
                 Chosen::WholeSystem => None,
-                Chosen::App { name, .. } => Some(name.clone()),
+                Chosen::App { name, .. } | Chosen::Input { name, .. } => Some(name.clone()),
             },
             mute: names(false),
             shared: names(true),
@@ -1456,16 +1506,32 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 kind: match source.id {
                     SourceId::WholeSystem => SourceKind::System,
                     SourceId::App { .. } => SourceKind::App,
+                    SourceId::Input { .. } => SourceKind::Input,
                 },
             })
             .collect();
         let chosen = self.chosen.key();
         if !rows.iter().any(|row| row.id == chosen) {
-            rows.push(Source {
-                id: chosen,
-                name: self.chosen_name(),
-                kind: SourceKind::App,
-            });
+            let kind = match self.chosen {
+                Chosen::Input { .. } => SourceKind::Input,
+                _ => SourceKind::App,
+            };
+            // Apps come before input devices, as in the listing.
+            let at = match kind {
+                SourceKind::Input => rows.len(),
+                _ => rows
+                    .iter()
+                    .position(|row| row.kind == SourceKind::Input)
+                    .unwrap_or(rows.len()),
+            };
+            rows.insert(
+                at,
+                Source {
+                    id: chosen,
+                    name: self.chosen_name(),
+                    kind,
+                },
+            );
         }
         rows
     }
@@ -1668,7 +1734,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.log.log(|| {
             let name = match &picked {
                 Chosen::WholeSystem => WHOLE_SYSTEM_NAME,
-                Chosen::App { name, .. } => name,
+                Chosen::App { name, .. } | Chosen::Input { name, .. } => name,
             };
             format!("source chosen: {name} ({})", picked.key())
         });
@@ -2090,26 +2156,33 @@ fn ui_problem(problem: AirPlayProblem) -> ui_model::AirPlayProblem {
 
 /// A listed source as the debug log names it.
 fn describe_source(source: &SourceInfo) -> String {
-    match source.id {
+    match &source.id {
         SourceId::WholeSystem => source.name.clone(),
         SourceId::App { root_pid } => format!(
             "{} ({}, process {root_pid})",
             source.name, source.executable
         ),
+        SourceId::Input { endpoint_id } => format!("{} (input device {endpoint_id})", source.name),
     }
 }
 
 /// The UI's ID of a listed source.
 fn source_key(source: &SourceInfo) -> String {
-    match source.id {
+    match &source.id {
         SourceId::WholeSystem => SYSTEM_KEY.to_owned(),
-        SourceId::App { root_pid } => app_key(root_pid, &source.executable),
+        SourceId::App { root_pid } => app_key(*root_pid, &source.executable),
+        SourceId::Input { endpoint_id } => input_key(endpoint_id),
     }
 }
 
 /// The UI's ID of an app source. Executable names can't hold a colon.
 fn app_key(root_pid: u32, executable: &str) -> String {
     format!("app:{root_pid}:{executable}")
+}
+
+/// The UI's ID of an input device source.
+fn input_key(endpoint_id: &str) -> String {
+    format!("input:{endpoint_id}")
 }
 
 #[cfg(test)]
@@ -2127,7 +2200,7 @@ mod tests {
     use super::*;
     use crate::audio::airplay::StartedSender;
     use crate::audio::airplay::tests::{APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, device, id_of};
-    use crate::audio::capture::LoopbackMode;
+    use crate::audio::capture::{CaptureTarget, LoopbackMode};
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
     use crate::audio::pairings::PairingStore;
     use crate::audio::pairings::tests::credentials;
@@ -2187,8 +2260,146 @@ mod tests {
             .driver()
             .captures_started()
             .iter()
-            .map(|activation| (activation.mode, activation.target_pid))
+            .filter_map(|target| match target {
+                CaptureTarget::Loopback(activation) => {
+                    Some((activation.mode, activation.target_pid))
+                }
+                CaptureTarget::Input { .. } => None,
+            })
             .collect()
+    }
+
+    /// The input devices captured, by endpoint ID, in order.
+    fn input_captures(adapter: &AudioAdapter<MockBackend>) -> Vec<String> {
+        adapter
+            .audio
+            .driver()
+            .captures_started()
+            .iter()
+            .filter_map(|target| match target {
+                CaptureTarget::Input { endpoint_id } => Some(endpoint_id.clone()),
+                CaptureTarget::Loopback(_) => None,
+            })
+            .collect()
+    }
+
+    const MIC: &str = "{0.0.1.00000000}.{mic}";
+
+    fn mic() -> String {
+        format!("input:{MIC}")
+    }
+
+    #[test]
+    fn input_devices_are_listed_after_the_apps_and_can_be_streamed() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        adapter
+            .audio
+            .connect_input("hf", "Headset (Hands-Free)", "BTHHFENUM");
+        adapter.refresh_sources();
+        let state = adapter.snapshot();
+        let sources: Vec<(&str, &str, SourceKind)> = state
+            .sources
+            .iter()
+            .map(|s| (s.id.as_str(), s.name.as_str(), s.kind))
+            .collect();
+        assert_eq!(
+            sources,
+            [
+                ("system", "All System Audio", SourceKind::System),
+                ("app:2000:player.exe", "Player", SourceKind::App),
+                (mic().as_str(), "Microphone (USB Audio)", SourceKind::Input),
+            ]
+        );
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.set_running(true);
+        assert!(adapter.snapshot().running);
+        assert_eq!(input_captures(&adapter), [MIC]);
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+    }
+
+    #[test]
+    fn an_input_device_choice_is_saved_and_restored_while_it_is_unplugged() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        adapter.refresh_sources();
+        adapter.select_source(&mic());
+        let saved = adapter.current_settings();
+        assert_eq!(saved.source, SavedSource::System);
+        assert_eq!(
+            saved.input_device,
+            Some(SavedInput {
+                id: MIC.to_owned(),
+                name: "Microphone (USB Audio)".to_owned(),
+            })
+        );
+
+        // At the next launch the device is unplugged: the choice stays, and
+        // shows under its saved name, after the apps.
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.add_app(PLAYER_PID, "player.exe");
+        let mut restored = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        restored.restore(saved);
+        restored.refresh_sources();
+        let state = restored.snapshot();
+        assert_eq!(state.source_id, mic());
+        let last = state.sources.last().expect("listed");
+        assert_eq!(
+            (last.id.as_str(), last.name.as_str(), last.kind),
+            (mic().as_str(), "Microphone (USB Audio)", SourceKind::Input)
+        );
+
+        // Streaming doesn't start without it, and says so.
+        turn_on(&mut restored, SPEAKERS);
+        restored.set_running(true);
+        assert!(!restored.snapshot().running);
+        assert_eq!(
+            messages(&restored),
+            [NoticeMessage::InputNotConnected {
+                source: "Microphone (USB Audio)".to_owned()
+            }]
+        );
+        assert!(input_captures(&restored).is_empty());
+
+        // Plugged in again, it streams.
+        restored
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        restored.set_running(true);
+        assert!(restored.snapshot().running);
+        assert_eq!(input_captures(&restored), [MIC]);
+    }
+
+    #[test]
+    fn an_input_device_unplugged_while_streaming_stops_streaming_with_a_notice() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.set_running(true);
+        assert!(adapter.snapshot().running);
+        adapter.audio.disconnect_input(MIC);
+        for _ in 0..4 {
+            adapter.poll();
+        }
+        let state = adapter.snapshot();
+        assert!(!state.running);
+        assert_eq!(state.source_id, mic(), "the choice stays");
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::InputDisconnected {
+                source: "Microphone (USB Audio)".to_owned()
+            }]
+        );
     }
 
     #[test]

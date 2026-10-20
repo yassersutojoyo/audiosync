@@ -507,7 +507,7 @@ pub(super) fn system_error(call: &'static str, error: &windows::core::Error) -> 
 
 /// `HRESULT_FROM_WIN32(ERROR_NOT_FOUND)`: an endpoint ID that is no longer
 /// known.
-const NOT_FOUND: HRESULT = HRESULT::from_win32(ERROR_NOT_FOUND.0);
+pub(super) const NOT_FOUND: HRESULT = HRESULT::from_win32(ERROR_NOT_FOUND.0);
 
 /// A failed call on a device: [`BackendError::DeviceGone`] when the device
 /// went away or Windows audio stopped, or Windows is rebuilding the endpoint

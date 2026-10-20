@@ -2204,6 +2204,12 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::SourceRefused { source } => {
             strings.invoke_notice_source_refused(source.as_str().into())
         }
+        NoticeMessage::InputNotConnected { source } => {
+            strings.invoke_notice_input_not_connected(source.as_str().into())
+        }
+        NoticeMessage::InputDisconnected { source } => {
+            strings.invoke_notice_input_disconnected(source.as_str().into())
+        }
         NoticeMessage::CaptureFailed => strings.get_notice_capture_failed(),
         NoticeMessage::CaptureLost => strings.get_notice_capture_lost(),
         NoticeMessage::SpeakerFailed { speaker } => {
@@ -2256,6 +2262,12 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
             (NoticeKind::SourceNotRunning, source.as_str())
         }
         NoticeMessage::SourceRefused { source } => (NoticeKind::SourceRefused, source.as_str()),
+        NoticeMessage::InputNotConnected { source } => {
+            (NoticeKind::InputNotConnected, source.as_str())
+        }
+        NoticeMessage::InputDisconnected { source } => {
+            (NoticeKind::InputDisconnected, source.as_str())
+        }
         NoticeMessage::CaptureFailed => (NoticeKind::CaptureFailed, ""),
         NoticeMessage::CaptureLost => (NoticeKind::CaptureLost, ""),
         NoticeMessage::SpeakerFailed { speaker } => (NoticeKind::SpeakerFailed, speaker.as_str()),
@@ -3339,6 +3351,8 @@ mod tests {
             NoticeMessage::SourceQuit { source: "A".into() },
             NoticeMessage::SourceNotRunning { source: "A".into() },
             NoticeMessage::SourceRefused { source: "A".into() },
+            NoticeMessage::InputNotConnected { source: "A".into() },
+            NoticeMessage::InputDisconnected { source: "A".into() },
             NoticeMessage::CaptureFailed,
             NoticeMessage::CaptureLost,
             NoticeMessage::SpeakerFailed {

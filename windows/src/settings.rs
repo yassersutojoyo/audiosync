@@ -2,8 +2,9 @@
 //!
 //! One small JSON file in the app's data folder,
 //! `%LOCALAPPDATA%\AudioSync\settings.json`, next to the AirPlay pairings:
-//! the source (the whole system, or an app by its executable's file name,
-//! since its process ID changes every time it starts), each output's and
+//! the source (the whole system, an app by its executable's file name,
+//! since its process ID changes every time it starts, or an input device by
+//! its endpoint ID), each output's and
 //! AirPlay speaker's switch, volume and delay (outputs by endpoint ID,
 //! AirPlay speakers by the ID they announce), the AirPlay delay adjustment,
 //! the master volume, the
@@ -111,6 +112,18 @@ pub enum SavedSource {
         #[serde(default)]
         name: String,
     },
+}
+
+/// The input device chosen as the source, kept beside [`Settings::source`]
+/// rather than in it: an older build ignores a field it doesn't know, but
+/// turns down the whole file over a source kind it doesn't know.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedInput {
+    /// The capture endpoint's ID.
+    pub id: String,
+    /// The name it showed, for the source menu while it is unplugged.
+    pub name: String,
 }
 
 /// An output's or AirPlay speaker's settings.
@@ -230,7 +243,12 @@ pub fn clamp_window(frame: WindowFrame) -> Option<WindowFrame> {
 pub struct Settings {
     /// The format version the file was written in.
     pub version: u32,
+    /// The source; the whole system while [`Settings::input_device`] names
+    /// the source, so an older build falls back to it.
     pub source: SavedSource,
+    /// The input device chosen as the source, if one is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_device: Option<SavedInput>,
     /// The master volume slider position, 0 to 100.
     pub master_volume: f64,
     /// The local outputs, by endpoint ID.
@@ -256,6 +274,7 @@ impl Default for Settings {
         Settings {
             version: VERSION,
             source: SavedSource::System,
+            input_device: None,
             master_volume: DEFAULT_MASTER_POSITION,
             outputs: BTreeMap::new(),
             airplay: BTreeMap::new(),
@@ -342,6 +361,13 @@ impl Settings {
             },
             _ => SavedSource::System,
         };
+        let input_device = self
+            .input_device
+            .filter(|input| usable_id(&input.id))
+            .map(|input| SavedInput {
+                id: input.id,
+                name: cut(input.name),
+            });
         let mut group_ids = BTreeSet::new();
         let groups = self
             .groups
@@ -372,6 +398,7 @@ impl Settings {
         Settings {
             version: VERSION,
             source,
+            input_device,
             master_volume: sanitize_position(self.master_volume).unwrap_or(DEFAULT_MASTER_POSITION),
             outputs: clamp_speakers(self.outputs, output_delays),
             airplay: clamp_speakers(self.airplay, (0.0, MAX_AIRPLAY_DELAY_MS)),
@@ -783,6 +810,54 @@ mod tests {
             })
         );
         assert_eq!(loaded.source, SavedSource::System);
+    }
+
+    #[test]
+    fn an_input_device_choice_survives_a_round_trip_and_older_builds_read_the_whole_system() {
+        let path = test_dir("settings-input").join(FILE_NAME);
+        let file = SettingsFile::at(path.clone());
+        let chosen = Settings {
+            input_device: Some(SavedInput {
+                id: "{0.0.1.00000000}.{mic}".to_owned(),
+                name: "Microphone (USB Audio)".to_owned(),
+            }),
+            ..sample()
+        };
+        file.save(&chosen).expect("saved");
+        assert_eq!(file.load().0, chosen);
+        let text = fs::read_to_string(&path).expect("read");
+        let json: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+        assert_eq!(json["input_device"]["id"], "{0.0.1.00000000}.{mic}");
+
+        // What an older build reads: it ignores the field it doesn't know,
+        // and the source beside it is the whole system.
+        let written = Settings {
+            input_device: Some(SavedInput {
+                id: "mic".to_owned(),
+                name: String::new(),
+            }),
+            ..Settings::default()
+        };
+        let json: serde_json::Value = serde_json::from_str(&written.to_json()).expect("JSON");
+        assert_eq!(json["source"]["kind"], "system");
+
+        // A file from before input devices has none, and one without a
+        // usable ID drops it.
+        let (loaded, _) =
+            Settings::from_json(r#"{"version": 2, "source": {"kind": "system"}}"#).expect("read");
+        assert_eq!(loaded.input_device, None);
+        let (loaded, found) =
+            Settings::from_json(r#"{"version": 2, "input_device": {"id": "", "name": "x"}}"#)
+                .expect("read");
+        assert_eq!(loaded.input_device, None);
+        assert_eq!(
+            found,
+            Loaded::Read {
+                version: 2,
+                adjusted: true
+            }
+        );
+        assert!(!Settings::default().to_json().contains("input_device"));
     }
 
     #[test]

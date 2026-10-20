@@ -1,6 +1,8 @@
 //! What process loopback captures, which sources to offer, the formats a
 //! capture asks Windows for, and the conversion of captured packets into the
-//! shared ring, through the equalizer, and into the AirPlay sender.
+//! shared ring, through the equalizer, and into the AirPlay sender. An input
+//! device is captured from its own capture endpoint instead, through the same
+//! formats and conversion.
 //!
 //! Process loopback captures the render streams of a process tree: either
 //! only that tree (one app), or everything except it (the whole system,
@@ -24,6 +26,7 @@ use audiosync_core::ring::{RingWriter, is_supported_rate};
 use super::SESSION_RATE;
 use super::airplay::FeedLease;
 use super::backend::{BackendError, SourceId, SourceInfo};
+use super::outputs::{EndpointReading, is_hands_free};
 use super::process::{IDLE_PID, ProcessTable, SYSTEM_PID};
 
 /// The name of the whole-system source in English, as the macOS app shows
@@ -50,8 +53,36 @@ pub struct Activation {
     pub target_pid: u32,
 }
 
-/// The capture for `source`, with AudioSync running as `own_pid` and the
-/// running processes in `processes`.
+/// What a capture opens.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CaptureTarget {
+    /// A process loopback capture.
+    Loopback(Activation),
+    /// The capture endpoint of an input device, by endpoint ID.
+    Input {
+        /// The endpoint ID.
+        endpoint_id: String,
+    },
+}
+
+/// The capture for `source`: an input device's own endpoint, or the process
+/// loopback capture [`decide_activation`] decides on.
+pub fn decide_capture(
+    source: &SourceId,
+    own_pid: u32,
+    processes: &ProcessTable,
+) -> Result<CaptureTarget, BackendError> {
+    match source {
+        SourceId::Input { endpoint_id } => Ok(CaptureTarget::Input {
+            endpoint_id: endpoint_id.clone(),
+        }),
+        _ => decide_activation(source, own_pid, processes).map(CaptureTarget::Loopback),
+    }
+}
+
+/// The process loopback capture for `source`, with AudioSync running as
+/// `own_pid` and the running processes in `processes`. An input device has
+/// none ([`BackendError::NotAnApp`]): [`decide_capture`] opens its endpoint.
 ///
 /// The whole system excludes AudioSync's own tree. An app includes the tree
 /// of its top process, unless that process is not an app, no longer runs,
@@ -75,6 +106,7 @@ pub fn decide_activation(
             });
         }
         SourceId::App { root_pid } => *root_pid,
+        SourceId::Input { .. } => return Err(BackendError::NotAnApp),
     };
     if root_pid == IDLE_PID || root_pid == SYSTEM_PID {
         return Err(BackendError::NotAnApp);
@@ -173,6 +205,50 @@ pub fn source_list(
     });
     sources.extend(apps);
     sources
+}
+
+/// The input devices to offer, from the active capture endpoints Windows
+/// listed, by name, then endpoint ID. An endpoint without an ID can't be
+/// opened, and a Bluetooth hands-free one is left out as it is for outputs
+/// ([`is_hands_free`]): opening it switches the headset to call mode, which
+/// interrupts its stereo sound. One without a readable name shows its ID.
+pub fn input_sources(readings: Vec<EndpointReading>) -> Vec<SourceInfo> {
+    let mut inputs: Vec<SourceInfo> = readings
+        .into_iter()
+        .filter_map(|reading| {
+            let endpoint_id = reading.id.ok()?;
+            let properties = reading.properties.unwrap_or_default();
+            if is_hands_free(properties.enumerator.as_deref().unwrap_or_default()) {
+                return None;
+            }
+            let name = properties
+                .name
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| endpoint_id.clone());
+            Some(SourceInfo {
+                id: SourceId::Input { endpoint_id },
+                name,
+                executable: String::new(),
+            })
+        })
+        .collect();
+    inputs.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.id_text().cmp(b.id_text()))
+    });
+    inputs
+}
+
+impl SourceInfo {
+    /// The endpoint ID of an input device, empty for other sources.
+    fn id_text(&self) -> &str {
+        match &self.id {
+            SourceId::Input { endpoint_id } => endpoint_id,
+            _ => "",
+        }
+    }
 }
 
 /// The app that runs `executable` now, found among all running processes,
@@ -615,6 +691,7 @@ mod tests {
 
     use super::*;
     use crate::audio::airplay::FeedSlot;
+    use crate::audio::outputs::EndpointProperties;
     use crate::audio::process::tests::{desktop, entry};
 
     /// AudioSync's process ID in [`desktop`].
@@ -622,6 +699,98 @@ mod tests {
 
     fn app(root_pid: u32) -> SourceId {
         SourceId::App { root_pid }
+    }
+
+    fn input_reading(
+        index: u32,
+        id: &str,
+        name: Option<&str>,
+        enumerator: &str,
+    ) -> EndpointReading {
+        EndpointReading {
+            index,
+            id: Ok(id.to_owned()),
+            properties: Ok(EndpointProperties {
+                name: name.map(str::to_owned),
+                enumerator: Some(enumerator.to_owned()),
+                ..EndpointProperties::default()
+            }),
+        }
+    }
+
+    #[test]
+    fn input_devices_are_offered_by_name_without_hands_free_or_unreadable_ones() {
+        let readings = vec![
+            input_reading(0, "usb", Some("Microphone (USB Audio)"), "USB"),
+            input_reading(
+                1,
+                "hf",
+                Some("Headset (Example Buds Hands-Free)"),
+                "BTHHFENUM",
+            ),
+            input_reading(2, "line", Some("Line In (Realtek Audio)"), "HDAUDIO"),
+            input_reading(3, "nameless", None, "SWD"),
+            input_reading(4, "blank", Some("  "), "SWD"),
+            EndpointReading {
+                index: 5,
+                id: Err("IMMDevice::GetId failed (0x80070490)".to_owned()),
+                properties: Ok(EndpointProperties::default()),
+            },
+            EndpointReading {
+                index: 6,
+                id: Ok("array".to_owned()),
+                properties: Err("IMMDevice::OpenPropertyStore failed".to_owned()),
+            },
+        ];
+        let offered: Vec<(SourceId, String)> = input_sources(readings)
+            .into_iter()
+            .map(|source| {
+                assert!(source.executable.is_empty());
+                (source.id, source.name)
+            })
+            .collect();
+        let input = |id: &str, name: &str| {
+            (
+                SourceId::Input {
+                    endpoint_id: id.to_owned(),
+                },
+                name.to_owned(),
+            )
+        };
+        assert_eq!(
+            offered,
+            [
+                input("array", "array"),
+                input("blank", "blank"),
+                input("line", "Line In (Realtek Audio)"),
+                input("usb", "Microphone (USB Audio)"),
+                input("nameless", "nameless"),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_input_device_is_captured_from_its_endpoint_not_by_process_loopback() {
+        let source = SourceId::Input {
+            endpoint_id: "usb".to_owned(),
+        };
+        assert_eq!(
+            decide_capture(&source, OWN_PID, &ProcessTable::default()),
+            Ok(CaptureTarget::Input {
+                endpoint_id: "usb".to_owned()
+            })
+        );
+        assert_eq!(
+            decide_activation(&source, OWN_PID, &desktop()),
+            Err(BackendError::NotAnApp)
+        );
+        assert_eq!(
+            decide_capture(&SourceId::WholeSystem, OWN_PID, &desktop()),
+            Ok(CaptureTarget::Loopback(Activation {
+                mode: LoopbackMode::ExcludeTree,
+                target_pid: OWN_PID,
+            }))
+        );
     }
 
     #[test]

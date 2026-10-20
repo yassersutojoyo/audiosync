@@ -1,4 +1,5 @@
-//! Process loopback capture, through the Application Loopback API.
+//! Process loopback capture, through the Application Loopback API, and
+//! input device capture.
 //!
 //! `ActivateAudioInterfaceAsync` on the virtual process loopback device gives
 //! an `IAudioClient` that captures one process tree, or everything except it.
@@ -11,6 +12,10 @@
 //! and the AirPlay sender's feed. Dropping the capture waits for the thread
 //! as a [`Worker`] does: stopping the stream can hang while Windows audio
 //! doesn't answer, and a thread let go keeps the feed until it ends.
+//!
+//! An input device is opened from its own capture endpoint
+//! (`IMMDevice::Activate`) and initialized in shared mode, without the
+//! loopback flag, through the same formats; the rest is the same.
 
 use std::mem::ManuallyDrop;
 use std::ptr;
@@ -29,28 +34,29 @@ use windows::Win32::Media::Audio::{
     AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
     AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
     AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
-    ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
+    ActivateAudioInterfaceAsync, DEVICE_STATE_ACTIVE, IActivateAudioInterfaceAsyncOperation,
     IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
     IAudioCaptureClient, IAudioClient, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
 };
-use windows::Win32::System::Com::BLOB;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+use windows::Win32::System::Com::{BLOB, CLSCTX_ALL};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::{WaitForMultipleObjects, WaitForSingleObject};
 use windows::Win32::System::Variant::VT_BLOB;
-use windows::core::{HRESULT, IUnknown, Interface, Ref};
+use windows::core::{HRESULT, HSTRING, IUnknown, Interface, Ref};
 use windows_core::implement;
 
 use super::com::{
-    Apartment, Event, ProAudioTask, Ready, Worker, device_code_error, spawn_worker, system_error,
-    wave_format,
+    Apartment, Event, NOT_FOUND, ProAudioTask, Ready, Worker, device_code_error, device_error,
+    spawn_worker, system_error, wave_format,
 };
+use super::devices::enumerator;
 use super::processes::ProcessWatch;
 use crate::audio::backend::{BackendError, TIMED_OUT};
 use crate::audio::capture::{
-    Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, GapFill, LoopbackMode,
-    StreamFormat,
+    Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, CaptureTarget, GapFill,
+    LoopbackMode, StreamFormat,
 };
 use crate::audio::controller::{CaptureHandle, CaptureState};
 use crate::audio::outputs::HNS_PER_MS;
@@ -71,7 +77,7 @@ const ACTIVATION_TIMEOUT_MS: u32 = 5_000;
 /// call on the stream then tells.
 const WAIT_MS: u32 = 10;
 
-/// A running process loopback capture.
+/// A running process loopback or input device capture.
 pub struct LoopbackCapture {
     stop: Arc<Event>,
     /// The HRESULT that ended the capture, once `ended` is set.
@@ -82,6 +88,8 @@ pub struct LoopbackCapture {
     source: Option<ProcessWatch>,
     /// How Windows accepted to deliver the capture.
     setup: CaptureAttempt,
+    /// What the log calls the capture when it fails.
+    call: &'static str,
 }
 
 impl CaptureHandle for LoopbackCapture {
@@ -92,7 +100,7 @@ impl CaptureHandle for LoopbackCapture {
         }
         if self.ended.load(Ordering::Acquire) {
             let code = HRESULT(self.failure.load(Ordering::Relaxed));
-            return CaptureState::Failed(device_code_error("process loopback capture", code));
+            return CaptureState::Failed(device_code_error(self.call, code));
         }
         CaptureState::Running
     }
@@ -110,17 +118,23 @@ impl Drop for LoopbackCapture {
     }
 }
 
-/// Starts capturing as `activation` says, writing through `equalizer` and
-/// `writer`, and to `airplay`.
+/// Starts capturing `target`, writing through `equalizer` and `writer`, and
+/// to `airplay`.
 pub(super) fn start(
-    activation: Activation,
+    target: CaptureTarget,
     writer: RingWriter,
     equalizer: EqProcessor,
     airplay: Option<FeedLease>,
 ) -> Result<LoopbackCapture, BackendError> {
-    let source = match activation.mode {
-        LoopbackMode::IncludeTree => ProcessWatch::open(activation.target_pid)?,
-        LoopbackMode::ExcludeTree => None,
+    let (source, call) = match &target {
+        CaptureTarget::Loopback(activation) => (
+            match activation.mode {
+                LoopbackMode::IncludeTree => ProcessWatch::open(activation.target_pid)?,
+                LoopbackMode::ExcludeTree => None,
+            },
+            "process loopback capture",
+        ),
+        CaptureTarget::Input { .. } => (None, "input device capture"),
     };
     let stop = Arc::new(Event::manual_reset()?);
     let failure = Arc::new(AtomicI32::new(0));
@@ -131,7 +145,7 @@ pub(super) fn start(
         let ended = Arc::clone(&ended);
         spawn_worker("audiosync-capture", move |ready| {
             run(
-                activation, writer, equalizer, airplay, &stop, &failure, &ended, ready,
+                &target, writer, equalizer, airplay, &stop, &failure, &ended, ready,
             );
         })?
     };
@@ -142,6 +156,7 @@ pub(super) fn start(
         thread,
         source,
         setup,
+        call,
     })
 }
 
@@ -152,7 +167,7 @@ pub(super) fn start(
     reason = "everything the thread owns or shares, passed once at its start"
 )]
 fn run(
-    activation: Activation,
+    target: &CaptureTarget,
     writer: RingWriter,
     equalizer: EqProcessor,
     airplay: Option<FeedLease>,
@@ -165,7 +180,7 @@ fn run(
         Ok(apartment) => apartment,
         Err(error) => return ready.fail(error),
     };
-    let stream = match open_stream(activation) {
+    let stream = match open_stream(target) {
         Ok(stream) => stream,
         Err(error) => return ready.fail(error),
     };
@@ -212,12 +227,20 @@ struct CaptureStream {
 
 /// Activates and initializes a capture, trying each format of
 /// [`CAPTURE_ATTEMPTS`] until one is accepted.
-fn open_stream(activation: Activation) -> Result<CaptureStream, BackendError> {
+fn open_stream(target: &CaptureTarget) -> Result<CaptureStream, BackendError> {
     let mut first_error = None;
     for attempt in CAPTURE_ATTEMPTS {
-        let client = activate(activation)?;
+        let (client, mut flags) = match target {
+            CaptureTarget::Loopback(activation) => (
+                activate(*activation)?,
+                AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+            ),
+            CaptureTarget::Input { endpoint_id } => (
+                activate_input(endpoint_id)?,
+                AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+            ),
+        };
         let format = wave_format(attempt.format);
-        let mut flags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
         if attempt.autoconvert {
             flags |= AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
         }
@@ -261,6 +284,30 @@ fn finish_stream(
         format: attempt.format,
         autoconvert: attempt.autoconvert,
     })
+}
+
+/// An `IAudioClient` for the input device of capture endpoint `endpoint_id`:
+/// [`BackendError::InputGone`] when Windows no longer knows the endpoint or
+/// it isn't active (unplugged or disabled).
+fn activate_input(endpoint_id: &str) -> Result<IAudioClient, BackendError> {
+    let enumerator = enumerator()?;
+    // SAFETY: calls on a live enumerator and the device it gives.
+    unsafe {
+        let device = match enumerator.GetDevice(&HSTRING::from(endpoint_id)) {
+            Ok(device) => device,
+            Err(error) if error.code() == NOT_FOUND => return Err(BackendError::InputGone),
+            Err(error) => return Err(device_error("IMMDeviceEnumerator::GetDevice", &error)),
+        };
+        let state = device
+            .GetState()
+            .map_err(|error| device_error("IMMDevice::GetState", &error))?;
+        if state != DEVICE_STATE_ACTIVE {
+            return Err(BackendError::InputGone);
+        }
+        device
+            .Activate(CLSCTX_ALL, None)
+            .map_err(|error| device_error("IMMDevice::Activate", &error))
+    }
 }
 
 /// The activation parameters and the PROPVARIANT that carries them, kept
@@ -539,6 +586,7 @@ mod tests {
             thread,
             source: None,
             setup: CAPTURE_ATTEMPTS[0],
+            call: "process loopback capture",
         };
         let answers = thread::spawn(move || {
             thread::sleep(HANG);

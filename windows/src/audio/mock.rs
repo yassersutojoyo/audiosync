@@ -5,7 +5,8 @@
 //! keeps a pretend list of processes, audio sessions and outputs. Nothing
 //! plays: a started output only records that it started. Methods on
 //! [`MockBackend`] change the pretend world the way Windows would (an output
-//! is unplugged, an app quits, a device refuses to start), and the next
+//! or input device is unplugged, an app quits, a device refuses to start),
+//! and the next
 //! [`AudioBackend::poll`](super::backend::AudioBackend::poll) reports it.
 //!
 //! For the double-audio check, each mock output has a mute, a volume and the
@@ -30,10 +31,11 @@ use audiosync_core::volume::SharedGain;
 
 use super::airplay::FeedLease;
 use super::backend::{BackendError, OutputKind};
-use super::capture::{Activation, CAPTURE_ATTEMPTS, CaptureAttempt, LoopbackMode};
+use super::capture::{CAPTURE_ATTEMPTS, CaptureAttempt, CaptureTarget, LoopbackMode};
 use super::controller::{CaptureHandle, CaptureState, Controller, Driver, RendererHandle};
 use super::outputs::{
-    Endpoint, EndpointReading, Listing, RenderFormat, StreamSetup, list_endpoints,
+    Endpoint, EndpointProperties, EndpointReading, Listing, RenderFormat, StreamSetup,
+    list_endpoints,
 };
 use super::process::{ProcessEntry, ProcessTable};
 use super::routing::{EndpointAudio, EndpointVolume};
@@ -128,7 +130,7 @@ struct DeviceVolumes {
 
 /// What a mock capture shares with the driver.
 struct CaptureLink {
-    activation: Activation,
+    target: CaptureTarget,
     state: CaptureState,
     /// The ring writer, until the capture stops.
     writer: Option<RingWriter>,
@@ -224,6 +226,8 @@ pub struct MockDriver {
     processes: Vec<ProcessEntry>,
     session_pids: Vec<u32>,
     outputs: Vec<Endpoint>,
+    /// The active capture endpoints, as Windows would describe them.
+    inputs: Vec<EndpointReading>,
     /// Endpoints as Windows would describe them, which go through the
     /// listing's own rules.
     readings: Vec<EndpointReading>,
@@ -245,7 +249,7 @@ pub struct MockDriver {
     endpoint_audio_error: Option<BackendError>,
     faded: Arc<AtomicUsize>,
     hold_fades: Arc<AtomicBool>,
-    captures_started: Vec<Activation>,
+    captures_started: Vec<CaptureTarget>,
     renderers_started: Vec<String>,
     /// Every capture start asked for, refused ones included.
     capture_attempts: usize,
@@ -281,6 +285,7 @@ impl MockDriver {
             ],
             session_pids: Vec::new(),
             outputs: Vec::new(),
+            inputs: Vec::new(),
             readings: Vec::new(),
             changed: false,
             listing_error: None,
@@ -302,7 +307,7 @@ impl MockDriver {
     }
 
     /// Every capture started, in order.
-    pub fn captures_started(&self) -> &[Activation] {
+    pub fn captures_started(&self) -> &[CaptureTarget] {
         &self.captures_started
     }
 
@@ -447,6 +452,13 @@ impl Driver for MockDriver {
         std::mem::take(&mut self.changed)
     }
 
+    fn inputs(&mut self) -> Result<Vec<EndpointReading>, BackendError> {
+        if let Some(error) = &self.listing_error {
+            return Err(error.clone());
+        }
+        Ok(self.inputs.clone())
+    }
+
     fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError> {
         if let Some(error) = &self.endpoint_audio_error {
             return Err(error.clone());
@@ -541,7 +553,7 @@ impl Driver for MockDriver {
 
     fn start_capture(
         &mut self,
-        activation: Activation,
+        target: CaptureTarget,
         writer: RingWriter,
         equalizer: EqProcessor,
         airplay: Option<FeedLease>,
@@ -550,9 +562,17 @@ impl Driver for MockDriver {
         if let Some(error) = &self.capture_error {
             return Err(error.clone());
         }
-        self.captures_started.push(activation);
+        if let CaptureTarget::Input { endpoint_id } = &target
+            && !self
+                .inputs
+                .iter()
+                .any(|input| input.id.as_deref() == Ok(endpoint_id.as_str()))
+        {
+            return Err(BackendError::InputGone);
+        }
+        self.captures_started.push(target.clone());
         let link = Arc::new(Mutex::new(CaptureLink {
-            activation,
+            target,
             state: CaptureState::Running,
             writer: Some(writer),
             equalizer,
@@ -676,11 +696,49 @@ impl Controller<MockDriver> {
             .retain(|&session_pid| session_pid != pid);
         if let Some(link) = &driver.capture {
             let mut link = lock(link);
-            if link.activation.mode == LoopbackMode::IncludeTree
-                && link.activation.target_pid == pid
-                && link.state == CaptureState::Running
-            {
+            let captures_app = matches!(
+                link.target,
+                CaptureTarget::Loopback(activation)
+                    if activation.mode == LoopbackMode::IncludeTree && activation.target_pid == pid
+            );
+            if captures_app && link.state == CaptureState::Running {
                 link.state = CaptureState::SourceQuit;
+            }
+        }
+    }
+
+    /// Connects an input device, or renames a connected one. `enumerator`
+    /// is its device's enumerator name, as Windows reports it.
+    pub fn connect_input(&mut self, id: &str, name: &str, enumerator: &str) {
+        let driver = self.driver_mut();
+        driver.inputs.retain(|input| input.id.as_deref() != Ok(id));
+        let index = driver.inputs.len() as u32;
+        driver.inputs.push(EndpointReading {
+            index,
+            id: Ok(id.to_owned()),
+            properties: Ok(EndpointProperties {
+                name: Some(name.to_owned()),
+                enumerator: Some(enumerator.to_owned()),
+                ..EndpointProperties::default()
+            }),
+        });
+        driver.changed = true;
+    }
+
+    /// Unplugs an input device. A capture from it fails as Windows fails it,
+    /// with its stream invalidated.
+    pub fn disconnect_input(&mut self, id: &str) {
+        let driver = self.driver_mut();
+        driver.inputs.retain(|input| input.id.as_deref() != Ok(id));
+        driver.changed = true;
+        if let Some(link) = &driver.capture {
+            let mut link = lock(link);
+            let captures_it = matches!(
+                &link.target,
+                CaptureTarget::Input { endpoint_id } if endpoint_id == id
+            );
+            if captures_it && link.state == CaptureState::Running {
+                link.state = CaptureState::Failed(BackendError::DeviceGone);
             }
         }
     }
