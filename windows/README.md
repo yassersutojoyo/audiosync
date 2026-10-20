@@ -90,7 +90,11 @@ another kind of pairing (the Apple TV code above is the one AudioSync does),
 and speakers that only play AirPlay 2. They're listed with a note saying so,
 and AudioSync never connects to them. Windows Firewall may ask whether AudioSync can use the
 network the first time it looks for speakers; it needs private networks for
-AirPlay.
+AirPlay. If you said no, or Windows counts your network as Public (new
+networks start out that way), AirPlay speakers can't be found: after 20
+seconds the speaker list says so. Set the network to Private in Settings >
+Network & internet, or allow AudioSync on Public networks too in Windows
+Security > Firewall & network protection > Allow an app through firewall.
 
 If something acts up, start it from PowerShell with
 `$env:AUDIOSYNC_DEBUG=1; .\audiosync.exe` and read
