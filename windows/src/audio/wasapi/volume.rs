@@ -18,8 +18,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
-use std::thread::JoinHandle;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
 use windows::Win32::Foundation::E_FAIL;
@@ -32,7 +31,10 @@ use windows::Win32::System::Com::CLSCTX_ALL;
 use windows::core::HSTRING;
 use windows_core::implement;
 
-use super::com::{Apartment, READY_TIMEOUT, Ready, device_error, spawn_ready_within};
+use super::com::{
+    Apartment, Awaited, READY_TIMEOUT, Ready, Running, StuckThreads, WINDOWS_AUDIO, Worker,
+    awaited, device_error, spawn_worker_within,
+};
 use super::devices::enumerator;
 use crate::audio::backend::BackendError;
 use crate::audio::routing::EndpointVolume;
@@ -60,26 +62,40 @@ enum Command {
     Watch {
         id: String,
         flag: Arc<AtomicBool>,
-        reply: mpsc::Sender<Result<(), BackendError>>,
+        reply: Reply<()>,
     },
     /// Unregister the endpoint's listener.
     Unwatch(String),
     /// Read the endpoint's mute and master volume, and answer.
     Read {
         id: String,
-        reply: mpsc::Sender<Result<EndpointVolume, BackendError>>,
+        reply: Reply<EndpointVolume>,
     },
     /// Set the endpoint's master volume, 0 to 1, and answer.
     SetLevel {
         id: String,
         level: f32,
-        reply: mpsc::Sender<Result<(), BackendError>>,
+        reply: Reply<()>,
     },
     /// Unmute the endpoint, and answer.
-    Unmute {
-        id: String,
-        reply: mpsc::Sender<Result<(), BackendError>>,
-    },
+    Unmute { id: String, reply: Reply<()> },
+}
+
+/// Where the listener thread answers a call. The call counts as returned
+/// once this goes, answered or not, which ends its stuck count if the caller
+/// gave it up.
+struct Reply<T> {
+    sender: mpsc::Sender<Result<T, BackendError>>,
+    _call: Running,
+}
+
+impl<T> Reply<T> {
+    fn send(
+        &self,
+        answer: Result<T, BackendError>,
+    ) -> Result<(), mpsc::SendError<Result<T, BackendError>>> {
+        self.sender.send(answer)
+    }
 }
 
 /// The Windows calls the listener thread makes on the endpoints: through
@@ -144,25 +160,6 @@ impl Endpoints for Windows {
     }
 }
 
-/// A call the caller stopped waiting for: it knows whether the thread making
-/// it is still in it.
-struct Late(Box<dyn Fn() -> bool + Send>);
-
-impl Late {
-    /// The call whose answer comes on `answer`, or which ends when the
-    /// sender of `answer` goes.
-    fn on<T: Send + 'static>(answer: mpsc::Receiver<T>) -> Late {
-        Late(Box::new(move || {
-            matches!(answer.try_recv(), Err(TryRecvError::Empty))
-        }))
-    }
-
-    /// Whether the call still hasn't returned.
-    fn pending(&self) -> bool {
-        (self.0)()
-    }
-}
-
 /// Reads, follows and sets the volume of the endpoints it is asked to, all
 /// through a thread of its own, which also holds the listeners. Dropping it
 /// unregisters them all.
@@ -172,9 +169,11 @@ impl Late {
 /// up ([`BackendError::NotResponding`]): a read shows no device volume for
 /// now, a write may still happen, and a listener registered late is dropped
 /// as soon as its call returns. Until that call returns the thread is stuck,
-/// so further calls fail at once instead of each waiting again.
+/// so further calls fail at once instead of each waiting again. A call given
+/// up counts as stuck ([`WINDOWS_AUDIO`]) until it returns: Windows audio
+/// hangs, and the other audio threads' drops wait only a grace meanwhile.
 ///
-/// Dropping it waits for the thread to end as long as an answer at most:
+/// Dropping it waits for the thread to end as a [`Worker`] does:
 /// unregistering a listener answers nothing, and can hang too.
 pub(super) struct VolumeWatcher {
     commands: Option<mpsc::Sender<Command>>,
@@ -182,34 +181,34 @@ pub(super) struct VolumeWatcher {
     flags: BTreeMap<String, Arc<AtomicBool>>,
     /// How long an answer is waited for.
     answer_timeout: Duration,
+    /// Where a call given up is counted.
+    stuck: &'static StuckThreads,
     /// The call given up last, until it returns.
-    late: Option<Late>,
-    thread: Option<JoinHandle<()>>,
-    /// Disconnects when the thread ends, whichever way it does.
-    ended: mpsc::Receiver<()>,
+    late: Option<Awaited>,
+    thread: Worker,
 }
 
 impl VolumeWatcher {
     /// The watcher whose listener thread runs `body`, waiting
-    /// `answer_timeout` at most for the thread's start and for each answer.
+    /// `answer_timeout` at most for the thread's start and for each answer,
+    /// and counting the thread or a call given up in `stuck`.
     fn start_with(
         answer_timeout: Duration,
+        stuck: &'static StuckThreads,
         body: impl FnOnce(&mpsc::Receiver<Command>, Ready) + Send + 'static,
     ) -> Result<VolumeWatcher, BackendError> {
         let (commands, received) = mpsc::channel();
-        let (running, ended) = mpsc::channel::<()>();
-        let (thread, ()) = spawn_ready_within("audiosync-volumes", answer_timeout, move |ready| {
-            // Goes when the thread ends, a panic included.
-            let _running = running;
-            body(&received, ready);
-        })?;
+        let (thread, ()) =
+            spawn_worker_within("audiosync-volumes", answer_timeout, stuck, move |ready| {
+                body(&received, ready);
+            })?;
         Ok(VolumeWatcher {
             commands: Some(commands),
             flags: BTreeMap::new(),
             answer_timeout,
+            stuck,
             late: None,
-            thread: Some(thread),
-            ended,
+            thread,
         })
     }
 
@@ -219,7 +218,7 @@ impl VolumeWatcher {
     /// or at once while the thread is still in a call given up before.
     fn ask<T: Send + 'static>(
         &mut self,
-        request: impl FnOnce(mpsc::Sender<Result<T, BackendError>>) -> Command,
+        request: impl FnOnce(Reply<T>) -> Command,
     ) -> Result<T, BackendError> {
         if self.stuck() {
             return Err(BackendError::NotResponding);
@@ -229,13 +228,20 @@ impl VolumeWatcher {
             code: E_FAIL.0,
         };
         let commands = self.commands.as_ref().ok_or_else(|| gone.clone())?;
-        let (reply, answer) = mpsc::channel();
+        let (sender, answer) = mpsc::channel();
+        let (call, end) = awaited(self.stuck);
+        let reply = Reply {
+            sender,
+            _call: call,
+        };
         commands.send(request(reply)).map_err(|_| gone.clone())?;
         match answer.recv_timeout(self.answer_timeout) {
             Ok(answered) => answered,
             Err(RecvTimeoutError::Disconnected) => Err(gone),
             Err(RecvTimeoutError::Timeout) => {
-                self.late = Some(Late::on(answer));
+                if end.let_go() {
+                    self.late = Some(end);
+                }
                 Err(BackendError::NotResponding)
             }
         }
@@ -244,7 +250,7 @@ impl VolumeWatcher {
     /// Whether the listener thread is still in the call given up last: its
     /// answer hasn't come yet.
     fn stuck(&mut self) -> bool {
-        let still = self.late.as_ref().is_some_and(Late::pending);
+        let still = self.late.as_ref().is_some_and(Awaited::pending);
         if !still {
             self.late = None;
         }
@@ -332,7 +338,7 @@ impl VolumeWatcher {
 pub(super) struct Volumes {
     watcher: Option<VolumeWatcher>,
     /// The start given up last, until its thread ends.
-    late_start: Option<Late>,
+    late_start: Option<Awaited>,
 }
 
 impl Volumes {
@@ -343,33 +349,36 @@ impl Volumes {
 
     /// The watcher, its thread started now when it doesn't run yet.
     pub(super) fn watcher(&mut self) -> Result<&mut VolumeWatcher, BackendError> {
-        self.watcher_with(READY_TIMEOUT, listen)
+        self.watcher_with(READY_TIMEOUT, &WINDOWS_AUDIO, listen)
     }
 
-    /// [`Volumes::watcher`], whose thread runs `body` and is waited for
-    /// `timeout` at most. [`BackendError::NotResponding`] when the start
-    /// doesn't answer in time, or at once while a start given up before
-    /// still hangs.
+    /// [`Volumes::watcher`], whose thread runs `body`, is waited for
+    /// `timeout` at most and counts in `stuck` when let go.
+    /// [`BackendError::NotResponding`] when the start doesn't answer in time,
+    /// or at once while a start given up before still hangs.
     fn watcher_with(
         &mut self,
         timeout: Duration,
+        stuck: &'static StuckThreads,
         body: impl FnOnce(&mpsc::Receiver<Command>, Ready) + Send + 'static,
     ) -> Result<&mut VolumeWatcher, BackendError> {
         let watcher = match self.watcher.take() {
             Some(watcher) => watcher,
             None => {
-                if self.late_start.as_ref().is_some_and(Late::pending) {
+                if self.late_start.as_ref().is_some_and(Awaited::pending) {
                     return Err(BackendError::NotResponding);
                 }
-                let (running, ended) = mpsc::channel::<()>();
-                let started = VolumeWatcher::start_with(timeout, move |commands, ready| {
+                // Only looked at here: the thread itself counts as stuck
+                // once its start is given up.
+                let (running, start) = awaited(stuck);
+                let started = VolumeWatcher::start_with(timeout, stuck, move |commands, ready| {
                     // Goes when the thread ends, whichever way it does.
                     let _running = running;
                     body(commands, ready);
                 });
                 // A thread that couldn't start has ended already; one that
                 // didn't answer in time ends once its call returns.
-                self.late_start = started.is_err().then(|| Late::on(ended));
+                self.late_start = started.is_err().then_some(start);
                 started?
             }
         };
@@ -381,18 +390,15 @@ impl Drop for VolumeWatcher {
     fn drop(&mut self) {
         // The thread ends, unregistering every listener, once the channel
         // closes. One still in a call given up before isn't waited for at
-        // all; any other is waited for as long as an answer at most, since
-        // unregistering can hang too (the requests queued before this one
-        // included). A thread that doesn't end in time is left to finish
-        // once its calls return: waiting for it would hold AudioSync's exit.
+        // all; any other is waited for as a Worker is, since unregistering
+        // can hang too (the requests queued before this one included). A
+        // thread that doesn't end in time is left to finish once its calls
+        // return: waiting for it would hold AudioSync's exit.
         self.commands = None;
-        let stuck = self.stuck();
-        if let Some(thread) = self.thread.take()
-            && !stuck
-            && let Err(RecvTimeoutError::Disconnected) =
-                self.ended.recv_timeout(self.answer_timeout)
-        {
-            let _ = thread.join();
+        if self.stuck() {
+            self.thread.let_go();
+        } else {
+            self.thread.finish();
         }
     }
 }
@@ -499,6 +505,7 @@ mod tests {
     use std::thread;
     use std::time::Instant;
 
+    use super::super::com::STUCK_GRACE;
     use super::*;
 
     /// What the fake listener thread did, in order: "+id" for a listener
@@ -701,10 +708,11 @@ mod tests {
 
     #[test]
     fn a_volume_listener_that_doesnt_answer_in_time_is_given_up_and_its_late_registration_undone() {
+        static STUCK: StuckThreads = StuckThreads::new();
         let (gate, hold) = mpsc::channel();
         let done = Done::default();
-        let watcher =
-            VolumeWatcher::start_with(TIMEOUT, hanging(hold, done.clone())).expect("it starts");
+        let watcher = VolumeWatcher::start_with(TIMEOUT, &STUCK, hanging(hold, done.clone()))
+            .expect("it starts");
         // Windows audio hangs in the first registration: given up after the
         // wait, as no device volume for now.
         let (mut watcher, answer) = within(move || {
@@ -747,10 +755,11 @@ mod tests {
 
     #[test]
     fn a_volume_read_or_fix_that_doesnt_answer_in_time_is_given_up_without_freezing_the_caller() {
+        static STUCK: StuckThreads = StuckThreads::new();
         let (gate, hold) = mpsc::channel();
         let done = Done::default();
-        let watcher =
-            VolumeWatcher::start_with(TIMEOUT, hanging(hold, done.clone())).expect("it starts");
+        let watcher = VolumeWatcher::start_with(TIMEOUT, &STUCK, hanging(hold, done.clone()))
+            .expect("it starts");
         // Windows audio hangs in a read the UI thread asked for: the call
         // returns after the wait, as no device volume for now.
         let (mut watcher, read) = within(move || {
@@ -803,10 +812,11 @@ mod tests {
 
     #[test]
     fn a_volume_thread_that_hangs_unregistering_a_listener_doesnt_hold_quitting() {
+        static STUCK: StuckThreads = StuckThreads::new();
         let (gate, hold) = mpsc::channel();
         let done = Done::default();
         let mut watcher =
-            VolumeWatcher::start_with(TIMEOUT, hanging_unregistration(hold, done.clone()))
+            VolumeWatcher::start_with(TIMEOUT, &STUCK, hanging_unregistration(hold, done.clone()))
                 .expect("it starts");
         gate.send(()).expect("the thread waits");
         assert_eq!(watcher.watch("speakers"), Ok(()));
@@ -835,7 +845,7 @@ mod tests {
         let (gate, hold) = mpsc::channel();
         let done = Done::default();
         let mut watcher =
-            VolumeWatcher::start_with(TIMEOUT, hanging_unregistration(hold, done.clone()))
+            VolumeWatcher::start_with(TIMEOUT, &STUCK, hanging_unregistration(hold, done.clone()))
                 .expect("it starts");
         gate.send(()).expect("the thread waits");
         assert_eq!(watcher.watch("headphones"), Ok(()));
@@ -844,15 +854,102 @@ mod tests {
         done.wait_for(&["+headphones", "-headphones"]);
     }
 
+    /// A thread like the capture's, whose answers are waited for `timeout`
+    /// at most, and which hangs stopping its stream until `hung` closes.
+    fn hanging_capture(
+        stuck: &'static StuckThreads,
+        timeout: Duration,
+        hung: mpsc::Receiver<()>,
+    ) -> Worker {
+        let (worker, ()) = spawn_worker_within("audiosync-test", timeout, stuck, move |ready| {
+            if ready.ok(()) {
+                let _ = hung.recv();
+            }
+        })
+        .expect("it starts");
+        worker
+    }
+
+    #[test]
+    fn a_volume_call_given_up_counts_as_stuck_until_it_returns() {
+        static STUCK: StuckThreads = StuckThreads::new();
+        let (gate, hold) = mpsc::channel();
+        let done = Done::default();
+        let watcher = VolumeWatcher::start_with(TIMEOUT, &STUCK, hanging(hold, done.clone()))
+            .expect("it starts");
+        let (watcher, read) = within(move || {
+            let mut watcher = watcher;
+            let read = watcher.read("speakers");
+            (watcher, read)
+        });
+        assert_eq!(read, Err(BackendError::NotResponding));
+        // Windows audio hangs: the other audio threads' drops wait only a
+        // grace from now on.
+        assert!(STUCK.any(), "the call counts as stuck");
+
+        // AudioSync quits meanwhile: the capture, which hangs stopping its
+        // stream in the same Windows audio, is waited for only a grace,
+        // however long its own answer timeout, and the volume thread, still
+        // in the call given up, not at all.
+        let (capture_answer, capture_hung) = mpsc::channel();
+        let capture = hanging_capture(&STUCK, LIMIT * 2, capture_hung);
+        let quitting = Instant::now();
+        drop(capture);
+        drop(watcher);
+        let waited = quitting.elapsed();
+        assert!(waited < STUCK_GRACE * 4, "quitting waited {waited:?}");
+
+        // Windows audio answers: the call returns, and every thread ends.
+        gate.send(()).expect("the thread waits");
+        done.wait_for(&["read speakers"]);
+        drop(capture_answer);
+        assert!(STUCK.none_within(LIMIT), "nothing is stuck anymore");
+    }
+
+    #[test]
+    fn while_another_audio_thread_is_stuck_the_volume_thread_is_waited_for_only_a_grace() {
+        static STUCK: StuckThreads = StuckThreads::new();
+        // The capture hung stopping its stream and was let go.
+        let (capture_answer, capture_hung) = mpsc::channel();
+        drop(hanging_capture(&STUCK, TIMEOUT, capture_hung));
+        assert!(STUCK.any(), "the capture counts as stuck");
+        // The volume thread, whose answers are waited for long, hangs
+        // unregistering a listener as AudioSync quits: waited for only a
+        // grace.
+        let (gate, hold) = mpsc::channel();
+        let done = Done::default();
+        let mut watcher = VolumeWatcher::start_with(
+            LIMIT * 2,
+            &STUCK,
+            hanging_unregistration(hold, done.clone()),
+        )
+        .expect("it starts");
+        gate.send(()).expect("the thread waits");
+        assert_eq!(watcher.watch("speakers"), Ok(()));
+        let quitting = Instant::now();
+        drop(watcher);
+        let waited = quitting.elapsed();
+        assert!(
+            waited >= STUCK_GRACE / 2 && waited < STUCK_GRACE * 4,
+            "the drop waited {waited:?}"
+        );
+        // Windows audio answers: both end by themselves.
+        gate.send(()).expect("the thread waits");
+        done.wait_for(&["+speakers", "-speakers"]);
+        drop(capture_answer);
+        assert!(STUCK.none_within(LIMIT), "nothing is stuck anymore");
+    }
+
     #[test]
     fn a_volume_thread_that_doesnt_start_in_time_holds_no_later_start() {
+        static STUCK: StuckThreads = StuckThreads::new();
         let (gate, hold) = mpsc::channel();
         // Windows audio hangs while the listener thread sets up: given up
         // after the wait.
         let (mut volumes, started) = within(move || {
             let mut volumes = Volumes::default();
             let started = volumes
-                .watcher_with(TIMEOUT, hanging_start(hold))
+                .watcher_with(TIMEOUT, &STUCK, hanging_start(hold))
                 .map(|_| ());
             (volumes, started)
         });
@@ -863,7 +960,7 @@ mod tests {
         let tried = Arc::new(AtomicBool::new(false));
         let also = Arc::clone(&tried);
         let again = volumes
-            .watcher_with(TIMEOUT, move |_, ready| {
+            .watcher_with(TIMEOUT, &STUCK, move |_, ready| {
                 also.store(true, Ordering::Release);
                 let _ = ready.ok(());
             })
@@ -876,7 +973,7 @@ mod tests {
         gate.send(()).expect("the thread waits");
         let until = Instant::now() + LIMIT;
         loop {
-            match volumes.watcher_with(TIMEOUT, idle()).map(|_| ()) {
+            match volumes.watcher_with(TIMEOUT, &STUCK, idle()).map(|_| ()) {
                 Ok(()) => break,
                 Err(BackendError::NotResponding) if Instant::now() < until => {
                     thread::sleep(Duration::from_millis(5));

@@ -277,6 +277,10 @@ struct Session<D: Driver> {
     /// Polls left in the trial of a capture that started again after a loss
     /// ([`RESTART_TRIAL_POLLS`]); 0 for one that runs as it should.
     trial_polls: u32,
+    /// Whether the capture started without the AirPlay sender's feed because
+    /// an earlier capture, let go while Windows audio hung, still held it:
+    /// the session starts again once that one gives it back.
+    waits_for_feed: bool,
 }
 
 /// A playing output and the handles its delay and gain are changed through.
@@ -1065,7 +1069,9 @@ impl<D: Driver> Controller<D> {
 
     /// Drops what `entry` holds: an ended session's capture first, then the
     /// outputs (S115, S186), then the ring. The capture and each renderer
-    /// wait for their threads before the ring they use is freed (S134).
+    /// wait for their threads before the ring they use is freed (S134); a
+    /// thread let go because Windows audio doesn't answer holds its share
+    /// of the ring until it ends.
     fn retire(&mut self, entry: Retiring<D>, faded: bool, waited: Duration) {
         let Retiring {
             outputs, session, ..
@@ -1193,6 +1199,39 @@ impl<D: Driver> Controller<D> {
         Ok(())
     }
 
+    /// Starts the session again once the AirPlay sender's feed, which an
+    /// earlier capture let go while Windows audio hung still held when it
+    /// started, is back in its slot: the capture can't take a feed while it
+    /// runs, as for Retry. Streaming stays on meanwhile.
+    fn take_back_feed(&mut self) {
+        let Some(source) = self
+            .session
+            .as_ref()
+            .filter(|session| session.waits_for_feed)
+            .map(|session| session.source.clone())
+        else {
+            return;
+        };
+        if !self.feed.as_ref().is_some_and(FeedSlot::is_free) {
+            return;
+        }
+        self.log.log(|| {
+            "the AirPlay feed is back from the capture that hung: the capture starts again to \
+             feed the speakers"
+                .to_owned()
+        });
+        self.end_session();
+        if let Err(error) = self.begin_session(&source) {
+            self.log
+                .log(|| format!("the capture couldn't start again with the feed: {error}"));
+            self.airplay_streaming(false);
+            self.release_busy();
+            self.pending.push(BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(error),
+            });
+        }
+    }
+
     /// Ends the session whose capture was lost because Windows audio
     /// restarted or its device went away, and starts it again
     /// [`RESTART_DELAY_POLLS`] polls later (`start_when_faded`), up to
@@ -1305,11 +1344,19 @@ impl<D: Driver> Controller<D> {
         equalizer.set_settings(self.equalizer);
         let feed = self.feed.as_ref().and_then(FeedSlot::lease);
         let feeds_airplay = feed.is_some();
+        let waits_for_feed = self.feed.is_some() && !feeds_airplay;
         let capture = self
             .driver
             .start_capture(activation, writer, processor, feed)?;
         self.log
             .log(|| describe_capture_start(activation, capture.setup(), feeds_airplay));
+        if waits_for_feed {
+            self.log.log(|| {
+                "the AirPlay feed is still held by an earlier capture that hung: the capture \
+                 starts again once it's back"
+                    .to_owned()
+            });
+        }
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.restart_timeline();
         }
@@ -1321,6 +1368,7 @@ impl<D: Driver> Controller<D> {
             equalizer,
             outputs: BTreeMap::new(),
             trial_polls: 0,
+            waits_for_feed,
         });
         self.refresh_if_needed(false);
         let failures = self.sync_outputs();
@@ -1866,6 +1914,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
             self.release_busy();
             self.pending.push(BackendEvent::Stopped { reason });
         }
+        self.take_back_feed();
 
         // What the AirPlay sender reported.
         if let Some(airplay) = self.airplay.as_mut() {
@@ -4571,6 +4620,42 @@ mod tests {
         assert_eq!(fake.take_calls(), [Call::Remove(id.clone())]);
         assert!(feed.is_free(), "the feed is back for the next capture");
         assert_eq!(backend.enabled_airplay(), [id], "it stays on");
+    }
+
+    #[test]
+    fn a_capture_started_while_a_hung_one_holds_the_airplay_feed_takes_it_once_its_back() {
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        let feed = FeedSlot::new(input);
+        backend.set_airplay(fake.link(), Some(feed.clone()));
+        // The last capture, let go while Windows audio hung, still holds the
+        // feed: the next one starts without it.
+        let held = feed.lease().expect("the feed is free");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(!backend.driver().capture_feeds_airplay());
+        backend.poll();
+        assert!(!backend.driver().capture_feeds_airplay(), "still held");
+
+        // Windows audio answers: that capture ends and gives the feed back,
+        // and the session starts again to feed the speakers, streaming on.
+        drop(held);
+        let events = backend.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::Stopped { .. })),
+            "{events:?}"
+        );
+        assert!(
+            backend.driver().capture_feeds_airplay(),
+            "the capture feeds the speakers"
+        );
+        assert!(!feed.is_free(), "the new capture holds the feed");
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        backend.poll();
+        assert!(backend.driver().capture_feeds_airplay(), "it starts once");
     }
 
     #[test]
