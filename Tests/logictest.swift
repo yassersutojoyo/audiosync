@@ -2784,6 +2784,19 @@ do {
     check(steady == LocalOutputSync.Applied() && stale.tried == ["usb"],
           "EC1 new ID: the next sync leaves the restarted speaker alone",
           "\(steady)")
+
+    // EC1 + S69: the restart on the new ID won't start. The speaker is
+    // reported and switched off, and nothing is left bound to either ID.
+    let refused = RefusingEngine(active: ["usb"], refusing: ["usb"])
+    let failedRestart = LocalOutputSync.apply(enabled: ["usb"], listing: [usbAgain], to: refused, bound: ["usb": 52],
+                                              holdBacks: [:], gain: { _ in 1 })
+    let afterRestart = LocalOutputSync.report(failedRestart.failures, enabled: ["usb"], origin: .automatic)
+    check(refused.removed == ["usb"] && refused.activeOutputUIDs.isEmpty && failedRestart.restarted == ["usb"]
+            && failedRestart.failures == [F(uid: "usb", deviceName: "USB DAC")]
+            && failedRestart.attached.isEmpty && failedRestart.devices.isEmpty && failedRestart.detached.isEmpty
+            && afterRestart?.enabled == [] && afterRestart?.notices.map(\.uid) == ["usb"],
+          "EC1 new ID: a restart that won't start is reported and switched off, with no device left bound",
+          "removed \(refused.removed), applied \(failedRestart), report \(String(describing: afterRestart))")
 }
 
 // MARK: Launch, second launch and session events (AppLifecycle.swift)

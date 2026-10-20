@@ -30,6 +30,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Building from source also finds Rust when it's installed through Homebrew's rustup.
 - A Bluetooth speaker, or any other output that runs at 44.1 kHz, no longer crackles when you switch it on. It used to run short of audio for a moment at the start. This goes for the Windows version too.
 - A delay you type, for a speaker or for AirPlay, now applies when you press Return or leave the field, not at every keystroke, so typing 220 no longer jumps through 2 and 22 ms on the way. Escape drops what you typed, and a value you typed is still kept if you quit before pressing Return.
+- A USB or Bluetooth speaker that came back after being unplugged or disconnected could look like it was playing and still stay silent. It plays again now.
 
 ### Windows (preview, not released yet)
 
