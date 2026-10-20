@@ -658,6 +658,16 @@ pub fn render_buffer_hns(default_period_hns: i64) -> i64 {
         .clamp(MIN_RENDER_BUFFER_HNS, MAX_RENDER_BUFFER_HNS)
 }
 
+/// The frames of one device period at `rate`, rounded up: what each wake of
+/// an event-driven shared-mode stream refills when it is on time, which the
+/// output's lead counts (S206). A period that isn't positive gives 0 (the
+/// lead then goes by the callbacks), and one longer than
+/// [`MAX_RENDER_BUFFER_HNS`] counts as that.
+pub fn period_frames(default_period_hns: i64, rate: u32) -> usize {
+    let hns = default_period_hns.clamp(0, MAX_RENDER_BUFFER_HNS) as u64;
+    (hns * u64::from(rate)).div_ceil(1000 * HNS_PER_MS as u64) as usize
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1295,5 +1305,16 @@ mod tests {
         assert_eq!(render_buffer_hns(0), MIN_RENDER_BUFFER_HNS);
         assert_eq!(render_buffer_hns(-1), MIN_RENDER_BUFFER_HNS);
         assert_eq!(render_buffer_hns(i64::MAX), MAX_RENDER_BUFFER_HNS);
+    }
+
+    // covers: S206
+    #[test]
+    fn a_period_in_frames_is_rounded_up() {
+        assert_eq!(period_frames(100_000, 48_000), 480, "10 ms");
+        assert_eq!(period_frames(100_000, 44_100), 441);
+        assert_eq!(period_frames(30_000, 44_100), 133, "3 ms is 132.3 frames");
+        assert_eq!(period_frames(0, 48_000), 0);
+        assert_eq!(period_frames(-1, 48_000), 0);
+        assert_eq!(period_frames(i64::MAX, 48_000), 9_600, "at most 200 ms");
     }
 }

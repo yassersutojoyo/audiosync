@@ -355,7 +355,8 @@ impl CaptureConverter {
     /// `AUDCLNT_BUFFERFLAGS_SILENT`) writes `frames` frames of silence,
     /// whatever `data` holds; it still runs through the equalizer, so the
     /// filters ring out as they would on any quiet passage. The AirPlay
-    /// sender gets the packet as audio that arrived now.
+    /// sender gets the packet as audio that arrived now. However many writes
+    /// the packet takes, the ring counts it as one block (S206).
     pub fn push(&mut self, data: &[u8], frames: usize, silent: bool) {
         let arrived = Instant::now();
         let block = self.format.block_align();
@@ -382,11 +383,12 @@ impl CaptureConverter {
             self.write_stereo(n, arrived);
             done += n;
         }
+        self.writer.end_block();
     }
 
     /// Writes the first `frames` frames of `stereo`, resampled if needed and
-    /// equalized, and hands them to the AirPlay sender as audio that arrived
-    /// at `arrived`.
+    /// equalized, as part of the packet's block, and hands them to the
+    /// AirPlay sender as audio that arrived at `arrived`.
     fn write_stereo(&mut self, frames: usize, arrived: Instant) {
         let CaptureConverter {
             writer,
@@ -401,7 +403,7 @@ impl CaptureConverter {
             None => {
                 let block = &mut stereo[..frames * 2];
                 equalizer.process(block);
-                writer.write(block, frames);
+                writer.write_part(block, frames);
                 if let Some(airplay) = airplay {
                     airplay.push(block, frames, arrived);
                 }
@@ -413,7 +415,7 @@ impl CaptureConverter {
                     let (used, produced) = resampler.process(&input[consumed * 2..], resampled);
                     let block = &mut resampled[..produced * 2];
                     equalizer.process(block);
-                    writer.write(block, produced);
+                    writer.write_part(block, produced);
                     if let Some(airplay) = airplay.as_mut() {
                         airplay.push(block, produced, arrived);
                     }
@@ -1114,9 +1116,9 @@ mod tests {
             converter.push(&vec![0u8; frames * align], frames, false);
             let packet = usize::try_from(ring.frames_written()).unwrap();
             assert!(packet > CONVERT_CHUNK * 2, "{} Hz: {packet}", format.rate);
-            assert_eq!(ring.last_block_frames(), packet, "{} Hz", format.rate);
+            assert_eq!(ring.block_frames(), packet, "{} Hz", format.rate);
             converter.push(&vec![0u8; 37 * align], 37, false);
-            assert_eq!(ring.last_block_frames(), packet, "{} Hz", format.rate);
+            assert_eq!(ring.block_frames(), packet, "{} Hz", format.rate);
         }
     }
 

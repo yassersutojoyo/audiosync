@@ -2,22 +2,27 @@
 //! output whose pulls can't line up with the blocks the capture writes (it
 //! converts rates, like a 44.1 kHz Bluetooth speaker fed from a 48 kHz
 //! session) never runs dry after its start, whatever the phase between the
-//! two clocks; a callback that takes several reads judges drift once; and an
-//! output whose hold-back covers the lead keeps its timing exactly.
+//! two clocks, or right after a short write; a callback that takes several
+//! reads judges drift once; one late, larger callback never raises the lead
+//! for good; an output whose hold-back covers the lead keeps its timing
+//! exactly; and an earliest output at its lead and one held back keep the
+//! difference S206 gives them.
 //!
 //! The capture writes fixed blocks at 48 kHz on its own clock (512 frames,
 //! the Mac's tap; 480, a Windows loopback period); the device pulls fixed
 //! callbacks at its own rate on its own clock. Each run is deterministic: the
 //! phase of the device's clock against the capture's varies over one capture
 //! block, and a pull due at the same instant as a write comes after it. The
-//! ring holds a constant 0.5.
+//! ring holds a constant 0.5, except where a ramp shows which frame plays.
 //!
 //! A run whose clocks are in step lasts five seconds. A converting output's
 //! clock also runs 100 ppm fast or slow, for the first second after the
 //! start: a fast clock moves the reader about 5 frames a second closer to W,
-//! inside the dead band, so in the long run a reader at a short hold-back
-//! reaches W again whatever its start (S53); the start is what S206 is about.
-//! An output at the capture rate is taken to run on the capture's clock.
+//! inside the dead band, so a reader at a short hold-back reaches W again
+//! once the lead's slack is used up (S53), 2.5 s after the start at the
+//! worst phase here. That is S206's known limit; the start is what S206 is
+//! about. An output at the capture rate is taken to run on the capture's
+//! clock.
 
 use std::sync::Arc;
 
@@ -321,6 +326,8 @@ struct LateWake {
     /// The reader's lag right after the callback that re-anchored it at
     /// the delay set again.
     lag_after_resync: Option<i64>,
+    /// The lead of every callback rendered, in order.
+    leads: Vec<i64>,
 }
 
 /// A Windows endpoint in step with a capture that writes one 10 ms block of
@@ -329,8 +336,9 @@ struct LateWake {
 /// for callback `late` comes a period late and asks for two periods
 /// (`GetCurrentPadding` found the buffer empty). Before callback `resync`
 /// the hold-back is set again (a delay change, S187), which re-anchors the
-/// reader once the fade-out is done.
-fn late_wake(device_rate: u32, late: u64, resync: u64) -> LateWake {
+/// reader once the fade-out is done. With `period_given`, the host tells the
+/// renderer its period.
+fn late_wake(device_rate: u32, late: u64, resync: u64, period_given: bool) -> LateWake {
     let block = RATE as usize / 100;
     let period = device_rate as usize / 100;
     let ring = Ring::for_rate(RATE).unwrap();
@@ -340,9 +348,13 @@ fn late_wake(device_rate: u32, late: u64, resync: u64) -> LateWake {
     control.set_delay_frames(0);
     let gain = Arc::new(SharedGain::new(1.0));
     let mut renderer = Renderer::new(reader, &control, gain, RATE, device_rate, 2).unwrap();
+    if period_given {
+        renderer.set_period_frames(period);
+    }
     write_blocks(&mut writer, block, 100);
     let mut out = vec![0.0f32; 2 * period * 2];
     let mut lag_after_resync = None;
+    let mut leads = Vec::new();
     for callback in 0..resync + 100 {
         write_blocks(&mut writer, block, 1);
         if callback == late {
@@ -357,6 +369,7 @@ fn late_wake(device_rate: u32, late: u64, resync: u64) -> LateWake {
             control.set_delay_frames(0);
         }
         renderer.render(&mut out[..frames * 2]);
+        leads.push(renderer.lead_frames());
         if lag_after_resync.is_none() && control.counters().resyncs > 0 {
             lag_after_resync = Some(control.lag_frames());
         }
@@ -364,6 +377,7 @@ fn late_wake(device_rate: u32, late: u64, resync: u64) -> LateWake {
     LateWake {
         counters: control.counters(),
         lag_after_resync,
+        leads,
     }
 }
 
@@ -373,7 +387,7 @@ fn one_late_wake_never_raises_a_48_khz_outputs_floor_for_good() {
     // The two-period callback is covered while it lasts; a second later,
     // a delay change re-anchors the output at its floor of one period
     // again, which a callback of one period reads to W.
-    let seen = late_wake(48_000, 50, 150);
+    let seen = late_wake(48_000, 50, 150, false);
     assert_eq!(seen.counters.starved_renders, 0);
     assert_eq!(seen.counters.resyncs, 1);
     assert_eq!(seen.lag_after_resync, Some(0));
@@ -386,7 +400,7 @@ fn one_late_wake_never_raises_a_converted_outputs_lead_for_good() {
     // frames; the lead is the bound on one period's reads (485) plus one
     // 480-frame block, so the read that re-anchors leaves 484 or 485.
     let lead = reader_frames_bound(441, RATE, 44_100) as i64 + 480;
-    let seen = late_wake(44_100, 50, 150);
+    let seen = late_wake(44_100, 50, 150, false);
     assert_eq!(seen.counters.starved_renders, 0);
     assert_eq!(seen.counters.resyncs, 1);
     let lag = seen.lag_after_resync.expect("the reader re-anchored");
@@ -394,6 +408,35 @@ fn one_late_wake_never_raises_a_converted_outputs_lead_for_good() {
         (lead - 481..=lead - 480).contains(&lag),
         "lag {lag} after the resync, lead {lead}"
     );
+}
+
+// covers: S187, S206
+#[test]
+fn with_its_period_given_a_late_wake_raises_the_lead_for_its_own_callback() {
+    // A Windows endpoint's period: the two-period callback (the 51st one
+    // rendered, the 50th was skipped) gets a lead of two periods, the next
+    // one is back at one, so a delay change right after the late wake
+    // re-anchors at the floor of one period.
+    let seen = late_wake(48_000, 50, 53, true);
+    assert_eq!(seen.counters.starved_renders, 0);
+    assert_eq!(seen.counters.resyncs, 1);
+    assert_eq!(seen.lag_after_resync, Some(0));
+    assert_eq!(&seen.leads[48..52], &[480, 480, 960, 480]);
+    assert!(seen.leads.iter().all(|&lead| lead == 480 || lead == 960));
+    // Without it, the larger callback counts for the next few callbacks
+    // (CALLBACK_WINDOW, this one included) and is forgotten after them.
+    let seen = late_wake(48_000, 50, 150, false);
+    assert_eq!(
+        &seen.leads[48..60],
+        &[480, 480, 960, 960, 960, 960, 960, 960, 960, 960, 480, 480]
+    );
+    // A converted output with its period given: the bound on one period's
+    // reads plus one block, two periods' in the late callback.
+    let seen = late_wake(44_100, 50, 53, true);
+    let lead = reader_frames_bound(441, RATE, 44_100) as i64 + 480;
+    let late = reader_frames_bound(882, RATE, 44_100) as i64 + 480;
+    assert_eq!(&seen.leads[48..52], &[lead, lead, late, lead]);
+    assert_eq!(seen.counters.starved_renders, 0);
 }
 
 /// Writes `frames` ramp frames from `first` on: the left sample is the

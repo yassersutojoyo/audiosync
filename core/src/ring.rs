@@ -30,6 +30,9 @@ pub const MIN_CAPTURE_RATE: u32 = 8_000;
 /// Highest capture rate the engine accepts, in Hz (S16).
 pub const MAX_CAPTURE_RATE: u32 = 384_000;
 
+/// The writer's blocks that [`Ring::block_frames`] looks back over (S206).
+pub const BLOCK_WINDOW: usize = 8;
+
 /// Why a ring could not be created or used at a rate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RingError {
@@ -77,9 +80,10 @@ pub struct Ring {
     margin: u64,
     /// W: frames written since the last reset (S37).
     written: AtomicU64,
-    /// The frame count of the writer's latest write, 0 before the first
-    /// one and after a reset (S206).
-    last_block: AtomicU64,
+    /// The largest of the writer's last [`BLOCK_WINDOW`] blocks, the open
+    /// one included, in frames; 0 before the first write and after a reset
+    /// (S206).
+    block_frames: AtomicU64,
     /// Set while a [`RingWriter`] exists.
     writer_taken: AtomicBool,
 }
@@ -111,7 +115,7 @@ impl Ring {
             capacity: capacity as u64,
             margin: margin as u64,
             written: AtomicU64::new(0),
-            last_block: AtomicU64::new(0),
+            block_frames: AtomicU64::new(0),
             writer_taken: AtomicBool::new(false),
         }))
     }
@@ -148,12 +152,14 @@ impl Ring {
         self.written.load(Ordering::Acquire)
     }
 
-    /// The frame count of the writer's latest write, 0 before the first one
-    /// and after a reset: how far W may still be from the capture's own
-    /// timeline, which a converting renderer's lead covers (S206). A relaxed
-    /// load; the writer stores it with each write.
-    pub fn last_block_frames(&self) -> usize {
-        self.last_block.load(Ordering::Relaxed) as usize
+    /// The capture's block, in frames: the largest of the writer's last
+    /// [`BLOCK_WINDOW`] blocks, the one it is writing included, so a short
+    /// block (a gap fill's tail) never hides the size of the others; 0
+    /// before the first write and after a reset. It bounds how far W may be
+    /// from the capture's own timeline, which a converting renderer's lead
+    /// covers (S206). A relaxed load; the writer stores it with each write.
+    pub fn block_frames(&self) -> usize {
+        self.block_frames.load(Ordering::Relaxed) as usize
     }
 
     /// The readable index range `[max(0, W - C + M), W)` for the current W
@@ -176,6 +182,9 @@ impl Ring {
             .ok()?;
         Some(RingWriter {
             ring: Arc::clone(self),
+            open: 0,
+            blocks: [0; BLOCK_WINDOW],
+            next: 0,
         })
     }
 
@@ -204,9 +213,20 @@ impl Ring {
 
 /// The ring's single writer (S35), used by the capture thread.
 ///
+/// It also counts the capture's blocks (S206): what one capture callback or
+/// packet writes, which [`RingWriter::write`] takes as a whole and
+/// [`RingWriter::write_part`] in pieces that [`RingWriter::end_block`]
+/// closes.
+///
 /// Dropping it lets [`Ring::writer`] hand out a new one.
 pub struct RingWriter {
     ring: Arc<Ring>,
+    /// Frames written in the open block so far.
+    open: u64,
+    /// The last [`BLOCK_WINDOW`] closed blocks, in frames.
+    blocks: [u64; BLOCK_WINDOW],
+    /// Where in `blocks` the next closed block goes.
+    next: usize,
 }
 
 impl fmt::Debug for RingWriter {
@@ -224,24 +244,59 @@ impl RingWriter {
     }
 
     /// Writes `frames` interleaved stereo frames from `interleaved` (at most
-    /// `interleaved.len() / 2`) and advances W by that count (S38). Any count
-    /// is accepted; when it exceeds C only the last C frames remain.
+    /// `interleaved.len() / 2`) as one block of their own, and advances W by
+    /// that count (S38): [`RingWriter::write_part`], then
+    /// [`RingWriter::end_block`]. Never waits, allocates or locks.
+    pub fn write(&mut self, interleaved: &[f32], frames: usize) {
+        self.write_part(interleaved, frames);
+        self.end_block();
+    }
+
+    /// Writes `frames` interleaved stereo frames from `interleaved` (at most
+    /// `interleaved.len() / 2`) as part of the open block, and advances W by
+    /// that count (S38). Any count is accepted; when it exceeds C only the
+    /// last C frames remain.
     ///
     /// The frames are stored in chunks of at most M frames. After each chunk
     /// W is published with release ordering and a release fence follows, so
     /// the writer only ever stores into the slots of frames
     /// `[W - C, W - C + M)` (S37, S40). Never waits, allocates or locks.
-    pub fn write(&mut self, interleaved: &[f32], frames: usize) {
-        let ring = &*self.ring;
+    pub fn write_part(&mut self, interleaved: &[f32], frames: usize) {
         let frames = frames.min(interleaved.len() / 2);
+        self.store(&interleaved[..frames * 2]);
         if frames > 0 {
-            ring.last_block.store(frames as u64, Ordering::Relaxed);
+            self.open += frames as u64;
+            self.publish_block();
         }
+    }
+
+    /// Closes the open block (S206): the next write starts a new one. Does
+    /// nothing when the open block is empty. Never waits, allocates or
+    /// locks.
+    pub fn end_block(&mut self) {
+        if self.open == 0 {
+            return;
+        }
+        self.blocks[self.next] = self.open;
+        self.next = (self.next + 1) % BLOCK_WINDOW;
+        self.open = 0;
+        self.publish_block();
+    }
+
+    /// Publishes the largest of the last blocks and the open one.
+    fn publish_block(&self) {
+        let largest = self.blocks.iter().copied().fold(self.open, u64::max);
+        self.ring.block_frames.store(largest, Ordering::Relaxed);
+    }
+
+    /// Stores the frames of `interleaved` and advances W, chunk by chunk.
+    fn store(&self, interleaved: &[f32]) {
+        let ring = &*self.ring;
         let capacity = ring.capacity as usize;
         let margin = ring.margin as usize;
         // Only this writer stores W, so its own last store is the current W.
         let mut w = ring.written.load(Ordering::Relaxed);
-        let mut src = &interleaved[..frames * 2];
+        let mut src = interleaved;
         while !src.is_empty() {
             let n = (src.len() / 2).min(margin);
             let (chunk, rest) = src.split_at(n * 2);
@@ -264,7 +319,10 @@ impl RingWriter {
     /// Sets W to 0, which makes all history unreadable (S39). Call it only
     /// while no capture callback runs and no reader exists.
     pub fn reset(&mut self) {
-        self.ring.last_block.store(0, Ordering::Relaxed);
+        self.open = 0;
+        self.blocks = [0; BLOCK_WINDOW];
+        self.next = 0;
+        self.ring.block_frames.store(0, Ordering::Relaxed);
         self.ring.written.store(0, Ordering::Release);
         fence(Ordering::Release);
     }
@@ -446,22 +504,60 @@ mod tests {
 
     // covers: S38, S206
     #[test]
-    fn a_write_publishes_its_frame_count() {
+    fn the_largest_of_the_last_blocks_is_published() {
         let ring = Ring::new(16_384, 8192).unwrap();
         let mut writer = ring.writer().unwrap();
-        assert_eq!(ring.last_block_frames(), 0);
-        writer.write(&block(0, 512), 512);
-        assert_eq!(ring.last_block_frames(), 512);
-        writer.write(&block(512, 480), 480);
-        assert_eq!(ring.last_block_frames(), 480);
+        assert_eq!(ring.block_frames(), 0);
+        writer.write(&block(0, 480), 480);
+        assert_eq!(ring.block_frames(), 480);
+        writer.write(&block(480, 512), 512);
+        assert_eq!(ring.block_frames(), 512);
+        // A short block (a gap fill's tail) keeps the larger one in view,
+        // and so do the next ones until it is BLOCK_WINDOW blocks old.
+        let mut w = 992;
+        for _ in 0..BLOCK_WINDOW - 1 {
+            writer.write(&block(w, 37), 37);
+            w += 37;
+            assert_eq!(ring.block_frames(), 512);
+        }
+        writer.write(&block(w, 37), 37);
+        w += 37;
+        assert_eq!(ring.block_frames(), 37);
         // A write longer than the margin is stored in chunks, but it is one
-        // block; a write of nothing leaves the count as it was.
-        writer.write(&block(992, 10_000), 10_000);
-        assert_eq!(ring.last_block_frames(), 10_000);
+        // block; a write of nothing leaves the blocks as they were.
+        writer.write(&block(w, 10_000), 10_000);
+        assert_eq!(ring.block_frames(), 10_000);
         writer.write(&[], 0);
-        assert_eq!(ring.last_block_frames(), 10_000);
+        assert_eq!(ring.block_frames(), 10_000);
         writer.reset();
-        assert_eq!(ring.last_block_frames(), 0);
+        assert_eq!(ring.block_frames(), 0);
+    }
+
+    // covers: S38, S206
+    #[test]
+    fn parts_of_one_block_count_together() {
+        let ring = Ring::new(16_384, 8192).unwrap();
+        let mut writer = ring.writer().unwrap();
+        writer.write(&block(0, 480), 480);
+        // A packet the capture writes in pieces: the open block counts at
+        // once, and closing it keeps it.
+        writer.write_part(&block(480, 300), 300);
+        assert_eq!(ring.block_frames(), 480);
+        writer.write_part(&block(780, 400), 400);
+        assert_eq!(ring.block_frames(), 700);
+        writer.end_block();
+        assert_eq!(ring.block_frames(), 700);
+        // A plain write after parts closes them with it; closing an empty
+        // block does nothing.
+        writer.write_part(&block(1180, 100), 100);
+        writer.write(&block(1280, 900), 900);
+        assert_eq!(ring.block_frames(), 1000);
+        writer.end_block();
+        assert_eq!(ring.frames_written(), 2180);
+        for i in 0..BLOCK_WINDOW as u64 {
+            writer.write(&block(2180 + i, 1), 1);
+        }
+        assert_eq!(ring.block_frames(), 1);
     }
 
     // covers: S40

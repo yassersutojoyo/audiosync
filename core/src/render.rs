@@ -10,11 +10,14 @@
 //!
 //! Callbacks against the capture's blocks (S206): at the start of every
 //! callback the renderer gives its reader a lead, a floor of the effective
-//! delay: the largest callback so far, and with rate conversion what that
-//! callback can ask the reader for plus the writer's latest block, since a
-//! converting output's callbacks never line up with the capture's blocks.
-//! Only the first read of a callback may correct drift; its later reads are
-//! held and what they report as due is ignored.
+//! delay. It counts the device's steady callback (the period the host gives,
+//! or else the largest of the last [`CALLBACK_WINDOW`] callbacks) or this
+//! callback when it is larger, and with rate conversion what that callback
+//! can ask the reader for plus the capture's block (at most
+//! [`LEAD_BLOCK_CAP_MS`]), since a converting output's callbacks never line
+//! up with the capture's blocks. Only the first read of a callback may
+//! correct drift; its later reads are held and what they report as due is
+//! ignored.
 //!
 //! The fade (S184 to S188):
 //!
@@ -68,6 +71,18 @@ pub const STOP_FADE_CAP: Duration = Duration::from_millis(500);
 
 /// No output time published yet.
 const NO_TIME: u64 = u64::MAX;
+
+/// The callbacks a renderer looks back over for its steady callback size
+/// when the host gives no period (S206): a larger one is forgotten that many
+/// callbacks later.
+pub const CALLBACK_WINDOW: usize = 8;
+
+/// The most of the capture's block a converting renderer's lead counts, in
+/// ms (S206): more than the capture's blocks (10 ms packets on Windows, 512
+/// or 1024 frames on the Mac), about the first silence a Windows loopback
+/// gap writes, and well inside the readers' 35 ms dead band, so silence
+/// written at once after a stall never raises the lead by more than that.
+pub const LEAD_BLOCK_CAP_MS: u32 = 25;
 
 /// The most capture-rate frames the resampler can ask for to produce
 /// `device_frames` frames at `device_rate`, whatever state it is in: the
@@ -303,8 +318,15 @@ pub struct Renderer {
     channels: usize,
     capture_rate: u32,
     device_rate: u32,
-    /// The largest callback rendered so far, in device frames (S206).
-    largest_callback: usize,
+    /// The device's period in device frames as the host gives it, 0 when it
+    /// gives none (S206).
+    period_frames: usize,
+    /// The last [`CALLBACK_WINDOW`] callbacks, in device frames.
+    callbacks: [usize; CALLBACK_WINDOW],
+    /// Where in `callbacks` the next one goes.
+    next_callback: usize,
+    /// [`LEAD_BLOCK_CAP_MS`] in capture frames.
+    block_cap: usize,
     /// Capture-rate stereo frames from the reader.
     stereo: Box<[f32]>,
     /// Device-rate stereo frames from the resampler.
@@ -367,7 +389,10 @@ impl Renderer {
             channels,
             capture_rate,
             device_rate,
-            largest_callback: 0,
+            period_frames: 0,
+            callbacks: [0; CALLBACK_WINDOW],
+            next_callback: 0,
+            block_cap: (u64::from(capture_rate) * u64::from(LEAD_BLOCK_CAP_MS) / 1000) as usize,
             stereo: vec![0.0; read_frames * 2].into_boxed_slice(),
             converted: vec![0.0; RENDER_CHUNK * 2].into_boxed_slice(),
             fade: Fade::new(device_rate),
@@ -415,6 +440,22 @@ impl Renderer {
     /// Device frames played as silence because the resampler lacked input.
     pub fn shortfall_frames(&self) -> u64 {
         self.shortfall_frames
+    }
+
+    /// Sets the device's period, in device frames: the callback it asks for
+    /// when it is on time (a Windows endpoint's period, which each wake
+    /// refills). The lead then counts it, or a callback when that is larger,
+    /// rather than the largest of the last callbacks (S206). 0, as at the
+    /// start, means the host doesn't know it. Call it before the first
+    /// callback, on the output's thread.
+    pub fn set_period_frames(&mut self, frames: usize) {
+        self.period_frames = frames;
+    }
+
+    /// The lead the reader got at the start of the last callback, in
+    /// capture frames (S206); 0 before the first one.
+    pub fn lead_frames(&self) -> i64 {
+        self.reader.lead_frames()
     }
 
     /// Fills `out`, interleaved with [`Renderer::channels`] channels.
@@ -472,16 +513,26 @@ impl Renderer {
     }
 
     /// Gives the reader its lead Lr at the start of a callback of `frames`
-    /// device frames (S206): the largest callback so far, and with rate
-    /// conversion the most that callback can ask the reader for plus the
-    /// frames of the writer's latest block.
+    /// device frames (S206). The callback it counts is the device's steady
+    /// one (its period when the host gave it, else the largest of the last
+    /// [`CALLBACK_WINDOW`] callbacks, this one included) or this one when it
+    /// is larger. Without conversion Lr is that callback; with it, the most
+    /// that callback can ask the reader for plus the capture's block, at
+    /// most [`LEAD_BLOCK_CAP_MS`].
     fn update_lead(&mut self, frames: usize) {
-        self.largest_callback = self.largest_callback.max(frames);
-        let lead = if self.resampler.is_passthrough() {
-            self.largest_callback
+        self.callbacks[self.next_callback] = frames;
+        self.next_callback = (self.next_callback + 1) % CALLBACK_WINDOW;
+        let steady = if self.period_frames > 0 {
+            self.period_frames
         } else {
-            reader_frames_bound(self.largest_callback, self.capture_rate, self.device_rate)
-                .saturating_add(self.reader.ring().last_block_frames())
+            self.callbacks.iter().copied().fold(0, usize::max)
+        };
+        let callback = steady.max(frames);
+        let lead = if self.resampler.is_passthrough() {
+            callback
+        } else {
+            let block = self.reader.ring().block_frames().min(self.block_cap);
+            reader_frames_bound(callback, self.capture_rate, self.device_rate).saturating_add(block)
         };
         self.reader
             .set_lead_frames(i64::try_from(lead).unwrap_or(i64::MAX));
