@@ -31,6 +31,8 @@ component SpeakerSection inherits VerticalLayout {
     callback sync-toggled(string);
     callback delay-stepped(string, int);
     callback delay-edited(string, string);
+    callback delay-committed(string);
+    callback delay-cancelled(string);
     callback auto-connect-toggled(string, bool);
     callback forget-pairing(string);
     callback device-volume-fix(string);
@@ -93,6 +95,12 @@ component SpeakerSection inherits VerticalLayout {
                 }
                 delay-edited(text) => {
                     root.delay-edited(speaker.id, text);
+                }
+                delay-committed => {
+                    root.delay-committed(speaker.id);
+                }
+                delay-cancelled => {
+                    root.delay-cancelled(speaker.id);
                 }
                 auto-connect-toggled(on) => {
                     root.auto-connect-toggled(speaker.id, on);
@@ -240,6 +248,10 @@ export component MainWindow inherits Window {
     callback sync-toggled(string);
     callback delay-stepped(string, int);
     callback delay-edited(string, string);
+    // Enter, or the speaker's delay field lost the focus: apply what was typed.
+    callback delay-committed(string);
+    // Escape in the speaker's delay field: drop what was typed.
+    callback delay-cancelled(string);
     callback airplay-delay-stepped(int);
     callback airplay-delay-edited(string);
     callback airplay-delay-committed();
@@ -603,6 +615,12 @@ export component MainWindow inherits Window {
                         delay-edited(id, text) => {
                             root.delay-edited(id, text);
                         }
+                        delay-committed(id) => {
+                            root.delay-committed(id);
+                        }
+                        delay-cancelled(id) => {
+                            root.delay-cancelled(id);
+                        }
                         auto-connect-toggled(id, on) => {
                             root.auto-connect-toggled(id, on);
                         }
@@ -691,6 +709,12 @@ export component MainWindow inherits Window {
                         }
                         delay-edited(id, text) => {
                             root.delay-edited(id, text);
+                        }
+                        delay-committed(id) => {
+                            root.delay-committed(id);
+                        }
+                        delay-cancelled(id) => {
+                            root.delay-cancelled(id);
                         }
                         auto-connect-toggled(id, on) => {
                             root.auto-connect-toggled(id, on);

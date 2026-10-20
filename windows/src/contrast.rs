@@ -869,3 +869,21 @@ fn the_flyout_row_shows_the_glyph_and_the_hint_in_its_description() {
     assert!(function.contains("return root.volume-muted;"));
     assert!(function.contains("return root.volume-low;"));
 }
+
+/// A tray flyout row shows its speaker's note under the name (a waiting
+/// speaker's reason, for one), as a main window row does. The source is read
+/// line by line: Windows CI checks it out with CRLF line endings.
+#[test]
+fn a_flyout_row_shows_the_speakers_note() {
+    let row = component_body(include_str!("../ui/flyout.slint"), "FlyoutRow");
+    let lines: Vec<&str> = row.lines().map(str::trim).collect();
+    let note = lines
+        .iter()
+        .position(|line| *line == "if Strings.row-note(root.state) != \"\": QuietText {")
+        .expect("FlyoutRow shows a QuietText while its state has a note");
+    assert_eq!(
+        lines.get(note + 1).copied(),
+        Some("text: Strings.row-note(root.state);"),
+        "the QuietText shows the note"
+    );
+}

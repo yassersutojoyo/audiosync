@@ -391,7 +391,7 @@ export global Strings {
             return @tr("capture stopped");
         }
         if kind == NoticeKind.speaker-failed {
-            return @tr("{} didn't start", name);
+            return @tr("{} didn't start, turned off", name);
         }
         if kind == NoticeKind.speaker-lost {
             return @tr("{} disconnected", name);
@@ -415,10 +415,10 @@ export global Strings {
             return @tr("pairings not saved");
         }
         if kind == NoticeKind.settings-kept-aside {
-            return @tr("settings not read");
+            return @tr("settings unreadable, copy kept");
         }
         if kind == NoticeKind.pairings-kept-aside {
-            return @tr("pairings not read");
+            return @tr("pairings unreadable, copy kept");
         }
         if kind == NoticeKind.no-sound-output {
             return @tr("no sound output");
