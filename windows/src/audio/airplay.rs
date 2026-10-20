@@ -10,7 +10,10 @@
 //! gives are kept in the [`PairingStore`] and handed back each time the
 //! speaker joins, so no PIN is asked again. A wrong PIN starts a new pairing
 //! (the Apple TV shows a new PIN); any other failure leaves the speaker off
-//! with a notice. A speaker the user turns on joins the
+//! with a notice. A pairing the user cancels and starts again at once waits
+//! for the cancelled one's end, and nothing the cancelled one reports
+//! reaches the UI, though credentials it got are kept. A speaker the user
+//! turns on joins the
 //! sender's stream while streaming is on, and leaves it when it is turned off
 //! or streaming stops. Its volume and its own delay d_s go to the sender as
 //! they change. Errors come back as backend events, which the UI turns into
@@ -48,7 +51,7 @@
 //! The sender sits behind [`AirPlayLink`], so the backend logic is tested
 //! with a fake; [`SenderLink`] is the real one.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -58,7 +61,7 @@ use audiosync_airplay::discovery::mdns::DiscoveryError;
 use audiosync_airplay::discovery::{Device, DeviceKey, ServiceKind};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
 use audiosync_airplay::input::InputWriter;
-use audiosync_airplay::pairing::{PairingEvent, PinError};
+use audiosync_airplay::pairing::{Credentials, PairingEvent, PinError};
 use audiosync_airplay::sender::{
     ReceiverEvent, ReceiverInfo, Sender, SenderConfig, SenderEvent, SpeakerError, SpeakerEvent,
     SpeakerOptions, SpeakerState,
@@ -539,6 +542,13 @@ pub struct AirPlaySpeakers {
     store: PairingStore,
     /// The pairings running, by speaker ID.
     pairings: BTreeMap<String, PairingRun>,
+    /// The speakers whose cancelled pairing hasn't reported its end yet.
+    /// The sender's pairing events name the receiver only, so until that
+    /// end every one for the speaker is the cancelled pairing's: it never
+    /// reaches the UI or the pairing in `pairings`. A pairing the user
+    /// starts meanwhile waits in `pairings` and starts on the sender once
+    /// that end comes (a pairing ends once), so the two never run at once.
+    ending: BTreeSet<String>,
     /// The next `PairingRun::shown_order`.
     next_shown_order: u64,
     streaming: bool,
@@ -568,6 +578,7 @@ impl AirPlaySpeakers {
             names: BTreeMap::new(),
             store,
             pairings: BTreeMap::new(),
+            ending: BTreeSet::new(),
             next_shown_order: 0,
             streaming: false,
             master,
@@ -592,6 +603,7 @@ impl AirPlaySpeakers {
         self.listed.clear();
         self.added.clear();
         self.pairings.clear();
+        self.ending.clear();
         self.latency = self.link.latency();
         self.stopped = false;
         self.log.log(|| {
@@ -610,6 +622,7 @@ impl AirPlaySpeakers {
         self.listed.clear();
         self.added.clear();
         self.pairings.clear();
+        self.ending.clear();
         if changed || !self.stopped {
             self.log.log(|| {
                 "AirPlay: the sender stopped after an internal error; AirPlay stays silent until Retry"
@@ -751,8 +764,10 @@ impl AirPlaySpeakers {
     }
 
     /// Starts pairing with an Apple TV that asks for a PIN, which the user
-    /// switched on. A pairing already running for it goes on. Paired, the
-    /// speaker is turned on ([`BackendEvent::AirPlayPaired`]).
+    /// switched on. A pairing already running for it goes on; one the user
+    /// cancelled just before that hasn't reported its end yet goes first,
+    /// and this one starts on the sender once it has (see `ending`).
+    /// Paired, the speaker is turned on ([`BackendEvent::AirPlayPaired`]).
     pub fn start_pairing(&mut self, id: &str) -> Result<(), AirPlayProblem> {
         let Some(listed) = self.listed.get(id) else {
             self.log.log(|| {
@@ -778,14 +793,16 @@ impl AirPlaySpeakers {
             return Ok(());
         }
         let device = listed.device().clone();
-        self.log.log(|| {
-            format!(
-                "AirPlay pairing {}: started, asking the Apple TV to show a PIN",
-                self.label(id)
-            )
-        });
-        let password = self.password(id);
-        self.link.start_pairing(&device, password);
+        if self.ending.contains(id) {
+            self.log.log(|| {
+                format!(
+                    "AirPlay pairing {}: starts once the cancelled pairing has ended",
+                    self.label(id)
+                )
+            });
+        } else {
+            self.begin_pairing(id, &device);
+        }
         self.pairings.insert(
             id.to_owned(),
             PairingRun {
@@ -797,6 +814,18 @@ impl AirPlaySpeakers {
             },
         );
         Ok(())
+    }
+
+    /// Has the sender start a pairing with `device`, the speaker `id`.
+    fn begin_pairing(&mut self, id: &str, device: &Device) {
+        self.log.log(|| {
+            format!(
+                "AirPlay pairing {}: started, asking the Apple TV to show a PIN",
+                self.label(id)
+            )
+        });
+        let password = self.password(id);
+        self.link.start_pairing(device, password);
     }
 
     /// Hands the PIN the user typed to the speaker's pairing. Returns whether
@@ -834,9 +863,15 @@ impl AirPlaySpeakers {
     }
 
     /// Stops the speaker's pairing, if one runs, saying why in the log.
+    /// Until the sender reports its end, the speaker is `ending`.
     fn stop_pairing(&mut self, id: &str, why: &str) {
         if let Some(run) = self.pairings.remove(id) {
-            self.link.cancel_pairing(&run.device.key);
+            // One that waited for a cancelled pairing's end never started
+            // on the sender, and now never will.
+            if !self.ending.contains(id) {
+                self.link.cancel_pairing(&run.device.key);
+                self.ending.insert(id.to_owned());
+            }
             self.log
                 .log(|| format!("AirPlay pairing {}: stopped, {why}", self.label(id)));
         }
@@ -1097,6 +1132,9 @@ impl AirPlaySpeakers {
         event: PairingEvent,
         events: &mut Vec<BackendEvent>,
     ) -> bool {
+        if self.ending.contains(id) {
+            return self.ending_pairing_event(id, event);
+        }
         self.log.log(|| {
             format!(
                 "AirPlay pairing {}: {}",
@@ -1121,22 +1159,10 @@ impl AirPlaySpeakers {
             }
             PairingEvent::Paired(credentials) => {
                 let wanted = self.pairings.remove(id).is_some();
-                match self.store.insert(id, credentials) {
-                    Ok(()) => self.log.log(|| {
-                        format!(
-                            "AirPlay pairing {}: credentials stored, encrypted for this Windows user",
-                            self.label(id)
-                        )
-                    }),
-                    Err(error) => self.log.log(|| {
-                        format!(
-                            "AirPlay pairing {}: credentials kept until AudioSync quits; the store couldn't be written: {error}",
-                            self.label(id)
-                        )
-                    }),
-                }
-                // A pairing the user cancelled meanwhile still keeps its
-                // credentials, but leaves the speaker off.
+                self.keep_credentials(id, credentials);
+                // Credentials no running pairing asked for (a cancelled
+                // pairing's come while it is `ending`) leave the speaker
+                // off.
                 if wanted {
                     self.entry(id).enabled = true;
                     self.reconcile();
@@ -1174,8 +1200,58 @@ impl AirPlaySpeakers {
                 });
                 true
             }
-            // A cancel or a shutdown, already taken in.
+            // A shutdown, already taken in. (The end of a pairing the user
+            // cancelled comes while it is `ending`.)
             PairingEvent::Stopped => false,
+        }
+    }
+
+    /// Takes in what a pairing the user cancelled reported before its end
+    /// (see `ending`): nothing reaches the UI or the pairing running now.
+    /// The credentials it got are real, so they are kept, while the speaker
+    /// stays as the user left it. Its end (it paired, failed or stopped: a
+    /// pairing ends once) starts the pairing the user started since, if
+    /// any. Returns whether the speaker list changed.
+    fn ending_pairing_event(&mut self, id: &str, event: PairingEvent) -> bool {
+        self.log.log(|| {
+            format!(
+                "AirPlay pairing {}: the cancelled pairing reported: {}; not shown",
+                self.label(id),
+                pairing_summary(&event)
+            )
+        });
+        let changed = match event {
+            // Its PIN is no one's to type now.
+            PairingEvent::PinRequested => return false,
+            PairingEvent::Paired(credentials) => {
+                self.keep_credentials(id, credentials);
+                true
+            }
+            // A wrong PIN starts nothing again: the user cancelled it.
+            PairingEvent::Failed { .. } | PairingEvent::Stopped => false,
+        };
+        self.ending.remove(id);
+        if let Some(device) = self.pairings.get(id).map(|run| run.device.clone()) {
+            self.begin_pairing(id, &device);
+        }
+        changed
+    }
+
+    /// Stores the credentials a pairing with the speaker `id` gave.
+    fn keep_credentials(&mut self, id: &str, credentials: Credentials) {
+        match self.store.insert(id, credentials) {
+            Ok(()) => self.log.log(|| {
+                format!(
+                    "AirPlay pairing {}: credentials stored, encrypted for this Windows user",
+                    self.label(id)
+                )
+            }),
+            Err(error) => self.log.log(|| {
+                format!(
+                    "AirPlay pairing {}: credentials kept until AudioSync quits; the store couldn't be written: {error}",
+                    self.label(id)
+                )
+            }),
         }
     }
 
