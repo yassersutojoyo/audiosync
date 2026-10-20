@@ -83,11 +83,23 @@ enum LocalOutputSync {
     ///   - available: the UIDs of the output devices present right now.
     ///   - bound: the device ID each running renderer was started on.
     ///   - listed: the device ID each available UID has right now.
+    ///
+    /// A running speaker that is on is restarted only when both IDs are
+    /// known and differ. One whose UID isn't listed is left alone: there is
+    /// nothing to start it on, and a list read during a glitch must not stop
+    /// a speaker that plays.
     static func plan(enabled: Set<String>, active: [String], available: Set<String>,
                      bound: [String: AudioObjectID] = [:], listed: [String: AudioObjectID] = [:]) -> Plan {
         let running = Set(active)
-        return Plan(attach: enabled.filter { !running.contains($0) && available.contains($0) }.sorted(),
-                    detach: running.filter { !enabled.contains($0) }.sorted())
+        let restart = running.filter { uid in
+            guard enabled.contains(uid), available.contains(uid),
+                  let was = bound[uid], let now = listed[uid] else { return false }
+            return was != now
+        }
+        return Plan(attach: enabled.filter { (!running.contains($0) || restart.contains($0)) && available.contains($0) }
+                        .sorted(),
+                    detach: running.filter { !enabled.contains($0) }.sorted(),
+                    restart: restart.sorted())
     }
 }
 
@@ -150,14 +162,22 @@ extension LocalOutputSync {
         for device in listing where deviceByUID[device.uid] == nil {
             deviceByUID[device.uid] = device
         }
-        let steps = plan(enabled: enabled, active: engine.activeOutputUIDs, available: Set(deviceByUID.keys))
+        let steps = plan(enabled: enabled, active: engine.activeOutputUIDs, available: Set(deviceByUID.keys),
+                         bound: bound, listed: deviceByUID.mapValues(\.id))
         var applied = Applied()
+        if !steps.restart.isEmpty {   // off the dead device ID first, so the attach below starts them again (EC1)
+            DebugTrace.log("[AudioSync] local output(s) on a new device ID, restarting: "
+                + steps.restart.joined(separator: ", "))
+            engine.detachOutputs(uids: steps.restart)
+            applied.restarted = steps.restart
+        }
         for uid in steps.attach {
             guard let device = deviceByUID[uid] else { continue }   // not listed yet: a later call attaches it
             let holdBack = holdBacks[uid] ?? 0
             do {
                 try engine.attachOutput(uid: uid, device: device.id, delayMs: holdBack, gain: gain(uid))
                 applied.attached[uid] = holdBack
+                applied.devices[uid] = device.id
             } catch let startError {
                 DebugTrace.log("[AudioSync] local output \(uid) failed to start: \(startError)")
                 applied.failures.append(Failure(uid: uid, deviceName: device.name))
