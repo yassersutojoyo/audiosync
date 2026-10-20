@@ -11,25 +11,56 @@ one app, or everything the PC plays except AudioSync itself, and plays it on
 the outputs you turn on, each at its own delay and volume, through the
 equalizer. AirPlay speakers on your network show up under Connected Speakers,
 through AudioSync's own sender ([`../airplay`](../airplay)); that part hasn't
-been tried with a real speaker yet. An Apple TV that asks for a code is paired
-the first time you switch it on: type the 4-digit code it shows, and AudioSync
-remembers the pairing (encrypted for your Windows account in
-`%LOCALAPPDATA%\AudioSync`); Forget Pairing in the speaker's menu undoes it.
-Your other choices are saved next to it, in `settings.json`: the source, the
-speakers you turned on with their delays and volumes, the master volume,
-auto-connect marks, groups, the equalizer, View > Show Virtual Devices and
-where the main window was. A launch doesn't start streaming by itself, unless
-an auto-connect speaker is there, as on the Mac; a speaker that's missing
-keeps its settings for when it's back. So far it has only been started on one
-Windows 11 PC, with nothing playing, and nobody has listened to it there yet; CI builds and
-tests it. [docs/WINDOWS_UI.md](../docs/WINDOWS_UI.md) maps each
+been tried with a real speaker yet. So far it has only been started on one
+Windows 11 PC, with nothing playing, and nobody has listened to it there yet;
+CI builds and tests it. [docs/WINDOWS_UI.md](../docs/WINDOWS_UI.md) maps each
 part of the Mac main window to its Windows counterpart and lists the keyboard
 shortcuts.
 
-## What you need
+## Trying the preview exe
 
-- Windows 11 (build 22000 or later) on x64 or ARM64. On an older Windows the
-  app says so and exits.
+There's no Windows release yet. Every CI run of
+`.github/workflows/windows.yml` keeps an `audiosync.exe` for x64 and one for
+ARM64 as workflow artifacts for a week (you need to be signed in to GitHub to
+download them), or you can build it yourself (below). It's a single exe with
+no installer: put it in a folder of its own, keep `THIRD-PARTY-NOTICES.txt`
+from the same download next to it, and run it.
+
+- **What you need:** Windows 11 (build 22000 or later) on x64 or ARM64. On
+  anything older the app says so and exits.
+- **SmartScreen:** the exe isn't code-signed, so the first time Windows may
+  say it protected your PC. Click More info, then Run anyway. That's expected
+  for this preview.
+- **Firewall:** the first time AudioSync looks for AirPlay speakers, Windows
+  Firewall may ask whether it can use the network. Allow it on private
+  networks. If your Wi-Fi or Ethernet is set to Public, Windows will probably
+  block the search and no AirPlay speakers show up; switching the network to
+  Private usually fixes it
+  (Settings > Network & internet > your connection > Network profile type).
+  You can also allow AudioSync on Public networks in Windows Security >
+  Firewall & network protection > Allow an app through firewall. If no
+  AirPlay speaker turns up within 20 seconds, the speaker list says so.
+- **One copy at a time:** starting it again while it runs brings the running
+  copy's window to the front instead of opening a second one.
+- **Closing and quitting:** closing the window keeps AudioSync running in the
+  notification area, next to the clock. To quit, right-click the tray icon and
+  choose Exit AudioSync, or use File > Exit in the main window.
+- **Where your stuff is:** your choices (source, speakers with their delays
+  and volumes, master volume, groups, auto-connect, the equalizer, where the
+  window was) are saved in `%LOCALAPPDATA%\AudioSync\settings.json`, next to
+  `airplay-pairings.dat`, the Apple TV pairings, encrypted for your Windows
+  account. To start over, quit AudioSync and delete that folder. A launch
+  doesn't start streaming by itself unless an auto-connect speaker is there,
+  and a speaker that's missing keeps its settings for when it's back.
+- **Debug log:** if something acts up, quit AudioSync from the tray, then
+  start it from PowerShell in the exe's folder with
+  `$env:AUDIOSYNC_DEBUG=1; .\audiosync.exe`. The log goes to
+  `%TEMP%\audiosync-debug.log`; it starts over at every launch and stops at
+  50 MB. [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md) says what it records.
+  Attach it when you report a problem.
+
+## What you need to build it
+
 - [rustup](https://rustup.rs) with the stable MSVC toolchain, and the Visual
   Studio Build Tools with the "Desktop development with C++" workload (the MSVC
   compiler and linker, and the Windows SDK, whose `rc.exe` embeds the
@@ -68,6 +99,11 @@ under the slider ("Windows volume is 13%", "Muted in Windows"), and one click
 on Set to 75% or Unmute fixes it. AudioSync never touches that volume unless
 you click.
 
+If another app holds a speaker for itself (exclusive mode), that speaker
+stays on with a notice, and AudioSync plays to it as soon as it's free. If
+Windows restarts its audio service while you stream, AudioSync picks the
+capture up again by itself after a few seconds.
+
 ### AirPlay
 
 AirPlay speakers that the sender can play are listed like any other speaker:
@@ -84,17 +120,18 @@ delay field: give a speaker that sounds late, like a Bluetooth one, a
 negative delay (around −150 to −300 ms), and the others wait for it. Settings
 saved by an older version are converted once, so everything sounds as it did.
 
-Not supported yet: speakers that ask for a password, speakers that need
-pairing with a PIN (such as an Apple TV that asks for one), and speakers that
-only play AirPlay 2. They're listed with a note saying so, and AudioSync never
-connects to them. Windows Firewall may ask whether AudioSync can use the
-network the first time it looks for speakers; it needs private networks for
-AirPlay.
+An Apple TV that asks for a code is paired the first time you switch it on:
+type the 4-digit code it shows, and AudioSync remembers the pairing; Forget
+Pairing in the speaker's menu undoes it.
 
-If something acts up, start it from PowerShell with
-`$env:AUDIOSYNC_DEBUG=1; .\audiosync.exe` and read
-`%TEMP%\audiosync-debug.log`, which starts over at every launch and stops at
-50 MB (`src/debug_log.rs`; [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md) says what it records).
+If AirPlay stops after an internal error, or can't start (at launch too), a
+notice says "AirPlay stopped or couldn't start" with a Retry button that
+starts it again.
+
+Not supported yet: speakers that ask for a password, speakers that need
+another kind of pairing (the Apple TV code is the one AudioSync does),
+and speakers that only play AirPlay 2. They're listed with a note saying so,
+and AudioSync never connects to them.
 
 ## On a Mac
 
@@ -114,6 +151,8 @@ cargo check --target aarch64-pc-windows-msvc
 ## Where things are
 
 - `src/main.rs`: startup
+- `src/single_instance.rs`: one copy per Windows session; a second launch
+  asks the running copy to show its main window, then exits (unit-tested)
 - `src/ui_model.rs`: what the windows show and can ask for (the `Backend`
   trait) and the mock backend the window runs on off Windows, unit-tested
 - `src/adapter.rs`: the `Backend` on Windows. It turns what the window asks

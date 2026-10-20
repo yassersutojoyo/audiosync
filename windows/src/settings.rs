@@ -12,17 +12,23 @@
 //!
 //! The file carries a format version ([`VERSION`]). A file from an older
 //! version is read for the fields it has; one from a newer version, one that
-//! can't be read or one that isn't valid JSON is ignored as a whole (the
-//! defaults apply, and the next change writes a fresh file; a newer
-//! version's file is first kept as [`NEWER_FILE_NAME`]). Fields this
-//! version doesn't know are ignored, missing ones take their defaults, and
-//! values out of range are clamped ([`Settings::clamped`]). Nothing here
-//! panics on a bad file, and the caller logs what [`Loaded`] says.
+//! can't be read or one that isn't valid JSON is ignored as a whole: the
+//! defaults apply, and the next change writes a fresh file, after keeping
+//! the old one aside in a copy with the time in its name, which no later
+//! copy replaces (a newer version's named after [`NEWER_FILE_NAME`], any
+//! other after [`IGNORED_FILE_NAME`]). A file that can't be read is tried
+//! once more at launch (another program may hold it for a moment), and
+//! while it still can't be read nothing is saved over it, since it may hold
+//! the user's settings. Fields this version doesn't know are ignored,
+//! missing ones take their defaults, and values out of range are clamped
+//! ([`Settings::clamped`]). Nothing here panics on a bad file, and the
+//! caller logs what [`Loaded`] says.
 //!
 //! The file is replaced as a whole through a temporary file
 //! (`crate::data_folder::write_atomically`), so a crash while saving leaves
 //! the old file or the new one.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
@@ -43,9 +49,16 @@ use crate::ui_model::WindowFrame;
 /// The file's name in the app's data folder.
 pub const FILE_NAME: &str = "settings.json";
 
-/// Where a newer AudioSync's settings file is kept before this build first
-/// saves over it.
+/// What the copy of a newer AudioSync's settings file is named after
+/// (`settings.newer-<time>.json`), kept before this build first saves over
+/// it.
 pub const NEWER_FILE_NAME: &str = "settings.newer.json";
+
+/// What the copy of a settings file this build ignored for another reason
+/// (it couldn't be read at launch, or it was damaged) is named after
+/// (`settings.ignored-<time>.json`), kept before this build first saves
+/// over it.
+pub const IGNORED_FILE_NAME: &str = "settings.ignored.json";
 
 /// The format version this build writes, and the newest it reads.
 ///
@@ -73,7 +86,7 @@ pub const MAX_TEXT: usize = 1024;
 
 /// The main window's smallest size in logical pixels, as `ui/main.slint`
 /// sets it.
-pub const MIN_WINDOW: (f64, f64) = (860.0, 520.0);
+pub const MIN_WINDOW: (f64, f64) = (860.0, 440.0);
 
 /// The main window's largest size kept, in logical pixels.
 pub const MAX_WINDOW: (f64, f64) = (16_384.0, 16_384.0);
@@ -443,9 +456,33 @@ impl fmt::Display for Loaded {
             }
             Loaded::Ignored(reason) => write!(
                 f,
-                "ignored: {reason}; the defaults apply, and the next change writes a new file"
+                "ignored: {reason}; the defaults apply, and the next change keeps it aside \
+                 and writes a new file"
             ),
         }
+    }
+}
+
+/// A settings file [`SettingsFile::save`] copied aside before it first
+/// saved over it, and where the copy is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeptAside {
+    /// A newer AudioSync's file.
+    Newer(PathBuf),
+    /// A file the last load ignored: it couldn't be read at launch, or it
+    /// was damaged. The settings in effect are the defaults, with what the
+    /// user changed since.
+    Ignored(PathBuf),
+}
+
+impl KeptAside {
+    /// The copy's file name, for the log and the user.
+    pub fn file_name(&self) -> String {
+        let (KeptAside::Newer(path) | KeptAside::Ignored(path)) = self;
+        path.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
     }
 }
 
@@ -453,6 +490,10 @@ impl fmt::Display for Loaded {
 #[derive(Clone, Debug, Default)]
 pub struct SettingsFile {
     path: Option<PathBuf>,
+    /// The last load ignored the file there (it couldn't be read, or it
+    /// wasn't a settings file this build reads): it is kept aside before
+    /// the next save replaces it.
+    keep_aside: Cell<bool>,
 }
 
 impl SettingsFile {
@@ -464,38 +505,40 @@ impl SettingsFile {
 
     /// The file at `path`.
     pub fn at(path: PathBuf) -> SettingsFile {
-        SettingsFile { path: Some(path) }
+        SettingsFile {
+            path: Some(path),
+            keep_aside: Cell::new(false),
+        }
     }
 
     /// No file: the settings last until the app quits.
     pub fn in_memory() -> SettingsFile {
-        SettingsFile { path: None }
+        SettingsFile::default()
     }
 
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
     }
 
-    /// The settings in the file, or the defaults, with what was found.
+    /// The settings in the file, or the defaults, with what was found. A
+    /// read that fails is tried once more after a short pause
+    /// ([`data_folder::read_at_launch`]). A file it ignores is kept aside by
+    /// the next [`SettingsFile::save`].
     pub fn load(&self) -> (Settings, Loaded) {
         let Some(path) = &self.path else {
             return (Settings::default(), Loaded::NoFile);
         };
-        let text = match fs::read(path) {
-            Ok(bytes) => bytes,
+        let read = match data_folder::read_at_launch(path) {
+            Ok(bytes) => String::from_utf8(bytes)
+                .map_err(|_| "it isn't text".to_owned())
+                .and_then(|text| Settings::from_json(&text)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                self.keep_aside.set(false);
                 return (Settings::default(), Loaded::NoFile);
             }
-            Err(error) => {
-                return (
-                    Settings::default(),
-                    Loaded::Ignored(format!("it can't be read ({error})")),
-                );
-            }
+            Err(error) => Err(format!("it can't be read, even at a second try ({error})")),
         };
-        let read = String::from_utf8(text)
-            .map_err(|_| "it isn't text".to_owned())
-            .and_then(|text| Settings::from_json(&text));
+        self.keep_aside.set(read.is_err());
         match read {
             Ok(read) => read,
             Err(reason) => (Settings::default(), Loaded::Ignored(reason)),
@@ -504,23 +547,29 @@ impl SettingsFile {
 
     /// Replaces the file with `settings`. Without a file it does nothing.
     ///
-    /// A file a newer AudioSync wrote is first copied to
-    /// [`NEWER_FILE_NAME`] next to it (replacing an older copy), so going
-    /// back to an older build doesn't lose the newer one's settings; the
-    /// copy's path is returned when that happened. If the copy fails, the
-    /// file is left alone and the error returned.
-    pub fn save(&self, settings: &Settings) -> io::Result<Option<PathBuf>> {
+    /// A file the last load ignored is first copied next to it, so the
+    /// user's settings in it aren't lost: a newer AudioSync's file
+    /// (whenever this build saves over one) to a copy named after
+    /// [`NEWER_FILE_NAME`], any other to one named after
+    /// [`IGNORED_FILE_NAME`], each with the time
+    /// ([`data_folder::keep_bytes_aside`]), so no copy ever replaces an
+    /// older one; what was kept is returned. While such a file still can't
+    /// be read, or the copy fails, the file is left alone and the error
+    /// returned.
+    pub fn save(&self, settings: &Settings) -> io::Result<Option<KeptAside>> {
         let Some(path) = &self.path else {
             return Ok(None);
         };
         let kept = match fs::read(path) {
-            Ok(bytes) if written_by_a_newer_build(&bytes) => {
-                let kept = path.with_file_name(NEWER_FILE_NAME);
-                data_folder::write_atomically(&kept, &bytes)?;
-                Some(kept)
+            Ok(bytes) if written_by_a_newer_build(&bytes) => Some(KeptAside::Newer(
+                data_folder::keep_bytes_aside(path, NEWER_FILE_NAME, &bytes)?,
+            )),
+            Ok(_) | Err(_) if self.keep_aside.get() => {
+                data_folder::keep_aside(path, IGNORED_FILE_NAME)?.map(KeptAside::Ignored)
             }
             _ => None,
         };
+        self.keep_aside.set(false);
         data_folder::write_atomically(path, settings.to_json().as_bytes())?;
         Ok(kept)
     }
@@ -539,6 +588,7 @@ fn written_by_a_newer_build(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data_folder::copies_kept_aside;
     use crate::debug_log::test_dir;
 
     /// Settings with something in every field.
@@ -964,23 +1014,140 @@ mod tests {
     fn a_newer_file_is_kept_aside_before_the_first_save_over_it() {
         let folder = test_dir("settings-newer-kept");
         let path = folder.join(FILE_NAME);
-        let kept = folder.join("settings.newer.json");
         let mut newer = sample();
         newer.version = VERSION + 1;
         let newer_text = newer.to_json();
         fs::write(&path, &newer_text).expect("written");
-        // An older copy kept earlier is replaced.
-        fs::write(&kept, b"an older copy").expect("written");
         let file = SettingsFile::at(path.clone());
         assert!(matches!(file.load().1, Loaded::Ignored(_)));
 
         file.save(&Settings::default()).expect("saved");
-        assert_eq!(fs::read_to_string(&kept).expect("kept"), newer_text);
+        let kept = || copies_kept_aside(&folder, "settings.newer");
+        assert_eq!(kept(), [newer_text.clone().into_bytes()]);
         assert_eq!(file.load().0, Settings::default());
 
         // The file is this build's now: the next save leaves the copy alone.
         file.save(&sample()).expect("saved again");
-        assert_eq!(fs::read_to_string(&kept).expect("kept"), newer_text);
+        assert_eq!(kept(), [newer_text.clone().into_bytes()]);
+
+        // The newer AudioSync saved over it again, starting from what this
+        // build wrote: that file gets a copy of its own, and the first copy
+        // stays.
+        let again_text = Settings {
+            version: VERSION + 1,
+            ..Settings::default()
+        }
+        .to_json();
+        fs::write(&path, &again_text).expect("written");
+        let file = SettingsFile::at(path.clone());
+        assert!(matches!(file.load().1, Loaded::Ignored(_)));
+        file.save(&sample()).expect("saved");
+        let mut both = kept();
+        both.sort();
+        let mut expected = vec![newer_text.into_bytes(), again_text.into_bytes()];
+        expected.sort();
+        assert_eq!(both, expected);
+    }
+
+    #[test]
+    fn a_file_that_cant_be_read_at_launch_is_never_saved_over() {
+        let folder = test_dir("settings-unreadable");
+        let path = folder.join(FILE_NAME);
+        let kept = || copies_kept_aside(&folder, "settings.ignored");
+        // A folder where the file should be: reading it fails, but not with
+        // "not found", as when another program holds the file at launch.
+        fs::create_dir(&path).expect("the folder is made");
+        let file = SettingsFile::at(path.clone());
+        let (loaded, found) = file.load();
+        assert_eq!(loaded, Settings::default());
+        assert!(matches!(found, Loaded::Ignored(_)), "{found}");
+        // Still unreadable: the save is refused, nothing replaced.
+        assert!(file.save(&Settings::default()).is_err());
+        assert!(path.is_dir());
+
+        // Readable again, holding the user's settings: they are kept aside
+        // before the first save replaces the file.
+        fs::remove_dir(&path).expect("the folder is removed");
+        let good = sample().to_json();
+        fs::write(&path, &good).expect("written");
+        file.save(&Settings::default()).expect("saved");
+        assert_eq!(kept(), [good.clone().into_bytes()]);
+        assert_eq!(file.load().0, Settings::default());
+        // Once replaced, the next save leaves the copy alone.
+        file.save(&sample()).expect("saved again");
+        assert_eq!(kept(), [good.into_bytes()]);
+    }
+
+    #[test]
+    fn settings_unreadable_at_two_launches_in_a_row_are_never_lost() {
+        let folder = test_dir("settings-unreadable-twice");
+        let path = folder.join(FILE_NAME);
+        let users = sample().to_json();
+        fs::write(&path, &users).expect("written");
+        // A launch while another program holds the file (a folder stands in
+        // its place), which lets go of it before the first save.
+        let launch = |settings: &Settings| {
+            let held = folder.join("held");
+            fs::rename(&path, &held).expect("moved");
+            fs::create_dir(&path).expect("the folder is made");
+            let file = SettingsFile::at(path.clone());
+            let (loaded, found) = file.load();
+            assert_eq!(loaded, Settings::default());
+            assert!(matches!(found, Loaded::Ignored(_)), "{found}");
+            fs::remove_dir(&path).expect("the folder is removed");
+            fs::rename(&held, &path).expect("moved back");
+            file.save(settings).expect("saved");
+        };
+        let mut changed = Settings {
+            master_volume: 12.0,
+            ..Settings::default()
+        };
+        launch(&changed);
+        changed.master_volume = 13.0;
+        launch(&changed);
+        // The user's settings are still kept, next to the first launch's.
+        let kept = copies_kept_aside(&folder, "settings.ignored");
+        assert!(kept.contains(&users.into_bytes()), "{kept:?}");
+        assert_eq!(kept.len(), 2);
+        assert_eq!(SettingsFile::at(path).load().0, changed);
+    }
+
+    #[test]
+    fn a_damaged_file_is_kept_aside_before_the_first_save_over_it() {
+        let folder = test_dir("settings-damaged-kept");
+        let path = folder.join(FILE_NAME);
+        fs::write(&path, b"{\"version\": 2, \"master_volu").expect("written");
+        let file = SettingsFile::at(path.clone());
+        assert!(matches!(file.load().1, Loaded::Ignored(_)));
+        file.save(&sample()).expect("saved");
+        assert_eq!(
+            copies_kept_aside(&folder, "settings.ignored"),
+            [b"{\"version\": 2, \"master_volu".to_vec()]
+        );
+        assert_eq!(file.load().0, sample());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_another_program_holds_for_a_moment_at_launch_is_read_at_the_second_try() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let path = test_dir("settings-held").join(FILE_NAME);
+        fs::write(&path, sample().to_json()).expect("written");
+        // Shared with no one, as an antivirus scan may hold it.
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .expect("held");
+        let loader = {
+            let path = path.clone();
+            std::thread::spawn(move || SettingsFile::at(path).load())
+        };
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        drop(held);
+        let (loaded, found) = loader.join().expect("loaded");
+        assert!(matches!(found, Loaded::Read { .. }), "{found}");
+        assert_eq!(loaded, sample());
     }
 
     #[test]

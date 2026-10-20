@@ -3,11 +3,14 @@
 //!
 //! The sender hands each pairing's credentials to its host and never stores
 //! them itself (P54); this store keeps them in one file, by receiver ID,
-//! readable and writable by the current user only (mode 0600). The macOS
-//! app keeps it at `~/Library/Application Support/AudioSync/airplay-pairings.dat`
+//! readable and writable by the current user only (mode 0600), at the path
+//! the host chooses. The macOS app keeps it at
+//! `~/Library/Application Support/AudioSync/Pairings/airplay-pairings.dat`
 //! and not in the Keychain, which would ask for access again after every
-//! ad-hoc or locally signed rebuild. Passwords are never stored here: the
-//! host hands them over for one run only.
+//! ad-hoc or locally signed rebuild; it keeps that `Pairings` folder (and
+//! only that one) out of Time Machine backups, since the file is plaintext.
+//! Passwords are never stored here: the host hands them over for one run
+//! only.
 //!
 //! The file holds a magic line, a format version byte, then per receiver its
 //! ID and the credential blob the sender defines

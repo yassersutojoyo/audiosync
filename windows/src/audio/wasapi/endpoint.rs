@@ -177,10 +177,17 @@ fn run(
     if let Err(error) = unsafe { stream.client.Start() } {
         return ready.fail(device_error("IAudioClient::Start", &error));
     }
-    ready.ok(StreamSetup {
+    let waited = ready.ok(StreamSetup {
         format: stream.format,
         buffer_frames: stream.buffer_frames,
     });
+    if !waited {
+        // Nobody waits for this stream anymore, and nothing would stop it:
+        // it stops at once rather than play unseen.
+        // SAFETY: stops the stream started above.
+        let _ = unsafe { stream.client.Stop() };
+        return;
+    }
     let lost = render_loop(&stream, &mut pipeline, signals);
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };

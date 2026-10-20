@@ -18,6 +18,7 @@ use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
 use audiosync_airplay::metadata::TrackInfo;
 use audiosync_airplay::rtp::RtpHeader;
 use audiosync_airplay::rtsp::Method;
+use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
     NowPlaying, ReceiverEvent, Sender, SenderConfig, SenderEvent, SpeakerError, SpeakerEvent,
     SpeakerOptions, SpeakerState,
@@ -489,7 +490,7 @@ fn password_errors_wait_for_the_user_and_are_not_retried() {
     assert_eq!(receiver.log().connections.len(), 1, "no retry");
 
     let mut wrong = options(-20.0);
-    wrong.password = Some("wrong".to_owned());
+    wrong.password = Some(Secret::from("wrong"));
     sender.add_speaker(device.clone(), wrong);
     assert!(
         events
@@ -503,7 +504,7 @@ fn password_errors_wait_for_the_user_and_are_not_retried() {
     assert_eq!(receiver.log().connections.len(), 2, "no retry");
 
     let mut right = options(-20.0);
-    right.password = Some("secret".to_owned());
+    right.password = Some(Secret::from("secret"));
     sender.add_speaker(device, right);
     assert!(
         events

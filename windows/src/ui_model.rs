@@ -91,7 +91,7 @@ pub enum Availability {
     WaitingToPair,
     /// It asks for a password, which AudioSync for Windows can't send yet.
     PasswordNotYet,
-    /// It needs pairing with a PIN, which AudioSync for Windows can't do yet.
+    /// It needs a kind of pairing AudioSync for Windows can't do yet.
     #[cfg_attr(
         all(not(windows), not(test)),
         expect(dead_code, reason = "only the Windows backend lists real receivers")
@@ -164,6 +164,28 @@ pub struct Speaker {
     /// A local output that is on, whose own volume in Windows is low or
     /// muted (spec S196): the hint under its volume slider, with the fix.
     pub device_volume: Option<Hint>,
+    /// Why a speaker that is on can't play right now, while streaming is
+    /// on; it plays again by itself. `None` while it plays or is off.
+    pub waiting: Option<Waiting>,
+}
+
+/// Why a speaker that is on can't play right now. Its row says so instead
+/// of showing it as playing; it stays on and plays again by itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(
+        dead_code,
+        reason = "only the Windows backend reports a waiting speaker"
+    )
+)]
+pub enum Waiting {
+    /// Another app holds its device for itself (exclusive mode); it plays
+    /// once that app lets go.
+    ForDevice,
+    /// An AirPlay speaker that stopped playing, which AudioSync keeps trying
+    /// to reach.
+    Reconnecting,
 }
 
 /// Where a pairing's PIN prompt is.
@@ -251,6 +273,9 @@ pub enum NoticeMessage {
     /// A speaker's device went away while it played. It stays on and plays
     /// again once the device is back.
     SpeakerLost { speaker: String },
+    /// Another app holds a speaker's device for itself (exclusive mode). It
+    /// stays on and plays once that app lets go; the notice then clears.
+    SpeakerBusy { speaker: String },
     /// An AirPlay speaker stopped playing; it stays on while AudioSync keeps
     /// trying to reach it.
     AirPlayRetrying {
@@ -262,10 +287,32 @@ pub enum NoticeMessage {
         speaker: String,
         problem: AirPlayProblem,
     },
-    /// AudioSync's AirPlay sender stopped after an internal error, so
-    /// AirPlay speakers aren't listed or playing. The notice offers Retry
-    /// ([`Backend::retry_airplay`]).
+    /// AudioSync's AirPlay sender stopped after an internal error or
+    /// couldn't start, so AirPlay speakers aren't listed or playing. The
+    /// notice offers Retry ([`Backend::retry_airplay`]).
     AirPlayStopped,
+    /// The settings file couldn't be written, so changes made now last only
+    /// until AudioSync quits. Posted once until a save works again, which
+    /// clears it.
+    SettingsNotSaved,
+    /// The pairings' file couldn't be written, so pairings added or
+    /// forgotten now last only until AudioSync quits. Posted once until a
+    /// write works again, which clears it.
+    PairingsNotSaved,
+    /// The settings file couldn't be read at launch (or was damaged), so
+    /// AudioSync started with the defaults; once it could be read again, it
+    /// was kept aside as `file`, in the app's data folder, before the first
+    /// save over it.
+    SettingsKeptAside { file: String },
+    /// The pairings' file couldn't be read at launch (or decrypted, or
+    /// parsed), so AudioSync started without the pairings in it; once it
+    /// could be read again, it was kept aside as `file`, in the app's data
+    /// folder, before the first write over it.
+    PairingsKeptAside { file: String },
+    /// Windows has no active sound output while an AirPlay speaker is on, so
+    /// apps have nowhere to play and nothing reaches the speaker. Clears
+    /// itself once an output is back or no AirPlay speaker is on.
+    NoSoundOutput,
     /// The source also plays straight from these outputs, undelayed, so it
     /// is heard twice. `source` is the app's name, or `None` for the whole
     /// system. `mute` names the outputs AudioSync doesn't play to, which the
@@ -288,6 +335,16 @@ pub enum SpeakerState {
     /// Chosen, and plays once streaming starts.
     WillPlay,
     Playing,
+    /// On while streaming is on, but it can't play right now (a speaker
+    /// only, never a group).
+    #[cfg_attr(
+        all(not(windows), not(test)),
+        expect(
+            dead_code,
+            reason = "only the Windows backend reports a waiting speaker"
+        )
+    )]
+    Waiting(Waiting),
 }
 
 impl SpeakerState {
@@ -299,9 +356,10 @@ impl SpeakerState {
         }
     }
 
-    /// What a click on the row does: anything but playing turns on.
+    /// What a click on the row does: off or waiting for streaming turns on;
+    /// playing, or on but waiting for its device, turns off.
     pub fn click_turns_on(self) -> bool {
-        self != SpeakerState::Playing
+        matches!(self, SpeakerState::Off | SpeakerState::WillPlay)
     }
 }
 
@@ -327,6 +385,9 @@ pub struct AppState {
     /// The AirPlay delay field's value L in milliseconds, while an AirPlay
     /// sender runs (spec S178, S181).
     pub airplay_delay_ms: Option<f64>,
+    /// AirPlay discovery runs but has found no speaker for a while: the
+    /// speaker list says to check the network and Windows Firewall.
+    pub airplay_none_found: bool,
 }
 
 impl AppState {
@@ -334,8 +395,14 @@ impl AppState {
         self.speakers.iter().find(|s| s.id == id)
     }
 
+    /// A speaker that is on while streaming is on plays, unless it waits.
     pub fn speaker_state(&self, speaker: &Speaker) -> SpeakerState {
-        SpeakerState::new(speaker.enabled, self.running)
+        match SpeakerState::new(speaker.enabled, self.running) {
+            SpeakerState::Playing => speaker
+                .waiting
+                .map_or(SpeakerState::Playing, SpeakerState::Waiting),
+            state => state,
+        }
     }
 
     /// The members of `group` that are present right now.
@@ -566,6 +633,7 @@ impl MockBackend {
             availability: Availability::Open,
             paired: false,
             device_volume: None,
+            waiting: None,
         };
         let mut speakers = vec![
             // The reference: no delay of its own.
@@ -645,6 +713,7 @@ impl MockBackend {
             pin_prompt: None,
             reference_name: Some("Speakers".into()),
             airplay_delay_ms: Some(1750.0),
+            airplay_none_found: false,
         };
         MockBackend { state, next_id: 1 }
     }
@@ -859,6 +928,29 @@ mod tests {
     }
 
     #[test]
+    fn a_speaker_on_that_cant_play_waits_instead_of_playing() {
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let mut state = backend.snapshot();
+        let mut kitchen = state.speaker("airplay:kitchen").unwrap().clone();
+        kitchen.waiting = Some(Waiting::Reconnecting);
+        assert_eq!(
+            state.speaker_state(&kitchen),
+            SpeakerState::Waiting(Waiting::Reconnecting)
+        );
+        assert!(
+            !SpeakerState::Waiting(Waiting::ForDevice).click_turns_on(),
+            "it is on, so a click turns it off"
+        );
+        // Without streaming it just plays once streaming starts; off is off.
+        state.running = false;
+        assert_eq!(state.speaker_state(&kitchen), SpeakerState::WillPlay);
+        state.running = true;
+        kitchen.enabled = false;
+        assert_eq!(state.speaker_state(&kitchen), SpeakerState::Off);
+    }
+
+    #[test]
     fn this_pc_comes_first_then_the_rest_by_name() {
         let state = MockBackend::new().snapshot();
         let (this_pc, connected) = state.layout();
@@ -889,6 +981,7 @@ mod tests {
             availability: Availability::Open,
             paired: false,
             device_volume: None,
+            waiting: None,
         };
         assert!(!speaker(SpeakerKind::Virtual, false).is_listed(false));
         assert!(speaker(SpeakerKind::Virtual, false).is_listed(true));

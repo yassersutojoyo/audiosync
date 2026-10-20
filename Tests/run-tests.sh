@@ -85,6 +85,9 @@ else
   echo "PASSED"
 fi
 
+echo "▶ cargo lookup (Tests/cargolookuptest.sh)"
+Tests/cargolookuptest.sh || status=1
+
 echo "▶ Rust core (scripts/build_core.sh)"
 if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
   echo "▶ logic"

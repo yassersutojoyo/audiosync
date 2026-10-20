@@ -5,6 +5,7 @@
 //! hash is the RustCrypto `md-5` crate.
 
 use md5::{Digest, Md5};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::rtsp::{Headers, Method};
 
@@ -135,13 +136,34 @@ fn auth_params(input: &str) -> Option<Vec<(String, String)>> {
 
 /// MD5 written as 32 lowercase hex digits (P37).
 pub fn md5_hex(input: &str) -> String {
-    let digest = Md5::digest(input.as_bytes());
-    let mut hex = String::with_capacity(32);
-    for byte in digest.iter() {
-        hex.push(char::from(HEX[usize::from(byte >> 4)]));
-        hex.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    text(&md5_hex_parts(&[input.as_bytes()]))
+}
+
+/// MD5 of `parts` joined by `:`, as 32 lowercase hex digits. The parts go
+/// into the hash one by one, so no joined copy of them is ever built, and
+/// the hash state and the raw digest are wiped before this returns: for HA1
+/// the parts hold the password, and the digest stands in for it.
+fn md5_hex_parts(parts: &[&[u8]]) -> Zeroizing<[u8; 32]> {
+    let mut hash = Md5::new();
+    for (index, part) in parts.iter().enumerate() {
+        if index > 0 {
+            hash.update(b":");
+        }
+        hash.update(part);
     }
+    let mut digest = hash.finalize();
+    let mut hex = Zeroizing::new([0u8; 32]);
+    for (index, byte) in digest.iter().enumerate() {
+        hex[2 * index] = HEX[usize::from(byte >> 4)];
+        hex[2 * index + 1] = HEX[usize::from(byte & 0x0f)];
+    }
+    digest[..].zeroize();
     hex
+}
+
+/// Hex digits as text.
+fn text(hex: &[u8; 32]) -> String {
+    hex.iter().map(|&digit| char::from(digit)).collect()
 }
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -166,14 +188,25 @@ pub fn response(
     nonce: &str,
     qop: Option<QopAuth<'_>>,
 ) -> String {
-    let ha1 = md5_hex(&format!("{username}:{realm}:{password}"));
-    let ha2 = md5_hex(&format!("{method}:{uri}"));
-    match qop {
-        None => md5_hex(&format!("{ha1}:{nonce}:{ha2}")),
+    // HA1 stands in for the password at this realm: neither it nor the
+    // password is ever copied into a buffer that isn't wiped.
+    let ha1 = md5_hex_parts(&[username.as_bytes(), realm.as_bytes(), password.as_bytes()]);
+    let ha2 = md5_hex_parts(&[method.as_bytes(), uri.as_bytes()]);
+    let hash = match qop {
+        None => md5_hex_parts(&[&ha1[..], nonce.as_bytes(), &ha2[..]]),
         Some(QopAuth { nc, cnonce }) => {
-            md5_hex(&format!("{ha1}:{nonce}:{nc:08x}:{cnonce}:auth:{ha2}"))
+            let nc = format!("{nc:08x}");
+            md5_hex_parts(&[
+                &ha1[..],
+                nonce.as_bytes(),
+                nc.as_bytes(),
+                cnonce.as_bytes(),
+                b"auth",
+                &ha2[..],
+            ])
         }
-    }
+    };
+    text(&hash)
 }
 
 /// The `Authorization` value for one request (P36, P37): user name, realm,

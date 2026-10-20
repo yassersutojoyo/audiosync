@@ -4,14 +4,17 @@
 
 use std::ffi::c_void;
 use std::marker::PhantomData;
-use std::sync::mpsc;
+use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use windows::Win32::Foundation::{
     CloseHandle, E_FAIL, ERROR_NOT_FOUND, HANDLE, RPC_E_CHANGED_MODE,
 };
 use windows::Win32::Media::Audio::{
-    AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_SERVICE_NOT_RUNNING, WAVE_FORMAT_PCM, WAVEFORMATEX,
+    AUDCLNT_E_DEVICE_IN_USE, AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_ENDPOINT_CREATE_FAILED,
+    AUDCLNT_E_RESOURCES_INVALIDATED, AUDCLNT_E_SERVICE_NOT_RUNNING, WAVE_FORMAT_PCM, WAVEFORMATEX,
     WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
 };
 use windows::Win32::Media::KernelStreaming::WAVE_FORMAT_EXTENSIBLE;
@@ -154,45 +157,101 @@ impl Drop for ProAudioTask {
     }
 }
 
+/// How long a starting thread has to report through its [`Ready`]: an audio
+/// call that hangs (Windows audio still waking up, say) would otherwise hold
+/// the thread that waits, the UI thread, for good. As long as the loopback
+/// capture's own wait for its activation.
+const READY_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// How a starting thread tells the thread that started it that it runs, with
 /// what it set up (`T`), or why it couldn't start.
-pub(super) struct Ready<T = ()>(mpsc::Sender<Result<T, BackendError>>);
+pub(super) struct Ready<T = ()> {
+    sender: mpsc::Sender<Result<T, BackendError>>,
+    /// Set, under its lock, once the starter stopped waiting.
+    given_up: Arc<Mutex<bool>>,
+}
 
 impl<T> Ready<T> {
-    pub(super) fn ok(self, setup: T) {
-        let _ = self.0.send(Ok(setup));
+    /// Reports that the thread runs, with what it set up. Returns false when
+    /// the starter already gave up waiting ([`READY_TIMEOUT`]): nothing will
+    /// ever use what the thread set up or stop it, so it undoes its start and
+    /// ends at once.
+    #[must_use]
+    pub(super) fn ok(self, setup: T) -> bool {
+        let given_up = lock_flag(&self.given_up);
+        !*given_up && self.sender.send(Ok(setup)).is_ok()
     }
 
     pub(super) fn fail(self, error: BackendError) {
-        let _ = self.0.send(Err(error));
+        let _ = self.sender.send(Err(error));
     }
 }
 
+fn lock_flag(flag: &Mutex<bool>) -> MutexGuard<'_, bool> {
+    flag.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Runs `body` on a new thread named `name` and waits until it reports
-/// through its [`Ready`]; returns the thread and what it set up. A thread
-/// that couldn't start is joined, and its error returned.
+/// through its [`Ready`], for [`READY_TIMEOUT`] at most; returns the thread
+/// and what it set up. A thread that couldn't start is joined, and its error
+/// returned. One that doesn't report in time is left to end by itself
+/// (`Ready::ok` tells it), and [`BackendError::NotResponding`] returned, so
+/// the caller can try again later.
 pub(super) fn spawn_ready<T: Send + 'static>(
     name: &str,
     body: impl FnOnce(Ready<T>) + Send + 'static,
 ) -> Result<(JoinHandle<()>, T), BackendError> {
+    spawn_ready_within(name, READY_TIMEOUT, body)
+}
+
+/// [`spawn_ready`], waiting `timeout` at most.
+fn spawn_ready_within<T: Send + 'static>(
+    name: &str,
+    timeout: Duration,
+    body: impl FnOnce(Ready<T>) + Send + 'static,
+) -> Result<(JoinHandle<()>, T), BackendError> {
     let (sender, receiver) = mpsc::channel();
+    let given_up = Arc::new(Mutex::new(false));
+    let ready = Ready {
+        sender,
+        given_up: Arc::clone(&given_up),
+    };
     let thread = thread::Builder::new()
         .name(name.to_owned())
-        .spawn(move || body(Ready(sender)))
+        .spawn(move || body(ready))
         .map_err(|error| BackendError::System {
             call: "CreateThread",
             code: error
                 .raw_os_error()
                 .map_or(E_FAIL.0, |code| HRESULT::from_win32(code as u32).0),
         })?;
-    match receiver.recv() {
-        Ok(Ok(setup)) => Ok((thread, setup)),
-        Ok(Err(error)) => {
+    let answer = match receiver.recv_timeout(timeout) {
+        Ok(answer) => Some(answer),
+        Err(RecvTimeoutError::Disconnected) => None,
+        Err(RecvTimeoutError::Timeout) => {
+            // It may have answered just now. Once the flag is set under the
+            // lock, a later answer finds it set.
+            let mut given_up = lock_flag(&given_up);
+            match receiver.try_recv() {
+                Ok(answer) => Some(answer),
+                Err(TryRecvError::Disconnected) => None,
+                Err(TryRecvError::Empty) => {
+                    *given_up = true;
+                    // Detached: it ends by itself once its call returns.
+                    drop(thread);
+                    return Err(BackendError::NotResponding);
+                }
+            }
+        }
+    };
+    match answer {
+        Some(Ok(setup)) => Ok((thread, setup)),
+        Some(Err(error)) => {
             let _ = thread.join();
             Err(error)
         }
         // The thread ended without a word: it panicked.
-        Err(_) => {
+        None => {
             let _ = thread.join();
             Err(BackendError::System {
                 call: "audio thread start",
@@ -215,7 +274,12 @@ pub(super) fn system_error(call: &'static str, error: &windows::core::Error) -> 
 const NOT_FOUND: HRESULT = HRESULT::from_win32(ERROR_NOT_FOUND.0);
 
 /// A failed call on a device: [`BackendError::DeviceGone`] when the device
-/// went away or Windows audio stopped, a failed call otherwise.
+/// went away or Windows audio stopped, or Windows is rebuilding the endpoint
+/// (after a wake, or a change of its format), so the call is tried again
+/// (an output's start for about thirty seconds while Windows still lists
+/// its device, see the controller's `REFUSED_GIVE_UP_POLLS`);
+/// [`BackendError::DeviceBusy`] when another app holds it in exclusive mode;
+/// a failed call otherwise.
 pub(super) fn device_error(call: &'static str, error: &windows::core::Error) -> BackendError {
     device_code_error(call, error.code())
 }
@@ -224,9 +288,13 @@ pub(super) fn device_error(call: &'static str, error: &windows::core::Error) -> 
 pub(super) fn device_code_error(call: &'static str, code: HRESULT) -> BackendError {
     if code == AUDCLNT_E_DEVICE_INVALIDATED
         || code == AUDCLNT_E_SERVICE_NOT_RUNNING
+        || code == AUDCLNT_E_ENDPOINT_CREATE_FAILED
+        || code == AUDCLNT_E_RESOURCES_INVALIDATED
         || code == NOT_FOUND
     {
         BackendError::DeviceGone
+    } else if code == AUDCLNT_E_DEVICE_IN_USE {
+        BackendError::DeviceBusy
     } else {
         BackendError::System { call, code: code.0 }
     }
@@ -346,6 +414,8 @@ pub(super) unsafe fn read_mix_format(format: *const WAVEFORMATEX) -> MixFormat {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::*;
     use crate::audio::capture::CAPTURE_ATTEMPTS;
 
@@ -399,12 +469,67 @@ mod tests {
     }
 
     #[test]
+    fn a_thread_that_answers_in_time_hands_over_what_it_set_up() {
+        let (thread, setup) =
+            spawn_ready_within("audiosync-test", Duration::from_secs(5), |ready| {
+                assert!(ready.ok(7_u32), "the starter waits");
+            })
+            .unwrap();
+        assert_eq!(setup, 7);
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn a_thread_that_doesnt_answer_in_time_is_given_up_and_its_late_start_undone() {
+        let (told, still_waited) = mpsc::channel();
+        let started = Instant::now();
+        let result =
+            spawn_ready_within("audiosync-test", Duration::from_millis(50), move |ready| {
+                // Windows answers long after the starter gave up.
+                thread::sleep(Duration::from_secs(1));
+                let _ = told.send(ready.ok(7_u32));
+            });
+        assert!(
+            matches!(result, Err(BackendError::NotResponding)),
+            "{:?}",
+            result.map(|(_, setup)| setup)
+        );
+        assert!(started.elapsed() < Duration::from_millis(900));
+        // The thread learns nobody waits anymore, so it undoes its start
+        // rather than run on with nothing to stop it.
+        assert_eq!(
+            still_waited.recv_timeout(Duration::from_secs(10)),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn an_endpoint_windows_rebuilds_after_a_wake_or_a_format_change_is_tried_again() {
+        for code in [
+            AUDCLNT_E_ENDPOINT_CREATE_FAILED,
+            AUDCLNT_E_RESOURCES_INVALIDATED,
+            AUDCLNT_E_SERVICE_NOT_RUNNING,
+        ] {
+            assert_eq!(
+                device_code_error("x", code),
+                BackendError::DeviceGone,
+                "0x{:08X}",
+                code.0
+            );
+        }
+    }
+
+    #[test]
     fn a_device_that_went_away_is_gone() {
         assert_eq!(
             device_code_error("x", AUDCLNT_E_DEVICE_INVALIDATED),
             BackendError::DeviceGone
         );
         assert_eq!(device_code_error("x", NOT_FOUND), BackendError::DeviceGone);
+        assert_eq!(
+            device_code_error("x", AUDCLNT_E_DEVICE_IN_USE),
+            BackendError::DeviceBusy
+        );
         assert_eq!(
             device_code_error("x", E_FAIL),
             BackendError::System {

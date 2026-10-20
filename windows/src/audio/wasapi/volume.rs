@@ -196,7 +196,10 @@ fn listen(commands: &mpsc::Receiver<Command>, ready: Ready) {
         Ok(enumerator) => enumerator,
         Err(error) => return ready.fail(error),
     };
-    ready.ok(());
+    if !ready.ok(()) {
+        // Nobody waits for this listener thread anymore.
+        return;
+    }
     let mut registrations: BTreeMap<String, Registration> = BTreeMap::new();
     while let Ok(command) = commands.recv() {
         match command {

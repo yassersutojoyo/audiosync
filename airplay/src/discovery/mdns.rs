@@ -15,6 +15,7 @@
 //! Avahi or the Windows DNS client). It only queries; it announces nothing.
 
 use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
 use mdns_sd::{ResolvedService, ScopedIp, ServiceDaemon, ServiceEvent};
@@ -63,6 +64,19 @@ impl Source {
     }
 }
 
+/// How many times [`MdnsBrowser::new`] tried to start a live daemon in this
+/// process.
+static DAEMONS_STARTED: AtomicUsize = AtomicUsize::new(0);
+
+/// How many times this process tried to start a live `mdns-sd` daemon
+/// ([`MdnsBrowser::new`]), whether it started or not. Tests of the crates
+/// built on the sender check it stays 0: a test never browses the real
+/// network, whose multicast sockets on every interface make the system
+/// firewall ask the user to allow the test program.
+pub fn daemons_started() -> usize {
+    DAEMONS_STARTED.load(Ordering::SeqCst)
+}
+
 /// Browses both service types (P7) and hands over what it finds.
 pub struct MdnsBrowser {
     sources: Vec<Source>,
@@ -85,6 +99,7 @@ impl MdnsBrowser {
     /// Starts the `mdns-sd` daemon and browses `_raop._tcp.local.` and
     /// `_airplay._tcp.local.`.
     pub fn new() -> Result<MdnsBrowser, DiscoveryError> {
+        DAEMONS_STARTED.fetch_add(1, Ordering::SeqCst);
         let daemon = ServiceDaemon::new().map_err(DiscoveryError)?;
         let mut sources = Vec::new();
         for kind in [ServiceKind::Raop, ServiceKind::AirPlay] {
