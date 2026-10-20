@@ -4,7 +4,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-10-20
+## [0.5.0] - 2026-10-21
 
 ### Added
 
@@ -17,6 +17,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - AudioSync is now licensed under the GNU General Public License, version 3 or later (GPL-3.0-or-later), instead of MIT. The About panel shows the copyright and the license, and that it comes with no warranty. Contributions now come with short contributor terms, described in `CONTRIBUTING.md`.
 - AirPlay on the Mac now goes through AudioSync's own AirPlay sender, the one the Windows version uses, and the bundled AirPlay engine is gone, so the app is much smaller and runs nothing next to itself. Your AirPlay speakers, their volumes, groups and auto-connect carry over the first time the sender finds them. An Apple TV that asks for a PIN pairs once more, and an AirPlay 1 speaker with a password now works: AudioSync asks for the password when you turn it on. A speaker that only takes AirPlay 2 isn't listed yet, and neither is this Mac's own AirPlay Receiver.
 - Delays now work with local speakers alone. The Mac's built-in speakers are the reference and have no delay of their own; every other local speaker's delay is relative to them and always applies, so you can line a Bluetooth speaker up with the built-in speakers (it usually needs about −150 to −300 ms) without any AirPlay speaker on. Lining the Mac up with AirPlay speakers happens in one place now, the AirPlay delay under Connected Speakers. Delays from an earlier version are carried over once, so a setup tuned for AirPlay sounds the same.
+- Sound now fades in over about 20 ms when it starts and fades out when it stops, on local and AirPlay speakers alike.
 - Building from source now needs a Rust toolchain, since the app links a small Rust library.
 - A delay you've typed but not applied yet is marked, with a hint to press Return (Enter on Windows).
 - In the main window, the speaker list fades out under the header instead of being cut off by a hard edge, and the header band drags the window again.
@@ -38,6 +39,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - An AirPlay speaker that sends back broken or odd answers can no longer crash AudioSync. Pairing answers nested too deeply or pointing back at themselves are refused, and so are malformed replies from the speaker. This goes for the Windows version too.
 - Building from source also finds Rust when it's installed through Homebrew's rustup.
 - A Bluetooth speaker, or any other output that runs at 44.1 kHz, no longer crackles when you switch it on. It used to run short of audio for a moment at the start. This goes for the Windows version too.
+- With two Bluetooth speakers on at once, the one whose audio arrives late from macOS no longer runs short of audio and drifts off the delay you set. When an output stops, the debug log now says how many of its audio callbacks came late and by how much at most.
 - A 44.1 kHz speaker on Windows or a 96 kHz one on the Mac whose clock runs a touch fast no longer clicks every minute or two. AudioSync now keeps following the speaker's clock and nudges its pace a frame at a time, either way, so one that runs a touch slow no longer jumps ahead every few minutes either. This goes for the Windows version too.
 - A delay you type, for a speaker or for AirPlay, now applies once, not at every keystroke, so typing 220 no longer jumps through 2 and 22 ms on the way. Return applies it and keeps the controls open, and Command-S does the same for every delay you typed. A click anywhere on a speaker's row opens or closes its delay controls (the AirPlay note under the last row counts as part of that row), and a click on another speaker's row applies what you typed in the open one first, and that one stays open. A click outside every speaker row applies every delay you typed and closes them all. Escape drops what you typed and closes them, and so does quitting before the delay applies. The delay field takes only digits after an optional + or −, and a number out of range gets a red outline and a line saying the range and what Return applies.
 - A USB or Bluetooth speaker that came back after being unplugged or disconnected could look like it was playing and still stay silent. It plays again now.
