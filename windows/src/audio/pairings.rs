@@ -114,6 +114,9 @@ pub struct PairingStore {
     /// The file was ignored when the store opened: it is kept aside before
     /// the next write replaces it.
     keep_aside: bool,
+    /// Where a write kept that file aside, until
+    /// [`PairingStore::take_kept_aside`] takes it.
+    kept_aside: Option<PathBuf>,
 }
 
 impl fmt::Debug for PairingStore {
@@ -140,6 +143,7 @@ impl PairingStore {
             sealer: Sealer::current_user(),
             entries: BTreeMap::new(),
             keep_aside: false,
+            kept_aside: None,
         }
     }
 
@@ -166,8 +170,16 @@ impl PairingStore {
             sealer,
             entries,
             keep_aside: matches!(loaded, Loaded::Ignored(_)),
+            kept_aside: None,
         };
         (store, loaded)
+    }
+
+    /// Where the file ignored at launch was kept aside, once a write did
+    /// that (the file could be read again by then); `None` after that, so
+    /// the user is told once.
+    pub fn take_kept_aside(&mut self) -> Option<PathBuf> {
+        self.kept_aside.take()
     }
 
     /// Whether the speaker `id` is paired.
@@ -207,7 +219,7 @@ impl PairingStore {
             return Ok(());
         };
         if self.keep_aside {
-            data_folder::keep_aside(path, IGNORED_FILE_NAME)?;
+            self.kept_aside = data_folder::keep_aside(path, IGNORED_FILE_NAME)?;
             self.keep_aside = false;
         }
         if self.entries.is_empty() {

@@ -446,9 +446,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Writes the settings file if anything changed since it was last read
     /// or written. A failed write is logged and tried again at the next
     /// change; the settings stay in effect for this run, and the user is
-    /// told once, until a save works again and clears that notice. Nothing
-    /// is written while an older file's delays wait for their migration.
-    /// Returns whether the notices changed.
+    /// told once, until a save works again and clears that notice. A file
+    /// ignored at launch that the save kept aside is told once too, with the
+    /// copy's name. Nothing is written while an older file's delays wait for
+    /// their migration. Returns whether the notices changed.
     fn persist(&mut self) -> bool {
         if self.delays_to_migrate {
             return false;
@@ -459,7 +460,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         self.must_save = false;
         let saved = self.settings_file.save(&current);
-        let notices_changed = saved.is_ok() == self.settings_unsaved;
+        let mut notices_changed = saved.is_ok() == self.settings_unsaved;
         if saved.is_ok() && self.settings_unsaved {
             self.notices.clear(&[NoticeSubject::SettingsFile]);
         }
@@ -480,6 +481,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
                             ),
                         }
                     });
+                    // The user's settings were replaced by the defaults at
+                    // launch: told once, with where the old file is.
+                    if let KeptAside::Ignored(_) = kept {
+                        let file = kept.file_name();
+                        self.post(
+                            NoticeSubject::SettingsKeptAside,
+                            NoticeMessage::SettingsKeptAside { file },
+                        );
+                        notices_changed = true;
+                    }
                 }
                 self.log.log(|| "settings: saved".to_owned());
             }
@@ -1105,7 +1116,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::PairingStore { saved: true } => {
                 self.notices.clear(&[NoticeSubject::PairingsFile]);
             }
-            BackendEvent::PairingsKeptAside { .. } => {}
+            // The pairings in it were missing since launch: told once, with
+            // where the old file is.
+            BackendEvent::PairingsKeptAside { file } => {
+                self.post(
+                    NoticeSubject::PairingsKeptAside,
+                    NoticeMessage::PairingsKeptAside { file },
+                );
+            }
         }
     }
 

@@ -587,6 +587,10 @@ pub struct AirPlaySpeakers {
     /// Whether the pairings' file can be written changed since the last
     /// poll, which reports it ([`BackendEvent::PairingStore`]).
     store_change: Option<bool>,
+    /// The file name of the copy a write of the pairings' file kept aside
+    /// since the last poll, which reports it
+    /// ([`BackendEvent::PairingsKeptAside`]).
+    store_kept_aside: Option<String>,
     log: DebugLog,
 }
 
@@ -616,17 +620,24 @@ impl AirPlaySpeakers {
             stopped: false,
             store_unsaved: false,
             store_change: None,
+            store_kept_aside: None,
             log,
         }
     }
 
     /// Takes in whether a write of the pairings' file worked: a change from
     /// working to failing, or back, is reported at the next poll, so the
-    /// user is told once while the writes keep failing.
+    /// user is told once while the writes keep failing. A file ignored at
+    /// launch that the write kept aside is reported at the next poll too
+    /// (the store tells that once).
     fn store_written(&mut self, saved: bool) {
         if saved == self.store_unsaved {
             self.store_unsaved = !saved;
             self.store_change = Some(saved);
+        }
+        if let Some(kept) = self.store.take_kept_aside() {
+            let file = kept.file_name().unwrap_or_default().to_string_lossy();
+            self.store_kept_aside = Some(file.into_owned());
         }
     }
 
@@ -1178,6 +1189,9 @@ impl AirPlaySpeakers {
         }
         if let Some(saved) = self.store_change.take() {
             events.push(BackendEvent::PairingStore { saved });
+        }
+        if let Some(file) = self.store_kept_aside.take() {
+            events.push(BackendEvent::PairingsKeptAside { file });
         }
         if changed {
             events.insert(0, BackendEvent::AirPlayChanged);
