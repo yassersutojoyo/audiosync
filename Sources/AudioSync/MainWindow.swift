@@ -717,13 +717,14 @@ struct SyncControls: View {
                 step(10)
                 step(100)
             }
-            if pending {
-                // VoiceOver hears this as the field's hint.
-                Label(text.delayDraftHint, systemImage: "return")
-                    .font(.caption)
-                    .foregroundStyle(Brand.tealText)
-                    .accessibilityHidden(true)
-            }
+            // VoiceOver hears this as the field's hint. Hidden, it keeps its
+            // line, so the text below doesn't jump on the first keystroke or
+            // when the value applies.
+            Label(text.delayDraftHint, systemImage: "return")
+                .font(.caption)
+                .foregroundStyle(Brand.tealText)
+                .opacity(pending ? 1 : 0)
+                .accessibilityHidden(true)
             Text(hint)
                 .font(.caption)
                 .foregroundStyle(Brand.secondaryText)

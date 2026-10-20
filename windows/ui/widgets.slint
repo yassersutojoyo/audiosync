@@ -541,9 +541,13 @@ component DraftOutline inherits Rectangle {
 // Under a delay field that holds typing not yet applied. Narrator hears it as
 // the field's description instead. Teal text: 5.07:1 or more on a dark
 // playing row, 5.35:1 or more on a light one. A wrapper, like QuietText, so
-// Narrator skips it.
+// Narrator skips it. Hidden, it keeps its line, so the text below doesn't
+// jump on the first keystroke or when the value applies.
 component DraftHint inherits HorizontalLayout {
+    in property <bool> shown;
+
     Text {
+        visible: root.shown;
         text: Strings.delay-draft-hint;
         font-size: Tokens.font-size-caption;
         color: Tokens.teal-text;
@@ -665,7 +669,9 @@ export component SyncControls inherits VerticalLayout {
         }
     }
 
-    if root.pending: DraftHint { }
+    DraftHint {
+        shown: root.pending;
+    }
 
     SecondaryText {
         text: Strings.sync-hint(root.reference-name);
@@ -772,7 +778,9 @@ export component AirPlayDelayControls inherits VerticalLayout {
                 }
             }
 
-            if root.pending: DraftHint { }
+            DraftHint {
+                shown: root.pending;
+            }
 
             SecondaryText {
                 text: Strings.airplay-delay-hint;
