@@ -152,6 +152,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var codePromptWindow: NSWindow?
     /// A taken-back prompt that waits to close under another modal window.
     var promptWithdrawal = PromptWithdrawal()
+    /// Watches a waiting withdrawn prompt for the moment it is key again.
+    var codePromptKeyObserver: NSObjectProtocol?
     var sentTrackInfo: SentTrackInfo?
 
     // MARK: - Local speakers (`+Outputs`)
