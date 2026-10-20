@@ -16,11 +16,11 @@ use crate::policy::device_volume::{self, Decision, DeviceVolume};
 pub const DEVICE_VOLUME_UNKNOWN: u32 = 0;
 /// [`Decision::Fine`]: not muted and not low, the row shows nothing.
 pub const DEVICE_VOLUME_FINE: u32 = 1;
-/// [`Decision::Low`]: the volume is below 25 %.
+/// [`Decision::Low`]: the volume is 25 % or less.
 pub const DEVICE_VOLUME_LOW: u32 = 2;
 /// [`Decision::Muted`]: muted at a volume that isn't low or isn't known.
 pub const DEVICE_VOLUME_MUTED: u32 = 3;
-/// [`Decision::MutedAndLow`]: muted, and below 25 % too.
+/// [`Decision::MutedAndLow`]: muted, and 25 % or less too.
 pub const DEVICE_VOLUME_MUTED_AND_LOW: u32 = 4;
 
 /// One reading of an output device's own volume and mute, as the host read

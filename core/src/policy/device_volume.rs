@@ -12,8 +12,8 @@
 
 use std::fmt;
 
-/// A device volume is low below this whole percent (S196).
-pub const LOW_BELOW_PERCENT: u32 = 25;
+/// A device volume is low at this whole percent or below (S196).
+pub const LOW_AT_MOST_PERCENT: u32 = 25;
 
 /// The volume, 0 to 1, that the fix sets on a low device (S197).
 pub const FIX_VOLUME: f64 = 0.75;
@@ -36,11 +36,11 @@ pub enum Decision {
     Unknown,
     /// Not muted, and not low (or the volume isn't known): nothing to show.
     Fine,
-    /// The volume is below 25 %.
+    /// The volume is 25 % or less.
     Low,
     /// Muted, at a volume that isn't low or isn't known.
     Muted,
-    /// Muted, and the volume is below 25 % too.
+    /// Muted, and the volume is 25 % or less too.
     MutedAndLow,
 }
 
@@ -124,11 +124,11 @@ impl DeviceVolume {
 
     fn is_low(self) -> bool {
         self.percent()
-            .is_some_and(|percent| percent < LOW_BELOW_PERCENT)
+            .is_some_and(|percent| percent <= LOW_AT_MOST_PERCENT)
     }
 
     /// What the reading means (S196): muted when the mute is known and set,
-    /// low when the volume is known and below 25 %, both when both hold,
+    /// low when the volume is known and 25 % or less, both when both hold,
     /// unknown when neither part is known, fine otherwise.
     pub fn decision(self) -> Decision {
         let muted = self.muted == Some(true);

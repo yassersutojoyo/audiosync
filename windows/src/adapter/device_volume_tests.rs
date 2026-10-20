@@ -89,8 +89,8 @@ fn a_switched_on_output_at_13_percent_shows_the_low_hint() {
     let speakers = adapter.snapshot().speaker(&key(SPEAKERS)).cloned().unwrap();
     assert_eq!(speakers.volume, DEFAULT_LOCAL_POSITION);
 
-    // Raised to 25 % in Windows, the hint goes at the next poll.
-    adapter.audio_mut().set_output_level(SPEAKERS, 0.25);
+    // Raised to 26 % in Windows, the hint goes at the next poll.
+    adapter.audio_mut().set_output_level(SPEAKERS, 0.26);
     assert!(adapter.poll(), "the row changed");
     assert_eq!(hint(&adapter, SPEAKERS), None);
     assert_eq!(row(&adapter, SPEAKERS).0, DeviceVolumeHint::None);
