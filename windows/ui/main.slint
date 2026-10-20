@@ -29,6 +29,7 @@ component SpeakerSection inherits VerticalLayout {
     callback toggled(string);
     callback volume-changed(string, float);
     callback sync-toggled(string);
+    callback blank-clicked();
     callback delay-stepped(string, int);
     callback delay-edited(string, string);
     callback delay-committed(string);
@@ -89,6 +90,9 @@ component SpeakerSection inherits VerticalLayout {
                 }
                 sync-toggled => {
                     root.sync-toggled(speaker.id);
+                }
+                blank-clicked => {
+                    root.blank-clicked();
                 }
                 delay-stepped(delta) => {
                     root.delay-stepped(speaker.id, delta);
@@ -624,6 +628,9 @@ export component MainWindow inherits Window {
                         sync-toggled(id) => {
                             root.sync-toggled(id);
                         }
+                        blank-clicked => {
+                            root.blank-clicked();
+                        }
                         delay-stepped(id, delta) => {
                             root.delay-stepped(id, delta);
                         }
@@ -662,6 +669,9 @@ export component MainWindow inherits Window {
 
                                 GroupRow {
                                     item: group;
+                                    blank-clicked => {
+                                        root.blank-clicked();
+                                    }
                                     init => {
                                         if group.id == root.focus-group-id {
                                             root.focus-group-id = "";
@@ -718,6 +728,9 @@ export component MainWindow inherits Window {
                         }
                         sync-toggled(id) => {
                             root.sync-toggled(id);
+                        }
+                        blank-clicked => {
+                            root.blank-clicked();
                         }
                         delay-stepped(id, delta) => {
                             root.delay-stepped(id, delta);

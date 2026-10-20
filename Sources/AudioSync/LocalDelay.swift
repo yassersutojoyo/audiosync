@@ -183,8 +183,7 @@ struct AirPlayDelay: Equatable {
 
 /// A delay field's typed text (S181). Keystrokes only change the text; the
 /// value applies on commit (its panel closing, see `DelayPanels`), once, so
-/// typing "220"
-/// doesn't re-time the outputs at 2 and 22 ms on the way. Text the field
+/// typing "220" doesn't re-time the outputs at 2 and 22 ms on the way. Text the field
 /// can't read, or the saved value typed again, applies nothing, and the
 /// field shows the saved value again.
 struct DelayFieldDraft: Equatable {
@@ -228,8 +227,7 @@ struct DelayFieldDraft: Equatable {
         text = format(saved)
     }
 
-    /// Drop the typing and show the saved value (a step button applied one,
-    /// or Escape).
+    /// Drop the typing and show the saved value (a step button applied one).
     mutating func discard(saved: Double, format: (Double) -> String) {
         isEditing = false
         text = format(saved)

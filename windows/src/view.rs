@@ -1869,8 +1869,9 @@ impl App {
     /// Closing the main window keeps AudioSync running in the tray, like the
     /// Mac app in the menu bar. Without a tray icon, it quits.
     fn close_main(&self) {
-        // As a click outside the controls: what was typed applies.
-        self.end_delay_typing(true);
+        // With a tray this is a click outside the controls, so what was typed
+        // applies; without one it quits, and a quit drops it.
+        self.end_delay_typing(self.tray_available.get());
         self.remember_view();
         let _ = self.main.hide();
         if !self.tray_available.get() {
@@ -2647,9 +2648,15 @@ mod tests {
 
     #[test]
     fn a_click_outside_every_control_applies_each_typed_delay_and_closes_every_sync_control() {
-        // Between the wordmark and the streaming switch, then under the
-        // left column's cards, in its scroll view.
-        for (x, y) in [(500.0, 60.0), (100.0, 700.0)] {
+        // Between the wordmark and the streaming switch, under the left
+        // column's cards, then on the blank part of a row in each speaker
+        // section, which the row's own TouchArea takes.
+        for (x, y) in [
+            (500.0, 60.0),
+            (100.0, 700.0),
+            (420.0, 190.0),
+            (420.0, 470.0),
+        ] {
             let app = app_over(MockBackend::new());
             draw_frames();
             type_into_two_rows(&app, "abc");

@@ -788,6 +788,8 @@ export component SpeakerRow inherits Rectangle {
     // A narrow window: a shorter volume slider leaves the name more room.
     in property <bool> compact;
     callback toggled();
+    // A click on the row's blank space, which this row's TouchArea takes.
+    callback blank-clicked();
     callback volume-changed(float);
     callback sync-toggled();
     callback delay-stepped(int);
@@ -859,6 +861,9 @@ export component SpeakerRow inherits Rectangle {
     // Around the row's content, so the hover fill stays on over the row's
     // own controls (they still get their clicks and drags first).
     hover := TouchArea {
+        clicked => {
+            root.blank-clicked();
+        }
         menu := ContextMenuArea {
             Menu {
                 MenuItem {
@@ -1163,6 +1168,7 @@ export component SpeakerRow inherits Rectangle {
 export component GroupRow inherits Rectangle {
     in property <GroupItem> item;
     callback toggled();
+    callback blank-clicked();
     callback rename();
     callback delete();
     // The part of the row with the keyboard focus changed (its toggle or
@@ -1193,6 +1199,9 @@ export component GroupRow inherits Rectangle {
     // Around the row's content, so the hover fill stays on over the row's
     // own controls (they still get their clicks and drags first).
     hover := TouchArea {
+        clicked => {
+            root.blank-clicked();
+        }
         menu := ContextMenuArea {
             Menu {
                 MenuItem {
