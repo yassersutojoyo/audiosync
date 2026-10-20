@@ -705,6 +705,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // A level write that doesn't answer leaves Windows audio hung: the
+    // unmute after it isn't tried, and the log says so rather than
+    // reporting a failure that never happened.
+    #[test]
+    fn a_fix_whose_level_write_doesnt_answer_tries_no_unmute() {
+        let dir = test_dir("controller-device-volume-fix-no-unmute");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let mut backend = MockBackend::empty();
+        backend.set_debug_log(log.clone());
+        backend.connect_output(SPEAKERS, "Speakers");
+        backend.list_outputs().unwrap();
+        backend.set_output_enabled(SPEAKERS, true).unwrap();
+        let record = backend.volume_record();
+        backend.set_output_level(SPEAKERS, 0.125);
+        backend.mute_output(SPEAKERS, true);
+        backend.poll();
+
+        backend.refuse_volume_writes(Some(BackendError::NotResponding));
+        backend.fix_device_volume(SPEAKERS);
+        assert_eq!(
+            record.writes(),
+            [VolumeWrite::Level {
+                id: SPEAKERS.to_owned(),
+                level: 0.75
+            }]
+        );
+        let lines: Vec<String> = logged(&log, &dir)
+            .into_iter()
+            .filter(|message| message.contains("fix"))
+            .collect();
+        assert_eq!(
+            lines,
+            ["output \"Speakers\" (speakers) device volume fix: volume set to 75%: failed: \
+              Windows audio didn't answer in time.; unmute not tried"]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     fn poll_times(backend: &mut MockBackend, polls: u32) {
         for _ in 0..polls {
             backend.poll();
