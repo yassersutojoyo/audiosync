@@ -49,7 +49,6 @@ struct UIStrings {
         case .dark: return "Dark"
         }
     }
-    let checkForUpdates = "Check for Updates…"
     let masterVolumeTitle = "Master Volume"
     let moreOptions = "Options"
     let dismissNotice = "Dismiss Notice"

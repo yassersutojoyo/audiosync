@@ -1,10 +1,6 @@
 import AppKit
 import ServiceManagement
 
-#if canImport(Sparkle)
-import Sparkle
-#endif
-
 // The app's windows and the bridge to its views: the menu bar item, the main
 // window, the equalizer and the Guide; the model snapshots the views render;
 // the actions they send back; and the commands in the app menus.
@@ -16,8 +12,7 @@ extension AppDelegate {
     /// Builds what the views need before any window opens: the equalizer
     /// (with its saved settings, handed to the engine), Now Playing's
     /// callbacks, the view actions, the menu bar item and the first model
-    /// snapshot. `MainMenu.make` reads `appModel.actions` afterwards to see
-    /// whether this build checks for updates.
+    /// snapshot.
     func setUpMenuBar() {
         let settings = StoredEqualizer.decode(UserDefaults.standard.data(forKey: Keys.equalizer))
         engine.updateEqualizer(settings)
@@ -81,7 +76,6 @@ extension AppDelegate {
         a.openGuide = { [weak self] in self?.openGuideWindow() }
         a.openEqualizer = { [weak self] in self?.openEqualizerWindow() }
         a.refreshDevices = { [weak self] in self?.rescanDevices() }
-        a.checkForUpdates = updateCheck()
         a.refreshExternalState = { [weak self] in self?.rereadExternalState() }
         a.mainWindowVisible = { [weak self] visible in
             guard let self, visible != self.nowPlayingOnScreen else { return }
@@ -109,20 +103,6 @@ extension AppDelegate {
         }
         a.fixDeviceVolume = { [weak self] uid in self?.fixDeviceVolume(uid) }
         return a
-    }
-
-    /// The updater's "check now", or nil when this build has no update feed
-    /// (the menus then leave the item out).
-    private func updateCheck() -> (() -> Void)? {
-        #if canImport(Sparkle)
-        guard let controller = updaterController else { return nil }
-        return {
-            NSApp.activate(ignoringOtherApps: true)   // Sparkle's window opens in front
-            controller.checkForUpdates(nil)
-        }
-        #else
-        return nil
-        #endif
     }
 
     // MARK: - Actions behind the views
@@ -391,18 +371,9 @@ extension AppDelegate {
         setAppearance(choice)
     }
 
-    @objc func checkForUpdates(_ sender: Any?) {
-        #if canImport(Sparkle)
-        guard let updater = updaterController else { return }
-        NSApp.activate(ignoringOtherApps: true)   // Sparkle's window opens in front
-        updater.checkForUpdates(sender)
-        #endif
-    }
-
     /// Keeps the menus current each time one opens: check marks for the
     /// choices that are on, the streaming item's wording.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        var itemEnabled = true
         switch menuItem.action {
         case #selector(toggleStreaming(_:)):
             menuItem.title = engine.isRunning ? text.menuTurnStreamingOff : text.menuTurnStreamingOn
@@ -410,16 +381,10 @@ extension AppDelegate {
             menuItem.state = (menuItem.representedObject as? String) == appearance.rawValue ? .on : .off
         case #selector(toggleLaunchAtLogin(_:)):
             menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        case #selector(checkForUpdates(_:)):
-            #if canImport(Sparkle)
-            itemEnabled = updaterController?.updater.canCheckForUpdates ?? false
-            #else
-            itemEnabled = false
-            #endif
         default:
             break
         }
-        return itemEnabled
+        return true
     }
 }
 

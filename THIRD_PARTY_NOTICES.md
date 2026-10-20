@@ -17,7 +17,6 @@ Each component stays under its own license. The app carries, in
 - the copyright notices and license texts of the Rust standard library and of
   the Rust crates compiled into the audio core (`licenses/rust/`, the crates in
   `crates.txt`)
-- Sparkle's license (`licenses/sparkle/`), when the build includes it
 
 **Earlier versions.** AudioSync releases up to 0.4.1 bundled an AirPlay
 engine, OwnTone (GPL-2.0-or-later), and the libraries it used, and attached
@@ -32,7 +31,6 @@ providing the source.
 
 | Component | License |
 |---|---|
-| [Sparkle](https://sparkle-project.org) 2.9.5 (update framework, currently disabled; license in `licenses/sparkle/`) | MIT |
 | [Rust standard library](https://github.com/rust-lang/rust), © The Rust Project Developers (the parts the audio core uses, compiled into the app binary; its copyright notices, which also cover the crates it is built from, its license texts and the Rust version in `licenses/rust/`) | MIT OR Apache-2.0 |
 
 The audio core carries AudioSync's own AirPlay sender (`airplay/`, MIT), the

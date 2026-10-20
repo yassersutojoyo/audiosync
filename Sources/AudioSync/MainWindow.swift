@@ -151,9 +151,6 @@ struct MainView: View {
                                                   set: { model.actions.setLaunchAtLogin($0) }))
             Divider()
             Button(t.guideTitle) { model.actions.openGuide() }
-            if let check = model.actions.checkForUpdates {
-                Button(t.checkForUpdates) { check() }
-            }
         } label: {
             Image(systemName: "gearshape")
                 .font(.system(size: 15))

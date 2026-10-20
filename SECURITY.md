@@ -30,7 +30,7 @@ Capture uses a Core Audio process tap (behind the Screen & System Audio Recordin
 
 ### Supply chain
 
-The Rust core and the native sender build with `--locked`, so their crates are exactly the ones in the committed `Cargo.lock`, and `scripts/build_core.sh` records each one's version and license in the app (`Contents/Resources/ThirdParty/licenses/rust/crates.txt`). `build.sh` pins Sparkle 2.9.5 by SHA-256, unless you pass an already verified copy with `SPARKLE_DIR`, which skips the check.
+The Rust core and the native sender build with `--locked`, so their crates are exactly the ones in the committed `Cargo.lock`, and `scripts/build_core.sh` records each one's version and license in the app (`Contents/Resources/ThirdParty/licenses/rust/crates.txt`).
 
 ## Signing and distribution
 

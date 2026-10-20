@@ -145,7 +145,7 @@ jobs:
 
   app-bundle:
     # build.sh end to end, without touching /Applications or quitting anything:
-    # the core, Sparkle, signing with the local identity make-local-cert.sh
+    # the core, signing with the local identity make-local-cert.sh
     # creates, then the bundle is checked and started once, and a local
     # identity that can't sign must stop the build.
     runs-on: macos-15
