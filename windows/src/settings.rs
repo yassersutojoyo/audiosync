@@ -568,21 +568,26 @@ impl SettingsFile {
             return Ok(None);
         }
         let kept = match fs::read(path) {
-            Ok(bytes) if written_by_a_newer_build(&bytes) => None,
-            Ok(bytes) => Some(KeptAside::Ignored(data_folder::keep_bytes_aside(
-                path,
-                IGNORED_FILE_NAME,
-                &bytes,
-            )?)),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Ok(bytes) if written_by_a_newer_build(&bytes) => Ok(None),
+            Ok(bytes) => data_folder::keep_bytes_aside(path, IGNORED_FILE_NAME, &bytes)
+                .map(|kept| Some(KeptAside::Ignored(kept))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        };
+        match kept {
+            Ok(kept) => {
+                self.keep_aside.set(false);
+                Ok(kept)
+            }
+            // The file can't be read yet, or the copy couldn't be written
+            // (a full disk, a folder that can't be written): either way the
+            // next try waits, rather than coming at every poll.
             Err(error) => {
                 self.keep_aside_wait
                     .set(data_folder::KEEP_ASIDE_RETRY_POLLS);
-                return Err(error);
+                Err(error)
             }
-        };
-        self.keep_aside.set(false);
-        Ok(kept)
+        }
     }
 
     /// [`SettingsFile::keep_ignored_aside`] again, once its next try is due:
