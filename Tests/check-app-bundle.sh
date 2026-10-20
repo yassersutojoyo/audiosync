@@ -1,6 +1,6 @@
 #!/bin/bash
 # Checks an AudioSync.app that ./build.sh made: the bundle layout, Info.plist,
-# the license files, the Rust core and Sparkle in the binary, every signature,
+# the license files, the Rust core in the binary, every signature,
 # and that nothing else is bundled: AirPlay runs in the app itself, so there
 # are no helper programs and no loose libraries. CI runs it on the app
 # `./build.sh --no-install` leaves in .build/app; it works on an installed copy
@@ -62,7 +62,6 @@ minos_at_most() {
   done
   [ "$found" = 1 ]
 }
-has_rpath() { otool -l "$1" | grep "path $2 " >/dev/null; }
 # The signer codesign reports: the leaf certificate's name, or "adhoc"
 # (codesign lists the certificates from verbosity 2 on).
 signer() { codesign -dvv "$1" 2>&1 | awk -F= '/^(Authority|Signature)=/ && !found { print $2; found = 1 }'; }
@@ -100,15 +99,10 @@ done
 # (its discovery) stands for them.
 expect "crates.txt covers the AirPlay sender's crates (mdns-sd)" \
   grep -q '^mdns-sd ' "$third_party/licenses/rust/crates.txt"
-expect "Frameworks/Sparkle.framework" test -f "$contents/Frameworks/Sparkle.framework/Versions/Current/Sparkle"
-expect "ThirdParty/licenses/sparkle/LICENSE" test -s "$third_party/licenses/sparkle/LICENSE"
 
 echo "▶ App binary"
 links_core() { nm -gU "$bin" | grep ' T _asc_version$' >/dev/null; }
-links_sparkle() { otool -L "$bin" | grep '@rpath/Sparkle.framework/' >/dev/null; }
 expect "contains the Rust audio core (_asc_version)" links_core
-expect "links Sparkle.framework" links_sparkle
-expect "finds it through the rpath @executable_path/../Frameworks" has_rpath "$bin" @executable_path/../Frameworks
 expect "targets macOS $min or older (LSMinimumSystemVersion)" minos_at_most "$bin" "$min"
 
 echo "▶ Signatures"
@@ -134,19 +128,12 @@ case "$app_signer" in
     expect "Hardened Runtime (Developer ID)" runtime ;;
 esac
 
-echo "▶ Nothing besides the app and Sparkle"
+echo "▶ Nothing besides the app"
 # AirPlay goes through the sender inside the app binary (the Rust core), so a
 # helper program, a loose library or an engine's version list would be a
 # leftover of an older build.
 expect "no Contents/Helpers" test ! -e "$contents/Helpers"
-only_sparkle() {
-  local f
-  for f in "$contents/Frameworks"/*; do
-    [ -e "$f" ] || continue
-    [ "$(basename "$f")" = Sparkle.framework ] || { echo "$f" >&2; return 1; }
-  done
-}
-expect "Frameworks holds only Sparkle.framework" only_sparkle
+expect "no Contents/Frameworks" test ! -e "$contents/Frameworks"
 expect "no ThirdParty/versions.txt" test ! -e "$third_party/versions.txt"
 
 if [ "$launch" = 1 ]; then

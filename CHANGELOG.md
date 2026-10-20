@@ -18,6 +18,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A delay you've typed but not applied yet is marked, with a hint to press Return (Enter on Windows).
 - The Guide's setup section is now called First Steps, with clearer tips for lining up your speakers.
 
+### Removed
+
+- The built-in updater, which was never switched on, is gone. Updates stay manual: download the new version from the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
+
 ### Fixed
 
 - An AirPlay speaker no longer jumps to full volume when streaming starts. Each AirPlay speaker keeps its own volume, and the master slider scales it too, never above its own slider. After the update each AirPlay speaker starts at 60% or lower the first time, so set its slider once.

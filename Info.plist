@@ -35,7 +35,5 @@
 	<string>AudioSync finds and streams to the AirPlay speakers (HomePod, Apple TV, AirPlay receivers) on your network.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>AudioSync reads the input device you choose (microphone, line-in or audio interface) to play it on your speakers.</string>
-	<key>SUEnableAutomaticChecks</key>
-	<false/>
 </dict>
 </plist>

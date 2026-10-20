@@ -54,13 +54,6 @@ enum AppLifecycle {
     /// stays in the menu bar and the Dock until its icon is clicked.
     static func opensMainWindow(loginItemLaunch: Bool) -> Bool { !loginItemLaunch }
 
-    /// Sparkle runs, and Check for Updates… is offered, only when the bundle
-    /// names an update feed (`SUFeedURL`, RELEASE.md).
-    static func hasUpdateFeed(_ value: Any?) -> Bool {
-        guard let feed = value as? String else { return false }
-        return !feed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
     /// The running copy answers a second launch by showing its window, unless
     /// it is quitting: the new copy then waits for it to go and carries on.
     static func answersSecondLaunch(exiting: Bool) -> Bool { !exiting }

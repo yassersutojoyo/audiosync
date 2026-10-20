@@ -55,8 +55,6 @@ final class AppModel: ObservableObject {
         var openMainWindow: () -> Void = {}
         var openGuide: () -> Void = {}
         var refreshDevices: () -> Void = {}
-        /// Nil when this build has no update feed.
-        var checkForUpdates: (() -> Void)?
         /// The panel opened or the window became key: re-read what can change
         /// outside AudioSync.
         var refreshExternalState: () -> Void = {}

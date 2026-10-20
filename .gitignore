@@ -28,9 +28,8 @@ __pycache__/
 # The debug log, when written inside the repository
 audiosync-debug.log
 
-# Credentials — this repository is public. With Sparkle auto-updates, the EdDSA
-# private key became the trust anchor of the release chain, and that one key signs
-# every app it releases. An accidental commit cannot be undone.
+# Credentials: this repository is public, and an accidental commit cannot be
+# undone.
 *.pem
 *.key
 *.p12

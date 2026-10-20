@@ -2866,11 +2866,6 @@ do {
           "launch: any other launch is not a login-item launch")
     check(AppLifecycle.opensMainWindow(loginItemLaunch: false) && !AppLifecycle.opensMainWindow(loginItemLaunch: true),
           "launch: the main window opens at launch, but not at login")
-    check(AppLifecycle.hasUpdateFeed("https://example.invalid/appcast.xml"),
-          "launch: the updater runs when the bundle names a feed")
-    check(!AppLifecycle.hasUpdateFeed(nil) && !AppLifecycle.hasUpdateFeed("") && !AppLifecycle.hasUpdateFeed(" \n")
-            && !AppLifecycle.hasUpdateFeed(42),
-          "launch: no feed, a blank one or a wrong type leaves the updater off")
     check(AppLifecycle.safetyNetInterval == 30,
           "reconcile: with no event, the host reconciles by itself only every 30 s, the safety net (S101)")
     do {

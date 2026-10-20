@@ -5,16 +5,11 @@ import AppKit
 /// `validateMenuItem` handle the AudioSync-specific ones.
 enum MainMenu {
 
-    static func make(text t: UIStrings, checksForUpdates: Bool) -> NSMenu {
+    static func make(text t: UIStrings) -> NSMenu {
         let main = NSMenu()
 
         let app = submenu(of: main, title: t.appName)
         app.addItem(item(t.menuAbout, #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
-        #if canImport(Sparkle)
-        if checksForUpdates {
-            app.addItem(item(t.checkForUpdates, #selector(AppDelegate.checkForUpdates(_:))))
-        }
-        #endif
         app.addItem(.separator())
         let appearance = NSMenu(title: t.appearance)
         for choice in AppAppearance.allCases {

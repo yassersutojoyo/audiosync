@@ -87,7 +87,7 @@ Download `AudioSync.dmg` from the [latest release](https://github.com/yassersuto
 
 I don't have a paid Apple developer account, so releases aren't notarized and macOS blocks the first launch. Open AudioSync once, dismiss the warning, then go to System Settings → Privacy & Security and click Open Anyway next to the message about AudioSync. (Or run `xattr -dr com.apple.quarantine /Applications/AudioSync.app`.) Each release lists SHA-256 checksums for its files.
 
-Auto-update is off for now. To update, quit AudioSync and replace the app with the one from [Releases](https://github.com/yassersutojoyo/audiosync/releases). [`CHANGELOG.md`](CHANGELOG.md) has what changed.
+AudioSync doesn't update itself. To update, quit AudioSync and replace the app with the one from [Releases](https://github.com/yassersutojoyo/audiosync/releases). [`CHANGELOG.md`](CHANGELOG.md) has what changed.
 
 You can also build it yourself, on macOS 15 or later. You need the Xcode 16 command line tools and a Rust toolchain ([rustup](https://rustup.rs), or Homebrew's rustup), then:
 
@@ -158,7 +158,6 @@ An Apple TV that asks for a PIN pairs once, with the PIN it shows, and a speaker
 AudioSync's own code is under the [MIT License](LICENSE). What the app bundles from others keeps its own license; [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists everything.
 
 - AudioSync started as a fork of [HomeSounds Sync](https://github.com/techjuicelab/homesounds-sync) by TechJuicelab. The original copyright notice is kept in `LICENSE`.
-- [Sparkle](https://sparkle-project.org) (MIT) is the update framework, embedded but currently disabled.
 - [Poppins](https://github.com/itfoundry/Poppins) (SIL Open Font License 1.1) is the wordmark typeface, bundled in the app.
 
 AudioSync is an independent project. It is not affiliated with, endorsed by, or based on code from Rogue Amoeba; Airfoil is a trademark of Rogue Amoeba Software, LLC, mentioned only to say what AudioSync is an alternative to. Apple, AirPlay and HomePod are trademarks of Apple Inc. The Bluetooth® word mark and logos are registered trademarks owned by Bluetooth SIG, Inc. AudioSync is not affiliated with or endorsed by Apple or Bluetooth SIG.

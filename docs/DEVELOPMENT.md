@@ -16,7 +16,7 @@ cd audiosync
 
 `setup.sh` checks for Swift and a Rust toolchain, then runs `build.sh`.
 
-After that, `./build.sh` is all you need day to day. It builds the app, embeds Sparkle, signs it, and installs it to `/Applications`, or `~/Applications` if `/Applications` isn't writable, after quitting the running AudioSync. AirPlay is part of the app binary (the Rust core carries the sender), so there's nothing else to bundle. `./build.sh --no-install` stops before the install: it leaves the signed app in `.build/app/AudioSync.app` and doesn't quit anything. CI builds it that way and checks the bundle with `Tests/check-app-bundle.sh`, which you can also point at an installed copy.
+After that, `./build.sh` is all you need day to day. It builds the app, signs it, and installs it to `/Applications`, or `~/Applications` if `/Applications` isn't writable, after quitting the running AudioSync. AirPlay is part of the app binary (the Rust core carries the sender), so there's nothing else to bundle. `./build.sh --no-install` stops before the install: it leaves the signed app in `.build/app/AudioSync.app` and doesn't quit anything. CI builds it that way and checks the bundle with `Tests/check-app-bundle.sh`, which you can also point at an installed copy.
 
 The app links the audio core, the Rust crate in `core/` (see `core/NOTES.md`). `build.sh` first runs `scripts/build_core.sh`, which builds it for Apple silicon and Intel (with rustup, it adds a missing target itself) and joins both into one static library, `core/target/universal-apple-darwin/release/libaudiosync_core.a`. That library exports only the functions in `core/include/audiosync_core.h`, so none of the Rust standard library's own symbols can stand in for the system's. Next to it, `licenses/rust/` gets the notices the app ships for the Rust code inside: the standard library's, and in `crates.txt` those of the crates compiled into the core (`scripts/core_notices.py`, run with `python3`). A plain `swift build`, a scratch build included, links that file: run the script first, or the link stops with "library 'audiosync_core' not found".
 
@@ -28,7 +28,6 @@ A few environment variables change what the scripts do:
 - `AUDIOSYNC_ADHOC=1`: sign ad-hoc instead of with the local identity
 - `CODESIGN_IDENTITY`: sign with a Developer ID, given by its full name (see `RELEASE.md`)
 - `ENTITLEMENTS`: entitlements for the app signature (Developer ID builds default to `AudioSync.entitlements`)
-- `SPARKLE_DIR`: use an already verified Sparkle folder instead of the cached archive
 
 ### Signing
 

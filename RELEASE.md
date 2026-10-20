@@ -42,7 +42,7 @@ Say plainly in the release notes that it's an unsigned preview (SmartScreen will
 
 ## Sources and license obligations
 
-AudioSync bundles no GPL or LGPL code: the app is AudioSync's own code (MIT), the Rust standard library and the crates the audio core compiles in, Sparkle and the Poppins font, all under permissive licenses. Every release ships `THIRD_PARTY_NOTICES.md` (it's also inside the app, with the license files). A new dependency gets its license checked and its entry in the notices before it ships.
+AudioSync bundles no GPL or LGPL code: the app is AudioSync's own code (MIT), the Rust standard library and the crates the audio core compiles in, and the Poppins font, all under permissive licenses. Every release ships `THIRD_PARTY_NOTICES.md` (it's also inside the app, with the license files). A new dependency gets its license checked and its entry in the notices before it ships.
 
 Releases up to 0.4.1 bundled an AirPlay engine (OwnTone, GPL-2.0-or-later) and its libraries, and attached their sources. The written offer for those builds in `THIRD_PARTY_NOTICES.md` still has to be honored, so their source archives stay in a private backup for at least three years.
 
@@ -66,23 +66,6 @@ spctl -a -vvv --type execute "$APP"   # should say: accepted, source=Notarized D
 ```
 
 Then zip the stapled app again for the release, or build the DMG with the same `CODESIGN_IDENTITY ./make-dmg.sh` and notarize and staple that too. Other entitlements can be passed with `ENTITLEMENTS=path/to.entitlements ./build.sh`.
-
-## Auto-update (off for now)
-
-Sparkle is embedded but switched off: there's no `SUFeedURL`, `SUEnableAutomaticChecks` is `false`, and `appcast.xml` is an empty feed. `AppDelegate` only starts the updater, and only shows Check for Updates…, when `SUFeedURL` is set. Sparkle only accepts updates signed with the key the installed copy carries, so the feed and the key both need to be AudioSync's own before this goes on.
-
-To turn it on:
-
-1. Get Sparkle's tools from the archive `build.sh` caches and generate a key pair. The private key stays in your login keychain; never commit it.
-
-   ```bash
-   mkdir -p /tmp/sparkle && tar -xf ~/Library/Caches/io.github.yassersutojoyo.audiosync/Sparkle-2.9.5.tar.xz \
-     -C /tmp/sparkle ./bin/generate_keys ./bin/sign_update
-   /tmp/sparkle/bin/generate_keys
-   ```
-
-2. In `Info.plist`, set `SUFeedURL` to `https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/appcast.xml`, `SUPublicEDKey` to the printed public key, and `SUEnableAutomaticChecks` to `true` (optionally `SUScheduledCheckInterval` `86400`). Once a version ships with them, the URL and the key are effectively permanent.
-3. For each release, sign the zip with `sign_update` and add an `<item>` to `appcast.xml` pointing at the GitHub release asset.
 
 ## Other ways to distribute
 

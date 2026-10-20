@@ -4,10 +4,6 @@ import CoreServices
 import ServiceManagement
 import Synchronization
 
-#if canImport(Sparkle)
-import Sparkle
-#endif
-
 /// The app delegate, and the owner of everything that lives as long as the
 /// app: the session engine, the speakers with their settings, the AirPlay
 /// bookkeeping and the windows. This file holds that state and the app's
@@ -58,10 +54,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var equalizerWindow: EqualizerWindowController?
     /// The Guide, made the first time it opens and kept.
     var helpWindow: NSWindow?
-    #if canImport(Sparkle)
-    /// Nil unless the bundle names an update feed.
-    var updaterController: SPUStandardUpdaterController?
-    #endif
 
     // MARK: - AudioSync's own AirPlay sender (`+NativeAirPlay`)
 
@@ -251,10 +243,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             .forEach { DebugTrace.log($0) }
         AudioSyncCore.logVersion()   // which Rust core this build carries
 
-        startUpdater()   // before the menus, which offer Check for Updates… only with an updater
         handleEngineEvents()
         setUpMenuBar()
-        NSApp.mainMenu = MainMenu.make(text: text, checksForUpdates: appModel.actions.checkForUpdates != nil)
+        NSApp.mainMenu = MainMenu.make(text: text)
         mainWindow = MainWindowController(model: appModel)
         launchAtLogin = SMAppService.mainApp.status == .enabled
 
@@ -279,14 +270,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return AppLifecycle.isLoginItemLaunch(
             eventID: event?.eventID,
             launchedAs: event?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue)
-    }
-
-    private func startUpdater() {
-        #if canImport(Sparkle)
-        guard AppLifecycle.hasUpdateFeed(Bundle.main.object(forInfoDictionaryKey: "SUFeedURL")) else { return }
-        updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil,
-                                                         userDriverDelegate: nil)
-        #endif
     }
 
     /// What the session engine and the Local Network probe report. Both

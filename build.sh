@@ -8,14 +8,11 @@
 #
 # Steps:
 #   1) the Rust audio core (scripts/build_core.sh)
-#   2) Sparkle, the update framework: the pinned archive (SHA-256 checked,
-#      cached in ~/Library/Caches/<bundle id>), or SPARKLE_DIR. Without it
-#      (offline, checksum mismatch) the app is built without update support.
-#   3) the app binary (swift build -c release), linked with the core and Sparkle
-#   4) a fresh AudioSync.app: Info.plist, the binary, the icon, the font, the
-#      notices and license files, Sparkle.framework
-#   5) signing, inside out: Sparkle's helpers, Sparkle, the app
-#   6) quitting the running AudioSync and installing to /Applications, or
+#   2) the app binary (swift build -c release), linked with the core
+#   3) a fresh AudioSync.app: Info.plist, the binary, the icon, the font, the
+#      notices and license files
+#   4) signing
+#   5) quitting the running AudioSync and installing to /Applications, or
 #      ~/Applications when /Applications isn't writable
 #
 # Signing: with CODESIGN_IDENTITY when it's set (a "Developer ID Application: …"
@@ -33,8 +30,6 @@
 #   AUDIOSYNC_ADHOC=1             sign ad-hoc
 #   CODESIGN_IDENTITY             the signing identity, by its full name
 #   ENTITLEMENTS                  entitlements for the app's signature
-#   SPARKLE_DIR                   an already verified folder holding
-#                                 Sparkle.framework and Sparkle's LICENSE
 #
 set -o errexit -o nounset -o pipefail
 
@@ -42,12 +37,6 @@ caller_dir=$PWD
 cd -- "$(dirname -- "$0")"
 ROOT=$(pwd)
 
-# The Sparkle release the app ships, and the SHA-256 of its .tar.xz archive
-# (pinned for supply-chain integrity). A new release needs a new checksum:
-# shasum -a 256 Sparkle-<release>.tar.xz
-SPARKLE_RELEASE=2.9.5
-SPARKLE_ARCHIVE_SHA256=015336b601493e05c237964954bff6191370003d94edefe663724c88840d73cc
-SPARKLE_URL="https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_RELEASE/Sparkle-$SPARKLE_RELEASE.tar.xz"
 LOCAL_IDENTITY="AudioSync Local Code Signing"
 LOCAL_KEYCHAIN="$HOME/Library/Keychains/audiosync-signing.keychain-db"
 LAUNCH_SERVICES_TOOL=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
@@ -62,7 +51,6 @@ warn() { echo "   ⚠️  $*" >&2; }
 absolute() {
   case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s\n' "$caller_dir/$1" ;; esac
 }
-sha256_of() { shasum -a 256 "$1" | awk '{ print $1 }'; }
 plist_value() { plutil -extract "$1" raw -o - "$ROOT/Info.plist" 2>/dev/null; }
 
 install=1
@@ -85,78 +73,12 @@ VERSION=$(plist_value CFBundleShortVersionString) || VERSION="?"
 export MACOSX_DEPLOYMENT_TARGET=$MIN_MACOS
 
 # ---------------------------------------------------------------------------
-say "1/6  Rust audio core"
+say "1/5  Rust audio core"
 scripts/build_core.sh
 
 # ---------------------------------------------------------------------------
-say "2/6  Sparkle $SPARKLE_RELEASE"
-sparkle_dir=""   # the folder holding Sparkle.framework, empty to build without it
-
-# The caller's own Sparkle (SPARKLE_DIR), taken as it is.
-use_given_sparkle() {
-  local given
-  given=$(absolute "$SPARKLE_DIR")
-  case "$given" in */Sparkle.framework|*/Sparkle.framework/) given=$(dirname "$given") ;; esac
-  [ -d "$given/Sparkle.framework" ] || die "SPARKLE_DIR=$SPARKLE_DIR holds no Sparkle.framework"
-  [ -f "$given/LICENSE" ] || die "SPARKLE_DIR=$SPARKLE_DIR has no LICENSE next to Sparkle.framework (the app ships Sparkle's license)"
-  echo "   Using $given (SPARKLE_DIR: no checksum check)"
-  sparkle_dir=$given
-}
-
-# unpack_sparkle ARCHIVE: unpacked once per archive, so the framework's files
-# keep their dates and an unchanged Sparkle doesn't make SwiftPM recompile.
-unpack_sparkle() {
-  local unpacked="$ROOT/.build/sparkle/$SPARKLE_RELEASE"
-  if [ "$(cat "$unpacked/.sha256" 2>/dev/null)" != "$SPARKLE_ARCHIVE_SHA256" ]; then
-    rm -rf "$unpacked"
-    mkdir -p "$unpacked"
-    tar -xf "$1" -C "$unpacked"
-    echo "$SPARKLE_ARCHIVE_SHA256" > "$unpacked/.sha256"
-  fi
-  [ -d "$unpacked/Sparkle.framework" ] || die "the Sparkle archive has no Sparkle.framework ($unpacked)"
-  [ -f "$unpacked/LICENSE" ] || die "the Sparkle archive has no LICENSE ($unpacked)"
-  sparkle_dir=$unpacked
-}
-
-# The pinned archive, from the cache or downloaded and checked. A download
-# that fails or doesn't match the checksum leaves sparkle_dir empty: the app
-# is then built without update support.
-fetch_sparkle() {
-  local cache="$HOME/Library/Caches/$BUNDLE_ID"
-  local archive="$cache/Sparkle-$SPARKLE_RELEASE.tar.xz"
-  local partial="$archive.part" problem=""
-  if [ -f "$archive" ] && [ "$(sha256_of "$archive")" = "$SPARKLE_ARCHIVE_SHA256" ]; then
-    echo "   ✓ Using the cached archive ($archive)"
-  else
-    mkdir -p "$cache"
-    rm -f "$partial"
-    if ! curl -fsSL --retry 2 -o "$partial" "$SPARKLE_URL"; then
-      problem="Couldn't download Sparkle"
-    elif [ "$(sha256_of "$partial")" != "$SPARKLE_ARCHIVE_SHA256" ]; then
-      problem="The Sparkle download doesn't match its pinned SHA-256"
-    else
-      mv -f "$partial" "$archive"
-      echo "   ✓ Downloaded and checked $(basename "$archive")"
-    fi
-  fi
-  if [ -n "$problem" ]; then
-    rm -f "$partial"
-    warn "$problem: building without update support"
-  else
-    unpack_sparkle "$archive"
-  fi
-}
-
-if [ -n "${SPARKLE_DIR:-}" ]; then use_given_sparkle; else fetch_sparkle; fi
-
-# ---------------------------------------------------------------------------
-say "3/6  App (swift build -c release)"
+say "2/5  App (swift build -c release)"
 swift_args=(-c release)
-if [ -n "$sparkle_dir" ]; then
-  # Sparkle's module map makes `import Sparkle` work and asks the linker for
-  # the framework; both need to know where it is.
-  swift_args+=(-Xswiftc "-F$sparkle_dir" -Xlinker "-F$sparkle_dir")
-fi
 bin_dir=$(swift build "${swift_args[@]}" --show-bin-path)
 binary="$bin_dir/$EXECUTABLE"
 # SwiftPM doesn't see the core library as an input: when build_core.sh
@@ -170,7 +92,7 @@ nm -gU "$binary" | grep ' T _asc_version$' >/dev/null \
   || die "$binary doesn't contain the audio core (no _asc_version): run scripts/build_core.sh and build again"
 
 # ---------------------------------------------------------------------------
-say "4/6  Assembling AudioSync.app"
+say "3/5  Assembling AudioSync.app"
 contents="$APP/Contents"
 resources="$contents/Resources"
 third_party="$resources/ThirdParty"
@@ -197,25 +119,8 @@ cp brand/fonts/OFL.txt "$third_party/licenses/poppins/OFL.txt"
 [ -d "$CORE_OUT/licenses/rust" ] || die "$CORE_OUT/licenses/rust is missing: run scripts/build_core.sh"
 cp -R "$CORE_OUT/licenses/rust" "$third_party/licenses/rust"
 
-if [ -n "$sparkle_dir" ]; then
-  mkdir -p "$contents/Frameworks" "$third_party/licenses/sparkle"
-  ditto "$sparkle_dir/Sparkle.framework" "$contents/Frameworks/Sparkle.framework"
-  cp "$sparkle_dir/LICENSE" "$third_party/licenses/sparkle/LICENSE"
-  # Sparkle's install name is @rpath/…: the app finds it in Contents/Frameworks.
-  if ! otool -l "$contents/MacOS/$EXECUTABLE" | grep 'path @executable_path/\.\./Frameworks ' >/dev/null; then
-    # (It warns that the linker's signature becomes invalid; the app is signed below.)
-    if ! out=$(install_name_tool -add_rpath @executable_path/../Frameworks "$contents/MacOS/$EXECUTABLE" 2>&1); then
-      echo "$out" >&2
-      die "Couldn't add the Frameworks rpath to $contents/MacOS/$EXECUTABLE"
-    fi
-  fi
-  echo "   Sparkle.framework embedded"
-else
-  warn "No Sparkle: this build has no update support"
-fi
-
 # ---------------------------------------------------------------------------
-say "5/6  Signing"
+say "4/5  Signing"
 adhoc_warning() {   # adhoc_warning REASON
   echo >&2
   echo "   ⚠️  ⚠️  ⚠️  SIGNING AD-HOC: $1" >&2
@@ -302,17 +207,8 @@ sign() {
   out=$(codesign "${args[@]}" "$@" 2>&1) || { echo "$out" >&2; return 1; }
 }
 
-# Inside out: every piece of code is signed before the bundle that holds it.
 sign_all() {
-  local f version_dir app_args=()
-  if [ -d "$contents/Frameworks/Sparkle.framework" ]; then
-    version_dir=$(cd "$contents/Frameworks/Sparkle.framework/Versions/Current" && pwd -P)
-    # Sparkle's own entitlements stay (its downloader service needs them).
-    for f in "$version_dir"/XPCServices/*.xpc "$version_dir/Autoupdate" "$version_dir/Updater.app"; do
-      if [ -e "$f" ]; then sign --preserve-metadata=entitlements "$f" || return 1; fi
-    done
-    sign "$contents/Frameworks/Sparkle.framework" || return 1
-  fi
+  local app_args=()
   if [ -n "$entitlements" ]; then app_args=(--entitlements "$entitlements"); fi
   sign ${app_args[@]+"${app_args[@]}"} "$APP" || return 1
 }
@@ -334,7 +230,7 @@ if [ "$install" = 0 ]; then
   exit 0
 fi
 
-say "6/6  Installing"
+say "5/5  Installing"
 if [ -n "${AUDIOSYNC_INSTALL_DIR:-}" ]; then
   dest_dir=$(absolute "$AUDIOSYNC_INSTALL_DIR")
 elif [ -w /Applications ]; then
