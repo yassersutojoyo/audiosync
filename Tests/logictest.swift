@@ -2802,7 +2802,7 @@ do {
     check(SignalQuit.step(signal: SIGINT, quitBegun: true) == .exitNow(status: 130)
             && SignalQuit.step(signal: SIGTERM, quitBegun: true) == .exitNow(status: 143),
           "quit: an exit signal while the quit steps run exits at once with its own status (S111)")
-    check(SignalQuit.limit >= 2.5 && SignalQuit.limit <= 5,
+    check(SignalQuit.limit == 3,
           "quit: a signal waits at most 3 s for the quit steps, past the 500 ms fade cap and the sender's teardown (S111, S186)",
           "\(SignalQuit.limit) s")
 
