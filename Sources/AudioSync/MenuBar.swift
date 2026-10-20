@@ -115,9 +115,11 @@ final class AppModel: ObservableObject {
     /// @State: the Command Line Tools toolchain ships without SwiftUI's macro plugins.
     @Published var expandedSync: Set<String> = []
     private var drafts: [String: SyncDraft] = [:]
+    /// Typed delays not applied yet, which quitting applies.
+    let pendingDelays = PendingDelayDrafts()
     func draft(for id: String) -> SyncDraft {
         if let d = drafts[id] { return d }
-        let d = SyncDraft()
+        let d = SyncDraft(id: id, pending: pendingDelays)
         drafts[id] = d
         return d
     }
@@ -189,6 +191,22 @@ extension SpeakerTag {
 /// half-typed number isn't overwritten on every redraw.
 final class SyncDraft: ObservableObject {
     @Published var field = DelayFieldDraft()
+    private let id: String
+    private let pending: PendingDelayDrafts
+
+    init(id: String, pending: PendingDelayDrafts) {
+        self.id = id
+        self.pending = pending
+    }
+
+    /// A keystroke. `commit` applies it if AudioSync quits before Return or a focus loss.
+    func type(_ text: String, commit: @escaping () -> Void) {
+        field.type(text)
+        pending.hold(id, commit: commit)
+    }
+
+    /// The typing was applied or dropped: nothing left for quit to commit.
+    func settle() { pending.release(id) }
 }
 
 // MARK: - Status item and panel

@@ -1650,6 +1650,12 @@ impl App {
     /// Saves the settings now, with the main window's frame: the app is
     /// about to quit.
     pub fn save_settings(&self) {
+        // Quit ends the event loop without a focus loss: apply what is typed.
+        let typed: Vec<String> = self.ui.borrow().delay_drafts.keys().cloned().collect();
+        for id in typed {
+            self.commit_delay(&id);
+        }
+        self.commit_airplay_delay();
         self.remember_view();
         self.backend.borrow_mut().save_settings();
     }
