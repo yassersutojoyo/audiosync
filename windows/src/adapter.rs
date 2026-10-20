@@ -4719,6 +4719,146 @@ mod tests {
     }
 
     #[test]
+    fn a_damaged_settings_file_gets_its_notice_at_launch_naming_the_copy() {
+        let dir = test_dir("adapter-settings-damaged-at-launch");
+        let path = dir.join(settings::FILE_NAME);
+        std::fs::write(&path, "{ the user's settings, cut short").expect("written");
+        let mut adapter = launch(launch_audio(), &path);
+        // Told at launch, though the user changes nothing.
+        let shown = messages(&adapter);
+        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert!(file.starts_with("settings.ignored-"), "{file}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(file)).expect("kept"),
+            "{ the user's settings, cut short"
+        );
+        // Told once: dismissed, it stays away, and the first save keeps no
+        // other copy.
+        adapter.dismiss_all_notices();
+        adapter.poll();
+        adapter.set_master_volume(64.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert_eq!(
+            crate::data_folder::copies_kept_aside(&dir, "settings.ignored").len(),
+            1
+        );
+        assert_eq!(SettingsFile::at(path).load().0.master_volume, 64.0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn settings_unreadable_at_launch_get_their_notice_once_they_can_be_kept_aside_unchanged() {
+        use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
+        let dir = test_dir("adapter-settings-kept-aside-unchanged");
+        let path = dir.join(settings::FILE_NAME);
+        let held = dir.join("held");
+        std::fs::write(&held, "the user's settings").expect("written");
+        // Another program holds the file at launch (a folder stands in its
+        // place), and lets go of it; the user changes nothing.
+        std::fs::create_dir(&path).expect("the folder is made");
+        let mut adapter = launch(launch_audio(), &path);
+        assert!(messages(&adapter).is_empty(), "nothing kept aside yet");
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(&held, &path).expect("moved back");
+        for _ in 0..KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        let shown = messages(&adapter);
+        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert_eq!(
+            std::fs::read_to_string(dir.join(file)).expect("kept"),
+            "the user's settings"
+        );
+        // Nothing changed, so the file itself is left as it was; told once.
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "the user's settings"
+        );
+        adapter.dismiss_all_notices();
+        for _ in 0..2 * KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The adapter over AirPlay with the pairings in `path`, and the fake
+    /// sender behind it.
+    fn launch_with_pairings(path: &std::path::Path) -> (AudioAdapter<MockBackend>, FakeAirPlay) {
+        use crate::audio::pairings::tests::sealer;
+        let mut audio = launch_audio();
+        let fake = FakeAirPlay::new();
+        let (store, _) = PairingStore::open(path.to_path_buf(), sealer());
+        audio.set_airplay_with_pairings(fake.link(), None, store);
+        let adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        (adapter, fake)
+    }
+
+    #[test]
+    fn damaged_pairings_get_their_notice_at_launch_naming_the_copy() {
+        let dir = test_dir("adapter-pairings-damaged-at-launch");
+        let path = dir.join(crate::audio::pairings::FILE_NAME);
+        std::fs::write(&path, b"no pairings in here").expect("written");
+        let (mut adapter, _fake) = launch_with_pairings(&path);
+        // Told at the first poll, with no pairing made.
+        adapter.poll();
+        let shown = messages(&adapter);
+        let [NoticeMessage::PairingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert!(file.starts_with("airplay-pairings.ignored-"), "{file}");
+        assert_eq!(
+            std::fs::read(dir.join(file)).expect("kept"),
+            b"no pairings in here"
+        );
+        adapter.dismiss_all_notices();
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pairings_unreadable_at_launch_get_their_notice_once_they_can_be_kept_aside_unchanged() {
+        use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
+        let dir = test_dir("adapter-pairings-kept-aside-unchanged");
+        let path = dir.join(crate::audio::pairings::FILE_NAME);
+        // Another program holds the file at launch (a folder stands in its
+        // place), and lets go of it; nothing is paired meanwhile.
+        std::fs::create_dir(&path).expect("the folder is made");
+        let (mut adapter, _fake) = launch_with_pairings(&path);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "nothing kept aside yet");
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::write(&path, b"the pairings made before").expect("written");
+        for _ in 0..KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        let shown = messages(&adapter);
+        let [NoticeMessage::PairingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert_eq!(
+            std::fs::read(dir.join(file)).expect("kept"),
+            b"the pairings made before"
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("read"),
+            b"the pairings made before"
+        );
+        adapter.dismiss_all_notices();
+        for _ in 0..2 * KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn pairings_unreadable_at_launch_get_a_notice_once_they_are_kept_aside() {
         use crate::audio::pairings::tests::sealer;
         let dir = test_dir("adapter-pairings-kept-aside");
