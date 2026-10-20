@@ -317,6 +317,40 @@ export component LinkButton inherits Rectangle {
     }
 }
 
+// A dialog's button that passes Escape on. A Dialog lays its buttons out
+// beside its one content element, so a key scope around the content never
+// sees a key pressed on a button; this scope around the button does. It
+// takes no focus itself: Tab and the focus ring stay the button's.
+export component DialogButton inherits FocusScope {
+    in property <string> text;
+    in property <bool> primary;
+    in property <bool> active: true;
+    callback clicked();
+    // Escape while the button has the focus.
+    callback escape-pressed();
+
+    enabled: false;
+    key-pressed(event) => {
+        if event.text == Key.Escape {
+            root.escape-pressed();
+            return accept;
+        }
+        return reject;
+    }
+
+    HorizontalLayout {
+        Button {
+            text: root.text;
+            primary: root.primary;
+            enabled: root.active;
+            accessible-label: root.text;
+            clicked => {
+                root.clicked();
+            }
+        }
+    }
+}
+
 // The round toggle at the start of a speaker or group row: filled while it
 // plays, outlined while it waits for streaming, grey while off.
 export component SpeakerBadge inherits Rectangle {
@@ -462,6 +496,8 @@ export component VolumeSlider inherits HorizontalLayout {
         slider.focus();
     }
 
+    out property <bool> slider-focused: slider.has-focus;
+
     slider := Slider {
         minimum: 0;
         maximum: 100;
@@ -493,6 +529,10 @@ export component SyncControls inherits VerticalLayout {
     in property <string> reference-name;
     callback stepped(int);
     callback edited(string);
+    // Whether one of its steps or its field has the keyboard focus: a count,
+    // as the handlers of two controls trading the focus run in any order.
+    property <int> focused-controls;
+    out property <bool> focus-within: self.focused-controls > 0;
 
     spacing: 6px;
     // Typing replaces the field's binding; show the applied value after a step.
@@ -512,6 +552,9 @@ export component SyncControls inherits VerticalLayout {
             clicked => {
                 root.stepped(delta);
             }
+            changed has-focus => {
+                root.focused-controls += self.has-focus ? 1 : -1;
+            }
         }
 
         // Text input, so a leading "+" or "−" can be typed.
@@ -522,6 +565,9 @@ export component SyncControls inherits VerticalLayout {
             accessible-label: Strings.delay-of(root.name);
             edited(text) => {
                 root.edited(text);
+            }
+            changed has-focus => {
+                root.focused-controls += self.has-focus ? 1 : -1;
             }
         }
 
@@ -537,6 +583,9 @@ export component SyncControls inherits VerticalLayout {
             accessible-label: Strings.delay-step-accessibility(delta);
             clicked => {
                 root.stepped(delta);
+            }
+            changed has-focus => {
+                root.focused-controls += self.has-focus ? 1 : -1;
             }
         }
     }
@@ -663,6 +712,26 @@ export component SpeakerRow inherits Rectangle {
     callback forget-pairing();
     // The fix after the device-volume hint.
     callback device-volume-fix();
+    // The row gained (true) or lost (false) the keyboard focus.
+    callback focus-changed(bool);
+
+    // Gives the row the keyboard focus, on its toggle.
+    public function take-focus() {
+        badge.focus();
+    }
+
+    // Which of the row's controls has the keyboard focus. The ones a
+    // refresh can take away (the delay button, the fix, the sync controls)
+    // hand the focus on within the row first, or go with the whole row.
+    property <bool> badge-focused;
+    property <bool> delay-focused;
+    property <bool> fix-focused;
+    property <bool> sync-focused;
+    property <bool> options-focused;
+    property <bool> focus-within: self.badge-focused || self.delay-focused || volume-slider.slider-focused || self.fix-focused || self.sync-focused || self.options-focused;
+    changed focus-within => {
+        root.focus-changed(self.focus-within);
+    }
 
     // The line under the name: the kind of a connected speaker, and the note
     // of one that can't simply play.
@@ -708,13 +777,16 @@ export component SpeakerRow inherits Rectangle {
                     VerticalLayout {
                         alignment: center;
                         padding-right: 4px;
-                        SpeakerBadge {
+                        badge := SpeakerBadge {
                             glyph: Glyphs.speaker(root.item.kind);
                             state: root.item.state;
                             label: Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind);
                             description: Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.help(root.item.state);
                             toggled => {
                                 root.toggled();
+                            }
+                            focus-changed(focused) => {
+                                root.badge-focused = focused;
                             }
                         }
                     }
@@ -786,6 +858,9 @@ export component SpeakerRow inherits Rectangle {
                                         return accept;
                                     }
                                     return reject;
+                                }
+                                changed has-focus => {
+                                    root.delay-focused = self.has-focus;
                                 }
                             }
 
@@ -870,6 +945,9 @@ export component SpeakerRow inherits Rectangle {
                                     fix-button := LinkButton {
                                         text: Strings.device-volume-fix(root.item.device-volume);
                                         label: Strings.device-volume-fix-label(root.item.name, root.item.device-volume);
+                                        changed keyboard-focused => {
+                                            root.fix-focused = self.keyboard-focused;
+                                        }
                                         clicked => {
                                             // The button goes with the hint once
                                             // Windows reports the change: hand
@@ -899,6 +977,9 @@ export component SpeakerRow inherits Rectangle {
                                     y: self.absolute-position.y - menu.absolute-position.y + self.height,
                                 });
                             }
+                            focus-changed(focused) => {
+                                root.options-focused = focused;
+                            }
                         }
                     }
                 }
@@ -917,6 +998,9 @@ export component SpeakerRow inherits Rectangle {
                         edited(text) => {
                             root.delay-edited(text);
                         }
+                        changed focus-within => {
+                            root.sync-focused = self.focus-within;
+                        }
                     }
                 }
             }
@@ -931,6 +1015,25 @@ export component GroupRow inherits Rectangle {
     callback toggled();
     callback rename();
     callback delete();
+    // The row gained (true) or lost (false) the keyboard focus.
+    callback focus-changed(bool);
+
+    // Gives the row the keyboard focus: its toggle, or its options while
+    // the toggle is off for want of members.
+    public function take-focus() {
+        if root.item.available > 0 {
+            badge.focus();
+        } else {
+            options.focus();
+        }
+    }
+
+    property <bool> badge-focused;
+    property <bool> options-focused;
+    property <bool> focus-within: self.badge-focused || self.options-focused;
+    changed focus-within => {
+        root.focus-changed(self.focus-within);
+    }
 
     border-radius: Fluent.radius-control;
     background: root.item.state == RowState.playing ? Tokens.playing-row : hover.has-hover ? Fluent.hover : transparent;
@@ -967,7 +1070,7 @@ export component GroupRow inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     padding-right: 4px;
-                    SpeakerBadge {
+                    badge := SpeakerBadge {
                         glyph: Glyphs.group;
                         state: root.item.state;
                         enabled: root.item.available > 0;
@@ -975,6 +1078,9 @@ export component GroupRow inherits Rectangle {
                         description: Strings.group-members(root.item.available, root.item.total);
                         toggled => {
                             root.toggled();
+                        }
+                        focus-changed(focused) => {
+                            root.badge-focused = focused;
                         }
                     }
                 }
@@ -1002,7 +1108,7 @@ export component GroupRow inherits Rectangle {
 
                 VerticalLayout {
                     alignment: center;
-                    IconButton {
+                    options := IconButton {
                         glyph: Glyphs.more;
                         label: Strings.speaker-options(root.item.name);
                         glyph-color: Tokens.teal-text;
@@ -1012,6 +1118,9 @@ export component GroupRow inherits Rectangle {
                                 x: self.absolute-position.x - menu.absolute-position.x,
                                 y: self.absolute-position.y - menu.absolute-position.y + self.height,
                             });
+                        }
+                        focus-changed(focused) => {
+                            root.options-focused = focused;
                         }
                     }
                 }
@@ -1042,12 +1151,19 @@ export component NoticeStack inherits VerticalLayout {
     // Whether one of a notice's buttons has keyboard focus, each time that
     // changes.
     callback button-focus-changed(bool);
+    // The same with the notice's id, and for the Dismiss All button.
+    callback notice-focus-changed(int, bool);
+    callback dismiss-all-focus-changed(bool);
+    // A notice row built while this is its index takes the keyboard focus
+    // (its dismiss button) and clears it: the app sets it when a refresh
+    // rebuilds the stack under the focus.
+    in-out property <int> focus-index: -1;
 
     spacing: 6px;
     accessible-role: groupbox;
     accessible-label: Strings.notices;
 
-    for notice in root.notices: row := Rectangle {
+    for notice[index] in root.notices: row := Rectangle {
         // Which of the row's buttons has keyboard focus; the stack reports
         // either one, whichever changed last.
         property <bool> dismiss-focused;
@@ -1057,6 +1173,16 @@ export component NoticeStack inherits VerticalLayout {
         }
         changed guide-focused => {
             root.button-focus-changed(self.dismiss-focused || self.guide-focused);
+        }
+        property <bool> focus-within: self.dismiss-focused || self.guide-focused;
+        changed focus-within => {
+            root.notice-focus-changed(notice.id, self.focus-within);
+        }
+        init => {
+            if index == root.focus-index {
+                root.focus-index = -1;
+                dismiss.focus();
+            }
         }
 
         background: Tokens.notice;
@@ -1131,7 +1257,7 @@ export component NoticeStack inherits VerticalLayout {
 
             VerticalLayout {
                 alignment: start;
-                IconButton {
+                dismiss := IconButton {
                     glyph: Glyphs.dismiss;
                     glyph-size: 12px;
                     label: Strings.dismiss-notice;
@@ -1153,6 +1279,9 @@ export component NoticeStack inherits VerticalLayout {
             accessible-label: Strings.dismiss-all-notices;
             clicked => {
                 root.dismissed-all();
+            }
+            changed has-focus => {
+                root.dismiss-all-focus-changed(self.has-focus);
             }
         }
     }

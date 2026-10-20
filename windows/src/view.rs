@@ -7,7 +7,8 @@
 //! field being typed in keeps its focus while the rest of the window updates.
 //! A list whose length changes is rebuilt; when that removes the control that
 //! had the focus in the tray flyout, the flyout takes the focus back so Escape
-//! still closes it.
+//! still closes it, and in the main window the focus goes to the next notice,
+//! the same row rebuilt, or the streaming switch.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -216,6 +217,103 @@ impl FlyoutCounts {
     }
 }
 
+/// What has the keyboard focus in the main window's lists, as their rows
+/// report it. A row that a refresh removes never reports losing it.
+#[derive(Debug, Default)]
+struct MainFocus {
+    /// A notice's button, by notice id.
+    notice: Option<i32>,
+    /// The notices' Dismiss All button.
+    dismiss_all: bool,
+    /// A speaker row's control, by speaker id.
+    speaker: Option<SharedString>,
+    /// A group row's control, by group id.
+    group: Option<SharedString>,
+}
+
+/// Notes that the row `id` gained or lost the focus.
+fn note_focus<T: PartialEq>(slot: &mut Option<T>, id: T, focused: bool) {
+    if focused {
+        *slot = Some(id);
+    } else if slot.as_ref() == Some(&id) {
+        // Another row may have reported gaining it first.
+        *slot = None;
+    }
+}
+
+/// Where the main window's keyboard focus goes after a refresh rebuilt
+/// the list that had it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum MainFocusTarget {
+    /// The notice at this index.
+    Notice(usize),
+    Speaker(SharedString),
+    Group(SharedString),
+    StreamingSwitch,
+}
+
+impl MainFocus {
+    /// Where the focus goes when the lists change from `old` to `new`, if a
+    /// rebuilt list (its length changed, [`sync_model`]) had it.
+    fn target(&self, old: &MainLists, new: &MainLists) -> Option<MainFocusTarget> {
+        let notice_ids = |lists: &MainLists| lists.notices.iter().map(|n| n.id).collect::<Vec<_>>();
+        if (self.notice.is_some() || self.dismiss_all) && old.notices.len() != new.notices.len() {
+            let (old_ids, new_ids) = (notice_ids(old), notice_ids(new));
+            let index = match self.notice {
+                // The same notice if it stayed, else the one in its place.
+                Some(id) => new_ids
+                    .iter()
+                    .position(|&n| n == id)
+                    .or_else(|| old_ids.iter().position(|&n| n == id))
+                    .unwrap_or(0),
+                // Dismiss All sits under the last notice.
+                None => old_ids.len(),
+            };
+            return Some(match new_ids.len() {
+                0 => MainFocusTarget::StreamingSwitch,
+                len => MainFocusTarget::Notice(index.min(len - 1)),
+            });
+        }
+        if let Some(id) = &self.speaker {
+            let rebuilt = |old: &[SpeakerItem], new: &[SpeakerItem]| {
+                old.len() != new.len() && old.iter().any(|s| s.id == *id)
+            };
+            if rebuilt(&old.this_pc, &new.this_pc) || rebuilt(&old.connected, &new.connected) {
+                let listed = new
+                    .this_pc
+                    .iter()
+                    .chain(&new.connected)
+                    .any(|s| s.id == *id);
+                return Some(if listed {
+                    MainFocusTarget::Speaker(id.clone())
+                } else {
+                    MainFocusTarget::StreamingSwitch
+                });
+            }
+        }
+        if let Some(id) = &self.group
+            && old.groups.len() != new.groups.len()
+            && old.groups.iter().any(|g| g.id == *id)
+        {
+            return Some(if new.groups.iter().any(|g| g.id == *id) {
+                MainFocusTarget::Group(id.clone())
+            } else {
+                MainFocusTarget::StreamingSwitch
+            });
+        }
+        None
+    }
+}
+
+/// The main window's lists that a refresh can rebuild.
+#[derive(Debug, Default)]
+struct MainLists {
+    notices: Vec<NoticeItem>,
+    this_pc: Vec<SpeakerItem>,
+    connected: Vec<SpeakerItem>,
+    groups: Vec<GroupItem>,
+}
+
 /// Runs after every refresh with the new state.
 type RefreshHook = Box<dyn Fn(&AppState)>;
 
@@ -242,6 +340,8 @@ pub struct App {
     guide_follows_notice: Cell<bool>,
     log: DebugLog,
     ui: RefCell<UiState>,
+    /// What has the keyboard focus in the main window's lists.
+    main_focus: RefCell<MainFocus>,
     dialog_purpose: RefCell<DialogPurpose>,
     models: Models,
     /// With a tray icon, closing the main window keeps the app running there.
@@ -359,6 +459,7 @@ impl App {
             guide_follows_notice: Cell::new(false),
             log,
             ui: RefCell::default(),
+            main_focus: RefCell::default(),
             dialog_purpose: RefCell::new(DialogPurpose::Message),
             models,
             tray_available: Cell::new(false),
@@ -589,15 +690,31 @@ impl App {
             groups: groups.len(),
             speakers: all.len(),
         });
+        let main_lists = MainLists {
+            notices: newest_notices(&notices, MAIN_NOTICE_LIMIT),
+            this_pc,
+            connected,
+            groups,
+        };
+        let main_focus = self.main_focus_target(&main_lists);
+        let MainLists {
+            notices: main_notices,
+            this_pc,
+            connected,
+            groups,
+        } = main_lists;
         sync_model(&m.sources, sources);
         sync_model(&m.this_pc, this_pc);
         sync_model(&m.connected, connected);
         sync_model(&m.all_speakers, all);
         sync_model(&m.groups, groups);
-        sync_model(&m.notices, newest_notices(&notices, MAIN_NOTICE_LIMIT));
+        sync_model(&m.notices, main_notices);
         sync_model(&m.flyout_notices, flyout_notices);
         self.flyout.set_notice_count(count(notices.len()));
         self.restore_flyout_focus(flyout_removed);
+        if main_focus == Some(MainFocusTarget::StreamingSwitch) {
+            self.main.invoke_focus_streaming_switch();
+        }
         self.refresh_guide(&state);
         self.show_pin_prompt(state.pin_prompt.as_ref());
 
@@ -638,6 +755,55 @@ impl App {
         if focused.overlaps(removed) && flyout.window().is_visible() {
             flyout.invoke_take_focus();
         }
+    }
+
+    /// Where the main window's keyboard focus goes when this refresh, to
+    /// `new`, rebuilds the list that has it: Slint then leaves nothing
+    /// focused. Asks the rebuilt row or notice to take it as it is built
+    /// (so before the models change); the streaming switch takes it after.
+    fn main_focus_target(&self, new: &MainLists) -> Option<MainFocusTarget> {
+        let m = &self.models;
+        let old = MainLists {
+            notices: m.notices.iter().collect(),
+            this_pc: m.this_pc.iter().collect(),
+            connected: m.connected.iter().collect(),
+            groups: m.groups.iter().collect(),
+        };
+        let mut focus = self.main_focus.borrow_mut();
+        let target = focus.target(&old, new)?;
+        let main = &self.main;
+        if !main.window().is_visible() {
+            *focus = MainFocus::default();
+            return None;
+        }
+        // What has it next. The row that takes it may report that before
+        // its own focus tracking starts, and so never report it.
+        *focus = match &target {
+            MainFocusTarget::Notice(index) => MainFocus {
+                notice: new.notices.get(*index).map(|n| n.id),
+                ..MainFocus::default()
+            },
+            MainFocusTarget::Speaker(id) => MainFocus {
+                speaker: Some(id.clone()),
+                ..MainFocus::default()
+            },
+            MainFocusTarget::Group(id) => MainFocus {
+                group: Some(id.clone()),
+                ..MainFocus::default()
+            },
+            MainFocusTarget::StreamingSwitch => MainFocus::default(),
+        };
+        drop(focus);
+        main.set_focus_notice_index(-1);
+        main.set_focus_speaker_id(SharedString::new());
+        main.set_focus_group_id(SharedString::new());
+        match &target {
+            MainFocusTarget::Notice(index) => main.set_focus_notice_index(count(*index)),
+            MainFocusTarget::Speaker(id) => main.set_focus_speaker_id(id.clone()),
+            MainFocusTarget::Group(id) => main.set_focus_group_id(id.clone()),
+            MainFocusTarget::StreamingSwitch => {}
+        }
+        Some(target)
     }
 
     fn show_equalizer_state(&self, settings: &EqSettings) {
@@ -743,6 +909,28 @@ impl App {
             with_app(&w, |app| app.update(|b| b.retry_airplay()))
         });
         let w = weak.clone();
+        main.on_notice_focus_changed(move |id, focused| {
+            with_app(&w, |app| {
+                note_focus(&mut app.main_focus.borrow_mut().notice, id, focused)
+            })
+        });
+        let w = weak.clone();
+        main.on_dismiss_all_focus_changed(move |focused| {
+            with_app(&w, |app| app.main_focus.borrow_mut().dismiss_all = focused)
+        });
+        let w = weak.clone();
+        main.on_speaker_focus_changed(move |id, focused| {
+            with_app(&w, |app| {
+                note_focus(&mut app.main_focus.borrow_mut().speaker, id, focused)
+            })
+        });
+        let w = weak.clone();
+        main.on_group_focus_changed(move |id, focused| {
+            with_app(&w, |app| {
+                note_focus(&mut app.main_focus.borrow_mut().group, id, focused)
+            })
+        });
+        let w = weak.clone();
         main.on_close_requested(move || with_app(&w, App::close_main));
         main.on_exit_requested(|| {
             let _ = slint::quit_event_loop();
@@ -752,7 +940,9 @@ impl App {
             with_app(&w, |app| {
                 if let Err(error) = app.about.show() {
                     app.show_window_error(&error);
+                    return;
                 }
+                app.about.invoke_take_focus();
             })
         });
         let w = weak;
@@ -762,7 +952,7 @@ impl App {
         });
 
         let about = self.about.as_weak();
-        self.about.on_ok_clicked(move || {
+        self.about.on_closed(move || {
             if let Some(about) = about.upgrade() {
                 // A window that fails to hide stays open; the user can still close it.
                 let _ = about.hide();
@@ -2365,6 +2555,82 @@ mod tests {
             enabled(&app, "airplay:bedroom"),
             bedroom,
             "the rebuilt row has the focus back"
+        );
+    }
+
+    #[test]
+    fn the_main_window_focus_goes_where_the_removed_control_was() {
+        let notices = |ids: &[i32]| -> Vec<NoticeItem> {
+            ids.iter()
+                .map(|&id| NoticeItem {
+                    id,
+                    ..NoticeItem::default()
+                })
+                .collect()
+        };
+        let groups = |ids: &[&str]| -> Vec<GroupItem> {
+            ids.iter()
+                .map(|&id| GroupItem {
+                    id: id.into(),
+                    ..GroupItem::default()
+                })
+                .collect()
+        };
+        let lists = |n: &[i32], g: &[&str]| MainLists {
+            notices: notices(n),
+            groups: groups(g),
+            ..MainLists::default()
+        };
+        let on_notice = |id| MainFocus {
+            notice: Some(id),
+            ..MainFocus::default()
+        };
+        assert_eq!(
+            on_notice(2).target(&lists(&[3, 2, 1], &[]), &lists(&[3, 1], &[])),
+            Some(MainFocusTarget::Notice(1)),
+            "the notice that took the dismissed one's place"
+        );
+        assert_eq!(
+            on_notice(1).target(&lists(&[2, 1], &[]), &lists(&[3, 2, 1], &[])),
+            Some(MainFocusTarget::Notice(2)),
+            "a new notice rebuilt the stack: the same notice"
+        );
+        assert_eq!(
+            on_notice(1).target(&lists(&[2, 1], &[]), &lists(&[2], &[])),
+            Some(MainFocusTarget::Notice(0)),
+            "the last one went: the one above"
+        );
+        assert_eq!(
+            on_notice(1).target(&lists(&[2, 1], &[]), &lists(&[2, 1], &[])),
+            None,
+            "updated in place, the focus stays"
+        );
+        let dismiss_all = MainFocus {
+            dismiss_all: true,
+            ..MainFocus::default()
+        };
+        assert_eq!(
+            dismiss_all.target(&lists(&[2, 1], &[]), &lists(&[], &[])),
+            Some(MainFocusTarget::StreamingSwitch)
+        );
+
+        let on_group = |id: &str| MainFocus {
+            group: Some(id.into()),
+            ..MainFocus::default()
+        };
+        assert_eq!(
+            on_group("a").target(&lists(&[], &["a", "b"]), &lists(&[], &["a"])),
+            Some(MainFocusTarget::Group("a".into()))
+        );
+        assert_eq!(
+            on_group("b").target(&lists(&[], &["a", "b"]), &lists(&[], &["a"])),
+            Some(MainFocusTarget::StreamingSwitch),
+            "a deleted group"
+        );
+        assert_eq!(
+            MainFocus::default().target(&lists(&[1], &["a"]), &lists(&[], &[])),
+            None,
+            "nothing in the lists had the focus"
         );
     }
 }

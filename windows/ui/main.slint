@@ -34,6 +34,11 @@ component SpeakerSection inherits VerticalLayout {
     callback auto-connect-toggled(string, bool);
     callback forget-pairing(string);
     callback device-volume-fix(string);
+    // A row gained (true) or lost (false) the keyboard focus.
+    callback focus-changed(string, bool);
+    // A row built while this is its speaker's ID takes the keyboard focus
+    // and clears it (see MainWindow).
+    in-out property <string> focus-id;
 
     spacing: 8px;
     accessible-role: groupbox;
@@ -56,6 +61,15 @@ component SpeakerSection inherits VerticalLayout {
             SpeakerRow {
                 item: speaker;
                 compact: root.compact;
+                init => {
+                    if speaker.id == root.focus-id {
+                        root.focus-id = "";
+                        self.take-focus();
+                    }
+                }
+                focus-changed(focused) => {
+                    root.focus-changed(speaker.id, focused);
+                }
                 toggled => {
                     root.toggled(speaker.id);
                 }
@@ -240,6 +254,25 @@ export component MainWindow inherits Window {
     callback exit-requested();
     callback about-requested();
 
+    // Slint leaves nothing focused when a refresh removes the focused
+    // control (a notice dismissed with the keyboard, a speaker unplugged):
+    // Narrator goes quiet and Tab starts over. So the rows report their
+    // keyboard focus, and when a refresh rebuilds the list that has it, the
+    // app (src/view.rs) asks for the focus back: on the notice at this
+    // index, or the speaker or group row with this ID, which takes it as it
+    // is built and clears the request; else on the streaming switch.
+    callback notice-focus-changed(int, bool);
+    callback dismiss-all-focus-changed(bool);
+    callback speaker-focus-changed(string, bool);
+    callback group-focus-changed(string, bool);
+    in-out property <int> focus-notice-index: -1;
+    in-out property <string> focus-speaker-id;
+    in-out property <string> focus-group-id;
+
+    public function focus-streaming-switch() {
+        power.focus();
+    }
+
     title: Strings.main-window-title;
     icon: @image-url("../res/audiosync-256.png");
     // Wide enough for a speaker row's columns next to the left column.
@@ -406,6 +439,13 @@ export component MainWindow inherits Window {
 
         if root.notices.length > 0: NoticeStack {
             notices: root.notices;
+            focus-index <=> root.focus-notice-index;
+            notice-focus-changed(id, focused) => {
+                root.notice-focus-changed(id, focused);
+            }
+            dismiss-all-focus-changed(focused) => {
+                root.dismiss-all-focus-changed(focused);
+            }
             dismissed(id) => {
                 root.notice-dismissed(id);
             }
@@ -518,6 +558,10 @@ export component MainWindow inherits Window {
                             root.device-volume-fix-requested(id);
                         }
                         compact: root.compact;
+                        focus-id <=> root.focus-speaker-id;
+                        focus-changed(id, focused) => {
+                            root.speaker-focus-changed(id, focused);
+                        }
                         note: root.this-pc.length == 0 ? Strings.this-pc-none : "";
                         toggled(id) => {
                             root.speaker-toggled(id);
@@ -560,6 +604,15 @@ export component MainWindow inherits Window {
 
                                 GroupRow {
                                     item: group;
+                                    init => {
+                                        if group.id == root.focus-group-id {
+                                            root.focus-group-id = "";
+                                            self.take-focus();
+                                        }
+                                    }
+                                    focus-changed(focused) => {
+                                        root.group-focus-changed(group.id, focused);
+                                    }
                                     toggled => {
                                         root.group-toggled(group.id);
                                     }
@@ -584,6 +637,10 @@ export component MainWindow inherits Window {
                             root.device-volume-fix-requested(id);
                         }
                         compact: root.compact;
+                        focus-id <=> root.focus-speaker-id;
+                        focus-changed(id, focused) => {
+                            root.speaker-focus-changed(id, focused);
+                        }
                         note: root.connected.length > 0 ? "" : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
                         toggled(id) => {
                             root.speaker-toggled(id);

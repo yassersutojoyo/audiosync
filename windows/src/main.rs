@@ -435,7 +435,7 @@ mod tests {
             .find("export component NoticeStack")
             .expect("NoticeStack is there")..];
         assert!(
-            stack.contains("for notice in root.notices:")
+            stack.contains("for notice[index] in root.notices:")
                 && stack.contains("if root.notices.length > 1:")
                 && !stack.contains("visible:"),
             "the stack lists every notice it gets and no hidden ones"

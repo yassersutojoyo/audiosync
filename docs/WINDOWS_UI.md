@@ -89,6 +89,12 @@ Apple TV pairings have their own file (see the pairing prompt below).
 | Escape | Close the flyout, the equalizer, the double-audio guide or a dialog |
 
 A focused control shows a ring in the focus color while it has keyboard focus.
+Escape in a dialog works wherever the focus is, on its buttons too. When an
+update removes the focused control (a notice dismissed or retried, a speaker
+unplugged), the main window moves the focus to the notice in its place, the
+same row once its list is rebuilt, or else the streaming switch, so Narrator
+keeps talking and Tab goes on from there. The tray flyout keeps the focus
+inside itself the same way, so Escape still closes it.
 
 ## Narrator and contrast
 

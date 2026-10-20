@@ -1,12 +1,13 @@
-// The About dialog, opened from Help > About AudioSync.
+// The About dialog, opened from Help > About AudioSync. OK or Escape closes
+// it.
 //
 // Slint is used under its royalty-free license, which asks for the AboutSlint
 // widget in an About dialog reachable from the top-level menu. Keep it here.
 
-import { AboutSlint, StandardButton, VerticalBox } from "std-widgets.slint";
+import { AboutSlint, VerticalBox } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Fluent } from "widgets.slint";
+import { DialogButton, Fluent } from "widgets.slint";
 
 export component AboutDialog inherits Dialog {
     in property <string> version;
@@ -17,35 +18,64 @@ export component AboutDialog inherits Dialog {
     background: Tokens.background;
     preferred-width: 360px;
     default-font-family: Fluent.font;
+    // Key events go to the focused item, so Escape needs the scope focused.
+    forward-focus: keys;
 
-    VerticalBox {
-        alignment: start;
+    // OK or Escape.
+    callback closed();
 
-        Text {
-            text: Strings.app-name;
-            font-size: Tokens.font-size-title;
-            font-weight: 600;
-            color: Tokens.text;
-            horizontal-alignment: center;
-        }
-
-        Text {
-            text: Strings.version(root.version);
-            color: Tokens.text;
-            horizontal-alignment: center;
-        }
-
-        Text {
-            text: Strings.core-version(root.core-version);
-            font-size: Tokens.font-size-caption;
-            color: Tokens.secondary-text;
-            horizontal-alignment: center;
-        }
-
-        AboutSlint { }
+    // Called each time the dialog opens, so Escape works before anything
+    // inside is clicked.
+    public function take-focus() {
+        keys.focus();
     }
 
-    StandardButton {
-        kind: ok;
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.closed();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalBox {
+            alignment: start;
+
+            Text {
+                text: Strings.app-name;
+                font-size: Tokens.font-size-title;
+                font-weight: 600;
+                color: Tokens.text;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: Strings.version(root.version);
+                color: Tokens.text;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: Strings.core-version(root.core-version);
+                font-size: Tokens.font-size-caption;
+                color: Tokens.secondary-text;
+                horizontal-alignment: center;
+            }
+
+            AboutSlint { }
+        }
+    }
+
+    DialogButton {
+        text: Strings.ok;
+        primary: true;
+        dialog-button-role: accept;
+        clicked => {
+            root.closed();
+        }
+        escape-pressed => {
+            root.closed();
+        }
     }
 }
