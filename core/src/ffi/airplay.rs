@@ -3275,11 +3275,12 @@ mod tests {
     }
 
     // A panic on the sender's own driver thread: no call caught it, so the
-    // detail is the latest panic the process saw since the sender started
+    // detail is the latest panic the process saw since the sender started,
+    // and says so, since a session thread may have recovered from that one
     // (other tests panic in parallel here, so only its form is checked).
     // covers: S205
     #[test]
-    fn a_failure_after_the_driver_panicked_says_where_a_panic_happened() {
+    fn a_failure_after_the_driver_panicked_says_where_the_latest_panic_happened() {
         let mut handle = asc_airplay_create();
         // SAFETY: a live handle, used by this thread only.
         unsafe { &*handle }
@@ -3288,7 +3289,11 @@ mod tests {
         let events = events_until(handle, failed);
         let failure = events.last().expect("the failure");
         assert_eq!(failure.kind, AIRPLAY_EVENT_FAILED, "{events:?}");
-        assert!(is_panic_location(&failure.detail, ".rs"), "{failure:?}");
+        let detail = failure
+            .detail
+            .strip_prefix("latest ")
+            .unwrap_or_else(|| panic!("not marked as the latest panic: {failure:?}"));
+        assert!(is_panic_location(detail, ".rs"), "{failure:?}");
         assert!(!failure.detail.contains("a bug in"), "{failure:?}");
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
