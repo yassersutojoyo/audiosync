@@ -187,6 +187,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// AirPlay speakers saved as on that the backend couldn't switch on at
     /// launch (no AirPlay sender): their saved settings stay as they are.
     airplay_unrestored: BTreeSet<String>,
+    /// The last save of the settings file failed; its notice was posted
+    /// then, once until a save works again.
+    settings_unsaved: bool,
     /// The windows' own settings.
     view: ViewSettings,
 }
@@ -248,6 +251,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             ),
             must_save: false,
             airplay_unrestored: BTreeSet::new(),
+            settings_unsaved: false,
             view: ViewSettings::default(),
         };
         adapter.restore(saved);
@@ -423,18 +427,26 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Writes the settings file if anything changed since it was last read
     /// or written. A failed write is logged and tried again at the next
-    /// change; the settings stay in effect for this run. Nothing is written
-    /// while an older file's delays wait for their migration.
-    fn persist(&mut self) {
+    /// change; the settings stay in effect for this run, and the user is
+    /// told once, until a save works again and clears that notice. Nothing
+    /// is written while an older file's delays wait for their migration.
+    /// Returns whether the notices changed.
+    fn persist(&mut self) -> bool {
         if self.delays_to_migrate {
-            return;
+            return false;
         }
         let current = self.current_settings();
         if current == self.saved && !self.must_save {
-            return;
+            return false;
         }
         self.must_save = false;
-        match self.settings_file.save(&current) {
+        let saved = self.settings_file.save(&current);
+        let notices_changed = saved.is_ok() == self.settings_unsaved;
+        if saved.is_ok() && self.settings_unsaved {
+            self.notices.clear(&[NoticeSubject::SettingsFile]);
+        }
+        self.settings_unsaved = saved.is_err();
+        match saved {
             Ok(kept) if self.settings_file.path().is_some() => {
                 if let Some(kept) = kept {
                     self.log.log(|| {
@@ -455,11 +467,19 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.log.log(|| "settings: saved".to_owned());
             }
             Ok(_) => {}
-            Err(error) => self.log.log(|| {
-                format!("settings: couldn't be saved ({error}); they last until AudioSync quits")
-            }),
+            Err(error) => {
+                self.log.log(|| {
+                    format!(
+                        "settings: couldn't be saved ({error}); they last until AudioSync quits"
+                    )
+                });
+                if notices_changed {
+                    self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
+                }
+            }
         }
         self.saved = current;
+        notices_changed
     }
 
     /// The audio backend, to change the mock's pretend world in tests.
@@ -1008,7 +1028,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             // The next snapshot shows it; no notice, no focus change (S198).
             BackendEvent::DeviceVolumeChanged { .. } => {}
-            BackendEvent::PairingStore { .. } => {}
+            // Told once while the writes keep failing (the backend reports
+            // only the changes); a write that works clears it.
+            BackendEvent::PairingStore { saved: false } => {
+                self.post(NoticeSubject::PairingsFile, NoticeMessage::PairingsNotSaved);
+            }
+            BackendEvent::PairingStore { saved: true } => {
+                self.notices.clear(&[NoticeSubject::PairingsFile]);
+            }
         }
     }
 
@@ -1636,7 +1663,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             self.polls = 0;
             changed |= self.refresh_sources();
         }
-        self.persist();
+        changed |= self.persist();
         changed
     }
 
@@ -1649,7 +1676,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn save_settings(&mut self) {
-        self.persist();
+        let _ = self.persist();
     }
 }
 

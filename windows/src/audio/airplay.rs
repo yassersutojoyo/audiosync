@@ -582,6 +582,11 @@ pub struct AirPlaySpeakers {
     /// The sender stopped after an internal error, or its discovery did;
     /// reported once, until a new sender replaces it.
     stopped: bool,
+    /// The last write of the pairings' file failed.
+    store_unsaved: bool,
+    /// Whether the pairings' file can be written changed since the last
+    /// poll, which reports it ([`BackendEvent::PairingStore`]).
+    store_change: Option<bool>,
     log: DebugLog,
 }
 
@@ -609,7 +614,19 @@ impl AirPlaySpeakers {
             master,
             latency,
             stopped: false,
+            store_unsaved: false,
+            store_change: None,
             log,
+        }
+    }
+
+    /// Takes in whether a write of the pairings' file worked: a change from
+    /// working to failing, or back, is reported at the next poll, so the
+    /// user is told once while the writes keep failing.
+    fn store_written(&mut self, saved: bool) {
+        if saved == self.store_unsaved {
+            self.store_unsaved = !saved;
+            self.store_change = Some(saved);
         }
     }
 
@@ -924,19 +941,21 @@ impl AirPlaySpeakers {
     pub fn forget_pairing(&mut self, id: &str) {
         self.stop_pairing(id, "the user forgot the pairing");
         match self.store.remove(id) {
-            Ok(true) => self.log.log(|| {
-                format!(
-                    "AirPlay pairing {}: credentials forgotten",
-                    self.label(id)
-                )
-            }),
+            Ok(true) => {
+                self.store_written(true);
+                self.log
+                    .log(|| format!("AirPlay pairing {}: credentials forgotten", self.label(id)));
+            }
             Ok(false) => return,
-            Err(error) => self.log.log(|| {
-                format!(
-                    "AirPlay pairing {}: credentials forgotten for this run, but the store couldn't be written: {error}",
-                    self.label(id)
-                )
-            }),
+            Err(error) => {
+                self.store_written(false);
+                self.log.log(|| {
+                    format!(
+                        "AirPlay pairing {}: credentials forgotten for this run, but the store couldn't be written: {error}",
+                        self.label(id)
+                    )
+                });
+            }
         }
         if self.settings(id).enabled {
             self.entry(id).enabled = false;
@@ -1157,6 +1176,9 @@ impl AirPlaySpeakers {
         if !self.link.is_running() {
             changed |= self.sender_stopped(&mut events);
         }
+        if let Some(saved) = self.store_change.take() {
+            events.push(BackendEvent::PairingStore { saved });
+        }
         if changed {
             events.insert(0, BackendEvent::AirPlayChanged);
         }
@@ -1302,7 +1324,9 @@ impl AirPlaySpeakers {
 
     /// Stores the credentials a pairing with the speaker `id` gave.
     fn keep_credentials(&mut self, id: &str, credentials: Credentials) {
-        match self.store.insert(id, credentials) {
+        let stored = self.store.insert(id, credentials);
+        self.store_written(stored.is_ok());
+        match stored {
             Ok(()) => self.log.log(|| {
                 format!(
                     "AirPlay pairing {}: credentials stored, encrypted for this Windows user",
@@ -1402,6 +1426,7 @@ impl AirPlaySpeakers {
                 if problem == AirPlayProblem::PairingNotYet && self.store.contains(id) {
                     problem = AirPlayProblem::NeedsPin;
                     let forgotten = self.store.remove(id);
+                    self.store_written(forgotten.is_ok());
                     self.log.log(|| {
                         let saved = match &forgotten {
                             Ok(_) => String::new(),
