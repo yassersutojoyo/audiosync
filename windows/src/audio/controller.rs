@@ -207,6 +207,8 @@ pub trait Driver {
     /// (spec S195): a change notification from Windows marks it for
     /// [`Driver::endpoint_volume_changes`]. The notification runs on a system
     /// thread and only marks; nothing is read there.
+    /// [`BackendError::NotResponding`] when Windows audio didn't answer in
+    /// time: the endpoint isn't followed then.
     fn watch_endpoint_volume(&mut self, id: &str) -> Result<(), BackendError>;
 
     /// Stops following the endpoint `id`'s volume. Does nothing when it isn't
@@ -218,16 +220,21 @@ pub trait Driver {
     fn endpoint_volume_changes(&mut self) -> Vec<String>;
 
     /// The endpoint `id`'s mute and master volume, read now
-    /// (`IAudioEndpointVolume::GetMute` and `GetMasterVolumeLevelScalar`),
-    /// or `None` when its volume control can't be activated or read (S194).
-    fn endpoint_volume(&mut self, id: &str) -> Option<EndpointVolume>;
+    /// (`IAudioEndpointVolume::GetMute` and `GetMasterVolumeLevelScalar`):
+    /// an error when its volume control can't be activated or read (S194),
+    /// and [`BackendError::NotResponding`] when Windows audio didn't answer
+    /// in time.
+    fn endpoint_volume(&mut self, id: &str) -> Result<EndpointVolume, BackendError>;
 
     /// Sets the endpoint `id`'s master volume, 0 to 1
     /// (`SetMasterVolumeLevelScalar`): only the fix the user clicks (S197).
+    /// [`BackendError::NotResponding`] when Windows audio didn't answer in
+    /// time.
     fn set_endpoint_level(&mut self, id: &str, level: f32) -> Result<(), BackendError>;
 
     /// Unmutes the endpoint `id` (`SetMute(false)`): only the fix the user
-    /// clicks (S197).
+    /// clicks (S197). [`BackendError::NotResponding`] when Windows audio
+    /// didn't answer in time.
     fn unmute_endpoint(&mut self, id: &str) -> Result<(), BackendError>;
 
     /// Starts capturing as `activation` says, writing to the ring through
