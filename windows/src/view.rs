@@ -1717,15 +1717,57 @@ mod tests {
     use super::*;
     use crate::ui_model::MockBackend;
 
+    use slint::platform::software_renderer::{MinimalSoftwareWindow, Rgb565Pixel};
+    use slint::platform::{Key, WindowEvent};
+
     /// A platform without native windows, so a test can build the whole App
-    /// and drive it through the windows' callbacks.
+    /// and drive it through the windows' callbacks or keys.
     struct Headless;
+
+    thread_local! {
+        /// The windows the headless platform made on this thread.
+        static HEADLESS_WINDOWS: RefCell<Vec<Weak<MinimalSoftwareWindow>>> =
+            RefCell::default();
+    }
 
     impl slint::platform::Platform for Headless {
         fn create_window_adapter(
             &self,
         ) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
-            Ok(slint::platform::software_renderer::MinimalSoftwareWindow::new(Default::default()))
+            let window = MinimalSoftwareWindow::new(Default::default());
+            HEADLESS_WINDOWS.with(|windows| windows.borrow_mut().push(Rc::downgrade(&window)));
+            Ok(window)
+        }
+    }
+
+    /// Draws a frame of every headless window, as the event loop would after
+    /// an event: lists are laid out then, and their new rows built.
+    fn draw_frames() {
+        slint::platform::update_timers_and_animations();
+        let windows: Vec<_> = HEADLESS_WINDOWS
+            .with(|windows| windows.borrow().iter().filter_map(Weak::upgrade).collect());
+        for window in windows {
+            window.set_size(slint::PhysicalSize::new(1000, 720));
+            window.draw_if_needed(|renderer| {
+                let mut pixels = vec![Rgb565Pixel::default(); 1000 * 720];
+                renderer.render(&mut pixels, 1000);
+            });
+        }
+        slint::platform::update_timers_and_animations();
+    }
+
+    /// Presses and releases `key` in `window`, then draws a frame.
+    fn press(window: &slint::Window, key: impl Into<SharedString>) {
+        let text: SharedString = key.into();
+        window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        window.dispatch_event(WindowEvent::KeyReleased { text });
+        draw_frames();
+    }
+
+    /// Presses Tab `times` times in `window`.
+    fn tab(window: &slint::Window, times: usize) {
+        for _ in 0..times {
+            press(window, Key::Tab);
         }
     }
 
@@ -2173,5 +2215,156 @@ mod tests {
             "a focused speaker row keeps its focus when other parts change"
         );
         assert!(!FlyoutParts::default().overlaps(notice), "nothing focused");
+    }
+
+    #[test]
+    fn escape_on_the_pin_dialog_buttons_cancels() {
+        let app = app_over(MockBackend::new());
+        app.preview_pin(false);
+        let window = app.pin_dialog.window();
+        assert!(window.is_visible());
+        // From the field to Cancel: Pair waits for four digits.
+        tab(window, 1);
+        press(window, "5");
+        assert_eq!(app.pin_dialog.get_pin(), "", "the field lost the focus");
+        press(window, Key::Escape);
+        assert!(!window.is_visible(), "Escape on Cancel closed the dialog");
+        assert!(!app.pin_preview.get(), "through its Cancel path");
+    }
+
+    #[test]
+    fn escape_on_the_group_dialog_buttons_cancels() {
+        let app = app_over(MockBackend::new());
+        let groups = app.snapshot().groups.len();
+        app.ask_new_group();
+        let window = app.group_dialog.window();
+        assert!(window.is_visible());
+        assert!(app.group_dialog.get_show_field(), "a speaker is on");
+        // From the name field to Create.
+        tab(window, 1);
+        press(window, "x");
+        assert_eq!(app.group_dialog.get_name(), "", "the field lost the focus");
+        press(window, Key::Escape);
+        assert!(!window.is_visible(), "Escape on Create closed the dialog");
+        assert_eq!(app.snapshot().groups.len(), groups, "and made no group");
+    }
+
+    #[test]
+    fn escape_closes_the_about_dialog() {
+        let app = app_over(MockBackend::new());
+        let window = app.about.window();
+        app.main.invoke_about_requested();
+        assert!(window.is_visible());
+        press(window, Key::Escape);
+        assert!(!window.is_visible(), "Escape right after it opened");
+
+        app.main.invoke_about_requested();
+        assert!(window.is_visible());
+        tab(window, 1);
+        press(window, Key::Escape);
+        assert!(!window.is_visible(), "Escape on a focused button");
+    }
+
+    /// The App over `backend`, with its main window shown and drawn once.
+    fn main_window_over(backend: MockBackend) -> Rc<App> {
+        let app = app_over(backend);
+        app.main.show().expect("the main window shows headless");
+        draw_frames();
+        app
+    }
+
+    #[test]
+    fn dismissing_a_notice_with_the_keyboard_focuses_the_next_then_the_switch() {
+        let mut backend = MockBackend::new();
+        backend.post("source", NoticeMessage::CaptureLost, "09.40");
+        backend.post("start", NoticeMessage::NoSpeaker, "09.41");
+        let app = main_window_over(backend);
+        let window = app.main.window();
+        // The streaming switch, then the newest notice's dismiss button.
+        tab(window, 2);
+        press(window, " ");
+        assert_eq!(app.snapshot().notices.len(), 1, "Space dismissed it");
+        press(window, " ");
+        assert_eq!(
+            app.snapshot().notices.len(),
+            0,
+            "the focus moved to the next notice, which Space dismissed"
+        );
+        assert!(!app.snapshot().running);
+        press(window, " ");
+        assert!(
+            app.snapshot().running,
+            "with no notice left, the streaming switch has the focus"
+        );
+    }
+
+    /// The example speakers plus a virtual output that is off, so it is
+    /// listed only while Show Virtual Devices is on.
+    fn main_window_with_listed_cable() -> Rc<App> {
+        let mut backend = MockBackend::new();
+        let mut cable = backend.snapshot().speaker("local:desk").unwrap().clone();
+        cable.id = "local:cable".into();
+        cable.name = "Cable Input".into();
+        cable.kind = ui_model::SpeakerKind::Virtual;
+        cable.enabled = false;
+        backend.add_speaker(cable);
+        let app = app_over(backend);
+        app.main.invoke_show_virtual_devices_toggled(true);
+        app.main.show().expect("the main window shows headless");
+        draw_frames();
+        app
+    }
+
+    fn enabled(app: &App, id: &str) -> bool {
+        app.snapshot().speaker(id).unwrap().enabled
+    }
+
+    #[test]
+    fn a_focused_speaker_row_that_goes_hands_the_focus_to_the_switch() {
+        let app = main_window_with_listed_cable();
+        let window = app.main.window();
+        // Switch, source, master volume, Equalizer, then the rows: the
+        // group's, This PC's, then the connected speakers' by name.
+        tab(window, 16);
+        press(window, " ");
+        assert!(enabled(&app, "local:cable"), "the cable row has the focus");
+        press(window, " ");
+        assert!(!enabled(&app, "local:cable"));
+
+        // Off and no longer shown, its row goes.
+        app.main.invoke_show_virtual_devices_toggled(false);
+        draw_frames();
+        app.update(|b| b.set_running(false));
+        draw_frames();
+        let speakers_on = app.snapshot().active_speakers();
+        press(window, " ");
+        assert!(app.snapshot().running, "the streaming switch has the focus");
+        assert_eq!(app.snapshot().active_speakers(), speakers_on);
+    }
+
+    #[test]
+    fn a_focused_speaker_row_keeps_the_focus_when_its_list_is_rebuilt() {
+        let app = main_window_with_listed_cable();
+        let window = app.main.window();
+        tab(window, 14);
+        let bedroom = enabled(&app, "airplay:bedroom");
+        press(window, " ");
+        assert_ne!(
+            enabled(&app, "airplay:bedroom"),
+            bedroom,
+            "it has the focus"
+        );
+        press(window, " ");
+        assert_eq!(enabled(&app, "airplay:bedroom"), bedroom);
+
+        // The cable row goes, so Connected Speakers is rebuilt.
+        app.main.invoke_show_virtual_devices_toggled(false);
+        draw_frames();
+        press(window, " ");
+        assert_ne!(
+            enabled(&app, "airplay:bedroom"),
+            bedroom,
+            "the rebuilt row has the focus back"
+        );
     }
 }
