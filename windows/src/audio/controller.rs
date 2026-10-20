@@ -2601,6 +2601,32 @@ mod tests {
     }
 
     #[test]
+    fn a_busy_output_is_tried_again_every_few_seconds_not_at_every_poll() {
+        let mut backend = backend();
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(backend.driver().renderer_attempts(HEADPHONES), 1);
+        // Thirty seconds at the UI's two polls a second: each try starts
+        // an output thread and opens the device, so one about every three
+        // seconds, not one at every poll.
+        for _ in 0..60 {
+            backend.poll();
+        }
+        let attempts = backend.driver().renderer_attempts(HEADPHONES);
+        assert!((10..=11).contains(&attempts), "{attempts} tries");
+        assert!(backend.policy().settings(HEADPHONES).enabled);
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        // Once free, it plays within about three seconds.
+        backend.fail_output(HEADPHONES, None);
+        let mut polls = 0;
+        while !playing(&backend).iter().any(|id| id == HEADPHONES) {
+            assert!(polls < 6, "not playing after {polls} polls");
+            backend.poll();
+            polls += 1;
+        }
+    }
+
+    #[test]
     fn an_output_taken_over_by_another_app_while_playing_waits_for_it() {
         let mut backend = backend();
         backend.start(&SourceId::WholeSystem).unwrap();
