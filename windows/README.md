@@ -20,12 +20,9 @@ shortcuts.
 
 ## Trying the preview exe
 
-There's no Windows release yet. Every CI run of
-`.github/workflows/windows.yml` keeps an `audiosync.exe` for x64 and one for
-ARM64 as workflow artifacts for a week (you need to be signed in to GitHub to
-download them), or you can build it yourself (below). It's a single exe with
-no installer: put it in a folder of its own, keep `THIRD-PARTY-NOTICES.txt`
-from the same download next to it, and run it.
+There's no Windows release yet, so for now you build it yourself (below).
+It's a single exe with no installer: put it in a folder of its own, keep the
+`THIRD-PARTY-NOTICES.txt` you write for it (below) next to it, and run it.
 
 - **What you need:** Windows 11 (build 22000 or later) on x64 or ARM64. On
   anything older the app says so and exits.
@@ -73,6 +70,12 @@ from the same download next to it, and run it.
 cd windows
 cargo test
 cargo build --release    # target\release\audiosync.exe
+```
+
+Then, from the repository root, write the notices for that build next to it:
+
+```powershell
+py -3 -I scripts/windows_notices.py x86_64-pc-windows-msvc --output windows/target/release/THIRD-PARTY-NOTICES.txt
 ```
 
 For the other architecture, add its target first:
