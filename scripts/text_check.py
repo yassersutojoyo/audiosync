@@ -23,7 +23,10 @@ import sys
 import tempfile
 
 EM_DASH = "—"
-_ENTITY = re.compile(r"&(mdash|#8212|#x2014);", re.IGNORECASE)
+# Browsers render &#151; and &#x97; as an em dash too (windows-1252 remapping).
+_ENTITY = re.compile(
+    r"&(mdash;|#0*(8212|151)(?![0-9])|#x0*(2014|97)(?![0-9a-f]))", re.IGNORECASE
+)
 _BINARY = (".png", ".ico", ".jpg", ".jpeg", ".gif", ".webp", ".icns", ".pdf",
            ".woff", ".woff2", ".ttf", ".otf")
 _HINT = "em dash; use a comma, colon, parentheses or two sentences"
@@ -100,7 +103,9 @@ def self_test():
         "first line\nsecond " + EM_DASH + " here\nthird\n": [2],
         "en dash – and hyphen - are fine\n": [],
         "<p>a &mdash; b</p>\n<p>&#8212;</p>\n<p>&#X2014;</p>\n": [1, 2, 3],
+        "<p>&#8212 &#08212;</p>\n<p>&#151;</p>\n<p>&#x97;</p>\n": [1, 2, 3],
         "&ndash; and &amp;mdash are fine\n": [],
+        "&#1512; &#82120; &#x972; &#x20140; are other characters\n": [],
         "": [],
     }
     for text, want in samples.items():
