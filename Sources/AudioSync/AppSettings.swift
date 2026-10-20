@@ -274,7 +274,7 @@ enum RetiredEngineChoice {
 }
 
 /// The AirPlay sender choice of older builds: the `airplayImpl` setting and
-/// the `AUDIOSYNC_AIRPLAY` environment variable, "native" or "owntone".
+/// the `AUDIOSYNC_AIRPLAY` environment variable, "native" or the old engine's value.
 /// AudioSync's own sender is the only one now, so either one is only noted in
 /// the debug log: the variable at every launch that has it, the setting once,
 /// since that launch removes it (`SettingsStore.retiredChoiceNotes`).

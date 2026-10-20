@@ -138,7 +138,7 @@ The first public release, an early alpha.
 - A per-speaker sync delay of 0–20 s, with clock drift correction.
 - Per-speaker and master volume, and a 10-band equalizer with preamp and presets.
 - Now Playing for Spotify and Music, speaker groups, per-speaker auto-connect and launch at login.
-- The AirPlay engine ([OwnTone](https://github.com/owntone/owntone-server) 29.2 with five small patches), bundled and managed by AudioSync. Its source is attached to the release.
+- A bundled open-source AirPlay engine (GPL-2.0-or-later, with five small patches), managed by AudioSync. Its source is attached to the release.
 
 ### Known limitations
 
