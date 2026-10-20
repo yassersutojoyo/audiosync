@@ -1128,6 +1128,7 @@ impl<D: Driver> Controller<D> {
                     lag_frames: playing.control.lag_frames(),
                     counters: playing.control.counters(),
                     slowed_frames: playing.control.slowed_frames(),
+                    sped_frames: playing.control.sped_frames(),
                     shortfall_frames: playing.control.shortfall_frames(),
                 })
                 .collect();
@@ -2294,8 +2295,10 @@ struct OutputStatus {
     /// Its reader's counters.
     counters: ReaderCounters,
     /// Capture frames its converter was slowed down by to keep the reader
-    /// off W (S206), and device frames it couldn't produce.
+    /// off W or follow the capture's clock (S206, S207), sped up by to
+    /// follow it (S207), and device frames it couldn't produce.
     slowed_frames: u64,
+    sped_frames: u64,
     shortfall_frames: u64,
 }
 
@@ -2321,7 +2324,7 @@ fn describe_status(
             "\n  output {}: delay {} ms ({} frames), volume {} (gain {:.3}), lag {} frames; \
              primes {}, resyncs {}, starved reads {} ({} frames), drift skips {} ({} frames), \
              drift silences {} ({} frames), rejected copies {}, slowed {} frames, \
-             shortfall {} frames",
+             sped {} frames, shortfall {} frames",
             output.label,
             output.hold_back_ms,
             output.delay_frames,
@@ -2338,6 +2341,7 @@ fn describe_status(
             counters.drift_silence_frames,
             counters.rejected_copies,
             output.slowed_frames,
+            output.sped_frames,
             output.shortfall_frames,
         ));
     }
@@ -4073,7 +4077,7 @@ mod tests {
         // Nothing reads the mock's ring, so every reader counter is 0.
         let counters = "lag 0 frames; primes 0, resyncs 0, starved reads 0 (0 frames), \
                         drift skips 0 (0 frames), drift silences 0 (0 frames), rejected copies 0, \
-                        slowed 0 frames, shortfall 0 frames";
+                        slowed 0 frames, sped 0 frames, shortfall 0 frames";
         let outputs = messages.iter().filter(|m| m.starts_with("  output "));
         assert!(outputs.clone().count() == 2 && outputs.clone().all(|m| m.ends_with(counters)));
         let _ = std::fs::remove_dir_all(dir);

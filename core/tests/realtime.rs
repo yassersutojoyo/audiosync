@@ -17,6 +17,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+use audiosync_core::clock;
 use audiosync_core::convert;
 use audiosync_core::fade::InputFade;
 use audiosync_core::reader::{Reader, ReaderControl, tolerance_frames};
@@ -223,10 +224,13 @@ fn fading_allocates_and_locks_nothing_on_the_audio_thread() {
     let count = allocations_in(|| {
         for round in 0..3000usize {
             // The capture: steady blocks, a burst (a held skip forward) and
-            // a stall (a held step back).
+            // a stall (a held step back); after the first 1000 rounds, each
+            // block stamped on the core's clock (S207).
+            let stamped = round >= 1000;
             match round % 500 {
                 200 => writer.write(&burst, 3000),
                 300..=320 => {}
+                _ if stamped => writer.write_at(&block, 512, clock::now_ns()),
                 _ => writer.write(&block, 512),
             }
             // The control thread: delay changes, then the native input's stop
@@ -243,12 +247,16 @@ fn fading_allocates_and_locks_nothing_on_the_audio_thread() {
                 control.request_fade_out();
             }
             // The output, in callbacks of changing sizes, with and without
-            // an output time.
+            // an output time, and once the capture stamps, with the time
+            // it reads at (S207).
             let frames = [512usize, 441, 1500, 97][round % 4];
-            if round % 2 == 0 {
-                renderer.render(&mut out[..frames * 2]);
-            } else {
-                renderer.render_timed(&mut out[..frames * 2], round as u64 * 10_000_000);
+            let out = &mut out[..frames * 2];
+            let now = clock::now_ns();
+            match (stamped, round % 2 == 0) {
+                (false, true) => renderer.render(out),
+                (false, false) => renderer.render_timed(out, round as u64 * 10_000_000),
+                (true, true) => renderer.render_at(out, now),
+                (true, false) => renderer.render_timed_at(out, round as u64 * 10_000_000, now),
             }
             std::hint::black_box(renderer.frames_after_fade());
             std::hint::black_box(control.faded_by_time(1_000_000, round as u64));
@@ -264,6 +272,47 @@ fn fading_allocates_and_locks_nothing_on_the_audio_thread() {
     );
     assert!(control.fade_rendered());
     assert!(handed > 0);
+}
+
+// covers: S207, S126
+#[test]
+fn following_the_capture_clock_allocates_nothing() {
+    // Setup may allocate: an earliest output converting to 44.1 kHz.
+    let ring = Ring::for_rate(48_000).unwrap();
+    let mut writer = ring.writer().unwrap();
+    let reader = Reader::new(Arc::clone(&ring), 48_000);
+    let control = RendererControl::new(&reader);
+    let gain = Arc::new(SharedGain::new(0.8));
+    let mut renderer = Renderer::new(reader, &control, gain, 48_000, 44_100, 2).unwrap();
+    let block = noisy_block(480, 11);
+    let mut out = vec![0.0f32; 441 * 2];
+    // The capture writes 480 frames every 10 ms; the device asks for 441
+    // every 10 ms on its own clock, 0.2 % fast for 4 s and then 0.2 %
+    // slow, so the converter is trimmed both ways. Both are stamped on one
+    // made-up clock.
+    let (mut write_ns, mut pull_ns) = (10_000_000u64, 0u64);
+    let count = allocations_in(|| {
+        while write_ns <= 8_000_000_000 {
+            if pull_ns < write_ns {
+                renderer.render_at(&mut out, pull_ns);
+                pull_ns += if pull_ns < 4_000_000_000 {
+                    9_980_000
+                } else {
+                    10_020_000
+                };
+            } else {
+                writer.write_at(&block, 480, write_ns);
+                write_ns += 10_000_000;
+            }
+        }
+    });
+    assert_eq!(count, 0, "following the clock allocated or freed memory");
+    assert!(
+        control.slowed_frames() > 0 && control.sped_frames() > 0,
+        "slowed {}, sped {}",
+        control.slowed_frames(),
+        control.sped_frames()
+    );
 }
 
 /// The source of a module without its unit tests, with `\n` line ends
@@ -340,6 +389,7 @@ fn audio_path_modules_use_only_atomics() {
         ("fade.rs", "none"),
         ("render.rs", "none"),
         ("eq.rs", "yield"),
+        ("clock.rs", "origin"),
     ];
     for (name, waits) in modules {
         let source = source_file(&[name]);
@@ -372,10 +422,16 @@ fn c_interface_audio_calls_use_only_atomics() {
 }
 
 /// Asserts that a module's production code holds no word of
-/// [`NOT_REAL_TIME`] and waits only as `waits` allows: "none" or "yield" (a
-/// `thread::yield_now`).
+/// [`NOT_REAL_TIME`] and waits only as `waits` allows: "none", "yield" (a
+/// `thread::yield_now`) or "origin" (the stamps' clock, S207: its origin is
+/// a `OnceLock` that `Ring::new` sets before any audio thread runs, so on
+/// an audio thread it is only loaded, never waited for).
 fn assert_waits_only_as_allowed(name: &str, code: &str, waits: &str) {
-    assert_eq!(forbidden_words(code), [] as [&str; 0], "{name}");
+    let forbidden: Vec<&str> = forbidden_words(code)
+        .into_iter()
+        .filter(|word| !(waits == "origin" && *word == "OnceLock"))
+        .collect();
+    assert_eq!(forbidden, [] as [&str; 0], "{name}");
     let mut thread_calls = code.match_indices("thread::").map(|(at, _)| &code[at..]);
     let allowed = |call: &str| waits == "yield" && call.starts_with("thread::yield_now");
     assert!(thread_calls.all(allowed), "{name} blocks");

@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use audiosync_core::clock;
 use audiosync_core::reader::Reader;
 use audiosync_core::render::{Renderer, RendererControl, endpoint_faded};
 use audiosync_core::volume::SharedGain;
@@ -88,9 +89,12 @@ impl RenderPipeline {
         self.renderer.lead_frames()
     }
 
-    /// Fills `out`, interleaved with [`RenderPipeline::channels`] channels.
+    /// Fills `out`, interleaved with [`RenderPipeline::channels`] channels,
+    /// reading now on the core's clock, the one the capture stamps its
+    /// blocks with, so a converting output follows the capture's clock
+    /// (S207).
     pub fn render(&mut self, out: &mut [f32]) {
-        self.renderer.render(out);
+        self.renderer.render_at(out, clock::now_ns());
     }
 
     /// Whether the endpoint has played the requested fade-out (S185): it

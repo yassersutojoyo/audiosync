@@ -16,6 +16,7 @@
 use std::time::Instant;
 
 use audiosync_core::channels::input_to_stereo;
+use audiosync_core::clock;
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::resample::Resampler;
 use audiosync_core::ring::{RingWriter, is_supported_rate};
@@ -356,7 +357,9 @@ impl CaptureConverter {
     /// whatever `data` holds; it still runs through the equalizer, so the
     /// filters ring out as they would on any quiet passage. The AirPlay
     /// sender gets the packet as audio that arrived now. However many writes
-    /// the packet takes, the ring counts it as one block (S206).
+    /// the packet takes, the ring counts it as one block (S206), stamped
+    /// with the time it closes on the core's clock (S207), so the outputs
+    /// can follow the capture's clock.
     pub fn push(&mut self, data: &[u8], frames: usize, silent: bool) {
         let arrived = Instant::now();
         let block = self.format.block_align();
@@ -383,7 +386,7 @@ impl CaptureConverter {
             self.write_stereo(n, arrived);
             done += n;
         }
-        self.writer.end_block();
+        self.writer.end_block_at(clock::now_ns());
     }
 
     /// Writes the first `frames` frames of `stereo`, resampled if needed and
@@ -1120,6 +1123,28 @@ mod tests {
             converter.push(&vec![0u8; 37 * align], 37, false);
             assert_eq!(ring.block_frames(), packet, "{} Hz", format.rate);
         }
+    }
+
+    /// Every packet's block, a gap fill's silence included, is stamped with
+    /// W and the time it closed on the core's clock (S207); a packet that
+    /// wrote nothing leaves the newest stamp as it was.
+    // covers: S207
+    #[test]
+    fn each_packet_and_gap_fill_is_stamped_as_its_block_closes() {
+        let (ring, writer) = session_ring();
+        let mut converter = new_converter(CAPTURE_ATTEMPTS[0].format, writer).unwrap();
+        assert_eq!(ring.stamp(), None);
+        let before = clock::now_ns();
+        converter.push(&f32_bytes(&[0.25; 960]), 480, false);
+        let first = ring.stamp().expect("the packet's block is stamped");
+        assert_eq!(first.written, 480);
+        assert!(first.time_ns >= before && first.time_ns <= clock::now_ns());
+        converter.push(&[], 480, true);
+        let fill = ring.stamp().expect("the gap fill's block is stamped");
+        assert_eq!(fill.written, 960);
+        assert!(fill.time_ns >= first.time_ns);
+        converter.push(&[], 0, false);
+        assert_eq!(ring.stamp(), Some(fill));
     }
 
     #[test]

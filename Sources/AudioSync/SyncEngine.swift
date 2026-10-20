@@ -290,6 +290,7 @@ final class StreamEngine {
         renderer.onDeviceGone = nil
         DebugTrace.log("[AudioSync] output stopped (\(reason)): \(uid), \(renderer.stopNote), "
                 + "\(renderer.framesRendered.load(ordering: .relaxed)) frames rendered, \(renderer.counters), "
-                + "slowed \(renderer.slowedFrames) frames, shortfall \(renderer.shortfallFrames) frames")
+                + "slowed \(renderer.slowedFrames) frames, sped \(renderer.spedFrames) frames, "
+                + "shortfall \(renderer.shortfallFrames) frames")
     }
 }

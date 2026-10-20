@@ -310,8 +310,13 @@ final class CoreRenderer {
     var counters: CoreDelayReader.Counters { CoreDelayReader.Counters(asc_renderer_counters(handle)) }
 
     /// Any thread: the capture frames the converter was slowed down by to keep
-    /// the reader off the newest frame (S206), in all.
+    /// the reader off the newest frame (S206) or to follow the capture's clock
+    /// (S207), in all.
     var slowedFrames: Int64 { Int64(clamping: asc_renderer_slowed_frames(handle)) }
+
+    /// Any thread: the capture frames the converter was sped up by to follow
+    /// the capture's clock (S207), in all.
+    var spedFrames: Int64 { Int64(clamping: asc_renderer_sped_frames(handle)) }
 
     /// Any thread: the device frames the converter couldn't produce and that
     /// played as silence, in all; 0 unless the core's read sizing is wrong.
