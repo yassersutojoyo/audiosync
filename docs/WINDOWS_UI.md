@@ -18,11 +18,14 @@ which is close to Mica's own tint; the tray flyout gets the system's rounded fra
 Where Windows doesn't offer one, the window keeps the plain frame (and the
 flyout its own drawn edge). The dialogs (About, the group dialog and the
 Apple TV code dialog) have only a close button in the title bar, as Windows
-dialogs do. The standard controls (switches, sliders, drop-downs, text
-fields, the primary button) take their accent from the brand teal instead of
-the Windows accent color, so the app has one accent: the Fluent style keeps its
-own lightness and takes the teal's hue, dark teal in light mode and mint in
-dark mode. AudioSync's own pieces use the brand teal tokens.
+dialogs do. The standard controls (switches, sliders, drop-downs, the
+primary button) take their accent from the brand teal instead of the Windows
+accent color, so the app has one accent: the Fluent style keeps its own
+lightness and takes the teal's hue, dark teal in light mode and mint in dark
+mode. AudioSync's own pieces use the brand teal tokens. Text fields are
+AudioSync's own: at the style's lightness, selected text in teal measured
+4.21:1, so a field selects in the teal text color with the surface color on
+it (5.85:1 in light mode, 5.6:1 in dark), and a teal line under it shows the focus.
 
 The About dialog (Help > About AudioSync) shows the brand mark and the
 wordmark on top, then the version, the audio core's version, the copyright and

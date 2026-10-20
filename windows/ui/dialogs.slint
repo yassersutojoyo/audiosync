@@ -3,11 +3,10 @@
 // Escape cancels wherever the focus is: in the content's key scope or on a
 // button (DialogButton).
 
-import { LineEdit } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { PinPhase } from "types.slint";
-import { DialogButton, Fluent, Glyph, Glyphs } from "widgets.slint";
+import { DialogButton, Fluent, Glyph, Glyphs, TextField } from "widgets.slint";
 
 export component GroupNameDialog inherits Dialog {
     in property <string> heading;
@@ -59,7 +58,7 @@ export component GroupNameDialog inherits Dialog {
             }
 
             // Left out (not just hidden) without a field, so it takes no row.
-            if root.show-field: LineEdit {
+            if root.show-field: TextField {
                 property <int> focus-request: root.focus-request;
                 text <=> root.name;
                 placeholder-text: root.placeholder;
@@ -177,7 +176,7 @@ export component PinDialog inherits Dialog {
                 }
             }
 
-            LineEdit {
+            TextField {
                 property <int> focus-request: root.focus-request;
                 text <=> root.pin;
                 placeholder-text: Strings.pin-field-placeholder;

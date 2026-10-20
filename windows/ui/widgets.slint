@@ -6,7 +6,7 @@
 // focus ring while it has keyboard focus, acts on Space and Enter, and
 // carries an accessible role, label and (where it has one) value.
 
-import { Button, LineEdit, Slider, Switch } from "std-widgets.slint";
+import { Button, Slider, Switch } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Availability, DeviceVolumeHint, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
@@ -522,6 +522,132 @@ export component VolumeSlider inherits HorizontalLayout {
     }
 }
 
+// A one-line text box instead of the style's LineEdit, whose selection in the
+// brand teal measures 4.21:1 and takes no other colors.
+export component TextField inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    in property <string> placeholder-text;
+    in property <InputType> input-type <=> input.input-type;
+    in property <bool> read-only <=> input.read-only;
+    in property <length> font-size <=> input.font-size;
+    in property <TextHorizontalAlignment> horizontal-alignment <=> input.horizontal-alignment;
+    out property <bool> has-focus: input.has-focus;
+    callback edited(string);
+    callback accepted(string);
+
+    public function select-all() {
+        input.select-all();
+    }
+
+    public function set-selection-offsets(anchor: int, focus: int) {
+        input.set-selection-offsets(anchor, focus);
+    }
+
+    min-width: 48px;
+    min-height: max(32px, input.preferred-height + 12px);
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    forward-focus: input;
+    border-radius: Fluent.radius-control;
+    border-width: 1px;
+    border-color: Fluent.stroke;
+    background: input.has-focus ? Tokens.surface : Tokens.surface.mix(Tokens.text, 0.98);
+    clip: true;
+    accessible-role: text-input;
+    accessible-value: root.text;
+    accessible-placeholder-text: root.placeholder-text;
+    accessible-read-only: root.read-only;
+    accessible-action-set-value(value) => {
+        root.text = value;
+        root.edited(value);
+    }
+
+    // A click on the padding beside the text focuses it too.
+    TouchArea {
+        clicked => {
+            input.focus();
+        }
+    }
+
+    ContextMenuArea {
+        Menu {
+            MenuItem {
+                title: Strings.edit-cut;
+                enabled: !root.read-only;
+                activated => {
+                    input.cut();
+                }
+            }
+
+            MenuItem {
+                title: Strings.edit-copy;
+                activated => {
+                    input.copy();
+                }
+            }
+
+            MenuItem {
+                title: Strings.edit-paste;
+                enabled: !root.read-only;
+                activated => {
+                    input.paste();
+                }
+            }
+
+            MenuSeparator { }
+
+            MenuItem {
+                title: Strings.edit-select-all;
+                activated => {
+                    input.select-all();
+                }
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+
+            Rectangle {
+                if root.text == "": Text {
+                    width: 100%;
+                    height: 100%;
+                    text: root.placeholder-text;
+                    font-size: input.font-size;
+                    color: Tokens.secondary-text;
+                    vertical-alignment: center;
+                    horizontal-alignment: input.horizontal-alignment;
+                    accessible-role: none;
+                }
+
+                input := TextInput {
+                    width: 100%;
+                    height: 100%;
+                    vertical-alignment: center;
+                    color: Tokens.text;
+                    selection-background-color: Tokens.teal-text;
+                    selection-foreground-color: Tokens.surface;
+                    accessible-role: none;
+                    edited => {
+                        root.edited(self.text);
+                    }
+                    accepted => {
+                        root.accepted(self.text);
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        x: 0;
+        y: parent.height - self.height;
+        width: parent.width;
+        height: input.has-focus ? 2px : 1px;
+        background: input.has-focus ? Tokens.teal : Tokens.text.with-alpha(0.45);
+    }
+}
+
 // Around a delay field: a teal outline while the field holds typing not yet
 // applied (Enter applies it), a red one while that typing is a number out of
 // range. Drawn in the 4 px spacing around the field instead of taking room,
@@ -641,7 +767,7 @@ export component SyncControls inherits VerticalLayout {
                 pending: root.pending;
                 out-of-range: root.range-hint != "";
 
-                field := LineEdit {
+                field := TextField {
                     width: 72px;
                     text: root.delay-text;
                     horizontal-alignment: center;
@@ -767,7 +893,7 @@ export component AirPlayDelayControls inherits VerticalLayout {
                         pending: root.pending;
                         out-of-range: root.range-hint != "";
 
-                        field := LineEdit {
+                        field := TextField {
                             width: 72px;
                             text: root.delay-text;
                             horizontal-alignment: center;

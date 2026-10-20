@@ -233,6 +233,7 @@ fn every_control_has_an_accessible_label() {
         "Slider",
         "ComboBox",
         "LineEdit",
+        "TextField",
         "CheckBox",
         "SpinBox",
     ];
@@ -886,4 +887,21 @@ fn a_flyout_row_shows_the_speakers_note() {
         Some("text: Strings.row-note(root.state);"),
         "the QuietText shows the note"
     );
+}
+
+/// Selected text keeps 4.5:1: every text box is a TextField, which selects
+/// in the "surface" on "tealText" pair, and none is the style's LineEdit,
+/// whose accent selection measures 4.21:1 under white text.
+#[test]
+fn selected_text_in_a_text_box_reaches_4_5_to_1() {
+    for (file, source) in UI_FILES {
+        assert!(
+            blocks(source, "LineEdit").is_empty(),
+            "{file} uses LineEdit"
+        );
+    }
+    let field = component_body(include_str!("../ui/widgets.slint"), "TextField");
+    assert!(field.contains("selection-background-color: Tokens.teal-text;"));
+    assert!(field.contains("selection-foreground-color: Tokens.surface;"));
+    assert!(CONTRAST_PAIRS.contains(&("surface", "tealText")));
 }
