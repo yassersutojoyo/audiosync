@@ -77,8 +77,10 @@ enum NativeSpeakerEvent: Equatable {
     /// The base latency L, after a start, a change or a restart.
     case timeline(latencyMs: Double, restarted: Bool)
     /// The sender stopped working after an internal error (a panic in it):
-    /// it lists, plays and reports nothing more.
-    case failed
+    /// it lists, plays and reports nothing more. `detail`: where the panic
+    /// happened ("panic at <file>:<line>"), or empty, for the debug log
+    /// (S205).
+    case failed(detail: String)
     /// A pairing's Apple TV shows a PIN.
     case pinNeeded(id: String)
     /// A pairing needs the receiver's password; `wrong`: it turned down the
@@ -109,8 +111,8 @@ enum NativeSpeakerEvent: Equatable {
                 + (frames.map { "\($0) frames" } ?? "nothing")
         case .timeline(let ms, let restarted):
             line = String(format: "timeline: L = %.0f ms", ms) + (restarted ? ", restarted" : "")
-        case .failed:
-            line = "the sender stopped after an internal error"
+        case .failed(let detail):
+            line = "the sender stopped after an internal error" + (detail.isEmpty ? "" : " (\(detail))")
         case .pinNeeded(let id):
             line = "\(label(id)): pairing, the Apple TV shows a PIN"
         case .passwordNeeded(let id, let wrong):

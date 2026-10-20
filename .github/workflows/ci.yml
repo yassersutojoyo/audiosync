@@ -38,6 +38,36 @@ jobs:
       - name: Tests (shellcheck, logic and the core's app-side parts)
         run: Tests/run-tests.sh
 
+      - name: A panic inside an AirPlay sender call stops at the C boundary in the shipped library build (panic probe, S205)
+        run: |
+          # The app's library, prelinked the same way, plus one entry that
+          # panics inside a sender call's guard, in a folder of its own.
+          AUDIOSYNC_CORE_PROBE=1 scripts/build_core.sh
+          probe_lib=core/target/universal-apple-darwin/probe/libaudiosync_core.a
+          app_lib=core/target/universal-apple-darwin/release/libaudiosync_core.a
+          for arch in arm64 x86_64; do
+            xcrun nm -gU --no-llvm-bc -arch "$arch" "$probe_lib" | grep -q ' T _asc_airplay_panic_probe$'
+            # The app's library and the app itself never have the probe, not even as
+            # a hidden local symbol (no -g: local symbols count too).
+            if xcrun nm -U --no-llvm-bc -arch "$arch" "$app_lib" | grep -q '_asc_airplay_panic_probe'; then
+              echo "the app's core library ($arch) has the panic probe"; exit 1
+            fi
+          done
+          if nm -U .build/release/AudioSync | grep -q '_asc_airplay_panic_probe'; then
+            echo "the app has the panic probe"; exit 1
+          fi
+          for arch in arm64 x86_64; do
+            cc -arch "$arch" -std=c11 -Wall -Wextra -Werror -I core/include Tests/panic-probe.c "$probe_lib" \
+              -o "$RUNNER_TEMP/panic-probe-$arch"
+          done
+          # Status 0 only: a panic that got past the guard aborts.
+          "$RUNNER_TEMP/panic-probe-arm64"
+          if arch -x86_64 /usr/bin/true 2> /dev/null; then
+            arch -x86_64 "$RUNNER_TEMP/panic-probe-x86_64"
+          else
+            echo "No Rosetta on this runner: the Intel build was linked, not run."
+          fi
+
       - name: make-dmg.sh packages a signed bundle into an image that mounts with the app, an Applications link and the README
         run: |
           # A stand-in bundle around the release binary, signed ad hoc: the

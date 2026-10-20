@@ -26,6 +26,13 @@
 # toolchain that built it, and, in crates.txt, those of the crates compiled in
 # with the core (scripts/core_notices.py); build.sh ships them in the app.
 #
+# AUDIOSYNC_CORE_PROBE=1 (CI only) builds the same library with the core's
+# ffi-panic-probe feature into universal-apple-darwin/probe/ instead, exporting
+# asc_airplay_panic_probe besides the header's functions, and skips the
+# notices: Tests/panic-probe.c links it to check that a panic inside an
+# asc_airplay_* call stops at the C boundary in this build (S205). The app's
+# library is never built that way.
+#
 # Needs a Rust toolchain (https://rustup.rs) with the standard library for both
 # macOS targets, and python3; with rustup, a missing target is added here.
 # Usage: scripts/build_core.sh
@@ -39,6 +46,19 @@ lib=libaudiosync_core.a
 header="$root/core/include/audiosync_core.h"
 target_dir="$root/core/target"
 out="$target_dir/universal-apple-darwin/release"
+
+# The panic probe's build (see above): its own folder, one more export.
+probe=${AUDIOSYNC_CORE_PROBE:-0}
+features=()
+built=""
+if [ "$probe" = 1 ]; then
+  out="$target_dir/universal-apple-darwin/probe"
+  features=(--features ffi-panic-probe)
+  built=", with the panic probe"
+elif [ "$probe" != 0 ]; then
+  echo "❌ AUDIOSYNC_CORE_PROBE must be 0 or 1, not \"$probe\"" >&2
+  exit 1
+fi
 
 # The app's LSMinimumSystemVersion: the core must not need a newer macOS.
 export MACOSX_DEPLOYMENT_TARGET=15.0
@@ -78,8 +98,10 @@ if [ ! -x "$objcopy" ]; then
   exit 1
 fi
 
-echo "▶ Rust core (release, $arm and $intel)…"
-cargo build --release --lib --locked --target "$arm" --target "$intel" --target-dir "$target_dir"
+echo "▶ Rust core (release, $arm and $intel$built)…"
+# The array's ${…+…} form: bash 3.2, macOS's, calls an empty one unbound.
+cargo build --release --lib --locked ${features[@]+"${features[@]}"} \
+  --target "$arm" --target "$intel" --target-dir "$target_dir"
 
 mkdir -p "$out"
 work=$(mktemp -d "$target_dir/.universal.XXXXXX")
@@ -90,6 +112,10 @@ grep -o -E 'asc_[a-z0-9_]+[(]' "$header" | sed -e 's/[(]$//' -e 's/^/_/' | sort 
 if [ ! -s "$work/exports" ]; then
   echo "❌ No asc_* functions found in $header" >&2
   exit 1
+fi
+if [ "$probe" = 1 ]; then
+  echo _asc_airplay_panic_probe >> "$work/exports"
+  sort -u -o "$work/exports" "$work/exports"
 fi
 
 sdk=$(xcrun --sdk macosx --show-sdk-version)
@@ -131,6 +157,10 @@ done
 # linked binary so every SwiftPM build system relinks it.
 if ! cmp -s "$work/$lib" "$out/$lib"; then
   mv -f "$work/$lib" "$out/$lib"
+fi
+if [ "$probe" = 1 ]; then
+  echo "   ${out#"$root"/}/$lib ($(xcrun lipo -archs "$out/$lib")$built)"
+  exit 0
 fi
 
 licenses="$out/licenses/rust"

@@ -361,7 +361,7 @@ final class NativeAirPlay {
         case ASC_AIRPLAY_EVENT_TIMELINE:
             return .timeline(latencyMs: raw.latency_ms, restarted: raw.restarted)
         case ASC_AIRPLAY_EVENT_FAILED:
-            return .failed
+            return .failed(detail: text(raw.detail))
         case ASC_AIRPLAY_EVENT_PIN_NEEDED:
             return .pinNeeded(id: id)
         case ASC_AIRPLAY_EVENT_PASSWORD_NEEDED:
