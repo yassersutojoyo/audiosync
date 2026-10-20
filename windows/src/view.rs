@@ -2175,6 +2175,69 @@ mod tests {
         assert!(!app.snapshot().speaker("local:busy").unwrap().enabled);
     }
 
+    /// The delay field's text on the desk's row.
+    fn desk_delay_text(app: &App) -> String {
+        app.models
+            .all_speakers
+            .iter()
+            .chain(app.models.this_pc.iter())
+            .chain(app.models.connected.iter())
+            .find(|s| s.id == "local:desk")
+            .map(|s| s.delay_text.to_string())
+            .expect("the desk has a row")
+    }
+
+    #[test]
+    fn a_typed_speaker_delay_applies_only_on_enter_or_focus_loss() {
+        let app = app_over(MockBackend::new());
+        let applied = || app.snapshot().speaker("local:desk").unwrap().delay_ms;
+        assert_eq!(applied(), Some(120.0), "the example desk has a delay");
+        assert_eq!(desk_delay_text(&app), "+120");
+
+        // Typing "220" applies nothing on the way (2, 22, 220).
+        for text in ["2", "22", "220"] {
+            app.main
+                .invoke_delay_edited("local:desk".into(), text.into());
+            assert_eq!(desk_delay_text(&app), text, "the field keeps what is typed");
+            assert_eq!(applied(), Some(120.0), "typing {text} applies nothing");
+        }
+        app.main.invoke_delay_committed("local:desk".into());
+        assert_eq!(applied(), Some(220.0), "Enter applies what was typed");
+        assert_eq!(desk_delay_text(&app), "+220");
+
+        // Escape drops the typing; the focus loss after it applies nothing.
+        app.main
+            .invoke_delay_edited("local:desk".into(), "5".into());
+        app.main.invoke_delay_cancelled("local:desk".into());
+        assert_eq!(
+            desk_delay_text(&app),
+            "+220",
+            "Escape shows the saved value"
+        );
+        app.main.invoke_delay_committed("local:desk".into());
+        assert_eq!(
+            applied(),
+            Some(220.0),
+            "leaving after Escape applies nothing"
+        );
+
+        // Unreadable text reverts to the saved value.
+        app.main
+            .invoke_delay_edited("local:desk".into(), "abc".into());
+        app.main.invoke_delay_committed("local:desk".into());
+        assert_eq!(applied(), Some(220.0));
+        assert_eq!(desk_delay_text(&app), "+220", "unreadable text reverts");
+
+        // A step applies at once and drops half-typed text.
+        app.main
+            .invoke_delay_edited("local:desk".into(), "9".into());
+        app.main.invoke_delay_stepped("local:desk".into(), 10);
+        assert_eq!(applied(), Some(230.0), "a step applies at once");
+        assert_eq!(desk_delay_text(&app), "+230", "a step drops the typed text");
+        app.main.invoke_delay_committed("local:desk".into());
+        assert_eq!(applied(), Some(230.0), "the dropped text stays dropped");
+    }
+
     #[test]
     fn escape_in_the_airplay_delay_field_leaves_the_applied_delay() {
         let app = app_over(MockBackend::new());
