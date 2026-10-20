@@ -38,6 +38,12 @@ jobs:
       - name: Tests
         run: cargo test
 
+      - name: Clippy and the probe's test with the CI-only panic probe (ffi-panic-probe feature)
+        if: runner.os == 'Linux'
+        run: |
+          cargo clippy --all-targets --features ffi-panic-probe -- -D warnings
+          cargo test --lib --features ffi-panic-probe panic_probe
+
       - name: Library for Apple silicon and Intel Macs
         if: runner.os == 'macOS'
         run: |

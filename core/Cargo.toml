@@ -11,6 +11,14 @@ publish = false
 [lib]
 crate-type = ["rlib", "staticlib"]
 
+[features]
+# CI only: adds asc_airplay_panic_probe (src/panic_probe.rs), a C entry that
+# panics inside an AirPlay sender call's guard, so a C program linked with
+# the prelinked release library proves the panic still stops there
+# (scripts/build_core.sh with AUDIOSYNC_CORE_PROBE=1, Tests/panic-probe.c).
+# The app's library never has it.
+ffi-panic-probe = []
+
 [dependencies]
 # AudioSync's own AirPlay sender (airplay/, MIT), reached by the macOS app
 # through this crate's C interface (src/ffi/airplay.rs): the app links one
