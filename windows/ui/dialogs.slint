@@ -16,6 +16,8 @@ export component GroupNameDialog inherits Dialog {
     in-out property <string> name;
     // False for a message without a name field.
     in property <bool> show-field: true;
+    // Whether the name field shows its text cursor (tests read it).
+    out property <bool> name-caret-in-view: true;
     callback confirmed(string);
     callback cancelled();
 
@@ -63,6 +65,9 @@ export component GroupNameDialog inherits Dialog {
                 text <=> root.name;
                 placeholder-text: root.placeholder;
                 accessible-label: Strings.new-group-field-label;
+                changed caret-in-view => {
+                    root.name-caret-in-view = self.caret-in-view;
+                }
                 init => {
                     self.focus();
                     self.select-all();

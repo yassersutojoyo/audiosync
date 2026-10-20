@@ -558,9 +558,9 @@ enum Titled {
     Main,
 }
 
-/// Holds the main window at `settings::MIN_WINDOW` natively. Slint hands its
-/// layout minimum to winit only when the constraints change, and without
-/// this a MoveWindow from another program shrank the window to 286 x 193.
+/// Holds the main window at `settings::MIN_WINDOW` natively (a MoveWindow
+/// from another program shrank it to 286 x 193), growing it first if it is
+/// smaller.
 fn keep_main_min_size(window: &slint::Window) {
     use slint::winit_030::WinitWindowAccessor;
     use slint::winit_030::winit::dpi::LogicalSize;
@@ -569,6 +569,7 @@ fn keep_main_min_size(window: &slint::Window) {
     window.with_winit_window(|window| {
         window.set_min_inner_size(Some(LogicalSize::new(width, height)));
     });
+    crate::platform::hold_min_size(window, crate::settings::MIN_WINDOW);
 }
 
 /// The saved main window `frame` as it opens on the monitor with
@@ -800,7 +801,18 @@ impl App {
         use slint::winit_030::{EventResult, WinitWindowAccessor};
 
         let weak = Rc::downgrade(self);
+        // The main window's first event comes once its native window exists,
+        // with or without the focus; outside this filter, as it resizes.
+        let min_held = std::cell::Cell::new(kind != Titled::Main);
         window(self).on_winit_window_event(move |_, event| {
+            if !min_held.replace(true) {
+                let weak = weak.clone();
+                Timer::single_shot(Duration::ZERO, move || {
+                    with_app(&weak, |app| {
+                        keep_main_min_size(window(app));
+                    });
+                });
+            }
             match event {
                 WindowEvent::Focused(true) => with_app(&weak, |app| {
                     if kind == Titled::Main {
@@ -3703,6 +3715,29 @@ mod tests {
     }
 
     #[test]
+    fn a_group_name_longer_than_its_field_keeps_the_cursor_in_view() {
+        let app = app_over(MockBackend::new());
+        app.ask_new_group();
+        let window = app.group_dialog.window();
+        // Wider than the 1000 px the headless windows draw at.
+        let name = "Living Room and Kitchen and Bedroom and Office Speakers, ".repeat(4);
+        let name = name.trim_end();
+        for character in name.chars() {
+            press(window, character.to_string());
+            assert!(
+                app.group_dialog.get_name_caret_in_view(),
+                "the cursor is in view after {:?}",
+                app.group_dialog.get_name()
+            );
+        }
+        assert_eq!(app.group_dialog.get_name(), name);
+        press(window, Key::Home);
+        assert!(app.group_dialog.get_name_caret_in_view(), "at the start");
+        press(window, Key::End);
+        assert!(app.group_dialog.get_name_caret_in_view(), "at the end");
+    }
+
+    #[test]
     fn escape_closes_the_about_dialog() {
         let app = app_over(MockBackend::new());
         let window = app.about.window();
@@ -4149,9 +4184,10 @@ mod tests {
         assert!(!enabled(&app, "local:cable"));
 
         // Off and no longer shown, Connected Speakers is empty: the focus
-        // goes to This PC's first row's options; past that row's volume and
-        // its device volume fix, the next stop is the headphones' toggle, not
-        // the source after the streaming switch.
+        // goes to This PC's first row's options. Three Tabs on: its volume,
+        // its device volume fix (the mock's speaker device sits at 13 %),
+        // then the headphones' toggle, not the source after the streaming
+        // switch.
         app.main.invoke_show_virtual_devices_toggled(false);
         draw_frames();
         let headphones = enabled(&app, "local:headphones");
@@ -4160,7 +4196,7 @@ mod tests {
         assert_ne!(
             enabled(&app, "local:headphones"),
             headphones,
-            "the next stop after the speakers' options is the headphones' toggle"
+            "after the speakers' volume and its fix, the headphones' toggle"
         );
     }
 

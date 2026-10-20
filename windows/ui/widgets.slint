@@ -32,6 +32,9 @@ export global Fluent {
     out property <length> name-inset: 56px;
     // The delay column every speaker row lines up on.
     out property <length> delay-column: 76px;
+    // How far inside its box the style's slider track starts (measured on
+    // screen: 10 px at 100 %).
+    out property <length> slider-inset: 10px;
     // Subtle fills under the pointer, over any card or row.
     out property <brush> hover: Tokens.text.with-alpha(0.06);
     out property <brush> pressed: Tokens.text.with-alpha(0.035);
@@ -515,7 +518,10 @@ export component VolumeSlider inherits HorizontalLayout {
         text: Strings.volume-value(slider.value);
         width: 26px;
         horizontal-alignment: right;
+        // One line, centered on the track: a wrapped label is taller than
+        // the slider and drops below it.
         vertical-alignment: center;
+        wrap: no-wrap;
         font-size: Tokens.font-size-caption;
     }
 }
@@ -524,12 +530,14 @@ export component VolumeSlider inherits HorizontalLayout {
 // brand teal measures 4.21:1 and takes no other colors.
 export component TextField inherits Rectangle {
     in-out property <string> text <=> input.text;
-    in property <string> placeholder-text;
+    in property <TextHorizontalAlignment> horizontal-alignment <=> input.horizontal-alignment;
+    in property <length> font-size <=> input.font-size;
     in property <InputType> input-type <=> input.input-type;
     in property <bool> read-only <=> input.read-only;
-    in property <length> font-size <=> input.font-size;
-    in property <TextHorizontalAlignment> horizontal-alignment <=> input.horizontal-alignment;
+    in property <string> placeholder-text;
     out property <bool> has-focus: input.has-focus;
+    // Whether the whole text cursor is inside the box (tests read it).
+    out property <bool> caret-in-view: input.x + view.caret-x >= 0 && input.x + view.caret-x + input.text-cursor-width <= view.width;
     callback edited(string);
     callback accepted(string);
 
@@ -537,8 +545,8 @@ export component TextField inherits Rectangle {
         input.select-all();
     }
 
-    public function set-selection-offsets(anchor: int, focus: int) {
-        input.set-selection-offsets(anchor, focus);
+    public function set-selection-offsets(start: int, end: int) {
+        input.set-selection-offsets(start, end);
     }
 
     min-width: 48px;
@@ -570,8 +578,26 @@ export component TextField inherits Rectangle {
     ContextMenuArea {
         Menu {
             MenuItem {
-                title: Strings.edit-cut;
+                title: Strings.edit-undo;
                 enabled: !root.read-only;
+                activated => {
+                    input.undo();
+                }
+            }
+
+            MenuItem {
+                title: Strings.edit-redo;
+                enabled: !root.read-only;
+                activated => {
+                    input.redo();
+                }
+            }
+
+            MenuSeparator { }
+
+            MenuItem {
+                title: Strings.edit-cut;
+                enabled: !root.read-only && root.text != "";
                 activated => {
                     input.cut();
                 }
@@ -579,6 +605,7 @@ export component TextField inherits Rectangle {
 
             MenuItem {
                 title: Strings.edit-copy;
+                enabled: root.text != "";
                 activated => {
                     input.copy();
                 }
@@ -596,6 +623,7 @@ export component TextField inherits Rectangle {
 
             MenuItem {
                 title: Strings.edit-select-all;
+                enabled: root.text != "";
                 activated => {
                     input.select-all();
                 }
@@ -606,7 +634,14 @@ export component TextField inherits Rectangle {
             padding-left: 10px;
             padding-right: 10px;
 
-            Rectangle {
+            // The text slides left under this clip so the cursor stays in
+            // view: `offset` is how far, never past the end of the text.
+            view := Rectangle {
+                clip: true;
+                property <length> scroll;
+                property <length> caret-x;
+                property <length> offset: max(0px, min(self.scroll, input.width - self.width));
+
                 if root.text == "": Text {
                     width: 100%;
                     height: 100%;
@@ -619,13 +654,24 @@ export component TextField inherits Rectangle {
                 }
 
                 input := TextInput {
-                    width: 100%;
+                    x: -view.offset;
+                    width: max(view.width, self.preferred-width + self.text-cursor-width);
                     height: 100%;
                     vertical-alignment: center;
                     color: Tokens.text;
                     selection-background-color: Tokens.teal-text;
                     selection-foreground-color: Tokens.surface;
                     accessible-role: none;
+                    cursor-position-changed(caret) => {
+                        view.caret-x = caret.x;
+                        if caret.x < view.offset {
+                            view.scroll = caret.x;
+                        } else if caret.x + self.text-cursor-width > view.offset + view.width {
+                            view.scroll = caret.x + self.text-cursor-width - view.width;
+                        } else {
+                            view.scroll = view.offset;
+                        }
+                    }
                     edited => {
                         root.edited(self.text);
                     }
@@ -1234,13 +1280,23 @@ export component SpeakerRow inherits Rectangle {
                         // and its fix, read right after the slider.
                         VerticalLayout {
                             spacing: 2px;
+                            padding-bottom: 4px;
 
-                            volume-slider := VolumeSlider {
-                                volume: root.item.volume;
-                                label: Strings.volume-of(root.item.name);
-                                enabled: root.item.state != RowState.off;
-                                changed(value) => {
-                                    root.volume-changed(value);
+                            // Moved left by the slider's own inset, so its track
+                            // starts under the name, as on the Mac.
+                            Rectangle {
+                                min-height: max(28px, volume-slider.min-height);
+
+                                volume-slider := VolumeSlider {
+                                    x: -Fluent.slider-inset;
+                                    width: parent.width + Fluent.slider-inset;
+                                    height: parent.height;
+                                    volume: root.item.volume;
+                                    label: Strings.volume-of(root.item.name);
+                                    enabled: root.item.state != RowState.off;
+                                    changed(value) => {
+                                        root.volume-changed(value);
+                                    }
                                 }
                             }
 
