@@ -716,6 +716,30 @@ pub unsafe extern "C" fn asc_renderer_sped_frames(renderer: *const AscRenderer) 
     unsafe { control_side(renderer) }.map_or(0, RendererControl::sped_frames)
 }
 
+/// Any thread: the largest lateness of a callback against the renderer's
+/// earliest ones, in ns (S209); 0 without output times or for a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_late_max_ns(renderer: *const AscRenderer) -> u64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::late_max_ns)
+}
+
+/// Any thread: the callbacks that came more than 5 ms later
+/// than the renderer's earliest ones (S209); 0 for a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_late_callbacks(renderer: *const AscRenderer) -> u64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::late_callbacks)
+}
+
 /// Any thread: the device frames the converter couldn't produce and that
 /// were played as silence, in all; 0 for a null handle and, unless the read
 /// sizing is wrong, always.
@@ -1112,6 +1136,8 @@ mod tests {
             );
             assert_eq!(asc_renderer_slowed_frames(c), rust.slowed_frames());
             assert_eq!(asc_renderer_sped_frames(c), rust.sped_frames());
+            assert_eq!(asc_renderer_late_max_ns(c), control.late_max_ns());
+            assert_eq!(asc_renderer_late_callbacks(c), control.late_callbacks());
             assert_eq!(asc_renderer_shortfall_frames(c), rust.shortfall_frames());
             assert!(asc_renderer_fade_rendered(c));
             assert!(
@@ -1220,6 +1246,8 @@ mod tests {
             assert_eq!(asc_renderer_counters(null), AscReaderCounters::default());
             assert_eq!(asc_renderer_slowed_frames(null), 0);
             assert_eq!(asc_renderer_sped_frames(null), 0);
+            assert_eq!(asc_renderer_late_max_ns(null), 0);
+            assert_eq!(asc_renderer_late_callbacks(null), 0);
             assert_eq!(asc_renderer_shortfall_frames(null), 0);
             asc_renderer_destroy(null);
             let renderer = asc_renderer_create(ring, 48_000, 48_000, 2, 1.0);

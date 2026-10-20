@@ -615,6 +615,19 @@ pub fn parse_delay_ms(text: &str) -> Option<f64> {
     parse_ms(text).map(clamp_delay_ms)
 }
 
+/// What a delay field keeps of a keystroke or a paste: digits, after one
+/// leading "+" or "−" (or hyphen-minus); anything else can't be typed.
+pub fn delay_field_text(typed: &str) -> String {
+    typed
+        .chars()
+        .enumerate()
+        .filter(|&(index, c)| {
+            c.is_ascii_digit() || (index == 0 && matches!(c, '+' | '-' | '\u{2212}'))
+        })
+        .map(|(_, c)| c)
+        .collect()
+}
+
 /// Example data for UI work and tests: no device is opened, nothing plays.
 #[cfg(any(not(windows), test))]
 pub struct MockBackend {
@@ -754,6 +767,13 @@ impl MockBackend {
     #[cfg(test)]
     pub fn add_speaker(&mut self, speaker: Speaker) {
         self.state.speakers.push(speaker);
+    }
+
+    /// AirPlay discovery has found nothing for a while: Connected Speakers
+    /// shows its note.
+    #[cfg(test)]
+    pub fn set_airplay_none_found(&mut self, on: bool) {
+        self.state.airplay_none_found = on;
     }
 
     /// Keeps only the example speakers `keep` accepts, and the groups.
@@ -904,6 +924,24 @@ pub fn matching_preset_index(settings: &EqSettings) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_delay_field_keeps_digits_and_one_leading_sign() {
+        for (typed, kept) in [
+            ("150", "150"),
+            ("+150", "+150"),
+            ("\u{2212}250", "\u{2212}250"),
+            ("-25", "-25"),
+            ("1a2", "12"),
+            ("15x", "15"),
+            ("1-2", "12"),
+            ("--5", "-5"),
+            ("1.5", "15"),
+            (" 7", "7"),
+        ] {
+            assert_eq!(delay_field_text(typed), kept, "{typed:?}");
+        }
+    }
 
     fn frame(x: i32, width: f64, maximized: bool) -> WindowFrame {
         WindowFrame {

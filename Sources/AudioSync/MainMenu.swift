@@ -33,6 +33,7 @@ enum MainMenu {
         app.addItem(item(t.quitApp, #selector(NSApplication.terminate(_:)), "q"))
 
         let file = submenu(of: main, title: t.menuFile)
+        file.addItem(item(t.menuApplyDelay, #selector(AppDelegate.applyTypedDelay(_:)), "s"))
         file.addItem(item(t.menuCloseWindow, #selector(NSWindow.performClose(_:)), "w"))
 
         // Text fields (the sync delay) need the standard editing commands.
