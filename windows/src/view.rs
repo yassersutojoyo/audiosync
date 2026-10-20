@@ -537,6 +537,7 @@ fn set_size_once_native(
         };
         let window = window_owner.window();
         if window.with_winit_window(|_| ()).is_some() {
+            keep_main_min_size(window);
             window.set_size(size);
             if maximized {
                 window.set_maximized(true);
@@ -544,6 +545,29 @@ fn set_size_once_native(
         } else if tries > 1 {
             set_size_once_native(main, size, maximized, tries - 1);
         }
+    });
+}
+
+/// What a titled window does on gaining the focus besides taking its frame.
+#[derive(Clone, Copy, PartialEq)]
+enum Titled {
+    Window,
+    /// Keeps only the close button and fits the PIN dialog.
+    Dialog,
+    /// Holds `settings::MIN_WINDOW`.
+    Main,
+}
+
+/// Holds the main window at `settings::MIN_WINDOW` natively. Slint hands its
+/// layout minimum to winit only when the constraints change, and without
+/// this a MoveWindow from another program shrank the window to 286 x 193.
+fn keep_main_min_size(window: &slint::Window) {
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::dpi::LogicalSize;
+
+    let (width, height) = crate::settings::MIN_WINDOW;
+    window.with_winit_window(|window| {
+        window.set_min_inner_size(Some(LogicalSize::new(width, height)));
     });
 }
 
@@ -752,7 +776,7 @@ impl App {
     /// time it gains the focus, which covers a native window created after
     /// `show` returned, and the brand accent again after a theme change.
     fn follow_frame(self: &Rc<Self>, window: fn(&App) -> &slint::Window, name: &'static str) {
-        self.follow_titled_frame(window, name, false);
+        self.follow_titled_frame(window, name, Titled::Window);
     }
 
     /// `follow_frame` for a dialog, which also keeps only the close button
@@ -762,14 +786,14 @@ impl App {
         window: fn(&App) -> &slint::Window,
         name: &'static str,
     ) {
-        self.follow_titled_frame(window, name, true);
+        self.follow_titled_frame(window, name, Titled::Dialog);
     }
 
     fn follow_titled_frame(
         self: &Rc<Self>,
         window: fn(&App) -> &slint::Window,
         name: &'static str,
-        dialog: bool,
+        kind: Titled,
     ) {
         use slint::winit_030::winit::event::WindowEvent;
         use slint::winit_030::winit::window::WindowButtons;
@@ -779,7 +803,10 @@ impl App {
         window(self).on_winit_window_event(move |_, event| {
             match event {
                 WindowEvent::Focused(true) => with_app(&weak, |app| {
-                    if dialog {
+                    if kind == Titled::Main {
+                        keep_main_min_size(window(app));
+                    }
+                    if kind == Titled::Dialog {
                         window(app).with_winit_window(|window| {
                             window.set_enabled_buttons(WindowButtons::CLOSE);
                         });
@@ -1121,7 +1148,7 @@ impl App {
     }
 
     fn connect_main(self: &Rc<Self>) {
-        self.follow_frame(|app| app.main.window(), "main window");
+        self.follow_titled_frame(|app| app.main.window(), "main window", Titled::Main);
         let main = &self.main;
         let weak = Rc::downgrade(self);
 
