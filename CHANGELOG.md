@@ -53,11 +53,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - If AirPlay can't start at launch, or can't start looking for speakers, you now get the notice "AirPlay stopped or couldn't start" with Retry, the same one as when it stops later.
 - A speaker that's on but can't play right now says so: "Waiting for device" while another app holds it, "Reconnecting…" while an AirPlay speaker comes back.
 - When no AirPlay speaker turns up after about 20 seconds, the list says to check that the PC is on the same network, that Windows Firewall allows AudioSync, or to set the network to Private.
-- Keyboard fixes: Escape closes the PIN, group name and About dialogs wherever the focus is, the focus stays on the same control or moves to a neighbouring row when the list changes instead of getting lost, and Narrator says which notice a dismiss button closes.
+- Keyboard fixes: Escape closes the PIN, group name and About dialogs wherever the focus is, the focus stays on the same control or moves to a neighbouring row when the list changes instead of getting lost, and Narrator says which notice a dismiss button closes and what happened, such as "Kitchen didn't start, turned off" or "settings unreadable, copy kept".
 - Settings or Apple TV pairings that can't be read at launch are no longer overwritten. The old file is kept as a copy in AudioSync's data folder and a notice tells you where. You also get a notice when your settings or pairings can't be saved, and when Windows has no working sound output.
 - The window fits a 1366×768 screen at 150% scaling.
 - As on the Mac, when a speaker that's on sits at 25% or less, or is muted, in Windows, its row says so and one click sets it to 75% or unmutes it. If Windows audio stops answering, reading or fixing that volume can no longer freeze the window: AudioSync gives up after five seconds and tries again a little later.
-- Narrator reads clearer names on a notice's dismiss button, such as "Kitchen didn't start, turned off" or "settings unreadable, copy kept".
 - A speaker that disappears always gets its notice, a USB device plugged into another port keeps its settings, short Windows audio errors (after sleep, for example) are retried, and an output that doesn't answer holds up the window for about five seconds at most.
 
 ## [0.4.1] — 2026-10-17
