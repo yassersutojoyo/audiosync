@@ -2761,6 +2761,22 @@ mod tests {
             }),
             "Dismiss: Kitchen reconnecting"
         );
+        // The names say what happened: the speaker was turned off, and the
+        // unreadable file was kept.
+        assert_eq!(
+            dismiss_label(NoticeMessage::SpeakerFailed {
+                speaker: "Kitchen".into(),
+            }),
+            "Dismiss: Kitchen didn't start, turned off"
+        );
+        assert_eq!(
+            dismiss_label(NoticeMessage::SettingsKeptAside { file: "f".into() }),
+            "Dismiss: settings unreadable, copy kept"
+        );
+        assert_eq!(
+            dismiss_label(NoticeMessage::PairingsKeptAside { file: "f".into() }),
+            "Dismiss: pairings unreadable, copy kept"
+        );
         // Every kind gets a name of a few words, never the whole message.
         let messages = [
             NoticeMessage::NoSpeaker,
