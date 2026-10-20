@@ -17,12 +17,13 @@
 //!
 //! A run whose clocks are in step lasts five seconds. A converting output's
 //! clock also runs 100 ppm fast or slow, for the first second after the
-//! start: a fast clock moves the reader about 5 frames a second closer to W,
-//! inside the dead band, so a reader at a short hold-back reaches W again
-//! once the lead's slack is used up (S53), 2.5 s after the start at the
-//! worst phase here. That is S206's known limit; the start is what S206 is
-//! about. An output at the capture rate is taken to run on the capture's
-//! clock.
+//! start in the start checks. A fast clock moves the reader about 5 frames a
+//! second closer to W, inside the dead band, so a reader at a short
+//! hold-back would reach W again once the lead's slack is used up (S53),
+//! 2.5 s after the start at the worst phase here; the renderer slows its
+//! converter instead (S206), which the 30-second runs of an earliest output
+//! on a clock off check. An output at the capture rate is taken to run on
+//! the capture's clock.
 
 use std::sync::Arc;
 
@@ -85,8 +86,14 @@ fn write_blocks(writer: &mut RingWriter, block: usize, count: usize) {
     }
 }
 
-/// Runs a renderer against a capture on its own clock, as `clocks` says.
+/// Runs a renderer against a capture on its own clock, as `clocks` says,
+/// for [`SECONDS`] with the clocks in step and one second with a clock off.
 fn run(clocks: Clocks) -> Outcome {
+    run_for(clocks, if clocks.drift_ppm == 0 { SECONDS } else { 1 })
+}
+
+/// [`run`] for `seconds` of the capture's clock.
+fn run_for(clocks: Clocks, seconds: u64) -> Outcome {
     let ring = Ring::for_rate(RATE).unwrap();
     let mut writer = ring.writer().unwrap();
     let reader = Reader::new(ring, RATE);
@@ -110,7 +117,6 @@ fn run(clocks: Clocks) -> Outcome {
         * u128::from(RATE)
         * (PPM as i128 - i128::from(clocks.drift_ppm)) as u128;
     let offset = (clocks.phase * write_period as f64) as u128;
-    let seconds = if clocks.drift_ppm == 0 { SECONDS } else { 1 };
     let end = u128::from(seconds) * u128::from(RATE) * u128::from(clocks.device_rate) * PPM;
     let (mut k, mut j) = (1u128, 0u128);
     let mut out = vec![9.0f32; clocks.callback * 2];
@@ -226,6 +232,62 @@ fn a_44_1_khz_output_fed_in_10_ms_blocks_never_runs_dry_after_its_start() {
 fn other_converted_rates_never_run_dry_after_their_start() {
     every_start(96_000, 512, 512, 0);
     every_start(32_000, 256, 512, 0);
+}
+
+/// Seconds the runs of an earliest converted output on a clock off last.
+const LONG_SECONDS: u64 = 30;
+
+// covers: S53, S206
+#[test]
+fn an_earliest_converted_output_on_a_clock_100_ppm_off_never_runs_dry() {
+    // A converting output at hold-back 0 plays at its lead, inside the dead
+    // band, so no step back keeps it off W. Its clock runs 100 ppm fast or
+    // slow for 30 seconds: a fast one may never run it dry, and neither
+    // makes a drift correction in that time (a slow one falls behind by
+    // about 144 frames, far inside the dead band), so the bound is none.
+    for (device_rate, callback, block) in [
+        (44_100, 512, 512),
+        (44_100, 441, 480),
+        (44_100, 4096, 512),
+        (96_000, 512, 512),
+        (32_000, 256, 512),
+    ] {
+        for running in [false, true] {
+            for phase in PHASES {
+                for drift_ppm in [-100, 100] {
+                    let clocks = Clocks {
+                        device_rate,
+                        callback,
+                        block,
+                        delay: 0,
+                        running,
+                        phase,
+                        drift_ppm,
+                        tail: 0,
+                    };
+                    let outcome = run_for(clocks, LONG_SECONDS);
+                    let c = outcome.counters;
+                    assert_eq!(
+                        (c.starved_renders, c.starved_frames),
+                        (0, 0),
+                        "starved renders: {clocks:?}"
+                    );
+                    assert_eq!(
+                        (c.drift_skips, c.drift_silences, c.resyncs, c.primes),
+                        (0, 0, 0, 1),
+                        "one prime and no correction: {clocks:?}"
+                    );
+                    assert_eq!(outcome.shortfall, 0, "{clocks:?}");
+                    let open = outcome.open_at.expect("the output faded in");
+                    let gaps = outcome.played[open..]
+                        .iter()
+                        .filter(|&&sample| (sample - A).abs() > 1e-3)
+                        .count();
+                    assert_eq!(gaps, 0, "frames off the source's level: {clocks:?}");
+                }
+            }
+        }
+    }
 }
 
 // covers: S50, S188, S206
