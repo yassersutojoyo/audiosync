@@ -1,5 +1,6 @@
 // The Guide, opened from Help > AudioSync Guide (F1): how to use AudioSync on
-// Windows, one section per topic. Escape or Close closes it; the arrow keys,
+// Windows, one section per topic, in the Mac Guide's order, with double
+// audio (a Windows topic) last. Escape or Close closes it; the arrow keys,
 // Page Up, Page Down, Space, Home and End scroll it. Show How in the
 // double-audio section shows only while that notice does, and opens the
 // notice's own guide (guide.slint).
@@ -138,13 +139,28 @@ export component HelpWindow inherits Window {
                     }
 
                     HelpSection {
-                        title: Strings.help-volume-title;
-                        body: Strings.help-volume;
+                        title: Strings.help-more-title;
+                        body: Strings.help-more;
+                    }
+
+                    HelpSection {
+                        title: Strings.help-airplay-title;
+                        body: Strings.help-airplay;
+                    }
+
+                    HelpSection {
+                        title: Strings.help-notices-title;
+                        body: Strings.help-notices;
                     }
 
                     HelpSection {
                         title: Strings.help-bluetooth-title;
                         body: Strings.help-bluetooth;
+                    }
+
+                    HelpSection {
+                        title: Strings.help-volume-title;
+                        body: Strings.help-volume;
                     }
 
                     HelpSection {
@@ -162,21 +178,6 @@ export component HelpWindow inherits Window {
                                 }
                             }
                         }
-                    }
-
-                    HelpSection {
-                        title: Strings.help-more-title;
-                        body: Strings.help-more;
-                    }
-
-                    HelpSection {
-                        title: Strings.help-airplay-title;
-                        body: Strings.help-airplay;
-                    }
-
-                    HelpSection {
-                        title: Strings.help-notices-title;
-                        body: Strings.help-notices;
                     }
                 }
             }
