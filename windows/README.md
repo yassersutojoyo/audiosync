@@ -173,8 +173,8 @@ cargo check --target aarch64-pc-windows-msvc
   device notifications, what kind of device each output is); the rest is
   plain Rust over `audiosync-core` (which outputs play, at what delay and
   volume, what gets captured, the equalizer in the capture path) and is
-  tested on any host with an in-memory mock driver. It hasn't run on real
-  hardware yet.
+  tested on any host with an in-memory mock driver. On real hardware it has
+  only been started, with nothing playing.
 - `ui/`: the Slint files, compiled by `build.rs`. `strings.slint` holds every
   user-facing string, `tokens.slint` (generated from `brand/tokens.json`) the
   colors and sizes
