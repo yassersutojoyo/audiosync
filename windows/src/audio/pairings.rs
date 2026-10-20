@@ -488,6 +488,68 @@ pub mod tests {
         );
     }
 
+    /// The bytes of a store file holding one pairing.
+    fn good_file(name: &str) -> Vec<u8> {
+        let path = test_dir(name).join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        store
+            .insert("02005E005301", credentials("0123456789ABCDEF", 9))
+            .expect("saved");
+        fs::read(&path).expect("written")
+    }
+
+    #[test]
+    fn a_file_that_cant_be_read_at_launch_is_never_saved_over() {
+        let dir = test_dir("pairings-unreadable");
+        let path = dir.join(FILE_NAME);
+        let kept = dir.join("airplay-pairings.ignored.dat");
+        // A folder where the file should be: reading it fails, but not with
+        // "not found", as when another program holds the file at launch.
+        fs::create_dir(&path).unwrap();
+        let (mut store, loaded) = PairingStore::open(path.clone(), sealer());
+        assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+        // Still unreadable: the new pairing is kept for this run only.
+        assert!(
+            store
+                .insert("02005E005302", credentials("0123456789ABCDEE", 4))
+                .is_err()
+        );
+        assert!(store.contains("02005E005302"));
+        assert!(path.is_dir());
+
+        // Readable again, with the pairings made before: kept aside before
+        // the first write replaces the file.
+        let good = good_file("pairings-unreadable-good");
+        fs::remove_dir(&path).unwrap();
+        fs::write(&path, &good).unwrap();
+        store
+            .insert("02005E005303", credentials("0123456789ABCDED", 5))
+            .expect("saved");
+        assert_eq!(fs::read(&kept).expect("kept"), good);
+        assert_eq!(
+            PairingStore::open(path.clone(), sealer()).1,
+            Loaded::Speakers(2)
+        );
+        // Once replaced, the next write leaves the copy alone.
+        store.remove("02005E005303").expect("saved");
+        assert_eq!(fs::read(&kept).expect("kept"), good);
+    }
+
+    #[test]
+    fn a_file_that_cant_be_decrypted_is_kept_aside_before_the_next_pairing() {
+        let dir = test_dir("pairings-kept");
+        let path = dir.join(FILE_NAME);
+        fs::write(&path, b"sealed for another user").unwrap();
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        store
+            .insert("02005E005301", credentials("0123456789ABCDEF", 3))
+            .expect("saved");
+        assert_eq!(
+            fs::read(dir.join("airplay-pairings.ignored.dat")).expect("kept"),
+            b"sealed for another user"
+        );
+    }
+
     #[test]
     fn the_plaintext_is_checked_field_by_field() {
         let mut entries = BTreeMap::new();
