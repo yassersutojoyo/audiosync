@@ -1650,12 +1650,13 @@ impl App {
     /// Saves the settings now, with the main window's frame: the app is
     /// about to quit.
     pub fn save_settings(&self) {
-        // Quit ends the event loop without a focus loss: apply what is typed.
-        let typed: Vec<String> = self.ui.borrow().delay_drafts.keys().cloned().collect();
-        for id in typed {
-            self.commit_delay(&id);
+        // Quit drops a typed delay that wasn't applied, so a focus loss as
+        // the window goes applies nothing either.
+        {
+            let mut ui = self.ui.borrow_mut();
+            ui.delay_drafts.clear();
+            ui.airplay_delay_draft.cancel();
         }
-        self.commit_airplay_delay();
         self.remember_view();
         self.backend.borrow_mut().save_settings();
     }
@@ -2531,7 +2532,7 @@ mod tests {
 
         app.save_settings();
         assert!(app.ui.borrow().delay_drafts.is_empty(), "no draft is left");
-        assert!(!app.main.get_airplay_delay_pending());
+        assert!(app.ui.borrow().airplay_delay_draft.draft.is_none());
         // A focus loss as the window goes applies nothing either.
         app.main.invoke_delay_committed("local:desk".into());
         app.main.invoke_airplay_delay_committed();

@@ -233,23 +233,8 @@ struct DelayFieldDraft: Equatable {
         isEditing = false
         text = format(saved)
     }
-}
 
-/// The delay fields holding typing not yet applied, each with its commit.
-/// Quit commits them all: a field's own focus-loss commit waits for a view
-/// update that never comes once the app is terminating.
-final class PendingDelayDrafts {
-    private var commits: [String: () -> Void] = [:]
-
-    /// A keystroke in the field `id`; the latest commit replaces the last.
-    func hold(_ id: String, commit: @escaping () -> Void) { commits[id] = commit }
-
-    /// The field committed or dropped its typing.
-    func release(_ id: String) { commits[id] = nil }
-
-    func commitAll() {
-        let held = commits
-        commits = [:]
-        for commit in held.values { commit() }
-    }
+    /// Quit: the typing goes, applied nowhere, so a focus loss as the app
+    /// ends commits nothing.
+    mutating func drop() { isEditing = false }
 }
