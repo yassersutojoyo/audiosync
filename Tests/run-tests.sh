@@ -56,6 +56,9 @@ echo "▶ private references (scripts/privacy_check.py)"
 { python3 -I scripts/privacy_check.py --self-test && python3 -I scripts/privacy_check.py \
   && python3 -I scripts/privacy_check.py --verify-names; } || status=1
 
+echo "▶ no em dashes in public docs (scripts/text_check.py)"
+{ python3 -I scripts/text_check.py --self-test && python3 -I scripts/text_check.py; } || status=1
+
 echo "▶ side effects in debug logging"
 # DebugTrace.log takes an autoclosure that only runs with AUDIOSYNC_DEBUG=1, so a
 # call inside its message never happens in a normal run.

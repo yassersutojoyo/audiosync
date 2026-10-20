@@ -63,7 +63,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - As on the Mac, when a speaker that's on sits at 25% or less, or is muted, in Windows, its row says so and one click sets it to 75% or unmutes it. If Windows audio stops answering, reading or fixing that volume can no longer freeze the window: AudioSync gives up after five seconds and tries again a little later.
 - A speaker that disappears always gets its notice, a USB device plugged into another port keeps its settings, short Windows audio errors (after sleep, for example) are retried, and an output that doesn't answer holds up the window for about five seconds at most.
 
-## [0.4.1] — 2026-10-17
+## [0.4.1] - 2026-10-17
 
 ### Changed
 
@@ -74,7 +74,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - The AirPlay engine in the 0.4.0 download could crash on macOS 26.0 through 26.3, because one of its bundled libraries needed macOS 26.4.
 
-## [0.4.0] — 2026-10-17
+## [0.4.0] - 2026-10-17
 
 The big one: AudioSync is now a regular Dock app with a main window, and it can pair with speakers that ask for a code.
 
@@ -122,7 +122,7 @@ The big one: AudioSync is now a regular Dock app with a main window, and it can 
 - Older AirPlay 1 receivers protected by a password can't be used; turn the password off on the receiver.
 - The prebuilt app's AirPlay engine needs macOS 26 (Tahoe) or later. On macOS 15, build from source.
 
-## 0.3.0 — 2026-10-16
+## 0.3.0 - 2026-10-16
 
 The first public release, an early alpha.
 
