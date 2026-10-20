@@ -57,10 +57,10 @@ echo "▶ private references (scripts/privacy_check.py)"
   && python3 -I scripts/privacy_check.py --verify-names; } || status=1
 
 echo "▶ side effects in debug logging"
-# DBG.log takes an autoclosure that only runs with AUDIOSYNC_DEBUG=1, so a
+# DebugTrace.log takes an autoclosure that only runs with AUDIOSYNC_DEBUG=1, so a
 # call inside its message never happens in a normal run.
-if grep -nE 'DBG\.log\(.*\b(perform|send|write|open|close)\(' "$SRC"/*.swift; then
-  echo "FAIL: a call inside DBG.log(...) only runs when debugging is on"
+if grep -nE 'DebugTrace\.log\(.*\b(perform|send|write|open|close)\(' "$SRC"/*.swift; then
+  echo "FAIL: a call inside DebugTrace.log(...) only runs when debugging is on"
   status=1
 else
   echo "PASSED"
@@ -78,7 +78,7 @@ capture_rt=$(grep -vE '^[[:space:]]*//' <<< "$capture_rt" || true)
 if ! grep -q 'func consume' <<< "$capture_rt" || ! grep -q 'func copy' <<< "$capture_rt"; then
   echo "FAIL: the capture IOProc's code (CaptureSink, CaptureChannels) wasn't found"
   status=1
-elif grep -nE 'DBG|print\(|NSLog|os_log|Logger|DispatchQueue|Lock|Mutex|pthread_|String\(|"' <<< "$capture_rt"; then
+elif grep -nE 'DebugTrace|print\(|NSLog|os_log|Logger|DispatchQueue|Lock|Mutex|pthread_|String\(|"' <<< "$capture_rt"; then
   echo "FAIL: the capture IOProc logs, locks, dispatches or builds strings"
   status=1
 else

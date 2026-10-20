@@ -12,7 +12,7 @@ CI builds the Rust audio core and the app (`scripts/build_core.sh`, then `swift 
 
 - Match the code around you: naming, comment density, idioms.
 - Real-time code (render and IOProc callbacks) must not allocate, lock or do I/O.
-- User-facing strings go in `AppText` (`Localization.swift`).
+- User-facing strings go in `UIStrings` (`Localization.swift`).
 - Code, comments, docs and commit messages are in English. No trailing whitespace.
 - Don't edit generated brand files by hand; see [`brand/README.md`](brand/README.md).
 

@@ -253,7 +253,7 @@ final class DeviceVolumes {
     /// is on.
     init(access: DeviceVolumeAccess,
          schedule: @escaping (@escaping () -> Void) -> Void = { DispatchQueue.main.async(execute: $0) },
-         log: @escaping (() -> String) -> Void = { DBG.log($0()) }) {
+         log: @escaping (() -> String) -> Void = { DebugTrace.log($0()) }) {
         self.access = access
         self.schedule = schedule
         self.log = log
@@ -511,7 +511,7 @@ struct DeviceVolumePresentation: Equatable {
     let fixLabel: String
     let symbol: String
 
-    init(_ hint: DeviceVolumeHint, name: String, text texts: AppText) {
+    init(_ hint: DeviceVolumeHint, name: String, text texts: UIStrings) {
         text = texts.deviceVolumeHint(hint)
         label = texts.deviceVolumeHintLabel(hint, name: name)
         help = texts.deviceVolumeHelp
@@ -529,7 +529,7 @@ struct DeviceVolumeGlyph: Equatable {
     let tooltip: String
     let accessibilityNote: String
 
-    init(_ hint: DeviceVolumeHint, text: AppText) {
+    init(_ hint: DeviceVolumeHint, text: UIStrings) {
         symbol = hint.symbol
         tooltip = text.deviceVolumeHint(hint)
         accessibilityNote = tooltip

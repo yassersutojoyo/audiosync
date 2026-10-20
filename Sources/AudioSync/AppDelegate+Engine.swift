@@ -40,7 +40,7 @@ extension AppDelegate {
         do {
             try engine.start(source: audioSource)
         } catch {
-            DBG.log("[AudioSync] engine start failed: \(error)")   // codes stay in the log
+            DebugTrace.log("[AudioSync] engine start failed: \(error)")   // codes stay in the log
             failStart(text.streamingStartMessage(for: error), origin: origin)
             return
         }

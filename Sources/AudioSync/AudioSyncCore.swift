@@ -18,7 +18,7 @@ enum AudioSyncCore {
 
     /// Writes the version to the debug log (only with `AUDIOSYNC_DEBUG=1`).
     static func logVersion() {
-        DBG.log("[AudioSync] core \(version), C interface \(asc_abi_version())"
+        DebugTrace.log("[AudioSync] core \(version), C interface \(asc_abi_version())"
             + (interfaceMatches ? "" : " (app built for \(ASC_ABI_VERSION))"))
     }
 }

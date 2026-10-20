@@ -12,7 +12,7 @@ final class EqualizerWindowController {
         if window == nil {
             let host = NSHostingController(rootView: EqualizerView(model: model))
             let panel = NSWindow(contentViewController: host)
-            panel.title = AppText().equalizerTitle
+            panel.title = UIStrings().equalizerTitle
             panel.styleMask = [.titled, .closable]
             panel.isReleasedWhenClosed = false   // kept and shown again by the next show()
             panel.isExcludedFromWindowsMenu = true   // the Window menu has its own Equalizer item
@@ -28,7 +28,7 @@ private let accent = Brand.teal
 
 struct EqualizerView: View {
     @ObservedObject var model: EqualizerModel
-    private let text = AppText()
+    private let text = UIStrings()
 
     var body: some View {
         let s = model.settings

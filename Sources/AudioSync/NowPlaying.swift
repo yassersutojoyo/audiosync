@@ -221,7 +221,7 @@ final class NowPlayingMonitor {
     private func run(target: String, _ source: String) -> NSAppleEventDescriptor? {
         var error: NSDictionary?
         let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
-        if let error { DBG.log("[AudioSync] AppleScript error: \(error)") }
+        if let error { DebugTrace.log("[AudioSync] AppleScript error: \(error)") }
         let refused = (error?[NSAppleScript.errorNumber] as? Int) == Self.notPermitted
         let changed = refused ? denied.insert(target).inserted
             : error == nil ? denied.remove(target) != nil : false

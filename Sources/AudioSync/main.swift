@@ -81,7 +81,7 @@ let signalQuit = SignalQuit(queue: exitSignalQueue, quitSteps: { done in
     // Off the main thread, possibly while Core Audio or the core is still
     // tearing down: flush the log ourselves and skip the exit handlers and
     // static destructors, which would race that teardown.
-    DBG.flush()
+    DebugTrace.flush()
     _exit(status)
 })
 let exitSignalSources = AppLifecycle.exitSignals.map { number -> DispatchSourceSignal in
