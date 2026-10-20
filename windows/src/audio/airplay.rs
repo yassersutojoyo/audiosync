@@ -1948,6 +1948,196 @@ pub mod tests {
         assert!(airplay.speakers()[0].paired);
     }
 
+    /// An Apple TV listed and switched on by the user, its pairing started
+    /// but no PIN shown yet.
+    fn pairing_started(fake: &FakeAirPlay, airplay: &mut AirPlaySpeakers, tv: &Device) {
+        fake.appear(tv);
+        airplay.poll();
+        let id = id_of(tv);
+        assert_eq!(
+            airplay.set_enabled(&id, true),
+            Err(AirPlayProblem::NeedsPin)
+        );
+        airplay.start_pairing(&id).expect("the pairing starts");
+        assert_eq!(fake.take_calls(), [Call::StartPairing(id)]);
+    }
+
+    /// The user cancels the Apple TV's pairing and starts it again at once,
+    /// before the cancelled pairing reported its end. The sender's pairing
+    /// events name the receiver only, so whatever it reports next for the
+    /// Apple TV may still be the cancelled pairing's.
+    fn cancel_and_start_again(fake: &FakeAirPlay, airplay: &mut AirPlaySpeakers, tv: &Device) {
+        let id = id_of(tv);
+        airplay.cancel_pairing(&id);
+        airplay
+            .start_pairing(&id)
+            .expect("the new pairing is taken");
+        assert_eq!(
+            fake.take_calls().first(),
+            Some(&Call::CancelPairing(id)),
+            "the cancelled pairing is stopped first"
+        );
+        assert!(airplay.speakers()[0].pairing);
+        assert_eq!(airplay.pin_prompt(), None, "the new pairing showed no PIN");
+    }
+
+    /// The pairing started after a cancel goes on as its own: it starts on
+    /// the sender only once the cancelled one has ended, and then asks for
+    /// its own PIN and takes it.
+    fn the_new_pairing_goes_on(fake: &FakeAirPlay, airplay: &mut AirPlaySpeakers, tv: &Device) {
+        let id = id_of(tv);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::StartPairing(id.clone())],
+            "the new pairing starts once the cancelled one has ended"
+        );
+        assert!(airplay.speakers()[0].pairing, "the new pairing is kept");
+        assert_eq!(airplay.pin_prompt(), None);
+        assert!(!airplay.submit_pin(&id, "4821"), "no PIN asked for yet");
+        fake.pairing(tv, PairingEvent::PinRequested);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        let prompt = airplay.pin_prompt().expect("its own PIN shows");
+        assert_eq!(prompt.phase, PairingPhase::WaitingForPin);
+        assert!(!prompt.wrong_pin);
+        assert!(airplay.submit_pin(&id, "4821"));
+        assert_eq!(fake.take_calls(), [Call::SubmitPin(id, "4821".to_owned())]);
+    }
+
+    #[test]
+    fn a_cancelled_pairings_late_failure_leaves_the_next_pairing_alone() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        pin_shown(&fake, &mut airplay, &tv);
+        cancel_and_start_again(&fake, &mut airplay, &tv);
+        // The cancelled pairing failed before the cancel reached it.
+        fake.pairing(&tv, pairing_failed(ErrorKind::PairingCancelled, false));
+        assert!(
+            airplay.poll().is_empty(),
+            "no notice for a pairing the user cancelled"
+        );
+        assert!(airplay.enabled_ids().is_empty(), "off until paired");
+        the_new_pairing_goes_on(&fake, &mut airplay, &tv);
+    }
+
+    #[test]
+    fn a_cancelled_pairings_late_pin_request_shows_no_prompt() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        pairing_started(&fake, &mut airplay, &tv);
+        cancel_and_start_again(&fake, &mut airplay, &tv);
+        // The cancelled pairing's PIN request was already on its way.
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        assert!(airplay.poll().is_empty());
+        assert_eq!(
+            airplay.pin_prompt(),
+            None,
+            "no prompt for the PIN the cancelled pairing asked for"
+        );
+        assert!(
+            !airplay.submit_pin(&id, "4821"),
+            "a PIN typed now would go to the cancelled pairing"
+        );
+        fake.pairing(&tv, PairingEvent::Stopped);
+        assert!(airplay.poll().is_empty());
+        the_new_pairing_goes_on(&fake, &mut airplay, &tv);
+    }
+
+    #[test]
+    fn a_cancelled_pairings_late_success_keeps_its_credentials_and_the_next_pairing() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        pin_shown(&fake, &mut airplay, &tv);
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.take_calls();
+        cancel_and_start_again(&fake, &mut airplay, &tv);
+        // The Apple TV took the PIN before the cancel reached the pairing.
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(crate::audio::pairings::tests::credentials(
+                "0123456789ABCDEF",
+                1,
+            )),
+        );
+        assert_eq!(
+            airplay.poll(),
+            [BackendEvent::AirPlayChanged],
+            "the credentials are stored, but the user cancelled that pairing"
+        );
+        assert!(airplay.speakers()[0].paired, "its credentials are real");
+        assert!(airplay.enabled_ids().is_empty());
+        the_new_pairing_goes_on(&fake, &mut airplay, &tv);
+    }
+
+    #[test]
+    fn a_cancelled_pairings_late_wrong_pin_starts_nothing_again() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        pin_shown(&fake, &mut airplay, &tv);
+        assert!(airplay.submit_pin(&id, "1111"));
+        fake.take_calls();
+        cancel_and_start_again(&fake, &mut airplay, &tv);
+        fake.pairing(&tv, pairing_failed(ErrorKind::PairingFailed, true));
+        assert!(
+            airplay.poll().is_empty(),
+            "the wrong PIN was the cancelled pairing's"
+        );
+        the_new_pairing_goes_on(&fake, &mut airplay, &tv);
+    }
+
+    #[test]
+    fn a_pairing_cancelled_before_it_started_never_starts() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        pairing_started(&fake, &mut airplay, &tv);
+        cancel_and_start_again(&fake, &mut airplay, &tv);
+        // Cancelled again while it waits for the first one's end.
+        airplay.cancel_pairing(&id);
+        assert!(
+            fake.take_calls().is_empty(),
+            "nothing to cancel on the sender: it never started there"
+        );
+        assert!(!airplay.speakers()[0].pairing);
+        fake.pairing(&tv, PairingEvent::Stopped);
+        assert!(airplay.poll().is_empty());
+        assert!(fake.take_calls().is_empty(), "it never starts");
+
+        // With the cancelled pairing ended, a new one starts at once.
+        airplay.start_pairing(&id).unwrap();
+        assert_eq!(fake.take_calls(), [Call::StartPairing(id)]);
+    }
+
+    #[test]
+    fn a_new_sender_starts_a_pairing_at_once_after_a_cancel() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        pairing_started(&fake, &mut airplay, &tv);
+        airplay.cancel_pairing(&id);
+        // The old sender, and the end it owed, are gone with it.
+        let fake = FakeAirPlay::new();
+        airplay.replace_link(fake.link());
+        fake.appear(&tv);
+        airplay.poll();
+        airplay.start_pairing(&id).unwrap();
+        assert_eq!(fake.take_calls(), [Call::StartPairing(id.clone())]);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        airplay.poll();
+        assert_eq!(
+            airplay.pin_prompt().map(|prompt| prompt.phase),
+            Some(PairingPhase::WaitingForPin)
+        );
+    }
+
     #[test]
     fn a_failed_pairing_turns_the_speaker_off_with_a_notice() {
         let fake = FakeAirPlay::new();
