@@ -2263,6 +2263,48 @@ mod tests {
     }
 
     #[test]
+    fn closing_the_sync_controls_applies_the_typed_delay() {
+        let app = app_over(MockBackend::new());
+        let applied = || app.snapshot().speaker("local:desk").unwrap().delay_ms;
+        app.main.invoke_sync_toggled("local:desk".into());
+        assert!(app.ui.borrow().sync_open.contains("local:desk"));
+        app.main
+            .invoke_delay_edited("local:desk".into(), "220".into());
+        assert_eq!(applied(), Some(120.0), "typing applies nothing");
+
+        // The delay button doesn't take the focus, so the field goes
+        // without losing it first: closing applies what was typed.
+        app.main.invoke_sync_toggled("local:desk".into());
+        assert!(!app.ui.borrow().sync_open.contains("local:desk"));
+        assert_eq!(applied(), Some(220.0), "closing applied the typed delay");
+        assert_eq!(desk_delay_text(&app), "+220");
+        assert!(app.ui.borrow().delay_drafts.is_empty(), "no draft is left");
+    }
+
+    #[test]
+    fn a_removed_speakers_typed_delay_is_dropped() {
+        let app = app_over(MockBackend::new());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "99".into());
+        assert_eq!(desk_delay_text(&app), "99");
+
+        // The desk is unplugged: its draft goes with it.
+        let mut unplugged = MockBackend::new();
+        unplugged.retain_speakers(|s| s.id != "local:desk");
+        *app.backend.borrow_mut() = Box::new(unplugged);
+        app.refresh();
+        assert!(
+            !app.ui.borrow().delay_drafts.contains_key("local:desk"),
+            "the removed speaker's draft is gone"
+        );
+
+        // Plugged back in, it shows its saved delay.
+        *app.backend.borrow_mut() = Box::new(MockBackend::new());
+        app.refresh();
+        assert_eq!(desk_delay_text(&app), "+120");
+    }
+
+    #[test]
     fn escape_in_the_airplay_delay_field_leaves_the_applied_delay() {
         let app = app_over(MockBackend::new());
         let applied = app.snapshot().airplay_delay_ms;
