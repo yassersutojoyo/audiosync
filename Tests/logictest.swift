@@ -2764,5 +2764,89 @@ do {
           "EC6 app quit: another source, or an app without a bundle ID, keeps streaming")
 }
 
+// MARK: The way out on an exit signal (SignalQuit, AppLifecycle.swift)
+/// What a `SignalQuit` did, in order. Its quit steps end only when the test
+/// says so (`finishQuit`); its exit records the status instead of exiting.
+final class SignalQuitProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [String] = []
+    private var pendingDone: (@Sendable () -> Void)?
+    let exited = DispatchSemaphore(value: 0)
+
+    var log: [String] { lock.lock(); defer { lock.unlock() }; return entries }
+    func note(_ entry: String) { lock.lock(); entries.append(entry); lock.unlock() }
+
+    /// The quit steps end now: noted, then reported to the `SignalQuit`.
+    func finishQuit() {
+        lock.lock(); let done = pendingDone; pendingDone = nil; lock.unlock()
+        note("quit done")
+        done?()
+    }
+
+    func make(queue: DispatchQueue, limit: TimeInterval) -> SignalQuit {
+        SignalQuit(queue: queue, limit: limit,
+                   quitSteps: { done in
+                       self.note("quit")
+                       self.lock.lock(); self.pendingDone = done; self.lock.unlock()
+                   },
+                   exitProcess: { status in
+                       self.note("exit \(status)")
+                       self.exited.signal()
+                   })
+    }
+}
+do {
+    check(SignalQuit.step(signal: SIGTERM, quitBegun: false) == .quitThenExit(status: 143)
+            && SignalQuit.step(signal: SIGINT, quitBegun: false) == .quitThenExit(status: 130),
+          "quit: the first exit signal runs the quit steps (the fade-out), then exits with its status (S111)")
+    check(SignalQuit.step(signal: SIGINT, quitBegun: true) == .exitNow(status: 130)
+            && SignalQuit.step(signal: SIGTERM, quitBegun: true) == .exitNow(status: 143),
+          "quit: an exit signal while the quit steps run exits at once with its own status (S111)")
+    check(SignalQuit.limit == 3,
+          "quit: a signal waits at most 3 s for the quit steps, past the 500 ms fade cap and the sender's teardown (S111, S186)",
+          "\(SignalQuit.limit) s")
+
+    // The order: the exit waits for the quit steps, then carries the signal's status.
+    let ordered = SignalQuitProbe()
+    let orderedQueue = DispatchQueue(label: "logtest.signal-quit.order")
+    let orderedQuit = ordered.make(queue: orderedQueue, limit: 30)
+    orderedQueue.sync { orderedQuit.handle(signal: SIGTERM) }
+    Thread.sleep(forTimeInterval: 0.05)
+    let beforeDone = ordered.log
+    ordered.finishQuit()
+    let exitedAfterDone = ordered.exited.wait(timeout: .now() + 2) == .success
+    check(beforeDone == ["quit"] && exitedAfterDone && ordered.log == ["quit", "quit done", "exit 143"],
+          "quit: SIGTERM runs the quit steps first and exits with 143 only once they are done (S111)",
+          "before they were done \(beforeDone), then \(ordered.log)")
+
+    // The bound: quit steps that never end don't keep the app alive.
+    let stuck = SignalQuitProbe()
+    let stuckQueue = DispatchQueue(label: "logtest.signal-quit.bound")
+    let stuckQuit = stuck.make(queue: stuckQueue, limit: 0.2)
+    let started = Date()
+    stuckQueue.sync { stuckQuit.handle(signal: SIGINT) }
+    let exitedInTime = stuck.exited.wait(timeout: .now() + 3) == .success
+    let waited = Date().timeIntervalSince(started)
+    stuck.finishQuit()   // the steps end after all, too late
+    Thread.sleep(forTimeInterval: 0.05)
+    check(exitedInTime && waited >= 0.19 && stuck.log == ["quit", "exit 130", "quit done"],
+          "quit: Ctrl-C exits with 130 once the bound has passed when the quit steps don't end, and only once (S111)",
+          "after \(String(format: "%.2f", waited)) s: \(stuck.log)")
+
+    // A second signal while the quit steps run: out at once, and only once.
+    let twice = SignalQuitProbe()
+    let twiceQueue = DispatchQueue(label: "logtest.signal-quit.twice")
+    let twiceQuit = twice.make(queue: twiceQueue, limit: 0.2)
+    twiceQueue.sync { twiceQuit.handle(signal: SIGTERM) }
+    twiceQueue.sync { twiceQuit.handle(signal: SIGINT) }
+    let atOnce = twice.log
+    Thread.sleep(forTimeInterval: 0.35)   // past the bound
+    twice.finishQuit()
+    Thread.sleep(forTimeInterval: 0.05)
+    check(atOnce == ["quit", "exit 130"] && twice.log == ["quit", "exit 130", "quit done"],
+          "quit: a second Ctrl-C while the quit steps run exits at once with 130, and nothing exits again later (S111)",
+          "at once \(atOnce), later \(twice.log)")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

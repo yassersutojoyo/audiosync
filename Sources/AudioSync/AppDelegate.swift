@@ -29,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     nonisolated static let showRequest = Notification.Name("io.github.yassersutojoyo.audiosync.show")
     /// The running copy's answer, after which the second copy leaves.
     nonisolated static let showReply = Notification.Name("io.github.yassersutojoyo.audiosync.shown")
-    /// Set once quitting has begun (Quit, or SIGTERM in main.swift). A copy
+    /// Set once quitting has begun (Quit, or an exit signal in main.swift). A copy
     /// that is quitting no longer answers a second launch, which then waits
     /// for it to go instead of leaving.
     nonisolated static let exiting = Atomic<Bool>(false)
@@ -185,6 +185,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private var reconcileTimer: Timer?
     private var observers: [NSObjectProtocol] = []
+    /// Set by `runQuitSteps`, so Quit and an exit signal never run them twice.
+    private var quitStepsRan = false
     private var deviceRescanPending = false
 
     override init() {
@@ -400,10 +402,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        runQuitSteps()
+    }
+
     /// Quit (S110, S186): stop the session, letting the outputs and the
     /// AirPlay inputs fade out (at most 0.5 s), then tear AudioSync's own
-    /// AirPlay sender down, which ends every speaker's session.
-    func applicationWillTerminate(_ notification: Notification) {
+    /// AirPlay sender down, which ends every speaker's session. An exit
+    /// signal runs the same steps before it exits (S111, `SignalQuit` in
+    /// main.swift). Runs once, whichever asks first.
+    func runQuitSteps() {
+        guard !quitStepsRan else { return }
+        quitStepsRan = true
         Self.exiting.store(true, ordering: .relaxed)
         DBG.log("[AudioSync] quitting")
         // Quitting doesn't close the window: keep a half-typed delay.
