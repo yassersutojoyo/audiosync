@@ -73,7 +73,7 @@ The part I'm proudest of: AirPlay on Windows goes out through AudioSync's own Ai
 
 It isn't released yet, so there's no download on the Releases page today. It can go out with an upcoming release as an unsigned preview, once I've tried that exact build on a real Windows 11 PC. CI builds and tests it on every push, and if you're signed in to GitHub you can grab a build from there; [windows/README.md](windows/README.md#trying-the-preview-exe) says where and what to expect the first time (it needs Windows 11, isn't code-signed, and wants a Private network for AirPlay).
 
-To be upfront about the gaps: from Windows, AirPlay only plays to receivers that take AirPlay 1. Receivers that only do AirPlay 2, or that ask for a password, are listed with a note and stay off. I haven't tried the AirPlay part with a real speaker or Apple TV yet, and the local playback hasn't had a proper listening test on a real PC either.
+To be upfront about the gaps: from Windows, AirPlay only plays to receivers that take AirPlay 1. Receivers that only do AirPlay 2, or that ask for a password, are listed with a note and stay off. I haven't tried the AirPlay part with a real speaker or Apple TV yet. Local playback has had a short first listen on my Windows 11 PC, a USB-C in-ear and a pair of wired speakers playing together; Bluetooth speakers are next on my list.
 
 ## Coming from Airfoil?
 
