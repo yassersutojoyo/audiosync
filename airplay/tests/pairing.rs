@@ -337,7 +337,7 @@ fn after_a_470_to_the_proof_no_proof_is_sent_again() {
     assert!(link.paired().is_some());
 }
 
-// covers: P46, P53, P54
+// covers: P46, P53, P54, P148
 #[test]
 fn options_goes_first_and_the_receivers_sealed_key_is_kept_when_it_opens() {
     // A 200 whose `Public` lacks ANNOUNCE: Unsupported, no PIN asked.
@@ -384,12 +384,13 @@ fn options_goes_first_and_the_receivers_sealed_key_is_kept_when_it_opens() {
     assert_eq!(error.kind, ErrorKind::PairingFailed);
     assert_eq!(error.status, Some(403));
 
-    // The sealed answer: kept when it opens, ignored when it is missing or
-    // doesn't open; pairing completes either way.
+    // The sealed answer: kept when it opens, ignored when it is missing,
+    // doesn't open or is too large to read; pairing completes either way.
     for (answer, kept) in [
         (SealAnswer::Sealed, true),
         (SealAnswer::Empty, false),
         (SealAnswer::Tampered, false),
+        (SealAnswer::Oversized, false),
     ] {
         let atv = FakeAppleTv::new(PIN);
         atv.answer_seal_with(answer);

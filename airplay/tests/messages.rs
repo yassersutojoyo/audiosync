@@ -22,7 +22,7 @@ fn response(bytes: &[u8]) -> audiosync_airplay::rtsp::Response {
     }
 }
 
-// covers: P24
+// covers: P24, P147
 #[test]
 fn rtsp_response_parsing() {
     // No Content-Length means no body: the next message starts right after.
@@ -297,6 +297,7 @@ fn digest_challenges_parse_with_quotes_stale_and_algorithm() {
     );
 }
 
+// covers: P147
 #[test]
 fn the_parser_skips_stray_line_ends_and_reads_bad_bytes_lossily() {
     // Empty lines before a status line are skipped (RFC 2326 §4, as in
@@ -329,7 +330,7 @@ fn the_parser_skips_stray_line_ends_and_reads_bad_bytes_lossily() {
     );
 }
 
-// covers: P140
+// covers: P140, P147
 #[test]
 fn header_values_with_control_characters_are_malformed() {
     // Values such as the nonce and the session ID go back out in the

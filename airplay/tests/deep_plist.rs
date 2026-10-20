@@ -153,7 +153,7 @@ fn assert_protocol_error(events: &[PairingEvent], state: PairingState) {
     );
 }
 
-// covers: P140
+// covers: P140, P148
 #[test]
 fn a_binary_pairing_answer_nested_a_hundred_thousand_deep_is_a_protocol_error() {
     let body = deep_binary(LEVELS, 4);
@@ -162,7 +162,7 @@ fn a_binary_pairing_answer_nested_a_hundred_thousand_deep_is_a_protocol_error() 
     assert_protocol_error(&events, state);
 }
 
-// covers: P140
+// covers: P140, P148
 #[test]
 fn an_xml_pairing_answer_nested_sixty_thousand_deep_is_a_protocol_error() {
     let body = deep_xml(60_000);
@@ -171,7 +171,7 @@ fn an_xml_pairing_answer_nested_sixty_thousand_deep_is_a_protocol_error() {
     assert_protocol_error(&events, state);
 }
 
-// covers: P140
+// covers: P140, P148
 #[test]
 fn the_deepest_answer_within_the_body_cap_is_read_on_a_quarter_of_the_stack() {
     // With 2-byte references and offsets a level takes 5 bytes, and the

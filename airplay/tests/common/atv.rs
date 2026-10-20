@@ -24,7 +24,7 @@ use aes::Aes128;
 use aes_gcm::aead::consts::U16;
 use aes_gcm::{AeadInOut, AesGcm, KeyInit};
 use audiosync_airplay::ids::{Entropy, EntropyUnavailable};
-use audiosync_airplay::pairing::{Output, Pairing, PairingEvent};
+use audiosync_airplay::pairing::{MAX_PAIRING_BODY_BYTES, Output, Pairing, PairingEvent};
 use audiosync_airplay::rtsp::{Request, Response};
 use crypto_bigint::modular::{FixedMontyForm, FixedMontyParams};
 use crypto_bigint::{Odd, U2048};
@@ -190,6 +190,9 @@ pub enum SealAnswer {
     Sealed,
     /// The same with a tag that doesn't match.
     Tampered,
+    /// The sealed answer, one that opens, with padding that takes the body
+    /// past the cap on pairing answers (P148).
+    Oversized,
 }
 
 #[derive(Debug)]
@@ -526,6 +529,12 @@ impl State {
         let mut answer = Dictionary::new();
         answer.insert("epk".to_owned(), Value::Data(own.to_vec()));
         answer.insert("authTag".to_owned(), Value::Data(answer_tag.to_vec()));
+        if self.seal_answer == SealAnswer::Oversized {
+            answer.insert(
+                "padding".to_owned(),
+                Value::Data(vec![0; MAX_PAIRING_BODY_BYTES]),
+            );
+        }
         plist_response(answer)
     }
 
