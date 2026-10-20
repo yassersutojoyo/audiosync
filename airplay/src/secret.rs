@@ -4,15 +4,17 @@
 //! A [`Secret`] owns its buffer, wipes it when dropped (spare capacity
 //! included) and never prints it: `Debug` shows `Secret(<hidden>)`. Its text
 //! is reachable only through [`Secret::expose`], so every read is easy to
-//! find. Each clone owns and wipes a buffer of its own.
+//! find. Each clone owns and wipes a buffer of its own. Two secrets compare
+//! in constant time for texts of the same length.
 
 use std::fmt;
 
+use subtle::ConstantTimeEq;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 /// A password or PIN, wiped from memory when dropped and hidden from
 /// `Debug`.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct Secret(Zeroizing<String>);
 
 impl Secret {
@@ -48,6 +50,20 @@ impl fmt::Debug for Secret {
         f.write_str("Secret(<hidden>)")
     }
 }
+
+/// Compares the bytes in constant time (`subtle`), so how long a
+/// comparison takes never tells how much of one secret matches the other;
+/// only a difference in length returns early.
+impl PartialEq for Secret {
+    fn eq(&self, other: &Secret) -> bool {
+        self.expose()
+            .as_bytes()
+            .ct_eq(other.expose().as_bytes())
+            .into()
+    }
+}
+
+impl Eq for Secret {}
 
 /// The one field is a `Zeroizing<String>`, which wipes itself when dropped.
 impl ZeroizeOnDrop for Secret {}
@@ -91,5 +107,14 @@ mod tests {
         assert_eq!(secret.expose().as_ptr(), buffer, "the same buffer");
         assert_eq!(secret, Secret::from("1234"));
         assert_ne!(secret, Secret::from("4321"));
+    }
+
+    #[test]
+    fn secrets_compare_by_their_whole_text() {
+        assert_eq!(Secret::from(""), Secret::from(""));
+        assert_ne!(Secret::from("1234"), Secret::from("123"));
+        assert_ne!(Secret::from("123"), Secret::from("1234"));
+        assert_ne!(Secret::from("1234"), Secret::from("1235"));
+        assert_ne!(Secret::from("1234"), Secret::from(""));
     }
 }
