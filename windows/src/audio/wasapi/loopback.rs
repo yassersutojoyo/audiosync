@@ -8,14 +8,15 @@
 //! [`CAPTURE_ATTEMPTS`] in order. The capture thread is event-driven, in the
 //! multithreaded apartment and registered with MMCSS; its loop passes each
 //! packet to a [`CaptureConverter`], which equalizes it and writes the ring
-//! and the AirPlay sender's feed.
+//! and the AirPlay sender's feed. Dropping the capture waits for the thread
+//! as a [`Worker`] does: stopping the stream can hang while Windows audio
+//! doesn't answer, and a thread let go keeps the feed until it ends.
 
 use std::mem::ManuallyDrop;
 use std::ptr;
 use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::thread::JoinHandle;
 
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::ring::RingWriter;
@@ -42,7 +43,7 @@ use windows::core::{HRESULT, IUnknown, Interface, Ref};
 use windows_core::implement;
 
 use super::com::{
-    Apartment, Event, ProAudioTask, Ready, device_code_error, spawn_ready, system_error,
+    Apartment, Event, ProAudioTask, Ready, Worker, device_code_error, spawn_worker, system_error,
     wave_format,
 };
 use super::processes::ProcessWatch;
@@ -76,7 +77,7 @@ pub struct LoopbackCapture {
     /// The HRESULT that ended the capture, once `ended` is set.
     failure: Arc<AtomicI32>,
     ended: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
+    thread: Worker,
     /// The captured app, to notice when it quits.
     source: Option<ProcessWatch>,
     /// How Windows accepted to deliver the capture.
@@ -103,10 +104,9 @@ impl CaptureHandle for LoopbackCapture {
 
 impl Drop for LoopbackCapture {
     fn drop(&mut self) {
+        // The thread stops its stream and ends.
         self.stop.set();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        self.thread.finish();
     }
 }
 
@@ -129,7 +129,7 @@ pub(super) fn start(
         let stop = Arc::clone(&stop);
         let failure = Arc::clone(&failure);
         let ended = Arc::clone(&ended);
-        spawn_ready("audiosync-capture", move |ready| {
+        spawn_worker("audiosync-capture", move |ready| {
             run(
                 activation, writer, equalizer, airplay, &stop, &failure, &ended, ready,
             );
@@ -139,7 +139,7 @@ pub(super) fn start(
         stop,
         failure,
         ended,
-        thread: Some(thread),
+        thread,
         source,
         setup,
     })
@@ -491,7 +491,70 @@ fn capture_loop(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use audiosync_core::ring::Ring;
+    use windows::Win32::System::Threading::INFINITE;
+
+    use super::super::com::{StuckThreads, spawn_worker_within};
     use super::*;
+    use crate::audio::SESSION_RATE;
+
+    /// How long the fake Windows audio hangs before it answers again.
+    const HANG: Duration = Duration::from_secs(3);
+
+    /// How long a test waits for an answer.
+    const TIMEOUT: Duration = Duration::from_millis(200);
+
+    #[test]
+    fn a_capture_thread_that_hangs_stopping_its_stream_doesnt_hold_quitting() {
+        static STUCK: StuckThreads = StuckThreads::new();
+        let ring = Ring::for_rate(SESSION_RATE).expect("a ring");
+        let writer = ring.writer().expect("the only writer");
+        let stop = Arc::new(Event::manual_reset().expect("an event"));
+        let (answer, hung) = mpsc::channel::<()>();
+        let (stopped, done) = mpsc::channel();
+        let (thread, ()) = {
+            let stop = Arc::clone(&stop);
+            spawn_worker_within("audiosync-test", TIMEOUT, &STUCK, move |ready| {
+                // The thread owns the ring's writer, as the real one does.
+                let _writer = writer;
+                if ready.ok(()) {
+                    // SAFETY: waits on an event that outlives this thread's
+                    // use of it.
+                    unsafe { WaitForSingleObject(stop.raw(), INFINITE) };
+                    // Stopping the stream hangs until Windows audio answers.
+                    let _ = hung.recv();
+                    let _ = stopped.send(());
+                }
+            })
+            .expect("it starts")
+        };
+        let capture = LoopbackCapture {
+            stop,
+            failure: Arc::new(AtomicI32::new(0)),
+            ended: Arc::new(AtomicBool::new(false)),
+            thread,
+            source: None,
+            setup: CAPTURE_ATTEMPTS[0],
+        };
+        let answers = thread::spawn(move || {
+            thread::sleep(HANG);
+            drop(answer);
+        });
+        let started = Instant::now();
+        drop(capture);
+        let waited = started.elapsed();
+        assert!(waited < HANG / 2, "the drop waited {waited:?}");
+        assert!(STUCK.any(), "the thread counts as stuck");
+        // Once Windows audio answers, the thread still stops its stream, and
+        // ends.
+        assert_eq!(done.recv_timeout(HANG * 3), Ok(()));
+        assert!(STUCK.none_within(HANG), "the thread ends");
+        answers.join().expect("the answer comes");
+    }
 
     #[test]
     fn a_timed_out_activation_carries_the_windows_timeout_code() {
