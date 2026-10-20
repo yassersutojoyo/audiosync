@@ -1549,12 +1549,14 @@ impl AirPlaySpeakers {
             ));
             if let Some(counters) = &added.counters {
                 text.push_str(&format!(
-                    "; {} packets sent, {} late, {} resend requests, {} resent, {} timing replies",
+                    "; {} packets sent, {} late, {} resend requests, {} resent, {} timing replies, \
+                     {} datagrams from other addresses dropped",
                     counters.packets_sent(),
                     counters.late_packets(),
                     counters.resend_requests(),
                     counters.packets_resent(),
                     counters.timing_replies(),
+                    counters.foreign_datagrams(),
                 ));
             }
         }

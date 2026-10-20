@@ -18,6 +18,11 @@
 //!   stops reading blocks only its own thread, never the driver or another
 //!   speaker (P3, P141).
 //!
+//! Both UDP threads take datagrams only from the receiver: the address the
+//! connection reached, from any port. Others are dropped unread and counted
+//! (P86, P91, P144), so another host on the network can't draw timing
+//! replies or resends, or keep a lost session's timing alive (P131).
+//!
 //! The threads start before the session learns its ports, so both sockets
 //! are open and answering before SETUP names them (P31). Audio, sync and
 //! resend datagrams leave from the control socket, timing replies from the
@@ -227,6 +232,7 @@ impl SessionIo {
         tcp.set_write_timeout(Some(RTSP_WRITE_TIMEOUT))?;
         tcp.set_read_timeout(Some(POLL_INTERVAL))?;
         let local = tcp.local_addr()?;
+        let receiver = tcp.peer_addr()?.ip().to_canonical();
         let bind_at = udp_bind_address(local);
         let control = UdpSocket::bind(bind_at)?;
         let timing = UdpSocket::bind(bind_at)?;
@@ -258,8 +264,9 @@ impl SessionIo {
             timing_loop(
                 session,
                 io.timing.clone(),
+                receiver,
                 clock,
-                counters,
+                counters.clone(),
                 io.stop.clone(),
                 notify.clone(),
             ),
@@ -271,6 +278,8 @@ impl SessionIo {
             control_loop(
                 session,
                 io.control.clone(),
+                receiver,
+                counters,
                 io.stop.clone(),
                 io.reset.clone(),
                 notify.clone(),
@@ -435,13 +444,22 @@ impl Drop for RtspIo {
     }
 }
 
-/// Answers timing requests (P90, P91, P92): the receive time is read right
-/// after the receive call, the transmit time right before the send call,
-/// and nothing slow happens between them. Anything that isn't a request is
-/// ignored.
+/// Whether a datagram from `source` came from the session's receiver,
+/// whose address (in canonical form) is `receiver`: the same address, from
+/// any port, since receivers pick their own (P86, P91).
+fn from_receiver(source: SocketAddr, receiver: IpAddr) -> bool {
+    source.ip().to_canonical() == receiver
+}
+
+/// Answers timing requests from `receiver` (P90, P91, P92): the receive
+/// time is read right after the receive call, the transmit time right
+/// before the send call, and nothing slow happens between them. Anything
+/// that isn't a request is ignored; a datagram from another address is
+/// counted and dropped.
 fn timing_loop(
     session: SessionKey,
     socket: Arc<UdpSocket>,
+    receiver: IpAddr,
     clock: SenderClock,
     counters: Arc<SpeakerCounters>,
     stop: Arc<AtomicBool>,
@@ -453,6 +471,10 @@ fn timing_loop(
             match socket.recv_from(&mut buf) {
                 Ok((len, source)) => {
                     let received = Instant::now();
+                    if !from_receiver(source, receiver) {
+                        counters.count_foreign_datagram();
+                        continue;
+                    }
                     let transmit = Instant::now();
                     let Some(reply) =
                         rtp::timing_reply(&buf[..len], clock.ntp(received), clock.ntp(transmit))
@@ -475,12 +497,15 @@ fn timing_loop(
     }
 }
 
-/// Hands retransmission requests to the driver (P86); other datagrams are
-/// ignored (P92). A reset on a receive is an ICMP unreachable for an earlier
-/// send, which the next send reports (P141).
+/// Hands retransmission requests from `receiver` to the driver (P86); other
+/// datagrams are ignored (P92), and those from another address counted. A
+/// reset on a receive is an ICMP unreachable for an earlier send, which the
+/// next send reports (P141).
 fn control_loop(
     session: SessionKey,
     socket: Arc<UdpSocket>,
+    receiver: IpAddr,
+    counters: Arc<SpeakerCounters>,
     stop: Arc<AtomicBool>,
     reset: Arc<AtomicBool>,
     notify: impl Notify,
@@ -489,7 +514,11 @@ fn control_loop(
         let mut buf = [0u8; DATAGRAM_BYTES];
         while !stop.load(Ordering::Acquire) {
             match socket.recv_from(&mut buf) {
-                Ok((len, _)) => {
+                Ok((len, source)) => {
+                    if !from_receiver(source, receiver) {
+                        counters.count_foreign_datagram();
+                        continue;
+                    }
                     if ResendRequest::parse(&buf[..len]).is_none() {
                         continue;
                     }
@@ -691,7 +720,8 @@ mod tests {
     // own requests, from any port, still do (P86, P91). The other host
     // sends from 127.0.0.2, which Windows and Linux route to loopback;
     // macOS has only 127.0.0.1 unless configured, so there the test is
-    // skipped.
+    // skipped and the next one covers the rule.
+    // covers: P86, P91, P144
     #[test]
     fn datagrams_from_another_address_never_reach_the_driver() {
         let Ok(stranger) = UdpSocket::bind("127.0.0.2:0") else {
@@ -703,17 +733,23 @@ mod tests {
         let (_receiver_end, _) = listener.accept().expect("accept");
         let (events, received) = mpsc::channel();
         let notify = move |event: IoEvent| events.send(event).is_ok();
+        let counters = Arc::new(SpeakerCounters::default());
         let (io, connection) = SessionIo::open(
             SessionKey(9),
             1,
             tcp,
             SenderClock::new(Instant::now()),
-            Arc::new(SpeakerCounters::default()),
+            counters.clone(),
             notify,
         )
         .expect("session I/O");
-        let timing = SocketAddr::new((connection).local, connection.timing_port);
-        let control = SocketAddr::new((connection).local, connection.control_port);
+        let Connection {
+            local: sender,
+            control_port,
+            timing_port,
+        } = connection;
+        let timing = SocketAddr::new(sender, timing_port);
+        let control = SocketAddr::new(sender, control_port);
         let receiver = UdpSocket::bind("127.0.0.1:0").expect("receiver socket");
         receiver.set_read_timeout(Some(WAIT)).expect("timeout");
 
@@ -758,6 +794,8 @@ mod tests {
         }
         assert_eq!(timing_events, 1, "only the receiver's timing request");
         assert_eq!(resends, [200], "only the receiver's resend request");
+        assert_eq!(counters.foreign_datagrams(), 2, "the stranger's, counted");
+        assert_eq!(counters.timing_replies(), 1);
         stranger
             .set_read_timeout(Some(Duration::from_millis(100)))
             .expect("timeout");
@@ -766,5 +804,70 @@ mod tests {
             "no timing reply to the stranger"
         );
         drop(io);
+    }
+
+    // The rule on any system: with the receiver at an address no local
+    // socket has (192.0.2.1, reserved for documentation), every datagram
+    // from loopback is another host's. Both UDP threads count it, the
+    // timing thread doesn't answer it, and nothing reaches the driver.
+    // covers: P86, P91, P144
+    #[test]
+    fn the_udp_threads_count_and_drop_datagrams_from_another_address() {
+        let timing = Arc::new(UdpSocket::bind("127.0.0.1:0").expect("timing socket"));
+        let control = Arc::new(UdpSocket::bind("127.0.0.1:0").expect("control socket"));
+        for socket in [&timing, &control] {
+            socket
+                .set_read_timeout(Some(POLL_INTERVAL))
+                .expect("timeout");
+        }
+        let receiver = IpAddr::from([192, 0, 2, 1]);
+        let counters = Arc::new(SpeakerCounters::default());
+        let stop = Arc::new(AtomicBool::new(false));
+        let (events, received) = mpsc::channel();
+        let notify = move |event: IoEvent| events.send(event).is_ok();
+        let threads = [
+            thread::spawn(timing_loop(
+                SessionKey(4),
+                timing.clone(),
+                receiver,
+                SenderClock::new(Instant::now()),
+                counters.clone(),
+                stop.clone(),
+                notify.clone(),
+            )),
+            thread::spawn(control_loop(
+                SessionKey(4),
+                control.clone(),
+                receiver,
+                counters.clone(),
+                stop.clone(),
+                Arc::new(AtomicBool::new(false)),
+                notify,
+            )),
+        ];
+        let stranger = UdpSocket::bind("127.0.0.1:0").expect("stranger");
+        let to = |socket: &UdpSocket| socket.local_addr().expect("address");
+        stranger
+            .send_to(&timing_request(1), to(&timing))
+            .expect("send");
+        stranger
+            .send_to(&resend_request(100, 1), to(&control))
+            .expect("send");
+        let deadline = Instant::now() + WAIT;
+        while counters.foreign_datagrams() < 2 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        stop.store(true, Ordering::Release);
+        for thread in threads {
+            thread.join().expect("a UDP thread");
+        }
+        assert_eq!(counters.foreign_datagrams(), 2);
+        assert_eq!(counters.timing_replies(), 0);
+        assert!(received.try_recv().is_err(), "nothing reached the driver");
+        stranger.set_nonblocking(true).expect("nonblocking");
+        assert!(
+            stranger.recv_from(&mut [0u8; 64]).is_err(),
+            "no timing reply"
+        );
     }
 }
