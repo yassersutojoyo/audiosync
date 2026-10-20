@@ -702,8 +702,8 @@ impl AirPlaySpeakers {
         self.added.clear();
         self.pairings.clear();
         self.ending.clear();
-        self.password_asks.clear();
-        self.password_attempts.clear();
+        // A password prompt still waiting (discovery stopped, the sessions
+        // didn't) stays: the speaker joins with it once listed again.
         self.latency = self.link.latency();
         self.stopped = false;
         self.log.log(|| {
@@ -725,8 +725,12 @@ impl AirPlaySpeakers {
         self.added.clear();
         self.pairings.clear();
         self.ending.clear();
-        self.password_asks.clear();
         self.password_attempts.clear();
+        // Its prompts go with it, as on the Mac. A speaker left on without
+        // its password would stay silent, so it goes off with a notice.
+        for id in std::mem::take(&mut self.password_asks).into_keys() {
+            self.turn_off(&id, AirPlayProblem::NeedsPassword, events);
+        }
         if changed || !self.stopped {
             self.log.log(|| {
                 "AirPlay: the sender stopped after an internal error; AirPlay stays silent until Retry"
@@ -3166,6 +3170,26 @@ pub mod tests {
         assert_eq!(airplay.enabled_ids(), std::slice::from_ref(&id));
         assert!(airplay.submit_password(&id, "hunter2"));
         assert_eq!(fake.take_calls(), joined_with(&id, "hunter2"));
+    }
+
+    #[test]
+    fn a_sender_that_stops_during_a_password_prompt_turns_the_speaker_off() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let study = password_asked(&fake, &mut airplay);
+        let id = id_of(&study);
+        assert!(airplay.submit_password(&id, "hunter1"));
+        fake.fail(&study, ErrorKind::WrongPassword);
+        airplay.poll();
+        assert!(airplay.password_prompt().is_some());
+        fake.stop_running();
+        let events = airplay.poll();
+        assert!(events.contains(&BackendEvent::AirPlayFailed {
+            id: id.clone(),
+            problem: AirPlayProblem::NeedsPassword
+        }));
+        assert_eq!(airplay.password_prompt(), None);
+        assert!(airplay.enabled_ids().is_empty(), "not left on and silent");
     }
 
     #[test]
