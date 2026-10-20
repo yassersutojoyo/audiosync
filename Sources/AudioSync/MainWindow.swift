@@ -99,11 +99,17 @@ struct MainView: View {
                                        localNetworkHint: model.localNetworkHint)
                     }
                     .padding(.bottom, 4)
-                    // Blank space under a short list is outside every control too.
+                    // At rest the cards sit clear of the faded edges.
+                    .padding(.vertical, Self.scrollFade)
+                    // Blank space under a short list is outside every row too.
                     .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .topLeading)
                     .contentShape(Rectangle())
                     .onTapGesture { model.closeDelayPanels() }
                 } }
+                // Cards scrolling under the header fade out instead of
+                // meeting a hard edge; the fade lies in the gap above the list.
+                .mask(ScrollEdgeFade(height: Self.scrollFade))
+                .padding(.vertical, -Self.scrollFade)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -111,12 +117,20 @@ struct MainView: View {
         .padding(.top, 4)
         .padding(.bottom, 20)
         .frame(minWidth: 720, maxWidth: .infinity, minHeight: 460, maxHeight: .infinity, alignment: .topLeading)
-        // A click no control takes closes the delay panels, applying what
-        // was typed; controls get their clicks first.
-        .contentShape(Rectangle())
-        .onTapGesture { model.closeDelayPanels() }
+        // A click no row or control takes closes the delay panels, applying
+        // what was typed. Behind everything, so the header can still drag
+        // the window.
+        .background {
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { model.closeDelayPanels() }
+        }
         .tint(accent)
     }
+
+    /// The scroll list's soft top and bottom edge, shorter than the gap
+    /// between the header and the list (14 pt) and the window's bottom margin.
+    private static let scrollFade: CGFloat = 12
 
     // MARK: Header
 
@@ -126,17 +140,23 @@ struct MainView: View {
                 .fill(model.running ? Brand.logo : Color.secondary)
                 .frame(width: 32, height: 32)
                 .accessibilityHidden(true)
+                .allowsHitTesting(false)
             VStack(alignment: .leading, spacing: 2) {
                 Wordmark(size: BrandTokens.Typography.wordmarkSize)
                 Text(model.statusText)
                     .font(.callout)
                     .foregroundStyle(Brand.secondaryText)
             }
+            .allowsHitTesting(false)
             Spacer()
             gearMenu(t)
             PowerSwitch(isOn: model.running, text: t) { model.actions.setPower(!model.running) }
                 .help(model.running ? t.turnOff : t.turnOn)
         }
+        // The band drags the window like a title bar, and as a click outside
+        // every speaker row it closes the delay panels; the gear and the
+        // switch sit above it and take their own clicks.
+        .background(WindowDragArea { model.closeDelayPanels() }.accessibilityHidden(true))
     }
 
     private func gearMenu(_ t: UIStrings) -> some View {
@@ -312,7 +332,7 @@ struct MainView: View {
                             .padding(10)
                         if !speakers.isEmpty { Divider() }
                     } else if speakers.isEmpty {
-                        emptyNote(empty, hint: hint)
+                        emptyNote(empty, hint: hint, under: [])
                     } else if hasAirPlay && localNetworkHint == .denied, let hint {
                         LocalNetworkHintView(message: hint, text: model.text).padding(10)
                         Divider()
@@ -329,14 +349,15 @@ struct MainView: View {
                     if connected && problem == nil && !speakers.isEmpty && !hasAirPlay {
                         // Local speakers only: say where AirPlay stands, under them.
                         Divider()
-                        emptyNote(empty, hint: hint)
+                        emptyNote(empty, hint: hint, under: speakers)
                     }
                 }
             }
         }
     }
 
-    private func emptyNote(_ message: String, hint: String?) -> some View {
+    /// `under`: the rows above the note, whose last row's box it belongs to.
+    private func emptyNote(_ message: String, hint: String?, under rows: [AppModel.Speaker]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(message)
                 .font(.callout)
@@ -345,6 +366,16 @@ struct MainView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
+        // Under a list, a click works like one on the last row; alone, it
+        // is outside every row.
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if let id = DelayPanels.noteTarget(under: rows.map { (id: $0.id, hasDelay: $0.offsetMs != nil) }) {
+                model.toggleDelayPanel(id)
+            } else {
+                model.closeDelayPanels()
+            }
+        }
     }
 }
 
@@ -535,7 +566,10 @@ struct SpeakerRow: View {
             if showSync, let ms = speaker.offsetMs {
                 SyncControls(kind: .offset(hasReference: model.hasLocalReference), ms: ms,
                              label: t.delay(of: speaker.name), text: t, draft: model.draft(for: speaker.id),
-                             close: { all in closeSync(all: all) }) {
+                             escape: {
+                    delayFocused = true
+                    model.dropDelayTyping()
+                }) {
                     model.actions.setLocalOffset(speaker.id, $0)
                 }
                 .padding(.leading, 44)
@@ -549,20 +583,19 @@ struct SpeakerRow: View {
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
         .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.row)
             .fill(state == .playing ? accent.opacity(0.08) : Color.clear))
-        .contextMenu { autoConnectToggle(t) }
-    }
-
-    /// Return (`all` false) or Escape (`all` true) in this row's panel.
-    private func closeSync(all: Bool) {
-        delayFocused = true
-        withAnimation(.easeInOut(duration: 0.15)) {
-            if all { model.dropDelayTyping() } else { model.closeDelayPanel(speaker.id) }
+        // A click on the row's box, between its dividers, works like its
+        // delay value; a row without one (AirPlay, the reference) is outside
+        // every panel. The delay value stays the keyboard's way in.
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if speaker.offsetMs != nil { model.toggleDelayPanel(speaker.id) } else { model.closeDelayPanels() }
         }
+        .contextMenu { autoConnectToggle(t) }
     }
 
     private func delayButton(_ ms: Double, _ t: UIStrings) -> some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.15)) { model.toggleDelayPanel(speaker.id) }
+            model.toggleDelayPanel(speaker.id)
         } label: {
             HStack(spacing: 3) {
                 Image(systemName: "timer")
@@ -631,7 +664,7 @@ struct AirPlayDelayRow: View {
                 Text(t.airPlayDelay)
                 Spacer()
                 Button {
-                    withAnimation(.easeInOut(duration: 0.15)) { model.toggleDelayPanel(Self.id) }
+                    model.toggleDelayPanel(Self.id)
                 } label: {
                     Text(t.delayValue(ms: model.airPlayDelayMs))
                         .monospacedDigit()
@@ -648,11 +681,9 @@ struct AirPlayDelayRow: View {
             }
             if expanded {
                 SyncControls(kind: .airPlay, ms: model.airPlayDelayMs, label: t.airPlayDelay, text: t,
-                             draft: model.draft(for: Self.id), close: { all in
+                             draft: model.draft(for: Self.id), escape: {
                     delayFocused = true
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        if all { model.dropDelayTyping() } else { model.closeDelayPanel(Self.id) }
-                    }
+                    model.dropDelayTyping()
                 }) { model.actions.setAirPlayDelay($0) }
                     .padding(.leading, 44)
                     .transition(.opacity)
@@ -663,6 +694,9 @@ struct AirPlayDelayRow: View {
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
+        // A click on the row's box works like its delay value.
+        .contentShape(Rectangle())
+        .onTapGesture { model.toggleDelayPanel(Self.id) }
     }
 }
 
@@ -676,11 +710,44 @@ private struct DraftUnderline: Shape {
     }
 }
 
+/// Drags the window from the header band. SwiftUI's background tap that
+/// closes the delay panels would otherwise take the header's clicks, so the
+/// band moves the window itself; `pressed` runs first, as for any click
+/// outside the speaker rows.
+private struct WindowDragArea: NSViewRepresentable {
+    let pressed: () -> Void
+
+    func makeNSView(context: Context) -> DragView { DragView() }
+    func updateNSView(_ view: DragView, context: Context) { view.pressed = pressed }
+
+    final class DragView: NSView {
+        var pressed: () -> Void = {}
+        override func mouseDown(with event: NSEvent) {
+            pressed()
+            window?.performDrag(with: event)
+        }
+    }
+}
+
+/// The scroll list's mask: opaque, fading out over `height` at the top and
+/// the bottom.
+private struct ScrollEdgeFade: View {
+    let height: CGFloat
+
+    var body: some View {
+        VStack(spacing: 0) {
+            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: height)
+            Color.black
+            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: height)
+        }
+    }
+}
+
 /// A delay's controls: coarse/fine steppers that apply at once, plus a typed
-/// value in whole ms that applies when the panel closes (Return, its delay
-/// value, a click outside every control; `DelayPanels`), so the outputs
-/// re-time once rather than at every keystroke. Text the field
-/// can't read applies nothing and the stored value shows again (S181,
+/// value in whole ms that applies on Return or Command-S, or as the panel
+/// closes (`DelayPanels`), so the outputs re-time once rather than at every
+/// keystroke. The field takes only digits after one leading sign; a number
+/// out of range gets a red outline and applies clamped (S181,
 /// `DelayFieldDraft`).
 struct SyncControls: View {
     /// Which delay the controls edit.
@@ -698,27 +765,38 @@ struct SyncControls: View {
     let label: String
     let text: UIStrings
     @ObservedObject var draft: SyncDraft
-    /// Return (false: this panel closes) or Escape (true: every typed delay
-    /// is dropped and every panel closes); the focus goes to the delay value.
-    let close: (_ all: Bool) -> Void
+    /// Escape: every typed delay is dropped and every panel closes; the focus
+    /// goes to the delay value.
+    let escape: () -> Void
     let apply: (Double) -> Void
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
         // Typing not yet applied: a dashed underline under the field and a
-        // hint under the steps, so the cue isn't color alone.
+        // hint under the steps, so the cue isn't color alone. Out of range:
+        // a red outline, and the hint says the range and what applies.
         let pending = draft.field.isPending(saved: ms, format: shown)
+        let outOfRange = draft.field.isOutOfRange(sanitize: clamped)
+        let cue = outOfRange ? rangeMessage : pending ? text.delayDraftHint : ""
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 4) {
                 step(-100)
                 step(-10)
-                TextField(text.delayFieldLabel, text: Binding(get: { draft.field.text },
-                                                              set: { draft.field.type($0) }))
+                TextField(text.delayFieldLabel, text: Binding(get: { draft.rejected ?? draft.field.text },
+                                                              set: { typeKeystroke($0) }))
                 .labelsHidden()
                 .textFieldStyle(.roundedBorder)
                 .multilineTextAlignment(.center)
                 .font(.callout.monospacedDigit())
                 .frame(width: 72)
+                .overlay {
+                    if outOfRange {
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(Brand.errorText, lineWidth: 1.5)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
                 // Below the focus ring, so the two don't overlap.
                 .overlay(alignment: .bottom) {
                     if pending {
@@ -731,12 +809,10 @@ struct SyncControls: View {
                     }
                 }
                 .accessibilityLabel(label)
-                .accessibilityHint(pending ? text.delayDraftHint : "")
+                .accessibilityHint(cue)
                 .focused($fieldFocused)
-                .onSubmit {
-                    commit()
-                    close(false)
-                }
+                // Applies and keeps the panel open, to try the next value.
+                .onSubmit { commit() }
                 .onChange(of: fieldFocused) { _, focused in draft.fieldFocused = focused }
                 Text(text.millisecondsUnit).font(.callout).foregroundStyle(Brand.secondaryText)
                 step(10)
@@ -745,22 +821,55 @@ struct SyncControls: View {
             // VoiceOver hears this as the field's hint. Hidden, it keeps its
             // line, so the text below doesn't jump on the first keystroke or
             // when the value applies.
-            Label(text.delayDraftHint, systemImage: "return")
-                .font(.caption)
-                .foregroundStyle(Brand.tealText)
-                .opacity(pending ? 1 : 0)
-                .accessibilityHidden(true)
+            if outOfRange {
+                Label(rangeMessage, systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(Brand.errorText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityHidden(true)
+            } else {
+                Label(text.delayDraftHint, systemImage: "return")
+                    .font(.caption)
+                    .foregroundStyle(Brand.tealText)
+                    .opacity(pending ? 1 : 0)
+                    .accessibilityHidden(true)
+            }
             Text(hint)
                 .font(.caption)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
         // Escape on the field or a step.
-        .onExitCommand { close(true) }
+        .onExitCommand(perform: escape)
         .onAppear { draft.field.show(ms, format: shown) }
         .onChange(of: ms) { _, value in draft.field.show(value, format: shown) }
+        // Command-S, or a click on another row's delay.
+        .onChange(of: draft.applyRequests) { _, _ in commit() }
+        // The hint is read only on focus: VoiceOver hears the range once as
+        // the number goes out of it, not at every keystroke after.
+        .onChange(of: outOfRange) { _, now in
+            if now { AccessibilityNotification.Announcement(rangeMessage).post() }
+        }
         // A panel closing applies what was typed, unless Escape dropped it.
         .onDisappear(perform: commit)
+    }
+
+    /// A keystroke or a paste. The field goes on showing a character it
+    /// can't take until its text changes, so it shows the keystroke for a
+    /// moment and then what it keeps.
+    private func typeKeystroke(_ typed: String) {
+        draft.field.type(typed)
+        guard draft.field.text != typed else { return }
+        draft.rejected = typed
+        DispatchQueue.main.async { draft.rejected = nil }
+    }
+
+    /// The range, and the value a commit applies instead of the typed one.
+    private var rangeMessage: String {
+        let typed = LocalDelay.wholeMs(draft.field.text) ?? 0
+        return text.delayOutOfRange(lowest: shown(clamped(-.greatestFiniteMagnitude) ?? 0),
+                                    highest: shown(clamped(.greatestFiniteMagnitude) ?? 0),
+                                    applies: shown(clamped(typed) ?? 0))
     }
 
     private var hint: String {
