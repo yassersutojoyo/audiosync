@@ -11,6 +11,8 @@ pub mod convert;
 pub mod eq;
 pub mod fade;
 pub mod ffi;
+#[cfg(feature = "ffi-panic-probe")]
+pub mod panic_probe;
 pub mod policy;
 pub mod reader;
 pub mod render;

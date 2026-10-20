@@ -6,6 +6,11 @@
 // group never waits.
 export enum RowState { off, will-play, playing, waiting-for-device, reconnecting }
 
+// The part of a speaker or group row that has, or is to take, the keyboard
+// focus: its toggle, delay button, volume, sync controls or options. A row
+// rebuilt under the focus takes it back on the same part.
+export enum RowPart { none, toggle, delay, volume, sync, options }
+
 // The kind of output: the icon in a speaker's toggle, and the line under a
 // connected speaker's name.
 export enum SpeakerKind { airplay, built-in, headphones, bluetooth, usb, hdmi, display-port, virtual, other }

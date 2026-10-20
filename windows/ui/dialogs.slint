@@ -1,12 +1,13 @@
 // The app's small dialogs: the one that names a group (New Speaker Group and
 // Rename Group) and the PIN prompt of an Apple TV pairing. Enter confirms,
-// Escape cancels.
+// Escape cancels wherever the focus is: in the content's key scope or on a
+// button (DialogButton).
 
-import { Button, LineEdit } from "std-widgets.slint";
+import { LineEdit } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { PinPhase } from "types.slint";
-import { Card, Fluent, Glyph, Glyphs } from "widgets.slint";
+import { Card, DialogButton, Fluent, Glyph, Glyphs } from "widgets.slint";
 
 export component GroupNameDialog inherits Dialog {
     in property <string> heading;
@@ -78,21 +79,25 @@ export component GroupNameDialog inherits Dialog {
         }
     }
 
-    Button {
+    DialogButton {
         text: root.confirm-label;
         primary: true;
         dialog-button-role: accept;
-        accessible-label: root.confirm-label;
         clicked => {
             root.confirmed(root.name);
         }
+        escape-pressed => {
+            root.cancelled();
+        }
     }
 
-    Button {
+    DialogButton {
         text: Strings.cancel;
         dialog-button-role: reject;
-        accessible-label: Strings.cancel;
         clicked => {
+            root.cancelled();
+        }
+        escape-pressed => {
             root.cancelled();
         }
     }
@@ -226,22 +231,26 @@ export component PinDialog inherits Dialog {
         }
     }
 
-    Button {
+    DialogButton {
         text: Strings.pair;
         primary: true;
-        enabled: root.can-pair;
+        active: root.can-pair;
         dialog-button-role: accept;
-        accessible-label: Strings.pair;
         clicked => {
             root.confirmed(root.pin);
         }
+        escape-pressed => {
+            root.cancelled();
+        }
     }
 
-    Button {
+    DialogButton {
         text: Strings.cancel;
         dialog-button-role: reject;
-        accessible-label: Strings.cancel;
         clicked => {
+            root.cancelled();
+        }
+        escape-pressed => {
             root.cancelled();
         }
     }
