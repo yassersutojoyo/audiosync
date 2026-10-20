@@ -295,7 +295,7 @@ fn an_earliest_converted_output_on_a_clock_100_ppm_off_never_runs_dry() {
     // synthetic pairing of 480-frame blocks with 512-frame callbacks, and
     // other rates of the 44.1 kHz family. A real Windows endpoint at
     // 44.1 kHz asks for 441-frame periods against 480-frame packets, one
-    // phase only: S206's known limit for callbacks with few phases.
+    // phase only, which the stamped runs below check (S207).
     for (device_rate, callback, block) in [
         (44_100, 512, 512),
         (44_100, 4096, 512),
@@ -360,15 +360,18 @@ fn an_earliest_converted_output_on_a_clock_100_ppm_off_never_runs_dry() {
 /// Seconds the runs of outputs whose callbacks take few phases last.
 const FEW_PHASES_SECONDS: u64 = 60;
 
-/// The capture frames a clock 100 ppm off gains or loses in
-/// [`FEW_PHASES_SECONDS`]: 48 000 × 60 / 10 000.
-const FEW_PHASES_DRIFT: u64 = 288;
+/// The device clocks of the few-phase runs, in ppm: 100 ppm off, and
+/// 300 ppm off, which takes a 441-frame output fed 480-frame blocks past
+/// a block's worth of slack inside the 60 seconds.
+const FEW_PHASES_DRIFTS_PPM: [i64; 4] = [-300, -100, 100, 300];
 
 /// Asserts that a stamped run of `clocks` for [`FEW_PHASES_SECONDS`] started
 /// once, faded in, and from then on played the source without a dry read,
 /// a correction or a gap, and that its converter was trimmed by what the
-/// clock gained or lost and no more, one way only.
+/// clock gained or lost (48 000 × 60 × ppm / 10^6 capture frames, 288 at
+/// 100 ppm) and no more, one way only.
 fn assert_trimmed_to_the_capture(clocks: Clocks) {
+    let drift = u64::from(RATE) * FEW_PHASES_SECONDS * clocks.drift_ppm.unsigned_abs() / 1_000_000;
     let outcome = simulate(clocks, FEW_PHASES_SECONDS, true);
     let c = outcome.counters;
     assert_eq!(
@@ -389,7 +392,7 @@ fn assert_trimmed_to_the_capture(clocks: Clocks) {
     };
     assert_eq!(other_way, 0, "trimmed the other way: {clocks:?}");
     assert!(
-        trimmed <= FEW_PHASES_DRIFT + 16,
+        trimmed <= drift + 16,
         "{trimmed} frames trimmed: {clocks:?}"
     );
     let open = outcome.open_at.expect("the output faded in");
@@ -402,26 +405,28 @@ fn assert_trimmed_to_the_capture(clocks: Clocks) {
 
 // covers: S53, S206, S207
 #[test]
-fn callbacks_with_few_phases_on_a_clock_100_ppm_off_never_run_dry() {
+fn callbacks_with_few_phases_on_a_clock_off_never_run_dry() {
     // A Windows endpoint at 44.1 kHz asks for 441-frame periods against
     // 480-frame packets, which take one phase against each other: W − P is
     // the same at every callback until the clock has gained or lost a
     // block, about every 100 s at 100 ppm, and a fast clock then takes a
-    // block's worth of slack at once. A 96 kHz output with 512-frame
-    // callbacks against 512-frame blocks takes two phases, a 32 kHz one
-    // with 256-frame callbacks three. With the blocks and callbacks
-    // stamped, the renderer sees the clock gain or lose long before that
-    // and trims its converter by what it gains or loses (S207): over
-    // 60 seconds, at hold-back 0 and held back by 25 ms (inside the dead
-    // band, so no step back keeps it off W either), for every phase, a
-    // fresh session and a running one, no read runs dry and no drift
-    // correction is made.
-    for (device_rate, callback, block) in [(44_100, 441, 480), (96_000, 512, 512), (32_000, 256, 512)]
+    // block's worth of slack at once; the second time, the reader runs dry
+    // (before S207, inside these 60 seconds at 300 ppm). A 96 kHz output
+    // with 512-frame callbacks against 512-frame blocks takes two phases, a
+    // 32 kHz one with 256-frame callbacks three, and ran dry at 100 ppm
+    // too. With the blocks and callbacks stamped, the renderer sees the
+    // clock gain or lose long before that and trims its converter by what
+    // it gains or loses (S207): over 60 seconds, 100 and 300 ppm fast or
+    // slow, at hold-back 0 and held back by 25 ms (inside the dead band, so
+    // no step back keeps it off W either), for every phase, a fresh session
+    // and a running one, no read runs dry and no drift correction is made.
+    for (device_rate, callback, block) in
+        [(44_100, 441, 480), (96_000, 512, 512), (32_000, 256, 512)]
     {
         for delay in [0, 1_200] {
             for running in [false, true] {
                 for phase in PHASES {
-                    for drift_ppm in [-100, 100] {
+                    for drift_ppm in FEW_PHASES_DRIFTS_PPM {
                         assert_trimmed_to_the_capture(Clocks {
                             device_rate,
                             callback,
@@ -446,7 +451,8 @@ fn an_output_that_needs_no_trim_plays_the_same_with_stamps() {
     // hold-back, nor for one held back beyond the dead band and a lead,
     // which a step back keeps off W as before (S52): over 60 seconds, those
     // play the very same frames stamped or not, and are never trimmed.
-    for (device_rate, callback, block) in [(44_100, 441, 480), (44_100, 512, 512), (96_000, 512, 512)]
+    for (device_rate, callback, block) in
+        [(44_100, 441, 480), (44_100, 512, 512), (96_000, 512, 512)]
     {
         for (delay, drifts) in [(0, &[0][..]), (1_200, &[0]), (4_800, &[-100, 0, 100])] {
             for &drift_ppm in drifts {
@@ -468,7 +474,10 @@ fn an_output_that_needs_no_trim_plays_the_same_with_stamps() {
                         (0, 0),
                         "trimmed: {clocks:?}"
                     );
-                    assert!(stamped.played == plain.played, "played otherwise: {clocks:?}");
+                    assert!(
+                        stamped.played == plain.played,
+                        "played otherwise: {clocks:?}"
+                    );
                     assert_eq!(stamped.counters, plain.counters, "{clocks:?}");
                 }
             }
