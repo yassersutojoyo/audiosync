@@ -348,6 +348,12 @@ export global Strings {
         return root.on;
     }
 
+    // The note under the name of a speaker that is on but can't play right
+    // now; empty otherwise.
+    public pure function row-note(state: RowState) -> string {
+        return "";
+    }
+
     // What selecting a row does, read after its value.
     public pure function help(state: RowState) -> string {
         if state == RowState.off {

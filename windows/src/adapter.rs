@@ -1142,6 +1142,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             paired: speaker.paired,
             // An AirPlay speaker's volume is its own slider (S192).
             device_volume: None,
+            waiting: None,
         }
     }
 
@@ -1176,6 +1177,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             device_volume: output
                 .device_volume
                 .and_then(|device_volume| device_volume.hint()),
+            waiting: None,
         }
     }
 
@@ -2329,6 +2331,49 @@ mod tests {
         assert!(messages(&adapter).is_empty(), "its cause is gone");
     }
 
+    fn state_of(adapter: &AudioAdapter<MockBackend>, id: &str) -> SpeakerState {
+        let state = adapter.snapshot();
+        state.speaker_state(state.speaker(id).expect("listed"))
+    }
+
+    #[test]
+    fn a_busy_speaker_row_waits_for_its_device_until_it_plays_or_is_turned_off() {
+        let waiting = SpeakerState::Waiting(ui_model::Waiting::ForDevice);
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter
+            .audio_mut()
+            .fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), waiting);
+        assert_eq!(state_of(&adapter, &key(SPEAKERS)), SpeakerState::Playing);
+        // The row keeps saying so after the notice is dismissed.
+        adapter.dismiss_all_notices();
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), waiting);
+        // Free again, it plays.
+        adapter.audio_mut().fail_output(HEADPHONES, None);
+        poll_until_busy_retried(&mut adapter);
+        assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), SpeakerState::Playing);
+
+        // Busy again after a new start, then turned off: off, and turned on
+        // with its device free it doesn't wait.
+        adapter
+            .audio_mut()
+            .fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        adapter.set_speaker_enabled(&key(HEADPHONES), false);
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), waiting);
+        adapter.set_speaker_enabled(&key(HEADPHONES), false);
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), SpeakerState::Off);
+        adapter.audio_mut().fail_output(HEADPHONES, None);
+        turn_on(&mut adapter, HEADPHONES);
+        assert_eq!(state_of(&adapter, &key(HEADPHONES)), SpeakerState::Playing);
+    }
+
     #[test]
     fn the_only_speaker_being_busy_keeps_streaming_on() {
         let mut adapter = adapter();
@@ -3078,6 +3123,41 @@ mod tests {
         );
         assert!(!adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
         assert!(!adapter.snapshot().running);
+    }
+
+    #[test]
+    fn a_retrying_airplay_speaker_row_says_reconnecting_until_it_plays() {
+        let reconnecting = SpeakerState::Waiting(ui_model::Waiting::Reconnecting);
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
+        // The row keeps saying so after the notice is dismissed.
+        adapter.dismiss_all_notices();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
+        // It plays again.
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+        // Retrying, then turned off: off, and turned on again a new attempt.
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
+        adapter.set_speaker_enabled(&ap(&kitchen), false);
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Off);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+        // Streaming stopped and started again: no stale wait either.
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
+        adapter.set_running(false);
+        adapter.set_running(true);
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
     }
 
     #[test]

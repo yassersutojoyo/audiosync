@@ -1,7 +1,7 @@
 // The data the Rust side passes to the windows (see src/view.rs).
 
 // How a speaker or group row shows: playing only while streaming is on.
-export enum RowState { off, will-play, playing }
+export enum RowState { off, will-play, playing, waiting-for-device, reconnecting }
 
 // The kind of output: the icon in a speaker's toggle, and the line under a
 // connected speaker's name.
