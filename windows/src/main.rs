@@ -439,11 +439,22 @@ mod tests {
             .find("export component NoticeStack")
             .expect("NoticeStack is there")..];
         assert!(
-            stack.contains("for notice in root.notices:")
+            stack.contains("for notice[index] in root.notices:")
                 && stack.contains("if root.notices.length > 1:")
                 && !stack.contains("visible:"),
             "the stack lists every notice it gets and no hidden ones"
         );
+    }
+
+    /// A dismiss button names its notice: after a dismiss the next notice's
+    /// button takes the focus, and Narrator then says which notice it is.
+    #[test]
+    fn a_notice_dismiss_button_names_its_notice() {
+        let widgets = include_str!("../ui/widgets.slint");
+        let stack = &widgets[widgets
+            .find("export component NoticeStack")
+            .expect("NoticeStack is there")..];
+        assert!(stack.contains("label: Strings.dismiss-notice(notice.message);"));
     }
 
     /// Key events go to the focused item: the flyout and the equalizer focus

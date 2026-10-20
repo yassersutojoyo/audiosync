@@ -503,7 +503,7 @@ fn has_private_use(text: &str) -> bool {
 #[test]
 fn accessible_names_have_no_private_use_characters() {
     assert!(has_private_use("Glyphs.dismiss") && has_private_use("\"\\u{E711}\""));
-    assert!(!has_private_use("Strings.dismiss-notice"));
+    assert!(!has_private_use("Strings.dismiss-notice(notice.message)"));
     let mut checked = 0;
     for (file, source) in UI_FILES {
         for line in source.lines().map(str::trim) {
