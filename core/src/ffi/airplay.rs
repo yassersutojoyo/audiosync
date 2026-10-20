@@ -67,7 +67,8 @@ use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::audio::SAMPLE_RATE;
-use audiosync_airplay::discovery::{Device, DeviceKey, ServiceKind};
+use audiosync_airplay::discovery::mdns::MdnsBrowser;
+use audiosync_airplay::discovery::{Browser, Device, DeviceKey, ServiceKind};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
 use audiosync_airplay::input::InputWriter;
 use audiosync_airplay::metadata::TrackInfo;
@@ -360,6 +361,27 @@ pub struct AscAirPlay {
     panics_before: u64,
     /// [`AIRPLAY_EVENT_FAILED`] was handed out.
     failure_reported: bool,
+    /// Opens the browser [`asc_airplay_start_discovery`] starts discovery
+    /// with.
+    open_browser: OpenBrowser,
+}
+
+/// Opens the browser discovery runs on; `None` when it can't start.
+pub(crate) type OpenBrowser = fn() -> Option<Box<dyn Browser + Send>>;
+
+/// Discovery's browser for the app: live multicast DNS (P7).
+///
+/// The core's tests never browse the real network: its multicast sockets on
+/// every interface make the system firewall ask the user to allow the test
+/// program. In them a handle [`asc_airplay_create`] makes fails to start
+/// discovery, as on a host without multicast; a test that needs discovery
+/// running picks its browser with [`create_with`].
+fn live_browser() -> Option<Box<dyn Browser + Send>> {
+    #[cfg(not(test))]
+    let browser = MdnsBrowser::new().ok();
+    #[cfg(test)]
+    let browser = None::<MdnsBrowser>;
+    Some(Box::new(browser?))
 }
 
 /// The ID a receiver goes by, the one the Windows app uses too: its device
@@ -1111,6 +1133,12 @@ pub struct AscAirPlayInput {
 /// Null when the thread can't start.
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_airplay_create() -> *mut AscAirPlay {
+    create_with(live_browser)
+}
+
+/// [`asc_airplay_create`] with the browser [`asc_airplay_start_discovery`]
+/// opens: live multicast DNS for the app, one a test supplies otherwise.
+pub(crate) fn create_with(open_browser: OpenBrowser) -> *mut AscAirPlay {
     note_panic_locations();
     let panics_before = PANICS.load(Ordering::SeqCst);
     let created = panic::catch_unwind(|| {
@@ -1135,6 +1163,7 @@ pub extern "C" fn asc_airplay_create() -> *mut AscAirPlay {
                 death: Arc::new(Death::new()),
                 panics_before,
                 failure_reported: false,
+                open_browser,
             })),
             Err(_) => ptr::null_mut(),
         }
@@ -1189,8 +1218,12 @@ pub unsafe extern "C" fn asc_airplay_start_discovery(airplay: *mut AscAirPlay) -
     // SAFETY: by the caller's contract null or a live handle that no other
     // call uses now.
     unsafe {
-        live(airplay, false, |airplay| {
-            airplay.sender.start_discovery().is_ok()
+        live(airplay, false, |airplay| match (airplay.open_browser)() {
+            Some(browser) => {
+                airplay.sender.start_discovery_with(browser);
+                true
+            }
+            None => false,
         })
     }
 }
@@ -1993,6 +2026,30 @@ mod tests {
         }
     }
 
+    /// A browser that finds nothing and never dies.
+    struct Quiet;
+
+    impl Browser for Quiet {
+        fn poll_event(&mut self) -> Option<BrowseEvent> {
+            None
+        }
+    }
+
+    fn quiet() -> Option<Box<dyn Browser + Send>> {
+        Some(Box::new(Quiet))
+    }
+
+    /// No test browses the real network: a live `mdns-sd` daemon binds
+    /// multicast DNS on every interface, and the system firewall then asks
+    /// the user to allow the test program.
+    fn assert_no_live_discovery() {
+        assert_eq!(
+            audiosync_airplay::discovery::mdns::daemons_started(),
+            0,
+            "a test started a live mDNS daemon"
+        );
+    }
+
     /// A RAOP record at a documentation address.
     fn raop(id: &str, name: &str, txt: &[&str]) -> ServiceRecord {
         ServiceRecord {
@@ -2292,14 +2349,13 @@ mod tests {
     }
 
     #[test]
-    fn live_discovery_starts_or_fails_cleanly_and_destroy_is_prompt() {
-        let mut handle = asc_airplay_create();
+    fn discovery_starts_on_the_handles_browser_and_destroy_is_prompt() {
+        let mut handle = create_with(quiet);
         assert!(!handle.is_null());
-        // A runner without multicast may refuse; either way the handle stays
-        // usable and its destroy returns within the sender's 2 s bound.
         // SAFETY: a live handle, used by this thread only.
-        let _ = unsafe { asc_airplay_start_discovery(handle) };
-        let _ = next(handle, 0);
+        assert!(unsafe { asc_airplay_start_discovery(handle) });
+        // SAFETY: as above.
+        assert!(unsafe { asc_airplay_latency_ms(handle) } > 0.0, "alive");
         let started = Instant::now();
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
@@ -2309,6 +2365,31 @@ mod tests {
             started.elapsed()
         );
         assert!(handle.is_null());
+        assert_no_live_discovery();
+    }
+
+    #[test]
+    fn discovery_that_cannot_start_fails_cleanly() {
+        // In the core's tests the C constructor's browser refuses, as live
+        // multicast DNS does on a host without multicast: the call says so
+        // and the handle stays usable, with a prompt destroy.
+        let mut handle = asc_airplay_create();
+        assert!(!handle.is_null());
+        // SAFETY: a live handle, used by this thread only.
+        assert!(!unsafe { asc_airplay_start_discovery(handle) });
+        // SAFETY: as above.
+        assert!(unsafe { asc_airplay_latency_ms(handle) } > 0.0, "alive");
+        assert!(next(handle, 0).is_empty());
+        let started = Instant::now();
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(handle.is_null());
+        assert_no_live_discovery();
     }
     // ---- Speakers, their events and the audio input ----
 
