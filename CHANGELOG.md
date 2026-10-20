@@ -23,7 +23,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - After the Mac wakes from sleep, AirPlay speakers that were playing stay on and play again by themselves, instead of being switched off with a "couldn't be reached" notice.
 - Ctrl-C in the Terminal you started AudioSync from now quits it cleanly, the same way a logout does, even while an alert is open. It also ends with the usual exit status (130 for Ctrl-C, 143 when it's told to quit), which only matters if a script started it.
 - A PIN or password prompt for an AirPlay speaker now closes by itself when the pairing behind it ends, for example when it times out or fails, instead of staying open with nothing waiting for it.
-- Switching an AirPlay speaker off and straight back on no longer lets a late answer from the first pairing spoil the second one, which could make it refuse the right PIN. In the same rare timing, an Apple TV that turns down its stored pairing is now paired again instead of being switched off.
+- Switching an AirPlay speaker off and straight back on no longer lets a late answer from the first pairing spoil the second one, which could make it refuse the right PIN.
+- An Apple TV that turns down its stored pairing is now paired again instead of being switched off, even when that happens while AudioSync is busy with other speaker updates.
 - If the audio engine can't be set up when streaming starts, the message now says exactly that and suggests quitting and reopening AudioSync, instead of pointing at the audio source.
 
 ### Windows (preview, not released yet)
