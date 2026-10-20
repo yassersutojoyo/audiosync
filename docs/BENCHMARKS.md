@@ -60,6 +60,14 @@ Both take `--minutes N` and `--out DIR` (by default the logs go to a new folder 
 - Memory growth leaves out a warm-up. The first window is logged while the session's buffers are still getting their pages, so a healthy run climbs once in its first minute or two (about 30 MB in a 10-minute soak) and then stays flat. Growth is the last window's footprint minus the level the run settled at: the median of the last three windows of the first 2 minutes (the first half of a run shorter than 4 minutes). A climb that's over by then counts as nothing; a leak keeps climbing and still fails. It's the median rather than the warm-up's highest window, so one short spike in the warm-up can't raise the level and hide a later leak. `result.json` records the warm-up and the level it settled at as `footprint_warmup_s` and `footprint_mb_settled`.
 - The release baseline below predates the warm-up: its memory growth (`footprint_mb_growth` in `Tests/baseline/rust.json`) still runs from the first window to the last. The next full `Tests/bench.sh` run on the Mac measures it again with the warm-up.
 
+## Reading lag drift and drift corrections
+
+In a 60-minute Mac run on 2026-10-20, the built-in speakers' lag error went from about -10 ms to -21 ms while the virtual output stayed put. That's a real clock difference: the speakers' clock runs a little fast against the host clock the producer follows. An output at the capture rate has no clock tracking, so its lag simply follows its clock until it leaves the 35 ms dead band. A clock 3 ppm fast loses about 10.8 ms an hour, which reproduces that run, and gets corrected about once every 3 hours. The clock stamps that trim a converting output don't change this. They never run on an output at the capture rate, and they only run on a converting output whose delay sits near its lead, not at the 2000 ms bench delay.
+
+The drift corrections a run counts come from producer stalls instead. When the producer stalls past the dead band and then catches up, every output steps back once (owed silence) during the stall and skips forward once when the late blocks land: two corrections each, the same on both outputs. A stall shorter than the dead band, or one the output's fade-out outlasts, costs nothing. To confirm, look up the window where `outN_corrections` went up in `windows.jsonl` or `windows.csv`: its `producer_late_ms` should show the stall.
+
+`core/tests/drift_hour.rs` runs this hour fast-forwarded, with a clean run and with one stall, so both readings stay checked.
+
 ## Results
 
 The release baseline is a full `Tests/bench.sh` run (60 minutes per configuration), recorded before the pipe feed was removed; only its `two_local` run is kept.
