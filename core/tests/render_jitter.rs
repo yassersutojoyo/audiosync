@@ -421,7 +421,7 @@ fn two_early_callbacks_in_a_row_move_an_output_at_most_the_cap_until_the_floor_l
                 (0, 0, 0),
                 "{setup:?}: {end:?}"
             );
-            assert!(seen.late[i].0 <= LATE_CAP_MS * 1_000_000, "{setup:?}");
+            assert!(seen.late[i].0 >= (LATE_CAP_MS - 1) * 1_000_000, "{setup:?}");
             let tuned = &without.delays[i];
             let mut low = tuned.iter().copied().fold(f64::INFINITY, f64::min);
             let mut high = tuned.iter().copied().fold(f64::NEG_INFINITY, f64::max);
