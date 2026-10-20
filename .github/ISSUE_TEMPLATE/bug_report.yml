@@ -1,0 +1,76 @@
+name: Something's wrong
+description: Sound out of sync, a speaker that drops out, a crash, or anything else that doesn't work.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. I can't test every speaker, so the device list and the debug log below are what let me find the problem on my side.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Which app
+      options:
+        - Mac
+        - Windows
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: AudioSync version and OS version
+      description: The AudioSync version is in its About panel. For example "0.5.0 on macOS 15.6" or "0.5.0 on Windows 11".
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: If it's about sync, say which speaker plays early or late and roughly by how much, if you can tell.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      placeholder: |
+        1. Turn on the built-in speakers and a Bluetooth speaker
+        2. Play something in Spotify
+        3. After about 10 minutes the Bluetooth speaker starts to stutter
+
+  - type: textarea
+    id: devices
+    attributes:
+      label: Speakers and outputs that were on
+      description: Every output that was switched on, with its make and model and how it's connected (built-in, USB, Bluetooth, HDMI, AirPlay). For AirPlay speakers, the model if you know it (HomePod mini, Apple TV 4K, an AirPlay receiver from another brand).
+    validations:
+      required: true
+
+  - type: textarea
+    id: delays
+    attributes:
+      label: Delays you set
+      description: The delay of each speaker, and the AirPlay delay if you use AirPlay. Write "none" if you left them all at 0.
+      placeholder: |
+        Sony WH-1000XM4: -220 ms
+        AirPlay delay: 0 ms
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Debug log
+      description: |
+        Start AudioSync with its debug log on, make the problem happen, quit, and drag the log file in here. The log starts over at every launch.
+
+        Mac, in Terminal: `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, the log is `/tmp/audiosync-debug.log`.
+        Windows, in PowerShell in the folder with the exe: `$env:AUDIOSYNC_DEBUG=1; .\audiosync.exe`, the log is `%TEMP%\audiosync-debug.log`.
+
+        The log lists your outputs and the AirPlay speakers on your network by name, and speakers are often named after people. Look it over and replace any name you'd rather not post before attaching it.
+    validations:
+      required: true
