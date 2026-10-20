@@ -54,6 +54,51 @@ enum SourceList {
     }
 }
 
+/// Closing a PIN or password prompt that nothing waits for any more
+/// (`NativeAirPlayModel.withdrawPrompt`). The app can close it only while
+/// it is the frontmost modal window, or it would close another alert in its
+/// place. With another modal over it (an alert opened from its run loop),
+/// the close stays pending and is tried again until the prompt is frontmost
+/// or gone, so it never stays open for a PIN that goes nowhere. The model
+/// has already let go of the prompt, so whatever it returns is no answer.
+struct PromptWithdrawal {
+    enum Step: Equatable {
+        /// Close the prompt now.
+        case close
+        /// Another modal is on top: try again shortly.
+        case wait
+        /// Nothing to do.
+        case none
+    }
+
+    /// A withdrawn prompt is still open under another modal window.
+    private(set) var pending = false
+
+    /// The open prompt was taken back. `open`: the prompt still runs;
+    /// `frontmost`: it is the frontmost modal window. `.wait` starts the
+    /// retries; while they run, a second withdrawal starts none.
+    mutating func withdraw(open: Bool, frontmost: Bool) -> Step {
+        guard open, !pending else { return .none }
+        return step(frontmost: frontmost)
+    }
+
+    /// A retry while the close is pending.
+    mutating func retry(open: Bool, frontmost: Bool) -> Step {
+        guard pending else { return .none }
+        guard open else { pending = false; return .none }
+        return step(frontmost: frontmost)
+    }
+
+    /// The prompt returned (closed or answered): a close still pending
+    /// would otherwise hit the next prompt.
+    mutating func ended() { pending = false }
+
+    private mutating func step(frontmost: Bool) -> Step {
+        pending = !frontmost
+        return frontmost ? .close : .wait
+    }
+}
+
 /// How a speaker group shows in the window and the panel.
 enum GroupSummary {
     /// `available`: members present right now. `allOn`: at least one member

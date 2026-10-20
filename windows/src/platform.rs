@@ -243,10 +243,16 @@ pub fn notice_time() -> String {
 }
 
 /// Brings a window that is showing to the front and gives it the keyboard
-/// focus.
+/// focus, restoring it first when it is minimized (Windows doesn't focus a
+/// minimized window).
 pub fn bring_to_front(window: &slint::Window) {
     use slint::winit_030::WinitWindowAccessor;
-    window.with_winit_window(|window| window.focus_window());
+    window.with_winit_window(|window| {
+        if window.is_minimized() == Some(true) {
+            window.set_minimized(false);
+        }
+        window.focus_window();
+    });
 }
 
 /// Whether the taskbar (and the notification area) uses the light theme, so

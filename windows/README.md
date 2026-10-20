@@ -20,11 +20,12 @@ speakers you turned on with their delays and volumes, the master volume,
 auto-connect marks, groups, the equalizer, View > Show Virtual Devices and
 where the main window was. A launch doesn't start streaming by itself, unless
 an auto-connect speaker is there, as on the Mac; a speaker that's missing
-keeps its settings for when it's back. So far it has only been started on one
-Windows 11 PC, with nothing playing, and nobody has listened to it there yet; CI builds and
-tests it. [docs/WINDOWS_UI.md](../docs/WINDOWS_UI.md) maps each
-part of the Mac main window to its Windows counterpart and lists the keyboard
-shortcuts.
+keeps its settings for when it's back. Starting AudioSync again while it runs
+brings up the running copy's window instead of a second copy, as on the Mac.
+So far it has only been started on one Windows 11 PC, with nothing playing,
+and nobody has listened to it there yet; CI builds and tests it.
+[docs/WINDOWS_UI.md](../docs/WINDOWS_UI.md) maps each part of the Mac main
+window to its Windows counterpart and lists the keyboard shortcuts.
 
 ## What you need
 
@@ -85,9 +86,9 @@ negative delay (around −150 to −300 ms), and the others wait for it. Setting
 saved by an older version are converted once, so everything sounds as it did.
 
 Not supported yet: speakers that ask for a password, speakers that need
-pairing with a PIN (such as an Apple TV that asks for one), and speakers that
-only play AirPlay 2. They're listed with a note saying so, and AudioSync never
-connects to them. Windows Firewall may ask whether AudioSync can use the
+another kind of pairing (the Apple TV code above is the one AudioSync does),
+and speakers that only play AirPlay 2. They're listed with a note saying so,
+and AudioSync never connects to them. Windows Firewall may ask whether AudioSync can use the
 network the first time it looks for speakers; it needs private networks for
 AirPlay.
 
@@ -114,6 +115,8 @@ cargo check --target aarch64-pc-windows-msvc
 ## Where things are
 
 - `src/main.rs`: startup
+- `src/single_instance.rs`: one copy per Windows session; a second launch
+  asks the running copy to show its main window, then exits (unit-tested)
 - `src/ui_model.rs`: what the windows show and can ask for (the `Backend`
   trait) and the mock backend the window runs on off Windows, unit-tested
 - `src/adapter.rs`: the `Backend` on Windows. It turns what the window asks
