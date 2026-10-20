@@ -362,9 +362,10 @@ pub struct Controller<D: Driver> {
     /// before its next try ([`BUSY_RETRY_POLLS`]).
     busy: BTreeMap<String, u32>,
     /// The outputs on that don't play while their device is still listed:
-    /// starting them failed as if the device were gone (their stream may
-    /// have just ended). Once the listing drops one, it is lost
-    /// ([`BackendEvent::OutputLost`]), as an output that played is.
+    /// starting them failed as if the device were gone, or didn't answer in
+    /// time (their stream may have just ended). Once the listing drops one,
+    /// it is lost ([`BackendEvent::OutputLost`]), as an output that played
+    /// is.
     unplayable: BTreeSet<String>,
     /// The outputs whose device didn't answer in time at their last start,
     /// each with the polls left before its next try ([`STALL_RETRY_POLLS`]).
@@ -771,8 +772,7 @@ impl<D: Driver> Controller<D> {
                 // Listed a moment ago and gone now, or rebuilt by Windows
                 // (after a wake, or a change of its format): it stays on and
                 // plays once it can (S68), and is lost once the listing drops
-                // it. Told once; the next tries, at every poll, are
-                // quiet.
+                // it. Told once; the next tries, at every poll, are quiet.
                 Err(BackendError::DeviceGone) => {
                     if self.unplayable.insert(endpoint.id.clone()) {
                         self.log.log(|| {
