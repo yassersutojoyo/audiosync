@@ -67,7 +67,7 @@ use audiosync_airplay::discovery::{Device, DeviceKey, ServiceKind};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
 use audiosync_airplay::input::InputWriter;
 use audiosync_airplay::metadata::TrackInfo;
-use audiosync_airplay::pairing::PairingEvent;
+use audiosync_airplay::pairing::{Credentials, PairingEvent};
 use audiosync_airplay::sender::{
     NowPlaying, ReceiverEvent, ReceiverInfo, Sender, SenderConfig, SenderEvent, SpeakerError,
     SpeakerEvent, SpeakerOptions, SpeakerState,
@@ -338,7 +338,8 @@ pub struct AscAirPlay {
     pairing: HashMap<String, DeviceKey>,
     /// The receivers whose cancelled pairing hasn't reported its end yet,
     /// by ID, each with the receiver of the pairing the host started since,
-    /// if any, which starts once that end comes. The sender's pairing
+    /// if any, which starts once that end comes (or, when the cancelled
+    /// pairing paired after all, ends there as paired). The sender's pairing
     /// events name the receiver only, so until then every one for it is the
     /// cancelled pairing's: it never reaches the host or ends the pairing
     /// the host has now, and the two pairings never run at once.
@@ -569,11 +570,7 @@ impl AscAirPlay {
             ),
             PairingEvent::Paired(credentials) => {
                 self.pairing.remove(&id);
-                let detail = match self.store.insert(&id, credentials) {
-                    Ok(()) => String::new(),
-                    Err(error) => format!("the pairings file couldn't be written: {error}"),
-                };
-                self.relist(&id);
+                let detail = self.store_paired(&id, credentials);
                 (AIRPLAY_EVENT_PAIRED, 0, AIRPLAY_REASON_NONE, detail)
             }
             PairingEvent::Failed { error, wrong_pin } => {
@@ -619,26 +616,52 @@ impl AscAirPlay {
     /// password the receiver turned down is forgotten. Nothing reaches the
     /// host, and the pairing the host has now keeps its mark. Its end (it
     /// stopped, failed or paired: a pairing ends once) lets the pairing the
-    /// host started since, if any, start.
+    /// host started since, if any, start; but when it paired, the receiver
+    /// asks for no PIN any more, so that pairing never starts and ends there
+    /// as paired: the host gets [`AIRPLAY_EVENT_PAIRED`], as from a pairing
+    /// that paired. With no pairing started since, its success is stored
+    /// only.
     fn ending_pairing_event(&mut self, id: &str, event: PairingEvent) {
-        match event {
+        let paired = match event {
             PairingEvent::PinRequested => return,
-            PairingEvent::Paired(credentials) => {
-                // When the file can't be written they last for this
-                // handle all the same.
-                let _ = self.store.insert(id, credentials);
-                self.relist(id);
-            }
+            PairingEvent::Paired(credentials) => Some(self.store_paired(id, credentials)),
             PairingEvent::Failed { error, .. } => {
                 if error.kind.user_reason() == UserReason::WrongPassword {
                     self.passwords.remove(id);
                 }
+                None
             }
-            PairingEvent::Stopped => {}
+            PairingEvent::Stopped => None,
+        };
+        let Some(Some(device)) = self.ending.remove(id) else {
+            return;
+        };
+        match paired {
+            Some(detail) => {
+                self.pairing.remove(id);
+                self.queue_event(Pending::Pairing {
+                    kind: AIRPLAY_EVENT_PAIRED,
+                    id: id.to_owned(),
+                    error: 0,
+                    unsupported: AIRPLAY_REASON_NONE,
+                    detail,
+                });
+            }
+            None => self.start_pairing_now(id, device),
         }
-        if let Some(Some(device)) = self.ending.remove(id) {
-            self.start_pairing_now(id, device);
-        }
+    }
+
+    /// Stores the credentials a pairing with the receiver `id` got and
+    /// lists the receiver again. Returns the detail for the host: empty, or
+    /// why the pairings file couldn't be written (they last for this handle
+    /// all the same).
+    fn store_paired(&mut self, id: &str, credentials: Credentials) -> String {
+        let detail = match self.store.insert(id, credentials) {
+            Ok(()) => String::new(),
+            Err(error) => format!("the pairings file couldn't be written: {error}"),
+        };
+        self.relist(id);
+        detail
     }
 
     /// Has the sender start a pairing with `device`, the receiver `id`,
@@ -1448,7 +1471,9 @@ pub unsafe extern "C" fn asc_airplay_open_pairings(
 /// pairing uses the password handed over for the receiver, if any. A
 /// pairing already running for it is replaced: that one is cancelled. A
 /// new pairing starts only once the one cancelled before it has ended, and
-/// nothing that one reports reaches the host or ends the new one; playing
+/// nothing that one reports reaches the host or ends the new one; when that
+/// one ended paired after all, the new one never starts and
+/// [`AIRPLAY_EVENT_PAIRED`] follows instead, with no PIN asked. Playing
 /// speakers are not touched. False, starting nothing, when the handle or
 /// `id` is null or `id` isn't a listed receiver.
 ///
