@@ -984,6 +984,74 @@ mod tests {
     }
 
     #[test]
+    fn a_file_that_cant_be_read_at_launch_is_never_saved_over() {
+        let folder = test_dir("settings-unreadable");
+        let path = folder.join(FILE_NAME);
+        let kept = folder.join("settings.ignored.json");
+        // A folder where the file should be: reading it fails, but not with
+        // "not found", as when another program holds the file at launch.
+        fs::create_dir(&path).expect("the folder is made");
+        let file = SettingsFile::at(path.clone());
+        let (loaded, found) = file.load();
+        assert_eq!(loaded, Settings::default());
+        assert!(matches!(found, Loaded::Ignored(_)), "{found}");
+        // Still unreadable: the save is refused, nothing replaced.
+        assert!(file.save(&Settings::default()).is_err());
+        assert!(path.is_dir());
+
+        // Readable again, holding the user's settings: they are kept aside
+        // before the first save replaces the file.
+        fs::remove_dir(&path).expect("the folder is removed");
+        let good = sample().to_json();
+        fs::write(&path, &good).expect("written");
+        file.save(&Settings::default()).expect("saved");
+        assert_eq!(fs::read_to_string(&kept).expect("kept"), good);
+        assert_eq!(file.load().0, Settings::default());
+        // Once replaced, the next save leaves the copy alone.
+        file.save(&sample()).expect("saved again");
+        assert_eq!(fs::read_to_string(&kept).expect("kept"), good);
+    }
+
+    #[test]
+    fn a_damaged_file_is_kept_aside_before_the_first_save_over_it() {
+        let folder = test_dir("settings-damaged-kept");
+        let path = folder.join(FILE_NAME);
+        let kept = folder.join("settings.ignored.json");
+        fs::write(&path, b"{\"version\": 2, \"master_volu").expect("written");
+        let file = SettingsFile::at(path.clone());
+        assert!(matches!(file.load().1, Loaded::Ignored(_)));
+        file.save(&sample()).expect("saved");
+        assert_eq!(
+            fs::read(&kept).expect("kept"),
+            b"{\"version\": 2, \"master_volu"
+        );
+        assert_eq!(file.load().0, sample());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_another_program_holds_for_a_moment_at_launch_is_read_at_the_second_try() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let path = test_dir("settings-held").join(FILE_NAME);
+        fs::write(&path, sample().to_json()).expect("written");
+        // Shared with no one, as an antivirus scan may hold it.
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .expect("held");
+        let loader = {
+            let path = path.clone();
+            std::thread::spawn(move || SettingsFile::at(path).load())
+        };
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        drop(held);
+        let (loaded, found) = loader.join().expect("loaded");
+        assert!(matches!(found, Loaded::Read { .. }), "{found}");
+        assert_eq!(loaded, sample());
+    }
+
+    #[test]
     fn a_file_this_build_reads_is_not_kept_aside() {
         let folder = test_dir("settings-not-newer");
         let path = folder.join(FILE_NAME);
