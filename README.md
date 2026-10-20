@@ -31,17 +31,48 @@
 
 I built this because I wanted my Mac's audio on every speaker in the house at once. The catch is that a HomePod always plays a little late (AirPlay buffers about two seconds), so a HomePod and a desk speaker playing the same song sound like an echo. AudioSync captures the audio once, streams it to your AirPlay speakers, and plays a delayed copy on each local output, every one with its own offset, until the whole room sounds like one speaker.
 
-It's a small Mac app written in Swift, with a main window and a menu bar panel, free and MIT-licensed. It's an early alpha, so expect rough edges.
+It's a small Mac app written in Swift, with a main window and a menu bar panel, free and MIT-licensed. It's an early alpha, so expect rough edges. A Windows 11 version is on the way too ([more below](#coming-to-windows)).
 
-There's a Windows 11 version on the way too, written in Rust. It's built to play all system audio, or one app, to the PC's own speakers, headphones and Bluetooth outputs, each with its own delay, and to AirPlay speakers that still take AirPlay 1, through AudioSync's own AirPlay sender. An Apple TV that asks for a code gets a PIN prompt. Receivers that only do AirPlay 2, or that ask for a password, don't work from Windows yet, and I haven't tried the AirPlay part on a real speaker or Apple TV. It isn't out yet, but if you want to try a preview build, [windows/README.md](windows/README.md#trying-the-preview-exe) says where to get it and what to expect the first time (it needs Windows 11, isn't code-signed yet, and wants a Private network for AirPlay).
+## What's in the download, and what's next
+
+The download today is 0.4.1. It streams to AirPlay through a bundled AirPlay engine (OwnTone) that runs next to the app. Since then I've rebuilt the insides, and the next version brings that work out of `main`:
+
+- AudioSync's own AirPlay sender, built into the app. The bundled engine is gone, so the app is much smaller and runs nothing next to itself.
+- A new audio engine written in Rust, shared with the Windows version.
+- Delays that work with local speakers alone, with the Mac's built-in speakers as the reference. No AirPlay speaker needed to line up a Bluetooth speaker with your Mac.
+- A hint on any speaker you switched on that sits at 25% or less, or muted, in macOS, with a one-click fix.
+- Short fades when audio starts and stops, so speakers don't click.
+- The track that's playing (title, artist, album, artwork) on AirPlay speakers with a screen, like a TV.
+
+The rest of this README describes the app as it is on `main`, which is what the next version will be. [`CHANGELOG.md`](CHANGELOG.md) has the full list under Unreleased.
 
 ## Multi-room audio on macOS
 
 The source can be all system audio, a single app (with its helper processes, like a browser's audio service), or an input device such as a microphone, line-in or audio interface (first two channels). It plays to one or more HomePods, Apple TVs and other AirPlay receivers, plus anything macOS can play to: built-in speakers, the headphone jack, HDMI/DisplayPort, USB DACs and Bluetooth.
 
-Each local speaker gets its own delay relative to the Mac's built-in speakers (−2 to +20 s), there's one AirPlay delay for lining the Mac up with the AirPlay speakers, and AudioSync's AirPlay sender keeps the AirPlay speakers in step with each other. On top of that there's per-speaker and master volume, a 10-band equalizer with a preamp and presets, Now Playing for Spotify and Music (also shown on AirPlay TVs and other speakers with a screen), speaker groups, auto-connect, and launch at login. AirPlay goes out through AudioSync's own sender, built into the app, so there's nothing else to install or configure.
+Each local speaker gets its own delay relative to the Mac's built-in speakers (−2 to +20 s), and it applies whether or not an AirPlay speaker is on. There's one AirPlay delay for lining the Mac up with the AirPlay speakers, and the AirPlay sender keeps the AirPlay speakers in step with each other. On top of that you get per-speaker and master volume, a 10-band equalizer with a preamp and presets, Now Playing for Spotify and Music (also shown on AirPlay TVs and other speakers with a screen), speaker groups, auto-connect, and launch at login. AirPlay goes out through AudioSync's own sender, built into the app, so there's nothing else to install or configure. An Apple TV that asks for a PIN pairs once, and an older AirPlay speaker with a password asks for it when you turn it on.
 
-macOS also keeps its own volume for every output, and only the default one is in the Sound menu. If a speaker you switched on sits very low or muted there, its row tells you and offers a one-click fix.
+macOS also keeps its own volume for every output, and only the default one is in the Sound menu. If a speaker you switched on sits at 25% or less there, or is muted, its row tells you, and one click sets it to 75% or unmutes it.
+
+## Coming to Windows
+
+There's a Windows 11 version too, written in Rust with a [Slint](https://slint.dev) interface, for x64 and ARM64 PCs. It uses the same Rust audio engine and the same AirPlay sender as the Mac app, and by now it does most of what the Mac app does:
+
+- It captures everything the PC plays (except AudioSync itself), or just one app.
+- It plays to several of the PC's outputs at once, in sync: speakers, headphones, USB, HDMI and Bluetooth, each with its own delay relative to the built-in output, and its own volume under a master volume.
+- It plays to AirPlay speakers through AudioSync's own sender, and the PC's outputs wait for them so everything stays in step. An Apple TV that asks for a code gets a PIN prompt and remembers the pairing.
+- Groups, auto-connect, and the same ten-band equalizer with a preamp and presets.
+- The same hint as on the Mac when a speaker you turned on sits very low or muted in Windows, with the same one-click fix.
+- A tray icon with a flyout, like the Mac's menu bar panel. Closing the window keeps it running there.
+- Keyboard shortcuts and Narrator support throughout ([`docs/WINDOWS_UI.md`](docs/WINDOWS_UI.md) lists them).
+- Notices in the window instead of popups, for things like a speaker that went away, an output another app holds for itself, or no working sound output.
+- One copy at a time: opening it again brings the running window forward.
+- Your settings are kept between launches, and a settings or pairing file it can't read is set aside as a copy instead of being overwritten.
+- A debug log you can switch on when something acts up.
+
+It isn't released yet, so there's no download on the Releases page today. It can go out with an upcoming release as an unsigned preview, once I've tried that exact build on a real Windows 11 PC. CI builds and tests it on every push, and if you're signed in to GitHub you can grab a build from there; [windows/README.md](windows/README.md#trying-the-preview-exe) says where and what to expect the first time (it needs Windows 11, isn't code-signed, and wants a Private network for AirPlay).
+
+To be upfront about the gaps: from Windows, AirPlay only plays to receivers that take AirPlay 1. Receivers that only do AirPlay 2, or that ask for a password, are listed with a note and stay off. I haven't tried the AirPlay part with a real speaker or Apple TV yet, and the local playback hasn't had a proper listening test on a real PC either.
 
 ## Coming from Airfoil?
 
@@ -51,13 +82,13 @@ To be clear: Airfoil is a product of Rogue Amoeba. AudioSync isn't affiliated wi
 
 ## Install
 
-Download `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest) and drag the app to Applications. It runs on macOS 15 (Sequoia) or later, AirPlay included.
+Download `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest) and drag the app to Applications. It runs on macOS 15 (Sequoia) or later, AirPlay included. That's 0.4.1 for now, with the bundled AirPlay engine; the changes above come with the next version, or you can build `main` yourself.
 
 I don't have a paid Apple developer account, so releases aren't notarized and macOS blocks the first launch. Open AudioSync once, dismiss the warning, then go to System Settings → Privacy & Security and click Open Anyway next to the message about AudioSync. (Or run `xattr -dr com.apple.quarantine /Applications/AudioSync.app`.) Each release lists SHA-256 checksums for its files.
 
 Auto-update is off for now. To update, quit AudioSync and replace the app with the one from [Releases](https://github.com/yassersutojoyo/audiosync/releases). [`CHANGELOG.md`](CHANGELOG.md) has what changed.
 
-You can also build it yourself. You need the Xcode 16 command line tools and a Rust toolchain ([rustup](https://rustup.rs)), then:
+You can also build it yourself, on macOS 15 or later. You need the Xcode 16 command line tools and a Rust toolchain ([rustup](https://rustup.rs), or Homebrew's rustup), then:
 
 ```bash
 git clone https://github.com/yassersutojoyo/audiosync
