@@ -643,3 +643,42 @@ struct NativeNowPlaying: Equatable {
         artwork = jpeg
     }
 }
+
+/// Where the native sender keeps the credentials of paired Apple TVs:
+/// `airplay-pairings.dat` in AudioSync's folder in Application Support,
+/// mode 0600 and written by the core, not the Keychain (which would ask
+/// again after every locally signed rebuild). The file is plaintext by
+/// design, so its folder stays out of Time Machine backups, which can be
+/// unencrypted. The folder rather than the file: the core writes every
+/// change to a new file renamed over the old one, which would drop a mark
+/// set on the file itself, while the folder's mark covers every file in it.
+enum NativeAirPlayPairings {
+    static let fileName = "airplay-pairings.dat"
+
+    /// AudioSync's folder in `applicationSupport`.
+    static func folder(in applicationSupport: URL) -> URL {
+        applicationSupport.appendingPathComponent("AudioSync", isDirectory: true)
+    }
+
+    /// The pairing store's file, inside `folder(in:)`.
+    static func file(in applicationSupport: URL) -> URL {
+        folder(in: applicationSupport).appendingPathComponent(fileName)
+    }
+
+    /// What the folder is marked with: excluded from backups.
+    static var folderValues: URLResourceValues {
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        return values
+    }
+
+    /// Creates the folder when missing, for its owner only as the core
+    /// would, and marks it with `folderValues`. Off the main thread is fine;
+    /// never on an audio thread.
+    static func prepareFolder(in applicationSupport: URL) throws {
+        var url = Self.folder(in: applicationSupport)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        try url.setResourceValues(folderValues)
+    }
+}

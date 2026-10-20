@@ -6,8 +6,9 @@
 //! readable and writable by the current user only (mode 0600). The macOS
 //! app keeps it at `~/Library/Application Support/AudioSync/airplay-pairings.dat`
 //! and not in the Keychain, which would ask for access again after every
-//! ad-hoc or locally signed rebuild. Passwords are never stored here: the
-//! host hands them over for one run only.
+//! ad-hoc or locally signed rebuild; it keeps that folder out of Time
+//! Machine backups, since the file is plaintext. Passwords are never stored
+//! here: the host hands them over for one run only.
 //!
 //! The file holds a magic line, a format version byte, then per receiver its
 //! ID and the credential blob the sender defines
