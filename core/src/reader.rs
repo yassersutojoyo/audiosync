@@ -183,6 +183,13 @@ fn take(flag: &AtomicBool) -> bool {
     flag.load(Ordering::Relaxed) && flag.swap(false, Ordering::Acquire)
 }
 
+/// De for a read of `n` frames at delay `delay` (S44 step 1):
+/// `min(max(D, N, Lr), C - M - N)`, never negative.
+fn effective_delay(delay: i64, n: i64, lead: i64, capacity: usize, margin: usize) -> i64 {
+    let ceiling = capacity as i64 - margin as i64 - n;
+    delay.max(n).max(lead).min(ceiling).max(0)
+}
+
 /// The control thread's handle to a [`Reader`]: target delay, tolerance,
 /// resync and prime-reset requests, the published lag and the counters.
 /// Cheap to clone; every method is a lock-free atomic operation (S128).
@@ -336,6 +343,42 @@ impl Reader {
         self.lead
     }
 
+    /// The frames the next read can go on with (S206): `W - P`, with W
+    /// loaded now, when a read of `frames` frames made now would go on from
+    /// where the last one ended, with drift corrections held (`held`, S188)
+    /// or not. `None` when it would anchor at `W - De` instead: the reader
+    /// is not anchored, a prime reset, a resync or an overrun waits, or, not
+    /// held, its error is outside the dead band. 0 when it would be dry.
+    /// Changes nothing; called by the renderer that owns the reader, on its
+    /// thread, never allocating, locking or blocking.
+    pub fn readable_frames(&self, frames: usize, held: bool) -> Option<i64> {
+        let waits =
+            self.shared.prime.load(Ordering::Relaxed) || self.shared.resync.load(Ordering::Relaxed);
+        if !self.anchored || self.reanchor || waits {
+            return None;
+        }
+        let w = self.ring.frames_written() as i64;
+        let p = self.next;
+        if p >= w {
+            return Some(0);
+        }
+        let oldest = self.ring.oldest_readable(w as u64) as i64;
+        if oldest > 0 && p < oldest {
+            return None;
+        }
+        if !held {
+            let n = frames as i64;
+            let (capacity, margin) = (self.ring.capacity(), self.ring.margin());
+            let de = effective_delay(self.applied_delay, n, self.lead, capacity, margin);
+            let t = self.shared.tolerance.load(Ordering::Relaxed).max(0);
+            let e = (w - p) - de;
+            if e > t || e < -t {
+                return None;
+            }
+        }
+        Some(w - p)
+    }
+
     /// A control handle for this reader.
     pub fn control(&self) -> ReaderControl {
         ReaderControl {
@@ -431,10 +474,8 @@ impl Reader {
         }
         let frames = frames.min(dst.len() / 2);
         let n = frames as i64;
-        let capacity = self.ring.capacity() as i64;
-        let margin = self.ring.margin() as i64;
-        let lead = self.lead;
-        let effective = |delay: i64| delay.max(n).max(lead).min(capacity - margin - n).max(0);
+        let (capacity, margin, lead) = (self.ring.capacity(), self.ring.margin(), self.lead);
+        let effective = |delay: i64| effective_delay(delay, n, lead, capacity, margin);
 
         // Step 1.
         let w = self.ring.frames_written() as i64;
@@ -986,6 +1027,46 @@ mod tests {
         assert_eq!(out.reader.lead_frames(), 0);
         cap.write(N);
         assert_eq!(out.read(N, 0).report.delay, N as i64);
+    }
+
+    // covers: S206
+    #[test]
+    fn a_reader_tells_what_its_next_read_can_go_on_with() {
+        let ring = ring(1 << 18);
+        let mut cap = Capture::new(&ring);
+        cap.write(8 * N);
+        let mut out = Output::new(&ring);
+        let control = out.reader.control();
+        let n = N as i64;
+        // Not anchored: the next read primes.
+        assert_eq!(out.reader.readable_frames(N, false), None);
+        control.set_delay_frames(1200);
+        assert_eq!(out.read_target(N).report.correction, Correction::Prime);
+        assert_eq!(out.reader.readable_frames(N, false), Some(1200 - n));
+        cap.write(N);
+        assert_eq!(out.reader.readable_frames(N, true), Some(1200));
+        // A resync waits: the next read anchors, held or not.
+        control.request_resync();
+        assert_eq!(out.reader.readable_frames(N, true), None);
+        assert_eq!(out.read_target(N).report.correction, Correction::Resync);
+        assert_eq!(out.reader.readable_frames(N, false), Some(1200 - n));
+        // More than T behind: an unheld read skips forward, a held one goes
+        // on (S188).
+        cap.write(5 * N);
+        assert_eq!(out.reader.readable_frames(N, false), None);
+        assert_eq!(out.reader.readable_frames(N, true), Some(1200 - n + 5 * n));
+        assert_eq!(
+            out.read_target(N).report.correction,
+            Correction::SkipForward
+        );
+        // A reader at W would be dry.
+        out.read_target(N);
+        assert_eq!(out.read_target(N).report.starved, N - 176);
+        assert_eq!(out.reader.readable_frames(N, false), Some(0));
+        // A prime reset waits: the next read anchors again.
+        control.reset_prime();
+        cap.write(N);
+        assert_eq!(out.reader.readable_frames(N, true), None);
     }
 
     // covers: S44, S56, S59

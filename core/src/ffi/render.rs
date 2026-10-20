@@ -687,6 +687,31 @@ pub unsafe extern "C" fn asc_renderer_counters(renderer: *const AscRenderer) -> 
     })
 }
 
+/// Any thread: the capture frames the renderer slowed its converter by to
+/// keep its reader off the newest frame (S206), in all; 0 for a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_slowed_frames(renderer: *const AscRenderer) -> u64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::slowed_frames)
+}
+
+/// Any thread: the device frames the converter couldn't produce and that
+/// were played as silence, in all; 0 for a null handle and, unless the read
+/// sizing is wrong, always.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_shortfall_frames(renderer: *const AscRenderer) -> u64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::shortfall_frames)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1068,6 +1093,8 @@ mod tests {
                 asc_renderer_counters(c),
                 AscReaderCounters::from(control.counters())
             );
+            assert_eq!(asc_renderer_slowed_frames(c), rust.slowed_frames());
+            assert_eq!(asc_renderer_shortfall_frames(c), rust.shortfall_frames());
             assert!(asc_renderer_fade_rendered(c));
             assert!(
                 c_out.iter().all(|&s| s == 0.0),
@@ -1173,6 +1200,8 @@ mod tests {
             assert_eq!(asc_renderer_fade_frames(null), 0);
             assert_eq!(asc_renderer_lag_frames(null), 0);
             assert_eq!(asc_renderer_counters(null), AscReaderCounters::default());
+            assert_eq!(asc_renderer_slowed_frames(null), 0);
+            assert_eq!(asc_renderer_shortfall_frames(null), 0);
             asc_renderer_destroy(null);
             let renderer = asc_renderer_create(ring, 48_000, 48_000, 2, 1.0);
             asc_renderer_render(renderer, ptr::null_mut(), 4);

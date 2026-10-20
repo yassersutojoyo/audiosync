@@ -17,7 +17,11 @@
 //! [`LEAD_BLOCK_CAP_MS`]), since a converting output's callbacks never line
 //! up with the capture's blocks. Only the first read of a callback may
 //! correct drift; its later reads are held and what they report as due is
-//! ignored.
+//! ignored. A converting renderer whose reader holds fewer frames than a
+//! callback needs (its device clock runs fast and the lead's slack is used
+//! up) slows its converter over that callback by the shortage, up to
+//! 1 / [`SLOW_DOWN_SHARE`] of the callback's reads, instead of letting the
+//! reader run dry.
 //!
 //! The fade (S184 to S188):
 //!
@@ -83,6 +87,12 @@ pub const CALLBACK_WINDOW: usize = 8;
 /// gap writes, and well inside the readers' 35 ms dead band, so silence
 /// written at once after a stall never raises the lead by more than that.
 pub const LEAD_BLOCK_CAP_MS: u32 = 25;
+
+/// A converting renderer slows its converter by at most this share of a
+/// callback's reads, a sixteenth (S206): a reader that runs shorter than
+/// that over one callback isn't kept off W by a fast clock but by a
+/// stopped writer, and runs dry as S53 says.
+pub const SLOW_DOWN_SHARE: usize = 16;
 
 /// The most capture-rate frames the resampler can ask for to produce
 /// `device_frames` frames at `device_rate`, whatever state it is in: the
@@ -153,6 +163,11 @@ struct Shared {
     faded: AtomicBool,
     /// Where the fade was at the end of the latest callback ([`state_code`]).
     state: AtomicU8,
+    /// Device frames the resampler could not produce and that were played
+    /// as silence. Stays 0 unless [`reader_frames_bound`] is wrong.
+    shortfall_frames: AtomicU64,
+    /// Capture frames the converter was slowed down by in all (S206).
+    slowed_frames: AtomicU64,
 }
 
 /// A fade state as the renderer publishes it.
@@ -171,8 +186,9 @@ fn take(flag: &AtomicBool) -> bool {
 }
 
 /// The control thread's handle to a [`Renderer`]: its delay (S187), its
-/// fade-out before a stop (S185), whether that fade-out has played, and the
-/// reader's lag and counters. Cheap to clone; every method is a lock-free
+/// fade-out before a stop (S185), whether that fade-out has played, the
+/// reader's lag and counters, and the frames the renderer slowed its
+/// converter by or couldn't convert. Cheap to clone; every method is a lock-free
 /// atomic operation (S190).
 #[derive(Debug, Clone)]
 pub struct RendererControl {
@@ -194,6 +210,8 @@ impl RendererControl {
                 fade_rendered: AtomicBool::new(false),
                 faded: AtomicBool::new(false),
                 state: AtomicU8::new(state_code(FadeState::Closed)),
+                shortfall_frames: AtomicU64::new(0),
+                slowed_frames: AtomicU64::new(0),
             }),
             reader,
         }
@@ -280,6 +298,16 @@ impl RendererControl {
     pub fn counters(&self) -> ReaderCounters {
         self.reader.counters()
     }
+
+    /// [`Renderer::slowed_frames`], from any thread (S206).
+    pub fn slowed_frames(&self) -> u64 {
+        self.shared.slowed_frames.load(Ordering::Relaxed)
+    }
+
+    /// [`Renderer::shortfall_frames`], from any thread.
+    pub fn shortfall_frames(&self) -> u64 {
+        self.shared.shortfall_frames.load(Ordering::Relaxed)
+    }
 }
 
 /// The stop's fade-out, as the renderer sees it.
@@ -342,9 +370,6 @@ pub struct Renderer {
     correction_due: bool,
     /// Device frames rendered after the stop's fade's last frame.
     frames_after_fade: Option<u64>,
-    /// Device frames the resampler could not produce and that were played
-    /// as silence. Stays 0 unless [`reader_frames_bound`] is wrong.
-    shortfall_frames: u64,
 }
 
 impl fmt::Debug for Renderer {
@@ -401,7 +426,6 @@ impl Renderer {
             awaiting_resync: false,
             correction_due: false,
             frames_after_fade: None,
-            shortfall_frames: 0,
         })
     }
 
@@ -439,7 +463,14 @@ impl Renderer {
 
     /// Device frames played as silence because the resampler lacked input.
     pub fn shortfall_frames(&self) -> u64 {
-        self.shortfall_frames
+        self.shared.shortfall_frames.load(Ordering::Relaxed)
+    }
+
+    /// Capture frames the converter was slowed down by to keep the reader
+    /// off W (S206), in all; each one plays the output one capture frame
+    /// later. Stays 0 without conversion.
+    pub fn slowed_frames(&self) -> u64 {
+        self.shared.slowed_frames.load(Ordering::Relaxed)
     }
 
     /// Sets the device's period, in device frames: the callback it asks for
@@ -475,6 +506,7 @@ impl Renderer {
         let frames = out.len() / channels;
         self.update_lead(frames);
         self.take_requests();
+        self.keep_reader_off_w(frames);
         let ramp = self.stage.begin(self.gain.get(), frames);
         let read_capacity = self.stereo.len() / 2;
         let mut done = 0;
@@ -496,7 +528,9 @@ impl Renderer {
                 .process(&self.stereo[..need * 2], &mut self.converted[..n * 2]);
             if produced < n {
                 self.converted[produced * 2..n * 2].fill(0.0);
-                self.shortfall_frames += (n - produced) as u64;
+                self.shared
+                    .shortfall_frames
+                    .fetch_add((n - produced) as u64, Ordering::Relaxed);
             }
             let piece = &mut out[done * channels..(done + n) * channels];
             map_to_device(&self.converted[..n * 2], n, 1.0, piece, channels);
@@ -536,6 +570,35 @@ impl Renderer {
         };
         self.reader
             .set_lead_frames(i64::try_from(lead).unwrap_or(i64::MAX));
+    }
+
+    /// Slows the converter over a callback of `frames` device frames when
+    /// the reader would go on from where it is but holds fewer frames than
+    /// the callback needs, by that shortage, if it is at most
+    /// 1 / [`SLOW_DOWN_SHARE`] of the need (S206): a device clock that runs
+    /// fast never runs the reader dry. Called after the control's requests
+    /// are taken, so the first read's hold is known.
+    fn keep_reader_off_w(&mut self, frames: usize) {
+        if self.resampler.is_passthrough() || self.resampler.is_slowing() || frames < 2 {
+            return;
+        }
+        let first = self
+            .resampler
+            .input_frames_for(frames.min(RENDER_CHUNK))
+            .min(self.stereo.len() / 2);
+        let Some(held) = self.reader.readable_frames(first, !self.fade.is_closed()) else {
+            return;
+        };
+        let need = self.resampler.input_frames_for(frames);
+        let short = need.saturating_sub(usize::try_from(held).unwrap_or(0));
+        if short == 0 || short > need / SLOW_DOWN_SHARE {
+            return;
+        }
+        if self.resampler.slow_down(short, frames - 1) {
+            self.shared
+                .slowed_frames
+                .fetch_add(short as u64, Ordering::Relaxed);
+        }
     }
 
     /// Takes the control's requests at the start of a callback (S190).

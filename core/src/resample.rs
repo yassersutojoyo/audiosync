@@ -13,6 +13,10 @@
 //! `ceil(fed × out / in)` output frames have been produced (S85 asks for
 //! ±2). The content is delayed by the filter's half-width, a fixed
 //! [`Resampler::latency_frames`] input frames, about half a millisecond.
+//! A renderer whose reader runs short can slow the converter down by whole
+//! input frames over a run of output frames ([`Resampler::slow_down`],
+//! S206); each such frame delays the content by one more input frame, and
+//! the counts keep pace from there.
 //!
 //! All memory is allocated by [`Resampler::new`], sized for every supported
 //! input rate; [`Resampler::process`] never allocates, locks or blocks
@@ -86,6 +90,15 @@ pub struct Resampler {
     pos: usize,
     /// The center's fractional part, in units of `1 / den`.
     frac: u64,
+    /// A slow-down under way (S206): over `slow_steps` steps the center
+    /// falls `slow_units` units of `1 / den` behind its course, evenly, and
+    /// `slow_done` of those steps are made. After k of them `pos` and `frac`
+    /// stand [`Resampler::slowed_by`]`(k)` whole units behind the course and
+    /// the center lies the fraction [`Resampler::slow_fraction`] of a unit
+    /// after them.
+    slow_units: u64,
+    slow_steps: u64,
+    slow_done: u64,
     /// Times a non-finite input sample reset the history (S125).
     resets: u64,
     #[cfg(test)]
@@ -187,6 +200,9 @@ impl Resampler {
             held: 0,
             pos: 0,
             frac: 0,
+            slow_units: 0,
+            slow_steps: 0,
+            slow_done: 0,
             resets: 0,
             #[cfg(test)]
             force_table: false,
@@ -237,6 +253,9 @@ impl Resampler {
         self.history[..self.held * 2].fill(0.0);
         self.pos = self.half - 1;
         self.frac = 0;
+        self.slow_units = 0;
+        self.slow_steps = 0;
+        self.slow_done = 0;
     }
 
     /// The input rate in Hz.
@@ -277,10 +296,66 @@ impl Resampler {
             return output_frames;
         }
         let steps = (output_frames - 1) as u128;
-        let advance = (u128::from(self.frac) + steps * u128::from(self.num)) / u128::from(self.den);
+        // A slow-down under way takes its share of these steps off.
+        let done = u128::from(self.slow_done);
+        let last_step = (done + steps).min(u128::from(self.slow_steps));
+        let slowed = self.slowed_by(last_step) - self.slowed_by(done.min(last_step));
+        let advance =
+            (u128::from(self.frac) + steps * u128::from(self.num) - slowed) / u128::from(self.den);
         let last_pos = self.pos as u128 + advance;
         let needed = (last_pos + self.half as u128 + 1).saturating_sub(self.held as u128);
         usize::try_from(needed).unwrap_or(usize::MAX)
+    }
+
+    /// Makes the converter fall `frames` input frames behind its course over
+    /// its next `steps` steps (those between its next `steps + 1` output
+    /// frames), evenly, so those output frames need `frames` fewer input
+    /// frames, and every later one is `frames` input frames later (S206).
+    /// The frames in between are interpolated at their exact positions.
+    /// Returns whether it took the request: rates that are equal, a
+    /// slow-down still under way, no steps, or as many frames as the steps
+    /// cover or more (a step would have to stand still or go back) change
+    /// nothing.
+    pub fn slow_down(&mut self, frames: usize, steps: usize) -> bool {
+        let units = (frames as u128) * u128::from(self.den);
+        let (Ok(units), Ok(steps)) = (u64::try_from(units), u64::try_from(steps)) else {
+            return false;
+        };
+        let covered = u128::from(steps) * u128::from(self.num);
+        if self.passthrough || self.is_slowing() || steps == 0 || u128::from(units) >= covered {
+            return false;
+        }
+        self.slow_units = units;
+        self.slow_steps = steps;
+        self.slow_done = 0;
+        true
+    }
+
+    /// Whether a slow-down is under way (S206).
+    pub fn is_slowing(&self) -> bool {
+        self.slow_done < self.slow_steps
+    }
+
+    /// The whole units of `1 / den` the slow-down under way has taken off
+    /// the course after `step` of its steps: `ceil(units × step / steps)`.
+    fn slowed_by(&self, step: u128) -> u128 {
+        if self.slow_steps == 0 {
+            return 0;
+        }
+        (u128::from(self.slow_units) * step).div_ceil(u128::from(self.slow_steps))
+    }
+
+    /// How far the center lies after `pos` and `frac` during a slow-down, as
+    /// a fraction of a unit of `1 / den`: the part of the slow-down's course
+    /// that [`Resampler::slowed_by`] rounded up. 0 outside a slow-down.
+    fn slow_fraction(&self) -> f64 {
+        if !self.is_slowing() {
+            return 0.0;
+        }
+        let done = u128::from(self.slow_done);
+        let exact = u128::from(self.slow_units) * done;
+        let ahead = self.slowed_by(done) * u128::from(self.slow_steps) - exact;
+        ahead as f64 / self.slow_steps as f64
     }
 
     /// Converts interleaved stereo `input` into interleaved stereo `output`.
@@ -328,11 +403,14 @@ impl Resampler {
         let use_bank = self.use_bank && !self.force_table;
         #[cfg(not(test))]
         let use_bank = self.use_bank;
-        let weights: &[f32] = if use_bank {
+        // During a slow-down the center may lie between two of the bank's
+        // phases; its weights then come from the kernel table.
+        let between = self.slow_fraction();
+        let weights: &[f32] = if use_bank && between == 0.0 {
             let start = self.frac as usize * taps;
             &self.bank[start..start + taps]
         } else {
-            let frac = self.frac as f64 / self.den as f64;
+            let frac = (self.frac as f64 + between) / self.den as f64;
             fill_weights(
                 &self.table,
                 self.scale,
@@ -347,11 +425,22 @@ impl Resampler {
             left += w * f[0];
             right += w * f[1];
         }
-        self.pos += self.step_whole;
-        self.frac += self.step_frac;
-        if self.frac >= self.den {
-            self.frac -= self.den;
-            self.pos += 1;
+        if self.is_slowing() {
+            // This step's share of the slow-down; `slow_down` keeps it at
+            // most a whole step, so the center never goes back.
+            let done = u128::from(self.slow_done);
+            let less = (self.slowed_by(done + 1) - self.slowed_by(done)) as u64;
+            self.slow_done += 1;
+            let units = self.frac + self.step_whole as u64 * self.den + self.step_frac - less;
+            self.pos += (units / self.den) as usize;
+            self.frac = units % self.den;
+        } else {
+            self.pos += self.step_whole;
+            self.frac += self.step_frac;
+            if self.frac >= self.den {
+                self.frac -= self.den;
+                self.pos += 1;
+            }
         }
         // Finite input cannot produce a non-finite sum unless it is huge;
         // keep the output finite regardless (S125).
@@ -747,6 +836,121 @@ mod tests {
             r.input_frames_for(large) as u128,
             (large as u128 - 1) * 383_999 / 48_000 + r.pos as u128 + r.half as u128 + 1
                 - r.held as u128
+        );
+    }
+
+    /// Feeds `r` exactly what it asks for to produce `frames` output frames
+    /// from `source` at input frame `*at`, in pieces of `piece` frames.
+    fn pull(
+        r: &mut Resampler,
+        source: &[f32],
+        at: &mut usize,
+        frames: usize,
+        piece: usize,
+    ) -> Vec<f32> {
+        let mut played = Vec::new();
+        let mut out = vec![0.0f32; 2 * piece];
+        let mut done = 0;
+        while done < frames {
+            let n = (frames - done).min(piece);
+            let need = r.input_frames_for(n);
+            let (used, made) = r.process(&source[*at * 2..(*at + need) * 2], &mut out[..n * 2]);
+            assert_eq!(
+                (used, made),
+                (need, n),
+                "{} -> {}",
+                r.input_rate,
+                r.output_rate
+            );
+            *at += need;
+            played.extend_from_slice(&out[..n * 2]);
+            done += n;
+        }
+        played
+    }
+
+    // covers: S206
+    #[test]
+    fn a_slow_down_needs_that_many_fewer_frames_and_lands_exactly_that_much_later() {
+        const SLOWED: usize = 7;
+        for (input_rate, output_rate) in [
+            (48_000u32, 44_100u32),
+            (48_000, 96_000),
+            (48_000, 32_000),
+            (48_000, 16_000),
+            (44_100, 48_000),
+        ] {
+            let freq = 1000.0;
+            let source = sine(input_rate, freq, 0.5, 40_000);
+            let mut r = Resampler::new(input_rate, output_rate).unwrap();
+            let mut at = 0;
+            let mut played = pull(&mut r, &source, &mut at, 8 * 512, 512);
+            // One callback of 512 frames, slowed over its 511 steps; its
+            // reads come in two pieces, each sized exactly.
+            let nominal = r.input_frames_for(512);
+            assert!(r.slow_down(SLOWED, 511));
+            assert!(r.is_slowing());
+            assert!(!r.slow_down(1, 511), "one slow-down at a time");
+            assert_eq!(r.input_frames_for(512), nominal - SLOWED);
+            played.extend(pull(&mut r, &source, &mut at, 512, 300));
+            assert!(!r.is_slowing());
+            played.extend(pull(&mut r, &source, &mut at, 8 * 512, 512));
+
+            // From the end of the slow-down on, the output is exactly that of
+            // a converter whose input came SLOWED frames later.
+            let mut padded = vec![0.0f32; SLOWED * 2];
+            padded.extend_from_slice(&source[..at * 2]);
+            let mut reference = Resampler::new(input_rate, output_rate).unwrap();
+            let mut from = 0;
+            let expected = pull(&mut reference, &padded, &mut from, played.len() / 2, 512);
+            let after = 9 * 512 * 2;
+            assert_eq!(
+                played[after..],
+                expected[after..],
+                "{input_rate} -> {output_rate}"
+            );
+
+            // During it, the frames are the tone at their exact positions,
+            // as accurate as the converter's steady output.
+            let (rate_in, rate_out) = (f64::from(input_rate), f64::from(output_rate));
+            let (mut err, mut count) = (0.0, 0);
+            for i in 0..512 {
+                let j = 8 * 512 + i;
+                let behind = SLOWED as f64 * i as f64 / 511.0;
+                let t = j as f64 * rate_in / rate_out - r.latency_frames() as f64 - behind;
+                let ideal = 0.5 * (2.0 * PI * freq * t / rate_in).sin();
+                err += (f64::from(played[j * 2]) - ideal).powi(2);
+                err += (f64::from(played[j * 2 + 1]) + ideal).powi(2);
+                count += 2;
+            }
+            let db = 10.0 * (err / f64::from(count)).log10() - 20.0 * (0.5 / 2f64.sqrt()).log10();
+            assert!(
+                db < -80.0,
+                "{input_rate} -> {output_rate}: error {db:.1} dB"
+            );
+        }
+    }
+
+    // covers: S206
+    #[test]
+    fn a_slow_down_is_refused_when_it_cannot_be_made() {
+        // Equal rates have no converter to slow.
+        assert!(!Resampler::new(48_000, 48_000).unwrap().slow_down(1, 511));
+        // 48 → 96 kHz steps half an input frame: 512 steps cover 256 frames,
+        // and slowing by all of them would make every step stand still.
+        let mut r = Resampler::new(48_000, 96_000).unwrap();
+        assert!(!r.slow_down(257, 512));
+        assert!(!r.slow_down(256, 512));
+        assert!(!r.slow_down(1, 0));
+        assert!(r.slow_down(255, 512));
+        // A reset ends a slow-down under way.
+        r.reset();
+        assert!(!r.is_slowing());
+        assert_eq!(
+            r.input_frames_for(512),
+            Resampler::new(48_000, 96_000)
+                .unwrap()
+                .input_frames_for(512)
         );
     }
 
