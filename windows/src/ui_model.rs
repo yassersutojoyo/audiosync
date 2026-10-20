@@ -91,7 +91,7 @@ pub enum Availability {
     WaitingToPair,
     /// It asks for a password, which AudioSync for Windows can't send yet.
     PasswordNotYet,
-    /// It needs pairing with a PIN, which AudioSync for Windows can't do yet.
+    /// It needs a kind of pairing AudioSync for Windows can't do yet.
     #[cfg_attr(
         all(not(windows), not(test)),
         expect(dead_code, reason = "only the Windows backend lists real receivers")
