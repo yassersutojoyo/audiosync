@@ -306,6 +306,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             view: ViewSettings::default(),
         };
         adapter.restore(saved);
+        // Settings ignored at launch: the user is told now why the defaults
+        // apply, even if they change nothing.
+        adapter.keep_settings_aside(false);
         adapter.list_devices();
         adapter.log.log(|| match &adapter.chosen {
             Chosen::WholeSystem => format!("source chosen: {WHOLE_SYSTEM_NAME} (the default)"),
@@ -476,6 +479,58 @@ impl<A: AudioBackend> AudioAdapter<A> {
         .clamped()
     }
 
+    /// Keeps the settings file ignored at launch aside, when it can be read,
+    /// and tells the user once where it is: at launch, and while it couldn't
+    /// be read then, at the poll it is `due` again, every few seconds (or at
+    /// the first save, [`AudioAdapter::persist`]). Returns whether the
+    /// notices changed.
+    fn keep_settings_aside(&mut self, due: bool) -> bool {
+        let kept = if due {
+            self.settings_file.keep_ignored_aside_if_due()
+        } else {
+            self.settings_file.keep_ignored_aside()
+        };
+        match kept {
+            Ok(Some(kept)) => self.tell_kept_aside(&kept, ""),
+            Ok(None) => false,
+            Err(error) => {
+                if !due {
+                    self.log.log(|| {
+                        format!(
+                            "settings: the file ignored at launch can't be kept aside yet \
+                             ({error}); tried again every few seconds"
+                        )
+                    });
+                }
+                false
+            }
+        }
+    }
+
+    /// Logs that the settings file was kept aside (`when`, for the log),
+    /// and, for a file ignored at launch, tells the user once with the
+    /// copy's name: their settings were replaced by the defaults. Returns
+    /// whether a notice was posted.
+    fn tell_kept_aside(&mut self, kept: &KeptAside, when: &str) -> bool {
+        let file = kept.file_name();
+        self.log.log(|| match kept {
+            KeptAside::Newer(_) => {
+                format!("settings: a newer AudioSync's file was kept as {file}{when}")
+            }
+            KeptAside::Ignored(_) => {
+                format!("settings: the file ignored at launch was kept as {file}{when}")
+            }
+        });
+        if let KeptAside::Ignored(_) = kept {
+            self.post(
+                NoticeSubject::SettingsKeptAside,
+                NoticeMessage::SettingsKeptAside { file },
+            );
+            return true;
+        }
+        false
+    }
+
     /// Writes the settings file if anything changed since it was last read
     /// or written. A failed write is logged and tried again at the next
     /// change; the settings stay in effect for this run, and the user is
@@ -501,29 +556,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         match saved {
             Ok(kept) if self.settings_file.path().is_some() => {
                 if let Some(kept) = kept {
-                    self.log.log(|| {
-                        let name = kept.file_name();
-                        match kept {
-                            KeptAside::Newer(_) => format!(
-                                "settings: a newer AudioSync's file was kept as {name} before \
-                                 saving over it"
-                            ),
-                            KeptAside::Ignored(_) => format!(
-                                "settings: the file ignored at launch was kept as {name} before \
-                                 saving over it"
-                            ),
-                        }
-                    });
-                    // The user's settings were replaced by the defaults at
-                    // launch: told once, with where the old file is.
-                    if let KeptAside::Ignored(_) = kept {
-                        let file = kept.file_name();
-                        self.post(
-                            NoticeSubject::SettingsKeptAside,
-                            NoticeMessage::SettingsKeptAside { file },
-                        );
-                        notices_changed = true;
-                    }
+                    notices_changed |= self.tell_kept_aside(&kept, " before saving over it");
                 }
                 self.log.log(|| "settings: saved".to_owned());
             }
@@ -759,7 +792,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// output with that name and kind, listed earlier in this run and not
     /// now, with or without anything set, must be gone, and have something
     /// set: with two gone, the new ID could be either device. An ID a
-    /// device left behind isn't another device, so it doesn't count.
+    /// device left behind isn't another device, so it doesn't count. Names
+    /// are compared without the number Windows may put before a device's
+    /// name in another port or for a second one of a model
+    /// ([`unnumbered`]).
     fn follow_moved_outputs(
         &mut self,
         outputs: &[OutputInfo],
@@ -771,8 +807,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .filter(|output| appeared.contains(&output.id))
             .collect();
         for output in &new {
+            let own_name = unnumbered(&output.name);
             let same = |name: &str, kind: Option<&OutputKind>| {
-                name == output.name && kind == Some(&output.kind)
+                kind == Some(&output.kind) && unnumbered(name) == own_name
             };
             let twins = new
                 .iter()
@@ -1949,6 +1986,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             changed |= self.refresh_sources();
         }
         changed |= self.count_airplay_quiet();
+        changed |= self.keep_settings_aside(true);
         changed |= self.persist();
         changed
     }
@@ -1978,6 +2016,27 @@ fn speaker_kind(kind: OutputKind) -> SpeakerKind {
         OutputKind::Virtual => SpeakerKind::Virtual,
         OutputKind::Other => SpeakerKind::Other,
     }
+}
+
+/// An output's name without the number Windows may put before the device's
+/// name inside its parentheses (digits, then "- "), as it does for a USB
+/// device in another port or a second device of the same model:
+/// "Speakers (2- USB DAC)" gives "Speakers (USB DAC)".
+fn unnumbered(name: &str) -> String {
+    let mut plain = String::with_capacity(name.len());
+    let mut rest = name;
+    while let Some(open) = rest.find('(') {
+        plain.push_str(&rest[..=open]);
+        rest = &rest[open + 1..];
+        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits > 0
+            && let Some(after) = rest[digits..].strip_prefix("- ")
+        {
+            rest = after;
+        }
+    }
+    plain.push_str(rest);
+    plain
 }
 
 /// The UI's ID of a local output.
@@ -2784,6 +2843,97 @@ mod tests {
         let dac = speaker_of(&adapter, &key(DAC_PORT_1));
         assert!(dac.enabled);
         assert_eq!(dac.volume, 35.0);
+    }
+
+    /// Plugs a USB device in under `endpoint_id`, listed as `name`, and
+    /// polls.
+    fn plug_named(adapter: &mut AudioAdapter<MockBackend>, endpoint_id: &str, name: &str) {
+        adapter
+            .audio_mut()
+            .connect_output_as(endpoint_id, name, OutputKind::Usb);
+        adapter.poll();
+    }
+
+    #[test]
+    fn a_usb_speaker_windows_numbers_in_another_port_keeps_its_settings() {
+        let mut adapter = adapter();
+        plug_named(&mut adapter, DAC_PORT_1, "Speakers (Thronmax MDrill)");
+        turn_on(&mut adapter, DAC_PORT_1);
+        adapter.set_speaker_volume(&key(DAC_PORT_1), 35.0);
+        adapter.set_speaker_delay(&key(DAC_PORT_1), 120.0);
+
+        // In another port, Windows numbers it: still the same device.
+        unplug(&mut adapter, DAC_PORT_1);
+        plug_named(&mut adapter, DAC_PORT_2, "Speakers (2- Thronmax MDrill)");
+        let dac = speaker_of(&adapter, &key(DAC_PORT_2));
+        assert!(dac.enabled);
+        assert_eq!(dac.volume, 35.0);
+        assert_eq!(dac.delay_ms, Some(120.0));
+        assert_eq!(playing(&adapter), [DAC_PORT_2]);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_2]);
+
+        // Back in the first port without the number, they follow it again.
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_named(&mut adapter, DAC_PORT_1, "Speakers (Thronmax MDrill)");
+        assert!(enabled(&adapter, DAC_PORT_1));
+        assert_eq!(speaker_of(&adapter, &key(DAC_PORT_1)).volume, 35.0);
+    }
+
+    #[test]
+    fn only_the_number_windows_puts_inside_the_parentheses_is_ignored() {
+        for (name, plain) in [
+            (
+                "Speakers (2- Thronmax MDrill)",
+                "Speakers (Thronmax MDrill)",
+            ),
+            ("Speakers (12- USB DAC)", "Speakers (USB DAC)"),
+            ("Speakers (USB DAC)", "Speakers (USB DAC)"),
+            ("Speakers (Realtek(R) Audio)", "Speakers (Realtek(R) Audio)"),
+            ("Speakers (2-USB DAC)", "Speakers (2-USB DAC)"),
+            ("Speakers (2 USB DAC)", "Speakers (2 USB DAC)"),
+            ("2- USB DAC", "2- USB DAC"),
+            ("Speakers (", "Speakers ("),
+            ("", ""),
+        ] {
+            assert_eq!(super::unnumbered(name), plain, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn twins_windows_numbers_apart_still_count_as_twins() {
+        let mut adapter = adapter();
+        // Two DACs of the same model: Windows numbers the second one.
+        plug_named(&mut adapter, DAC_PORT_1, "Speakers (USB DAC)");
+        turn_on(&mut adapter, DAC_PORT_1);
+        plug_named(&mut adapter, DAC_PORT_2, "Speakers (2- USB DAC)");
+        assert!(!enabled(&adapter, DAC_PORT_2));
+
+        // Both unplugged, one in a third port could be either: a new
+        // speaker, numbered or not.
+        unplug(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_2);
+        plug_named(&mut adapter, DAC_PORT_3, "Speakers (USB DAC)");
+        assert!(!enabled(&adapter, DAC_PORT_3));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1]);
+    }
+
+    #[test]
+    fn twins_windows_numbers_apart_that_appear_together_dont_take_settings() {
+        const DAC_PORT_4: &str = "usb-dac-port-4";
+        let mut adapter = adapter();
+        plug_named(&mut adapter, DAC_PORT_1, "Speakers (USB DAC)");
+        turn_on(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_1);
+        // Two of the model appear in one listing, one numbered by Windows:
+        // either could be the one that left.
+        let audio = adapter.audio_mut();
+        audio.connect_output_as(DAC_PORT_3, "Speakers (USB DAC)", OutputKind::Usb);
+        audio.connect_output_as(DAC_PORT_4, "Speakers (2- USB DAC)", OutputKind::Usb);
+        adapter.poll();
+        assert!(!enabled(&adapter, DAC_PORT_3));
+        assert!(!enabled(&adapter, DAC_PORT_4));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1]);
     }
 
     #[test]
@@ -4598,6 +4748,146 @@ mod tests {
         adapter.dismiss_all_notices();
         adapter.set_master_volume(65.0);
         adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_damaged_settings_file_gets_its_notice_at_launch_naming_the_copy() {
+        let dir = test_dir("adapter-settings-damaged-at-launch");
+        let path = dir.join(settings::FILE_NAME);
+        std::fs::write(&path, "{ the user's settings, cut short").expect("written");
+        let mut adapter = launch(launch_audio(), &path);
+        // Told at launch, though the user changes nothing.
+        let shown = messages(&adapter);
+        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert!(file.starts_with("settings.ignored-"), "{file}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(file)).expect("kept"),
+            "{ the user's settings, cut short"
+        );
+        // Told once: dismissed, it stays away, and the first save keeps no
+        // other copy.
+        adapter.dismiss_all_notices();
+        adapter.poll();
+        adapter.set_master_volume(64.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert_eq!(
+            crate::data_folder::copies_kept_aside(&dir, "settings.ignored").len(),
+            1
+        );
+        assert_eq!(SettingsFile::at(path).load().0.master_volume, 64.0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn settings_unreadable_at_launch_get_their_notice_once_they_can_be_kept_aside_unchanged() {
+        use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
+        let dir = test_dir("adapter-settings-kept-aside-unchanged");
+        let path = dir.join(settings::FILE_NAME);
+        let held = dir.join("held");
+        std::fs::write(&held, "the user's settings").expect("written");
+        // Another program holds the file at launch (a folder stands in its
+        // place), and lets go of it; the user changes nothing.
+        std::fs::create_dir(&path).expect("the folder is made");
+        let mut adapter = launch(launch_audio(), &path);
+        assert!(messages(&adapter).is_empty(), "nothing kept aside yet");
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(&held, &path).expect("moved back");
+        for _ in 0..KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        let shown = messages(&adapter);
+        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert_eq!(
+            std::fs::read_to_string(dir.join(file)).expect("kept"),
+            "the user's settings"
+        );
+        // Nothing changed, so the file itself is left as it was; told once.
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "the user's settings"
+        );
+        adapter.dismiss_all_notices();
+        for _ in 0..2 * KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The adapter over AirPlay with the pairings in `path`, and the fake
+    /// sender behind it.
+    fn launch_with_pairings(path: &std::path::Path) -> (AudioAdapter<MockBackend>, FakeAirPlay) {
+        use crate::audio::pairings::tests::sealer;
+        let mut audio = launch_audio();
+        let fake = FakeAirPlay::new();
+        let (store, _) = PairingStore::open(path.to_path_buf(), sealer());
+        audio.set_airplay_with_pairings(fake.link(), None, store);
+        let adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        (adapter, fake)
+    }
+
+    #[test]
+    fn damaged_pairings_get_their_notice_at_launch_naming_the_copy() {
+        let dir = test_dir("adapter-pairings-damaged-at-launch");
+        let path = dir.join(crate::audio::pairings::FILE_NAME);
+        std::fs::write(&path, b"no pairings in here").expect("written");
+        let (mut adapter, _fake) = launch_with_pairings(&path);
+        // Told at the first poll, with no pairing made.
+        adapter.poll();
+        let shown = messages(&adapter);
+        let [NoticeMessage::PairingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert!(file.starts_with("airplay-pairings.ignored-"), "{file}");
+        assert_eq!(
+            std::fs::read(dir.join(file)).expect("kept"),
+            b"no pairings in here"
+        );
+        adapter.dismiss_all_notices();
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pairings_unreadable_at_launch_get_their_notice_once_they_can_be_kept_aside_unchanged() {
+        use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
+        let dir = test_dir("adapter-pairings-kept-aside-unchanged");
+        let path = dir.join(crate::audio::pairings::FILE_NAME);
+        // Another program holds the file at launch (a folder stands in its
+        // place), and lets go of it; nothing is paired meanwhile.
+        std::fs::create_dir(&path).expect("the folder is made");
+        let (mut adapter, _fake) = launch_with_pairings(&path);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "nothing kept aside yet");
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::write(&path, b"the pairings made before").expect("written");
+        for _ in 0..KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        let shown = messages(&adapter);
+        let [NoticeMessage::PairingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert_eq!(
+            std::fs::read(dir.join(file)).expect("kept"),
+            b"the pairings made before"
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("read"),
+            b"the pairings made before"
+        );
+        adapter.dismiss_all_notices();
+        for _ in 0..2 * KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
         let _ = std::fs::remove_dir_all(dir);
     }

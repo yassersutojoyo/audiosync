@@ -26,6 +26,12 @@ pub const FOLDER_NAME: &str = "AudioSync";
 /// How long a read that failed waits before its second try.
 pub const READ_RETRY_PAUSE: Duration = Duration::from_millis(500);
 
+/// A file ignored at launch that couldn't be kept aside then (it still
+/// couldn't be read) is tried again this many polls later: about every ten
+/// seconds at the UI's two polls a second, so the user learns about it
+/// without changing anything first.
+pub const KEEP_ASIDE_RETRY_POLLS: u32 = 20;
+
 /// The file at `path`, read once more after [`READ_RETRY_PAUSE`] when the
 /// first read fails for another reason than the file not being there.
 /// Blocks for that pause, so it is for launch, not for the UI's polls.

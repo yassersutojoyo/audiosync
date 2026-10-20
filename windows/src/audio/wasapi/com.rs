@@ -161,7 +161,7 @@ impl Drop for ProAudioTask {
 /// call that hangs (Windows audio still waking up, say) would otherwise hold
 /// the thread that waits, the UI thread, for good. As long as the loopback
 /// capture's own wait for its activation.
-const READY_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) const READY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How a starting thread tells the thread that started it that it runs, with
 /// what it set up (`T`), or why it couldn't start.

@@ -1824,6 +1824,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         {
             *wait = wait.saturating_sub(1);
         }
+        self.device_volumes.tick();
         // Outputs that faded out stop, and then an ended session's capture;
         // a start that waited for them goes ahead.
         self.reap(false);

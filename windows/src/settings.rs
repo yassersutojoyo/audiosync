@@ -16,10 +16,12 @@
 //! defaults apply, and the next change writes a fresh file, after keeping
 //! the old one aside in a copy with the time in its name, which no later
 //! copy replaces (a newer version's named after [`NEWER_FILE_NAME`], any
-//! other after [`IGNORED_FILE_NAME`]). A file that can't be read is tried
-//! once more at launch (another program may hold it for a moment), and
-//! while it still can't be read nothing is saved over it, since it may hold
-//! the user's settings. Fields this version doesn't know are ignored,
+//! other after [`IGNORED_FILE_NAME`]). Any other is kept aside at launch
+//! already when it can be read then, so the user is told at once where it
+//! is ([`SettingsFile::keep_ignored_aside`]). A file that can't be read is
+//! tried once more at launch (another program may hold it for a moment),
+//! then every few seconds, and while it still can't be read nothing is
+//! saved over it, since it may hold the user's settings. Fields this version doesn't know are ignored,
 //! missing ones take their defaults, and values out of range are clamped
 //! ([`Settings::clamped`]). Nothing here panics on a bad file, and the
 //! caller logs what [`Loaded`] says.
@@ -456,8 +458,8 @@ impl fmt::Display for Loaded {
             }
             Loaded::Ignored(reason) => write!(
                 f,
-                "ignored: {reason}; the defaults apply, and the next change keeps it aside \
-                 and writes a new file"
+                "ignored: {reason}; the defaults apply, and it is kept aside before a new \
+                 file replaces it"
             ),
         }
     }
@@ -494,6 +496,9 @@ pub struct SettingsFile {
     /// wasn't a settings file this build reads): it is kept aside before
     /// the next save replaces it.
     keep_aside: Cell<bool>,
+    /// Polls left before [`SettingsFile::keep_ignored_aside_if_due`] tries
+    /// again to keep that file aside.
+    keep_aside_wait: Cell<u32>,
 }
 
 impl SettingsFile {
@@ -508,6 +513,7 @@ impl SettingsFile {
         SettingsFile {
             path: Some(path),
             keep_aside: Cell::new(false),
+            keep_aside_wait: Cell::new(0),
         }
     }
 
@@ -523,7 +529,8 @@ impl SettingsFile {
     /// The settings in the file, or the defaults, with what was found. A
     /// read that fails is tried once more after a short pause
     /// ([`data_folder::read_at_launch`]). A file it ignores is kept aside by
-    /// the next [`SettingsFile::save`].
+    /// [`SettingsFile::keep_ignored_aside`] or the next
+    /// [`SettingsFile::save`].
     pub fn load(&self) -> (Settings, Loaded) {
         let Some(path) = &self.path else {
             return (Settings::default(), Loaded::NoFile);
@@ -543,6 +550,60 @@ impl SettingsFile {
             Ok(read) => read,
             Err(reason) => (Settings::default(), Loaded::Ignored(reason)),
         }
+    }
+
+    /// Keeps the file the last load ignored aside now, without saving
+    /// anything, so the user can be told at launch where it is: copied as
+    /// [`SettingsFile::save`] would ([`IGNORED_FILE_NAME`]), and the copy
+    /// returned, once. A newer AudioSync's file isn't copied here: `save`
+    /// keeps one aside whenever it saves over one. While the file still
+    /// can't be read, the error is returned and the next try is due
+    /// [`data_folder::KEEP_ASIDE_RETRY_POLLS`] polls later
+    /// ([`SettingsFile::keep_ignored_aside_if_due`]), or at the next save.
+    pub fn keep_ignored_aside(&self) -> io::Result<Option<KeptAside>> {
+        let Some(path) = &self.path else {
+            return Ok(None);
+        };
+        if !self.keep_aside.get() {
+            return Ok(None);
+        }
+        let kept = match fs::read(path) {
+            Ok(bytes) if written_by_a_newer_build(&bytes) => Ok(None),
+            Ok(bytes) => data_folder::keep_bytes_aside(path, IGNORED_FILE_NAME, &bytes)
+                .map(|kept| Some(KeptAside::Ignored(kept))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        };
+        match kept {
+            Ok(kept) => {
+                self.keep_aside.set(false);
+                Ok(kept)
+            }
+            // The file can't be read yet, or the copy couldn't be written
+            // (a full disk, a folder that can't be written): either way the
+            // next try waits, rather than coming at every poll.
+            Err(error) => {
+                self.keep_aside_wait
+                    .set(data_folder::KEEP_ASIDE_RETRY_POLLS);
+                Err(error)
+            }
+        }
+    }
+
+    /// [`SettingsFile::keep_ignored_aside`] again, once its next try is due:
+    /// called at every poll, it tries every
+    /// [`data_folder::KEEP_ASIDE_RETRY_POLLS`] polls while the file ignored
+    /// at launch couldn't be kept aside yet, and does nothing otherwise.
+    pub fn keep_ignored_aside_if_due(&self) -> io::Result<Option<KeptAside>> {
+        if !self.keep_aside.get() {
+            return Ok(None);
+        }
+        let wait = self.keep_aside_wait.get().saturating_sub(1);
+        self.keep_aside_wait.set(wait);
+        if wait > 0 {
+            return Ok(None);
+        }
+        self.keep_ignored_aside()
     }
 
     /// Replaces the file with `settings`. Without a file it does nothing.

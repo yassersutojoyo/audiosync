@@ -55,9 +55,12 @@ monitor it opens on) and whether it was maximized. A file from a newer
 AudioSync is ignored and kept as `settings.newer-<UTC time>.json` before the
 first save over it. One that's damaged, or that can't be read at launch even
 at a second try half a second later (another program may hold it for a
-moment), is ignored too and kept as `settings.ignored-<UTC time>.json` before
-the first save over it, and a notice then says the settings couldn't be read
-at launch, that AudioSync started with the defaults, and names that copy.
+moment), is ignored too and kept as `settings.ignored-<UTC time>.json`: right
+at launch when it can be read then, otherwise as soon as it can (tried every
+few seconds, and before the first save over it). A notice then says the
+settings couldn't be read at launch, that AudioSync started with the
+defaults, and names that copy, even if nothing is changed. The Apple TV
+pairings' file works the same way.
 Each copy is a new file, so a later one never replaces an earlier one. While
 the file still can't be read, nothing is saved over it and the "couldn't save
 your settings" notice shows. As on the Mac, a launch starts streaming only

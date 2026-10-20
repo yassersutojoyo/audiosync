@@ -8,12 +8,13 @@
 //! read them. The file lives in the app's data folder,
 //! `%LOCALAPPDATA%\AudioSync\airplay-pairings.dat`. A file that can't be
 //! read, decrypted or parsed is ignored as a whole: the speakers in it are
-//! paired again, and the next pairing writes a fresh file, after keeping the
-//! old one aside in a copy named after [`IGNORED_FILE_NAME`] with the time,
-//! which no later copy replaces. A read that fails is tried once more at
-//! launch (another program may hold the file for a moment), and while the
-//! file still can't be read nothing is written over it: new pairings last
-//! until AudioSync quits.
+//! paired again, and it is kept aside in a copy named after
+//! [`IGNORED_FILE_NAME`] with the time, which no later copy replaces: at
+//! launch when it can be read then, so the user is told at once, and in any
+//! case before the next pairing writes a fresh file. A read that fails is
+//! tried once more at launch (another program may hold the file for a
+//! moment), then every few seconds, and while the file still can't be read
+//! nothing is written over it: new pairings last until AudioSync quits.
 //!
 //! Before encryption the file holds a magic tag, then per speaker its ID and
 //! the credential blob the sender defines ([`Credentials::to_bytes`]), each
@@ -117,6 +118,9 @@ pub struct PairingStore {
     /// Where a write kept that file aside, until
     /// [`PairingStore::take_kept_aside`] takes it.
     kept_aside: Option<PathBuf>,
+    /// Polls left before [`PairingStore::keep_aside_if_due`] tries again to
+    /// keep that file aside.
+    keep_aside_wait: u32,
 }
 
 impl fmt::Debug for PairingStore {
@@ -144,6 +148,7 @@ impl PairingStore {
             entries: BTreeMap::new(),
             keep_aside: false,
             kept_aside: None,
+            keep_aside_wait: 0,
         }
     }
 
@@ -155,7 +160,11 @@ impl PairingStore {
 
     /// The store kept in `path`, with what it holds now. A read that fails
     /// is tried once more after a short pause
-    /// ([`data_folder::read_at_launch`]).
+    /// ([`data_folder::read_at_launch`]). A file it ignores is kept aside at
+    /// once when it can be read, so the user can be told at launch
+    /// ([`PairingStore::take_kept_aside`]); one that can't be read yet is
+    /// tried again every few seconds ([`PairingStore::keep_aside_if_due`])
+    /// and before the first write over it.
     pub fn open(path: PathBuf, sealer: Sealer) -> (PairingStore, Loaded) {
         let (entries, loaded) = match read(&path, sealer) {
             Ok(Some(entries)) => {
@@ -165,19 +174,60 @@ impl PairingStore {
             Ok(None) => (BTreeMap::new(), Loaded::NoFile),
             Err(reason) => (BTreeMap::new(), Loaded::Ignored(reason)),
         };
-        let store = PairingStore {
+        let mut store = PairingStore {
             path: Some(path),
             sealer,
             entries,
             keep_aside: matches!(loaded, Loaded::Ignored(_)),
             kept_aside: None,
+            keep_aside_wait: 0,
         };
+        // While it can't be read, the next try is due a few seconds later.
+        let _ = store.keep_ignored_aside();
         (store, loaded)
     }
 
-    /// Where the file ignored at launch was kept aside, once a write did
-    /// that (the file could be read again by then); `None` after that, so
-    /// the user is told once.
+    /// Keeps the file ignored at launch aside now, when it can be read, for
+    /// [`PairingStore::take_kept_aside`]. While it can't, the error is
+    /// returned and the next try is due
+    /// [`data_folder::KEEP_ASIDE_RETRY_POLLS`] polls later.
+    fn keep_ignored_aside(&mut self) -> io::Result<()> {
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
+        if !self.keep_aside {
+            return Ok(());
+        }
+        match data_folder::keep_aside(path, IGNORED_FILE_NAME) {
+            Ok(kept) => {
+                self.kept_aside = kept;
+                self.keep_aside = false;
+                Ok(())
+            }
+            Err(error) => {
+                self.keep_aside_wait = data_folder::KEEP_ASIDE_RETRY_POLLS;
+                Err(error)
+            }
+        }
+    }
+
+    /// Called at every poll: while the file ignored at launch couldn't be
+    /// kept aside yet, tries again every
+    /// [`data_folder::KEEP_ASIDE_RETRY_POLLS`] polls, so the user is told
+    /// without pairing anything first.
+    pub fn keep_aside_if_due(&mut self) {
+        if !self.keep_aside {
+            return;
+        }
+        self.keep_aside_wait = self.keep_aside_wait.saturating_sub(1);
+        if self.keep_aside_wait == 0 {
+            let _ = self.keep_ignored_aside();
+        }
+    }
+
+    /// Where the file ignored at launch was kept aside, once that was done
+    /// (at launch, at a later poll, or before the first write over it);
+    /// `None` after that, so the user is told once.
     pub fn take_kept_aside(&mut self) -> Option<PathBuf> {
         self.kept_aside.take()
     }
@@ -215,13 +265,10 @@ impl PairingStore {
     /// [`IGNORED_FILE_NAME`]); while it can't be read, it is
     /// left alone and the error returned.
     fn save(&mut self) -> io::Result<()> {
+        self.keep_ignored_aside()?;
         let Some(path) = &self.path else {
             return Ok(());
         };
-        if self.keep_aside {
-            self.kept_aside = data_folder::keep_aside(path, IGNORED_FILE_NAME)?;
-            self.keep_aside = false;
-        }
         if self.entries.is_empty() {
             return match fs::remove_file(path) {
                 Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
