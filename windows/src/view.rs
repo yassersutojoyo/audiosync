@@ -2510,7 +2510,7 @@ mod tests {
     }
 
     #[test]
-    fn a_focused_speaker_row_that_goes_hands_the_focus_to_the_switch() {
+    fn a_focused_speaker_row_that_goes_hands_the_focus_to_the_next_rows_options() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
         // Switch, source, master volume, Equalizer, then the rows: the
@@ -2521,15 +2521,47 @@ mod tests {
         press(window, " ");
         assert!(!enabled(&app, "local:cable"));
 
-        // Off and no longer shown, its row goes.
+        // Off and no longer shown, its row goes: the focus moves to the
+        // options of the row after it, the desk speaker's, not to a control
+        // whose Space acts on every speaker.
         app.main.invoke_show_virtual_devices_toggled(false);
         draw_frames();
         app.update(|b| b.set_running(false));
         draw_frames();
-        let speakers_on = app.snapshot().active_speakers();
+        let headset = enabled(&app, "local:bt");
+        tab(window, 1);
         press(window, " ");
-        assert!(app.snapshot().running, "the streaming switch has the focus");
-        assert_eq!(app.snapshot().active_speakers(), speakers_on);
+        assert_ne!(
+            enabled(&app, "local:bt"),
+            headset,
+            "the next stop after the desk row's options is the headset's toggle"
+        );
+    }
+
+    #[test]
+    fn typing_in_a_delay_field_keeps_the_focus_there_when_its_list_is_rebuilt() {
+        let app = main_window_with_listed_cable();
+        let window = app.main.window();
+        app.main.invoke_sync_toggled("local:desk".into());
+        draw_frames();
+        // The cable row's toggle, delay and options, then the desk row's
+        // toggle, delay, options, two steps and its field.
+        tab(window, 24);
+        press(window, "5");
+        let draft = || app.ui.borrow().delay_drafts.get("local:desk").cloned();
+        assert_eq!(draft().as_deref(), Some("5"), "the desk's field has the focus");
+
+        // The cable row goes, so Connected Speakers is rebuilt.
+        app.main.invoke_show_virtual_devices_toggled(false);
+        draw_frames();
+        press(window, "0");
+        assert_eq!(
+            draft().as_deref(),
+            Some("50"),
+            "the rebuilt row's field has the focus, the typed text and the cursor at its end"
+        );
+        press(window, Key::Return);
+        assert!(!enabled(&app, "local:desk"), "Enter left the speaker off");
     }
 
     #[test]
