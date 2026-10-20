@@ -63,7 +63,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::audio::SAMPLE_RATE;
-use audiosync_airplay::discovery::{DeviceKey, ServiceKind};
+use audiosync_airplay::discovery::{Device, DeviceKey, ServiceKind};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
 use audiosync_airplay::input::InputWriter;
 use audiosync_airplay::metadata::TrackInfo;
@@ -308,10 +308,16 @@ pub struct AscAirPlay {
     input: Option<InputWriter>,
     /// Receiver changes not taken yet.
     receivers: VecDeque<ReceiverEvent>,
+    /// How many receiver changes were queued, and how many the host took:
+    /// an event waits until the host took every change queued before it
+    /// ([`asc_airplay_next_event`]).
+    receivers_queued: u64,
+    receivers_taken: u64,
     /// The strings of the last receiver handed out: ID, name, model.
     receiver_strings: [CString; 3],
-    /// Speaker and timeline events not taken yet.
-    events: VecDeque<Pending>,
+    /// Speaker and timeline events not taken yet, each with the number of
+    /// receiver changes queued before it.
+    events: VecDeque<(u64, Pending)>,
     /// The strings of the last event handed out: ID, detail.
     event_strings: [CString; 2],
     /// The receivers discovery lists now, by ID, so the host adds speakers
@@ -330,6 +336,13 @@ pub struct AscAirPlay {
     /// user reads its PIN (the wait has no timeout, P51) still takes the
     /// PIN and is still cancelled.
     pairing: HashMap<String, DeviceKey>,
+    /// The receivers whose cancelled pairing hasn't reported its end yet,
+    /// by ID, each with the receiver of the pairing the host started since,
+    /// if any, which starts once that end comes. The sender's pairing
+    /// events name the receiver only, so until then every one for it is the
+    /// cancelled pairing's: it never reaches the host or ends the pairing
+    /// the host has now, and the two pairings never run at once.
+    ending: HashMap<String, Option<Device>>,
     /// The master position, 0 to 100.
     master: f64,
     /// Set when a call on this handle or its input panicked; shared with
@@ -484,8 +497,8 @@ impl AscAirPlay {
 
     /// Takes one sender event in, and keeps the list of receivers the host
     /// can add up to date. Speaker events the host doesn't use (warnings,
-    /// methods, server, audio jack, volume reports) and a cancelled
-    /// pairing's end are passed over.
+    /// methods, server, audio jack, volume reports) and what a cancelled
+    /// pairing reports are passed over.
     fn take_in(&mut self, event: SenderEvent) {
         match event {
             SenderEvent::Receiver(event) => {
@@ -498,7 +511,7 @@ impl AscAirPlay {
                         self.listed.remove(&receiver_id(key));
                     }
                 }
-                self.receivers.push_back(event);
+                self.queue_receiver(event);
             }
             SenderEvent::Speaker { key, event } => {
                 let id = receiver_id(&key);
@@ -509,14 +522,12 @@ impl AscAirPlay {
                     event,
                     SpeakerEvent::State(_) | SpeakerEvent::Error(_) | SpeakerEvent::Latency(_)
                 ) {
-                    self.events.push_back(Pending::Speaker(id, event));
+                    self.queue_event(Pending::Speaker(id, event));
                 }
             }
             SenderEvent::Timeline {
                 latency, restarted, ..
-            } => self
-                .events
-                .push_back(Pending::Timeline { latency, restarted }),
+            } => self.queue_event(Pending::Timeline { latency, restarted }),
             SenderEvent::Pairing { key, event } => self.pairing_event(receiver_id(&key), event),
             // Discovery's browser died (a bug in it): the sender no
             // longer lists anything new, so it counts as dead too.
@@ -545,6 +556,10 @@ impl AscAirPlay {
 
     /// Takes in what a pairing reported.
     fn pairing_event(&mut self, id: String, event: PairingEvent) {
+        if self.ending.contains_key(&id) {
+            self.ending_pairing_event(&id, event);
+            return;
+        }
         let (kind, error, unsupported, detail) = match event {
             PairingEvent::PinRequested => (
                 AIRPLAY_EVENT_PIN_NEEDED,
@@ -585,13 +600,11 @@ impl AscAirPlay {
                     }
                 }
             }
-            // The host cancelled it, or the sender shut down: nothing to
-            // tell. The cancel already cleared its mark, and a pairing the
-            // host started again since then (a cancel and a start back to
-            // back) keeps its own.
+            // The sender shut down: nothing to tell. (The end of a
+            // pairing the host cancelled comes while it is `ending`.)
             PairingEvent::Stopped => return,
         };
-        self.events.push_back(Pending::Pairing {
+        self.queue_event(Pending::Pairing {
             kind,
             id,
             error,
@@ -600,12 +613,62 @@ impl AscAirPlay {
         });
     }
 
+    /// Takes in what a pairing the host cancelled reported before its end
+    /// (see `ending`). What it found out still counts: credentials it got
+    /// are real, so they are stored and the receiver is listed again, and a
+    /// password the receiver turned down is forgotten. Nothing reaches the
+    /// host, and the pairing the host has now keeps its mark. Its end (it
+    /// stopped, failed or paired: a pairing ends once) lets the pairing the
+    /// host started since, if any, start.
+    fn ending_pairing_event(&mut self, id: &str, event: PairingEvent) {
+        match event {
+            PairingEvent::PinRequested => return,
+            PairingEvent::Paired(credentials) => {
+                // When the file can't be written they last for this
+                // handle all the same.
+                let _ = self.store.insert(id, credentials);
+                self.relist(id);
+            }
+            PairingEvent::Failed { error, .. } => {
+                if error.kind.user_reason() == UserReason::WrongPassword {
+                    self.passwords.remove(id);
+                }
+            }
+            PairingEvent::Stopped => {}
+        }
+        if let Some(Some(device)) = self.ending.remove(id) {
+            self.start_pairing_now(id, device);
+        }
+    }
+
+    /// Has the sender start a pairing with `device`, the receiver `id`,
+    /// with the password handed over for it, if any.
+    fn start_pairing_now(&mut self, id: &str, device: Device) {
+        let password = self
+            .passwords
+            .get(id)
+            .map(|password| String::clone(password));
+        self.sender.start_pairing_with_password(device, password);
+    }
+
+    /// Queues a receiver change for the host.
+    fn queue_receiver(&mut self, event: ReceiverEvent) {
+        self.receivers.push_back(event);
+        self.receivers_queued += 1;
+    }
+
+    /// Queues an event for the host, behind the receiver changes queued so
+    /// far.
+    fn queue_event(&mut self, pending: Pending) {
+        self.events.push_back((self.receivers_queued, pending));
+    }
+
     /// Reports a listed receiver again, as changed, after its pairing
     /// changed: its availability follows the store.
     fn relist(&mut self, id: &str) {
         if let Some(info) = self.listed.get(id) {
-            self.receivers
-                .push_back(ReceiverEvent::Changed(Box::new(info.clone())));
+            let changed = ReceiverEvent::Changed(Box::new(info.clone()));
+            self.queue_receiver(changed);
         }
     }
 
@@ -912,6 +975,8 @@ pub extern "C" fn asc_airplay_create() -> *mut AscAirPlay {
                 sender,
                 input: Some(input),
                 receivers: VecDeque::new(),
+                receivers_queued: 0,
+                receivers_taken: 0,
                 receiver_strings: Default::default(),
                 events: VecDeque::new(),
                 event_strings: Default::default(),
@@ -920,6 +985,7 @@ pub extern "C" fn asc_airplay_create() -> *mut AscAirPlay {
                 store: PairingStore::in_memory(),
                 passwords: HashMap::new(),
                 pairing: HashMap::new(),
+                ending: HashMap::new(),
                 master: 100.0,
                 dead: Arc::new(AtomicBool::new(false)),
                 failure_reported: false,
@@ -1015,6 +1081,7 @@ pub unsafe extern "C" fn asc_airplay_next_receiver(
         let Some(event) = airplay.receivers.pop_front() else {
             return false;
         };
+        airplay.receivers_taken += 1;
         let report = airplay.report(event);
         // SAFETY: non-null, and by the caller's contract writable.
         unsafe { receiver.write(report) };
@@ -1028,9 +1095,13 @@ pub unsafe extern "C" fn asc_airplay_next_receiver(
 /// Takes the next speaker or timeline event, if one is waiting, into
 /// `*event` and returns true. Returns false, leaving `*event` as it was,
 /// when none is waiting or either pointer is null. Never waits. Receiver
-/// changes wait for [`asc_airplay_next_receiver`]. A dead sender (see the
-/// module's Panics) reports [`AIRPLAY_EVENT_FAILED`] once, in place of
-/// whatever still waited, and nothing after it.
+/// changes wait for [`asc_airplay_next_receiver`], and an event waits until
+/// every receiver change queued before it was taken there, so a host that
+/// takes the changes first never sees an event ahead of the change it
+/// follows (a speaker that turned its stored pairing down is listed as
+/// needing a PIN before its error comes). A dead sender (see the module's
+/// Panics) reports [`AIRPLAY_EVENT_FAILED`] once, in place of whatever
+/// still waited, and nothing after it.
 ///
 /// # Safety
 ///
@@ -1056,7 +1127,16 @@ pub unsafe extern "C" fn asc_airplay_next_event(
             airplay.events.clear();
             Pending::Failed
         } else {
-            let Some(pending) = airplay.events.pop_front() else {
+            // An event waits for the receiver changes queued before it.
+            let taken = airplay.receivers_taken;
+            if !airplay
+                .events
+                .front()
+                .is_some_and(|(after, _)| *after <= taken)
+            {
+                return false;
+            }
+            let Some((_, pending)) = airplay.events.pop_front() else {
                 return false;
             };
             pending
@@ -1366,9 +1446,11 @@ pub unsafe extern "C" fn asc_airplay_open_pairings(
 /// (P46 to P54): it is asked to show a PIN, and
 /// [`AIRPLAY_EVENT_PIN_NEEDED`] follows, or the pairing's failure. The
 /// pairing uses the password handed over for the receiver, if any. A
-/// pairing already running for it is replaced; playing speakers are not
-/// touched. False, starting nothing, when the handle or `id` is null or
-/// `id` isn't a listed receiver.
+/// pairing already running for it is replaced: that one is cancelled. A
+/// new pairing starts only once the one cancelled before it has ended, and
+/// nothing that one reports reaches the host or ends the new one; playing
+/// speakers are not touched. False, starting nothing, when the handle or
+/// `id` is null or `id` isn't a listed receiver.
 ///
 /// # Safety
 ///
@@ -1392,12 +1474,19 @@ pub unsafe extern "C" fn asc_airplay_start_pairing(
                 return false;
             };
             let device = info.device.clone();
-            let password = airplay
-                .passwords
-                .get(id)
-                .map(|password| String::clone(password));
             let key = device.key.clone();
-            airplay.sender.start_pairing_with_password(device, password);
+            if let Some(next) = airplay.ending.get_mut(id) {
+                // A pairing cancelled before hasn't ended yet: this one
+                // starts once it has.
+                *next = Some(device);
+            } else if let Some(running) = airplay.pairing.get(id).cloned() {
+                // Replaced: the one running is cancelled, and this one
+                // starts once it has ended.
+                airplay.sender.cancel_pairing(&running);
+                airplay.ending.insert(id.to_owned(), Some(device));
+            } else {
+                airplay.start_pairing_now(id, device);
+            }
             airplay.pairing.insert(id.to_owned(), key);
             true
         })
@@ -1440,6 +1529,7 @@ pub unsafe extern "C" fn asc_airplay_submit_pin(
 
 /// Stops the pairing with the receiver `id`, if one runs, also when the
 /// receiver left discovery since; nothing is reported for it any more.
+/// Credentials it still gets before it stops are stored all the same.
 ///
 /// # Safety
 ///
@@ -1456,8 +1546,17 @@ pub unsafe extern "C" fn asc_airplay_cancel_pairing(airplay: *mut AscAirPlay, id
     unsafe {
         live(airplay, (), |airplay| {
             airplay.pump();
-            if let Some(key) = airplay.pairing.remove(id) {
-                airplay.sender.cancel_pairing(&key);
+            let Some(key) = airplay.pairing.remove(id) else {
+                return;
+            };
+            match airplay.ending.get_mut(id) {
+                // It still waits for the pairing cancelled before it, so
+                // it never started and now never will.
+                Some(next) => *next = None,
+                None => {
+                    airplay.sender.cancel_pairing(&key);
+                    airplay.ending.insert(id.to_owned(), None);
+                }
             }
         })
     }
