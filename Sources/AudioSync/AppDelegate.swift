@@ -235,16 +235,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let loginItem = Self.launchedAsLoginItem()
         DBG.log("[AudioSync] launched\(loginItem ? " at login" : ""); audio engine: the Rust core")
-        if let note = RetiredEngineChoice.launchNote(
-            environment: ProcessInfo.processInfo.environment[RetiredEngineChoice.environmentKey],
-            stored: UserDefaults.standard.string(forKey: RetiredEngineChoice.defaultsKey)) {
-            DBG.log(note)
-        }
-        if let note = RetiredAirPlayChoice.launchNote(
-            environment: ProcessInfo.processInfo.environment[RetiredAirPlayChoice.environmentKey],
-            stored: UserDefaults.standard.string(forKey: RetiredAirPlayChoice.defaultsKey)) {
-            DBG.log(note)
-        }
+        SettingsStore.standard.retiredChoiceNotes(environment: ProcessInfo.processInfo.environment)
+            .forEach { DBG.log($0) }
         AudioSyncCore.logVersion()   // which Rust core this build carries
 
         startUpdater()   // before the menus, which offer Check for Updates… only with an updater
