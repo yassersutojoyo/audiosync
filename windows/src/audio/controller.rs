@@ -617,9 +617,9 @@ impl<D: Driver> Controller<D> {
     }
 
     /// The session's source as track info sees it: which media sessions
-    /// count, and the name the source list shows. An app is looked up once
-    /// per session; when the process snapshot fails, no media session
-    /// counts until a later poll finds the app.
+    /// count, and the name the source list shows. An app or input device is
+    /// looked up once per session; when the process snapshot fails, no media
+    /// session counts until a later poll finds the app.
     fn track_source(&mut self) -> Option<TrackSource> {
         let id = self.session.as_ref()?.source.clone();
         if let Some((known, source)) = &self.track_source
@@ -650,12 +650,20 @@ impl<D: Driver> Controller<D> {
                     follow: Follow::App { executable },
                 }
             }
-            // An input device has no media session; the receiver gets the fallback text.
-            SourceId::Input { .. } => TrackSource {
+            // An input device has no media session; receivers get the
+            // labels with its name, or without one when it isn't listed.
+            SourceId::Input { endpoint_id } => TrackSource {
                 follow: Follow::App {
                     executable: String::new(),
                 },
-                name: None,
+                name: self.driver.inputs().ok().and_then(|readings| {
+                    input_sources(readings)
+                        .into_iter()
+                        .find(|input| {
+                            matches!(&input.id, SourceId::Input { endpoint_id: listed } if listed == endpoint_id)
+                        })
+                        .map(|input| input.name)
+                }),
             },
         };
         self.track_source = Some((id, source.clone()));
@@ -4962,6 +4970,55 @@ mod tests {
             now_playing_sent(&fake),
             [NowPlaying::default()],
             "a receiver that starts later gets no track from before"
+        );
+    }
+
+    #[test]
+    fn an_input_device_source_names_the_device_to_airplay_receivers() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        backend.connect_input("mic", "USB Microphone", "USB");
+        let reader = FakeReader::with_icon(b"icon");
+        backend.set_track_reader(reader.reader());
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend
+            .start(&SourceId::Input {
+                endpoint_id: "mic".to_owned(),
+            })
+            .unwrap();
+        backend.poll();
+        reader.read(None);
+        backend.poll();
+        let sent = now_playing_sent(&fake);
+        let track_sent = sent.last().and_then(|sent| sent.track.as_ref());
+        assert_eq!(
+            track_sent.map(|track| (track.title.as_str(), track.artist.as_str())),
+            Some(("AudioSync", "USB Microphone")),
+            "{sent:?}"
+        );
+    }
+
+    #[test]
+    fn an_input_device_that_cant_be_named_gets_the_unnamed_source_label() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        backend.connect_input("mic", "USB Microphone", "USB");
+        let reader = FakeReader::with_icon(b"icon");
+        backend.set_track_reader(reader.reader());
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend
+            .start(&SourceId::Input {
+                endpoint_id: "mic".to_owned(),
+            })
+            .unwrap();
+        backend.fail_input_listing(Some(BackendError::NotResponding));
+        backend.poll();
+        reader.read(None);
+        backend.poll();
+        let sent = now_playing_sent(&fake);
+        let track_sent = sent.last().and_then(|sent| sent.track.as_ref());
+        assert_eq!(
+            track_sent.map(|track| track.artist.as_str()),
+            Some(crate::audio::now_playing::UNNAMED_SOURCE),
+            "{sent:?}"
         );
     }
 
