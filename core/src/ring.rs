@@ -700,24 +700,35 @@ mod tests {
         let ring = Ring::new(16_384, 8192).unwrap();
         let mut writer = ring.writer().unwrap();
         let samples = vec![0.0f32; 64];
+        let seen = Arc::new(AtomicU64::new(0));
+        let done = Arc::new(AtomicBool::new(false));
         let reader = {
-            let ring = Arc::clone(&ring);
+            let (ring, seen, done) = (Arc::clone(&ring), Arc::clone(&seen), Arc::clone(&done));
             std::thread::spawn(move || {
-                let mut seen = 0u64;
-                while ring.frames_written() < 200_000 {
+                while !done.load(Ordering::Relaxed) {
                     if let Some(stamp) = ring.stamp() {
                         assert_eq!(stamp.time_ns, stamp.written * 1000, "{stamp:?}");
-                        seen += 1;
+                        seen.fetch_add(1, Ordering::Relaxed);
                     }
                 }
-                seen
             })
         };
-        while ring.frames_written() < 200_000 {
+        // A loaded runner can start the reader only after a fixed number of
+        // writes is over, so the writer runs until the reader has read enough.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while ring.frames_written() < 200_000 || seen.load(Ordering::Relaxed) < 10_000 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the reader made fewer than 10,000 stamp loads in 20 s"
+            );
+            if reader.is_finished() {
+                break;
+            }
             let w = ring.frames_written() + 1;
             writer.write_at(&samples, 1, w * 1000);
         }
-        assert!(reader.join().unwrap() > 0);
+        done.store(true, Ordering::Relaxed);
+        reader.join().unwrap();
     }
 
     // covers: S40
