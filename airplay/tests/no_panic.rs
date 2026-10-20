@@ -1855,6 +1855,124 @@ fn the_pairing_survives_any_answer_before_the_pin() {
     }
 }
 
+/// The largest pairing answer body the pairing reads.
+const BODY_CAP: usize = 8 * 1024;
+
+/// A binary plist of `objects` written by hand, the first one on top;
+/// references take 2 bytes and offsets 4.
+fn bplist_objects(objects: &[Vec<u8>]) -> Vec<u8> {
+    let mut body = b"bplist00".to_vec();
+    let mut offsets = Vec::with_capacity(objects.len());
+    for object in objects {
+        offsets.push(u32::try_from(body.len()).expect("a small body"));
+        body.extend_from_slice(object);
+    }
+    let table = body.len() as u64;
+    for offset in offsets {
+        body.extend_from_slice(&offset.to_be_bytes());
+    }
+    body.extend_from_slice(&[0; 6]);
+    // Offset size, then reference size.
+    body.push(4);
+    body.push(2);
+    body.extend_from_slice(&(objects.len() as u64).to_be_bytes());
+    // The top object, then where the offset table starts.
+    body.extend_from_slice(&0u64.to_be_bytes());
+    body.extend_from_slice(&table.to_be_bytes());
+    body
+}
+
+/// The answer with B and the salt plus `x`: arrays `levels` deep, each
+/// holding the next one twice. As shared objects that is a few bytes a
+/// level; read out, it is 2^`levels` empty arrays.
+fn shared_answer(levels: u16) -> Vec<u8> {
+    // {pk: 4, salt: 5, x: 6}, its keys in objects 1 to 3.
+    let mut top = vec![0xD3];
+    for object in 1u16..=6 {
+        top.extend_from_slice(&object.to_be_bytes());
+    }
+    let mut objects = vec![
+        top,
+        b"\x52pk".to_vec(),
+        b"\x54salt".to_vec(),
+        b"\x51x".to_vec(),
+        // Data of 256 and of 16 bytes, each length a 2- or 1-byte integer.
+        [&[0x4F, 0x11, 0x01, 0x00][..], &[2; 256]].concat(),
+        [&[0x4F, 0x10, 0x10][..], &[7; 16]].concat(),
+    ];
+    for level in 0..levels {
+        let next = (7 + level).to_be_bytes();
+        objects.push([&[0xA2][..], &next, &next].concat());
+    }
+    objects.push(vec![0xA0]);
+    bplist_objects(&objects)
+}
+
+/// The answer with B and the salt plus padding data, `len` bytes in all.
+fn padded_answer(len: usize) -> Vec<u8> {
+    let with_padding = |padding: usize| {
+        let mut body = Dictionary::new();
+        body.insert("pk".to_owned(), Value::Data(vec![2; 256]));
+        body.insert("salt".to_owned(), Value::Data(vec![7; 16]));
+        body.insert("padding".to_owned(), Value::Data(vec![0; padding]));
+        plist_bytes(&Value::Dictionary(body))
+    };
+    let first = len - 1024;
+    let body = with_padding(first + len - with_padding(first).len());
+    assert_eq!(body.len(), len);
+    body
+}
+
+/// A pairing driven to the PIN whose answer to the first `/pair-setup-pin`
+/// carries `body`.
+fn answered_with(body: &[u8]) -> PairRun {
+    let mut tamper = |reply: Vec<u8>| {
+        let Some(Message::Response(mut response)) = read_all(&[&reply]).0.pop() else {
+            panic!("the script answers");
+        };
+        response.body = body.to_vec();
+        response.encode()
+    };
+    PairRun::new(Answerer::script()).run(2, &mut tamper, false)
+}
+
+fn assert_protocol_error(run: &PairRun) {
+    assert_eq!(run.pairing.state(), PairingState::Closed);
+    assert!(
+        matches!(
+            run.events.as_slice(),
+            [PairingEvent::Failed { error, wrong_pin: false }]
+                if error.kind == ErrorKind::ProtocolError
+        ),
+        "{:?}",
+        run.events
+    );
+}
+
+// covers: P140
+#[test]
+fn a_pairing_answer_over_the_body_cap_is_refused_unread() {
+    let run = answered_with(&padded_answer(BODY_CAP));
+    assert_eq!(run.pairing.state(), PairingState::WaitingForPin);
+    assert_eq!(run.events, [PairingEvent::PinRequested]);
+    assert_protocol_error(&answered_with(&padded_answer(BODY_CAP + 1)));
+}
+
+// covers: P140
+#[test]
+fn a_pairing_answer_whose_shared_objects_expand_without_bound_is_refused() {
+    // A few shared levels read like any other answer.
+    let run = answered_with(&shared_answer(3));
+    assert_eq!(run.pairing.state(), PairingState::WaitingForPin);
+    assert_eq!(run.events, [PairingEvent::PinRequested]);
+    // Eighteen are a few hundred bytes that would read out as 2^18 arrays,
+    // and a thousand would never finish: refused once the reading passes
+    // its budget.
+    let body = shared_answer(18);
+    assert!(body.len() < 1024, "{} bytes", body.len());
+    assert_protocol_error(&answered_with(&body));
+}
+
 // covers: P140
 #[test]
 fn the_pairing_survives_any_answer_to_the_proof_and_the_seal() {
