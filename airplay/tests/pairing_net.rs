@@ -13,6 +13,7 @@ use std::time::Duration;
 use audiosync_airplay::discovery::{BrowseEvent, Browser, DeviceKey};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
 use audiosync_airplay::pairing::{Credentials, PairingEvent, PinError};
+use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
     ReceiverEvent, ReceiverInfo, Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions,
     SpeakerState,
@@ -499,7 +500,7 @@ fn an_apple_tv_that_also_asks_for_a_password_pairs_with_it_through_the_host_api(
 
     // With it: the PIN pairing runs, every request after the challenge
     // carries `Authorization`, and the credentials come back.
-    sender.start_pairing_with_password(device.clone(), Some("secret".to_owned()));
+    sender.start_pairing_with_password(device.clone(), Some(Secret::from("secret")));
     assert!(
         wait_pairing(&mut events, &sender, &key, 1, |e| *e
             == PairingEvent::PinRequested)

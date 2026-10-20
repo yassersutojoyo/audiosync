@@ -76,6 +76,7 @@ use crate::metadata::{Metadata, MetadataError, TrackInfo};
 use crate::pairing::{self, Credentials, PairingEvent, PinError};
 use crate::rate::NOMINAL_RATE;
 use crate::rtsp::JackStatus;
+use crate::secret::Secret;
 use crate::stream::{
     DEFAULT_INPUT_FRAMES, DEFAULT_LATENCY_FRAMES, MAX_DELAY, SpeakerCounters, SpeakerLatency,
     Stream, StreamConfig, StreamCounters,
@@ -113,8 +114,9 @@ pub struct SpeakerOptions {
     pub delay: Duration,
     /// The speaker volume (P118).
     pub volume: Volume,
-    /// The speaker's password, if it has one (P39). Never logged.
-    pub password: Option<String>,
+    /// The speaker's password, if it has one (P39). Never logged; wiped
+    /// from memory when dropped.
+    pub password: Option<Secret>,
     /// The host enabled PCM for this speaker (P74).
     pub pcm: bool,
     /// The credentials of an earlier pairing with this Apple TV (P54): each
@@ -471,7 +473,7 @@ impl Sender {
     /// pairing with PasswordRequired before `/pair-pin-start`; a password
     /// the receiver turns down ends it with WrongPassword (P135). The
     /// password is never logged.
-    pub fn start_pairing_with_password(&self, device: Device, password: Option<String>) {
+    pub fn start_pairing_with_password(&self, device: Device, password: Option<Secret>) {
         self.command(Command::StartPairing {
             device: Box::new(device),
             password,
@@ -480,10 +482,11 @@ impl Sender {
 
     /// The PIN the user read off the Apple TV (P50, P51). Digits only;
     /// anything else is refused here. A PIN for a receiver whose pairing
-    /// isn't waiting for one is ignored.
+    /// isn't waiting for one is ignored. The copy that travels to the
+    /// sender's thread is wiped from memory once used.
     pub fn submit_pin(&self, key: &DeviceKey, pin: &str) -> Result<(), PinError> {
         pairing::check_pin(pin)?;
-        self.command(Command::SubmitPin(key.clone(), pin.to_owned()));
+        self.command(Command::SubmitPin(key.clone(), Secret::from(pin)));
         Ok(())
     }
 

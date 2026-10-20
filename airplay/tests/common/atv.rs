@@ -26,6 +26,7 @@ use aes_gcm::{AeadInOut, AesGcm, KeyInit};
 use audiosync_airplay::ids::{Entropy, EntropyUnavailable};
 use audiosync_airplay::pairing::{MAX_PAIRING_BODY_BYTES, Output, Pairing, PairingEvent};
 use audiosync_airplay::rtsp::{Request, Response};
+use audiosync_airplay::secret::Secret;
 use crypto_bigint::modular::{FixedMontyForm, FixedMontyParams};
 use crypto_bigint::{Odd, U2048};
 use ctr::cipher::{KeyIvInit, StreamCipher};
@@ -689,7 +690,7 @@ impl PairLink {
         let addresses = vec![SocketAddr::new(super::RECEIVER, super::RAOP_PORT)];
         PairLink {
             pairing: Pairing::new(addresses, ids(), CLIENT, now)
-                .with_password(password.map(str::to_owned)),
+                .with_password(password.map(Secret::from)),
             receiver,
             events: Vec::new(),
             sent: Vec::new(),

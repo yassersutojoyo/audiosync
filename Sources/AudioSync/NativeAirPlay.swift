@@ -173,14 +173,10 @@ final class NativeAirPlay {
         }
     }
 
-    /// Where the pairing store lives:
-    /// ~/Library/Application Support/AudioSync/airplay-pairings.dat (mode
-    /// 0600, written by the core; not the Keychain, which would ask again
-    /// after every locally signed rebuild).
-    static var pairingsPath: String? {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("AudioSync", isDirectory: true)
-            .appendingPathComponent("airplay-pairings.dat").path
+    /// The folder the pairing store's folder is decided in
+    /// (`NativeAirPlayPairings`): ~/Library/Application Support.
+    static var applicationSupport: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
     }
 
     /// What opening the pairing store found, for the debug log.
@@ -247,8 +243,22 @@ final class NativeAirPlay {
         handle = created
         // Before discovery, so a paired Apple TV is listed as able to play
         // from its first report.
-        let loaded = Self.pairingsPath.map { asc_airplay_open_pairings(created, $0) } ?? ASC_AIRPLAY_PAIRINGS_FAILED
-        DispatchQueue.main.async { DBG.log("[AudioSync] native AirPlay: " + Self.pairingsLogLine(loaded)) }
+        // Its folder is kept out of backups first (the file is plaintext),
+        // then the file older builds kept outside it moves in.
+        let support = Self.applicationSupport
+        let excluded = support.map { (try? NativeAirPlayPairings.prepareFolder(in: $0)) != nil } ?? false
+        let moved = support.map { NativeAirPlayPairings.moveOlderFile(in: $0) } ?? .nothing
+        let loaded = support.map { asc_airplay_open_pairings(created, NativeAirPlayPairings.file(in: $0).path) }
+            ?? ASC_AIRPLAY_PAIRINGS_FAILED
+        DispatchQueue.main.async {
+            if let line = NativeAirPlayPairings.moveLogLine(moved) {
+                DBG.log("[AudioSync] native AirPlay: " + line)
+            }
+            DBG.log("[AudioSync] native AirPlay: " + Self.pairingsLogLine(loaded))
+            if !excluded {
+                DBG.log("[AudioSync] native AirPlay: the pairings folder couldn't be kept out of backups")
+            }
+        }
         asc_airplay_set_master(created, master)
         if let taken = asc_airplay_take_input(created) {
             input = taken

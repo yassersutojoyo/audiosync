@@ -27,6 +27,7 @@ use crate::metadata::Metadata;
 use crate::pairing::{self, LegacyVerifier, Pairing, PairingEvent, PairingState};
 use crate::reconnect::Backoff;
 use crate::sdp::Codec;
+use crate::secret::Secret;
 use crate::session::{Output, Session, SessionConfig, SessionEvent, State, TEARDOWN_TIMEOUT};
 use crate::stream::{self, SpeakerConfig, SpeakerCounters, Stream, StreamEvent, Transmit};
 use crate::transport::{self, IoEvent, RtspIo, SessionIo, SessionKey};
@@ -78,9 +79,9 @@ pub(crate) enum Command {
     StartPairing {
         device: Box<Device>,
         /// The speaker's password, if the host has one (P39, P46).
-        password: Option<String>,
+        password: Option<Secret>,
     },
-    SubmitPin(DeviceKey, String),
+    SubmitPin(DeviceKey, Secret),
     CancelPairing(DeviceKey),
     Shutdown,
 }
@@ -488,7 +489,7 @@ impl Driver {
     /// Starts a pairing with a device on a connection of its own (P47), with
     /// the speaker's password when the host gave one (P46); one already
     /// running for it is dropped.
-    fn start_pairing(&mut self, device: Device, password: Option<String>, now: Instant) {
+    fn start_pairing(&mut self, device: Device, password: Option<Secret>, now: Instant) {
         if self.stopping.is_some() {
             return;
         }
@@ -914,7 +915,7 @@ impl Driver {
             Command::SubmitPin(key, pin) => {
                 if let Some(run) = self.pairings.get_mut(&key) {
                     // A PIN while none is awaited is ignored (Sender::submit_pin).
-                    let _ = run.pairing.submit_pin(&pin, &mut OsEntropy, now);
+                    let _ = run.pairing.submit_pin(pin.expose(), &mut OsEntropy, now);
                 }
             }
             Command::CancelPairing(key) => {

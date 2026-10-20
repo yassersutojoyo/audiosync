@@ -14,6 +14,8 @@
 //!   verdicts, and the choice of protocol path, codec and address.
 //! - [`rtsp`], [`sdp`], [`digest`]: RTSP/1.0 messages, the ANNOUNCE body and
 //!   RFC 2617 digest authentication.
+//! - [`secret`]: the password and PIN the host hands over, wiped from memory
+//!   when dropped and never printed.
 //! - [`session`]: the AirPlay 1 session from OPTIONS to TEARDOWN, with volume,
 //!   metadata and the error classification of section 10.
 //! - [`pairing`]: the Apple TV PIN pairing, the credentials it gives the
@@ -49,6 +51,7 @@ pub mod reconnect;
 pub mod rtp;
 pub mod rtsp;
 pub mod sdp;
+pub mod secret;
 pub mod sender;
 pub mod session;
 pub mod store;
