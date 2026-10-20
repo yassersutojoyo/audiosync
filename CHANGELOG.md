@@ -43,6 +43,9 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Opening AudioSync a second time brings the running window forward instead of starting a second copy. When the first copy runs as administrator, a normal launch doesn't start a second copy either, but it can't bring that window forward. If you open it while the running copy is still quitting, the new one starts once the old one is gone, as long as that takes no more than a few seconds.
 - The pairing wording matches the Mac: the dialog is called "Pair with" and the speaker's name, it asks for a PIN, and it says that Cancel turns the speaker off and that it connects without a PIN once paired. A few notices read more clearly too.
 - A debug log for testing: start it with `AUDIOSYNC_DEBUG=1` and it writes `%TEMP%\audiosync-debug.log` (see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)).
+- An output that another app holds for itself (exclusive mode) stays on instead of being switched off. AudioSync tries it again every few seconds and plays to it as soon as it's free, and a notice says what to do: close that app, or stop apps from taking exclusive control of it in Sound settings.
+- When Windows restarts its audio service, the capture starts again by itself. It gets a few tries over about five seconds before streaming stops.
+- If AirPlay can't start at launch, or can't start looking for speakers, you now get the notice "AirPlay stopped or couldn't start" with Retry, the same one as when it stops later.
 
 ## [0.4.1] — 2026-10-17
 
