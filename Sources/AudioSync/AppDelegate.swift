@@ -458,8 +458,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         quitStepsRan = true
         Self.exiting.store(true, ordering: .relaxed)
         DebugTrace.log("[AudioSync] quitting")
-        // Synchronous: a field's focus-loss commit would land after the app exits.
-        appModel.pendingDelays.commitAll()
+        appModel.dropDelayDrafts()
         safetyNetTimer?.invalidate()
         dueTimer?.invalidate()
         // Nothing needs to reach the views any more.

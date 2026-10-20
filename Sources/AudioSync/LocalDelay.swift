@@ -182,8 +182,8 @@ struct AirPlayDelay: Equatable {
 }
 
 /// A delay field's typed text (S181). Keystrokes only change the text; the
-/// value applies on commit (Return or focus loss), once, so typing "220"
-/// doesn't re-time the outputs at 2 and 22 ms on the way. Text the field
+/// value applies on commit (its panel closing, see `DelayPanels`), once, so
+/// typing "220" doesn't re-time the outputs at 2 and 22 ms on the way. Text the field
 /// can't read, or the saved value typed again, applies nothing, and the
 /// field shows the saved value again.
 struct DelayFieldDraft: Equatable {
@@ -198,7 +198,7 @@ struct DelayFieldDraft: Equatable {
         isEditing = true
     }
 
-    /// Return or focus loss: the value to apply (clamped to the delay's
+    /// Return or its panel closing: the value to apply (clamped to the delay's
     /// range by `sanitize`, and shown that way), or nil when there is
     /// nothing to apply. A second commit without typing in between returns nil.
     mutating func commit(saved: Double, sanitize: (Double) -> Double?,
@@ -214,8 +214,8 @@ struct DelayFieldDraft: Equatable {
     }
 
     /// The field holds typed text that isn't the saved value as the field
-    /// shows it: a draft that applies only on Return or focus loss, which the
-    /// field marks so typing doesn't look applied.
+    /// shows it: a draft that applies only when committed, which the field
+    /// marks so typing doesn't look applied.
     func isPending(saved: Double, format: (Double) -> String) -> Bool {
         isEditing && text != format(saved)
     }
@@ -227,29 +227,33 @@ struct DelayFieldDraft: Equatable {
         text = format(saved)
     }
 
-    /// Drop the typing and show the saved value (a step button applied one,
-    /// or Escape).
+    /// Drop the typing and show the saved value (a step button applied one).
     mutating func discard(saved: Double, format: (Double) -> String) {
         isEditing = false
         text = format(saved)
     }
+
+    /// Escape or quit: the typing goes, applied nowhere, so the panel
+    /// closing after it commits nothing.
+    mutating func drop() { isEditing = false }
 }
 
-/// The delay fields holding typing not yet applied, each with its commit.
-/// Quit commits them all: a field's own focus-loss commit waits for a view
-/// update that never comes once the app is terminating.
-final class PendingDelayDrafts {
-    private var commits: [String: () -> Void] = [:]
+/// The delay panels that are open (S181). Return or a row's delay value
+/// closes that row's panel, applying its typing; a click in the window
+/// outside every control closes them all, applying each one's; Escape drops
+/// every typed delay and closes them all. Only closing applies, so leaving
+/// the field for another control applies nothing.
+struct DelayPanels: Equatable {
+    private(set) var open: Set<String> = []
 
-    /// A keystroke in the field `id`; the latest commit replaces the last.
-    func hold(_ id: String, commit: @escaping () -> Void) { commits[id] = commit }
+    func isOpen(_ id: String) -> Bool { open.contains(id) }
 
-    /// The field committed or dropped its typing.
-    func release(_ id: String) { commits[id] = nil }
-
-    func commitAll() {
-        let held = commits
-        commits = [:]
-        for commit in held.values { commit() }
+    /// Its delay value was clicked.
+    mutating func toggle(_ id: String) {
+        if open.remove(id) == nil { open.insert(id) }
     }
+
+    mutating func close(_ id: String) { open.remove(id) }
+
+    mutating func closeAll() { open = [] }
 }

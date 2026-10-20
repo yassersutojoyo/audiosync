@@ -558,8 +558,8 @@ component DraftHint inherits HorizontalLayout {
 
 // The per-speaker sync offset relative to the reference output: coarse and
 // fine steps that apply at once, and a field ("+150", "−250") that applies on
-// Enter or when it loses the focus, so typing "220" doesn't re-time the
-// output at 2 and 22 ms on the way.
+// Enter, the delay button or a click outside every control, so typing "220"
+// doesn't re-time the output at 2 and 22 ms on the way.
 export component SyncControls inherits VerticalLayout {
     in property <string> name;
     in property <string> delay-text;
@@ -569,9 +569,9 @@ export component SyncControls inherits VerticalLayout {
     in property <string> reference-name;
     callback stepped(int);
     callback edited(string);
-    // Enter, or the field lost the focus: apply what was typed.
+    // Enter in the field: apply what was typed.
     callback committed();
-    // Escape in the field: drop what was typed.
+    // Escape in the controls: drop what was typed.
     callback cancelled();
     // Whether one of its steps or its field has the keyboard focus: a count,
     // as the handlers of two controls trading the focus run in any order.
@@ -593,14 +593,13 @@ export component SyncControls inherits VerticalLayout {
         }
     }
 
-    // Escape in the field drops what was typed and shows the applied value
-    // again; the focus loss that follows then applies nothing. Captured
-    // before the field sees the key.
+    // Escape in the field or on a step drops what was typed and shows the
+    // applied value again. Captured before the field sees the key.
     FocusScope {
         focus-on-click: false;
         focus-on-tab-navigation: false;
         capture-key-pressed(event) => {
-            if event.text == Key.Escape && field.has-focus {
+            if event.text == Key.Escape {
                 root.cancelled();
                 field.text = root.delay-text;
                 return accept;
@@ -642,9 +641,6 @@ export component SyncControls inherits VerticalLayout {
                     }
                     changed has-focus => {
                         root.focused-controls += self.has-focus ? 1 : -1;
-                        if !self.has-focus {
-                            root.committed();
-                        }
                     }
                 }
             }
@@ -680,17 +676,17 @@ export component SyncControls inherits VerticalLayout {
 
 // The AirPlay delay: how long the local speakers wait for the AirPlay
 // speakers. Steps and a field, under its own title. Like a speaker's sync
-// controls, the field applies on Enter or when it loses the focus: its lower
-// bound follows the sender's latency, so a half-typed number would clamp.
+// controls, the field applies on Enter or a click outside every control: its
+// lower bound follows the sender's latency, so a half-typed number would clamp.
 export component AirPlayDelayControls inherits VerticalLayout {
     in property <string> delay-text;
     // The field holds typing not yet applied: an outline and a hint say so.
     in property <bool> pending;
     callback stepped(int);
     callback edited(string);
-    // Enter, or the field lost the focus: apply what was typed.
+    // Enter in the field: apply what was typed.
     callback committed();
-    // Escape in the field: drop what was typed.
+    // Escape in the field or on a step: drop what was typed.
     callback cancelled();
 
     spacing: 8px;
@@ -711,14 +707,14 @@ export component AirPlayDelayControls inherits VerticalLayout {
         VerticalLayout {
             spacing: 6px;
 
-            // Escape in the field drops what was typed and shows the applied
-            // value again; the focus loss that follows then applies nothing.
-            // Captured before the field sees the key.
+            // Escape in the field or on a step drops what was typed and
+            // shows the applied value again. Captured before the field sees
+            // the key.
             FocusScope {
                 focus-on-click: false;
                 focus-on-tab-navigation: false;
                 capture-key-pressed(event) => {
-                    if event.text == Key.Escape && field.has-focus {
+                    if event.text == Key.Escape {
                         root.cancelled();
                         field.text = root.delay-text;
                         return accept;
@@ -752,11 +748,6 @@ export component AirPlayDelayControls inherits VerticalLayout {
                             }
                             accepted => {
                                 root.committed();
-                            }
-                            changed has-focus => {
-                                if !self.has-focus {
-                                    root.committed();
-                                }
                             }
                         }
                     }
@@ -797,13 +788,15 @@ export component SpeakerRow inherits Rectangle {
     // A narrow window: a shorter volume slider leaves the name more room.
     in property <bool> compact;
     callback toggled();
+    // A click on the row's blank space, which this row's TouchArea takes.
+    callback blank-clicked();
     callback volume-changed(float);
     callback sync-toggled();
     callback delay-stepped(int);
     callback delay-edited(string);
-    // Enter, or its delay field lost the focus: apply what was typed.
+    // Enter in its delay field: apply what was typed.
     callback delay-committed();
-    // Escape in its delay field: drop what was typed.
+    // Escape in its sync controls: drop what was typed.
     callback delay-cancelled();
     callback auto-connect-toggled(bool);
     callback forget-pairing();
@@ -843,6 +836,13 @@ export component SpeakerRow inherits Rectangle {
     property <bool> fix-focused;
     property <bool> sync-focused;
     property <bool> options-focused;
+    // The sync controls go without reporting that they lost the focus.
+    property <bool> sync-shown: root.item.has-delay && root.item.sync-open;
+    changed sync-shown => {
+        if !self.sync-shown {
+            root.sync-focused = false;
+        }
+    }
     property <RowPart> focused-part: self.sync-focused ? RowPart.sync : self.options-focused ? RowPart.options : self.delay-focused ? RowPart.delay : volume-slider.slider-focused || self.fix-focused ? RowPart.volume : self.badge-focused ? RowPart.toggle : RowPart.none;
     changed focused-part => {
         root.focus-changed(self.focused-part);
@@ -861,6 +861,9 @@ export component SpeakerRow inherits Rectangle {
     // Around the row's content, so the hover fill stays on over the row's
     // own controls (they still get their clicks and drags first).
     hover := TouchArea {
+        clicked => {
+            root.blank-clicked();
+        }
         menu := ContextMenuArea {
             Menu {
                 MenuItem {
@@ -959,6 +962,14 @@ export component SpeakerRow inherits Rectangle {
                             forward-focus: delay-focus;
                             init => {
                                 if root.pending-focus == RowPart.delay {
+                                    root.pending-focus = RowPart.none;
+                                    delay-focus.focus();
+                                }
+                            }
+                            // Already built: it takes a later request too.
+                            property <bool> focus-asked: root.pending-focus == RowPart.delay;
+                            changed focus-asked => {
+                                if self.focus-asked {
                                     root.pending-focus = RowPart.none;
                                     delay-focus.focus();
                                 }
@@ -1123,6 +1134,13 @@ export component SpeakerRow inherits Rectangle {
                                 self.focus-field();
                             }
                         }
+                        property <bool> focus-asked: root.pending-focus == RowPart.sync;
+                        changed focus-asked => {
+                            if self.focus-asked {
+                                root.pending-focus = RowPart.none;
+                                self.focus-field();
+                            }
+                        }
                         stepped(delta) => {
                             root.delay-stepped(delta);
                         }
@@ -1150,6 +1168,7 @@ export component SpeakerRow inherits Rectangle {
 export component GroupRow inherits Rectangle {
     in property <GroupItem> item;
     callback toggled();
+    callback blank-clicked();
     callback rename();
     callback delete();
     // The part of the row with the keyboard focus changed (its toggle or
@@ -1180,6 +1199,9 @@ export component GroupRow inherits Rectangle {
     // Around the row's content, so the hover fill stays on over the row's
     // own controls (they still get their clicks and drags first).
     hover := TouchArea {
+        clicked => {
+            root.blank-clicked();
+        }
         menu := ContextMenuArea {
             Menu {
                 MenuItem {
