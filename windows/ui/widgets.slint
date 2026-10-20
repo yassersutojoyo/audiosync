@@ -1333,6 +1333,8 @@ export component NoticeStack inherits VerticalLayout {
     callback guide-requested(int);
     // Retry on a notice: start AirPlay again.
     callback retry-requested(int);
+    // Open Privacy Settings on a notice: open the microphone privacy page.
+    callback privacy-requested(int);
     // Whether one of a notice's buttons has keyboard focus, each time that
     // changes.
     callback button-focus-changed(bool);
@@ -1433,6 +1435,21 @@ export component NoticeStack inherits VerticalLayout {
                         }
                         // A notice has no guide and Retry both, so the row's
                         // second button focus is this one's.
+                        changed has-focus => {
+                            row.guide-focused = self.has-focus;
+                        }
+                    }
+                }
+
+                if notice.has-privacy: HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        text: Strings.notice-open-privacy;
+                        accessible-label: Strings.notice-open-privacy-label;
+                        clicked => {
+                            root.privacy-requested(notice.id);
+                        }
+                        // Only the microphone notice has this button.
                         changed has-focus => {
                             row.guide-focused = self.has-focus;
                         }

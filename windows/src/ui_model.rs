@@ -265,6 +265,10 @@ pub enum NoticeMessage {
     /// The input device being captured was disconnected, so streaming
     /// stopped.
     InputDisconnected { source: String },
+    /// Windows' privacy settings block microphone access for desktop apps,
+    /// so the input device can't be captured. The notice opens those
+    /// settings.
+    MicrophoneBlocked { source: String },
     /// Capture couldn't start.
     CaptureFailed,
     /// Capture stopped working while streaming, so streaming stopped.

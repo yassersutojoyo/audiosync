@@ -228,6 +228,7 @@ pub struct MockDriver {
     outputs: Vec<Endpoint>,
     /// The active capture endpoints, as Windows would describe them.
     inputs: Vec<EndpointReading>,
+    inputs_error: Option<BackendError>,
     /// Endpoints as Windows would describe them, which go through the
     /// listing's own rules.
     readings: Vec<EndpointReading>,
@@ -286,6 +287,7 @@ impl MockDriver {
             session_pids: Vec::new(),
             outputs: Vec::new(),
             inputs: Vec::new(),
+            inputs_error: None,
             readings: Vec::new(),
             changed: false,
             listing_error: None,
@@ -453,7 +455,7 @@ impl Driver for MockDriver {
     }
 
     fn inputs(&mut self) -> Result<Vec<EndpointReading>, BackendError> {
-        if let Some(error) = &self.listing_error {
+        if let Some(error) = &self.inputs_error {
             return Err(error.clone());
         }
         Ok(self.inputs.clone())
@@ -723,6 +725,11 @@ impl Controller<MockDriver> {
             }),
         });
         driver.changed = true;
+    }
+
+    /// Makes listing the input devices fail with `error`, or work again.
+    pub fn fail_input_listing(&mut self, error: Option<BackendError>) {
+        self.driver_mut().inputs_error = error;
     }
 
     /// Unplugs an input device. A capture from it fails as Windows fails it,

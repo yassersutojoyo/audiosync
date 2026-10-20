@@ -285,6 +285,8 @@ export component MainWindow inherits Window {
     callback notice-guide-requested(int);
     // Retry on a notice: start AirPlay again.
     callback notice-retry-requested(int);
+    // Open Privacy Settings on a notice.
+    callback notice-privacy-requested(int);
     callback close-requested();
     callback exit-requested();
     callback about-requested();
@@ -505,6 +507,9 @@ export component MainWindow inherits Window {
             }
             retry-requested(id) => {
                 root.notice-retry-requested(id);
+            }
+            privacy-requested(id) => {
+                root.notice-privacy-requested(id);
             }
         }
 

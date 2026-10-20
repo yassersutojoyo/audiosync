@@ -356,6 +356,9 @@ pub enum BackendError {
     /// The chosen input device isn't connected (unplugged, disabled or
     /// removed). Unlike [`BackendError::DeviceGone`], waiting doesn't help.
     InputGone,
+    /// Windows denies AudioSync the input device (`E_ACCESSDENIED`): its
+    /// privacy settings block microphone access for desktop apps.
+    MicrophoneBlocked,
     /// The chosen process is not an app (the System or Idle process).
     NotAnApp,
     /// The output device is not connected, Windows audio is not running, or
@@ -392,6 +395,9 @@ impl fmt::Display for BackendError {
             ),
             BackendError::SourceGone => f.write_str("The app isn't running anymore."),
             BackendError::InputGone => f.write_str("The input device isn't connected."),
+            BackendError::MicrophoneBlocked => f.write_str(
+                "Windows blocks microphone access for desktop apps in its privacy settings.",
+            ),
             BackendError::NotAnApp => f.write_str("That process isn't an app."),
             BackendError::DeviceGone => {
                 f.write_str("The device isn't connected, or Windows audio isn't running.")
@@ -595,6 +601,7 @@ mod tests {
             BackendError::ContainsAudioSync,
             BackendError::SourceGone,
             BackendError::InputGone,
+            BackendError::MicrophoneBlocked,
             BackendError::NotAnApp,
             BackendError::DeviceGone,
             BackendError::DeviceBusy,

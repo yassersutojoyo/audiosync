@@ -27,7 +27,7 @@ use audiosync_core::eq::EqProcessor;
 use audiosync_core::ring::RingWriter;
 
 use crate::audio::airplay::FeedLease;
-use windows::Win32::Foundation::{E_FAIL, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows::Win32::Foundation::{E_ACCESSDENIED, E_FAIL, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
@@ -49,7 +49,7 @@ use windows_core::implement;
 
 use super::com::{
     Apartment, Event, NOT_FOUND, ProAudioTask, Ready, Worker, device_code_error, device_error,
-    spawn_worker, system_error, wave_format,
+    input_code_error, spawn_worker, system_error, wave_format,
 };
 use super::devices::enumerator;
 use super::processes::ProcessWatch;
@@ -90,6 +90,9 @@ pub struct LoopbackCapture {
     setup: CaptureAttempt,
     /// What the log calls the capture when it fails.
     call: &'static str,
+    /// Whether it captures an input device, whose failures
+    /// [`input_code_error`] reads.
+    input: bool,
 }
 
 impl CaptureHandle for LoopbackCapture {
@@ -100,7 +103,12 @@ impl CaptureHandle for LoopbackCapture {
         }
         if self.ended.load(Ordering::Acquire) {
             let code = HRESULT(self.failure.load(Ordering::Relaxed));
-            return CaptureState::Failed(device_code_error(self.call, code));
+            let error = if self.input {
+                input_code_error(self.call, code)
+            } else {
+                device_code_error(self.call, code)
+            };
+            return CaptureState::Failed(error);
         }
         CaptureState::Running
     }
@@ -126,6 +134,7 @@ pub(super) fn start(
     equalizer: EqProcessor,
     airplay: Option<FeedLease>,
 ) -> Result<LoopbackCapture, BackendError> {
+    let input = matches!(target, CaptureTarget::Input { .. });
     let (source, call) = match &target {
         CaptureTarget::Loopback(activation) => (
             match activation.mode {
@@ -157,6 +166,7 @@ pub(super) fn start(
         source,
         setup,
         call,
+        input,
     })
 }
 
@@ -257,6 +267,13 @@ fn open_stream(target: &CaptureTarget) -> Result<CaptureStream, BackendError> {
         };
         match initialized {
             Ok(()) => return finish_stream(client, attempt),
+            // No other format gets past the privacy settings.
+            Err(error)
+                if matches!(target, CaptureTarget::Input { .. })
+                    && error.code() == E_ACCESSDENIED =>
+            {
+                return Err(BackendError::MicrophoneBlocked);
+            }
             Err(error) => {
                 first_error.get_or_insert(system_error("IAudioClient::Initialize", &error));
             }
@@ -306,7 +323,7 @@ fn activate_input(endpoint_id: &str) -> Result<IAudioClient, BackendError> {
         }
         device
             .Activate(CLSCTX_ALL, None)
-            .map_err(|error| device_error("IMMDevice::Activate", &error))
+            .map_err(|error| input_code_error("IMMDevice::Activate", error.code()))
     }
 }
 
@@ -625,6 +642,7 @@ mod tests {
             source: None,
             setup: CAPTURE_ATTEMPTS[0],
             call: "process loopback capture",
+            input: false,
         };
         let answers = thread::spawn(move || {
             thread::sleep(HANG);

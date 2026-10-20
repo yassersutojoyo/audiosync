@@ -1,8 +1,8 @@
 //! The WASAPI driver: process loopback and input device capture, one render
-//! stream per output, endpoint listing and notifications, the process snapshot, the
-//! read-only endpoint snapshot of the double-audio check, and each output's
-//! own volume and mute (read, followed, and set only by the fix the user
-//! clicks).
+//! stream per output, endpoint listing and notifications, the process
+//! snapshot, the read-only endpoint snapshot of the double-audio check, and
+//! each output's own volume and mute (read, followed, and set only by the
+//! fix the user clicks).
 //!
 //! Each audio thread initializes COM in the multithreaded apartment and makes
 //! its own COM objects; only endpoint IDs, the ring's reader and writer, and

@@ -158,10 +158,10 @@ fn u32_property(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<u32> {
 }
 
 /// Watches for render and capture endpoints being added, removed, enabled,
-/// disabled or renamed, and for a new default render endpoint. A thread of its own holds the registration,
-/// so the watcher can be used from any thread. Dropping it waits for that
-/// thread as a [`Worker`] does: unregistering can hang while Windows audio
-/// doesn't answer.
+/// disabled or renamed, and for a new default render endpoint. A thread of
+/// its own holds the registration, so the watcher can be used from any
+/// thread. Dropping it waits for that thread as a [`Worker`] does:
+/// unregistering can hang while Windows audio doesn't answer.
 pub(super) struct DeviceWatcher {
     changed: Arc<AtomicBool>,
     stop: Arc<Event>,

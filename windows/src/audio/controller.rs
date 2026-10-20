@@ -350,6 +350,9 @@ pub struct Controller<D: Driver> {
     /// error that repeats at every poll is logged once.
     listing_error: Option<BackendError>,
     sources_error: Option<BackendError>,
+    /// Why the input devices couldn't be listed last time, if they couldn't:
+    /// the log tells once per failure, and the list goes on without them.
+    inputs_error: Option<BackendError>,
     /// The notes of the last listing: notes that repeat at every listing
     /// are logged once.
     listing_notes: Vec<ListingNote>,
@@ -422,6 +425,7 @@ impl<D: Driver> Controller<D> {
             setups: BTreeMap::new(),
             listing_error: None,
             sources_error: None,
+            inputs_error: None,
             listing_notes: Vec::new(),
             last_status: None,
             routing: RoutingState::default(),
@@ -1484,7 +1488,23 @@ impl<D: Driver> Controller<D> {
         let processes = self.driver.processes()?;
         let session_pids = self.driver.session_pids()?;
         let mut sources = source_list(&processes, &session_pids, self.driver.own_pid());
-        sources.extend(input_sources(self.driver.inputs()?));
+        match self.driver.inputs() {
+            Ok(readings) => {
+                if self.inputs_error.take().is_some() {
+                    self.log
+                        .log(|| "listing the input devices works again".to_owned());
+                }
+                sources.extend(input_sources(readings));
+            }
+            Err(error) => {
+                if self.inputs_error.as_ref() != Some(&error) {
+                    self.log.log(|| {
+                        format!("listing the input devices failed, so none are offered: {error}")
+                    });
+                    self.inputs_error = Some(error);
+                }
+            }
+        }
         Ok(sources)
     }
 }
@@ -1995,14 +2015,16 @@ impl<D: Driver> AudioBackend for Controller<D> {
 }
 
 /// Whether a capture that couldn't start again after a loss may start at a
-/// later try: Windows audio isn't back yet, or the device is held or failed
-/// for now. An app that quit, or a source that can't be captured, stays so.
+/// later try: Windows audio isn't back yet, the device is held or failed for
+/// now, or an input device is inactive for a moment (a USB microphone after a
+/// wake, or while Windows lists it again). An app that quit, or a source that
+/// can't be captured, stays so.
 /// An activation Windows never completed, or a capture thread that didn't
 /// answer in time ([`BackendError::NotResponding`]), is the last try: each
 /// one held the UI thread for the whole wait.
 fn may_start_later(error: &BackendError) -> bool {
     match error {
-        BackendError::DeviceGone | BackendError::DeviceBusy => true,
+        BackendError::DeviceGone | BackendError::DeviceBusy | BackendError::InputGone => true,
         BackendError::System { code, .. } => *code != TIMED_OUT,
         _ => false,
     }
@@ -3543,7 +3565,7 @@ mod tests {
     }
 
     #[test]
-    fn an_input_device_unplugged_while_streaming_stops_streaming_at_the_first_restart() {
+    fn an_input_device_unplugged_while_streaming_stops_streaming_once_the_restart_tries_run_out() {
         let mut backend = backend();
         backend.connect_input("mic", "Microphone", "USB");
         let source = SourceId::Input {
@@ -3558,18 +3580,72 @@ mod tests {
         );
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
         backend.disconnect_input("mic");
-        // The stream fails as one lost to a Windows audio restart does; the
-        // restart finds the device gone, which waiting doesn't change.
-        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        // The stream fails as one lost to a Windows audio restart does, and
+        // is tried again as that one is: a USB device can be inactive for a
+        // moment after a wake.
+        poll_quietly(&mut backend, 5 * RESTART_DELAY_POLLS);
         assert_eq!(
             backend.poll(),
             [BackendEvent::Stopped {
                 reason: StopReason::CaptureFailed(BackendError::InputGone),
             }]
         );
-        assert_eq!(backend.driver().capture_attempts(), 2);
+        assert_eq!(backend.driver().capture_attempts(), 1 + 5);
         assert_eq!(backend.running_source(), None);
         assert!(playing(&backend).is_empty());
+    }
+
+    #[test]
+    fn an_input_device_back_within_the_restart_tries_is_captured_again() {
+        let mut backend = backend();
+        backend.connect_input("mic", "Microphone", "USB");
+        let source = SourceId::Input {
+            endpoint_id: "mic".to_owned(),
+        };
+        backend.start(&source).unwrap();
+        backend.disconnect_input("mic");
+        poll_quietly(&mut backend, 2 * RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().capture_attempts(), 1 + 1, "one try failed");
+        backend.connect_input("mic", "Microphone", "USB");
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().capture_attempts(), 1 + 2);
+        assert!(backend.driver().capture_running());
+        assert_eq!(backend.running_source(), Some(source));
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    #[test]
+    fn a_failed_input_listing_leaves_the_inputs_out_and_keeps_the_apps() {
+        let mut backend = backend();
+        backend.connect_input("mic", "Microphone", "USB");
+        backend.fail_input_listing(Some(BackendError::System {
+            call: "IMMDeviceEnumerator::EnumAudioEndpoints",
+            code: 1,
+        }));
+        let ids = |backend: &mut MockBackend| -> Vec<SourceId> {
+            backend
+                .list_sources()
+                .expect("the apps are listed")
+                .into_iter()
+                .map(|source| source.id)
+                .collect()
+        };
+        let apps = [
+            SourceId::WholeSystem,
+            SourceId::App {
+                root_pid: PLAYER_PID,
+            },
+        ];
+        assert_eq!(ids(&mut backend), apps);
+        assert_eq!(ids(&mut backend), apps, "every refresh");
+        backend.fail_input_listing(None);
+        assert_eq!(ids(&mut backend).len(), 3, "the input is back");
+    }
+
+    #[test]
+    fn a_microphone_blocked_by_windows_privacy_settings_isnt_tried_again() {
+        assert!(!may_start_later(&BackendError::MicrophoneBlocked));
+        assert!(may_start_later(&BackendError::InputGone));
     }
 
     #[test]

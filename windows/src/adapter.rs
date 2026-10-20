@@ -1123,6 +1123,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendError::InputGone => NoticeMessage::InputNotConnected {
                 source: self.chosen_name(),
             },
+            BackendError::MicrophoneBlocked => NoticeMessage::MicrophoneBlocked {
+                source: self.chosen_name(),
+            },
             BackendError::SourceGone if app => NoticeMessage::SourceNotRunning {
                 source: self.chosen_name(),
             },
@@ -1340,6 +1343,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     }
                     StopReason::CaptureFailed(BackendError::InputGone) => {
                         NoticeMessage::InputDisconnected {
+                            source: self.chosen_name(),
+                        }
+                    }
+                    StopReason::CaptureFailed(BackendError::MicrophoneBlocked) => {
+                        NoticeMessage::MicrophoneBlocked {
                             source: self.chosen_name(),
                         }
                     }
@@ -2377,6 +2385,28 @@ mod tests {
     }
 
     #[test]
+    fn a_microphone_blocked_by_windows_privacy_settings_gets_its_own_notice() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        adapter.refresh_sources();
+        adapter.select_source(&mic());
+        adapter
+            .audio
+            .refuse_captures(Some(BackendError::MicrophoneBlocked));
+        // Switching a speaker on starts streaming.
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(!adapter.snapshot().running);
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::MicrophoneBlocked {
+                source: "Microphone (USB Audio)".to_owned()
+            }]
+        );
+    }
+
+    #[test]
     fn an_input_device_unplugged_while_streaming_stops_streaming_with_a_notice() {
         let mut adapter = adapter();
         adapter
@@ -2388,7 +2418,7 @@ mod tests {
         adapter.set_running(true);
         assert!(adapter.snapshot().running);
         adapter.audio.disconnect_input(MIC);
-        for _ in 0..4 {
+        for _ in 0..20 {
             adapter.poll();
         }
         let state = adapter.snapshot();
