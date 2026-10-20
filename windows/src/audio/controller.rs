@@ -15,6 +15,12 @@
 //! stays on, as the user chose, is reported once as busy, and is tried again
 //! at every poll until it plays.
 //!
+//! A capture lost because Windows audio restarted, or the device it captures
+//! through went away, ends its session and starts it again about a second
+//! later, with streaming on all along; if that capture can't start, or is
+//! lost again within a few seconds, streaming stops and the loss is reported.
+//! A capture whose app quit, or that failed otherwise, ends streaming at once.
+//!
 //! Everything the controller does and reports goes to the debug log
 //! ([`DebugLog`]), from the thread that calls it, never from an audio
 //! thread; while a session runs, [`AudioBackend::poll`] adds a status line
@@ -83,6 +89,17 @@ const STATUS_INTERVAL: Duration = Duration::from_secs(5);
 /// How often a running session checks whether the source is heard twice
 /// ([`routing`](super::routing)).
 const ROUTING_INTERVAL: Duration = Duration::from_secs(3);
+
+/// A capture lost because Windows audio restarted, or its device went away
+/// ([`BackendError::DeviceGone`]), starts again at this poll after the one
+/// that noticed: about a second later at the UI's two polls a second, so
+/// that the audio service is back.
+const RESTART_DELAY_POLLS: u32 = 2;
+
+/// A capture that started again counts as working once it has run this many
+/// polls (about five seconds); a loss before then means the restart failed,
+/// and streaming stops. After it, the next loss is restarted again.
+const RESTART_TRIAL_POLLS: u32 = 10;
 
 /// How a running capture is doing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -219,6 +236,9 @@ struct Session<D: Driver> {
     equalizer: EqControl,
     /// The playing outputs, by endpoint ID.
     outputs: BTreeMap<String, Playing<D::Renderer>>,
+    /// Polls left in the trial of a capture that started again after a loss
+    /// ([`RESTART_TRIAL_POLLS`]); 0 for one that runs as it should.
+    trial_polls: u32,
 }
 
 /// A playing output and the handles its delay and gain are changed through.
@@ -300,6 +320,9 @@ pub struct Controller<D: Driver> {
     /// A start that waits for the last session's outputs to fade out: the
     /// first poll after they have faded starts it (S186).
     next_start: Option<SourceId>,
+    /// Polls left before `next_start` restarts a capture that was lost
+    /// ([`RESTART_DELAY_POLLS`]); `None` when it isn't a restart.
+    restart_wait: Option<u32>,
     /// The own volume and mute of each output that is on and connected
     /// (spec S192 to S202), followed through Windows' notifications.
     device_volumes: device_volume::Followed,
@@ -333,6 +356,7 @@ impl<D: Driver> Controller<D> {
             starter: None,
             retiring: Vec::new(),
             next_start: None,
+            restart_wait: None,
             device_volumes: device_volume::Followed::default(),
             busy: BTreeSet::new(),
         }
@@ -894,6 +918,7 @@ impl<D: Driver> Controller<D> {
     /// either way.
     fn begin_session(&mut self, source: &SourceId) -> Result<(), BackendError> {
         self.next_start = None;
+        self.restart_wait = None;
         self.reap(false);
         if !self.last_session_fading() {
             return self.start_session(source);
@@ -909,24 +934,65 @@ impl<D: Driver> Controller<D> {
         Ok(())
     }
 
+    /// Ends the session whose capture was lost because Windows audio
+    /// restarted or its device went away, and starts it again
+    /// [`RESTART_DELAY_POLLS`] polls later (`start_when_faded`). Streaming
+    /// stays on meanwhile, the AirPlay speakers in the stream included, as
+    /// for a change of source.
+    fn restart_capture(&mut self) {
+        let Some(source) = self.session.as_ref().map(|session| session.source.clone()) else {
+            return;
+        };
+        self.log.log(|| {
+            "the capture was lost: Windows audio restarted or its device went away; it starts \
+             again in a moment"
+                .to_owned()
+        });
+        self.end_session();
+        self.next_start = Some(source);
+        self.restart_wait = Some(RESTART_DELAY_POLLS);
+    }
+
     /// Whether an ended session's outputs are still fading out.
     fn last_session_fading(&self) -> bool {
         self.retiring.iter().any(|entry| entry.session.is_some())
     }
 
     /// Starts the session that waits for the last one's outputs to fade, once
-    /// they have; a capture that can't start then ends it with that reason.
+    /// they have, and for a restart its delay too; a capture that can't start
+    /// then ends it with that reason.
     fn start_when_faded(&mut self) {
+        if let Some(wait) = self.restart_wait.as_mut() {
+            *wait = wait.saturating_sub(1);
+            if *wait > 0 {
+                return;
+            }
+        }
         if self.last_session_fading() {
             return;
         }
         let Some(source) = self.next_start.take() else {
             return;
         };
+        let restart = self.restart_wait.take().is_some();
         match self.start_session(&source) {
-            Ok(()) => self.follow_device_volumes(),
+            Ok(()) => {
+                if restart {
+                    self.log.log(|| "the capture runs again".to_owned());
+                    if let Some(session) = self.session.as_mut() {
+                        session.trial_polls = RESTART_TRIAL_POLLS;
+                    }
+                }
+                self.follow_device_volumes();
+            }
             Err(error) => {
-                self.log.log(|| format!("the start failed: {error}"));
+                self.log.log(|| {
+                    if restart {
+                        format!("the capture couldn't start again: {error}")
+                    } else {
+                        format!("the start failed: {error}")
+                    }
+                });
                 self.airplay_streaming(false);
                 self.pending.push(BackendEvent::Stopped {
                     reason: StopReason::CaptureFailed(error),
@@ -966,6 +1032,7 @@ impl<D: Driver> Controller<D> {
             capture,
             equalizer,
             outputs: BTreeMap::new(),
+            trial_polls: 0,
         });
         self.refresh_if_needed(false);
         let failures = self.sync_outputs();
@@ -1175,6 +1242,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
             self.log.log(|| "stopping".to_owned());
         }
         self.next_start = None;
+        self.restart_wait = None;
         self.end_session();
         self.airplay_streaming(false);
     }
@@ -1434,15 +1502,28 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // a start that waited for them goes ahead.
         self.reap(false);
         self.start_when_faded();
-        // A session whose capture stopped ends first.
-        let stop_reason = self
-            .session
-            .as_ref()
-            .and_then(|session| match session.capture.state() {
-                CaptureState::Running => None,
+        // A session whose capture stopped ends first. One lost because
+        // Windows audio restarted, or its device went away, starts again a
+        // moment later, once; streaming stays on meanwhile.
+        let mut lost = false;
+        let stop_reason = match self.session.as_mut() {
+            None => None,
+            Some(session) => match session.capture.state() {
+                CaptureState::Running => {
+                    session.trial_polls = session.trial_polls.saturating_sub(1);
+                    None
+                }
+                CaptureState::Failed(BackendError::DeviceGone) if session.trial_polls == 0 => {
+                    lost = true;
+                    None
+                }
                 CaptureState::SourceQuit => Some(StopReason::SourceQuit),
                 CaptureState::Failed(error) => Some(StopReason::CaptureFailed(error)),
-            });
+            },
+        };
+        if lost {
+            self.restart_capture();
+        }
         if let Some(reason) = stop_reason {
             self.log
                 .log(|| format!("the capture ended: {}", describe_stop(&reason)));
@@ -2589,6 +2670,80 @@ mod tests {
     fn the_session_ends_when_capture_fails() {
         let mut backend = backend();
         backend.start(&SourceId::WholeSystem).unwrap();
+        let error = BackendError::System {
+            call: "IAudioCaptureClient::GetBuffer",
+            code: 0x8000_4005_u32 as i32,
+        };
+        backend.fail_capture(error.clone());
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(error),
+            }]
+        );
+        assert_eq!(backend.running_source(), None);
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 1, "no restart");
+    }
+
+    /// Polls `count` times, expecting no event.
+    fn poll_quietly(backend: &mut MockBackend, count: u32) {
+        for _ in 0..count {
+            let events = backend.poll();
+            assert!(events.is_empty(), "{events:?}");
+        }
+    }
+
+    #[test]
+    fn a_capture_lost_to_a_windows_audio_restart_starts_again_a_moment_later() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(
+            backend.running_source(),
+            Some(SourceId::WholeSystem),
+            "streaming stays on"
+        );
+        assert!(playing(&backend).is_empty());
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS - 1);
+        assert_eq!(backend.driver().captures_started().len(), 1, "not yet");
+        poll_quietly(&mut backend, 1);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert!(backend.driver().capture_running());
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+    }
+
+    #[test]
+    fn a_capture_that_cant_start_again_after_windows_audio_restarted_stops_streaming() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(BackendError::DeviceGone),
+            }]
+        );
+        assert_eq!(backend.running_source(), None);
+        assert!(playing(&backend).is_empty());
+        backend.refuse_captures(None);
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS + 1);
+        assert_eq!(backend.running_source(), None, "restarted only once");
+    }
+
+    #[test]
+    fn a_restarted_capture_that_fails_again_soon_stops_streaming() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS + 1);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        // A second or two later: within its trial.
+        poll_quietly(&mut backend, 3);
         backend.fail_capture(BackendError::DeviceGone);
         assert_eq!(
             backend.poll(),
@@ -2597,6 +2752,56 @@ mod tests {
             }]
         );
         assert_eq!(backend.running_source(), None);
+    }
+
+    #[test]
+    fn a_restarted_capture_that_ran_a_while_is_restarted_again_after_the_next_loss() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS + 1);
+        poll_quietly(&mut backend, RESTART_TRIAL_POLLS);
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS + 1);
+        assert_eq!(backend.driver().captures_started().len(), 3);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    #[test]
+    fn a_stop_while_the_capture_waits_to_restart_cancels_the_restart() {
+        let mut backend = backend();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        backend.stop();
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS + 1);
+        assert_eq!(backend.driver().captures_started().len(), 1);
+        assert_eq!(backend.running_source(), None);
+    }
+
+    #[test]
+    fn an_app_that_quits_ends_the_session_without_a_restart() {
+        let mut backend = backend();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        // A capture whose app quit reports that first, whatever its stream
+        // says (EC6).
+        backend.quit_app(PLAYER_PID);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS + 1);
+        assert_eq!(backend.driver().captures_started().len(), 1);
     }
 
     #[test]

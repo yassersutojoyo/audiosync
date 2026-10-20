@@ -2158,6 +2158,20 @@ mod tests {
     }
 
     #[test]
+    fn capture_lost_to_a_windows_audio_restart_comes_back_without_a_notice() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio_mut().fail_capture(BackendError::DeviceGone);
+        for _ in 0..3 {
+            adapter.poll();
+            assert!(adapter.snapshot().running, "streaming stays on");
+        }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert_eq!(adapter.audio.driver().captures_started().len(), 2);
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+    }
+
+    #[test]
     fn capture_that_cant_start_leaves_streaming_off_with_a_notice() {
         let mut adapter = adapter();
         adapter
