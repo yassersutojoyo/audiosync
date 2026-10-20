@@ -256,15 +256,15 @@ pub(super) fn spawn_ready_within<T: Send + 'static>(
 }
 
 /// How long dropping a [`Worker`] waits for its thread while another thread
-/// let go before is still in its Windows call. Windows audio isn't answering
-/// then, and the thread most likely hangs in the same service, so quitting
-/// waits one answer timeout for the first such thread and this little for
-/// each one after it. A thread whose calls answer ends within milliseconds
-/// of being told to.
+/// or call let go before is still in its Windows call. Windows audio isn't
+/// answering then, and the thread most likely hangs in the same service, so
+/// quitting waits one answer timeout for the first thread or call that hangs
+/// and this little for each thread after it. A thread whose calls answer
+/// ends within milliseconds of being told to.
 pub(super) const STUCK_GRACE: Duration = Duration::from_millis(250);
 
-/// The threads let go while still in a Windows call (see [`Worker`]),
-/// counted until they end.
+/// The threads, and the calls other threads wait for, let go while still in
+/// a Windows call ([`Awaited::let_go`]), counted until they end.
 pub(super) struct StuckThreads(AtomicUsize);
 
 impl StuckThreads {
@@ -291,27 +291,28 @@ impl StuckThreads {
     }
 }
 
-/// The audio threads of this process that Windows audio left hanging. Every
-/// output, the capture and the endpoint watcher share it, since they all
-/// wait on the same Windows audio service.
+/// The audio threads and volume calls of this process that Windows audio
+/// left hanging. Every output, the capture, the endpoint watcher and the
+/// volume thread share it, since they all wait on the same Windows audio
+/// service.
 pub(super) static WINDOWS_AUDIO: StuckThreads = StuckThreads::new();
 
-/// A [`Worker`]'s thread runs.
+/// What's awaited (a thread, or a call another thread makes) runs.
 const RUNNING: u8 = 0;
 /// It ended.
 const ENDED: u8 = 1;
 /// It was let go while it ran, and is counted as stuck until it ends.
 const LET_GO: u8 = 2;
 
-/// What a [`Worker`] and its thread share.
+/// What an [`Awaited`] and its [`Running`] share.
 struct Lifetime {
     state: AtomicU8,
     stuck: &'static StuckThreads,
 }
 
 impl Lifetime {
-    /// Counts the thread as stuck until it ends, unless it ended already;
-    /// returns whether it was let go.
+    /// Counts what's awaited as stuck until it ends, unless it ended
+    /// already; returns whether it was let go.
     fn let_go(&self) -> bool {
         // Counted before it's marked, so its end never uncounts it first.
         self.stuck.0.fetch_add(1, Ordering::AcqRel);
@@ -326,7 +327,7 @@ impl Lifetime {
         marked
     }
 
-    /// The thread ends.
+    /// What's awaited ends.
     fn end(&self) {
         if self.state.swap(ENDED, Ordering::AcqRel) == LET_GO {
             self.stuck.0.fetch_sub(1, Ordering::AcqRel);
@@ -334,10 +335,10 @@ impl Lifetime {
     }
 }
 
-/// Held by a [`Worker`]'s thread from its start, and dropped as the thread
-/// ends, a panic included: it marks the end, then closes the channel the
-/// worker waits on.
-struct Running {
+/// Held by a thread while it runs, or while it makes a call another thread
+/// waits for, and dropped as that ends, a panic included: it marks the end,
+/// then closes the channel the [`Awaited`] waits on.
+pub(super) struct Running {
     lifetime: Arc<Lifetime>,
     _ended: mpsc::Sender<()>,
 }
@@ -348,14 +349,57 @@ impl Drop for Running {
     }
 }
 
+/// The end of a thread, or of a call another thread makes, as the thread
+/// that waits for it sees it.
+pub(super) struct Awaited {
+    lifetime: Arc<Lifetime>,
+    /// Disconnects as it ends.
+    ended: mpsc::Receiver<()>,
+}
+
+impl Awaited {
+    /// Whether it ended within `timeout`.
+    fn ended_within(&self, timeout: Duration) -> bool {
+        !matches!(
+            self.ended.recv_timeout(timeout),
+            Err(RecvTimeoutError::Timeout)
+        )
+    }
+
+    /// Whether it still runs.
+    pub(super) fn pending(&self) -> bool {
+        self.lifetime.state.load(Ordering::Acquire) != ENDED
+    }
+
+    /// Stops waiting for it: unless it ended already, it counts as stuck
+    /// until it ends, since it's in a Windows call that doesn't answer.
+    /// Returns whether it was let go.
+    pub(super) fn let_go(&self) -> bool {
+        self.lifetime.let_go()
+    }
+}
+
+/// A [`Running`] for the thread or call to hold, and the [`Awaited`] that
+/// sees it end, counted in `stuck` once let go.
+pub(super) fn awaited(stuck: &'static StuckThreads) -> (Running, Awaited) {
+    let lifetime = Arc::new(Lifetime {
+        state: AtomicU8::new(RUNNING),
+        stuck,
+    });
+    let (sender, ended) = mpsc::channel();
+    let running = Running {
+        lifetime: Arc::clone(&lifetime),
+        _ended: sender,
+    };
+    (running, Awaited { lifetime, ended })
+}
+
 /// A thread that ends once told to, started by [`spawn_worker`]. Its owner
 /// tells it to end, then [`finish`](Worker::finish)es it, which the drop
 /// does too if it wasn't done before.
 pub(super) struct Worker {
     thread: Option<JoinHandle<()>>,
-    /// Disconnects as the thread ends.
-    ended: mpsc::Receiver<()>,
-    lifetime: Arc<Lifetime>,
+    end: Awaited,
     /// How long `finish` waits while no other thread is stuck.
     timeout: Duration,
 }
@@ -367,8 +411,8 @@ impl Worker {
     }
 
     /// Waits for the thread to end, as long as an answer at most (or
-    /// [`STUCK_GRACE`] while another thread is stuck), and joins it if it
-    /// did. A thread still in a Windows call by then (unregistering a
+    /// [`STUCK_GRACE`] while another thread or call is stuck), and joins it
+    /// if it did. A thread still in a Windows call by then (unregistering a
     /// listener or stopping a stream while Windows audio hangs) is let go
     /// instead, counted as stuck until it ends: it finishes by itself once
     /// Windows audio answers, and waiting for it would hold AudioSync's
@@ -376,21 +420,30 @@ impl Worker {
     /// objects are its own, what it shares is behind `Arc`s), so it can
     /// outlive this value.
     pub(super) fn finish(&mut self) {
-        let Some(thread) = self.thread.take() else {
-            return;
-        };
-        let timeout = if self.lifetime.stuck.any() {
+        let timeout = if self.end.lifetime.stuck.any() {
             self.timeout.min(STUCK_GRACE)
         } else {
             self.timeout
         };
-        match self.ended.recv_timeout(timeout) {
+        self.finish_within(timeout);
+    }
+
+    /// [`finish`](Worker::finish) without waiting: for a thread known to be
+    /// in a call given up before.
+    pub(super) fn let_go(&mut self) {
+        self.finish_within(Duration::ZERO);
+    }
+
+    fn finish_within(&mut self, timeout: Duration) {
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        if !self.end.ended_within(timeout) && self.end.let_go() {
             // Detached: it ends by itself once its call returns.
-            Err(RecvTimeoutError::Timeout) if self.lifetime.let_go() => drop(thread),
+            drop(thread);
+        } else {
             // It ended, or is ending: what's left of it takes no time.
-            _ => {
-                let _ = thread.join();
-            }
+            let _ = thread.join();
         }
     }
 }
@@ -421,15 +474,7 @@ pub(super) fn spawn_worker_within<T: Send + 'static>(
     stuck: &'static StuckThreads,
     body: impl FnOnce(Ready<T>) + Send + 'static,
 ) -> Result<(Worker, T), BackendError> {
-    let lifetime = Arc::new(Lifetime {
-        state: AtomicU8::new(RUNNING),
-        stuck,
-    });
-    let (sender, ended) = mpsc::channel();
-    let running = Running {
-        lifetime: Arc::clone(&lifetime),
-        _ended: sender,
-    };
+    let (running, end) = awaited(stuck);
     let started = spawn_ready_within(name, timeout, move |ready| {
         // Declared first, so it's dropped last, as the thread ends.
         let _running = running;
@@ -439,14 +484,13 @@ pub(super) fn spawn_worker_within<T: Send + 'static>(
         Ok((thread, setup)) => Ok((
             Worker {
                 thread: Some(thread),
-                ended,
-                lifetime,
+                end,
                 timeout,
             },
             setup,
         )),
         Err(BackendError::NotResponding) => {
-            let _ = lifetime.let_go();
+            let _ = end.let_go();
             Err(BackendError::NotResponding)
         }
         Err(error) => Err(error),
