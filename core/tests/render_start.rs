@@ -77,6 +77,10 @@ struct Outcome {
     open_at: Option<usize>,
     /// The reader's lag right after the callback that primed it.
     lag_after_prime: Option<i64>,
+    /// Capture frames the converter was slowed down by, in all and in the
+    /// one callback that slowed it most.
+    slowed: u64,
+    most_slowed: u64,
 }
 
 fn write_blocks(writer: &mut RingWriter, block: usize, count: usize) {
@@ -126,6 +130,8 @@ fn run_for(clocks: Clocks, seconds: u64) -> Outcome {
         played: Vec::new(),
         open_at: None,
         lag_after_prime: None,
+        slowed: 0,
+        most_slowed: 0,
     };
     loop {
         let write_at = k * write_period;
@@ -134,7 +140,9 @@ fn run_for(clocks: Clocks, seconds: u64) -> Outcome {
             break;
         }
         if pull_at < write_at {
+            let slowed = renderer.slowed_frames();
             renderer.render(&mut out);
+            outcome.most_slowed = outcome.most_slowed.max(renderer.slowed_frames() - slowed);
             outcome
                 .played
                 .extend(out.chunks_exact(2).map(|frame| frame[0]));
@@ -152,6 +160,7 @@ fn run_for(clocks: Clocks, seconds: u64) -> Outcome {
     }
     outcome.counters = control.counters();
     outcome.shortfall = renderer.shortfall_frames();
+    outcome.slowed = renderer.slowed_frames();
     outcome
 }
 
@@ -171,6 +180,10 @@ fn assert_clean_start(clocks: Clocks) {
         "one prime and no correction: {clocks:?}"
     );
     assert_eq!(outcome.shortfall, 0, "{clocks:?}");
+    if clocks.drift_ppm == 0 {
+        // With the clocks in step the reader always holds enough.
+        assert_eq!(outcome.slowed, 0, "slowed down in step: {clocks:?}");
+    }
     let open = outcome.open_at.expect("the output faded in");
     // The converter rings for a few frames at the very start; after the
     // fade-in every frame is the source's level.
@@ -245,13 +258,20 @@ fn an_earliest_converted_output_on_a_clock_100_ppm_off_never_runs_dry() {
     // slow for 30 seconds: a fast one may never run it dry, and neither
     // makes a drift correction in that time (a slow one falls behind by
     // about 144 frames, far inside the dead band), so the bound is none.
+    // A fast one slows the converter by the frames its clock gains, about
+    // 4.8 a second, so at most 144 in all, and by at most a 64th of a
+    // callback's reads at once. The callbacks take many phases against the
+    // blocks here: the Mac's Bluetooth speaker, larger callbacks, the
+    // Windows capture's 10 ms blocks with 512-frame callbacks, and other
+    // rates of the 44.1 kHz family.
     for (device_rate, callback, block) in [
         (44_100, 512, 512),
-        (44_100, 441, 480),
         (44_100, 4096, 512),
-        (96_000, 512, 512),
-        (32_000, 256, 512),
+        (44_100, 512, 480),
+        (88_200, 512, 512),
+        (22_050, 256, 512),
     ] {
+        let reads = reader_frames_bound(callback, RATE, device_rate) as u64;
         for running in [false, true] {
             for phase in PHASES {
                 for drift_ppm in [-100, 100] {
@@ -278,6 +298,20 @@ fn an_earliest_converted_output_on_a_clock_100_ppm_off_never_runs_dry() {
                         "one prime and no correction: {clocks:?}"
                     );
                     assert_eq!(outcome.shortfall, 0, "{clocks:?}");
+                    if drift_ppm < 0 {
+                        assert_eq!(outcome.slowed, 0, "slowed down: {clocks:?}");
+                    } else {
+                        assert!(
+                            outcome.slowed <= 144,
+                            "{} slowed: {clocks:?}",
+                            outcome.slowed
+                        );
+                    }
+                    assert!(
+                        outcome.most_slowed * 64 <= reads,
+                        "{} slowed in one callback: {clocks:?}",
+                        outcome.most_slowed
+                    );
                     let open = outcome.open_at.expect("the output faded in");
                     let gaps = outcome.played[open..]
                         .iter()

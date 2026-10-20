@@ -17,7 +17,11 @@
 //! [`LEAD_BLOCK_CAP_MS`]), since a converting output's callbacks never line
 //! up with the capture's blocks. Only the first read of a callback may
 //! correct drift; its later reads are held and what they report as due is
-//! ignored.
+//! ignored. A converting renderer whose reader holds fewer frames than a
+//! callback needs (its device clock runs fast and the lead's slack is used
+//! up) slows its converter over that callback by the shortage, up to
+//! 1 / [`SLOW_DOWN_SHARE`] of the callback's reads, instead of letting the
+//! reader run dry.
 //!
 //! The fade (S184 to S188):
 //!
@@ -83,6 +87,12 @@ pub const CALLBACK_WINDOW: usize = 8;
 /// gap writes, and well inside the readers' 35 ms dead band, so silence
 /// written at once after a stall never raises the lead by more than that.
 pub const LEAD_BLOCK_CAP_MS: u32 = 25;
+
+/// A converting renderer slows its converter by at most this share of a
+/// callback's reads, a sixteenth (S206): a reader that runs shorter than
+/// that over one callback isn't kept off W by a fast clock but by a
+/// stopped writer, and runs dry as S53 says.
+pub const SLOW_DOWN_SHARE: usize = 16;
 
 /// The most capture-rate frames the resampler can ask for to produce
 /// `device_frames` frames at `device_rate`, whatever state it is in: the
@@ -345,6 +355,8 @@ pub struct Renderer {
     /// Device frames the resampler could not produce and that were played
     /// as silence. Stays 0 unless [`reader_frames_bound`] is wrong.
     shortfall_frames: u64,
+    /// Capture frames the converter was slowed down by in all (S206).
+    slowed_frames: u64,
 }
 
 impl fmt::Debug for Renderer {
@@ -402,6 +414,7 @@ impl Renderer {
             correction_due: false,
             frames_after_fade: None,
             shortfall_frames: 0,
+            slowed_frames: 0,
         })
     }
 
@@ -442,6 +455,13 @@ impl Renderer {
         self.shortfall_frames
     }
 
+    /// Capture frames the converter was slowed down by to keep the reader
+    /// off W (S206), in all; each one plays the output one capture frame
+    /// later. Stays 0 without conversion.
+    pub fn slowed_frames(&self) -> u64 {
+        self.slowed_frames
+    }
+
     /// Sets the device's period, in device frames: the callback it asks for
     /// when it is on time (a Windows endpoint's period, which each wake
     /// refills). The lead then counts it, or a callback when that is larger,
@@ -475,6 +495,7 @@ impl Renderer {
         let frames = out.len() / channels;
         self.update_lead(frames);
         self.take_requests();
+        self.keep_reader_off_w(frames);
         let ramp = self.stage.begin(self.gain.get(), frames);
         let read_capacity = self.stereo.len() / 2;
         let mut done = 0;
@@ -536,6 +557,33 @@ impl Renderer {
         };
         self.reader
             .set_lead_frames(i64::try_from(lead).unwrap_or(i64::MAX));
+    }
+
+    /// Slows the converter over a callback of `frames` device frames when
+    /// the reader would go on from where it is but holds fewer frames than
+    /// the callback needs, by that shortage, if it is at most
+    /// 1 / [`SLOW_DOWN_SHARE`] of the need (S206): a device clock that runs
+    /// fast never runs the reader dry. Called after the control's requests
+    /// are taken, so the first read's hold is known.
+    fn keep_reader_off_w(&mut self, frames: usize) {
+        if self.resampler.is_passthrough() || self.resampler.is_slowing() || frames < 2 {
+            return;
+        }
+        let first = self
+            .resampler
+            .input_frames_for(frames.min(RENDER_CHUNK))
+            .min(self.stereo.len() / 2);
+        let Some(held) = self.reader.readable_frames(first, !self.fade.is_closed()) else {
+            return;
+        };
+        let need = self.resampler.input_frames_for(frames);
+        let short = need.saturating_sub(usize::try_from(held).unwrap_or(0));
+        if short == 0 || short > need / SLOW_DOWN_SHARE {
+            return;
+        }
+        if self.resampler.slow_down(short, frames - 1) {
+            self.slowed_frames += short as u64;
+        }
     }
 
     /// Takes the control's requests at the start of a callback (S190).
