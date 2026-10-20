@@ -188,8 +188,7 @@ extension SpeakerTag {
 /// Text being typed into a sync field, kept apart from the applied value so a
 /// half-typed number isn't overwritten on every redraw.
 final class SyncDraft: ObservableObject {
-    @Published var text = ""
-    var lastApplied: Double?
+    @Published var field = DelayFieldDraft()
 }
 
 // MARK: - Status item and panel

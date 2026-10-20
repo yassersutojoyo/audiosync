@@ -48,12 +48,12 @@ struct AppSettings: Equatable {
         /// volume curve. Converted to `localVolumes` once, then removed (S75).
         static let legacyLocalGains = "localGainByUID"
         /// "swift" or "rust", from builds that offered a choice of audio
-        /// engine. Never written now; a value left there has no effect
-        /// (`RetiredEngineChoice`).
+        /// engine. Never written now; a value left there has no effect, is
+        /// noted once and removed (`RetiredEngineChoice`).
         static let retiredEngineChoice = "engineImpl"
         /// "native" or "owntone", from builds that offered a choice of AirPlay
-        /// sender. Never written now; a value left there has no effect
-        /// (`RetiredAirPlayChoice`).
+        /// sender. Never written now; a value left there has no effect, is
+        /// noted once and removed (`RetiredAirPlayChoice`).
         static let retiredAirPlayChoice = "airplayImpl"
         /// Each local speaker's offset in ms relative to the reference
         /// (−2000…20 000), by device UID (S175). Missing is 0.
@@ -253,8 +253,9 @@ struct SettingsStore {
 
 /// The audio engine choice of older builds: the `engineImpl` setting and the
 /// `AUDIOSYNC_ENGINE` environment variable, "swift" or "rust". Every session
-/// runs on the Rust core now, so either one is only noted in the debug log,
-/// once per launch, and the stored value is left as it is.
+/// runs on the Rust core now, so either one is only noted in the debug log:
+/// the variable at every launch that has it, the setting once, since that
+/// launch removes it (`SettingsStore.retiredChoiceNotes`).
 enum RetiredEngineChoice {
     static let defaultsKey = AppSettings.Keys.retiredEngineChoice
     static let environmentKey = "AUDIOSYNC_ENGINE"
@@ -275,7 +276,8 @@ enum RetiredEngineChoice {
 /// The AirPlay sender choice of older builds: the `airplayImpl` setting and
 /// the `AUDIOSYNC_AIRPLAY` environment variable, "native" or "owntone".
 /// AudioSync's own sender is the only one now, so either one is only noted in
-/// the debug log, once per launch, and the stored value is left as it is.
+/// the debug log: the variable at every launch that has it, the setting once,
+/// since that launch removes it (`SettingsStore.retiredChoiceNotes`).
 enum RetiredAirPlayChoice {
     static let defaultsKey = AppSettings.Keys.retiredAirPlayChoice
     static let environmentKey = "AUDIOSYNC_AIRPLAY"
@@ -290,5 +292,23 @@ enum RetiredAirPlayChoice {
         return "[AudioSync] " + found.joined(separator: " and ")
             + (found.count == 1 ? " no longer chooses" : " no longer choose")
             + " the AirPlay sender: AudioSync's own sender is the only one"
+    }
+}
+
+extension SettingsStore {
+    /// The debug log lines for the retired engine and AirPlay sender choices
+    /// at launch. A stored choice is removed once read, whatever its value,
+    /// so the next launch notes only an environment variable still set.
+    func retiredChoiceNotes(environment: [String: String]) -> [String] {
+        let engine = read(RetiredEngineChoice.defaultsKey)
+        let airPlay = read(RetiredAirPlayChoice.defaultsKey)
+        if engine != nil { write(nil, RetiredEngineChoice.defaultsKey) }
+        if airPlay != nil { write(nil, RetiredAirPlayChoice.defaultsKey) }
+        return [
+            RetiredEngineChoice.launchNote(environment: environment[RetiredEngineChoice.environmentKey],
+                                           stored: engine as? String),
+            RetiredAirPlayChoice.launchNote(environment: environment[RetiredAirPlayChoice.environmentKey],
+                                            stored: airPlay as? String),
+        ].compactMap { $0 }
     }
 }

@@ -78,8 +78,9 @@ enum NativeSpeakerEvent: Equatable {
     case timeline(latencyMs: Double, restarted: Bool)
     /// The sender stopped working after an internal error (a panic in it):
     /// it lists, plays and reports nothing more. `detail`: where the panic
-    /// happened ("panic at <file>:<line>"), or empty, for the debug log
-    /// (S205).
+    /// happened ("panic at <file>:<line>", or "latest panic at
+    /// <file>:<line>" when one of its own threads ended), or empty, for the
+    /// debug log (S205).
     case failed(detail: String)
     /// A pairing's Apple TV shows a PIN.
     case pinNeeded(id: String)
