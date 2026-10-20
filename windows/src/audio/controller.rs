@@ -10,10 +10,12 @@
 //! output sync (spec S117, S161), keyed by endpoint ID. An output whose
 //! device goes away stops, whether its stream notices or the device list no
 //! longer shows the device, and stays on; it plays again once the device is
-//! listed (S68). An output that can't start is turned off and reported (S69),
-//! except one whose device another app holds in exclusive mode: that one
-//! stays on, as the user chose, is reported once as busy, and is tried again
-//! every few seconds until it plays.
+//! listed (S68). One whose stream ended while the device was still listed,
+//! and that can't start again, is lost once the list drops the device. An
+//! output that can't start is turned off and reported (S69), except one
+//! whose device another app holds in exclusive mode: that one stays on, as
+//! the user chose, is reported once as busy, and is tried again every few
+//! seconds until it plays.
 //!
 //! A capture lost because Windows audio restarted, or the device it captures
 //! through went away, ends its session and starts it again about a second
@@ -47,7 +49,7 @@
 //! sender's timeline (P143); a new L_s from the sender re-times every
 //! playing output.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -352,6 +354,11 @@ pub struct Controller<D: Driver> {
     /// haven't played since or been switched off, each with the polls left
     /// before its next try ([`BUSY_RETRY_POLLS`]).
     busy: BTreeMap<String, u32>,
+    /// The outputs on that don't play while their device is still listed:
+    /// starting them failed as if the device were gone (their stream may
+    /// have just ended). Once the listing drops one, it is lost
+    /// ([`BackendEvent::OutputLost`]), as an output that played is.
+    unplayable: BTreeSet<String>,
 }
 
 impl<D: Driver> Controller<D> {
@@ -384,6 +391,7 @@ impl<D: Driver> Controller<D> {
             restart_tries_left: 0,
             device_volumes: device_volume::Followed::default(),
             busy: BTreeMap::new(),
+            unplayable: BTreeSet::new(),
         }
     }
 
@@ -711,6 +719,7 @@ impl<D: Driver> Controller<D> {
                 .start_renderer(&endpoint, reader, control.clone(), Arc::clone(&gain))
             {
                 Ok(handle) => {
+                    self.unplayable.remove(&endpoint.id);
                     if self.busy.remove(&endpoint.id).is_some() {
                         self.log.log(|| {
                             format!(
@@ -745,14 +754,18 @@ impl<D: Driver> Controller<D> {
                     );
                 }
                 // Listed a moment ago and gone now: it stays on and plays
-                // once it is listed again (S68).
+                // once it is listed again (S68), and is lost once the listing
+                // drops it. Told once; the next tries, at every poll, are
+                // quiet.
                 Err(BackendError::DeviceGone) => {
-                    self.log.log(|| {
-                        format!(
-                            "output {} went away while starting; it stays on",
-                            label(&self.names, &endpoint.id)
-                        )
-                    });
+                    if self.unplayable.insert(endpoint.id.clone()) {
+                        self.log.log(|| {
+                            format!(
+                                "output {} went away while starting; it stays on",
+                                label(&self.names, &endpoint.id)
+                            )
+                        });
+                    }
                 }
                 // Another app holds the device in exclusive mode: it stays
                 // on, as the user chose, and plays once that app lets go.
@@ -818,6 +831,32 @@ impl<D: Driver> Controller<D> {
             });
         }
         unlisted
+    }
+
+    /// Forgets the outputs that couldn't play while their device was listed
+    /// ([`Controller::unplayable`]) whose device the last successful listing
+    /// no longer shows, or that were switched off, and returns the IDs of
+    /// the first: they are lost now.
+    fn forget_unlisted_unplayable(&mut self) -> Vec<String> {
+        let present = &self.present;
+        let policy = &self.policy;
+        let mut gone = Vec::new();
+        self.unplayable.retain(|id| {
+            let listed = present.iter().any(|endpoint| endpoint.id == *id);
+            if !listed && policy.settings(id).enabled {
+                gone.push(id.clone());
+            }
+            listed && policy.settings(id).enabled
+        });
+        for id in &gone {
+            self.log.log(|| {
+                format!(
+                    "output {}, which couldn't play, is no longer listed",
+                    label(&self.names, id)
+                )
+            });
+        }
+        gone
     }
 
     fn report_failures(&mut self, failures: Vec<(String, BackendError)>) {
@@ -1048,8 +1087,10 @@ impl<D: Driver> Controller<D> {
 
     /// Ends the wait of every output reported busy, once streaming stopped:
     /// nothing plays to them now. A later session tells again of one whose
-    /// device is still held.
+    /// device is still held. The outputs that couldn't play are forgotten
+    /// too: a device that goes away while nothing streams isn't lost.
     fn release_busy(&mut self) {
+        self.unplayable.clear();
         for id in std::mem::take(&mut self.busy).into_keys() {
             self.pending.push(BackendEvent::OutputFree { id });
         }
@@ -1689,8 +1730,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // notification arrived, so the list is read again then too.
         self.refresh_if_needed(!ended.is_empty());
         // An output whose device is no longer listed is lost too, whether or
-        // not its stream noticed.
+        // not its stream noticed, and so is one that couldn't play while its
+        // device was still listed.
         ended.extend(self.stop_unlisted_outputs());
+        ended.extend(self.forget_unlisted_unplayable());
         let failures = self.sync_outputs();
         // An output that left or joined moves the others (S177).
         self.retime();
