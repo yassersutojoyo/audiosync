@@ -359,13 +359,18 @@ unsafe extern "system" fn min_size_procedure(
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
-    use windows::Win32::UI::Shell::DefSubclassProc;
+    use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass};
     use windows::Win32::UI::WindowsAndMessaging::{
         GWL_EXSTYLE, GWL_STYLE, GetMenu, GetWindowLongW, IsIconic, IsZoomed, MINMAXINFO,
-        SWP_NOSIZE, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPOS, WM_GETMINMAXINFO,
+        SWP_NOSIZE, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPOS, WM_GETMINMAXINFO, WM_NCDESTROY,
         WM_WINDOWPOSCHANGING,
     };
 
+    if message == WM_NCDESTROY {
+        // SAFETY: removes this procedure from the window being destroyed, as
+        // the comctl32 subclass documentation asks.
+        let _ = unsafe { RemoveWindowSubclass(hwnd, Some(min_size_procedure), MIN_SIZE_SUBCLASS) };
+    }
     // SAFETY: passes the message on unchanged, as a subclass must.
     let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
     if (message != WM_GETMINMAXINFO && message != WM_WINDOWPOSCHANGING) || lparam.0 == 0 {
@@ -383,6 +388,7 @@ unsafe extern "system" fn min_size_procedure(
         )
     };
     let mut rect = RECT::default();
+    // With a menu this counts one menu row; a menu wrapped to two rows is not measured.
     // SAFETY: `rect` is a valid, writable RECT.
     if unsafe { AdjustWindowRectExForDpi(&mut rect, style, has_menu, ex_style, dpi) }.is_err() {
         return result;
