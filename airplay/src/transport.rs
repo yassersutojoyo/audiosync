@@ -19,7 +19,8 @@
 //!   speaker (P3, P141).
 //!
 //! Both UDP threads take datagrams only from the receiver: the address the
-//! connection reached, from any port. Others are dropped unread and counted
+//! connection reached (a global IPv6 one by its /64 prefix), from any port
+//! ([`from_receiver`]). Others are dropped unread and counted
 //! (P86, P91, P144), so another host on the network can't draw timing
 //! replies or resends, or keep a lost session's timing alive (P131).
 //!
@@ -445,10 +446,18 @@ impl Drop for RtspIo {
 }
 
 /// Whether a datagram from `source` came from the session's receiver,
-/// whose address (in canonical form) is `receiver`: the same address, from
-/// any port, since receivers pick their own (P86, P91).
+/// whose address (in canonical form) is `receiver`, from any port, since
+/// receivers pick their own (P86, P91). An IPv4 or IPv6 link-local address
+/// must match exactly. Any other IPv6 address only needs the same /64
+/// prefix: a receiver may send from one of its temporary addresses
+/// (RFC 8981), which keeps the prefix and changes the rest.
 fn from_receiver(source: SocketAddr, receiver: IpAddr) -> bool {
-    source.ip().to_canonical() == receiver
+    match (source.ip().to_canonical(), receiver) {
+        (IpAddr::V6(source), IpAddr::V6(receiver)) if !receiver.is_unicast_link_local() => {
+            source.octets()[..8] == receiver.octets()[..8]
+        }
+        (source, receiver) => source == receiver,
+    }
 }
 
 /// Answers timing requests from `receiver` (P90, P91, P92): the receive
@@ -804,6 +813,35 @@ mod tests {
             "no timing reply to the stranger"
         );
         drop(io);
+    }
+
+    // Which source addresses count as the receiver: any port; IPv4 and
+    // IPv6 link-local exactly, IPv4-mapped IPv6 as IPv4; other IPv6 within
+    // the same /64, so a temporary address of the receiver's passes.
+    // covers: P86, P91
+    #[test]
+    fn the_receiver_is_its_address_from_any_port() {
+        let from = |source: &str, receiver: &str| {
+            let source: SocketAddr = source.parse().expect("source");
+            let receiver: IpAddr = receiver.parse().expect("receiver");
+            from_receiver(source, receiver)
+        };
+        assert!(from("192.0.2.7:6002", "192.0.2.7"));
+        assert!(from("192.0.2.7:51000", "192.0.2.7"));
+        assert!(!from("192.0.2.8:6002", "192.0.2.7"));
+        assert!(from("[::ffff:192.0.2.7]:6002", "192.0.2.7"));
+        assert!(!from("[::ffff:192.0.2.8]:6002", "192.0.2.7"));
+        assert!(from("[fe80::1%3]:6002", "fe80::1"));
+        assert!(!from("[fe80::2%3]:6002", "fe80::1"));
+        assert!(from("[2001:db8:1:2::10]:6002", "2001:db8:1:2::10"));
+        assert!(from(
+            "[2001:db8:1:2:a1b2:c3d4:e5f6:789]:6002",
+            "2001:db8:1:2::10"
+        ));
+        assert!(!from("[2001:db8:1:3::10]:6002", "2001:db8:1:2::10"));
+        assert!(!from("[fe80::10]:6002", "2001:db8:1:2::10"));
+        assert!(!from("192.0.2.7:6002", "2001:db8:1:2::10"));
+        assert!(!from("[::1]:6002", "127.0.0.1"));
     }
 
     // The rule on any system: with the receiver at an address no local
