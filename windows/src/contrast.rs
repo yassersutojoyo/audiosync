@@ -456,9 +456,9 @@ fn keyboard_shortcuts_are_declared() {
 /// short name for the dismiss button, and the
 /// note that discovery has found no speaker yet, which shows only while it
 /// runs; an empty Connected Speakers list otherwise says just that it's
-/// empty, or that its virtual outputs are hidden. The AudioSync Guide
-/// (`help-` strings) names AirPlay too, with the receivers the sender plays
-/// and the ones it can't yet.
+/// empty, or that its virtual outputs are hidden. Six strings of the
+/// AudioSync Guide name AirPlay too, with the receivers the sender plays and
+/// the ones it can't yet.
 #[test]
 fn no_text_promises_airplay() {
     let strings = include_str!("../ui/strings.slint");
@@ -474,7 +474,16 @@ fn no_text_promises_airplay() {
                 || line.contains("notice-retry-label: @tr(\"Retry starting AirPlay\")")
                 || line.contains("return @tr(\"AirPlay stopped\");")
                 || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
-                || line.contains("out property <string> help-"),
+                || [
+                    "help-intro",
+                    "help-start",
+                    "help-sync",
+                    "help-volume",
+                    "help-airplay-title",
+                    "help-airplay",
+                ]
+                .iter()
+                .any(|name| line.contains(&format!("out property <string> {name}: @tr("))),
             "strings.slint: {}",
             line.trim()
         );

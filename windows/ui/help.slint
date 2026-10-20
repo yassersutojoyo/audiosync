@@ -111,74 +111,85 @@ export component HelpWindow inherits Window {
         }
 
         VerticalLayout {
-            scroll := ScrollView {
+            Rectangle {
                 vertical-stretch: 1;
 
-                VerticalLayout {
-                    // The text wraps at the view's width instead of widening it.
-                    width: scroll.visible-width;
-                    padding: 18px;
-                    spacing: 18px;
-                    alignment: start;
+                scroll := ScrollView {
 
-                    Text {
-                        text: Strings.help-intro;
-                        color: Tokens.text;
-                        wrap: word-wrap;
-                        min-height: self.preferred-height;
-                    }
+                    VerticalLayout {
+                        // The text wraps at the view's width instead of widening it.
+                        width: scroll.visible-width;
+                        padding: 18px;
+                        spacing: 18px;
+                        alignment: start;
 
-                    HelpSection {
-                        title: Strings.help-start-title;
-                        body: Strings.help-start;
-                    }
+                        Text {
+                            text: Strings.help-intro;
+                            color: Tokens.text;
+                            wrap: word-wrap;
+                            min-height: self.preferred-height;
+                        }
 
-                    HelpSection {
-                        title: Strings.help-sync-title;
-                        body: Strings.help-sync;
-                    }
+                        HelpSection {
+                            title: Strings.help-start-title;
+                            body: Strings.help-start;
+                        }
 
-                    HelpSection {
-                        title: Strings.help-more-title;
-                        body: Strings.help-more;
-                    }
+                        HelpSection {
+                            title: Strings.help-sync-title;
+                            body: Strings.help-sync;
+                        }
 
-                    HelpSection {
-                        title: Strings.help-airplay-title;
-                        body: Strings.help-airplay;
-                    }
+                        HelpSection {
+                            title: Strings.help-more-title;
+                            body: Strings.help-more;
+                        }
 
-                    HelpSection {
-                        title: Strings.help-notices-title;
-                        body: Strings.help-notices;
-                    }
+                        HelpSection {
+                            title: Strings.help-airplay-title;
+                            body: Strings.help-airplay;
+                        }
 
-                    HelpSection {
-                        title: Strings.help-bluetooth-title;
-                        body: Strings.help-bluetooth;
-                    }
+                        HelpSection {
+                            title: Strings.help-notices-title;
+                            body: Strings.help-notices;
+                        }
 
-                    HelpSection {
-                        title: Strings.help-volume-title;
-                        body: Strings.help-volume;
-                    }
+                        HelpSection {
+                            title: Strings.help-bluetooth-title;
+                            body: Strings.help-bluetooth;
+                        }
 
-                    HelpSection {
-                        title: Strings.help-double-title;
-                        body: Strings.help-double;
+                        HelpSection {
+                            title: Strings.help-volume-title;
+                            body: Strings.help-volume;
+                        }
 
-                        if root.show-how-shown: HorizontalLayout {
-                            alignment: start;
+                        HelpSection {
+                            title: Strings.help-double-title;
+                            body: Strings.help-double;
 
-                            Button {
-                                text: Strings.notice-show-how;
-                                accessible-label: Strings.notice-show-how-label;
-                                clicked => {
-                                    root.show-how-requested();
+                            if root.show-how-shown: HorizontalLayout {
+                                alignment: start;
+
+                                Button {
+                                    text: Strings.notice-show-how;
+                                    accessible-label: Strings.notice-show-how-label;
+                                    clicked => {
+                                        root.show-how-requested();
+                                    }
                                 }
                             }
                         }
                     }
+                }
+
+                // The text has the keyboard focus (the scroll keys work), as
+                // the other windows' focus rings show.
+                Rectangle {
+                    border-width: keys.has-focus ? 2px : 0px;
+                    border-color: Tokens.focus;
+                    border-radius: 4px;
                 }
             }
 
