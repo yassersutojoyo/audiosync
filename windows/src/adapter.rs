@@ -436,12 +436,20 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.must_save = false;
         match self.settings_file.save(&current) {
             Ok(kept) if self.settings_file.path().is_some() => {
-                if kept.is_some() {
+                if let Some(kept) = kept {
                     self.log.log(|| {
-                        format!(
-                            "settings: a newer AudioSync's file was kept as {} before saving over it",
-                            crate::settings::NEWER_FILE_NAME
-                        )
+                        let name = kept.file_name().unwrap_or_default().to_string_lossy();
+                        if name == crate::settings::NEWER_FILE_NAME {
+                            format!(
+                                "settings: a newer AudioSync's file was kept as {name} before \
+                                 saving over it"
+                            )
+                        } else {
+                            format!(
+                                "settings: the file ignored at launch was kept as {name} before \
+                                 saving over it"
+                            )
+                        }
                     });
                 }
                 self.log.log(|| "settings: saved".to_owned());

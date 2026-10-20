@@ -6,13 +6,52 @@
 //! Each file is replaced as a whole: written to a temporary file next to it,
 //! flushed to disk, then renamed over it, so a crash or a power cut leaves
 //! the old file or the new one, never half of one.
+//!
+//! A file is read at launch with one more try after a short pause when the
+//! first read fails for another reason than the file not being there
+//! ([`read_at_launch`]): an antivirus scan or a backup tool may hold it for a
+//! moment. A file that still can't be read, or that turns out damaged, is
+//! never saved over unseen: each store keeps it aside first
+//! ([`keep_aside`]), and refuses to save while it can't be read.
 
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The app's data folder under `%LOCALAPPDATA%`.
 pub const FOLDER_NAME: &str = "AudioSync";
+
+/// How long a read that failed waits before its second try.
+pub const READ_RETRY_PAUSE: Duration = Duration::from_millis(500);
+
+/// The file at `path`, read once more after [`READ_RETRY_PAUSE`] when the
+/// first read fails for another reason than the file not being there.
+/// Blocks for that pause, so it is for launch, not for the UI's polls.
+pub fn read_at_launch(path: &Path) -> io::Result<Vec<u8>> {
+    match fs::read(path) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => {
+            std::thread::sleep(READ_RETRY_PAUSE);
+            fs::read(path)
+        }
+        read => read,
+    }
+}
+
+/// Copies the file at `path` to `name` in the same folder (replacing an
+/// older copy there) and returns the copy's path; `None` when there is no
+/// file at `path`. A file that can't be read is an error: it is then not
+/// kept, so the caller must not replace it.
+pub fn keep_aside(path: &Path, name: &str) -> io::Result<Option<PathBuf>> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let kept = path.with_file_name(name);
+    write_atomically(&kept, &bytes)?;
+    Ok(Some(kept))
+}
 
 /// The app's data folder, `%LOCALAPPDATA%\AudioSync`, or `None` when Windows
 /// names no such folder. The folder may not exist yet.
@@ -109,6 +148,33 @@ mod tests {
         let name = temporary.file_name().and_then(|name| name.to_str());
         let expected = format!("file.{}.tmp", std::process::id());
         assert_eq!(name, Some(expected.as_str()));
+    }
+
+    #[test]
+    fn a_file_kept_aside_is_copied_whole_and_an_unreadable_one_is_an_error() {
+        let folder = test_dir("data-folder-keep-aside");
+        let path = folder.join("file.json");
+        assert!(
+            keep_aside(&path, "file.kept.json")
+                .expect("no file")
+                .is_none()
+        );
+        fs::write(folder.join("file.kept.json"), b"an older copy").expect("written");
+        fs::write(&path, b"contents").expect("written");
+        let kept = keep_aside(&path, "file.kept.json").expect("kept");
+        assert_eq!(kept, Some(folder.join("file.kept.json")));
+        assert_eq!(
+            fs::read(folder.join("file.kept.json")).unwrap(),
+            b"contents"
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"contents", "left in place");
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(keep_aside(&path, "file.kept.json").is_err());
+        assert_eq!(
+            fs::read(folder.join("file.kept.json")).unwrap(),
+            b"contents"
+        );
     }
 
     #[test]

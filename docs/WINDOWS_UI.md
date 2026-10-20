@@ -41,7 +41,10 @@ volume, the master volume, auto-connect marks, groups, the equalizer, View >
 Show Virtual Devices and the main window's size and place (fitted to the
 monitor it opens on) and whether it was maximized. A file from a newer
 AudioSync is ignored and kept as `settings.newer.json` before the first save
-over it. As on the Mac, a launch starts streaming only through an
+over it. One that's damaged, or that can't be read at launch even at a second
+try (another program may hold it for a moment), is ignored too and kept as
+`settings.ignored.json` before the first save over it; while it still can't be
+read, nothing is saved over it. As on the Mac, a launch starts streaming only through an
 auto-connect speaker that is there.
 Apple TV pairings have their own file (see the pairing prompt below).
 

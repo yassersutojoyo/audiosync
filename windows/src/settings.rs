@@ -12,17 +12,22 @@
 //!
 //! The file carries a format version ([`VERSION`]). A file from an older
 //! version is read for the fields it has; one from a newer version, one that
-//! can't be read or one that isn't valid JSON is ignored as a whole (the
-//! defaults apply, and the next change writes a fresh file; a newer
-//! version's file is first kept as [`NEWER_FILE_NAME`]). Fields this
-//! version doesn't know are ignored, missing ones take their defaults, and
-//! values out of range are clamped ([`Settings::clamped`]). Nothing here
-//! panics on a bad file, and the caller logs what [`Loaded`] says.
+//! can't be read or one that isn't valid JSON is ignored as a whole: the
+//! defaults apply, and the next change writes a fresh file, after keeping
+//! the old one aside (a newer version's as [`NEWER_FILE_NAME`], any other as
+//! [`IGNORED_FILE_NAME`]). A file that can't be read is tried once more at
+//! launch (another program may hold it for a moment), and while it still
+//! can't be read nothing is saved over it, since it may hold the user's
+//! settings. Fields this version doesn't know are ignored, missing ones take
+//! their defaults, and values out of range are clamped
+//! ([`Settings::clamped`]). Nothing here panics on a bad file, and the
+//! caller logs what [`Loaded`] says.
 //!
 //! The file is replaced as a whole through a temporary file
 //! (`crate::data_folder::write_atomically`), so a crash while saving leaves
 //! the old file or the new one.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
@@ -46,6 +51,11 @@ pub const FILE_NAME: &str = "settings.json";
 /// Where a newer AudioSync's settings file is kept before this build first
 /// saves over it.
 pub const NEWER_FILE_NAME: &str = "settings.newer.json";
+
+/// Where a settings file this build ignored for another reason (it couldn't
+/// be read at launch, or it was damaged) is kept before this build first
+/// saves over it.
+pub const IGNORED_FILE_NAME: &str = "settings.ignored.json";
 
 /// The format version this build writes, and the newest it reads.
 ///
@@ -443,7 +453,8 @@ impl fmt::Display for Loaded {
             }
             Loaded::Ignored(reason) => write!(
                 f,
-                "ignored: {reason}; the defaults apply, and the next change writes a new file"
+                "ignored: {reason}; the defaults apply, and the next change keeps it aside \
+                 and writes a new file"
             ),
         }
     }
@@ -453,6 +464,10 @@ impl fmt::Display for Loaded {
 #[derive(Clone, Debug, Default)]
 pub struct SettingsFile {
     path: Option<PathBuf>,
+    /// The last load ignored the file there (it couldn't be read, or it
+    /// wasn't a settings file this build reads): it is kept aside before
+    /// the next save replaces it.
+    keep_aside: Cell<bool>,
 }
 
 impl SettingsFile {
@@ -464,38 +479,40 @@ impl SettingsFile {
 
     /// The file at `path`.
     pub fn at(path: PathBuf) -> SettingsFile {
-        SettingsFile { path: Some(path) }
+        SettingsFile {
+            path: Some(path),
+            keep_aside: Cell::new(false),
+        }
     }
 
     /// No file: the settings last until the app quits.
     pub fn in_memory() -> SettingsFile {
-        SettingsFile { path: None }
+        SettingsFile::default()
     }
 
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
     }
 
-    /// The settings in the file, or the defaults, with what was found.
+    /// The settings in the file, or the defaults, with what was found. A
+    /// read that fails is tried once more after a short pause
+    /// ([`data_folder::read_at_launch`]). A file it ignores is kept aside by
+    /// the next [`SettingsFile::save`].
     pub fn load(&self) -> (Settings, Loaded) {
         let Some(path) = &self.path else {
             return (Settings::default(), Loaded::NoFile);
         };
-        let text = match fs::read(path) {
-            Ok(bytes) => bytes,
+        let read = match data_folder::read_at_launch(path) {
+            Ok(bytes) => String::from_utf8(bytes)
+                .map_err(|_| "it isn't text".to_owned())
+                .and_then(|text| Settings::from_json(&text)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                self.keep_aside.set(false);
                 return (Settings::default(), Loaded::NoFile);
             }
-            Err(error) => {
-                return (
-                    Settings::default(),
-                    Loaded::Ignored(format!("it can't be read ({error})")),
-                );
-            }
+            Err(error) => Err(format!("it can't be read, even at a second try ({error})")),
         };
-        let read = String::from_utf8(text)
-            .map_err(|_| "it isn't text".to_owned())
-            .and_then(|text| Settings::from_json(&text));
+        self.keep_aside.set(read.is_err());
         match read {
             Ok(read) => read,
             Err(reason) => (Settings::default(), Loaded::Ignored(reason)),
@@ -504,11 +521,12 @@ impl SettingsFile {
 
     /// Replaces the file with `settings`. Without a file it does nothing.
     ///
-    /// A file a newer AudioSync wrote is first copied to
-    /// [`NEWER_FILE_NAME`] next to it (replacing an older copy), so going
-    /// back to an older build doesn't lose the newer one's settings; the
-    /// copy's path is returned when that happened. If the copy fails, the
-    /// file is left alone and the error returned.
+    /// A file the last load ignored is first copied next to it (replacing an
+    /// older copy), so the user's settings in it aren't lost: a newer
+    /// AudioSync's file to [`NEWER_FILE_NAME`] (whenever this build saves
+    /// over one), any other to [`IGNORED_FILE_NAME`]; the copy's path is
+    /// returned when that happened. While such a file still can't be read,
+    /// or the copy fails, the file is left alone and the error returned.
     pub fn save(&self, settings: &Settings) -> io::Result<Option<PathBuf>> {
         let Some(path) = &self.path else {
             return Ok(None);
@@ -519,8 +537,12 @@ impl SettingsFile {
                 data_folder::write_atomically(&kept, &bytes)?;
                 Some(kept)
             }
+            Ok(_) | Err(_) if self.keep_aside.get() => {
+                data_folder::keep_aside(path, IGNORED_FILE_NAME)?
+            }
             _ => None,
         };
+        self.keep_aside.set(false);
         data_folder::write_atomically(path, settings.to_json().as_bytes())?;
         Ok(kept)
     }
