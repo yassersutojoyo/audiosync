@@ -645,24 +645,41 @@ struct NativeNowPlaying: Equatable {
 }
 
 /// Where the native sender keeps the credentials of paired Apple TVs:
-/// `airplay-pairings.dat` in AudioSync's folder in Application Support,
-/// mode 0600 and written by the core, not the Keychain (which would ask
-/// again after every locally signed rebuild). The file is plaintext by
-/// design, so its folder stays out of Time Machine backups, which can be
-/// unencrypted. The folder rather than the file: the core writes every
-/// change to a new file renamed over the old one, which would drop a mark
-/// set on the file itself, while the folder's mark covers every file in it.
+/// `airplay-pairings.dat` in a folder of its own, `Pairings` in AudioSync's
+/// folder in Application Support, mode 0600 and written by the core, not
+/// the Keychain (which would ask again after every locally signed rebuild).
+/// The file is plaintext by design, so its folder stays out of Time Machine
+/// backups, which can be unencrypted. The folder rather than the file: the
+/// core writes every change to a new file renamed over the old one, which
+/// would drop a mark set on the file itself, while the folder's mark covers
+/// every file in it. Only that folder: AudioSync's own folder must stay in
+/// backups, since on a Mac that signs builds it also holds
+/// `signing-keychain.pass` (`make-local-cert.sh`), the password of a
+/// keychain that is backed up, and a restore without it would make a new
+/// signing identity. Not `AirPlay` either: versions up to 0.4.1 kept the
+/// bundled engine's files there, a folder users are told they can delete.
 enum NativeAirPlayPairings {
     static let fileName = "airplay-pairings.dat"
 
-    /// AudioSync's folder in `applicationSupport`.
-    static func folder(in applicationSupport: URL) -> URL {
+    /// AudioSync's folder in `applicationSupport`, where builds before the
+    /// pairing store had a folder of its own kept the file.
+    static func appFolder(in applicationSupport: URL) -> URL {
         applicationSupport.appendingPathComponent("AudioSync", isDirectory: true)
+    }
+
+    /// The pairing store's own folder, inside `appFolder(in:)`.
+    static func folder(in applicationSupport: URL) -> URL {
+        appFolder(in: applicationSupport).appendingPathComponent("Pairings", isDirectory: true)
     }
 
     /// The pairing store's file, inside `folder(in:)`.
     static func file(in applicationSupport: URL) -> URL {
         folder(in: applicationSupport).appendingPathComponent(fileName)
+    }
+
+    /// Where builds before the folder kept the file: in `appFolder(in:)`.
+    static func olderFile(in applicationSupport: URL) -> URL {
+        appFolder(in: applicationSupport).appendingPathComponent(fileName)
     }
 
     /// What the folder is marked with: excluded from backups.
@@ -680,5 +697,47 @@ enum NativeAirPlayPairings {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         try url.setResourceValues(folderValues)
+    }
+
+    /// What `moveOlderFile(in:)` did, for the debug log.
+    enum Move: Equatable {
+        /// No file where older builds kept it.
+        case nothing
+        /// The older builds' file moved into the folder, unchanged.
+        case moved
+        /// The folder already holds a file, which is the one used; the older
+        /// builds' file is left where it is.
+        case keptNewer
+        /// The older builds' file couldn't be moved and is left where it is.
+        case failed
+    }
+
+    /// Moves the file older builds kept in `appFolder(in:)` into `folder(in:)`,
+    /// once: a file already in the folder wins and is never replaced. Call
+    /// it after `prepareFolder(in:)`, so the file lands in a folder that is
+    /// already kept out of backups. The move is a rename within the same
+    /// folder tree, so the file keeps its contents and its mode 0600.
+    static func moveOlderFile(in applicationSupport: URL) -> Move {
+        let fm = FileManager.default
+        let older = olderFile(in: applicationSupport)
+        guard fm.fileExists(atPath: older.path) else { return .nothing }
+        let current = file(in: applicationSupport)
+        guard !fm.fileExists(atPath: current.path) else { return .keptNewer }
+        // moveItem never replaces a file that appeared meanwhile.
+        return (try? fm.moveItem(at: older, to: current)) != nil ? .moved : .failed
+    }
+
+    /// The debug log's line for `move`, or nil when there is nothing to say.
+    static func moveLogLine(_ move: Move) -> String? {
+        switch move {
+        case .nothing:
+            return nil
+        case .moved:
+            return "the pairings file moved into its own folder, which is kept out of backups"
+        case .keptNewer:
+            return "an older pairings file was left in AudioSync's folder; the one in its own folder is used"
+        case .failed:
+            return "the pairings file couldn't be moved into its own folder; its Apple TVs pair again"
+        }
     }
 }

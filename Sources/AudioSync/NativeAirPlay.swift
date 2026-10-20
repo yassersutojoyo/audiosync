@@ -173,8 +173,8 @@ final class NativeAirPlay {
         }
     }
 
-    /// The folder the pairing store lives in (`NativeAirPlayPairings`):
-    /// ~/Library/Application Support.
+    /// The folder the pairing store's folder is decided in
+    /// (`NativeAirPlayPairings`): ~/Library/Application Support.
     static var applicationSupport: URL? {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
     }
@@ -243,12 +243,17 @@ final class NativeAirPlay {
         handle = created
         // Before discovery, so a paired Apple TV is listed as able to play
         // from its first report.
-        // Its folder is kept out of backups first: the file is plaintext.
+        // Its folder is kept out of backups first (the file is plaintext),
+        // then the file older builds kept outside it moves in.
         let support = Self.applicationSupport
         let excluded = support.map { (try? NativeAirPlayPairings.prepareFolder(in: $0)) != nil } ?? false
+        let moved = support.map { NativeAirPlayPairings.moveOlderFile(in: $0) } ?? .nothing
         let loaded = support.map { asc_airplay_open_pairings(created, NativeAirPlayPairings.file(in: $0).path) }
             ?? ASC_AIRPLAY_PAIRINGS_FAILED
         DispatchQueue.main.async {
+            if let line = NativeAirPlayPairings.moveLogLine(moved) {
+                DBG.log("[AudioSync] native AirPlay: " + line)
+            }
             DBG.log("[AudioSync] native AirPlay: " + Self.pairingsLogLine(loaded))
             if !excluded {
                 DBG.log("[AudioSync] native AirPlay: the pairings folder couldn't be kept out of backups")
