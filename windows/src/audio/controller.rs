@@ -1481,6 +1481,29 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn has_output_settings(&self, id: &str) -> bool {
+        self.policy.has_settings(id)
+    }
+
+    fn move_output_settings(&mut self, from: &str, to: &str) -> Result<(), BackendError> {
+        let settings = self.policy.take_settings(from);
+        self.log.log(|| {
+            format!(
+                "output {} takes over the settings of {}, which is forgotten",
+                label(&self.names, to),
+                label(&self.names, from)
+            )
+        });
+        self.policy.set_delay_ms(to, settings.delay_ms);
+        self.policy.set_volume(to, settings.volume);
+        if settings.enabled {
+            self.set_output_enabled(to, true)
+        } else {
+            self.policy.set_enabled(to, false);
+            Ok(())
+        }
+    }
+
     fn fix_device_volume(&mut self, id: &str) {
         self.fix_followed_device_volume(id);
     }

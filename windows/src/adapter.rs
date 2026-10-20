@@ -37,7 +37,12 @@
 //! for a device that isn't there yet; at each poll it writes the file again
 //! if anything changed. Like the Mac app, a launch doesn't start streaming
 //! by itself, except through an auto-connect speaker that is there. Saved
-//! settings of a device that is gone stay in the file for when it is back.
+//! settings of a device that is gone stay in the file for when it is back;
+//! one saved as on that no listing has shown since launch doesn't count as a
+//! speaker that is on until it is listed. A device Windows lists under a new
+//! endpoint ID (a USB device plugged into another USB port) takes over what
+//! was set for its old ID, which is forgotten, when exactly one gone output
+//! with something set has its name and kind.
 //!
 //! Speakers are named by the core's speaker keys: `lc:` and the endpoint ID
 //! for a local output, `ap:` and the speaker's ID for an AirPlay speaker, so
@@ -164,6 +169,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The last name of every output listed, for a notice about one that is
     /// gone.
     names: BTreeMap<String, String>,
+    /// The last kind of every output listed, to tell a device listed under
+    /// a new endpoint ID.
+    kinds: BTreeMap<String, OutputKind>,
     /// The AirPlay speaker IDs of the last listing, to tell which appeared.
     airplay_listed: BTreeSet<String>,
     /// The last name of every AirPlay speaker listed.
@@ -252,6 +260,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             chosen: Chosen::WholeSystem,
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
+            kinds: BTreeMap::new(),
             airplay_listed: BTreeSet::new(),
             airplay_quiet_polls: 0,
             airplay_names: BTreeMap::new(),
@@ -493,9 +502,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.audio.running_source().is_some()
     }
 
-    /// Speakers turned on, local and AirPlay, connected or not.
+    /// Speakers turned on, local and AirPlay, connected or not (S162).
     fn enabled_count(&self) -> usize {
-        self.audio.enabled_outputs().len() + self.audio.enabled_airplay().len()
+        self.enabled_local() + self.audio.enabled_airplay().len()
+    }
+
+    /// Local outputs turned on that were listed at some point in this run,
+    /// connected now or not (S162). One saved as on that no listing showed
+    /// since launch doesn't count: the user can't see it or switch it off,
+    /// so it would keep streaming on and the notice asking for a speaker
+    /// away (the old endpoint ID of a device that moved to another USB port,
+    /// say). It stays on, and counts once it is listed.
+    fn enabled_local(&self) -> usize {
+        self.audio
+            .enabled_outputs()
+            .iter()
+            .filter(|id| self.names.contains_key(*id))
+            .count()
     }
 
     /// The streaming policy after `event` (S162), from the speakers on.
@@ -503,7 +526,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         streaming_after(
             event,
             self.running(),
-            self.audio.enabled_outputs().len(),
+            self.enabled_local(),
             self.audio.enabled_airplay().len(),
         )
     }
@@ -609,18 +632,21 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.refresh_sources();
     }
 
-    /// Takes in the outputs as last listed: remembers their names, clears the
-    /// notice about a lost output that is back, and switches on the
-    /// auto-connect speakers that appeared.
+    /// Takes in the outputs as last listed: remembers their names and kinds,
+    /// clears the notice about a lost output that is back, hands what was
+    /// set for a device that moved to its new endpoint ID, and switches on
+    /// the auto-connect speakers that appeared.
     fn outputs_listed(&mut self) {
+        let outputs = self.audio.outputs();
         let mut listed = BTreeSet::new();
         let mut appeared = Vec::new();
-        for output in self.audio.outputs() {
+        for output in &outputs {
             if !self.listed.contains(&output.id) {
                 appeared.push(output.id.clone());
             }
-            self.names.insert(output.id.clone(), output.name);
-            listed.insert(output.id);
+            self.names.insert(output.id.clone(), output.name.clone());
+            self.kinds.insert(output.id.clone(), output.kind);
+            listed.insert(output.id.clone());
         }
         self.listed = listed;
         for id in &appeared {
@@ -628,7 +654,91 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 matches!(message, NoticeMessage::SpeakerLost { .. })
             });
         }
+        self.follow_moved_outputs(&outputs, &appeared);
         self.auto_connect(&appeared);
+    }
+
+    /// Whether the user set anything for output `endpoint_id`: settings, an
+    /// auto-connect mark or a group.
+    fn has_choices(&self, endpoint_id: &str) -> bool {
+        let key = speaker_key(endpoint_id);
+        self.audio.has_output_settings(endpoint_id)
+            || self.auto_connect.contains(&key)
+            || self.groups.iter().any(|group| group.members.contains(&key))
+    }
+
+    /// Hands what the user set for an output that is gone to one that
+    /// appeared under a new endpoint ID with nothing set, when both are most
+    /// likely the same device: Windows lists a USB device plugged into
+    /// another USB port under another endpoint ID. They match when the new
+    /// one is the only output that appeared with its name and kind (which
+    /// follows its form factor and bus), and exactly one output with
+    /// something set, listed earlier in this run and not now, has them too.
+    fn follow_moved_outputs(&mut self, outputs: &[OutputInfo], appeared: &[String]) {
+        let new: Vec<&OutputInfo> = outputs
+            .iter()
+            .filter(|output| appeared.contains(&output.id))
+            .collect();
+        for output in &new {
+            let same = |name: &str, kind: Option<&OutputKind>| {
+                name == output.name && kind == Some(&output.kind)
+            };
+            let twins = new
+                .iter()
+                .filter(|other| same(&other.name, Some(&other.kind)))
+                .count();
+            if twins > 1 || self.has_choices(&output.id) {
+                continue;
+            }
+            let gone: Vec<String> = self
+                .names
+                .iter()
+                .filter(|(id, name)| {
+                    !self.listed.contains(*id)
+                        && same(name, self.kinds.get(*id))
+                        && self.has_choices(id)
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+            if let [from] = gone.as_slice() {
+                self.move_output(from, &output.id);
+            }
+        }
+    }
+
+    /// Moves what the user set for output `from` to output `to`: see
+    /// [`AudioAdapter::follow_moved_outputs`]. `from` is forgotten, here and
+    /// in the settings file, and its notice goes.
+    fn move_output(&mut self, from: &str, to: &str) {
+        self.log.log(|| {
+            format!(
+                "{} is listed under a new endpoint ID ({to}, was {from}): what was set for it \
+                 follows it",
+                self.output_name(to)
+            )
+        });
+        let result = self.audio.move_output_settings(from, to);
+        let (from_key, to_key) = (speaker_key(from), speaker_key(to));
+        if self.auto_connect.remove(&from_key) {
+            self.auto_connect.insert(to_key.clone());
+        }
+        for group in &mut self.groups {
+            if let Some(place) = group.members.iter().position(|key| *key == from_key) {
+                if group.members.contains(&to_key) {
+                    group.members.remove(place);
+                } else {
+                    group.members[place] = to_key.clone();
+                }
+            }
+        }
+        if self.saved.outputs.remove(from).is_some() {
+            self.must_save = true;
+        }
+        self.busy.remove(from);
+        self.notices.clear(&[speaker_subject(from)]);
+        if result.is_err() {
+            self.output_failed(to, false);
+        }
     }
 
     /// Takes in the AirPlay speakers as last listed: remembers their names,
@@ -2514,6 +2624,11 @@ mod tests {
         assert!(dac.enabled);
         assert_eq!(dac.volume, 35.0);
         assert_eq!(playing(&adapter), [DAC_PORT_1]);
+        // And into a third: the IDs it left behind hold nothing anymore.
+        unplug(&mut adapter, DAC_PORT_1);
+        plug_dac(&mut adapter, DAC_PORT_3);
+        assert!(enabled(&adapter, DAC_PORT_3));
+        assert_eq!(playing(&adapter), [DAC_PORT_3]);
     }
 
     #[test]

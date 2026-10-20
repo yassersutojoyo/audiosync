@@ -430,6 +430,18 @@ pub trait AudioBackend {
     /// live. A value that isn't finite is ignored.
     fn set_output_volume(&mut self, id: &str, position: f64);
 
+    /// Whether an output has settings of its own, connected or not: it was
+    /// turned on or off, or its delay or volume set, in this run or a saved
+    /// one.
+    fn has_output_settings(&self, id: &str) -> bool;
+
+    /// Gives output `to` the settings of output `from` (on or off, offset,
+    /// volume) and forgets `from`'s, for a device listed under a new
+    /// endpoint ID. While playing, `to` starts at once if it is on and
+    /// connected; if it can't start, it is turned off again and the error
+    /// returned.
+    fn move_output_settings(&mut self, from: &str, to: &str) -> Result<(), BackendError>;
+
     /// The fix under an output whose own volume in Windows is low or muted
     /// (spec S197): sets that volume to 75 % when it is low and unmutes it
     /// when it is muted, once each. Nothing else ever writes a device volume.
