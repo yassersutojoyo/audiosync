@@ -2168,8 +2168,10 @@ mod tests {
             "{min_width} x {min_height}"
         );
         let main = include_str!("../ui/main.slint");
-        assert!(main.contains(&format!("    min-width: {min_width}px;\n")));
-        assert!(main.contains(&format!("    min-height: {min_height}px;\n")));
+        // By line, so a checkout with CRLF line ends (Windows CI) reads the same.
+        let has_line = |wanted: String| main.lines().any(|line| line.trim_end() == wanted);
+        assert!(has_line(format!("    min-width: {min_width}px;")));
+        assert!(has_line(format!("    min-height: {min_height}px;")));
         // The left column scrolls when it is taller than the window, so
         // its cards never push the window past that height.
         assert!(main.contains("left-column := ScrollView {"));
