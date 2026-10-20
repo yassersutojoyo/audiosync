@@ -24,6 +24,13 @@
 //! gone. Once dismissed, it stays away for the same source and those outputs
 //! (or fewer of them) until that app quits.
 //!
+//! AirPlay discovery that runs but has found no speaker for 20 seconds is
+//! no notice: the snapshot says so ([`AppState::airplay_none_found`]), and
+//! the speaker list carries a note about the network and Windows Firewall.
+//! It goes once a speaker is listed and comes back after another 20 seconds
+//! without one; while discovery is dead, the AirPlay notice with its Retry
+//! says so instead.
+//!
 //! The user's choices outlive a restart (`crate::settings`): the adapter
 //! reads the settings file before the first listing and hands the saved
 //! switches, volumes and delays to the audio backend, which keeps them by ID
@@ -72,6 +79,13 @@ use crate::ui_model::{
 /// seconds: it takes a snapshot of the running processes, and apps that play
 /// audio come and go rarely.
 const SOURCE_POLLS: u32 = 6;
+
+/// After this many polls, 20 seconds, of AirPlay discovery without a single
+/// AirPlay speaker found, the speaker list says so and what to check: a
+/// Windows Firewall that blocks AudioSync, or a network Windows counts as
+/// Public while AudioSync is allowed on Private ones only, keeps the
+/// receivers' answers out, and the list would just stay empty.
+const NONE_FOUND_POLLS: u32 = 40;
 
 /// The UI's ID of the whole-system source.
 const SYSTEM_KEY: &str = "system";
@@ -154,6 +168,10 @@ pub struct AudioAdapter<A: AudioBackend> {
     airplay_listed: BTreeSet<String>,
     /// The last name of every AirPlay speaker listed.
     airplay_names: BTreeMap<String, String>,
+    /// Polls in a row with AirPlay discovery running and no AirPlay speaker
+    /// listed; from [`NONE_FOUND_POLLS`] on, the speaker list says none was
+    /// found.
+    airplay_quiet_polls: u32,
     /// The speaker keys marked auto-connect.
     auto_connect: BTreeSet<String>,
     groups: Vec<Group>,
@@ -227,6 +245,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
             airplay_listed: BTreeSet::new(),
+            airplay_quiet_polls: 0,
             airplay_names: BTreeMap::new(),
             auto_connect: BTreeSet::new(),
             groups: Vec::new(),
@@ -528,6 +547,41 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if self.notices.get(&subject).is_some_and(|p| kind(&p.message)) {
             self.notices.clear(&[subject]);
         }
+    }
+
+    /// Whether AirPlay discovery has run for 20 seconds without finding a
+    /// speaker. Never while it is dead: the AirPlay notice and its Retry
+    /// say so then.
+    fn airplay_none_found(&self) -> bool {
+        self.airplay_quiet_polls >= NONE_FOUND_POLLS
+    }
+
+    /// Counts one more poll with AirPlay discovery running and no AirPlay
+    /// speaker listed, or starts over; returns whether the speaker list's
+    /// note that none was found showed or went.
+    fn count_airplay_quiet(&mut self) -> bool {
+        let shown = self.airplay_none_found();
+        let browsing = self.audio.airplay_browsing();
+        if browsing && self.airplay_listed.is_empty() {
+            self.airplay_quiet_polls = self.airplay_quiet_polls.saturating_add(1);
+        } else {
+            self.airplay_quiet_polls = 0;
+        }
+        let shows = self.airplay_none_found();
+        if shows != shown {
+            self.log.log(|| {
+                if shows {
+                    "AirPlay: discovery has found no receiver in 20 s; the speaker list asks to \
+                     check the network and Windows Firewall"
+                        .to_owned()
+                } else if browsing {
+                    "AirPlay: a receiver is listed; the no-receiver note goes".to_owned()
+                } else {
+                    "AirPlay: discovery stopped; the no-receiver note goes".to_owned()
+                }
+            });
+        }
+        shows != shown
     }
 
     /// Lists the outputs and the sources again.
@@ -1239,7 +1293,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         AppState {
             reference_name,
             airplay_delay_ms: self.airplay_delay_ms(),
-            airplay_none_found: false,
+            airplay_none_found: self.airplay_none_found(),
             running: self.running(),
             sources: self.source_rows(),
             source_id: self.chosen.key(),
@@ -1628,6 +1682,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             self.polls = 0;
             changed |= self.refresh_sources();
         }
+        changed |= self.count_airplay_quiet();
         self.persist();
         changed
     }
