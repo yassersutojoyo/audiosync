@@ -759,7 +759,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// output with that name and kind, listed earlier in this run and not
     /// now, with or without anything set, must be gone, and have something
     /// set: with two gone, the new ID could be either device. An ID a
-    /// device left behind isn't another device, so it doesn't count.
+    /// device left behind isn't another device, so it doesn't count. Names
+    /// are compared without the number Windows may put before a device's
+    /// name in another port or for a second one of a model
+    /// ([`unnumbered`]).
     fn follow_moved_outputs(
         &mut self,
         outputs: &[OutputInfo],
@@ -771,8 +774,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .filter(|output| appeared.contains(&output.id))
             .collect();
         for output in &new {
+            let own_name = unnumbered(&output.name);
             let same = |name: &str, kind: Option<&OutputKind>| {
-                name == output.name && kind == Some(&output.kind)
+                kind == Some(&output.kind) && unnumbered(name) == own_name
             };
             let twins = new
                 .iter()
@@ -1980,6 +1984,27 @@ fn speaker_kind(kind: OutputKind) -> SpeakerKind {
     }
 }
 
+/// An output's name without the number Windows may put before the device's
+/// name inside its parentheses (digits, then "- "), as it does for a USB
+/// device in another port or a second device of the same model:
+/// "Speakers (2- USB DAC)" gives "Speakers (USB DAC)".
+fn unnumbered(name: &str) -> String {
+    let mut plain = String::with_capacity(name.len());
+    let mut rest = name;
+    while let Some(open) = rest.find('(') {
+        plain.push_str(&rest[..=open]);
+        rest = &rest[open + 1..];
+        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits > 0
+            && let Some(after) = rest[digits..].strip_prefix("- ")
+        {
+            rest = after;
+        }
+    }
+    plain.push_str(rest);
+    plain
+}
+
 /// The UI's ID of a local output.
 fn speaker_key(endpoint_id: &str) -> String {
     SpeakerKey::Local(endpoint_id.to_owned()).to_string()
@@ -2819,6 +2844,26 @@ mod tests {
         plug_named(&mut adapter, DAC_PORT_1, "Speakers (Thronmax MDrill)");
         assert!(enabled(&adapter, DAC_PORT_1));
         assert_eq!(speaker_of(&adapter, &key(DAC_PORT_1)).volume, 35.0);
+    }
+
+    #[test]
+    fn only_the_number_windows_puts_inside_the_parentheses_is_ignored() {
+        for (name, plain) in [
+            (
+                "Speakers (2- Thronmax MDrill)",
+                "Speakers (Thronmax MDrill)",
+            ),
+            ("Speakers (12- USB DAC)", "Speakers (USB DAC)"),
+            ("Speakers (USB DAC)", "Speakers (USB DAC)"),
+            ("Speakers (Realtek(R) Audio)", "Speakers (Realtek(R) Audio)"),
+            ("Speakers (2-USB DAC)", "Speakers (2-USB DAC)"),
+            ("Speakers (2 USB DAC)", "Speakers (2 USB DAC)"),
+            ("2- USB DAC", "2- USB DAC"),
+            ("Speakers (", "Speakers ("),
+            ("", ""),
+        ] {
+            assert_eq!(super::unnumbered(name), plain, "{name:?}");
+        }
     }
 
     #[test]
