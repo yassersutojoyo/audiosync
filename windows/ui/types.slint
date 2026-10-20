@@ -43,6 +43,8 @@ export struct SpeakerItem {
     delay-ms: int,
     // What the delay field shows: the applied value, or what is being typed.
     delay-text: string,
+    // The delay field holds typing not yet applied (Enter applies it).
+    delay-pending: bool,
     // The reference output's name for the sync hint; empty without one.
     reference-name: string,
     sync-open: bool,

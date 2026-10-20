@@ -646,6 +646,16 @@ struct AirPlayDelayRow: View {
     }
 }
 
+/// The dashed line under a delay field that holds typing not yet applied.
+private struct DraftUnderline: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        return path
+    }
+}
+
 /// A delay's controls: coarse/fine steppers that apply at once, plus a typed
 /// value in whole ms that applies on Return or when the field loses focus, so
 /// the outputs re-time once rather than at every keystroke. Text the field
@@ -671,6 +681,9 @@ struct SyncControls: View {
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
+        // Typing not yet applied: a dashed underline under the field and a
+        // hint under the steps, so the cue isn't color alone.
+        let pending = draft.field.isPending(saved: ms, format: shown)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 4) {
                 step(-100)
@@ -682,7 +695,19 @@ struct SyncControls: View {
                 .multilineTextAlignment(.center)
                 .font(.callout.monospacedDigit())
                 .frame(width: 72)
+                // Below the focus ring, so the two don't overlap.
+                .overlay(alignment: .bottom) {
+                    if pending {
+                        DraftUnderline()
+                            .stroke(Brand.tealText, style: StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
+                            .frame(height: 1.5)
+                            .offset(y: 5)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
                 .accessibilityLabel(label)
+                .accessibilityHint(pending ? text.delayDraftHint : "")
                 .focused($fieldFocused)
                 .onSubmit(commit)
                 // Escape drops the typing, so a later focus loss applies nothing.
@@ -692,6 +717,14 @@ struct SyncControls: View {
                 step(10)
                 step(100)
             }
+            // VoiceOver hears this as the field's hint. Hidden, it keeps its
+            // line, so the text below doesn't jump on the first keystroke or
+            // when the value applies.
+            Label(text.delayDraftHint, systemImage: "return")
+                .font(.caption)
+                .foregroundStyle(Brand.tealText)
+                .opacity(pending ? 1 : 0)
+                .accessibilityHidden(true)
             Text(hint)
                 .font(.caption)
                 .foregroundStyle(Brand.secondaryText)

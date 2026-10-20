@@ -241,6 +241,8 @@ export component MainWindow inherits Window {
     // AirPlay discovery runs but has found no speaker for 20 seconds.
     in property <bool> airplay-none-found;
     in property <string> airplay-delay-text;
+    // The AirPlay delay field holds typing not yet applied.
+    in property <bool> airplay-delay-pending;
 
     callback power-toggled(bool);
     callback source-selected(int);
@@ -726,6 +728,7 @@ export component MainWindow inherits Window {
 
                     if root.airplay-delay-shown: AirPlayDelayControls {
                         delay-text: root.airplay-delay-text;
+                        pending: root.airplay-delay-pending;
                         stepped(delta) => {
                             root.airplay-delay-stepped(delta);
                         }
