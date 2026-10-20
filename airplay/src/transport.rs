@@ -662,4 +662,109 @@ mod tests {
         }
         drop(io);
     }
+
+    /// A timing request with sequence number `seq` (P90).
+    fn timing_request(seq: u16) -> [u8; 32] {
+        rtp::TimingPacket {
+            reply: false,
+            seq,
+            origin: crate::clock::NtpTime(0),
+            receive: crate::clock::NtpTime(0),
+            transmit: crate::clock::NtpTime(0x0102_0304_0506_0708),
+        }
+        .encode()
+    }
+
+    /// A retransmission request for `count` packets from `first` (P86).
+    fn resend_request(first: u16, count: u16) -> [u8; 8] {
+        ResendRequest {
+            seq: 1,
+            first,
+            count,
+        }
+        .encode()
+    }
+
+    // A host other than the receiver gets no timing reply, and neither its
+    // timing nor its retransmission requests reach the driver, so it can't
+    // keep a session's timing alive (P131) or draw resends; the receiver's
+    // own requests, from any port, still do (P86, P91). The other host
+    // sends from 127.0.0.2, which Windows and Linux route to loopback;
+    // macOS has only 127.0.0.1 unless configured, so there the test is
+    // skipped.
+    #[test]
+    fn datagrams_from_another_address_never_reach_the_driver() {
+        let Ok(stranger) = UdpSocket::bind("127.0.0.2:0") else {
+            eprintln!("skipped: 127.0.0.2 is not a local address here");
+            return;
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let tcp = TcpStream::connect(listener.local_addr().expect("address")).expect("connect");
+        let (_receiver_end, _) = listener.accept().expect("accept");
+        let (events, received) = mpsc::channel();
+        let notify = move |event: IoEvent| events.send(event).is_ok();
+        let (io, connection) = SessionIo::open(
+            SessionKey(9),
+            1,
+            tcp,
+            SenderClock::new(Instant::now()),
+            Arc::new(SpeakerCounters::default()),
+            notify,
+        )
+        .expect("session I/O");
+        let timing = SocketAddr::new((connection).local, connection.timing_port);
+        let control = SocketAddr::new((connection).local, connection.control_port);
+        let receiver = UdpSocket::bind("127.0.0.1:0").expect("receiver socket");
+        receiver.set_read_timeout(Some(WAIT)).expect("timeout");
+
+        // The stranger's datagrams go first, so the sender's threads have
+        // dealt with them by the time the receiver's own are answered.
+        stranger.send_to(&timing_request(1), timing).expect("send");
+        stranger
+            .send_to(&resend_request(100, 1), control)
+            .expect("send");
+        receiver.send_to(&timing_request(2), timing).expect("send");
+        receiver
+            .send_to(&resend_request(200, 1), control)
+            .expect("send");
+
+        let mut buf = [0u8; 64];
+        let (len, _) = receiver.recv_from(&mut buf).expect("the receiver's reply");
+        let reply = rtp::TimingPacket::parse(&buf[..len]).expect("a timing reply");
+        assert_eq!(reply.seq, 2);
+        let mut timing_events = 0;
+        let mut resends = Vec::new();
+        let deadline = Instant::now() + WAIT;
+        while resends.is_empty() && Instant::now() < deadline {
+            match received.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(IoEvent::TimingRequest { .. }) => timing_events += 1,
+                Ok(IoEvent::Control { bytes, .. }) => {
+                    let request = ResendRequest::parse(&bytes).expect("a resend request");
+                    resends.push(request.first);
+                }
+                Ok(_) | Err(_) => {}
+            }
+        }
+        // Anything still on its way from the stranger was sent before the
+        // receiver's own datagrams and is late by now.
+        while let Ok(event) = received.recv_timeout(Duration::from_millis(100)) {
+            match event {
+                IoEvent::TimingRequest { .. } => timing_events += 1,
+                IoEvent::Control { bytes, .. } => {
+                    resends.extend(ResendRequest::parse(&bytes).map(|r| r.first));
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(timing_events, 1, "only the receiver's timing request");
+        assert_eq!(resends, [200], "only the receiver's resend request");
+        stranger
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .expect("timeout");
+        assert!(
+            stranger.recv_from(&mut buf).is_err(),
+            "no timing reply to the stranger"
+        );
+        drop(io);
+    }
 }
