@@ -23,6 +23,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, Vec
 use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
+use crate::launch_at_login::{self, LaunchAtLogin};
 use crate::ui_model::{
     self, AppState, Backend, MainWindowShows, NoticeMessage, PinPrompt, SourceKind, SpeakerState,
     ViewSettings, WindowFrame,
@@ -244,6 +245,14 @@ impl NoticeAnnouncer {
 
 /// How often the backend is polled for what happened on its own.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How often Launch at Sign-In is read again from the registry, so a change
+/// in Task Manager shows in the menus (Slint's menu bar says nothing before
+/// it opens). One small registry read.
+const LOGIN_CHECK: Duration = Duration::from_secs(2);
+
+/// The Settings page where Windows turns startup apps on or off.
+const STARTUP_APPS_PAGE: &str = "ms-settings:startupapps";
 
 /// How often, 20 ms apart, the saved main window size waits for the native
 /// window before it gives up (about two seconds).
@@ -506,6 +515,10 @@ pub struct App {
     announcement_timer: Timer,
     /// Polls the backend; it stops when the app is dropped.
     poll_timer: Timer,
+    /// Launch at Sign-In and its notice, which the windows own: the
+    /// backend's notices are about audio.
+    login: RefCell<LaunchAtLogin>,
+    login_timer: Timer,
 }
 
 /// Runs `action` on the app if it still exists.
@@ -620,6 +633,11 @@ impl App {
             notice_announcer: RefCell::default(),
             announcement_timer: Timer::default(),
             poll_timer: Timer::default(),
+            login: RefCell::new(LaunchAtLogin::new(
+                launch_at_login::system_store(),
+                std::env::current_exe().ok(),
+            )),
+            login_timer: Timer::default(),
         });
         app.attach_models();
         app.connect_main();
@@ -633,6 +651,11 @@ impl App {
         app.poll_timer
             .start(TimerMode::Repeated, POLL_INTERVAL, move || {
                 with_app(&weak, App::poll)
+            });
+        let weak = Rc::downgrade(&app);
+        app.login_timer
+            .start(TimerMode::Repeated, LOGIN_CHECK, move || {
+                with_app(&weak, App::reread_launch_at_login)
             });
         Ok(app)
     }
@@ -652,7 +675,58 @@ impl App {
     }
 
     pub fn snapshot(&self) -> AppState {
-        self.backend.borrow().snapshot()
+        let mut state = self.backend.borrow().snapshot();
+        state.notices.extend(self.login.borrow().notice().cloned());
+        state
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn launch_at_login(&self) -> bool {
+        self.login.borrow().is_on()
+    }
+
+    /// Reads Launch at Sign-In again, and shows it if it changed.
+    pub fn reread_launch_at_login(&self) {
+        if self.login.borrow_mut().reread() {
+            self.refresh();
+        }
+    }
+
+    /// The user turned Launch at Sign-In on or off.
+    pub fn set_launch_at_login(&self, on: bool) {
+        let outcome = self
+            .login
+            .borrow_mut()
+            .set(on, crate::platform::notice_time);
+        let status = self.login.borrow().status();
+        self.log.log(|| match &outcome.error {
+            Some(error) => format!(
+                "launch at sign-in: turning it {} failed ({error}); {status:?}",
+                if on { "on" } else { "off" }
+            ),
+            None => format!(
+                "launch at sign-in: turned {}; {status:?}",
+                if on { "on" } else { "off" }
+            ),
+        });
+        if outcome.open_startup_settings && !crate::platform::open_settings(STARTUP_APPS_PAGE) {
+            self.log
+                .log(|| format!("launch at sign-in: {STARTUP_APPS_PAGE} didn't open"));
+        }
+        self.refresh();
+    }
+
+    fn dismiss_notice(&self, id: u64) {
+        if self.login.borrow_mut().dismiss(id) {
+            self.refresh();
+        } else {
+            self.update(|b| b.dismiss_notice(id));
+        }
+    }
+
+    fn dismiss_all_notices(&self) {
+        self.login.borrow_mut().dismiss_notice();
+        self.update(|b| b.dismiss_all_notices());
     }
 
     /// Changes the backend, then shows the result everywhere.
@@ -900,6 +974,7 @@ impl App {
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
         self.main.set_show_virtual_devices(ui.show_virtual);
+        self.main.set_launch_at_login(self.login.borrow().is_on());
         self.main
             .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
         let airplay_delay = format_ms(state.airplay_delay_ms.unwrap_or(0.0));
@@ -1109,13 +1184,11 @@ impl App {
             with_app(&w, |app| app.show_virtual_devices(on))
         });
         let w = weak.clone();
-        main.on_notice_dismissed(move |id| {
-            with_app(&w, |app| app.update(|b| b.dismiss_notice(id as u64)))
-        });
+        main.on_notice_dismissed(move |id| with_app(&w, |app| app.dismiss_notice(id as u64)));
         let w = weak.clone();
-        main.on_notices_dismissed_all(move || {
-            with_app(&w, |app| app.update(|b| b.dismiss_all_notices()))
-        });
+        main.on_notices_dismissed_all(move || with_app(&w, App::dismiss_all_notices));
+        let w = weak.clone();
+        main.on_launch_at_login_toggled(move |on| with_app(&w, |app| app.set_launch_at_login(on)));
         let w = weak.clone();
         main.on_notice_guide_requested(move |id| with_app(&w, |app| app.show_guide(id)));
         let w = weak.clone();
@@ -1191,13 +1264,9 @@ impl App {
         let w = weak.clone();
         flyout.on_group_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_group(&id))));
         let w = weak.clone();
-        flyout.on_notice_dismissed(move |id| {
-            with_app(&w, |app| app.update(|b| b.dismiss_notice(id as u64)))
-        });
+        flyout.on_notice_dismissed(move |id| with_app(&w, |app| app.dismiss_notice(id as u64)));
         let w = weak.clone();
-        flyout.on_notices_dismissed_all(move || {
-            with_app(&w, |app| app.update(|b| b.dismiss_all_notices()))
-        });
+        flyout.on_notices_dismissed_all(move || with_app(&w, App::dismiss_all_notices));
         let w = weak.clone();
         flyout.on_notice_guide_requested(move |id| {
             with_app(&w, |app| {
@@ -2229,6 +2298,11 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             strings.invoke_notice_pairings_kept_aside(file.as_str().into())
         }
         NoticeMessage::NoSoundOutput => strings.get_notice_no_sound_output(),
+        NoticeMessage::LaunchAtLoginFailed => strings.get_notice_launch_at_login_failed(),
+        NoticeMessage::LaunchAtLoginNotRemoved => strings.get_notice_launch_at_login_not_removed(),
+        NoticeMessage::LaunchAtLoginOffInSettings => {
+            strings.get_notice_launch_at_login_off_in_settings()
+        }
         NoticeMessage::HeardTwice {
             source,
             mute,
@@ -2273,6 +2347,9 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::SettingsKeptAside { .. } => (NoticeKind::SettingsKeptAside, ""),
         NoticeMessage::PairingsKeptAside { .. } => (NoticeKind::PairingsKeptAside, ""),
         NoticeMessage::NoSoundOutput => (NoticeKind::NoSoundOutput, ""),
+        NoticeMessage::LaunchAtLoginFailed => (NoticeKind::LaunchAtLoginFailed, ""),
+        NoticeMessage::LaunchAtLoginNotRemoved => (NoticeKind::LaunchAtLoginNotRemoved, ""),
+        NoticeMessage::LaunchAtLoginOffInSettings => (NoticeKind::LaunchAtLoginOffInSettings, ""),
         NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
     };
     strings.invoke_notice_title(kind, name.into())
@@ -2353,6 +2430,42 @@ mod tests {
         // App has it, which is fine.
         let _ = slint::platform::set_platform(Box::new(Headless));
         App::new(Box::new(backend), DebugLog::new(None)).expect("the windows build headless")
+    }
+
+    #[test]
+    fn launch_at_sign_in_follows_the_file_menu_and_its_notice_is_dismissed_here() {
+        let app = app_over(MockBackend::new());
+        let store = launch_at_login::MemoryStore::default();
+        *app.login.borrow_mut() = LaunchAtLogin::new(
+            Box::new(store.clone()),
+            Some(std::path::PathBuf::from(r"C:\Apps\audiosync.exe")),
+        );
+        app.refresh();
+        assert!(!app.main.get_launch_at_login());
+
+        app.main.invoke_launch_at_login_toggled(true);
+        assert!(app.main.get_launch_at_login());
+        assert!(store.entry().run.is_some());
+
+        // Task Manager turns it off; the next reading shows it.
+        store.entry().approval = Some(vec![3; 12]);
+        app.reread_launch_at_login();
+        assert!(!app.main.get_launch_at_login());
+
+        store.entry().refuse_writes = true;
+        store.entry().approval = None;
+        store.entry().run = None;
+        app.reread_launch_at_login();
+        app.main.invoke_launch_at_login_toggled(true);
+        let notices = app.snapshot().notices;
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].message, NoticeMessage::LaunchAtLoginFailed);
+        assert_eq!(app.main.get_notices().row_count(), 1);
+
+        app.main
+            .invoke_notice_dismissed(launch_at_login::NOTICE_ID as i32);
+        assert!(app.snapshot().notices.is_empty());
+        assert_eq!(app.main.get_notices().row_count(), 0);
     }
 
     #[test]
@@ -3360,6 +3473,9 @@ mod tests {
             NoticeMessage::SettingsKeptAside { file: "f".into() },
             NoticeMessage::PairingsKeptAside { file: "f".into() },
             NoticeMessage::NoSoundOutput,
+            NoticeMessage::LaunchAtLoginFailed,
+            NoticeMessage::LaunchAtLoginNotRemoved,
+            NoticeMessage::LaunchAtLoginOffInSettings,
         ];
         for message in messages {
             let label = dismiss_label(message.clone());
