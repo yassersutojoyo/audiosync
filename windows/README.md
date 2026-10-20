@@ -22,7 +22,7 @@ shortcuts.
 
 There's no Windows release yet, so for now you build it yourself (below).
 It's a single exe with no installer: put it in a folder of its own, keep the
-`THIRD-PARTY-NOTICES.txt` written for that build next to it, and run it.
+`THIRD-PARTY-NOTICES.txt` you write for it (below) next to it, and run it.
 
 - **What you need:** Windows 11 (build 22000 or later) on x64 or ARM64. On
   anything older the app says so and exits.
@@ -70,6 +70,12 @@ It's a single exe with no installer: put it in a folder of its own, keep the
 cd windows
 cargo test
 cargo build --release    # target\release\audiosync.exe
+```
+
+Then, from the repository root, write the notices for that build next to it:
+
+```powershell
+py -3 -I scripts/windows_notices.py x86_64-pc-windows-msvc --output windows/target/release/THIRD-PARTY-NOTICES.txt
 ```
 
 For the other architecture, add its target first:
