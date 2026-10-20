@@ -280,4 +280,12 @@ struct DelayPanels: Equatable {
     }
 
     mutating func closeAll() { open = [] }
+
+    /// The panel a click on the note under a speaker list toggles: the note
+    /// belongs to the last row's box, so that row's panel, or nil (a click
+    /// outside every row) when that row has no delay or the note is alone.
+    static func noteTarget(under rows: [(id: String, hasDelay: Bool)]) -> String? {
+        guard let last = rows.last, last.hasDelay else { return nil }
+        return last.id
+    }
 }

@@ -332,7 +332,7 @@ struct MainView: View {
                             .padding(10)
                         if !speakers.isEmpty { Divider() }
                     } else if speakers.isEmpty {
-                        emptyNote(empty, hint: hint)
+                        emptyNote(empty, hint: hint, under: [])
                     } else if hasAirPlay && localNetworkHint == .denied, let hint {
                         LocalNetworkHintView(message: hint, text: model.text).padding(10)
                         Divider()
@@ -349,14 +349,15 @@ struct MainView: View {
                     if connected && problem == nil && !speakers.isEmpty && !hasAirPlay {
                         // Local speakers only: say where AirPlay stands, under them.
                         Divider()
-                        emptyNote(empty, hint: hint)
+                        emptyNote(empty, hint: hint, under: speakers)
                     }
                 }
             }
         }
     }
 
-    private func emptyNote(_ message: String, hint: String?) -> some View {
+    /// `under`: the rows above the note, whose last row's box it belongs to.
+    private func emptyNote(_ message: String, hint: String?, under rows: [AppModel.Speaker]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(message)
                 .font(.callout)
@@ -365,9 +366,16 @@ struct MainView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
-        // Not a speaker row: a click here is outside them all.
+        // Under a list, a click works like one on the last row; alone, it
+        // is outside every row.
         .contentShape(Rectangle())
-        .onTapGesture { model.closeDelayPanels() }
+        .onTapGesture {
+            if let id = DelayPanels.noteTarget(under: rows.map { (id: $0.id, hasDelay: $0.offsetMs != nil) }) {
+                model.toggleDelayPanel(id)
+            } else {
+                model.closeDelayPanels()
+            }
+        }
     }
 }
 
@@ -837,6 +845,11 @@ struct SyncControls: View {
         .onChange(of: ms) { _, value in draft.field.show(value, format: shown) }
         // Command-S, or a click on another row's delay.
         .onChange(of: draft.applyRequests) { _, _ in commit() }
+        // The hint is read only on focus: VoiceOver hears the range once as
+        // the number goes out of it, not at every keystroke after.
+        .onChange(of: outOfRange) { _, now in
+            if now { AccessibilityNotification.Announcement(rangeMessage).post() }
+        }
         // A panel closing applies what was typed, unless Escape dropped it.
         .onDisappear(perform: commit)
     }

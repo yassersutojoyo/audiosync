@@ -503,6 +503,9 @@ pub struct App {
     on_refresh: RefCell<Option<RefreshHook>>,
     /// Which new notice Narrator is told about.
     notice_announcer: RefCell<NoticeAnnouncer>,
+    /// The delay fields holding a number out of range, so Narrator hears
+    /// the range once as a field goes out of it (`newly_out_of_range`).
+    out_of_range: RefCell<HashSet<String>>,
     /// Clears the announcement a while after it was made.
     announcement_timer: Timer,
     /// Polls the backend; it stops when the app is dropped.
@@ -619,6 +622,7 @@ impl App {
             frames: RefCell::default(),
             on_refresh: RefCell::new(None),
             notice_announcer: RefCell::default(),
+            out_of_range: RefCell::default(),
             announcement_timer: Timer::default(),
             poll_timer: Timer::default(),
         });
@@ -824,6 +828,11 @@ impl App {
             .map(|s| item(s, true))
             .collect();
         let all: Vec<SpeakerItem> = this_pc.iter().chain(&connected).cloned().collect();
+        let mut out_of_range: Vec<(String, SharedString)> = all
+            .iter()
+            .filter(|row| !row.delay_range_hint.is_empty())
+            .map(|row| (row.id.to_string(), row.delay_range_hint.clone()))
+            .collect();
         let groups: Vec<GroupItem> = state.groups.iter().map(|g| group_item(&state, g)).collect();
         let notices: Vec<NoticeItem> = state
             .notices
@@ -919,13 +928,16 @@ impl App {
             .set_airplay_delay_text(typed.map_or(airplay_delay, str::to_owned).into());
         // The range the Mac's field takes too; the sender clamps the stored
         // adjustment on its own.
-        self.main.set_airplay_delay_range_hint(range_hint(
-            &strings,
-            typed,
-            0.0,
-            ui_model::MAX_DELAY_MS,
-            format_ms,
-        ));
+        let airplay_range_hint =
+            range_hint(&strings, typed, 0.0, ui_model::MAX_DELAY_MS, format_ms);
+        if !airplay_range_hint.is_empty() {
+            out_of_range.push((AIRPLAY_DELAY_FIELD.to_owned(), airplay_range_hint.clone()));
+        }
+        self.main.set_airplay_delay_range_hint(airplay_range_hint);
+        let alert = newly_out_of_range(&mut self.out_of_range.borrow_mut(), out_of_range);
+        if let Some(hint) = alert {
+            self.announce(hint);
+        }
 
         self.show_equalizer_state(&state.equalizer);
         drop(ui);
@@ -1086,6 +1098,8 @@ impl App {
         main.on_delay_edited(move |id, text| with_app(&w, |app| app.edit_delay(&id, &text)));
         let w = weak.clone();
         main.on_delay_committed(move |id| with_app(&w, |app| app.enter_delay(&id)));
+        let w = weak.clone();
+        main.on_delay_apply_requested(move || with_app(&w, |app| app.apply_delay_typing(None)));
         let w = weak.clone();
         main.on_delay_cancelled(move |_| with_app(&w, |app| app.end_delay_typing(false)));
         let w = weak.clone();
@@ -1547,19 +1561,7 @@ impl App {
     /// click on its row). What was typed in the other delay fields applies
     /// first, their controls staying open; closing applies its own typing.
     fn toggle_sync(&self, id: &str) {
-        let mut others: Vec<String> = self
-            .ui
-            .borrow()
-            .delay_drafts
-            .keys()
-            .filter(|other| other.as_str() != id)
-            .cloned()
-            .collect();
-        others.sort();
-        for other in others {
-            self.commit_delay(&other);
-        }
-        self.commit_airplay_delay();
+        self.apply_delay_typing(Some(id));
         let closed = {
             let mut ui = self.ui.borrow_mut();
             let closed = ui.sync_open.remove(id);
@@ -1717,7 +1719,7 @@ impl App {
         self.refresh();
     }
 
-    /// Enter or Ctrl+S in a speaker's delay field: applies what was typed and
+    /// Enter in a speaker's delay field: applies what was typed and
     /// keeps its sync controls open, the focus in the field, to try the next
     /// value; other rows' stay open with their typing.
     fn enter_delay(&self, id: &str) {
@@ -1773,6 +1775,24 @@ impl App {
     /// every control). Unreadable text applies nothing and the field shows
     /// the applied value again; out of range, it shows the value that was
     /// applied.
+    /// Applies what was typed in every delay field but `except`'s, in a
+    /// fixed order; every sync control stays open. Ctrl+S passes `None`.
+    fn apply_delay_typing(&self, except: Option<&str>) {
+        let mut typed: Vec<String> = self
+            .ui
+            .borrow()
+            .delay_drafts
+            .keys()
+            .filter(|id| Some(id.as_str()) != except)
+            .cloned()
+            .collect();
+        typed.sort();
+        for id in typed {
+            self.commit_delay(&id);
+        }
+        self.commit_airplay_delay();
+    }
+
     fn commit_delay(&self, id: &str) {
         let shown = self.snapshot().speaker(id).and_then(|s| s.delay_ms);
         let typed = self.ui.borrow_mut().delay_drafts.remove(id);
@@ -2017,6 +2037,25 @@ fn fit_tooltip(text: &str) -> String {
 
 fn format_ms(ms: f64) -> String {
     format!("{}", ms.round() as i64)
+}
+
+/// The AirPlay delay field's key among the fields out of range (no speaker
+/// id has this form).
+const AIRPLAY_DELAY_FIELD: &str = "airplay-delay";
+
+/// The range line to announce: that of a field whose number has just gone
+/// out of range. A field that stays out of range as more is typed isn't
+/// announced again; `fields` becomes the fields out of range now.
+fn newly_out_of_range(
+    fields: &mut HashSet<String>,
+    now: Vec<(String, SharedString)>,
+) -> Option<SharedString> {
+    let alert = now
+        .iter()
+        .find(|(id, _)| !fields.contains(id))
+        .map(|(_, hint)| hint.clone());
+    *fields = now.into_iter().map(|(id, _)| id).collect();
+    alert
 }
 
 /// What a delay field says under it while it holds a number outside
@@ -2725,19 +2764,110 @@ mod tests {
         assert!(open(&app).is_empty());
     }
 
+    fn ctrl_s(window: &slint::Window) {
+        window.dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Control.into(),
+        });
+        press(window, "s");
+        window.dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Control.into(),
+        });
+    }
+
     #[test]
-    fn a_click_on_the_no_airplay_note_applies_and_closes_every_sync_control() {
-        let mut backend = MockBackend::new();
-        backend.set_airplay_none_found(true);
-        backend.retain_speakers(|s| !s.id.starts_with("airplay:") && s.id != "local:bt");
-        let app = app_over(backend);
+    fn ctrl_s_applies_every_typed_delay_wherever_the_focus_is_and_keeps_the_controls_open() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
         draw_frames();
+        type_into_two_rows(&app, "-200");
+        app.main.invoke_airplay_delay_edited("2100".into());
+        app.main.invoke_focus_streaming_switch();
+        draw_frames();
+        ctrl_s(app.main.window());
+        assert_eq!(delay_of(&app, "local:desk"), Some(400.0));
+        assert_eq!(delay_of(&app, "local:bt"), Some(-200.0));
+        assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0));
+        let ui = app.ui.borrow();
+        assert_eq!(ui.sync_open.len(), 2, "the sync controls stay open");
+        assert!(ui.delay_drafts.is_empty() && ui.airplay_delay_draft.draft.is_none());
+    }
+
+    #[test]
+    fn the_range_line_is_announced_once_as_a_field_goes_out_of_range() {
+        let mut fields = HashSet::new();
+        let hint = |text: &str| SharedString::from(text);
+        let desk = |text: &str| vec![("local:desk".to_owned(), hint(text))];
+        assert_eq!(newly_out_of_range(&mut fields, desk("A")), Some(hint("A")));
+        assert_eq!(
+            newly_out_of_range(&mut fields, desk("B")),
+            None,
+            "still out"
+        );
+        assert_eq!(newly_out_of_range(&mut fields, Vec::new()), None);
+        assert_eq!(
+            newly_out_of_range(&mut fields, desk("C")),
+            Some(hint("C")),
+            "out again"
+        );
+        let both = vec![
+            ("local:desk".to_owned(), hint("C")),
+            (AIRPLAY_DELAY_FIELD.to_owned(), hint("D")),
+        ];
+        assert_eq!(newly_out_of_range(&mut fields, both), Some(hint("D")));
+
+        let app = app_over(MockBackend::new());
         app.main.invoke_sync_toggled("local:desk".into());
         app.main
+            .invoke_delay_edited("local:desk".into(), "+30000".into());
+        let said = app.main.get_notice_announcement();
+        assert_eq!(
+            said,
+            "The range is \u{2212}2000 to +20000 ms. Enter applies +20000."
+        );
+    }
+
+    /// No AirPlay speaker found, and Connected Speakers lists the desk
+    /// (`with_desk`) or nothing.
+    fn app_with_the_no_airplay_note(with_desk: bool) -> Rc<App> {
+        let mut backend = MockBackend::new();
+        backend.set_airplay_none_found(true);
+        backend.retain_speakers(|s| {
+            !s.id.starts_with("airplay:")
+                && s.id != "local:bt"
+                && (with_desk || s.id != "local:desk")
+        });
+        let app = app_over(backend);
+        draw_frames();
+        app
+    }
+
+    #[test]
+    fn a_click_on_the_no_airplay_note_under_a_list_works_like_one_on_the_last_row() {
+        let app = app_with_the_no_airplay_note(true);
+        click(app.main.window(), 420.0, 525.0);
+        assert!(
+            app.ui.borrow().sync_open.contains("local:desk"),
+            "the desk's controls opened"
+        );
+        app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
+        // The note, moved down by the open controls.
         click(app.main.window(), 420.0, 610.0);
-        assert_eq!(delay_of(&app, "local:desk"), Some(400.0));
+        assert_eq!(
+            delay_of(&app, "local:desk"),
+            Some(400.0),
+            "closing applied it"
+        );
         assert!(app.ui.borrow().sync_open.is_empty());
+    }
+
+    #[test]
+    fn a_click_on_the_no_airplay_note_alone_is_outside_every_row() {
+        let app = app_with_the_no_airplay_note(false);
+        app.main.invoke_airplay_delay_edited("2100".into());
+        click(app.main.window(), 420.0, 465.0);
+        assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0), "it applied");
+        assert!(app.ui.borrow().sync_open.is_empty(), "and opened nothing");
     }
 
     #[test]
@@ -2905,13 +3035,7 @@ mod tests {
         );
 
         press(window, "1");
-        window.dispatch_event(WindowEvent::KeyPressed {
-            text: Key::Control.into(),
-        });
-        press(window, "s");
-        window.dispatch_event(WindowEvent::KeyReleased {
-            text: Key::Control.into(),
-        });
+        ctrl_s(window);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(12091.0),

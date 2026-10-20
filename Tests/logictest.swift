@@ -2517,10 +2517,25 @@ do {
           "delay panels: a click on another row applies the open panel's typing first and leaves that panel open",
           "order: \(order), delays: \(delays)")
 
+    // The note under Connected Speakers belongs to the last row's box.
+    let noteTargets = [DelayPanels.noteTarget(under: [(id: "usb", hasDelay: true), (id: "dock", hasDelay: true)]),
+                       DelayPanels.noteTarget(under: [(id: "dock", hasDelay: true), (id: "kitchen", hasDelay: false)]),
+                       DelayPanels.noteTarget(under: [])]
+    check(noteTargets == ["dock", nil, nil],
+          "delay panels: a click on the note under a list toggles the last row's panel; under a row without a delay, or alone, it is outside",
+          "targets: \(noteTargets)")
+    openBoth()
+    typed["usb"]?.type("390"); typed["dock"]?.type("66")
+    order = []
+    if let target = noteTargets[0] { change { $0.toggle(target) } }   // the note, under the dock's row
+    check(order == ["usb", "dock"] && delays == ["usb": 390, "dock": 66] && panels.open == ["usb"],
+          "delay panels: a click on the note applies the other panel's typing first, then closes the last row's panel",
+          "order: \(order), delays: \(delays)")
+
     openBoth()
     typed["usb"]?.type("-250"); typed["dock"]?.type("abc")
-    clickOutside()   // blank space, the header, the note under Connected Speakers
-    check(delays == ["usb": -250, "dock": 55] && panels.open.isEmpty && typed["dock"]?.text == signed(55),
+    clickOutside()   // blank space, the header, the note alone
+    check(delays == ["usb": -250, "dock": 66] && panels.open.isEmpty && typed["dock"]?.text == signed(66),
           "delay panels: a click outside every speaker row applies each readable typing and closes every panel; unreadable text shows the saved delay",
           "delays: \(delays), dock: \(typed["dock"]?.text ?? "")")
 
@@ -2529,7 +2544,7 @@ do {
     let before = retimes
     for id in typed.keys { typed[id]?.drop() }   // Escape
     clickOutside()
-    check(delays == ["usb": -250, "dock": 55] && retimes == before && panels.open.isEmpty,
+    check(delays == ["usb": -250, "dock": 66] && retimes == before && panels.open.isEmpty,
           "delay panels: Escape drops every typing and closes every panel", "delays: \(delays)")
 }
 

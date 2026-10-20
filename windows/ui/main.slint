@@ -121,11 +121,17 @@ component SpeakerSection inherits VerticalLayout {
         if root.note != "": VerticalLayout {
             if root.speakers.length > 0: Divider { }
 
-            // Not a speaker row: a click here is outside them all. Inside
-            // the scroll view, so the window's own TouchArea doesn't get it.
+            // Under a list, the note belongs to the last row's box: a click
+            // works like one on that row. Alone, it is outside every row.
+            // Inside the scroll view, so the window's own TouchArea doesn't
+            // get it.
             TouchArea {
                 clicked => {
-                    root.blank-clicked();
+                    if root.speakers.length > 0 && root.speakers[root.speakers.length - 1].has-delay {
+                        root.sync-toggled(root.speakers[root.speakers.length - 1].id);
+                    } else {
+                        root.blank-clicked();
+                    }
                 }
 
                 HorizontalLayout {
@@ -268,7 +274,7 @@ export component MainWindow inherits Window {
     callback sync-toggled(string);
     callback delay-stepped(string, int);
     callback delay-edited(string, string);
-    // Enter or Ctrl+S in the speaker's delay field: apply what was typed.
+    // Enter in the speaker's delay field: apply what was typed.
     callback delay-committed(string);
     // Escape in the speaker's sync controls: drop every typed delay.
     callback delay-cancelled(string);
@@ -279,6 +285,9 @@ export component MainWindow inherits Window {
     // A click on the window outside every speaker row: apply every typed
     // delay and close the sync controls.
     callback blank-clicked();
+    // File > Apply Typed Delay (Ctrl+S, wherever the focus is): apply every
+    // typed delay and keep the sync controls open.
+    callback delay-apply-requested();
     callback auto-connect-toggled(string, bool);
     callback forget-pairing-requested(string);
     // The fix under a speaker's device-volume hint.
@@ -351,6 +360,14 @@ export component MainWindow inherits Window {
     MenuBar {
         Menu {
             title: Strings.menu-file;
+
+            MenuItem {
+                title: Strings.menu-apply-delay;
+                shortcut: @keys(Control + S);
+                activated => {
+                    root.delay-apply-requested();
+                }
+            }
 
             MenuItem {
                 title: Strings.menu-close-window;

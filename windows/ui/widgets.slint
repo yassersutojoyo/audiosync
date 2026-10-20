@@ -577,7 +577,7 @@ export component SyncControls inherits VerticalLayout {
     in property <string> reference-name;
     callback stepped(int);
     callback edited(string);
-    // Enter or Ctrl+S in the field: apply what was typed.
+    // Enter in the field: apply what was typed.
     callback committed();
     // Escape in the controls: drop what was typed.
     callback cancelled();
@@ -610,10 +610,6 @@ export component SyncControls inherits VerticalLayout {
             if event.text == Key.Escape {
                 root.cancelled();
                 field.text = root.delay-text;
-                return accept;
-            }
-            if event.modifiers.control && (event.text == "s" || event.text == "S") {
-                root.committed();
                 return accept;
             }
             return reject;
@@ -706,7 +702,7 @@ export component AirPlayDelayControls inherits VerticalLayout {
     in property <string> range-hint;
     callback stepped(int);
     callback edited(string);
-    // Enter or Ctrl+S in the field: apply what was typed.
+    // Enter in the field: apply what was typed.
     callback committed();
     // Escape in the field or on a step: drop what was typed.
     callback cancelled();
@@ -739,10 +735,6 @@ export component AirPlayDelayControls inherits VerticalLayout {
                     if event.text == Key.Escape {
                         root.cancelled();
                         field.text = root.delay-text;
-                        return accept;
-                    }
-                    if event.modifiers.control && (event.text == "s" || event.text == "S") {
-                        root.committed();
                         return accept;
                     }
                     return reject;
@@ -828,7 +820,7 @@ export component SpeakerRow inherits Rectangle {
     callback sync-toggled();
     callback delay-stepped(int);
     callback delay-edited(string);
-    // Enter or Ctrl+S in its delay field: apply what was typed.
+    // Enter in its delay field: apply what was typed.
     callback delay-committed();
     // Escape in its sync controls: drop what was typed.
     callback delay-cancelled();
