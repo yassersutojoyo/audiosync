@@ -636,6 +636,12 @@ impl AirPlaySpeakers {
             self.store_unsaved = !saved;
             self.store_change = Some(saved);
         }
+        self.note_kept_aside();
+    }
+
+    /// Takes in where the store kept the pairings' file ignored at launch
+    /// aside, if it just did, for the next poll to report.
+    fn note_kept_aside(&mut self) {
         if let Some(kept) = self.store.take_kept_aside() {
             let file = kept.file_name().unwrap_or_default().to_string_lossy();
             self.store_kept_aside = Some(file.into_owned());
@@ -1191,6 +1197,10 @@ impl AirPlaySpeakers {
         if let Some(saved) = self.store_change.take() {
             events.push(BackendEvent::PairingStore { saved });
         }
+        // A file ignored at launch is reported once kept aside: at the
+        // first poll, or a few seconds after it could be read again.
+        self.store.keep_aside_if_due();
+        self.note_kept_aside();
         if let Some(file) = self.store_kept_aside.take() {
             events.push(BackendEvent::PairingsKeptAside { file });
         }

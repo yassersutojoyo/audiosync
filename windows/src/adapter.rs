@@ -306,6 +306,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             view: ViewSettings::default(),
         };
         adapter.restore(saved);
+        // Settings ignored at launch: the user is told now why the defaults
+        // apply, even if they change nothing.
+        adapter.keep_settings_aside(false);
         adapter.list_devices();
         adapter.log.log(|| match &adapter.chosen {
             Chosen::WholeSystem => format!("source chosen: {WHOLE_SYSTEM_NAME} (the default)"),
@@ -476,6 +479,58 @@ impl<A: AudioBackend> AudioAdapter<A> {
         .clamped()
     }
 
+    /// Keeps the settings file ignored at launch aside, when it can be read,
+    /// and tells the user once where it is: at launch, and while it couldn't
+    /// be read then, at the poll it is `due` again, every few seconds (or at
+    /// the first save, [`AudioAdapter::persist`]). Returns whether the
+    /// notices changed.
+    fn keep_settings_aside(&mut self, due: bool) -> bool {
+        let kept = if due {
+            self.settings_file.keep_ignored_aside_if_due()
+        } else {
+            self.settings_file.keep_ignored_aside()
+        };
+        match kept {
+            Ok(Some(kept)) => self.tell_kept_aside(&kept, ""),
+            Ok(None) => false,
+            Err(error) => {
+                if !due {
+                    self.log.log(|| {
+                        format!(
+                            "settings: the file ignored at launch can't be kept aside yet \
+                             ({error}); tried again every few seconds"
+                        )
+                    });
+                }
+                false
+            }
+        }
+    }
+
+    /// Logs that the settings file was kept aside (`when`, for the log),
+    /// and, for a file ignored at launch, tells the user once with the
+    /// copy's name: their settings were replaced by the defaults. Returns
+    /// whether a notice was posted.
+    fn tell_kept_aside(&mut self, kept: &KeptAside, when: &str) -> bool {
+        let file = kept.file_name();
+        self.log.log(|| match kept {
+            KeptAside::Newer(_) => {
+                format!("settings: a newer AudioSync's file was kept as {file}{when}")
+            }
+            KeptAside::Ignored(_) => {
+                format!("settings: the file ignored at launch was kept as {file}{when}")
+            }
+        });
+        if let KeptAside::Ignored(_) = kept {
+            self.post(
+                NoticeSubject::SettingsKeptAside,
+                NoticeMessage::SettingsKeptAside { file },
+            );
+            return true;
+        }
+        false
+    }
+
     /// Writes the settings file if anything changed since it was last read
     /// or written. A failed write is logged and tried again at the next
     /// change; the settings stay in effect for this run, and the user is
@@ -501,29 +556,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         match saved {
             Ok(kept) if self.settings_file.path().is_some() => {
                 if let Some(kept) = kept {
-                    self.log.log(|| {
-                        let name = kept.file_name();
-                        match kept {
-                            KeptAside::Newer(_) => format!(
-                                "settings: a newer AudioSync's file was kept as {name} before \
-                                 saving over it"
-                            ),
-                            KeptAside::Ignored(_) => format!(
-                                "settings: the file ignored at launch was kept as {name} before \
-                                 saving over it"
-                            ),
-                        }
-                    });
-                    // The user's settings were replaced by the defaults at
-                    // launch: told once, with where the old file is.
-                    if let KeptAside::Ignored(_) = kept {
-                        let file = kept.file_name();
-                        self.post(
-                            NoticeSubject::SettingsKeptAside,
-                            NoticeMessage::SettingsKeptAside { file },
-                        );
-                        notices_changed = true;
-                    }
+                    notices_changed |= self.tell_kept_aside(&kept, " before saving over it");
                 }
                 self.log.log(|| "settings: saved".to_owned());
             }
@@ -1953,6 +1986,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             changed |= self.refresh_sources();
         }
         changed |= self.count_airplay_quiet();
+        changed |= self.keep_settings_aside(true);
         changed |= self.persist();
         changed
     }
