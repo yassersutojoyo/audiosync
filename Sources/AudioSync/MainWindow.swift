@@ -839,6 +839,10 @@ struct SyncControls: View {
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        // A click on the panel's blank space stays inside it, so the row's
+        // tap doesn't close the panel.
+        .contentShape(Rectangle())
+        .onTapGesture {}
         // Escape on the field or a step.
         .onExitCommand(perform: escape)
         .onAppear { draft.field.show(ms, format: shown) }
