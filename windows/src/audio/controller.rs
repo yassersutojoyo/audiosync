@@ -3170,6 +3170,21 @@ mod tests {
     }
 
     #[test]
+    fn an_output_that_answers_again_isnt_starved_behind_one_that_still_hangs() {
+        let mut backend = backend();
+        // After a wake both hang: the headphones at the start, the speakers
+        // at the next pass, so both have hung once.
+        backend.fail_output(HEADPHONES, Some(BackendError::NotResponding));
+        backend.fail_output(SPEAKERS, Some(BackendError::NotResponding));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        poll_quietly(&mut backend, STALL_RETRY_POLLS);
+        // Windows answers for the speakers again; the headphones still hang.
+        backend.fail_output(SPEAKERS, None);
+        poll_quietly(&mut backend, 3 * STALL_RETRY_POLLS);
+        assert_eq!(playing(&backend), [SPEAKERS]);
+    }
+
+    #[test]
     fn stopping_ends_the_wait_for_an_output_that_didnt_answer() {
         let mut backend = backend();
         backend.fail_output(SPEAKERS, Some(BackendError::NotResponding));
