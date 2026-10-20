@@ -3470,6 +3470,25 @@ mod tests {
     }
 
     #[test]
+    fn a_capture_restart_whose_thread_doesnt_answer_is_the_last_try() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        // The capture thread didn't answer within its wait: that try held
+        // the UI thread for the whole wait, so there is no other.
+        backend.refuse_captures(Some(BackendError::NotResponding));
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(BackendError::NotResponding),
+            }]
+        );
+        assert_eq!(backend.driver().capture_attempts(), 1 + 1);
+        assert_eq!(backend.running_source(), None);
+    }
+
+    #[test]
     fn a_capture_that_cant_start_again_at_first_is_tried_again_for_a_few_seconds() {
         let mut backend = backend();
         backend.start(&SourceId::WholeSystem).unwrap();
