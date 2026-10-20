@@ -291,6 +291,28 @@ pub enum NoticeMessage {
     /// couldn't start, so AirPlay speakers aren't listed or playing. The
     /// notice offers Retry ([`Backend::retry_airplay`]).
     AirPlayStopped,
+    /// The settings file couldn't be written, so changes made now last only
+    /// until AudioSync quits. Posted once until a save works again, which
+    /// clears it.
+    SettingsNotSaved,
+    /// The pairings' file couldn't be written, so pairings added or
+    /// forgotten now last only until AudioSync quits. Posted once until a
+    /// write works again, which clears it.
+    PairingsNotSaved,
+    /// The settings file couldn't be read at launch (or was damaged), so
+    /// AudioSync started with the defaults; once it could be read again, it
+    /// was kept aside as `file`, in the app's data folder, before the first
+    /// save over it.
+    SettingsKeptAside { file: String },
+    /// The pairings' file couldn't be read at launch (or decrypted, or
+    /// parsed), so AudioSync started without the pairings in it; once it
+    /// could be read again, it was kept aside as `file`, in the app's data
+    /// folder, before the first write over it.
+    PairingsKeptAside { file: String },
+    /// Windows has no active sound output while an AirPlay speaker is on, so
+    /// apps have nowhere to play and nothing reaches the speaker. Clears
+    /// itself once an output is back or no AirPlay speaker is on.
+    NoSoundOutput,
     /// The source also plays straight from these outputs, undelayed, so it
     /// is heard twice. `source` is the app's name, or `None` for the whole
     /// system. `mute` names the outputs AudioSync doesn't play to, which the

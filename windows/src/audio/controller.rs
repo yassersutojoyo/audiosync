@@ -67,7 +67,7 @@ use super::airplay::{
 };
 use super::backend::{
     AirPlayInfo, AirPlayPinPrompt, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
-    OutputInfo, SourceId, SourceInfo, StopReason,
+    OutputInfo, SourceId, SourceInfo, StopReason, TIMED_OUT,
 };
 use super::capture::{
     Activation, CaptureAttempt, LoopbackMode, SampleType, decide_activation, running_app,
@@ -825,6 +825,13 @@ impl<D: Driver> Controller<D> {
                         )
                     });
                     self.policy.set_enabled(&endpoint.id, false);
+                    // Off, it no longer waits for its device, so a later
+                    // busy device is told again.
+                    if self.busy.remove(&endpoint.id).is_some() {
+                        self.pending.push(BackendEvent::OutputFree {
+                            id: endpoint.id.clone(),
+                        });
+                    }
                     failures.push((endpoint.id, error));
                 }
             }
@@ -1826,14 +1833,15 @@ impl<D: Driver> AudioBackend for Controller<D> {
 /// Whether a capture that couldn't start again after a loss may start at a
 /// later try: Windows audio isn't back yet, or the device is held or failed
 /// for now. An app that quit, or a source that can't be captured, stays so.
+/// An activation Windows never completed, or a capture thread that didn't
+/// answer in time ([`BackendError::NotResponding`]), is the last try: each
+/// one held the UI thread for the whole wait.
 fn may_start_later(error: &BackendError) -> bool {
-    matches!(
-        error,
-        BackendError::DeviceGone
-            | BackendError::DeviceBusy
-            | BackendError::NotResponding
-            | BackendError::System { .. }
-    )
+    match error {
+        BackendError::DeviceGone | BackendError::DeviceBusy => true,
+        BackendError::System { code, .. } => *code != TIMED_OUT,
+        _ => false,
+    }
 }
 
 /// How the log names an output: its last listed name and its endpoint ID.
@@ -2248,6 +2256,17 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         }
         BackendEvent::DeviceVolumeChanged { id } => {
             format!("output {}: its own volume changed", label(names, id))
+        }
+        BackendEvent::PairingStore { saved: true } => {
+            "the AirPlay pairings' file can be written again".to_owned()
+        }
+        BackendEvent::PairingStore { saved: false } => {
+            "the AirPlay pairings' file couldn't be written; pairings added or forgotten \
+             since last until AudioSync quits"
+                .to_owned()
+        }
+        BackendEvent::PairingsKeptAside { file } => {
+            format!("the AirPlay pairings' file ignored at launch was kept as {file}")
         }
     }
 }
@@ -3008,6 +3027,39 @@ mod tests {
     }
 
     #[test]
+    fn a_busy_output_that_then_fails_another_way_is_told_busy_again_later() {
+        let mut backend = backend();
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let busy = BackendEvent::OutputBusy {
+            id: HEADPHONES.to_owned(),
+        };
+        assert_eq!(backend.poll(), std::slice::from_ref(&busy));
+        // At its next try the device fails another way: turned off, it no
+        // longer waits for the other app.
+        backend.fail_output(HEADPHONES, Some(BackendError::UnsupportedFormat));
+        let events: Vec<BackendEvent> =
+            (0..BUSY_RETRY_POLLS).flat_map(|_| backend.poll()).collect();
+        assert_eq!(
+            events,
+            [
+                BackendEvent::OutputFree {
+                    id: HEADPHONES.to_owned(),
+                },
+                BackendEvent::OutputFailed {
+                    id: HEADPHONES.to_owned(),
+                    error: BackendError::UnsupportedFormat,
+                },
+            ]
+        );
+        assert!(!backend.policy().settings(HEADPHONES).enabled);
+        // Turned on again while an app holds it once more: told again.
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        assert_eq!(backend.set_output_enabled(HEADPHONES, true), Ok(()));
+        assert_eq!(backend.poll(), [busy]);
+    }
+
+    #[test]
     fn a_busy_output_whose_device_goes_away_no_longer_waits() {
         let mut backend = backend();
         backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
@@ -3175,6 +3227,39 @@ mod tests {
         backend.refuse_captures(None);
         poll_quietly(&mut backend, RESTART_DELAY_POLLS + 1);
         assert_eq!(backend.running_source(), None, "no try once it stopped");
+    }
+
+    #[test]
+    fn a_capture_restart_that_times_out_is_the_last_try() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        // Windows never completed the activation: each try held the UI
+        // thread for the whole wait, so there is no other.
+        let timed_out = BackendError::System {
+            call: "ActivateAudioInterfaceAsync",
+            code: crate::audio::backend::TIMED_OUT,
+        };
+        backend.refuse_captures(Some(timed_out.clone()));
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(timed_out),
+            }]
+        );
+        assert_eq!(backend.driver().capture_attempts(), 1 + 1);
+        assert_eq!(backend.running_source(), None);
+        // Another Windows error is still tried again.
+        backend.refuse_captures(None);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::System {
+            call: "IAudioClient::Initialize",
+            code: -1,
+        }));
+        poll_quietly(&mut backend, 1 + 2 * RESTART_DELAY_POLLS);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
     }
 
     #[test]

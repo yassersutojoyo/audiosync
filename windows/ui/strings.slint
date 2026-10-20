@@ -64,6 +64,13 @@ export global Strings {
     out property <string> notice-capture-failed: @tr("AudioSync couldn't capture audio from the selected source. Turn streaming off and on again, or pick another source. If it keeps happening, restart your PC.");
     out property <string> notice-capture-lost: @tr("AudioSync lost the audio from the selected source, so streaming has stopped. Turn streaming on again, or pick another source.");
     out property <string> notice-airplay-stopped: @tr("AirPlay stopped or couldn't start. Select Retry to try again. If it keeps happening, restart AudioSync.");
+    // The settings file in the app's data folder couldn't be written.
+    out property <string> notice-settings-not-saved: @tr("AudioSync couldn't save your settings, so changes you make now won't be kept after AudioSync quits.");
+    // The file with the Apple TV pairings couldn't be written.
+    out property <string> notice-pairings-not-saved: @tr("AudioSync couldn't save your Apple TV pairings, so pairings you add or forget now won't be kept after AudioSync quits.");
+    // Windows lists no active sound output (none connected, or all turned
+    // off) while a network speaker is on: apps have nowhere to play.
+    out property <string> notice-no-sound-output: @tr("Windows has no working sound output, so apps have nowhere to play and AudioSync has nothing to send to your speakers. Connect or turn on an output in Sound settings.");
 
     // Pairing with an Apple TV that asks for a PIN: the dialog and the
     // speaker menu.
@@ -195,6 +202,20 @@ export global Strings {
     // it would capture AudioSync's own output and echo.
     public pure function notice-source-refused(source: string) -> string {
         return @tr("AudioSync can't capture {} without capturing its own sound too. Pick another source.", source);
+    }
+
+    // The settings file couldn't be read when the app started (another
+    // program held it, or it was damaged), so the defaults applied; it was
+    // kept under this file name in %LOCALAPPDATA%\AudioSync before the
+    // first save over it.
+    public pure function notice-settings-kept-aside(file: string) -> string {
+        return @tr("AudioSync couldn't read your saved settings when it started, so it's using the default settings. The old file was kept as {} in AudioSync's data folder (type %LOCALAPPDATA% in File Explorer's address bar, then open AudioSync).", file);
+    }
+
+    // The same for the file with the Apple TV pairings: those Apple TVs ask
+    // for a PIN again.
+    public pure function notice-pairings-kept-aside(file: string) -> string {
+        return @tr("AudioSync couldn't read your Apple TV pairings when it started, so those Apple TVs ask for a PIN again. The old file was kept as {} in AudioSync's data folder (type %LOCALAPPDATA% in File Explorer's address bar, then open AudioSync).", file);
     }
 
     // A speaker that couldn't start was turned off.

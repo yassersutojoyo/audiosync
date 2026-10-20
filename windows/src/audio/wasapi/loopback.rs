@@ -21,7 +21,7 @@ use audiosync_core::eq::EqProcessor;
 use audiosync_core::ring::RingWriter;
 
 use crate::audio::airplay::FeedLease;
-use windows::Win32::Foundation::{E_FAIL, ERROR_TIMEOUT, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows::Win32::Foundation::{E_FAIL, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
@@ -46,7 +46,7 @@ use super::com::{
     wave_format,
 };
 use super::processes::ProcessWatch;
-use crate::audio::backend::BackendError;
+use crate::audio::backend::{BackendError, TIMED_OUT};
 use crate::audio::capture::{
     Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, GapFill, LoopbackMode,
     StreamFormat,
@@ -334,7 +334,7 @@ fn activate(activation: Activation) -> Result<IAudioClient, BackendError> {
         // Windows may still read `args`, so it stays allocated.
         return Err(BackendError::System {
             call: "ActivateAudioInterfaceAsync",
-            code: HRESULT::from_win32(ERROR_TIMEOUT.0).0,
+            code: TIMED_OUT,
         });
     }
     // SAFETY: the activation completed, so nothing else reads `args`.
@@ -492,6 +492,12 @@ fn capture_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_timed_out_activation_carries_the_windows_timeout_code() {
+        use windows::Win32::Foundation::ERROR_TIMEOUT;
+        assert_eq!(TIMED_OUT, HRESULT::from_win32(ERROR_TIMEOUT.0).0);
+    }
 
     #[test]
     fn activation_args_never_clear_their_variant() {

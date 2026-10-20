@@ -303,6 +303,20 @@ pub enum BackendEvent {
     /// did, so none is listed; [`AudioBackend::retry_airplay`] starts a new
     /// sender.
     AirPlayStopped,
+    /// Whether the pairings' file could be written, reported when that
+    /// changes: `false` once a write failed (the pairings added or forgotten
+    /// since last only until AudioSync quits), `true` once one worked again.
+    PairingStore {
+        /// The last write worked.
+        saved: bool,
+    },
+    /// The pairings' file the store ignored at launch (it couldn't be read,
+    /// decrypted or parsed) was kept aside before the first write over it,
+    /// so the user can be told where. Reported once.
+    PairingsKeptAside {
+        /// The copy's file name, in the app's data folder.
+        file: String,
+    },
 }
 
 /// Why playback stopped on its own.
@@ -313,6 +327,11 @@ pub enum StopReason {
     /// Capture failed and could not go on.
     CaptureFailed(BackendError),
 }
+
+/// The HRESULT of a wait that timed out, `HRESULT_FROM_WIN32(ERROR_TIMEOUT)`:
+/// the code of a [`BackendError::System`] for an activation Windows never
+/// completed within AudioSync's wait.
+pub const TIMED_OUT: i32 = 0x8007_05B4_u32 as i32;
 
 /// Why something failed. The UI words each variant in its own, translated
 /// text; [`fmt::Display`] gives English for logs.

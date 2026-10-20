@@ -8,7 +8,12 @@
 //! read them. The file lives in the app's data folder,
 //! `%LOCALAPPDATA%\AudioSync\airplay-pairings.dat`. A file that can't be
 //! read, decrypted or parsed is ignored as a whole: the speakers in it are
-//! paired again, and the next pairing writes a fresh file.
+//! paired again, and the next pairing writes a fresh file, after keeping the
+//! old one aside in a copy named after [`IGNORED_FILE_NAME`] with the time,
+//! which no later copy replaces. A read that fails is tried once more at
+//! launch (another program may hold the file for a moment), and while the
+//! file still can't be read nothing is written over it: new pairings last
+//! until AudioSync quits.
 //!
 //! Before encryption the file holds a magic tag, then per speaker its ID and
 //! the credential blob the sender defines ([`Credentials::to_bytes`]), each
@@ -29,6 +34,11 @@ use crate::data_folder;
 
 /// The file's name in the app's data folder.
 pub const FILE_NAME: &str = "airplay-pairings.dat";
+
+/// What the copy of a file the store ignored at launch is named after
+/// (`airplay-pairings.ignored-<time>.dat`), kept before the store first
+/// writes over it.
+pub const IGNORED_FILE_NAME: &str = "airplay-pairings.ignored.dat";
 
 /// The first bytes of the decrypted file, with its format version.
 const MAGIC: &[u8] = b"AudioSync pairings 1\n";
@@ -101,6 +111,12 @@ pub struct PairingStore {
     path: Option<PathBuf>,
     sealer: Sealer,
     entries: BTreeMap<String, Credentials>,
+    /// The file was ignored when the store opened: it is kept aside before
+    /// the next write replaces it.
+    keep_aside: bool,
+    /// Where a write kept that file aside, until
+    /// [`PairingStore::take_kept_aside`] takes it.
+    kept_aside: Option<PathBuf>,
 }
 
 impl fmt::Debug for PairingStore {
@@ -126,6 +142,8 @@ impl PairingStore {
             path: None,
             sealer: Sealer::current_user(),
             entries: BTreeMap::new(),
+            keep_aside: false,
+            kept_aside: None,
         }
     }
 
@@ -135,7 +153,9 @@ impl PairingStore {
         data_folder::folder().map(|folder| folder.join(FILE_NAME))
     }
 
-    /// The store kept in `path`, with what it holds now.
+    /// The store kept in `path`, with what it holds now. A read that fails
+    /// is tried once more after a short pause
+    /// ([`data_folder::read_at_launch`]).
     pub fn open(path: PathBuf, sealer: Sealer) -> (PairingStore, Loaded) {
         let (entries, loaded) = match read(&path, sealer) {
             Ok(Some(entries)) => {
@@ -149,8 +169,17 @@ impl PairingStore {
             path: Some(path),
             sealer,
             entries,
+            keep_aside: matches!(loaded, Loaded::Ignored(_)),
+            kept_aside: None,
         };
         (store, loaded)
+    }
+
+    /// Where the file ignored at launch was kept aside, once a write did
+    /// that (the file could be read again by then); `None` after that, so
+    /// the user is told once.
+    pub fn take_kept_aside(&mut self) -> Option<PathBuf> {
+        self.kept_aside.take()
     }
 
     /// Whether the speaker `id` is paired.
@@ -181,11 +210,18 @@ impl PairingStore {
     }
 
     /// Writes every entry to the file, through a temporary file renamed over
-    /// it; removes the file once nothing is paired.
-    fn save(&self) -> io::Result<()> {
+    /// it; removes the file once nothing is paired. A file ignored at launch
+    /// is first kept aside ([`data_folder::keep_aside`] with
+    /// [`IGNORED_FILE_NAME`]); while it can't be read, it is
+    /// left alone and the error returned.
+    fn save(&mut self) -> io::Result<()> {
         let Some(path) = &self.path else {
             return Ok(());
         };
+        if self.keep_aside {
+            self.kept_aside = data_folder::keep_aside(path, IGNORED_FILE_NAME)?;
+            self.keep_aside = false;
+        }
         if self.entries.is_empty() {
             return match fs::remove_file(path) {
                 Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
@@ -203,10 +239,14 @@ impl PairingStore {
 /// The entries in the file at `path`: `None` without a file, or why it was
 /// ignored.
 fn read(path: &Path, sealer: Sealer) -> Result<Option<BTreeMap<String, Credentials>>, String> {
-    let sealed = match fs::read(path) {
+    let sealed = match data_folder::read_at_launch(path) {
         Ok(sealed) => sealed,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("the file can't be read: {error}")),
+        Err(error) => {
+            return Err(format!(
+                "the file can't be read, even at a second try: {error}"
+            ));
+        }
     };
     let plain = (sealer.open)(&sealed)
         .map_err(|error| format!("the file can't be decrypted for this Windows user: {error}"))?;
@@ -376,6 +416,7 @@ mod dpapi {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::data_folder::copies_kept_aside;
     use crate::debug_log::test_dir;
 
     /// Credentials whose secret is `fill` repeated.
@@ -485,6 +526,100 @@ pub mod tests {
         assert_eq!(
             loaded,
             Loaded::Ignored("the file isn't in the expected format".to_owned())
+        );
+    }
+
+    /// The bytes of a store file holding one pairing.
+    fn good_file(name: &str) -> Vec<u8> {
+        let path = test_dir(name).join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        store
+            .insert("02005E005301", credentials("0123456789ABCDEF", 9))
+            .expect("saved");
+        fs::read(&path).expect("written")
+    }
+
+    #[test]
+    fn a_file_that_cant_be_read_at_launch_is_never_saved_over() {
+        let dir = test_dir("pairings-unreadable");
+        let path = dir.join(FILE_NAME);
+        let kept = || copies_kept_aside(&dir, "airplay-pairings.ignored");
+        // A folder where the file should be: reading it fails, but not with
+        // "not found", as when another program holds the file at launch.
+        fs::create_dir(&path).unwrap();
+        let (mut store, loaded) = PairingStore::open(path.clone(), sealer());
+        assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+        // Still unreadable: the new pairing is kept for this run only.
+        assert!(
+            store
+                .insert("02005E005302", credentials("0123456789ABCDEE", 4))
+                .is_err()
+        );
+        assert!(store.contains("02005E005302"));
+        assert!(path.is_dir());
+
+        // Readable again, with the pairings made before: kept aside before
+        // the first write replaces the file.
+        let good = good_file("pairings-unreadable-good");
+        fs::remove_dir(&path).unwrap();
+        fs::write(&path, &good).unwrap();
+        store
+            .insert("02005E005303", credentials("0123456789ABCDED", 5))
+            .expect("saved");
+        assert_eq!(kept(), std::slice::from_ref(&good));
+        assert_eq!(
+            PairingStore::open(path.clone(), sealer()).1,
+            Loaded::Speakers(2)
+        );
+        // Once replaced, the next write leaves the copy alone.
+        store.remove("02005E005303").expect("saved");
+        assert_eq!(kept(), [good]);
+    }
+
+    #[test]
+    fn pairings_unreadable_at_two_launches_in_a_row_are_never_lost() {
+        let dir = test_dir("pairings-unreadable-twice");
+        let path = dir.join(FILE_NAME);
+        let users = good_file("pairings-unreadable-twice-good");
+        fs::write(&path, &users).unwrap();
+        // A launch while another program holds the file (a folder stands in
+        // its place), which lets go of it before the first pairing.
+        let launch = |fill: u8| {
+            let held = dir.join("held");
+            fs::rename(&path, &held).unwrap();
+            fs::create_dir(&path).unwrap();
+            let (mut store, loaded) = PairingStore::open(path.clone(), sealer());
+            assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+            fs::remove_dir(&path).unwrap();
+            fs::rename(&held, &path).unwrap();
+            store
+                .insert("02005E005304", credentials("0123456789ABCDEC", fill))
+                .expect("saved");
+        };
+        launch(6);
+        launch(7);
+        // The user's pairings are still kept, next to the first launch's.
+        let kept = copies_kept_aside(&dir, "airplay-pairings.ignored");
+        assert!(kept.contains(&users), "{} copies", kept.len());
+        assert_eq!(kept.len(), 2);
+        assert_eq!(
+            PairingStore::open(path.clone(), sealer()).1,
+            Loaded::Speakers(1)
+        );
+    }
+
+    #[test]
+    fn a_file_that_cant_be_decrypted_is_kept_aside_before_the_next_pairing() {
+        let dir = test_dir("pairings-kept");
+        let path = dir.join(FILE_NAME);
+        fs::write(&path, b"sealed for another user").unwrap();
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        store
+            .insert("02005E005301", credentials("0123456789ABCDEF", 3))
+            .expect("saved");
+        assert_eq!(
+            copies_kept_aside(&dir, "airplay-pairings.ignored"),
+            [b"sealed for another user".to_vec()]
         );
     }
 

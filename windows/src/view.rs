@@ -1944,6 +1944,15 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
         }
         NoticeMessage::AirPlayStopped => strings.get_notice_airplay_stopped(),
+        NoticeMessage::SettingsNotSaved => strings.get_notice_settings_not_saved(),
+        NoticeMessage::PairingsNotSaved => strings.get_notice_pairings_not_saved(),
+        NoticeMessage::SettingsKeptAside { file } => {
+            strings.invoke_notice_settings_kept_aside(file.as_str().into())
+        }
+        NoticeMessage::PairingsKeptAside { file } => {
+            strings.invoke_notice_pairings_kept_aside(file.as_str().into())
+        }
+        NoticeMessage::NoSoundOutput => strings.get_notice_no_sound_output(),
         NoticeMessage::HeardTwice {
             source,
             mute,
@@ -2147,6 +2156,25 @@ mod tests {
             "leaving the field after Escape applies nothing"
         );
         assert_eq!(shown(), format_ms(1750.0));
+    }
+
+    #[test]
+    fn the_main_window_fits_a_small_laptop_screen() {
+        // A 1366 x 768 screen at 150 %, with the taskbar, leaves about
+        // 911 x 464 logical pixels inside the window's frame.
+        let (min_width, min_height) = crate::settings::MIN_WINDOW;
+        assert!(
+            min_width <= 911.0 && min_height <= 464.0,
+            "{min_width} x {min_height}"
+        );
+        let main = include_str!("../ui/main.slint");
+        // By line, so a checkout with CRLF line ends (Windows CI) reads the same.
+        let has_line = |wanted: String| main.lines().any(|line| line.trim_end() == wanted);
+        assert!(has_line(format!("    min-width: {min_width}px;")));
+        assert!(has_line(format!("    min-height: {min_height}px;")));
+        // The left column scrolls when it is taller than the window, so
+        // its cards never push the window past that height.
+        assert!(main.contains("left-column := ScrollView {"));
     }
 
     #[test]
