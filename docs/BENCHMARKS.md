@@ -73,7 +73,7 @@ The drift corrections a run counts come from producer stalls instead. When the p
 The release baseline is a full `Tests/bench.sh` run (60 minutes per configuration), recorded before the pipe feed was removed; only its `two_local` run is kept.
 
 <!-- bench:results:begin -->
-60 min per configuration, 2026-10-19, on main of that day.
+60 min per configuration, on main, 2026-10-19.
 
 Machine: MacBook Air (Mac16,12), Apple M4, 16 GB, macOS 26.6.2 (25G83). Outputs: Microsoft Teams Audio, MacBook Air Speakers.
 
