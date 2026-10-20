@@ -180,3 +180,49 @@ struct AirPlayDelay: Equatable {
         return true
     }
 }
+
+/// A delay field's typed text (S181). Keystrokes only change the text; the
+/// value applies on commit (Return or focus loss), once, so typing "220"
+/// doesn't re-time the outputs at 2 and 22 ms on the way. Text the field
+/// can't read, or the saved value typed again, applies nothing, and the
+/// field shows the saved value again.
+struct DelayFieldDraft: Equatable {
+    /// What the field shows.
+    private(set) var text = ""
+    /// The text holds typing not yet committed.
+    private(set) var isEditing = false
+
+    /// A keystroke: the text changes, nothing applies.
+    mutating func type(_ value: String) {
+        text = value
+        isEditing = true
+    }
+
+    /// Return or focus loss: the value to apply (clamped to the delay's
+    /// range by `sanitize`, and shown that way), or nil when there is
+    /// nothing to apply. A second commit without typing in between returns nil.
+    mutating func commit(saved: Double, sanitize: (Double) -> Double?,
+                         format: (Double) -> String) -> Double? {
+        guard isEditing else { return nil }
+        isEditing = false
+        guard let typed = LocalDelay.wholeMs(text), let value = sanitize(typed), value != saved else {
+            text = format(saved)
+            return nil
+        }
+        text = format(value)
+        return value
+    }
+
+    /// The saved value changed (or the field appeared): show it, unless the
+    /// user is typing.
+    mutating func show(_ saved: Double, format: (Double) -> String) {
+        guard !isEditing else { return }
+        text = format(saved)
+    }
+
+    /// Drop the typing and show the saved value (a step button applied one).
+    mutating func discard(saved: Double, format: (Double) -> String) {
+        isEditing = false
+        text = format(saved)
+    }
+}
