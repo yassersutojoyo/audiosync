@@ -5,10 +5,11 @@ import Foundation
 /// inputs it can capture from.
 ///
 /// Every call reads Core Audio afresh and nothing is cached, because devices
-/// come and go at any time; the host lists the outputs on every 3 s poll (spec
-/// S101) and the inputs whenever Core Audio's device list changes. Speakers are
-/// keyed by device UID, which survives unplugging, while a renderer is bound to
-/// the object ID of the moment (S60): a device that returns may get a new one.
+/// come and go at any time; the host lists the outputs and the inputs whenever
+/// Core Audio's device list changes, and the outputs on its 30 s safety net too
+/// (spec S101). Speakers are keyed by device UID, which survives unplugging,
+/// while a renderer is bound to the object ID of the moment (S60): a device
+/// that returns may get a new one.
 struct AudioDevices: Sendable {
     /// One device as listed.
     struct Device: Hashable, Sendable {

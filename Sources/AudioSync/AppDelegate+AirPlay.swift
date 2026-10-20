@@ -7,9 +7,11 @@ extension AppDelegate {
 
     // MARK: - The speaker list
 
-    /// From the 3 s poll, a wake and Refresh Devices: AudioSync's own sender
-    /// starts (again after a failed start), and its speakers follow the
-    /// switches (`reconcileNativeAirPlay`). Nothing happens while the Mac
+    /// At launch, after a wake, on Refresh Devices, when something falls due
+    /// (`scheduleDueReconcile`) and from the 30 s safety net (S101):
+    /// AudioSync's own sender starts (again after a failed start), a denied
+    /// Local Network answer is asked again, and the sender's speakers follow
+    /// the switches (`reconcileNativeAirPlay`). Nothing happens while the Mac
     /// sleeps.
     func reconcileAirPlaySpeakers() {
         guard !macAsleep else { return }
@@ -151,7 +153,8 @@ extension AppDelegate {
 
 extension AppDelegate {
     /// While the Mac sleeps, `reconcileAirPlaySpeakers` does nothing
-    /// (docs/EDGE_CASES.md, EC3); right after wake it runs at once.
+    /// (docs/EDGE_CASES.md, EC3); right after wake it runs at once, and the
+    /// local devices are listed again (S101).
     func observeSleepAndWake() {
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
@@ -172,6 +175,9 @@ extension AppDelegate {
         DebugTrace.log("[AudioSync] woke from sleep")
         macAsleep = false
         reconcileAirPlaySpeakers()
+        // Devices may have come or gone during the sleep. Its model update
+        // also arms again what fell due meanwhile (`scheduleDueReconcile`).
+        reconcileLocal(keepListed: true)
     }
 }
 

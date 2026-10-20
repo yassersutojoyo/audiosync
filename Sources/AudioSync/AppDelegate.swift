@@ -11,8 +11,9 @@ import Sparkle
 /// The app delegate, and the owner of everything that lives as long as the
 /// app: the session engine, the speakers with their settings, the AirPlay
 /// bookkeeping and the windows. This file holds that state and the app's
-/// life: launch, the 3 s poll, the system events AudioSync follows (apps that
-/// quit, devices that come and go, a second launch) and quitting. The work
+/// life: launch, the reconciles no event asks for (the 30 s safety net and
+/// what falls due), the system events AudioSync follows (apps that quit,
+/// devices that come and go, a second launch) and quitting. The work
 /// sits in the extensions: `+Engine` (streaming on and off, notices, alerts),
 /// `+Outputs` (speaker and source state, local outputs), `+AirPlay` (the
 /// AirPlay list, pairing, sleep and wake, track info), `+Groups` (groups,
@@ -183,7 +184,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Mirrors the login item's state (System Settings can change it too).
     var launchAtLogin = false
 
-    private var reconcileTimer: Timer?
+    /// The safety net's timer (`startSafetyNet`, S101).
+    private var safetyNetTimer: Timer?
+    /// The one reconcile armed for something that falls due
+    /// (`scheduleDueReconcile`), when it fires, and when the last one ran.
+    private var dueTimer: Timer?
+    private var dueReconcileAt: Date?
+    private var lastDueReconcile: Date?
     private var observers: [NSObjectProtocol] = []
     /// Set by `runQuitSteps`, so Quit and an exit signal never run them twice.
     private var quitStepsRan = false
@@ -254,8 +261,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         observeSecondLaunch()
 
         reconcileLocal()   // lists the local speakers; auto-connect may start streaming
-        startReconcileTimer()
+        startSafetyNet()
         if AppLifecycle.opensMainWindow(loginItemLaunch: loginItem) { showMainWindow() }
+        // AudioSync's own sender and its discovery start, after the window,
+        // so a Local Network prompt they raise comes up in front of it.
+        reconcileAirPlaySpeakers()
         pushModel()
     }
 
@@ -279,10 +289,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// What the session engine and the Local Network probe report. Both
     /// report on the main thread (S113).
     private func handleEngineEvents() {
-        engine.onOutputGone = { lostUID in
+        engine.onOutputGone = { [weak self] lostUID in
             // The speaker stays on; a reconcile attaches it again once its
-            // device is listed again (S68, EC1).
+            // device is listed again (S68, EC1). One runs now, as for a
+            // device-list change: a device that lingers in Core Audio's list
+            // without being alive leaves the speaker list at once.
             DebugTrace.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
+            self?.devicesChanged()
         }
         engine.onInterrupted = { [weak self] interruption in
             guard let self else { return }
@@ -308,18 +321,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    // MARK: - The poll
+    // MARK: - Reconciles no event asks for
 
-    /// Every 3 s: the AirPlay speakers, then the local devices
-    /// (S101). In the default run loop mode, so it pauses while a menu or a
-    /// modal alert (a PIN prompt) is open.
-    func startReconcileTimer() {
-        reconcileTimer?.invalidate()
-        reconcileTimer = Timer.scheduledTimer(withTimeInterval: AppLifecycle.pollInterval,
+    // Events drive the reconciles (S101): Core Audio's device-list notice and
+    // a lost output list the local devices again; the sender's discovery
+    // changes and speaker events update the AirPlay list; the launch, Refresh
+    // Devices and Retry run the AirPlay reconcile, and a wake runs both; every
+    // click makes the speakers it switches follow at once. Two timers cover
+    // the rest. Both run in the default run loop mode, so they pause while a
+    // menu or a modal alert (a PIN prompt) is open.
+
+    /// The safety net, every `AppLifecycle.safetyNetInterval`: the AirPlay
+    /// speakers, then the local devices, for what no event reports.
+    func startSafetyNet() {
+        safetyNetTimer?.invalidate()
+        safetyNetTimer = Timer.scheduledTimer(withTimeInterval: AppLifecycle.safetyNetInterval,
                                               repeats: true) { [weak self] _ in
             self?.reconcileAirPlaySpeakers()
             self?.reconcileLocal(keepListed: true)
         }
+    }
+
+    /// Arms the AirPlay reconcile for the next thing that falls due with no
+    /// event to say so (`AppLifecycle.nextDueReconcile`): the sender's restart
+    /// after a failed start, the Local Network recheck while access is
+    /// denied, the moment the Local Network hint may show. Runs with every
+    /// model update, which follows every change that can move one of those
+    /// times; arms nothing while the Mac sleeps or once AudioSync quits.
+    func scheduleDueReconcile() {
+        guard !quitStepsRan else { return }
+        let restart = nativeAirPlay == nil ? nativeStarts.restartAt : nil   // none while a start is under way
+        let hint = LocalNetworkHint.dueAt(access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
+                                          emptySince: airplayEmptySince, now: Date())
+        let next = AppLifecycle.nextDueReconcile(due: [restart, localNetworkProbe.recheckAt, hint],
+                                                 last: lastDueReconcile, asleep: macAsleep)
+        guard next != dueReconcileAt else { return }
+        dueTimer?.invalidate()
+        dueTimer = nil
+        dueReconcileAt = next
+        guard let next else { return }
+        dueTimer = Timer.scheduledTimer(withTimeInterval: max(0, next.timeIntervalSinceNow),
+                                        repeats: false) { [weak self] _ in
+            self?.dueReconcileFired()
+        }
+    }
+
+    /// What fell due: the AirPlay reconcile restarts the sender or asks
+    /// about Local Network access again, and the model update shows the hint
+    /// and arms the next one.
+    private func dueReconcileFired() {
+        dueTimer = nil
+        dueReconcileAt = nil
+        lastDueReconcile = Date()
+        reconcileAirPlaySpeakers()   // nothing while the Mac sleeps; its wake reconciles
+        pushModel()
     }
 
     // MARK: - System events
@@ -353,7 +408,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// Core Audio's device list changed: list the outputs and the inputs
-    /// again without waiting for the poll.
+    /// again. This notice drives the local list (S101); the safety net only
+    /// catches what it misses.
     private func observeDeviceList() {
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
                                                  mScope: kAudioObjectPropertyScopeGlobal,
@@ -418,7 +474,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         DebugTrace.log("[AudioSync] quitting")
         // Quitting doesn't close the window: keep a half-typed delay.
         mainWindow?.finishEditing()
-        reconcileTimer?.invalidate()
+        safetyNetTimer?.invalidate()
+        dueTimer?.invalidate()
         // Nothing needs to reach the views any more.
         localNetworkProbe.onChange = { _ in }
         stopEngine()

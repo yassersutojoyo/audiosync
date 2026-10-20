@@ -17,11 +17,14 @@ extension AppDelegate {
         NativeAirPlayID.playable(enabledAirPlay)
     }
 
-    /// From every AirPlay reconcile (at launch, every 3 s, after a wake): the
-    /// first one starts the sender and its discovery, and starts it again
-    /// after a start failed (`NativeSenderStarts`); later ones make its
-    /// speakers match the switches. On quit or an exit signal, `runQuitSteps`
-    /// tears it down (`NativeAirPlay.shutdown`).
+    /// From every AirPlay reconcile (at launch, after a wake, on Refresh
+    /// Devices or Retry, when a restart falls due, and from the 30 s safety
+    /// net, S101): the first one starts the sender and its discovery, and the
+    /// one due `NativeSenderStarts.retrySpacing` after a failed start starts
+    /// it again (`NativeSenderStarts`); later ones make its speakers match the
+    /// switches, which the switches' clicks and the sender's events already
+    /// do. On quit or an exit signal, `runQuitSteps` tears it down
+    /// (`NativeAirPlay.shutdown`).
     func reconcileNativeAirPlay() {
         guard nativeAirPlay != nil else {
             if nativeStarts.mayStart(at: Date()) { startNativeAirPlay() }
@@ -44,8 +47,10 @@ extension AppDelegate {
     }
 
     /// A failed start left nothing running: the sender goes, the user hears
-    /// about it once, and a later reconcile starts it again. A start that
-    /// works clears that notice.
+    /// about it once, and the reconcile that falls due
+    /// `NativeSenderStarts.retrySpacing` later starts it again (armed by the
+    /// model update below, `scheduleDueReconcile`). A start that works clears
+    /// that notice.
     private func nativeStartFinished(_ native: NativeAirPlay, started: Bool) {
         let news = nativeStarts.finished(started: started, at: Date())
         if started {

@@ -208,7 +208,7 @@ extension AppDelegate {
         for uid in applied.detached { localHoldBacks[uid] = nil }
 
         // A speaker that won't start is switched off: it no longer holds the
-        // others back, and the next poll doesn't try it again.
+        // others back, and the next reconcile doesn't try it again.
         let report = LocalOutputSync.report(applied.failures, enabled: enabledLocal, origin: origin)
         if let report { enabledLocal = report.enabled }
         retimeLocalOutputs()   // a joined, left or failed output can move the others' hold-back (S177)

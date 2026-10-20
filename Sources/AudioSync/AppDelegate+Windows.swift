@@ -189,7 +189,8 @@ extension AppDelegate {
     /// Copies the current state into `appModel`, which the main window, the
     /// menu bar panel and the menu bar icon render. Values that didn't change
     /// are left alone, so the views redraw only what moved. Every update also
-    /// decides whether Now Playing polls and AirPlay receivers get the track.
+    /// decides whether Now Playing polls and AirPlay receivers get the track,
+    /// and when the next reconcile falls due (`scheduleDueReconcile`).
     func pushModel() {
         publish(\.running, engine.isRunning)
         publish(\.sourceID, audioSource.defaultsValue)
@@ -213,6 +214,7 @@ extension AppDelegate {
         publish(\.deviceVolumes, followDeviceVolumes())
         menuBar?.setRunning(engine.isRunning)
         syncTrackInfo()
+        scheduleDueReconcile()
     }
 
     /// Refreshes the source picker: apps come and go, input devices are
