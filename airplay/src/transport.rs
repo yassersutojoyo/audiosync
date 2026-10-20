@@ -21,8 +21,9 @@
 //! Both UDP threads take datagrams only from the receiver: the address the
 //! connection reached (a global IPv6 one by its /64 prefix), from any port
 //! ([`from_receiver`]). Others are dropped unread and counted
-//! (P86, P91, P144), so another host on the network can't draw timing
-//! replies or resends, or keep a lost session's timing alive (P131).
+//! (P86, P91, P144). That screens out stray datagrams (a stale session,
+//! another device) from timing replies, resends and the liveness check
+//! (P131); it is no security boundary against a forged source address.
 //!
 //! The threads start before the session learns its ports, so both sockets
 //! are open and answering before SETUP names them (P31). Audio, sync and
