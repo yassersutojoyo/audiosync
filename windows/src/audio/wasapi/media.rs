@@ -397,3 +397,44 @@ fn read_all(stream: &InMemoryRandomAccessStream) -> windows::core::Result<Vec<u8
     DataReader::FromBuffer(&filled)?.ReadBytes(&mut data)?;
     Ok(data)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::audio::now_playing::ARTWORK_LIMIT;
+
+    /// Reads this PC's media sessions; play something first. Run with
+    /// `cargo test -- --ignored --nocapture reads_this_pcs`.
+    #[test]
+    #[ignore = "reads this PC's media sessions"]
+    fn reads_this_pcs_media_sessions() {
+        let mut reader = MediaSessionReader::start(DebugLog::default());
+        reader.follow(Some(Follow::AnyApp));
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let reading = loop {
+            if let Some(reading) = reader.take_reading() {
+                break reading;
+            }
+            assert!(Instant::now() < deadline, "no reading");
+            thread::sleep(Duration::from_millis(50));
+        };
+        let icon = reader
+            .icon()
+            .expect("the icon is made before the first reading");
+        assert!(icon.len() <= ARTWORK_LIMIT && icon.starts_with(&[0xFF, 0xD8]));
+        println!("icon: {} bytes", icon.len());
+        match reading.track {
+            Some(track) => {
+                println!("{:?}", track.session);
+                if let Some(jpeg) = &track.artwork {
+                    assert!(jpeg.len() <= ARTWORK_LIMIT && jpeg.starts_with(&[0xFF, 0xD8]));
+                }
+                let artwork = track.artwork.map(|jpeg| jpeg.len());
+                println!("artwork: {artwork:?} bytes");
+            }
+            None => println!("no media session counts"),
+        }
+    }
+}
