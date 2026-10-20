@@ -2140,6 +2140,14 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::DeviceVolumeChanged { id } => {
             format!("output {}: its own volume changed", label(names, id))
         }
+        BackendEvent::PairingStore { saved: true } => {
+            "the AirPlay pairings' file can be written again".to_owned()
+        }
+        BackendEvent::PairingStore { saved: false } => {
+            "the AirPlay pairings' file couldn't be written; pairings added or forgotten \
+             since last until AudioSync quits"
+                .to_owned()
+        }
     }
 }
 

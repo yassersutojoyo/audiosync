@@ -1697,6 +1697,8 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
         }
         NoticeMessage::AirPlayStopped => strings.get_notice_airplay_stopped(),
+        NoticeMessage::SettingsNotSaved => strings.get_notice_settings_not_saved(),
+        NoticeMessage::PairingsNotSaved => strings.get_notice_pairings_not_saved(),
         NoticeMessage::HeardTwice {
             source,
             mute,

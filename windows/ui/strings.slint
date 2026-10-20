@@ -57,6 +57,10 @@ export global Strings {
     out property <string> notice-capture-failed: @tr("AudioSync couldn't capture audio from the selected source. Turn streaming off and on again, or pick another source. If it keeps happening, restart your PC.");
     out property <string> notice-capture-lost: @tr("AudioSync lost the audio from the selected source, so streaming has stopped. Turn streaming on again, or pick another source.");
     out property <string> notice-airplay-stopped: @tr("AirPlay stopped or couldn't start. Select Retry to try again. If it keeps happening, restart AudioSync.");
+    // The settings file in the app's data folder couldn't be written.
+    out property <string> notice-settings-not-saved: @tr("AudioSync couldn't save your settings, so changes you make now won't be kept after AudioSync quits.");
+    // The file with the Apple TV pairings couldn't be written.
+    out property <string> notice-pairings-not-saved: @tr("AudioSync couldn't save your speaker pairings, so pairings you add or forget now won't be kept after AudioSync quits.");
 
     // Pairing with an Apple TV that asks for a PIN: the dialog and the
     // speaker menu.

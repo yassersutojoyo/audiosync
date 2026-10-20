@@ -303,6 +303,13 @@ pub enum BackendEvent {
     /// did, so none is listed; [`AudioBackend::retry_airplay`] starts a new
     /// sender.
     AirPlayStopped,
+    /// Whether the pairings' file could be written, reported when that
+    /// changes: `false` once a write failed (the pairings added or forgotten
+    /// since last only until AudioSync quits), `true` once one worked again.
+    PairingStore {
+        /// The last write worked.
+        saved: bool,
+    },
 }
 
 /// Why playback stopped on its own.

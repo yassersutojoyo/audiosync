@@ -269,6 +269,14 @@ pub enum NoticeMessage {
     /// couldn't start, so AirPlay speakers aren't listed or playing. The
     /// notice offers Retry ([`Backend::retry_airplay`]).
     AirPlayStopped,
+    /// The settings file couldn't be written, so changes made now last only
+    /// until AudioSync quits. Posted once until a save works again, which
+    /// clears it.
+    SettingsNotSaved,
+    /// The pairings' file couldn't be written, so pairings added or
+    /// forgotten now last only until AudioSync quits. Posted once until a
+    /// write works again, which clears it.
+    PairingsNotSaved,
     /// The source also plays straight from these outputs, undelayed, so it
     /// is heard twice. `source` is the app's name, or `None` for the whole
     /// system. `mute` names the outputs AudioSync doesn't play to, which the

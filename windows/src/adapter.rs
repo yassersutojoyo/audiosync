@@ -1008,6 +1008,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             // The next snapshot shows it; no notice, no focus change (S198).
             BackendEvent::DeviceVolumeChanged { .. } => {}
+            BackendEvent::PairingStore { .. } => {}
         }
     }
 
@@ -3691,6 +3692,76 @@ mod tests {
             .filter(|message| message.contains("was kept as"))
             .count();
         assert_eq!(kept_lines, 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn settings_that_cant_be_saved_get_one_notice_until_a_save_works() {
+        let dir = test_dir("adapter-settings-unsaved");
+        let path = dir.join(settings::FILE_NAME);
+        // A folder where the temporary file goes: every save fails.
+        let blocked = crate::data_folder::temporary_path(&path);
+        std::fs::create_dir(&blocked).expect("blocked");
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.set_master_volume(64.0);
+        assert!(adapter.poll(), "the notice shows");
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        // Told once: dismissed, it stays away while the saves keep failing.
+        adapter.dismiss_all_notices();
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+        // A save that works ends it; a failure after that tells again, and
+        // the next save that works clears the notice.
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        adapter.set_master_volume(66.0);
+        adapter.poll();
+        assert_eq!(SettingsFile::at(path.clone()).load().0.master_volume, 66.0);
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_master_volume(67.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        adapter.set_master_volume(68.0);
+        assert!(adapter.poll(), "the notice goes");
+        assert!(messages(&adapter).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_pairing_that_cant_be_saved_gets_a_notice_until_a_write_works() {
+        use crate::audio::pairings::tests::sealer;
+        let dir = test_dir("adapter-pairings-unsaved");
+        let path = dir.join(crate::audio::pairings::FILE_NAME);
+        // A folder where the file goes: nothing can be written there.
+        std::fs::create_dir(&path).expect("the folder is made");
+        let mut audio = launch_audio();
+        let fake = FakeAirPlay::new();
+        let (store, _) = PairingStore::open(path.clone(), sealer());
+        audio.set_airplay_with_pairings(fake.link(), None, store);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        fake.appear(&tv);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEF", 0x11)),
+        );
+        assert!(adapter.poll());
+        assert_eq!(messages(&adapter), [NoticeMessage::PairingsNotSaved]);
+        assert!(
+            adapter.snapshot().speaker(&id).unwrap().enabled,
+            "paired for this run all the same"
+        );
+        // Writable again: the next write clears the notice.
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        adapter.forget_pairing(&id);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

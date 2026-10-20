@@ -1997,6 +1997,61 @@ pub mod tests {
     }
 
     #[test]
+    fn a_pairing_the_store_cant_write_is_reported_once_until_a_write_works() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{credentials, sealer};
+
+        // A folder where the file goes: nothing can be written there.
+        let path = crate::debug_log::test_dir("airplay-pairing-unsaved").join(FILE_NAME);
+        std::fs::create_dir(&path).expect("the folder is made");
+        let fake = FakeAirPlay::new();
+        let (store, _) = PairingStore::open(path.clone(), sealer());
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        pin_shown(&fake, &mut airplay, &tv);
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEF", 0xA5)),
+        );
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::PairingStore { saved: false }),
+            "{events:?}"
+        );
+        assert_eq!(
+            airplay.enabled_ids(),
+            std::slice::from_ref(&id),
+            "paired for this run all the same"
+        );
+        // Told once while the writes keep failing.
+        airplay.forget_pairing(&id);
+        let events = airplay.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::PairingStore { .. })),
+            "{events:?}"
+        );
+        // Writable again: the next write works, and that is told too.
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        fake.take_calls();
+        pin_shown(&fake, &mut airplay, &tv);
+        assert!(airplay.submit_pin(&id, "1234"));
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEE", 0x5A)),
+        );
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::PairingStore { saved: true }),
+            "{events:?}"
+        );
+        assert!(path.is_file(), "the pairing is written");
+    }
+
+    #[test]
     fn a_wrong_pin_starts_a_new_pairing_and_keeps_the_prompt() {
         let fake = FakeAirPlay::new();
         let mut airplay = speakers(&fake);
