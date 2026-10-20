@@ -592,7 +592,7 @@ impl Renderer {
     /// fast never runs the reader dry. Called after the control's requests
     /// are taken, so the first read's hold is known.
     fn keep_reader_off_w(&mut self, frames: usize) {
-        if self.resampler.is_passthrough() || self.resampler.is_slowing() || frames < 2 {
+        if self.resampler.is_passthrough() || self.resampler.is_trimming() || frames < 2 {
             return;
         }
         let first = self
