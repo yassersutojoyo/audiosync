@@ -59,6 +59,10 @@ const LOG_FLUSH_AT_EXIT: Duration = Duration::from_secs(1);
 /// guide at launch for a made-up notice (`guide::preview`).
 const PREVIEW_GUIDE_VAR: &str = "AUDIOSYNC_PREVIEW_GUIDE";
 
+/// With the debug log on, `1` here opens the AudioSync Guide at launch, to
+/// look at it without the menu.
+const PREVIEW_HELP_VAR: &str = "AUDIOSYNC_PREVIEW_HELP";
+
 /// With the debug log on, `light` or `dark` here shows every window in that
 /// appearance, whatever Windows uses (`view::App::preview_theme`).
 const PREVIEW_THEME_VAR: &str = "AUDIOSYNC_PREVIEW_THEME";
@@ -354,6 +358,10 @@ fn run(
     {
         log.log(|| format!("guide: opened for a made-up notice ({PREVIEW_GUIDE_VAR})"));
         app.show_guide_for(&message);
+    }
+    if log.enabled() && std::env::var(PREVIEW_HELP_VAR).as_deref() == Ok("1") {
+        log.log(|| format!("AudioSync Guide: opened at launch ({PREVIEW_HELP_VAR})"));
+        app.show_help();
     }
     // To look at the PIN dialog without an Apple TV: a made-up pairing, only
     // while the debug log is on.

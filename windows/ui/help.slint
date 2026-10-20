@@ -1,0 +1,200 @@
+// The Guide, opened from Help > AudioSync Guide (F1): how to use AudioSync on
+// Windows, one section per topic. Escape or Close closes it; the arrow keys,
+// Page Up, Page Down, Space, Home and End scroll it. Show How in the
+// double-audio section shows only while that notice does, and opens the
+// notice's own guide (guide.slint).
+
+import { Button, ScrollView } from "std-widgets.slint";
+import { Tokens } from "tokens.slint";
+import { Strings } from "strings.slint";
+import { Fluent, SectionTitle } from "widgets.slint";
+
+// A heading and its text. Narrator reads the heading as the group's name,
+// as for the main window's sections, so SectionTitle hides it from Narrator.
+component HelpSection inherits VerticalLayout {
+    in property <string> title;
+    in property <string> body;
+
+    spacing: 6px;
+    accessible-role: groupbox;
+    accessible-label: root.title;
+
+    SectionTitle {
+        text: root.title;
+    }
+
+    // Without `min-height`, a wrapping text gets the height of one line and
+    // the sections overlap.
+    Text {
+        text: root.body;
+        color: Tokens.text;
+        wrap: word-wrap;
+        min-height: self.preferred-height;
+    }
+
+    @children
+}
+
+export component HelpWindow inherits Window {
+    // A double-audio notice is showing, so Show How has a guide to open.
+    in property <bool> show-how-shown;
+    callback show-how-requested();
+    callback close-requested();
+
+    title: Strings.help-title;
+    icon: @image-url("../res/audiosync-256.png");
+    background: Tokens.background;
+    min-width: 360px;
+    min-height: 280px;
+    preferred-width: 640px;
+    preferred-height: 600px;
+    default-font-family: Fluent.font;
+    default-font-size: Tokens.font-size-body;
+    // Key events go to the focused item, so Escape and the scroll keys need
+    // the scope focused.
+    forward-focus: keys;
+
+    // Called each time the window opens, so the keys work before anything
+    // inside is clicked.
+    public function take-focus() {
+        keys.focus();
+    }
+
+    public function scroll-to-top() {
+        scroll.content-y = 0px;
+    }
+
+    // How far the text is scrolled down, for the tests.
+    out property <length> scrolled: -scroll.content-y;
+    property <length> line-step: 40px;
+    // Content y runs from 0 (top) down to this (bottom).
+    property <length> lowest: min(0px, scroll.visible-height - scroll.content-height);
+
+    function scroll-by(delta: length) {
+        scroll.content-y = max(root.lowest, min(0px, scroll.content-y - delta));
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.close-requested();
+                return accept;
+            }
+            if event.text == Key.DownArrow {
+                root.scroll-by(root.line-step);
+                return accept;
+            }
+            if event.text == Key.UpArrow {
+                root.scroll-by(-root.line-step);
+                return accept;
+            }
+            // A focused button takes Space itself, so Space scrolls only
+            // from the text.
+            if event.text == Key.PageDown || event.text == Key.Space {
+                root.scroll-by(max(root.line-step, scroll.visible-height - root.line-step));
+                return accept;
+            }
+            if event.text == Key.PageUp {
+                root.scroll-by(-max(root.line-step, scroll.visible-height - root.line-step));
+                return accept;
+            }
+            if event.text == Key.Home {
+                scroll.content-y = 0px;
+                return accept;
+            }
+            if event.text == Key.End {
+                scroll.content-y = root.lowest;
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            scroll := ScrollView {
+                vertical-stretch: 1;
+
+                VerticalLayout {
+                    // The text wraps at the view's width instead of widening it.
+                    width: scroll.visible-width;
+                    padding: 18px;
+                    spacing: 18px;
+                    alignment: start;
+
+                    Text {
+                        text: Strings.help-intro;
+                        color: Tokens.text;
+                        wrap: word-wrap;
+                        min-height: self.preferred-height;
+                    }
+
+                    HelpSection {
+                        title: Strings.help-start-title;
+                        body: Strings.help-start;
+                    }
+
+                    HelpSection {
+                        title: Strings.help-sync-title;
+                        body: Strings.help-sync;
+                    }
+
+                    HelpSection {
+                        title: Strings.help-volume-title;
+                        body: Strings.help-volume;
+                    }
+
+                    HelpSection {
+                        title: Strings.help-bluetooth-title;
+                        body: Strings.help-bluetooth;
+                    }
+
+                    HelpSection {
+                        title: Strings.help-double-title;
+                        body: Strings.help-double;
+
+                        if root.show-how-shown: HorizontalLayout {
+                            alignment: start;
+
+                            Button {
+                                text: Strings.notice-show-how;
+                                accessible-label: Strings.notice-show-how-label;
+                                clicked => {
+                                    root.show-how-requested();
+                                }
+                            }
+                        }
+                    }
+
+                    HelpSection {
+                        title: Strings.help-more-title;
+                        body: Strings.help-more;
+                    }
+
+                    HelpSection {
+                        title: Strings.help-airplay-title;
+                        body: Strings.help-airplay;
+                    }
+
+                    HelpSection {
+                        title: Strings.help-notices-title;
+                        body: Strings.help-notices;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                padding: 12px;
+                padding-left: 18px;
+                padding-right: 18px;
+                alignment: end;
+
+                Button {
+                    text: Strings.guide-close;
+                    accessible-label: Strings.guide-close;
+                    clicked => {
+                        root.close-requested();
+                    }
+                }
+            }
+        }
+    }
+}
