@@ -17,7 +17,8 @@
 //!
 //! A capture lost because Windows audio restarted, or the device it captures
 //! through went away, ends its session and starts it again about a second
-//! later, with streaming on all along; if that capture can't start, or is
+//! later, with streaming on all along, trying once a second for about five
+//! seconds while Windows audio comes back; if it can't start by then, or is
 //! lost again within a few seconds, streaming stops and the loss is reported.
 //! A capture whose app quit, or that failed otherwise, ends streaming at once.
 //!
@@ -97,6 +98,11 @@ const ROUTING_INTERVAL: Duration = Duration::from_secs(3);
 /// that noticed: about a second later at the UI's two polls a second, so
 /// that the audio service is back.
 const RESTART_DELAY_POLLS: u32 = 2;
+
+/// A capture lost that way is tried this many times, [`RESTART_DELAY_POLLS`]
+/// apart (about five seconds in all), before streaming stops: Windows audio
+/// can take a few seconds to come back.
+const RESTART_TRIES: u32 = 5;
 
 /// An output whose device another app holds ([`BackendError::DeviceBusy`])
 /// is tried again this many polls after its last try: about every three
@@ -336,6 +342,9 @@ pub struct Controller<D: Driver> {
     /// Polls left before `next_start` restarts a capture that was lost
     /// ([`RESTART_DELAY_POLLS`]); `None` when it isn't a restart.
     restart_wait: Option<u32>,
+    /// The tries a restart has left after the one `restart_wait` waits for
+    /// ([`RESTART_TRIES`]).
+    restart_tries_left: u32,
     /// The own volume and mute of each output that is on and connected
     /// (spec S192 to S202), followed through Windows' notifications.
     device_volumes: device_volume::Followed,
@@ -372,6 +381,7 @@ impl<D: Driver> Controller<D> {
             retiring: Vec::new(),
             next_start: None,
             restart_wait: None,
+            restart_tries_left: 0,
             device_volumes: device_volume::Followed::default(),
             busy: BTreeMap::new(),
         }
@@ -1007,9 +1017,9 @@ impl<D: Driver> Controller<D> {
 
     /// Ends the session whose capture was lost because Windows audio
     /// restarted or its device went away, and starts it again
-    /// [`RESTART_DELAY_POLLS`] polls later (`start_when_faded`). Streaming
-    /// stays on meanwhile, the AirPlay speakers in the stream included, as
-    /// for a change of source.
+    /// [`RESTART_DELAY_POLLS`] polls later (`start_when_faded`), up to
+    /// [`RESTART_TRIES`] times. Streaming stays on meanwhile, the AirPlay
+    /// speakers in the stream included, as for a change of source.
     fn restart_capture(&mut self) {
         let Some(source) = self.session.as_ref().map(|session| session.source.clone()) else {
             return;
@@ -1022,6 +1032,7 @@ impl<D: Driver> Controller<D> {
         self.end_session();
         self.next_start = Some(source);
         self.restart_wait = Some(RESTART_DELAY_POLLS);
+        self.restart_tries_left = RESTART_TRIES - 1;
     }
 
     /// Whether an ended session's outputs are still fading out.
@@ -1031,7 +1042,8 @@ impl<D: Driver> Controller<D> {
 
     /// Starts the session that waits for the last one's outputs to fade, once
     /// they have, and for a restart its delay too; a capture that can't start
-    /// then ends it with that reason.
+    /// then ends it with that reason, unless it is a restart with tries left
+    /// that may work later ([`may_start_later`]): that one waits again.
     fn start_when_faded(&mut self) {
         if let Some(wait) = self.restart_wait.as_mut() {
             *wait = wait.saturating_sub(1);
@@ -1055,6 +1067,16 @@ impl<D: Driver> Controller<D> {
                     }
                 }
                 self.follow_device_volumes();
+            }
+            Err(error) if restart && self.restart_tries_left > 0 && may_start_later(&error) => {
+                self.restart_tries_left -= 1;
+                self.log.log(|| {
+                    format!(
+                        "the capture couldn't start again yet: {error} It tries again in a moment."
+                    )
+                });
+                self.next_start = Some(source);
+                self.restart_wait = Some(RESTART_DELAY_POLLS);
             }
             Err(error) => {
                 self.log.log(|| {
@@ -1578,7 +1600,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.start_when_faded();
         // A session whose capture stopped ends first. One lost because
         // Windows audio restarted, or its device went away, starts again a
-        // moment later, once; streaming stays on meanwhile.
+        // moment later; streaming stays on meanwhile.
         let mut lost = false;
         let stop_reason = match self.session.as_mut() {
             None => None,
@@ -1670,6 +1692,16 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
         events
     }
+}
+
+/// Whether a capture that couldn't start again after a loss may start at a
+/// later try: Windows audio isn't back yet, or the device is held or failed
+/// for now. An app that quit, or a source that can't be captured, stays so.
+fn may_start_later(error: &BackendError) -> bool {
+    matches!(
+        error,
+        BackendError::DeviceGone | BackendError::DeviceBusy | BackendError::System { .. }
+    )
 }
 
 /// How the log names an output: its last listed name and its endpoint ID.
