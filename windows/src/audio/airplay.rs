@@ -353,7 +353,6 @@ impl FeedSlot {
     }
 
     /// Whether the feed is in the slot, lent to no capture.
-    #[cfg(test)]
     pub fn is_free(&self) -> bool {
         self.feed
             .lock()
