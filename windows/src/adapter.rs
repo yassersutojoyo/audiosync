@@ -1505,11 +1505,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             return;
         }
+        let shown = |path: &DirectPath| {
+            self.custom_names
+                .shown(&speaker_key(&path.endpoint_id), &path.endpoint_name)
+        };
         let names = |plays_here: bool| -> Vec<String> {
             paths
                 .iter()
                 .filter(|path| path.audiosync_plays_here == plays_here)
-                .map(|path| path.endpoint_name.clone())
+                .map(shown)
                 .collect()
         };
         let message = NoticeMessage::HeardTwice {
@@ -1522,7 +1526,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             default_output: paths
                 .iter()
                 .find(|path| path.reason == DirectReason::DefaultEndpoint)
-                .map(|path| path.endpoint_name.clone()),
+                .map(shown),
         };
         let showing = self.heard_twice.as_ref() == Some(&subject)
             && self.notices.get(&NoticeSubject::DoubleAudio).is_some();
@@ -1630,9 +1634,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// A pairing's PIN prompt as the UI shows it.
     fn pin_prompt(&self, prompt: AirPlayPinPrompt) -> PinPrompt {
+        let speaker_id = airplay_key(&prompt.id);
         PinPrompt {
-            speaker_id: airplay_key(&prompt.id),
-            name: prompt.name,
+            name: self.custom_names.shown(&speaker_id, &prompt.name),
+            speaker_id,
             phase: match prompt.phase {
                 PairingPhase::Starting => PinPhase::Starting,
                 PairingPhase::WaitingForPin => PinPhase::Ready,
@@ -1758,14 +1763,14 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 })
                 .collect(),
             pin_prompt: pin_prompt.map(|prompt| self.pin_prompt(prompt)),
-            password_prompt: self
-                .audio
-                .airplay_password_prompt()
-                .map(|prompt| PasswordPrompt {
-                    speaker_id: airplay_key(&prompt.id),
-                    name: prompt.name,
+            password_prompt: self.audio.airplay_password_prompt().map(|prompt| {
+                let speaker_id = airplay_key(&prompt.id);
+                PasswordPrompt {
+                    name: self.custom_names.shown(&speaker_id, &prompt.name),
+                    speaker_id,
                     wrong: prompt.wrong,
-                }),
+                }
+            }),
             when_source_quits: self.when_source_quits,
         }
     }
@@ -3776,6 +3781,23 @@ mod tests {
     }
 
     #[test]
+    fn the_double_audio_notice_names_a_renamed_output_by_its_new_name() {
+        let mut adapter = adapter();
+        let audio = adapter.audio_mut();
+        audio.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        audio.connect_output_as(CABLE, "Cable Input", OutputKind::Virtual);
+        audio.play_on(PLAYER_PID, TV);
+        adapter.refresh_devices();
+        adapter.rename_speaker(&key(TV), "Living Room TV");
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        assert_eq!(
+            heard_twice(&adapter),
+            [twice(Some("Player"), &["Living Room TV"], &[])]
+        );
+    }
+
+    #[test]
     fn hearing_the_app_twice_raises_one_notice_that_follows_the_routing() {
         let mut adapter = player_on_the_tv();
         assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &["TV"], &[])]);
@@ -4050,6 +4072,17 @@ mod tests {
     }
 
     #[test]
+    fn the_pin_prompt_names_a_renamed_apple_tv_by_its_new_name() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let id = ap(&tv);
+        adapter.rename_speaker(&id, "Den");
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        assert_eq!(adapter.snapshot().pin_prompt.unwrap().name, "Den");
+    }
+
+    #[test]
     fn switching_on_an_apple_tv_pairs_it_and_then_it_streams() {
         let (mut adapter, fake, tv) = apple_tv_adapter();
         let id = ap(&tv);
@@ -4255,6 +4288,15 @@ mod tests {
         assert!(!state.running);
         assert!(fake.take_calls().is_empty(), "nothing connects before it");
         assert!(messages(adapter).is_empty());
+    }
+
+    #[test]
+    fn the_password_prompt_names_a_renamed_speaker_by_its_new_name() {
+        let (mut adapter, _fake, _, study) = airplay_adapter();
+        adapter.poll();
+        adapter.rename_speaker(&ap(&study), "Office");
+        adapter.set_speaker_enabled(&ap(&study), true);
+        assert_eq!(adapter.snapshot().password_prompt.unwrap().name, "Office");
     }
 
     #[test]
@@ -4799,6 +4841,22 @@ mod tests {
         adapter.save_settings();
         let (saved, _) = SettingsFile::at(path).load();
         assert!(saved.speaker_names.is_empty(), "cleared, nothing is kept");
+    }
+
+    #[test]
+    fn a_speaker_gone_mid_rename_still_takes_the_typed_name() {
+        let dir = test_dir("adapter-speaker-rename-gone");
+        let mut adapter = launch(launch_audio(), &dir.join(settings::FILE_NAME));
+        adapter.poll();
+        unplug(&mut adapter, HEADPHONES);
+        assert!(adapter.snapshot().speaker(&key(HEADPHONES)).is_none());
+        adapter.rename_speaker(&key(HEADPHONES), "Studio cans");
+
+        adapter.audio_mut().connect_output(HEADPHONES, "Headphones");
+        adapter.poll();
+        let headphones = speaker_of(&adapter, &key(HEADPHONES));
+        assert_eq!(headphones.name, "Studio cans");
+        assert_eq!(headphones.system_name, "Headphones");
     }
 
     #[test]

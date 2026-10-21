@@ -46,6 +46,11 @@ export global Fluent {
 }
 
 // Segoe Fluent Icons code points (the icon font Windows 11 ships).
+// The app cuts a speaker name to its limit while it is typed.
+export global NameField {
+    pure callback fit(string) -> string;
+}
+
 export global Glyphs {
     out property <string> speakers: "\u{E7F5}";
     out property <string> headphones: "\u{E7F6}";
@@ -1084,8 +1089,9 @@ export component SpeakerRow inherits Rectangle {
 
     // A click on the row's box works like its delay button; a row without a
     // delay is outside every sync control.
+    // While the row is renaming, a click on it only applies the name.
     function box-clicked() {
-        if root.item.has-delay {
+        if root.item.has-delay && !root.item.renaming {
             root.sync-toggled();
         } else {
             root.blank-clicked();
@@ -1290,7 +1296,11 @@ export component SpeakerRow inherits Rectangle {
                                                 }
                                             }
                                             edited(text) => {
-                                                root.rename-edited(text);
+                                                if NameField.fit(text) != text {
+                                                    self.text = NameField.fit(text);
+                                                    self.set-selection-offsets(self.text.character-count * 4, self.text.character-count * 4);
+                                                }
+                                                root.rename-edited(self.text);
                                             }
                                             accepted => {
                                                 root.rename-committed();

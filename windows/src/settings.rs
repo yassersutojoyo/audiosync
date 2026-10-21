@@ -239,6 +239,24 @@ pub fn clamp_window(frame: WindowFrame) -> Option<WindowFrame> {
     })
 }
 
+/// One unreadable name costs only that name, not the whole settings file.
+fn names_that_are_text<'de, D>(deserializer: D) -> Result<BTreeMap<String, String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Object(entries) = value else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|(key, name)| match name {
+            serde_json::Value::String(name) => Some((key, name)),
+            _ => None,
+        })
+        .collect())
+}
+
 /// Everything the file keeps. See the module documentation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -260,7 +278,10 @@ pub struct Settings {
     /// The speakers marked auto-connect, by speaker key.
     pub auto_connect: BTreeSet<String>,
     /// The names the user gave speakers, by speaker key (spec S228).
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "names_that_are_text"
+    )]
     pub speaker_names: BTreeMap<String, String>,
     pub groups: Vec<SavedGroup>,
     pub equalizer: SavedEqualizer,
@@ -801,6 +822,17 @@ mod tests {
             BTreeMap::from([("lc:desk".to_owned(), "Desk".to_owned())]),
             "unusable keys and blank names are skipped"
         );
+        let text = r#"{"version": 2, "master_volume": 40, "speaker_names": {
+            "lc:desk": "Desk", "lc:odd": 5, "ap:x": null
+        }}"#;
+        let (read, _) = Settings::from_json(text).expect("one odd name spoils nothing");
+        assert_eq!(read.master_volume, 40.0);
+        assert_eq!(
+            read.speaker_names,
+            BTreeMap::from([("lc:desk".to_owned(), "Desk".to_owned())])
+        );
+        let (read, _) = Settings::from_json(r#"{"version": 2, "speaker_names": 3}"#).expect("read");
+        assert!(read.speaker_names.is_empty());
         let without = Settings::default().to_json();
         assert!(!without.contains("speaker_names"), "no names, no field");
     }

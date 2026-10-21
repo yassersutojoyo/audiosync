@@ -33,9 +33,9 @@ use crate::ui_model::{
 };
 use crate::{
     AboutDialog, AirPlayProblem, Availability, DeviceVolumeHint, EqualizerWindow, GroupItem,
-    GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, NoticeKind,
-    Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind,
-    Strings, Tokens, TrayFlyout,
+    GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow, NameField, NoticeItem,
+    NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState, SpeakerItem,
+    SpeakerKind, Strings, Tokens, TrayFlyout, speaker_names,
 };
 
 mod help_window;
@@ -1345,12 +1345,9 @@ impl App {
         let w = weak.clone();
         main.on_airplay_delay_cancelled(move || with_app(&w, |app| app.end_delay_typing(false)));
         let w = weak.clone();
-        main.on_blank_clicked(move || {
-            with_app(&w, |app| {
-                app.end_rename(true);
-                app.end_delay_typing(true);
-            })
-        });
+        main.on_blank_clicked(move || with_app(&w, App::blank_click));
+        main.global::<NameField>()
+            .on_fit(|text| speaker_names::fitting(&text).into());
         let w = weak.clone();
         main.on_speaker_rename_requested(move |id| with_app(&w, |app| app.start_rename(&id)));
         let w = weak.clone();
@@ -1829,7 +1826,18 @@ impl App {
     /// Opens or closes a speaker's sync controls (its delay button, or a
     /// click on its row). What was typed in the other delay fields applies
     /// first, their controls staying open; closing applies its own typing.
+    /// A click on the window's blank space, or on the row being renamed.
+    fn blank_click(&self) {
+        self.end_rename(true);
+        self.end_delay_typing(true);
+    }
+
     fn toggle_sync(&self, id: &str) {
+        let renaming_it = matches!(&self.ui.borrow().rename, Some((open, _)) if open == id);
+        if renaming_it {
+            self.blank_click();
+            return;
+        }
         self.end_rename(true);
         self.apply_delay_typing(Some(id));
         let closed = {
@@ -3673,6 +3681,47 @@ mod tests {
         app.main.invoke_blank_clicked();
         assert_eq!(name_of(&app, "local:bt"), "Headset");
         assert!(app.ui.borrow().rename.is_none());
+    }
+
+    #[test]
+    fn a_click_on_the_row_being_renamed_only_applies_the_name() {
+        let app = app_over(MockBackend::new());
+        draw_frames();
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
+        draw_frames();
+        click(app.main.window(), 600.0, 625.0);
+        assert_eq!(name_of(&app, "local:desk"), "Desk");
+        assert!(app.ui.borrow().rename.is_none());
+        assert!(app.ui.borrow().sync_open.is_empty(), "no delay panel");
+
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main.invoke_sync_toggled("local:desk".into());
+        assert!(app.ui.borrow().rename.is_none());
+        assert!(app.ui.borrow().sync_open.is_empty(), "no delay panel");
+    }
+
+    #[test]
+    fn the_name_field_stops_at_sixty_characters_while_typing() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        draw_frames();
+        for _ in 0..65 {
+            press(app.main.window(), "a");
+        }
+        let sixty = "a".repeat(60);
+        assert_eq!(
+            app.ui.borrow().rename,
+            Some(("local:desk".to_owned(), sixty.clone()))
+        );
+        press(app.main.window(), Key::Return);
+        assert_eq!(name_of(&app, "local:desk"), sixty);
     }
 
     #[test]

@@ -10,6 +10,12 @@ use std::collections::BTreeMap;
 /// The longest name kept, in characters.
 pub const MAX_NAME_CHARS: usize = 60;
 
+/// What the name field keeps while typing: at most [`MAX_NAME_CHARS`]
+/// characters, untrimmed so a space can still be typed between words.
+pub fn fitting(typed: &str) -> String {
+    typed.chars().take(MAX_NAME_CHARS).collect()
+}
+
 /// A typed name as it is kept: trimmed, line breaks turned into spaces, cut
 /// to [`MAX_NAME_CHARS`] characters.
 pub fn normalized(typed: &str) -> String {
@@ -17,7 +23,7 @@ pub fn normalized(typed: &str) -> String {
         .chars()
         .map(|c| if c == '\r' || c == '\n' { ' ' } else { c })
         .collect();
-    let cut: String = one_line.trim().chars().take(MAX_NAME_CHARS).collect();
+    let cut = fitting(one_line.trim());
     cut.trim_end().to_owned()
 }
 
