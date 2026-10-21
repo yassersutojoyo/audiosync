@@ -1,12 +1,17 @@
 //! A fake Cast device for the tests: a TLS server on 127.0.0.1 with a
 //! self-signed certificate made for each test, speaking the framing of
-//! section 3 and answering the connection, heartbeat and receiver
-//! namespaces as the spec describes, with switches for the error cases.
+//! section 3, answering the connection, heartbeat, receiver and media
+//! namespaces as the spec describes, and fetching the stream URL of a
+//! `LOAD` over HTTP, with switches for the error cases. It accepts one
+//! connection after another and keeps its apps and media across them.
 
 #![allow(dead_code)]
 
+pub mod http;
+
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -14,8 +19,8 @@ use std::time::{Duration, Instant};
 
 use audiosync_cast::framing::{FrameReader, encode_frame};
 use audiosync_cast::message::{
-    CastMessage, DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_HEARTBEAT, NS_RECEIVER, PLATFORM,
-    PayloadType, ProtocolVersion,
+    CastMessage, DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_HEARTBEAT, NS_MEDIA, NS_RECEIVER,
+    PLATFORM, PayloadType, ProtocolVersion,
 };
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
@@ -37,12 +42,31 @@ pub enum OnLaunch {
     Ignore,
 }
 
+/// How the fake device answers `LOAD`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum OnLoad {
+    /// `BUFFERING` as the reply, then the fetch, then `PLAYING`.
+    Play,
+    /// The reply, and no fetch at all.
+    NoFetch,
+    /// The reply and the fetch, but never `PLAYING`.
+    NeverPlay,
+    /// The reply, then `IDLE` with this reason before any `PLAYING`.
+    IdleBeforePlaying(&'static str),
+    /// An error reply of this type with these extra fields.
+    Error(&'static str, Value),
+    Ignore,
+}
+
 /// The fake device's switches.
 #[derive(Clone, Debug)]
 pub struct Behavior {
     pub answer_status: bool,
     pub answer_ping: bool,
     pub on_launch: OnLaunch,
+    pub on_load: OnLoad,
+    pub answer_media_stop: bool,
+    pub answer_stop: bool,
     /// Apps already running when the sender connects.
     pub apps: Vec<Value>,
     pub volume: Value,
@@ -58,6 +82,9 @@ impl Default for Behavior {
             answer_status: true,
             answer_ping: true,
             on_launch: OnLaunch::Start,
+            on_load: OnLoad::Play,
+            answer_media_stop: true,
+            answer_stop: true,
             apps: Vec::new(),
             volume: json!({"level": 0.4, "muted": false, "controlType": "attenuation", "stepInterval": 0.05}),
             tls12_only: false,
@@ -77,6 +104,30 @@ pub fn app(app_id: &str, session_id: &str, transport_id: &str) -> Value {
     })
 }
 
+/// A `MEDIA_STATUS` from the app at `transport` with one entry.
+pub fn media_status(
+    transport: &str,
+    request_id: u64,
+    media_session_id: i64,
+    state: &str,
+    idle_reason: Option<&str>,
+) -> CastMessage {
+    let mut entry = json!({
+        "mediaSessionId": media_session_id,
+        "playerState": state,
+        "currentTime": 1.5,
+    });
+    if let Some(reason) = idle_reason {
+        entry["idleReason"] = json!(reason);
+    }
+    json_message(
+        transport,
+        "*",
+        NS_MEDIA,
+        json!({"type": "MEDIA_STATUS", "requestId": request_id, "status": [entry]}),
+    )
+}
+
 /// What the test tells the fake device to do between messages.
 pub enum Command {
     Send(CastMessage),
@@ -84,14 +135,29 @@ pub enum Command {
     /// Drop a running app, as another sender would, and broadcast the
     /// status.
     TakeOver,
+    /// Close the current TCP connection without a TLS close, then accept
+    /// the next one.
+    DropConnection,
     Disconnect,
+}
+
+/// One HTTP fetch of the stream by the fake device.
+#[derive(Clone, Debug, Default)]
+pub struct Fetch {
+    pub head: String,
+    /// The raw body bytes, chunk framing included, up to a cap.
+    pub body: Vec<u8>,
+    pub ended: bool,
 }
 
 pub struct FakeDevice {
     pub address: SocketAddr,
     pub log: Arc<Mutex<Vec<CastMessage>>>,
+    pub fetches: Arc<Mutex<Vec<Fetch>>>,
+    pub connections: Arc<Mutex<u32>>,
     pub certificate_der: Vec<u8>,
     commands: mpsc::Sender<Command>,
+    stop_fetching: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -114,22 +180,51 @@ impl FakeDevice {
             .with_single_cert(vec![certificate.clone()], private)
             .expect("server config");
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
         let address = listener.local_addr().expect("address");
         let log = Arc::new(Mutex::new(Vec::new()));
+        let fetches = Arc::new(Mutex::new(Vec::new()));
+        let connections = Arc::new(Mutex::new(0));
+        let stop_fetching = Arc::new(AtomicBool::new(false));
         let (commands, receiver) = mpsc::channel();
+        let mut device = Device {
+            apps: behavior.apps.clone(),
+            behavior,
+            launches: 0,
+            media_session: 0,
+            commands: commands.clone(),
+            fetches: Arc::clone(&fetches),
+            stop_fetching: Arc::clone(&stop_fetching),
+        };
         let thread_log = Arc::clone(&log);
+        let thread_connections = Arc::clone(&connections);
         let config = Arc::new(config);
         let thread = thread::spawn(move || {
-            let Ok((tcp, _)) = listener.accept() else {
-                return;
-            };
-            serve(tcp, config, behavior, thread_log, receiver);
+            loop {
+                match receiver.try_recv() {
+                    Ok(Command::Disconnect) | Err(mpsc::TryRecvError::Disconnected) => return,
+                    Ok(_) | Err(mpsc::TryRecvError::Empty) => {}
+                }
+                match listener.accept() {
+                    Ok((tcp, _)) => {
+                        *thread_connections.lock().expect("count") += 1;
+                        let _ = tcp.set_nonblocking(false);
+                        if serve(tcp, &config, &mut device, &thread_log, &receiver) {
+                            return;
+                        }
+                    }
+                    Err(_) => thread::sleep(Duration::from_millis(10)),
+                }
+            }
         });
         FakeDevice {
             address,
             log,
+            fetches,
+            connections,
             certificate_der: certificate.to_vec(),
             commands,
+            stop_fetching,
             thread: Some(thread),
         }
     }
@@ -171,6 +266,15 @@ impl FakeDevice {
             .collect()
     }
 
+    /// The payloads of the messages of `kind` on `namespace`.
+    pub fn payloads(&self, namespace: &str, kind: &str) -> Vec<Value> {
+        self.received()
+            .into_iter()
+            .filter(|(_, ns, payload)| ns == namespace && payload["type"] == kind)
+            .map(|(_, _, payload)| payload)
+            .collect()
+    }
+
     /// Waits until the sender sent a message of `kind`, up to `limit`.
     pub fn wait_for(&self, kind: &str, limit: Duration) -> bool {
         self.wait_for_count(kind, 1, limit)
@@ -188,7 +292,16 @@ impl FakeDevice {
         false
     }
 
+    pub fn fetches(&self) -> Vec<Fetch> {
+        self.fetches.lock().expect("fetches").clone()
+    }
+
+    pub fn connection_count(&self) -> u32 {
+        *self.connections.lock().expect("count")
+    }
+
     pub fn join(mut self) {
+        self.stop_fetching.store(true, Ordering::SeqCst);
         let _ = self.commands.send(Command::Disconnect);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -217,6 +330,10 @@ struct Device {
     behavior: Behavior,
     apps: Vec<Value>,
     launches: u32,
+    media_session: i64,
+    commands: mpsc::Sender<Command>,
+    fetches: Arc<Mutex<Vec<Fetch>>>,
+    stop_fetching: Arc<AtomicBool>,
 }
 
 impl Device {
@@ -277,35 +394,167 @@ impl Device {
                     }
                 }
             }
-            (NS_RECEIVER, "STOP") => {
+            (NS_RECEIVER, "STOP") if self.behavior.answer_stop => {
                 let session = payload["sessionId"].as_str().unwrap_or("");
                 self.apps
                     .retain(|app| app["sessionId"].as_str() != Some(session));
                 vec![self.status(id)]
             }
+            (NS_RECEIVER, "SET_VOLUME") => {
+                for key in ["level", "muted"] {
+                    if let Some(value) = payload["volume"].get(key) {
+                        self.behavior.volume[key] = value.clone();
+                    }
+                }
+                vec![self.status(id)]
+            }
+            (NS_MEDIA, "LOAD") => self.load(message, &payload, id),
+            (NS_MEDIA, "STOP") if self.behavior.answer_media_stop => {
+                self.stop_fetching.store(true, Ordering::SeqCst);
+                vec![media_status(
+                    &message.destination_id,
+                    id,
+                    self.media_session,
+                    "IDLE",
+                    Some("CANCELLED"),
+                )]
+            }
+            (NS_MEDIA, "GET_STATUS") => vec![media_status(
+                &message.destination_id,
+                id,
+                self.media_session,
+                "PLAYING",
+                None,
+            )],
             (NS_CONNECTION, _) => Vec::new(),
             _ => Vec::new(),
         }
     }
+
+    fn load(&mut self, message: &CastMessage, payload: &Value, id: u64) -> Vec<CastMessage> {
+        let transport = message.destination_id.clone();
+        let on_load = self.behavior.on_load.clone();
+        if on_load == OnLoad::Ignore {
+            return Vec::new();
+        }
+        if let OnLoad::Error(kind, extra) = &on_load {
+            let mut reply = json!({"type": kind, "requestId": id});
+            if let Some(fields) = extra.as_object() {
+                for (key, value) in fields {
+                    reply[key] = value.clone();
+                }
+            }
+            return vec![json_message(&transport, "*", NS_MEDIA, reply)];
+        }
+        self.media_session += 1;
+        let session = self.media_session;
+        let mut replies = vec![media_status(&transport, id, session, "BUFFERING", None)];
+        match on_load {
+            OnLoad::IdleBeforePlaying(reason) => {
+                replies.push(media_status(&transport, 0, session, "IDLE", Some(reason)));
+            }
+            OnLoad::Play | OnLoad::NeverPlay => {
+                let url = payload["media"]["contentId"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_owned();
+                let play = on_load == OnLoad::Play;
+                self.stop_fetching.store(false, Ordering::SeqCst);
+                let stop = Arc::clone(&self.stop_fetching);
+                let fetches = Arc::clone(&self.fetches);
+                let commands = self.commands.clone();
+                thread::spawn(move || {
+                    fetch(&url, &fetches, &stop, || {
+                        if play {
+                            let playing = media_status(&transport, 0, session, "PLAYING", None);
+                            let _ = commands.send(Command::Send(playing));
+                        }
+                    })
+                });
+            }
+            _ => {}
+        }
+        replies
+    }
 }
 
-fn serve(
-    tcp: TcpStream,
-    config: Arc<ServerConfig>,
-    behavior: Behavior,
-    log: Arc<Mutex<Vec<CastMessage>>>,
-    commands: mpsc::Receiver<Command>,
+/// GETs `url` as the device would, records what came back and calls
+/// `on_first_audio` once the headers and the first chunk arrived.
+fn fetch(
+    url: &str,
+    fetches: &Mutex<Vec<Fetch>>,
+    stop: &AtomicBool,
+    on_first_audio: impl FnOnce(),
 ) {
-    let _ = tcp.set_read_timeout(Some(Duration::from_millis(10)));
-    let Ok(connection) = ServerConnection::new(config) else {
+    let Some((address, path)) = http::split_url(url) else {
         return;
     };
-    let mut stream = StreamOwned::new(connection, tcp);
-    let mut device = Device {
-        apps: behavior.apps.clone(),
-        behavior,
-        launches: 0,
+    let Ok(mut stream) = http::request(address, &format!("GET {path} HTTP/1.1\r\nHost: device\r\n\r\n"))
+    else {
+        return;
     };
+    let index = {
+        let mut fetches = fetches.lock().expect("fetches");
+        fetches.push(Fetch::default());
+        fetches.len() - 1
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
+    let mut data = Vec::new();
+    let mut head_done = false;
+    let mut notify = Some(on_first_audio);
+    let mut buffer = [0u8; 8192];
+    while !stop.load(Ordering::SeqCst) {
+        let count = match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => count,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                continue;
+            }
+            Err(_) => break,
+        };
+        let mut fetches = fetches.lock().expect("fetches");
+        let record = &mut fetches[index];
+        if head_done {
+            if record.body.len() < 4 << 20 {
+                record.body.extend_from_slice(&buffer[..count]);
+            }
+        } else {
+            data.extend_from_slice(&buffer[..count]);
+            if let Some(end) = http::head_end(&data) {
+                head_done = true;
+                record.head = String::from_utf8_lossy(&data[..end]).into_owned();
+                record.body = data[end + 4..].to_vec();
+            }
+        }
+        // The WAV header chunk and one block of audio.
+        if record.body.len() > 100
+            && let Some(notify) = notify.take()
+        {
+            drop(fetches);
+            notify();
+        }
+    }
+    fetches.lock().expect("fetches")[index].ended = true;
+}
+
+/// Serves one connection; true when the device should shut down.
+fn serve(
+    tcp: TcpStream,
+    config: &Arc<ServerConfig>,
+    device: &mut Device,
+    log: &Mutex<Vec<CastMessage>>,
+    commands: &mpsc::Receiver<Command>,
+) -> bool {
+    let _ = tcp.set_read_timeout(Some(Duration::from_millis(10)));
+    let Ok(connection) = ServerConnection::new(Arc::clone(config)) else {
+        return false;
+    };
+    let mut stream = StreamOwned::new(connection, tcp);
     let mut reader = FrameReader::new();
     let mut buffer = vec![0u8; 16 * 1024];
     loop {
@@ -321,16 +570,20 @@ fn serve(
                     let status = device.status(0);
                     write(&mut stream, &status);
                 }
+                Ok(Command::DropConnection) => {
+                    let _ = stream.sock.shutdown(std::net::Shutdown::Both);
+                    return false;
+                }
                 Ok(Command::Disconnect) | Err(mpsc::TryRecvError::Disconnected) => {
                     stream.conn.send_close_notify();
                     let _ = stream.flush();
-                    return;
+                    return true;
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
             }
         }
         match stream.read(&mut buffer) {
-            Ok(0) => return,
+            Ok(0) => return false,
             Ok(count) => {
                 reader.push(&buffer[..count]);
                 while let Ok(Some(message)) = reader.next_message() {
@@ -347,7 +600,7 @@ fn serve(
                         | io::ErrorKind::TimedOut
                         | io::ErrorKind::Interrupted
                 ) => {}
-            Err(_) => return,
+            Err(_) => return false,
         }
     }
 }
