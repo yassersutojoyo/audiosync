@@ -17,8 +17,11 @@
 //! - [`calibrate`]: the microphone calibration's test signal and estimate
 //!   (S232-S234).
 //! - [`airplay`]: AudioSync's own AirPlay sender: discovery, speakers, their
-//!   events and the capture's input, the one part of this interface that
-//!   runs threads and sockets of its own.
+//!   events and the capture's input.
+//! - [`cast`]: AudioSync's own Google Cast sender: discovery, one device's
+//!   session, its events, the device memory and the capture's input. These
+//!   two are the parts of this interface that run threads and sockets of
+//!   their own.
 //!
 //! Threading (S113, S132): each handle states which thread makes which call.
 //! A handle that an audio thread shares with other threads keeps the two
@@ -43,6 +46,7 @@ use crate::volume;
 
 pub mod airplay;
 pub mod calibrate;
+pub mod cast;
 pub mod device_volume;
 pub mod render;
 pub mod ring;
@@ -51,6 +55,7 @@ pub mod sync;
 
 pub use self::airplay::*;
 pub use self::calibrate::*;
+pub use self::cast::*;
 pub use self::device_volume::*;
 pub use self::render::*;
 pub use self::ring::*;
@@ -375,10 +380,11 @@ mod tests {
     const HEADER: &str = include_str!("../include/audiosync_core.h");
 
     /// Every source file of the C interface, by its path under `src/`.
-    const SOURCES: [(&str, &str); 8] = [
+    const SOURCES: [(&str, &str); 9] = [
         ("ffi.rs", include_str!("ffi.rs")),
         ("ffi/airplay.rs", include_str!("ffi/airplay.rs")),
         ("ffi/calibrate.rs", include_str!("ffi/calibrate.rs")),
+        ("ffi/cast.rs", include_str!("ffi/cast.rs")),
         ("ffi/device_volume.rs", include_str!("ffi/device_volume.rs")),
         ("ffi/render.rs", include_str!("ffi/render.rs")),
         ("ffi/ring.rs", include_str!("ffi/ring.rs")),
@@ -1090,6 +1096,82 @@ mod tests {
             ("ASC_STREAMING_OFF", STREAMING_OFF.to_string()),
             ("ASC_STREAMING_RUNNING", STREAMING_RUNNING.to_string()),
             ("ASC_STREAMING_REBUILDING", STREAMING_REBUILDING.to_string()),
+            ("ASC_CAST_RATE", CAST_RATE.to_string()),
+            ("ASC_CAST_APPEARED", CAST_APPEARED.to_string()),
+            ("ASC_CAST_CHANGED", CAST_CHANGED.to_string()),
+            ("ASC_CAST_GONE", CAST_GONE.to_string()),
+            ("ASC_CAST_FLAG_GROUP", CAST_FLAG_GROUP.to_string()),
+            ("ASC_CAST_FLAG_OFFLINE", CAST_FLAG_OFFLINE.to_string()),
+            ("ASC_CAST_FLAG_MANUAL", CAST_FLAG_MANUAL.to_string()),
+            ("ASC_CAST_REFUSED_NONE", CAST_REFUSED_NONE.to_string()),
+            ("ASC_CAST_REFUSED_BUSY", CAST_REFUSED_BUSY.to_string()),
+            ("ASC_CAST_REFUSED_UNKNOWN", CAST_REFUSED_UNKNOWN.to_string()),
+            ("ASC_CAST_REFUSED_GROUP", CAST_REFUSED_GROUP.to_string()),
+            ("ASC_CAST_REFUSED_CLOSED", CAST_REFUSED_CLOSED.to_string()),
+            ("ASC_CAST_REFUSED_INVALID", CAST_REFUSED_INVALID.to_string()),
+            ("ASC_CAST_EVENT_STARTED", CAST_EVENT_STARTED.to_string()),
+            ("ASC_CAST_EVENT_ENDED", CAST_EVENT_ENDED.to_string()),
+            ("ASC_CAST_EVENT_PLAYING", CAST_EVENT_PLAYING.to_string()),
+            (
+                "ASC_CAST_EVENT_CONNECT_FAILED",
+                CAST_EVENT_CONNECT_FAILED.to_string(),
+            ),
+            (
+                "ASC_CAST_EVENT_RECOVERING",
+                CAST_EVENT_RECOVERING.to_string(),
+            ),
+            ("ASC_CAST_EVENT_RECOVERED", CAST_EVENT_RECOVERED.to_string()),
+            ("ASC_CAST_EVENT_RELOADED", CAST_EVENT_RELOADED.to_string()),
+            (
+                "ASC_CAST_EVENT_REBUFFERING",
+                CAST_EVENT_REBUFFERING.to_string(),
+            ),
+            (
+                "ASC_CAST_EVENT_FORMAT_FALLBACK",
+                CAST_EVENT_FORMAT_FALLBACK.to_string(),
+            ),
+            ("ASC_CAST_EVENT_VOLUME", CAST_EVENT_VOLUME.to_string()),
+            (
+                "ASC_CAST_EVENT_DIAGNOSTICS",
+                CAST_EVENT_DIAGNOSTICS.to_string(),
+            ),
+            ("ASC_CAST_EVENT_STREAM", CAST_EVENT_STREAM.to_string()),
+            (
+                "ASC_CAST_EVENT_COMMAND_FAILED",
+                CAST_EVENT_COMMAND_FAILED.to_string(),
+            ),
+            (
+                "ASC_CAST_EVENT_MEMORY_CHANGED",
+                CAST_EVENT_MEMORY_CHANGED.to_string(),
+            ),
+            (
+                "ASC_CAST_EVENT_DISCOVERY_STOPPED",
+                CAST_EVENT_DISCOVERY_STOPPED.to_string(),
+            ),
+            ("ASC_CAST_EVENT_FAILED", CAST_EVENT_FAILED.to_string()),
+            ("ASC_CAST_END_STOPPED", CAST_END_STOPPED.to_string()),
+            ("ASC_CAST_END_TAKEN_OVER", CAST_END_TAKEN_OVER.to_string()),
+            ("ASC_CAST_END_DESELECTED", CAST_END_DESELECTED.to_string()),
+            ("ASC_CAST_END_FAILED", CAST_END_FAILED.to_string()),
+            ("ASC_CAST_ERROR_NONE", CAST_ERROR_NONE.to_string()),
+            ("ASC_CAST_ERROR_CONNECT", CAST_ERROR_CONNECT.to_string()),
+            ("ASC_CAST_ERROR_LAUNCH", CAST_ERROR_LAUNCH.to_string()),
+            ("ASC_CAST_ERROR_MEDIA", CAST_ERROR_MEDIA.to_string()),
+            ("ASC_CAST_ERROR_NO_FETCH", CAST_ERROR_NO_FETCH.to_string()),
+            ("ASC_CAST_ERROR_STREAM", CAST_ERROR_STREAM.to_string()),
+            (
+                "ASC_CAST_ERROR_NO_SESSION",
+                CAST_ERROR_NO_SESSION.to_string(),
+            ),
+            (
+                "ASC_CAST_ERROR_VOLUME_FIXED",
+                CAST_ERROR_VOLUME_FIXED.to_string(),
+            ),
+            ("ASC_CAST_ERROR_VOLUME", CAST_ERROR_VOLUME.to_string()),
+            ("ASC_CAST_ERROR_ARTWORK", CAST_ERROR_ARTWORK.to_string()),
+            ("ASC_CAST_ERROR_GROUP", CAST_ERROR_GROUP.to_string()),
+            ("ASC_CAST_FORMAT_WAV", CAST_FORMAT_WAV.to_string()),
+            ("ASC_CAST_FORMAT_FLAC", CAST_FORMAT_FLAC.to_string()),
         ]
         .into_iter()
         .map(|(name, value)| (name.to_owned(), value))
@@ -1380,6 +1462,55 @@ mod realtime {
             "a write or a rate request allocated or freed memory"
         );
         assert!(handed > 0);
+    }
+
+    // The Cast spec's C8 asks the same of the sender's input.
+    // covers: S126
+    #[test]
+    fn cast_input_calls_never_touch_the_heap() {
+        // Setup may allocate: the sender, its input, a session's ring.
+        // SAFETY: a null memory text starts empty.
+        let mut cast = unsafe { asc_cast_create(std::ptr::null()) };
+        assert!(!cast.is_null());
+        // SAFETY: a live handle, used by this thread only; the strings are
+        // NUL-terminated literals.
+        let mut input = unsafe {
+            // Nothing listens on port 9 of the loopback: the session
+            // retries its connect while the input writes into its ring.
+            assert!(asc_cast_add_device(cast, c"127.0.0.1:9".as_ptr()));
+            assert!(asc_cast_start(cast, c"manual:127.0.0.1:9".as_ptr(), std::ptr::null_mut()) > 0);
+            asc_cast_take_input(cast)
+        };
+        assert!(!input.is_null());
+        let block: Vec<f32> = (0..512 * 2).map(|i| (i % 17) as f32 / 34.0).collect();
+        let mut taken = 0usize;
+        let events = heap_events(|| {
+            for round in 0..400usize {
+                // SAFETY: a live input, written by this thread only; `block`
+                // holds 512 stereo frames.
+                unsafe {
+                    if round % 100 == 0 {
+                        let rate = [48_000.0, 44_100.0, 96_000.0, 22_050.0][round / 100 % 4];
+                        assert!(asc_cast_input_set_rate(input, rate));
+                    }
+                    if round % 100 == 50 {
+                        asc_cast_input_request_fade_out(input);
+                    }
+                    taken += asc_cast_input_write(input, block.as_ptr(), 512);
+                }
+            }
+        });
+        // SAFETY: each handle destroyed once, by this thread, with no call
+        // in progress.
+        unsafe {
+            asc_cast_input_destroy(&mut input);
+            asc_cast_destroy(&mut cast);
+        }
+        assert_eq!(
+            events, 0,
+            "a write or a rate request allocated or freed memory"
+        );
+        assert!(taken > 0, "the session's ring took nothing");
     }
 
     // covers: S126, S128, S130

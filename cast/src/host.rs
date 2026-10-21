@@ -382,6 +382,14 @@ impl CastHost {
         Ok(attempt)
     }
 
+    /// Whether the worker still runs: false after [`CastHost::shutdown`],
+    /// and when a panic ended it, which no event reports.
+    pub fn is_running(&self) -> bool {
+        self.worker
+            .as_ref()
+            .is_some_and(|worker| !worker.is_finished())
+    }
+
     /// The device of the session that runs or starts, if any.
     pub fn playing(&self) -> Option<DeviceId> {
         lock(&self.shared.active).as_ref().map(|a| a.device)

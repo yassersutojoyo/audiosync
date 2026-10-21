@@ -404,6 +404,14 @@ fn a_rate_the_spec_does_not_allow_is_refused_at_once() {
     assert!(host.shutdown());
 }
 
+#[test]
+fn the_worker_runs_until_shutdown() {
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    assert!(host.is_running());
+    assert!(host.shutdown());
+    assert!(!host.is_running());
+}
+
 /// Every attempt's `Ended`, by attempt, from the events seen.
 fn ends(events: &[HostEvent]) -> Vec<AttemptId> {
     events
