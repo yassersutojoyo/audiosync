@@ -8,7 +8,8 @@
 //! exactly; and two outputs, the earliest one converting, sound exactly
 //! their hold-backs apart, also when the earliest joins later (S208); a
 //! Bluetooth output's start lead counts one capture block more, which moves
-//! the others only when it sets the session lead (S230).
+//! the others only when it sets the session lead (S230); and a Bluetooth
+//! output's implausible latency report gives way without moving any (S231).
 //!
 //! The capture writes fixed blocks at 48 kHz on its own clock (512 frames,
 //! the Mac's tap; 480, a Windows loopback period); the device pulls fixed
@@ -32,8 +33,8 @@ use std::sync::Arc;
 use audiosync_core::fade::FadeState;
 use audiosync_core::reader::{Reader, ReaderCounters};
 use audiosync_core::render::{
-    BLUETOOTH_LEAD_FRAMES, LEAD_BLOCK_CAP_MS, Renderer, RendererControl, SLOW_DOWN_SHARE,
-    reader_frames_bound,
+    BLUETOOTH_LATENCY_DEFAULT_NS, BLUETOOTH_LEAD_FRAMES, LEAD_BLOCK_CAP_MS, Renderer,
+    RendererControl, SLOW_DOWN_SHARE, reader_frames_bound,
 };
 use audiosync_core::resample::Resampler;
 use audiosync_core::ring::{Ring, RingWriter};
@@ -1117,4 +1118,71 @@ fn a_bluetooth_output_adds_a_capture_block_to_its_own_start_lead_only() {
             (0, 0, 0)
         );
     }
+}
+
+// covers: S208, S231
+#[test]
+fn a_bluetooth_output_s_implausible_reported_latency_gives_way_and_leaves_the_session_lead_alone() {
+    const MS: u64 = 1_000_000;
+    let ring = Ring::for_rate(RATE).unwrap();
+    let mut writer = ring.writer().unwrap();
+    let gain = Arc::new(SharedGain::new(1.0));
+    let make = |bluetooth: bool| {
+        let reader = Reader::new(Arc::clone(&ring), RATE);
+        let control = RendererControl::new(&reader);
+        control.set_bluetooth(bluetooth);
+        control.set_delay_frames(0);
+        let renderer = Renderer::new(reader, &control, Arc::clone(&gain), RATE, 44_100, 2).unwrap();
+        (renderer, control)
+    };
+    write_blocks(&mut writer, 480, 100);
+    let (mut built_in, built_in_control) = make(false);
+    let (mut speaker, speaker_control) = make(true);
+    play(&mut writer, &mut [&mut built_in, &mut speaker], 100);
+    let lead = start_lead_44_1(441) + BLUETOOTH_LEAD_FRAMES as i64;
+    assert_eq!(ring.session_leads().session_lead(), lead);
+    let settled = |control: &RendererControl| (control.reader().delay_frames(), control.counters());
+    let before = [settled(&built_in_control), settled(&speaker_control)];
+    // No plausible report before: the default, whatever the report.
+    for reported in [0, 30_000 * MS, 50 * MS - 1, 1_000 * MS + 1, u64::MAX] {
+        let used = speaker_control.set_reported_latency(reported, None);
+        assert_eq!(used, BLUETOOTH_LATENCY_DEFAULT_NS, "reported {reported} ns");
+        assert_eq!(speaker_control.output_latency_ns(), used);
+        assert_eq!(speaker_control.rejected_latency_ns(), Some(reported));
+        play(&mut writer, &mut [&mut built_in, &mut speaker], 20);
+        assert_eq!(ring.session_leads().session_lead(), lead);
+    }
+    // The output's latest plausible report, when there is one.
+    assert_eq!(
+        speaker_control.set_reported_latency(30_000 * MS, Some(180 * MS)),
+        180 * MS
+    );
+    assert_eq!(speaker_control.rejected_latency_ns(), Some(30_000 * MS));
+    assert_eq!(
+        speaker_control.set_reported_latency(0, Some(5 * MS)),
+        BLUETOOTH_LATENCY_DEFAULT_NS
+    );
+    // Inside the window, its edges included: as reported.
+    for reported in [50 * MS, 149_297_000, 1_000 * MS] {
+        assert_eq!(
+            speaker_control.set_reported_latency(reported, Some(180 * MS)),
+            reported
+        );
+        assert_eq!(speaker_control.rejected_latency_ns(), None);
+    }
+    // Any other output's report stays as it is.
+    for reported in [0, 30_000 * MS] {
+        assert_eq!(
+            built_in_control.set_reported_latency(reported, None),
+            reported
+        );
+        assert_eq!(built_in_control.rejected_latency_ns(), None);
+    }
+    play(&mut writer, &mut [&mut built_in, &mut speaker], 20);
+    assert_eq!(ring.session_leads().session_lead(), lead);
+    assert_eq!(
+        [settled(&built_in_control), settled(&speaker_control)],
+        before,
+        "no output moved: the same delay, no resync, no dry read"
+    );
 }

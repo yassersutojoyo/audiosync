@@ -2825,6 +2825,11 @@ do {
                                   timeSteps: 0, bluetoothOutputs: 0)
     check(early.text.hasPrefix("least slack n/a, floor drop 0.0 ms,"),
           "observer: before the core's warm-up the least slack reads n/a", early.text)
+    let rejected = OutputObservation(leastSlackMs: 1, floorDropMs: 0, shortageFrames: 0, overloads: 0, timeSteps: 0,
+                                     bluetoothOutputs: 1, rejectedLatencyNs: 30_000_000_000, latencyNs: 150_000_000)
+    check(rejected.text.hasSuffix("Bluetooth outputs 1, reported latency 30000.0 ms outside 50 to 1000 ms, used 150.0 ms")
+              && !measured.text.contains("reported latency"),
+          "observer: a latency report the window rejected shows with the value used instead", rejected.text)
     check(WiFiNote.text(poweredOn: true, band: 2, channel: 36, rssi: -52) == "Wi-Fi 5 GHz, channel 36, RSSI -52 dBm"
               && WiFiNote.text(poweredOn: true, band: 1, channel: 6, rssi: -70) == "Wi-Fi 2.4 GHz, channel 6, RSSI -70 dBm"
               && WiFiNote.text(poweredOn: true, band: 3, channel: 37, rssi: nil) == "Wi-Fi 6 GHz, channel 37, RSSI n/a",
@@ -3026,6 +3031,28 @@ do {
             buds.setBluetooth(true)
             check(wired.extraLeadMs == 0 && abs(buds.extraLeadMs - 512.0 / 48) < 1e-9, name,
                   "wired \(wired.extraLeadMs) ms, Bluetooth \(buds.extraLeadMs) ms")
+        } else {
+            check(false, name, "the core's renderer could not be made")
+        }
+    }
+
+    // S231: a Bluetooth output's latency report outside 50 to 1000 ms gives
+    // way to its latest plausible one, else 150 ms; any other stays as it is.
+    do {
+        let name = "bluetooth latency: a report outside the window gives way, any other output's stays"
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 4),
+           let wired = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 48_000, channels: 2, gain: 1),
+           let buds = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 44_100, channels: 2, gain: 1) {
+            buds.setBluetooth(true)
+            let unknown = buds.setReportedLatency(0, lastPlausibleNs: 0)
+            let unknownRejected = buds.rejectedLatencyNs
+            let absurd = buds.setReportedLatency(30_000_000_000, lastPlausibleNs: 180_000_000)
+            let plausible = buds.setReportedLatency(149_297_000, lastPlausibleNs: 180_000_000)
+            let wiredUsed = wired.setReportedLatency(0, lastPlausibleNs: 0)
+            check(unknown == 150_000_000 && unknownRejected == 0 && absurd == 180_000_000
+                      && plausible == 149_297_000 && buds.rejectedLatencyNs == nil
+                      && wiredUsed == 0 && wired.rejectedLatencyNs == nil, name,
+                  "\(unknown), \(String(describing: unknownRejected)), \(absurd), \(plausible), \(wiredUsed)")
         } else {
             check(false, name, "the core's renderer could not be made")
         }
