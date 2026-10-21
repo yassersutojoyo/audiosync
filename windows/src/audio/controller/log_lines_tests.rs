@@ -230,7 +230,7 @@ fn an_output_line_shows_the_stream_an_endpoint_gets() {
     let speakers = label(&names(), SPEAKERS_ID);
     for (setup, stream) in streams {
         assert_eq!(
-            describe_output_start(&speakers, Some(setup), 37.5, 80.0, 0.64),
+            describe_output_start(&speakers, Some(setup), 37.5, 80.0, 0.64, 0),
             format!(
                 "output \"Speakers\" ({SPEAKERS_ID}) started: {stream}; \
                  delay 37.5 ms, volume 80 (gain 0.640)"
@@ -240,10 +240,18 @@ fn an_output_line_shows_the_stream_an_endpoint_gets() {
     // An endpoint the listing hasn't named yet, whose stream can't tell.
     let unnamed = label(&BTreeMap::new(), HDMI_ID);
     assert_eq!(
-        describe_output_start(&unnamed, None, 0.0, 100.0, 1.0),
+        describe_output_start(&unnamed, None, 0.0, 100.0, 1.0, 0),
         format!(
             "output ({HDMI_ID}) started: stream format not known; \
              delay 0 ms, volume 100 (gain 1.000)"
+        )
+    );
+    // A Bluetooth output names what its start lead adds (S230).
+    assert_eq!(
+        describe_output_start(&unnamed, None, 0.0, 100.0, 1.0, 512),
+        format!(
+            "output ({HDMI_ID}) started: stream format not known; \
+             delay 0 ms, volume 100 (gain 1.000); Bluetooth, extra lead 10.7 ms"
         )
     );
 }

@@ -568,6 +568,32 @@ pub unsafe extern "C" fn asc_renderer_delay_frames(renderer: *const AscRenderer)
     unsafe { control_side(renderer) }.map_or(0, RendererControl::delay_frames)
 }
 
+/// Control thread, before the renderer's first callback: whether its device
+/// is Bluetooth, which adds a capture block to its start lead (S230).
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_set_bluetooth(renderer: *mut AscRenderer, bluetooth: bool) {
+    // SAFETY: by the caller's contract the handle is null or live.
+    if let Some(control) = unsafe { control_side(renderer) } {
+        control.set_bluetooth(bluetooth);
+    }
+}
+
+/// Any thread: what the start lead adds for a Bluetooth device, in capture
+/// frames (S230); 0 for any other device or a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_extra_lead_frames(renderer: *const AscRenderer) -> i64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::extra_lead_frames)
+}
+
 /// Any thread: asks the renderer to fade out over F device frames from its
 /// next callback and render exact zeros after them until it stops (S185).
 ///
@@ -1167,6 +1193,7 @@ mod tests {
         // SAFETY: `ring` is live.
         let c = unsafe { asc_renderer_create(ring, 48_000, 44_100, 2, 0.8) };
         assert!(!c.is_null());
+        control.set_bluetooth(true);
         control.set_delay_frames(4800);
         let mut rust_out = vec![0.0f32; 512 * 2];
         let mut c_out = vec![0.0f32; 512 * 2];
@@ -1174,6 +1201,9 @@ mod tests {
         // buffer holds the frames passed with it.
         unsafe {
             assert_eq!(asc_renderer_fade_frames(c), 882);
+            assert_eq!(asc_renderer_extra_lead_frames(c), 0);
+            asc_renderer_set_bluetooth(c, true);
+            assert_eq!(asc_renderer_extra_lead_frames(c), 512);
             asc_renderer_set_delay_frames(c, 4800);
             let history = wave(9600, 7);
             asc_ring_write(writer, history.as_ptr(), 9600);
@@ -1305,9 +1335,11 @@ mod tests {
             asc_renderer_render_timed(null, block.as_mut_ptr(), 4, 1);
             asc_renderer_set_gain(null, 1.0);
             asc_renderer_set_delay_frames(null, 100);
+            asc_renderer_set_bluetooth(null, true);
             asc_renderer_request_fade_out(null);
             assert_eq!(asc_renderer_gain(null), 0.0);
             assert_eq!(asc_renderer_delay_frames(null), 0);
+            assert_eq!(asc_renderer_extra_lead_frames(null), 0);
             assert!(!asc_renderer_fade_rendered(null));
             assert!(!asc_renderer_fade_end_time_ns(null, &mut end));
             assert!(!asc_renderer_faded_by_time(null, 0, u64::MAX));

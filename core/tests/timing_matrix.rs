@@ -25,6 +25,9 @@
 //! - I8 (stall cases only): a device that consumes nothing for 50 to 200 ms
 //!   and then plays on later gets at most one correction for it, runs dry
 //!   none, and every output it doesn't stall gets none.
+//!
+//! A Bluetooth output adds a capture block to its start lead (S230); the
+//! random mixes have none yet, see [`device`].
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -119,6 +122,8 @@ struct Device {
     /// Two callbacks in a row from this host time on are stamped this many
     /// ms early.
     strays: Option<(f64, f64)>,
+    /// Its start lead counts a capture block more (S230).
+    bluetooth: bool,
     seed: u64,
 }
 
@@ -314,6 +319,11 @@ fn device(o: &RawOutput, platform: Platform, shared: Option<(u64, u64)>) -> Devi
         },
         first_early_ms: if mac && o.first_early { 80.0 } else { 0.0 },
         strays: (mac && o.strays).then_some((o.stray_at * SECONDS, o.stray_ms)),
+        // Off until C2 and C3b land: taking every output from 100 ms of
+        // latency as Bluetooth lowers I1, I3 and I8 but adds three I4 cases,
+        // in each of which an output already fails on a fast clock without
+        // conversion or a late second callback, and the others move a block.
+        bluetooth: false,
         seed: o.seed,
     }
 }
@@ -586,6 +596,12 @@ impl Output {
 struct Outcome {
     fails: [bool; 8],
     lines: Vec<String>,
+    /// Per output: the observer's least slack in ms (S229), the reads that
+    /// ran dry from the start on, and the mean delay over the last quarter
+    /// less latency and hold-back.
+    slack_ms: Vec<Option<f64>>,
+    dry_from_start: Vec<u64>,
+    norms: Vec<f64>,
 }
 
 fn write_block(writer: &mut RingWriter, samples: &mut [f32], first: u64, at: f64) {
@@ -619,6 +635,7 @@ fn simulate(case: &Case) -> Outcome {
         .map(|(i, d)| {
             let reader = Reader::new(Arc::clone(&ring), CAPTURE_RATE);
             let control = RendererControl::new(&reader);
+            control.set_bluetooth(d.bluetooth);
             control.set_delay_frames(d.hold_back_frames());
             let mut renderer =
                 Renderer::new(reader, &control, Arc::clone(&gain), CAPTURE_RATE, d.rate, 2)
@@ -771,6 +788,8 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
     let mut fails = [false; 8];
     let mut lines = Vec::new();
     let mut norms = Vec::new();
+    let mut slack_ms = Vec::new();
+    let mut dry_from_start = Vec::new();
     for (i, o) in outputs.iter().enumerate() {
         let end = o.control.counters();
         let (early, shortage_early) = o.settled.unwrap_or_default();
@@ -781,6 +800,9 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         let d = &o.d;
         let norm = o.tail.mean() - d.latency_ms - d.hold_back_frames() as f64 / 48.0;
         let spread = o.tail.high - o.tail.low;
+        let slack = o.control.least_slack_ns().map(|ns| ns as f64 / 1e6);
+        slack_ms.push(slack);
+        dry_from_start.push(end.starved_renders);
         let mut own = [false; 8];
         if !case.is_stall() {
             own[0] = dry > 0;
@@ -815,7 +837,8 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
             .filter_map(|(name, f)| f.then_some(*name))
             .collect();
         lines.push(format!(
-            "  o{i} {} Hz hb {:.1} ms {:+.0} ppm cb {} lat {:.0} wander {:.1}/{:.0}s 2nd {:.1} early {:.0} strays {:?} | dry {dry} skips {} silences {} resyncs {} shortage {shortage} slowed {slowed} sped {sped} | tail {:.2} ms norm {:.2} {failed:?}",
+            "  o{i}{} {} Hz hb {:.1} ms {:+.0} ppm cb {} lat {:.0} wander {:.1}/{:.0}s 2nd {:.1} early {:.0} strays {:?} | dry {dry} skips {} silences {} resyncs {} shortage {shortage} slowed {slowed} sped {sped} slack {:.2} | tail {:.2} ms norm {:.2} {failed:?}",
+            if d.bluetooth { " bt" } else { "" },
             d.rate,
             d.hold_back_ms,
             d.ppm,
@@ -829,6 +852,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
             end.drift_skips,
             end.drift_silences,
             end.resyncs,
+            slack.unwrap_or(f64::NAN),
             spread,
             norm,
         ));
@@ -856,7 +880,13 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
             if norms.len() > 1 { high - low } else { 0.0 },
         ),
     );
-    Outcome { fails, lines }
+    Outcome {
+        fails,
+        lines,
+        slack_ms,
+        dry_from_start,
+        norms,
+    }
 }
 
 /// Each case's outcome, and the time all of them took on one core, in s.
@@ -1061,6 +1091,7 @@ fn calm(platform: Platform, airplay: bool) -> Case {
         second_late_ms: 0.0,
         first_early_ms: 0.0,
         strays: None,
+        bluetooth: false,
         seed: 7,
     };
     Case {
@@ -1090,6 +1121,57 @@ fn a_calm_mix_holds_every_invariant() {
                 !outcome.fails.iter().any(|&f| f),
                 "{}",
                 outcome.lines.join("\n")
+            );
+        }
+    }
+}
+
+// covers: S208, S229, S230
+#[test]
+fn a_bluetooth_output_that_sets_the_lead_no_longer_runs_dry_at_its_start() {
+    // The 48 kHz output at hold-back 0 sets the session lead with one
+    // callback and nothing to spare. The capture's first block after the
+    // start comes on time and every later one up to 1 ms after the callback
+    // that reads it, so the reader loses a block's phase at once: it ran
+    // dry, which put it behind the others. As Bluetooth its start lead
+    // counts a capture block more, which absorbs that; every other output
+    // plays a block later with it, and the offsets stay as set.
+    let block_ms = 512.0 * 1000.0 / f64::from(CAPTURE_RATE);
+    for platform in [Platform::Mac, Platform::Windows] {
+        let wired = calm(platform, false);
+        let mut bluetooth = wired.clone();
+        bluetooth.devices[0].bluetooth = true;
+        let (before, after) = (simulate(&wired), simulate(&bluetooth));
+        let report = format!("{}\n{}", before.lines.join("\n"), after.lines.join("\n"));
+        println!("{report}");
+        for outcome in [&before, &after] {
+            assert!(!outcome.fails.iter().any(|&f| f), "{report}");
+        }
+        assert!(before.dry_from_start[0] > 0, "{report}");
+        assert_eq!(before.slack_ms[0], Some(0.0), "{report}");
+        assert!(after.dry_from_start.iter().all(|&dry| dry == 0), "{report}");
+        let slack = after.slack_ms[0].unwrap();
+        // On the Mac the whole block goes to the phase lost after the start.
+        // Windows refills 480-frame periods from 512-frame blocks, so part
+        // of it stays as slack there.
+        let least = if platform == Platform::Windows {
+            9.0
+        } else {
+            0.0
+        };
+        assert!(slack >= least, "{platform:?}: {slack} ms of slack");
+        let low = after.norms.iter().copied().fold(f64::INFINITY, f64::min);
+        let high = after
+            .norms
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(high - low < 0.1, "{platform:?}: {} ms apart", high - low);
+        for (was, is) in before.norms[1..].iter().zip(&after.norms[1..]) {
+            assert!(
+                (is - was - block_ms).abs() < 0.05,
+                "{platform:?}: moved {} ms",
+                is - was
             );
         }
     }

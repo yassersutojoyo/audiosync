@@ -71,7 +71,8 @@ use super::airplay::{
 };
 use super::backend::{
     AirPlayInfo, AirPlayPasswordPrompt, AirPlayPinPrompt, AirPlayProblem, AudioBackend,
-    BackendError, BackendEvent, OutputInfo, SourceId, SourceInfo, StopReason, TIMED_OUT,
+    BackendError, BackendEvent, OutputInfo, OutputKind, SourceId, SourceInfo, StopReason,
+    TIMED_OUT,
 };
 use super::capture::{
     CaptureAttempt, CaptureTarget, LoopbackMode, SampleType, WHOLE_SYSTEM_NAME, decide_capture,
@@ -901,6 +902,7 @@ impl<D: Driver> Controller<D> {
             let reader = Reader::new(Arc::clone(&session.ring), SESSION_RATE);
             reader.control().set_delay_frames(params.delay_frames);
             let control = RendererControl::new(&reader);
+            control.set_bluetooth(endpoint.kind == OutputKind::Bluetooth);
             let gain = Arc::new(SharedGain::new(params.gain));
             let failed = match self.driver.start_renderer(
                 &endpoint,
@@ -935,6 +937,7 @@ impl<D: Driver> Controller<D> {
                             self.policy.hold_back_ms(&endpoint.id),
                             self.policy.settings(&endpoint.id).volume,
                             params.gain,
+                            control.extra_lead_frames(),
                         )
                     });
                     session.outputs.insert(
@@ -2488,16 +2491,24 @@ fn describe_capture_start(
 
 /// The log line of an output that started: the output as [`label`] names
 /// it, how its stream is set up, its hold-back in ms, its volume slider
-/// position and the gain it plays at.
+/// position, the gain it plays at and, for a Bluetooth output, what its
+/// start lead adds in capture frames (S230).
 fn describe_output_start(
     label: &str,
     setup: Option<StreamSetup>,
     hold_back_ms: f64,
     volume: f64,
     gain: f32,
+    extra_lead_frames: i64,
 ) -> String {
+    let bluetooth = if extra_lead_frames > 0 {
+        let ms = extra_lead_frames as f64 * 1_000.0 / f64::from(SESSION_RATE);
+        format!("; Bluetooth, extra lead {ms:.1} ms")
+    } else {
+        String::new()
+    };
     format!(
-        "output {label} started: {}; delay {hold_back_ms} ms, volume {volume} (gain {gain:.3})",
+        "output {label} started: {}; delay {hold_back_ms} ms, volume {volume} (gain {gain:.3}){bluetooth}",
         describe_stream(setup),
     )
 }
@@ -4357,6 +4368,29 @@ mod tests {
             !messages.iter().any(|m| m.starts_with("event:")),
             "nothing to report: {messages:?}"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_bluetooth_outputs_start_names_its_extra_lead() {
+        let (mut backend, log, dir) = logged_backend("controller-bluetooth");
+        backend.connect_output_as("buds", "Buds", OutputKind::Bluetooth);
+        backend.set_output_enabled("buds", true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.stop();
+        let messages = logged(&log, &dir);
+        let started = |prefix: &str| {
+            messages
+                .iter()
+                .find(|m| m.starts_with(prefix))
+                .unwrap_or_else(|| panic!("no {prefix}: {messages:?}"))
+                .clone()
+        };
+        assert!(
+            started("output \"Buds\" (buds) started: ")
+                .ends_with("; Bluetooth, extra lead 10.7 ms")
+        );
+        assert!(!started("output \"Speakers\" (speakers) started: ").contains("Bluetooth"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

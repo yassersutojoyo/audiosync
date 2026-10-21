@@ -3016,6 +3016,21 @@ do {
         }
     }
 
+    // S230: an output the host marks as Bluetooth adds a capture block of
+    // 512 frames to its start lead, which its start line logs in ms.
+    do {
+        let name = "bluetooth lead: a Bluetooth output's start lead counts a capture block more"
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 4),
+           let wired = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 48_000, channels: 2, gain: 1),
+           let buds = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 44_100, channels: 2, gain: 1) {
+            buds.setBluetooth(true)
+            check(wired.extraLeadMs == 0 && abs(buds.extraLeadMs - 512.0 / 48) < 1e-9, name,
+                  "wired \(wired.extraLeadMs) ms, Bluetooth \(buds.extraLeadMs) ms")
+        } else {
+            check(false, name, "the core's renderer could not be made")
+        }
+    }
+
     // S186: a source change is a stop and a start, and the start waits for
     // the stop (StreamEngine.start calls finishAll first).
     do {
