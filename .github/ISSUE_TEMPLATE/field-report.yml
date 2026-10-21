@@ -1,6 +1,5 @@
 name: Field report (Mac)
 description: You tried AudioSync 0.5.0 on your Mac. Tell me what you used and whether sync held, good or bad.
-labels: ["field report"]
 body:
   - type: markdown
     attributes:
