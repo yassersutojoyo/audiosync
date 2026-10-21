@@ -24,6 +24,8 @@ pub enum Method {
     Post,
     /// `GET /info` on the AirPlay 2 path (P41).
     Get,
+    /// The peer list of a PTP session on the AirPlay 2 path (P106, P165).
+    SetPeers,
 }
 
 impl Method {
@@ -39,6 +41,7 @@ impl Method {
             Method::Teardown => "TEARDOWN",
             Method::Post => "POST",
             Method::Get => "GET",
+            Method::SetPeers => "SETPEERS",
         }
     }
 
@@ -55,6 +58,7 @@ impl Method {
             "TEARDOWN" => Method::Teardown,
             "POST" => Method::Post,
             "GET" => Method::Get,
+            "SETPEERS" => Method::SetPeers,
             _ => return None,
         })
     }

@@ -25,6 +25,11 @@ pub enum UnsupportedReason {
     Format,
     /// Only the AirPlay 2 path could serve the device, and it is off (P2).
     AirPlay2Only,
+    /// The receiver refused the session SETUP's timing and PTP can't take
+    /// its place (P157).
+    Timing,
+    /// Another AirPlay 2 session is running (P169).
+    OneAirPlay2Session,
 }
 
 impl fmt::Display for UnsupportedReason {
@@ -36,6 +41,8 @@ impl fmt::Display for UnsupportedReason {
             UnsupportedReason::Methods => "methods",
             UnsupportedReason::Format => "format",
             UnsupportedReason::AirPlay2Only => "AirPlay 2 only",
+            UnsupportedReason::Timing => "timing",
+            UnsupportedReason::OneAirPlay2Session => "one AirPlay 2 speaker at a time",
         })
     }
 }
