@@ -1,6 +1,7 @@
-//! The UDP packets of an AirPlay 1 session: RTP audio (P78), sync (P93),
-//! retransmission requests and replies (P86, P87) and the timing exchange
-//! (P90, P91), each encoded and parsed without allocation where it can be.
+//! The UDP packets of a session: RTP audio (P78), sync (P93), the AirPlay 2
+//! time announce under PTP (P166), retransmission requests and replies
+//! (P86, P87) and the timing exchange (P90, P91), each encoded and parsed
+//! without allocation where it can be.
 
 use crate::clock::NtpTime;
 
@@ -115,6 +116,51 @@ impl SyncPacket {
             time: NtpTime::from_be_bytes(time),
             next_rtp: u32_at(16),
         })
+    }
+}
+
+/// Bytes of a time-announce packet (P166).
+pub const TIME_ANNOUNCE_BYTES: usize = 28;
+/// Second byte of a time-announce packet (P166).
+pub const TYPE_TIME_ANNOUNCE: u8 = 0xD7;
+/// What bytes 16 to 19 of a time-announce packet hold below the next
+/// packet's timestamp (P166).
+pub const TIME_ANNOUNCE_LEAD: u32 = 11_025;
+
+/// A time-announce packet, which takes the place of the sync packet under
+/// PTP timing (P166).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeAnnounce {
+    /// The first after RECORD or FLUSH: byte 0 is 0x90 instead of 0x80.
+    pub first: bool,
+    /// Counts up from 0 per session.
+    pub seq: u16,
+    /// The RTP timestamp of the frame due to be heard at `nanos`.
+    pub rtp_heard: u32,
+    /// That time in nanoseconds of the sender's PTP time (P163).
+    pub nanos: u64,
+    /// The RTP timestamp of the next audio packet.
+    pub next_rtp: u32,
+    /// The PTP clock identity (P159).
+    pub clock_identity: [u8; 8],
+}
+
+impl TimeAnnounce {
+    pub fn encode(&self) -> [u8; TIME_ANNOUNCE_BYTES] {
+        let mut bytes = [0u8; TIME_ANNOUNCE_BYTES];
+        bytes[0] = if self.first { 0x90 } else { 0x80 };
+        bytes[1] = TYPE_TIME_ANNOUNCE;
+        bytes[2..4].copy_from_slice(&self.seq.to_be_bytes());
+        bytes[4..8].copy_from_slice(&self.rtp_heard.to_be_bytes());
+        bytes[8..16].copy_from_slice(&self.nanos.to_be_bytes());
+        bytes[16..20].copy_from_slice(
+            &self
+                .next_rtp
+                .wrapping_sub(TIME_ANNOUNCE_LEAD)
+                .to_be_bytes(),
+        );
+        bytes[20..28].copy_from_slice(&self.clock_identity);
+        bytes
     }
 }
 
