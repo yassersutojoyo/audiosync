@@ -535,7 +535,10 @@ struct SpeakerRow: View {
                         }
                         Spacer()
                         // No delay field on AirPlay rows, nor on the reference's (S181).
-                        if let ms = speaker.offsetMs { delayButton(ms, t) }
+                        if speaker.offsetMs != nil {
+                            DelayValueButton(model: model, id: speaker.id, label: t.delay(of: speaker.name),
+                                             showsTimer: true, focus: $delayFocused)
+                        }
                         optionsMenu(t)
                     }
                     HStack(spacing: 8) {
@@ -563,7 +566,7 @@ struct SpeakerRow: View {
                     }
                 }
             }
-            if showSync, let ms = speaker.offsetMs {
+            if showSync, let ms = model.savedDelay(of: speaker.id) {
                 SyncControls(kind: .offset(hasReference: model.hasLocalReference), ms: ms,
                              label: t.delay(of: speaker.name), text: t, draft: model.draft(for: speaker.id),
                              escape: {
@@ -591,26 +594,6 @@ struct SpeakerRow: View {
             if speaker.offsetMs != nil { model.toggleDelayPanel(speaker.id) } else { model.closeDelayPanels() }
         }
         .contextMenu { autoConnectToggle(t) }
-    }
-
-    private func delayButton(_ ms: Double, _ t: UIStrings) -> some View {
-        Button {
-            model.toggleDelayPanel(speaker.id)
-        } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "timer")
-                Text(t.offsetValue(ms: ms)).monospacedDigit()
-            }
-            .font(.callout)
-            // Callout text: the readable teal (≥ 4.5:1), not the brand teal.
-            .foregroundStyle(showSync ? Brand.tealText : Brand.secondaryText)
-        }
-        .buttonStyle(.plain)
-        .focused($delayFocused)
-        .help(t.syncAdjust)
-        .accessibilityLabel(t.delay(of: speaker.name))
-        .accessibilityValue(t.offsetValue(ms: ms))
-        .accessibilityHint(t.syncAdjust)
     }
 
     private func optionsMenu(_ t: UIStrings) -> some View {
@@ -663,21 +646,7 @@ struct AirPlayDelayRow: View {
                     .accessibilityHidden(true)
                 Text(t.airPlayDelay)
                 Spacer()
-                Button {
-                    model.toggleDelayPanel(Self.id)
-                } label: {
-                    Text(t.delayValue(ms: model.airPlayDelayMs))
-                        .monospacedDigit()
-                        .font(.callout)
-                        // Callout text: the readable teal (≥ 4.5:1), not the brand teal.
-                        .foregroundStyle(expanded ? Brand.tealText : Brand.secondaryText)
-                }
-                .buttonStyle(.plain)
-                .focused($delayFocused)
-                .help(t.syncAdjust)
-                .accessibilityLabel(t.airPlayDelay)
-                .accessibilityValue(t.delayValue(ms: model.airPlayDelayMs))
-                .accessibilityHint(t.syncAdjust)
+                DelayValueButton(model: model, id: Self.id, label: t.airPlayDelay, focus: $delayFocused)
             }
             if expanded {
                 SyncControls(kind: .airPlay, ms: model.airPlayDelayMs, label: t.airPlayDelay, text: t,
@@ -697,6 +666,67 @@ struct AirPlayDelayRow: View {
         // A click on the row's box works like its delay value.
         .contentShape(Rectangle())
         .onTapGesture { model.toggleDelayPanel(Self.id) }
+    }
+}
+
+/// A row's delay value, which opens and closes its panel. It reads the saved
+/// delay from the model by ID (`DelayBadge`), so a delay applied with the
+/// panel open shows at once; the new number rolls in (a crossfade under
+/// Reduce Motion) over a brief teal highlight.
+private struct DelayValueButton: View {
+    @ObservedObject var model: AppModel
+    let id: String
+    /// VoiceOver's label, also used to announce a new value.
+    let label: String
+    var showsTimer = false
+    var focus: FocusState<Bool>.Binding
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var expanded: Bool { model.delayPanels.isOpen(id) }
+
+    var body: some View {
+        let t = model.text
+        let ms = model.savedDelay(of: id)
+        let value = model.savedDelayText(of: id) ?? ""
+        Button {
+            model.toggleDelayPanel(id)
+        } label: {
+            HStack(spacing: 3) {
+                if showsTimer { Image(systemName: "timer") }
+                Text(value)
+                    .monospacedDigit()
+                    .contentTransition(reduceMotion ? .opacity : .numericText(value: ms ?? 0))
+                    .animation(.snappy(duration: 0.3), value: ms)
+            }
+            .font(.callout)
+            // Callout text: the readable teal (≥ 4.5:1), not the brand teal.
+            .foregroundStyle(expanded ? Brand.tealText : Brand.secondaryText)
+            // At its 12% peak the highlight keeps the readable teal at 4.7:1 on
+            // a playing row in light mode, 5.1:1 in dark.
+            .keyframeAnimator(initialValue: 0.0, trigger: ms) { content, tint in
+                content.background {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Brand.teal.opacity(0.12 * tint))
+                        .padding(-3)
+                }
+            } keyframes: { _ in
+                KeyframeTrack {
+                    LinearKeyframe(1.0, duration: 0.12)
+                    CubicKeyframe(0.0, duration: 0.9)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .focused(focus)
+        .help(t.syncAdjust)
+        .accessibilityLabel(label)
+        .accessibilityValue(value)
+        .accessibilityHint(t.syncAdjust)
+        // The field keeps VoiceOver's focus while the panel is open.
+        .onChange(of: ms) { _, now in
+            guard expanded, now != nil, let shown = model.savedDelayText(of: id) else { return }
+            AccessibilityNotification.Announcement(t.delaySet(label, to: shown)).post()
+        }
     }
 }
 
