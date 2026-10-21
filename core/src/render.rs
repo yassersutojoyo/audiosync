@@ -1290,8 +1290,8 @@ impl Renderer {
 
     /// The observer at the start of a callback of `frames` device frames
     /// output at `time`, whose lateness floor lies `drop_ns` below the
-    /// floor at the reader's latest anchor (S229). Once the output has played [`OBSERVE_AFTER_MS`],
-    /// it counts a step in the output times, keeps the largest drop and,
+    /// floor at the reader's latest anchor (S229). Once the output has
+    /// played [`OBSERVE_AFTER_MS`], it counts a step in the output times, keeps the largest drop and,
     /// while the output plays and no stop is under way, the reader's least
     /// slack over the callback's need. It publishes only a new extreme.
     fn observe(&mut self, frames: usize, time: Option<u64>, drop_ns: i64) {
@@ -1848,7 +1848,7 @@ mod tests {
             timed_step(&mut s, 10_000_000);
         }
         let anchored = s.renderer.anchor_floor.unwrap();
-        // Two stray callbacks 50 ms early hardly move it.
+        // Two stray callbacks 10 ms early hardly move it.
         timed_step(&mut s, 0);
         timed_step(&mut s, 0);
         for _ in 0..5 {

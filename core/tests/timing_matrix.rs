@@ -9,9 +9,10 @@
 //! matrix ran as a ratchet on the failing cases per invariant, I1 to I8:
 //! main failed 14, 34, 3, 31, 44, 32, 0 and 2 of them, the trim at any
 //! hold-back left 14, 21, 3, 24, 29, 20, 0, 2, the ratio-1 converter
-//! 1, 2, 2, 13, 0, 0, 0, 0, and the anchor floor that falls toward earlier callbacks, formed over
-//! 300 ms before any callback counts as late, none. The 512-case property
-//! run takes minutes, so it is ignored.
+//! 1, 2, 2, 13, 0, 0, 0, 0, and the anchor floor that falls toward
+//! earlier callbacks, formed over 300 ms before any callback counts as
+//! late, none. The 512-case property run takes minutes, so it is
+//! ignored.
 //!
 //! Invariants, from 2 s on unless said otherwise:
 //! - I1: no read runs dry.
