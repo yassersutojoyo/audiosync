@@ -208,35 +208,34 @@ impl IdentityStore {
 
     /// The store kept in the file at `path`, with what was found there. A
     /// new device ID is written at once when the file is missing or was
-    /// ignored, so it stays the same from then on (P5).
+    /// ignored, so it stays the same from then on (P5). A file that can't
+    /// be read now, or that a newer AudioSync wrote, is never written over.
     pub fn open(path: PathBuf) -> (IdentityStore, Loaded) {
-        let read = match fs::read(&path) {
+        let (identity, writable, loaded) = match fs::read(&path) {
             Ok(bytes) => {
                 let bytes = Zeroizing::new(bytes);
                 match Airplay2Identity::from_bytes(&bytes) {
-                    Ok(identity) => Ok(Some(identity)),
-                    Err(Unreadable::Newer(version)) => Err(Loaded::Newer(version)),
-                    Err(Unreadable::Format) => Err(Loaded::Ignored(
-                        "the file isn't in the expected format".to_owned(),
-                    )),
+                    Ok(identity) => {
+                        let count = identity.len();
+                        (identity, true, Loaded::Receivers(count))
+                    }
+                    Err(Unreadable::Newer(version)) => (fresh().0, false, Loaded::Newer(version)),
+                    Err(Unreadable::Format) => {
+                        let (identity, random) = fresh();
+                        let reason = "the file isn't in the expected format".to_owned();
+                        (identity, random, Loaded::Ignored(reason))
+                    }
                 }
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(Loaded::Ignored(format!("the file can't be read: {error}"))),
-        };
-        let (identity, writable, loaded) = match read {
-            Ok(Some(identity)) => {
-                let count = identity.len();
-                (identity, true, Loaded::Receivers(count))
-            }
-            Ok(None) => {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let (identity, random) = fresh();
                 (identity, random, Loaded::NoFile)
             }
-            Err(Loaded::Newer(version)) => (fresh().0, false, Loaded::Newer(version)),
-            Err(loaded) => {
-                let (identity, random) = fresh();
-                (identity, random, loaded)
+            // A permission or disk error may pass, and the file may still
+            // hold the device ID and credentials.
+            Err(error) => {
+                let reason = format!("the file can't be read, so it is left as it is: {error}");
+                (fresh().0, false, Loaded::Ignored(reason))
             }
         };
         let store = IdentityStore {
@@ -244,7 +243,7 @@ impl IdentityStore {
             writable,
             identity,
         };
-        if matches!(loaded, Loaded::NoFile | Loaded::Ignored(_)) {
+        if store.writable && matches!(loaded, Loaded::NoFile | Loaded::Ignored(_)) {
             // When it can't be written now, the next pairing tries again.
             let _ = store.save();
         }
