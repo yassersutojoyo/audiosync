@@ -265,7 +265,8 @@ func airPlaySender() {
     check(handle == nil, "destroy sets the host's pointer to NULL")
     asc_airplay_destroy(&handle)
     asc_airplay_destroy(nil)
-    check(Int(ASC_AIRPLAY_FLAG_AIRPLAY2) == 128 && ASC_AIRPLAY_GONE == 3 && ASC_AIRPLAY_EVENT_FAILED == 5
+    check(Int(ASC_AIRPLAY_FLAG_AIRPLAY2) == 128 && Int(ASC_AIRPLAY_FLAG_OVER_AIRPLAY2) == 256
+              && ASC_AIRPLAY_GONE == 3 && ASC_AIRPLAY_EVENT_FAILED == 5
               && ASC_AIRPLAY_EVENT_PAIRED == 9 && ASC_AIRPLAY_ERROR_WRONG_PIN == 10 && ASC_AIRPLAY_PAIRINGS_NEWER == -3,
           "the AirPlay constants cross the header")
 }

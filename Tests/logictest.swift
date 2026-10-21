@@ -1345,6 +1345,22 @@ do {
     var titled = NoticeList()
     titled.post("body", subject: "s", title: "Loft waiting")
     check(titled.newest?.title == "Loft waiting" && titled.newest?.text == "body", "notices: a notice can carry a title")
+
+    // A receiver the sender reaches over AirPlay 2 (the core sets this only
+    // with the AirPlay 2 switch on) names AirPlay 2 as its kind, the way a
+    // Cast row names Google Cast; every other AirPlay row stays "AirPlay".
+    var paths = NativeAirPlayModel()
+    paths.apply(.appeared(NativeReceiver(id: "H8", name: "Loft", model: "", availability: .available, reason: nil,
+                                         hints: ["airplay", "airplay2", "over-airplay2"], overAirPlay2: true)))
+    paths.apply(.appeared(NativeReceiver(id: "I9", name: "Den", model: "", availability: .available, reason: nil,
+                                         hints: ["raop", "airplay", "airplay2"])))
+    check(paths.reachedOverAirPlay2("H8") && !paths.reachedOverAirPlay2("I9") && !paths.reachedOverAirPlay2("J0"),
+          "native airplay: only a receiver the sender reaches over AirPlay 2 is marked so, not one that merely lists AirPlay 2")
+    let kinds = UIStrings()
+    check(kinds.speakerTag(.airplay, airPlay2: true) == "AirPlay 2" && kinds.speakerTag(.airplay) == "AirPlay"
+            && kinds.speakerTag(.cast, airPlay2: true) == "Google Cast"
+            && kinds.speakerLabel(name: "Loft", tag: kinds.speakerTag(.airplay, airPlay2: true)) == "Loft, AirPlay 2",
+          "native airplay: the kind's tooltip and VoiceOver label say AirPlay 2 for such a row, AirPlay for the rest")
     check(model.apply(.timeline(latencyMs: 1750, restarted: false)) == .latencyChanged
             && model.apply(.timeline(latencyMs: 1750, restarted: true)) == nil && model.latencyMs == 1750,
           "native airplay: local outputs line up again only when L changes")

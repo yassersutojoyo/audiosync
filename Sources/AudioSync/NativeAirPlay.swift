@@ -378,7 +378,8 @@ final class NativeAirPlay {
         if raw.event == ASC_AIRPLAY_GONE { return .gone(id: id, name: nil) }
         let receiver = NativeReceiver(id: id, name: text(raw.name), model: text(raw.model),
                                       availability: availability(raw.availability),
-                                      reason: reason(raw.unsupported), hints: hints(raw.flags))
+                                      reason: reason(raw.unsupported), hints: hints(raw.flags),
+                                      overAirPlay2: raw.flags & UInt32(ASC_AIRPLAY_FLAG_OVER_AIRPLAY2) != 0)
         return raw.event == ASC_AIRPLAY_APPEARED ? .appeared(receiver) : .changed(receiver)
     }
 
@@ -485,6 +486,7 @@ final class NativeAirPlay {
             (ASC_AIRPLAY_FLAG_LEGACY_PAIRING, "pin-pairing"),
             (ASC_AIRPLAY_FLAG_BUSY, "busy"),
             (ASC_AIRPLAY_FLAG_AIRPLAY2, "airplay2"),
+            (ASC_AIRPLAY_FLAG_OVER_AIRPLAY2, "over-airplay2"),
         ]
         return names.filter { flags & UInt32($0.0) != 0 }.map(\.1)
     }
