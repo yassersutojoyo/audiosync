@@ -322,6 +322,21 @@ S172 to S181 replace the rule that local outputs play at once unless an AirPlay 
   - The AirPlay delay (S178) is one field in the AirPlay part of the window, not on any local row, with a hint that the local speakers wait that long for the AirPlay speakers. With the native sender, the only one since 2026-10-20 (with the bundled engine it showed and edited the stored value), it shows L = clamp(L_s + A, 0, 20 000) in whole ms and follows L_s when that changes; entering v stores A = clamp(v − L_s, −2000, 20 000) with the L_s of that moment, so the field then shows v (unless clamped). An AirPlay speaker's own delay d_s (P99), where a window offers it (the Windows app doesn't today), stays a plain 0 to 3000 ms value.
   - Hold-backs (S176) are not shown.
 
+### Microphone calibration of one output's offset
+
+S232 to S234 let the host measure one local output against the reference with a microphone and fill in that output's offset (S175), instead of the user finding it by ear. The core makes the test signal and does the estimate; the host plays the signal, records, and stores the result. AudioSync's own design from DSP textbook methods (a matched filter, that is a cross-correlation with the known signal); no other project's calibration was studied.
+
+- **S232** *Required.* The measurement. The host plays the test signal (S233) on the reference alone and records it with the microphone, then plays the same signal on the chosen output alone with the microphone where it was, and passes both recordings to the estimate: mono, at the signal's rate, the two outputs at the hold-backs they have while both take part (S176), so the only things that differ between the two runs are the output and its offset. Frame 0 of each recording is the moment the signal enters that output's path, before its hold-back, so the hold-back is part of the arrival; the host trims each recording to that moment, or starts it at the same distance before it in both runs. A gap from recording start to play start that differs between the runs goes into d unseen and can flip the result's sign. Each recording lasts at least the largest hold-back taking part (about 2 s while an AirPlay speaker is chosen, S178, up to 20 s with large offsets), plus the output's latency, plus the 0.75 s signal, plus a margin of about half a second. The host records at 48 kHz: S234's limit of 2^21 frames is about 44 s there but only about 10.9 s at 192 kHz, which a 20 s hold-back would pass. The estimate finds the signal's arrival in each recording (S234), a_R in the reference's and a_x in the chosen output's, in ms. Only the difference d = a_x − a_R is used, so the microphone's input latency and the time between the signal's start and the recording's start cancel out as long as they are the same in both runs. The new offset is `o_new = clamp(round(o_old − d), −2000, +20 000)` ms, whole ms in S175's range, where o_old is the output's stored offset read as S175 reads it (0 when it isn't finite, else clamped). A result the clamp changed is still accepted but says it was clamped, so the host can tell the user the output stays off by the part cut away. The sign follows S172: a chosen output heard d ms later than the reference sounds late, so it is held back d ms less, and one heard earlier is held back more. A difference larger in size than the whole offset range, 22 000 ms, which no two offsets in range explain, is refused as implausible. A refused measurement, for this reason or one of S234's, never changes the offset. Core tests "calibrate: ...".
+- **S233** *Required.* The test signal: a linear sweep from 300 Hz to 8 kHz over 0.75 s, peaking at −18 dBFS (a linear amplitude of 0.125), mono, with a raised-cosine fade of 20 ms at each end so neither end clicks (the first and last millisecond stay under 1 % of the peak). It is defined in continuous time and sampled at the rate asked for, so it is the same sound at any rate: the host may play it at the output's rate and give the estimate the signal made at the microphone's rate. Rates from 22 050 to 384 000 Hz are made (below 22 050 Hz the sweep's top would pass the Nyquist frequency); its length is `round(0.75 × rate)` frames. Why a sweep: its autocorrelation has one sharp peak (the main lobe is about 1 / 7.7 kHz, some 0.13 ms, wide, and outside 3 ms its sidelobes stay near 1 % of the peak), its energy is spread evenly over a band that small speakers and built-in microphones cover, and unlike a noise burst it is the same at every rate. The estimate needs far less than −18 dBFS at the microphone (S234), so the level is chosen to be quiet rather than for the estimate.
+- **S234** *Required.* Arrival and confidence. The arrival in a recording is the lag of the largest magnitude of the cross-correlation of the recording with the signal, over every lag where the whole signal lies inside the recording. The correlation runs through a radix-2 FFT of the recording's length rounded up to a power of two, which never wraps those lags: for two 3 s recordings at 48 kHz the whole estimate takes about 45 ms in a release build on the PC, where the plain sum would take seconds. A recording is refused, naming which one, when:
+  - *Too short:* it is shorter than the signal plus 100 ms (fewer lags would not show a noise floor), or the signal passed is not the one for the rate.
+  - *Too long:* it holds more than 2^21 frames (about 44 s at 48 kHz), which bounds the estimate's memory: at that length it peaks near 96 MB (two 2^21-point complex buffers of 32 MB each, their twiddles and the correlation).
+  - *Clipped:* 3 samples in a row have a magnitude of 0.99 or more (the flat top of a clipped waveform; a single full-scale sample, a click, is let through), or a sample isn't finite.
+  - *Too quiet:* the correlation is 0 everywhere (silence), or its peak is less than 12 times the median of its magnitude over all lags. Noise alone reaches 6.4 to 7.8 in the core's runs, so it is refused with room to spare; white noise 20 dB louder than the signal (per-sample RMS) still gives about 29; by the matched filter's gain, the square root of the signal's 36 000 frames at 48 kHz (about 190), the threshold lies near −27 dB.
+  - *Ambiguous echo:* another lag more than 3 ms from the peak reaches over 0.7 of it. Then a reflection or a second sound is nearly as strong as the arrival and either may be the direct one. Within 3 ms, about 1 m of extra path, a reflection is taken as part of the arrival itself. The signal's own sidelobes outside 3 ms stay near 0.01, and noise alone mostly reaches 0.8 to 0.99, so the check also backs up the one above. A reflection stronger than a blocked direct path is measured as the arrival and is not refused; the host asks for a clear line from the speaker to the microphone.
+
+  The thresholds are constants of the core (`core/src/calibrate.rs`), checked by tests that put noise alone, a signal under noise, and echoes of known strength through them.
+
 ## 9. FIFO feed (PCM into the AirPlay engine)
 
 Retired with the FIFO feed on 2026-10-20, all but the resampler of S85 and S94; kept as a record (see the note at the top). S82 went earlier that day with the bundled engine.
@@ -1416,3 +1431,21 @@ The checks for S227 in the Rust core, test functions with `// covers:` markers (
 | a_quit_during_a_rebuild_stops_it_or_rebuilds_with_whole_system_audio | S227 |
 | the_same_quit_reported_twice_acts_once | S227 |
 | picking_a_source_forgets_the_switch | S227 |
+
+### calibration: core (`cargo test` in `core/`)
+
+The checks for S232 to S234 in the Rust core, test functions with `// covers:` markers (`core/tests/calibrate.rs` against synthetic rooms: the signal at known fractional delays, an echo and noise; `core/src/ffi/calibrate.rs` for the C interface).
+
+| Test | Clauses |
+|---|---|
+| a_known_delay_with_noise_and_an_echo_gives_the_offset_within_a_millisecond | S232, S234 |
+| a_chosen_output_heard_later_than_the_reference_ends_up_with_a_lower_offset | S232 |
+| the_offset_is_clamped_at_both_ends_of_the_range | S232 |
+| a_difference_no_two_offsets_in_range_explain_is_refused | S232 |
+| silence_and_noise_alone_are_too_quiet | S234 |
+| a_clipped_recording_is_refused | S234 |
+| a_recording_too_short_or_too_long_is_refused | S234 |
+| an_echo_nearly_as_strong_as_the_first_arrival_is_ambiguous | S234 |
+| the_thresholds_leave_room_on_both_sides | S233, S234 |
+| the_signal_is_a_quiet_faded_sweep_that_sounds_the_same_at_any_rate | S233 |
+| the_signal_and_the_estimate_cross_the_boundary | S232, S233 |

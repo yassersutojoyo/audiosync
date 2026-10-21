@@ -14,6 +14,8 @@
 //! - [`sync`]: the AirPlay sync rule and the delay helpers (S3, S77-S80).
 //! - [`device_volume`]: what an output device's own volume and mute mean for
 //!   its row, and what the one-click fix writes (S192-S202).
+//! - [`calibrate`]: the microphone calibration's test signal and estimate
+//!   (S232-S234).
 //! - [`airplay`]: AudioSync's own AirPlay sender: discovery, speakers, their
 //!   events and the capture's input, the one part of this interface that
 //!   runs threads and sockets of its own.
@@ -40,6 +42,7 @@ use crate::eq::{
 use crate::volume;
 
 pub mod airplay;
+pub mod calibrate;
 pub mod device_volume;
 pub mod render;
 pub mod ring;
@@ -47,6 +50,7 @@ pub mod source_quit;
 pub mod sync;
 
 pub use self::airplay::*;
+pub use self::calibrate::*;
 pub use self::device_volume::*;
 pub use self::render::*;
 pub use self::ring::*;
@@ -371,9 +375,10 @@ mod tests {
     const HEADER: &str = include_str!("../include/audiosync_core.h");
 
     /// Every source file of the C interface, by its path under `src/`.
-    const SOURCES: [(&str, &str); 7] = [
+    const SOURCES: [(&str, &str); 8] = [
         ("ffi.rs", include_str!("ffi.rs")),
         ("ffi/airplay.rs", include_str!("ffi/airplay.rs")),
+        ("ffi/calibrate.rs", include_str!("ffi/calibrate.rs")),
         ("ffi/device_volume.rs", include_str!("ffi/device_volume.rs")),
         ("ffi/render.rs", include_str!("ffi/render.rs")),
         ("ffi/ring.rs", include_str!("ffi/ring.rs")),
@@ -1044,6 +1049,37 @@ mod tests {
             (
                 "ASC_DEVICE_VOLUME_MUTED_AND_LOW",
                 DEVICE_VOLUME_MUTED_AND_LOW.to_string(),
+            ),
+            ("ASC_CALIBRATION_ACCEPTED", CALIBRATION_ACCEPTED.to_string()),
+            (
+                "ASC_CALIBRATION_TOO_SHORT",
+                CALIBRATION_TOO_SHORT.to_string(),
+            ),
+            ("ASC_CALIBRATION_TOO_LONG", CALIBRATION_TOO_LONG.to_string()),
+            ("ASC_CALIBRATION_CLIPPED", CALIBRATION_CLIPPED.to_string()),
+            (
+                "ASC_CALIBRATION_TOO_QUIET",
+                CALIBRATION_TOO_QUIET.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_AMBIGUOUS_ECHO",
+                CALIBRATION_AMBIGUOUS_ECHO.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_IMPLAUSIBLE",
+                CALIBRATION_IMPLAUSIBLE.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_RECORDING_NONE",
+                CALIBRATION_RECORDING_NONE.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_RECORDING_REFERENCE",
+                CALIBRATION_RECORDING_REFERENCE.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_RECORDING_CHOSEN",
+                CALIBRATION_RECORDING_CHOSEN.to_string(),
             ),
             ("ASC_SOURCE_QUIT_KEEP", SOURCE_QUIT_KEEP.to_string()),
             ("ASC_SOURCE_QUIT_STOP", SOURCE_QUIT_STOP.to_string()),

@@ -150,6 +150,20 @@ extern "C" {
 #define ASC_DEVICE_VOLUME_MUTED 3         /* muted, at a volume that isn't low or isn't known */
 #define ASC_DEVICE_VOLUME_MUTED_AND_LOW 4 /* muted, and 25 % or less too */
 
+/* What asc_calibration_estimate found (AscCalibration.status). */
+#define ASC_CALIBRATION_ACCEPTED 0       /* offset_ms is the new offset */
+#define ASC_CALIBRATION_TOO_SHORT 1      /* under the signal plus 100 ms, or the signal isn't the rate's */
+#define ASC_CALIBRATION_TOO_LONG 2       /* over 2^21 frames */
+#define ASC_CALIBRATION_CLIPPED 3        /* 3 samples in a row at 0.99 or more, or one not finite */
+#define ASC_CALIBRATION_TOO_QUIET 4      /* no peak 12 times over the noise floor */
+#define ASC_CALIBRATION_AMBIGUOUS_ECHO 5 /* a second arrival over 0.7 of the first, 3 ms or more away */
+#define ASC_CALIBRATION_IMPLAUSIBLE 6    /* a difference over 22 000 ms */
+
+/* Which recording a refusal concerns (AscCalibration.recording). */
+#define ASC_CALIBRATION_RECORDING_NONE 0      /* accepted, or a refusal about the pair */
+#define ASC_CALIBRATION_RECORDING_REFERENCE 1 /* the reference's recording */
+#define ASC_CALIBRATION_RECORDING_CHOSEN 2    /* the chosen output's recording */
+
 /* What asc_source_quit_decide answers. */
 #define ASC_SOURCE_QUIT_KEEP 0             /* nothing changes */
 #define ASC_SOURCE_QUIT_STOP 1             /* stop, post the "source" notice, drop a pending rebuild */
@@ -833,6 +847,54 @@ const char *asc_device_volume_decision_name(uint32_t decision_code);
  * ASC_STREAMING_OFF. Pure function for the control thread.
  */
 uint32_t asc_source_quit_decide(const char *setting, const char *source, const char *quit_app, uint32_t streaming);
+
+/* ---- Microphone calibration ---------------------------------------------- */
+
+/*
+ * One local output measured against the reference with a microphone
+ * (S232-S234): the host plays the test signal on the reference and records
+ * it, then on the chosen output with the microphone where it was, and
+ * passes both recordings, mono at the signal's rate. Frame 0 of each is the
+ * moment the signal enters that output's path, before its hold-back, with
+ * the same gap from recording start to play start in both runs (a gap that
+ * differs goes into the result unseen). Each recording lasts the largest
+ * hold-back taking part (about 2 s with AirPlay, up to 20 s with large
+ * offsets) plus the output's latency plus the 0.75 s signal plus about
+ * 0.5 s. Record at 48 kHz: the 2^21-frame limit is about 44 s there but
+ * only 10.9 s at 192 kHz. Both calls allocate and are for the control
+ * thread; the estimate takes tens of ms and up to about 96 MB.
+ */
+
+/* Frames of the test signal at `rate`; 0 for a rate outside 22 050...384 000. */
+size_t asc_calibration_signal_frames(uint32_t rate);
+
+/*
+ * The test signal at `rate`, mono: a 0.75 s linear sweep from 300 Hz to
+ * 8 kHz peaking at -18 dBFS, with 20 ms raised-cosine fades. False, writing
+ * nothing, for an unsupported rate, a `frames` other than
+ * asc_calibration_signal_frames(rate) or a NULL samples.
+ */
+bool asc_calibration_signal(uint32_t rate, float *samples, size_t frames);
+
+/* What asc_calibration_estimate found. */
+typedef struct AscCalibration {
+    uint32_t status;      /* an ASC_CALIBRATION_ code */
+    uint32_t recording;   /* an ASC_CALIBRATION_RECORDING_ code */
+    double offset_ms;     /* the new offset, whole ms; refused: the old one as stored offsets count */
+    double difference_ms; /* how much later the chosen output was heard; refused: 0 */
+    double reference_ms;  /* where the signal arrived in the reference's recording; refused: 0 */
+    double chosen_ms;     /* where it arrived in the chosen output's recording; refused: 0 */
+    bool clamped;         /* accepted, but offset_ms hit an end of the range: the output stays off by the rest */
+} AscCalibration;
+
+/*
+ * The chosen output's new offset into *result: its old offset (0 when not
+ * finite, else clamped to -2000...+20 000) minus how much later it was
+ * heard than the reference, rounded to whole ms and clamped to that range;
+ * or a refusal that changes nothing. False, writing nothing, for a NULL
+ * array with a nonzero count or a NULL result.
+ */
+bool asc_calibration_estimate(const float *signal, size_t signal_frames, const float *reference, size_t reference_frames, const float *chosen, size_t chosen_frames, uint32_t rate, double old_offset_ms, AscCalibration *result);
 
 /* ---- AirPlay sender (AudioSync's own, airplay/) ----------------------------- */
 

@@ -55,9 +55,10 @@ The core's PCM pipe feed (`fifo.rs`, S82 to S95, S160, S169, S203) went on 2026-
 - `eq`: the ten-band equalizer and preamp (S22 to S34), split into `EqControl` (main thread) and `EqProcessor` (capture thread) that share only atomics.
 - `volume`: the cubic volume curve, host-side volume rules and the renderer's gain stage (S64, S65, S70, S71, S75, S76). The bundled engine's volume helpers (`engine_volume`, `adopt_reported_volume`, `LatestValues`, S72 to S74) went with it on 2026-10-20.
 - `channels`: an input device's channels to stereo (S14).
+- `calibrate`: the microphone calibration of one output's offset (S232 to S234): a 0.75 s sweep, its arrival by an FFT cross-correlation, and the refusals; its own radix-2 FFT, so no new dependency.
 - `fade` and `render`: the 20 ms fades at stream boundaries and a local output's renderer (S182 to S191, see the last part).
 - `policy`: pure host decisions the Windows app can reuse: delays and the AirPlay sync rule; the capture source, the microphone permission and app quits; the capture check and capture rate changes; sessions, output sync, streaming and source switches; speaker keys, groups, device lists, layout and notices.
-- `ffi`: the C interface, `ffi.rs` plus `ffi/ring.rs`, `ffi/render.rs`, `ffi/sync.rs`, `ffi/device_volume.rs` and `ffi/airplay.rs` (see the last part).
+- `ffi`: the C interface, `ffi.rs` plus `ffi/ring.rs`, `ffi/render.rs`, `ffi/sync.rs`, `ffi/device_volume.rs`, `ffi/source_quit.rs`, `ffi/calibrate.rs` and `ffi/airplay.rs` (see the last part).
 
 ### C interface
 
