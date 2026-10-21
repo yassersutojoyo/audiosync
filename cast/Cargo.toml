@@ -29,5 +29,5 @@ sha2 = { version = "0.11.0", default-features = false }
 [dev-dependencies]
 # The fake receiver's TLS server and its self-signed certificate, made in
 # each test. Test-only: the sender itself speaks TLS through native-tls.
-rcgen = { version = "0.14.5", default-features = false, features = ["crypto", "pem", "ring"] }
+rcgen = { version = "0.14.5", default-features = false, features = ["crypto", "ring"] }
 rustls = { version = "0.23.31", default-features = false, features = ["ring", "std", "tls12"] }
