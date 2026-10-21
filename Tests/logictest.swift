@@ -1305,13 +1305,75 @@ do {
             && model.apply(.error(id: "A1", .wrongPassword, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsPassword)
             && model.apply(.error(id: "A1", .unsupported, retryMs: 5, detail: "")) == .turnOff("native:A1", .cantPlay)
             && model.apply(.error(id: "A1", .incompatible, retryMs: 5, detail: "")) == .turnOff("native:A1", .cantPlay)
-            && model.apply(.error(id: "A1", .timingUnavailable, retryMs: nil, detail: "")) == .turnOff("native:A1", .timingUnavailable)
-            && model.apply(.error(id: "A1", .oneAirPlay2, retryMs: nil, detail: "")) == .turnOff("native:A1", .oneAirPlay2),
+            && model.apply(.error(id: "A1", .timingUnavailable, retryMs: nil, detail: "")) == .turnOff("native:A1", .timingUnavailable),
           "native airplay: an error the sender won't retry turns the speaker off, with why")
     model.removed("A1")
     check(model.apply(.state(id: "A1", .playing, retryMs: nil)) == nil
             && model.apply(.error(id: "A1", .notResponding, retryMs: nil, detail: "")) == nil,
           "native airplay: events of a removed speaker are passed over")
+
+    // P169: a second AirPlay 2 speaker waits for the one slot, switched on,
+    // and the sender starts it once the other one stops.
+    model.apply(.appeared(receiver("G7", "Loft", .available)))
+    model.added("G7")
+    let refused = model.apply(.error(id: "G7", .oneAirPlay2, retryMs: nil, detail: "one AirPlay 2 speaker at a time"))
+    check(refused == .waiting("native:G7", true) && model.apply(.state(id: "G7", .failed, retryMs: nil)) == nil
+            && model.isWaiting("G7") && model.plan(streaming: true, enabled: ["native:G7"]).isEmpty,
+          "P169 native airplay: a speaker refused the AirPlay 2 slot stays on and in the sender", "\(String(describing: refused))")
+    check(model.apply(.error(id: "G7", .oneAirPlay2, retryMs: nil, detail: "")) == nil && model.isWaiting("G7"),
+          "P169 native airplay: refused again while it waits, it posts no second notice")
+    check(model.apply(.state(id: "G7", .connecting, retryMs: nil)) == .waiting("native:G7", false) && !model.isWaiting("G7")
+            && model.apply(.state(id: "G7", .playing, retryMs: nil)) == .playingChanged("native:G7", playing: true),
+          "P169 native airplay: once the slot frees, the sender starts it and the row stops saying it waits")
+    _ = model.apply(.error(id: "G7", .oneAirPlay2, retryMs: nil, detail: ""))
+    check(model.apply(.error(id: "G7", .timingUnavailable, retryMs: nil, detail: "")) == .turnOff("native:G7", .timingUnavailable)
+            && !model.isWaiting("G7"),
+          "P169 native airplay: a waiting speaker that then can't get PTP timing goes off and no longer waits")
+    _ = model.apply(.error(id: "G7", .oneAirPlay2, retryMs: nil, detail: ""))
+    model.removed("G7")
+    check(!model.isWaiting("G7"), "P169 native airplay: switched off or streaming stopped, it no longer waits")
+    check(UIStrings().nativeAirPlayOneAirPlay2(name: "Loft")
+            == "AudioSync plays one AirPlay 2 speaker at a time, so Loft waits. It starts once the other one stops.",
+          "P169 native airplay: the waiting notice reads as on Windows")
+    check(UIStrings().nativeAirPlayWaitingTitle(name: "Loft") == "Loft waiting"
+            && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true) == "Waiting for the other AirPlay 2 speaker"
+            && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false) == nil,
+          "P169 native airplay: the notice's title and the row's note, as on Windows")
+    check(UIStrings().nativeAirPlayTimingUnavailable(name: "Loft")
+            == "Loft needs PTP timing, which isn't available, so it's off. Another app may be using ports 319 and 320.",
+          "native airplay: the PTP text reads as on Windows")
+    var titled = NoticeList()
+    titled.post("body", subject: "s", title: "Loft waiting")
+    check(titled.newest?.title == "Loft waiting" && titled.newest?.text == "body", "notices: a notice can carry a title")
+
+    // A receiver the sender reaches over AirPlay 2 (the core sets this only
+    // with the AirPlay 2 switch on) names AirPlay 2 as its kind, the way a
+    // Cast row names Google Cast; every other AirPlay row stays "AirPlay".
+    var paths = NativeAirPlayModel()
+    paths.apply(.appeared(NativeReceiver(id: "H8", name: "Loft", model: "", availability: .available, reason: nil,
+                                         hints: ["airplay", "airplay2", "over-airplay2"], overAirPlay2: true)))
+    paths.apply(.appeared(NativeReceiver(id: "I9", name: "Den", model: "", availability: .available, reason: nil,
+                                         hints: ["raop", "airplay", "airplay2"])))
+    check(paths.reachedOverAirPlay2("H8") && !paths.reachedOverAirPlay2("I9") && !paths.reachedOverAirPlay2("J0"),
+          "native airplay: only a receiver the sender reaches over AirPlay 2 is marked so, not one that merely lists AirPlay 2")
+    let kinds = UIStrings()
+    check(kinds.speakerTag(.airplay, airPlay2: true) == "AirPlay 2" && kinds.speakerTag(.airplay) == "AirPlay"
+            && kinds.speakerTag(.cast, airPlay2: true) == "Google Cast"
+            && kinds.speakerLabel(name: "Loft", tag: kinds.speakerTag(.airplay, airPlay2: true)) == "Loft, AirPlay 2",
+          "native airplay: the kind's tooltip and VoiceOver label say AirPlay 2 for such a row, AirPlay for the rest")
+    paths.apply(.changed(NativeReceiver(id: "H8", name: "Loft", model: "", availability: .available, reason: nil,
+                                        hints: ["airplay", "airplay2", "over-airplay2", "paired"], overAirPlay2: true,
+                                        paired: true)))
+    check(paths.isPaired("H8") && !paths.isPaired("I9") && !paths.isPaired("J0"),
+          "native airplay: only a receiver AudioSync keeps a pairing for offers Forget Pairing")
+    check(kinds.nativePairPINMessage(name: "Loft").hasPrefix("Loft shows a 4-digit PIN on its screen. Enter it to pair; "
+                                                              + "after that, it connects without a PIN.")
+            && !kinds.nativePairWrongPINMessage(name: "Loft").contains("TV"),
+          "native airplay: the PIN prompt reads as on Windows, for an Apple TV and an AirPlay 2 receiver alike")
+    paths.apply(.appeared(NativeReceiver(id: "K1", name: "Attic", model: "", availability: .needsPin, reason: nil,
+                                         hints: ["airplay", "airplay2", "pairing", "over-airplay2"], overAirPlay2: true)))
+    check(paths.turnedOnByUser("K1") == .startPairing("K1") && paths.apply(.pinNeeded(id: "K1")) == .prompt,
+          "native airplay: a click on an AirPlay 2 receiver asking for a PIN pairs and prompts, as for an Apple TV")
     check(model.apply(.timeline(latencyMs: 1750, restarted: false)) == .latencyChanged
             && model.apply(.timeline(latencyMs: 1750, restarted: true)) == nil && model.latencyMs == 1750,
           "native airplay: local outputs line up again only when L changes")

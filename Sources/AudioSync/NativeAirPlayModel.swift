@@ -50,8 +50,8 @@ enum NativeSpeakerEvent: Equatable {
         case oneAirPlay2 = "one AirPlay 2 speaker at a time"
 
         /// The sender tries again by itself, so the speaker stays on; any
-        /// other problem turns it off, one waiting for the AirPlay 2 slot
-        /// too, which the Windows app keeps on.
+        /// other problem turns it off, except a speaker waiting for the
+        /// AirPlay 2 slot, which stays on (`NativeAirPlayModel.apply`).
         var retried: Bool {
             switch self {
             case .notResponding, .connectionLost, .busy, .refused: return true
@@ -65,9 +65,10 @@ enum NativeSpeakerEvent: Equatable {
             case .notResponding, .connectionLost, .busy, .refused: return .unreachable
             case .passwordRequired, .wrongPassword: return .needsPassword
             case .pairingRequired: return .needsCode
-            case .incompatible, .unsupported: return .cantPlay
+            // A speaker waiting for the AirPlay 2 slot never goes off; a
+            // pairing that ends with it can't play, as with `unsupported`.
+            case .incompatible, .unsupported, .oneAirPlay2: return .cantPlay
             case .timingUnavailable: return .timingUnavailable
-            case .oneAirPlay2: return .oneAirPlay2
             }
         }
     }
@@ -120,7 +121,7 @@ enum NativeSpeakerEvent: Equatable {
         case .failed(let detail):
             line = "the sender stopped after an internal error" + (detail.isEmpty ? "" : " (\(detail))")
         case .pinNeeded(let id):
-            line = "\(label(id)): pairing, the Apple TV shows a PIN"
+            line = "\(label(id)): pairing, it shows a PIN"
         case .passwordNeeded(let id, let wrong):
             line = "\(label(id)): pairing needs the password" + (wrong ? " (the one given was turned down)" : "")
         case .pairingFailed(let id, let wrongPin, let problem, let detail):
@@ -146,8 +147,6 @@ enum NativeTurnOff: Equatable {
     case cantPlay
     /// It turned NTP timing down, and PTP timing isn't available.
     case timingUnavailable
-    /// Another AirPlay 2 speaker plays, and only one can at a time.
-    case oneAirPlay2
     /// The user cancelled its PIN or password prompt.
     case cancelled
     /// Its pairing ended without credentials (not for a wrong PIN, which
@@ -239,6 +238,11 @@ enum NativeAirPlayOutcome: Equatable {
     case prompt
     /// The receiver paired (app ID): it joins with its new credentials.
     case paired(String)
+    /// The speaker (app ID) started waiting for the AirPlay 2 slot, which
+    /// another AirPlay 2 speaker holds, or stopped waiting (`waiting`
+    /// false): it stays on, and the sender starts it once the slot frees
+    /// (P169).
+    case waiting(String, Bool)
 }
 
 /// The native sender's receivers and speakers as the app sees them (main
@@ -273,6 +277,14 @@ struct NativeAirPlayModel {
     }
 
     func isPlaying(_ id: String) -> Bool { states[id] == .playing }
+
+    /// Whether the sender reaches the listed receiver `id` over AirPlay 2:
+    /// its row then names AirPlay 2 as its kind.
+    func reachedOverAirPlay2(_ id: String) -> Bool { receivers[id]?.overAirPlay2 == true }
+
+    /// Whether credentials are kept for the listed receiver `id`: its row
+    /// offers Forget Pairing.
+    func isPaired(_ id: String) -> Bool { receivers[id]?.paired == true }
 
     /// The speaker list's rows, as app IDs: every receiver it shows
     /// (`NativeReceiver.access`), and any that still plays while its
@@ -480,7 +492,7 @@ struct NativeAirPlayModel {
         case .pairingFailed(let id, let wrongPin, let problem, _):
             guard stages[id]?.pairingRuns == true else { return nil }
             if wrongPin {
-                // The Apple TV shows a new PIN for a new pairing (P52).
+                // The receiver shows a new PIN for a new pairing (P52).
                 stages[id] = .pairing(afterWrongPin: true)
                 return .startPairing(id)
             }
@@ -543,7 +555,15 @@ struct NativeAirPlayModel {
 
     /// The app removed a speaker from the sender; its later events are
     /// passed over.
-    mutating func removed(_ id: String) { states.removeValue(forKey: id) }
+    mutating func removed(_ id: String) {
+        states.removeValue(forKey: id)
+        waiting.remove(id)
+    }
+
+    /// The speakers in the sender waiting for the AirPlay 2 slot (P169).
+    private(set) var waiting: Set<String> = []
+
+    func isWaiting(_ id: String) -> Bool { waiting.contains(id) }
 
     /// Takes a sender event in, and says what the app does about it.
     mutating func apply(_ event: NativeSpeakerEvent) -> NativeAirPlayOutcome? {
@@ -552,10 +572,18 @@ struct NativeAirPlayModel {
             guard let before = states[id] else { return nil }
             states[id] = state
             if state == .playing { endAttempt(id) }   // it plays: the user's attempt worked
+            // The refusal's failed state keeps it waiting; any other state
+            // means the sender started it again.
+            let waited = state != .failed && waiting.remove(id) != nil
             let (was, now) = (before == .playing, state == .playing)
-            return was == now ? nil : .playingChanged(NativeAirPlayID.app(id), playing: now)
+            if was != now { return .playingChanged(NativeAirPlayID.app(id), playing: now) }
+            return waited ? .waiting(NativeAirPlayID.app(id), false) : nil
         case .error(let id, let problem, let retryMs, _):
             guard states[id] != nil else { return nil }
+            if problem == .oneAirPlay2 {
+                return waiting.insert(id).inserted ? .waiting(NativeAirPlayID.app(id), true) : nil
+            }
+            waiting.remove(id)
             if retryMs != nil && problem.retried {
                 return nil   // a retrying state event follows
             }

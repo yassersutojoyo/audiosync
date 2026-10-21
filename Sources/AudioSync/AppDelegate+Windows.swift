@@ -68,6 +68,7 @@ extension AppDelegate {
         a.setMaster = { [weak self] position in self?.setMasterVolume(position) }
         a.setAirPlayEnabled = { [weak self] id, on in self?.setNativeAirPlayEnabled(id, on) }
         a.setAirPlayVolume = { [weak self] id, volume in self?.setNativeAirPlayVolume(id, volume) }
+        a.forgetAirPlayPairing = { [weak self] id in self?.forgetNativePairing(id) }
         a.setLocalEnabled = { [weak self] uid, on in self?.setLocalEnabled(uid, on) }
         a.setLocalVolume = { [weak self] uid, position in self?.setLocalVolume(uid, position) }
         a.setLocalOffset = { [weak self] uid, ms in self?.setLocalOffset(uid, ms) }
@@ -270,16 +271,21 @@ extension AppDelegate {
     }
 
     private func airplaySnapshot() -> [AppModel.Speaker] {
-        airplayOrder.map { id in
-            AppModel.Speaker(id: id,
-                             name: shownName(airPlay: id),
-                             tag: .airplay,
-                             enabled: enabledAirPlay.contains(id),
-                             volume: airplayVolume[id] ?? defaultVolume,
-                             offsetMs: nil,
-                             autoConnect: autoConnect.contains(SpeakerKey.make(id: id, airplay: true)),
-                             availability: airplayAccess[id].map(SpeakerAvailability.init) ?? .open,
-                             systemName: systemName(airPlay: id))
+        let native = nativeAirPlay?.model
+        return airplayOrder.map { id in
+            let receiver = NativeAirPlayID.receiver(id)
+            return AppModel.Speaker(id: id,
+                                    name: shownName(airPlay: id),
+                                    tag: .airplay,
+                                    enabled: enabledAirPlay.contains(id),
+                                    volume: airplayVolume[id] ?? defaultVolume,
+                                    offsetMs: nil,
+                                    autoConnect: autoConnect.contains(SpeakerKey.make(id: id, airplay: true)),
+                                    availability: airplayAccess[id].map(SpeakerAvailability.init) ?? .open,
+                                    systemName: systemName(airPlay: id),
+                                    airPlay2: receiver.map { native?.reachedOverAirPlay2($0) == true } ?? false,
+                                    waitingForAirPlay2: receiver.map { native?.isWaiting($0) == true } ?? false,
+                                    paired: receiver.map { native?.isPaired($0) == true } ?? false)
         }
     }
 

@@ -84,7 +84,7 @@ extern "C" {
 
 /* Whether a receiver can play from this sender (AscAirPlayReceiver.availability). */
 #define ASC_AIRPLAY_AVAILABLE 0      /* it can */
-#define ASC_AIRPLAY_NEEDS_PIN 1      /* an Apple TV that asks for a PIN once */
+#define ASC_AIRPLAY_NEEDS_PIN 1      /* it asks for a PIN once: an Apple TV, or a receiver reached over AirPlay 2 */
 #define ASC_AIRPLAY_NEEDS_PASSWORD 2 /* it asks for a password */
 #define ASC_AIRPLAY_NEEDS_PAIRING 3  /* it likely needs another kind of pairing */
 #define ASC_AIRPLAY_AIRPLAY2_ONLY 4  /* only AirPlay 2 could serve it, and that path is off */
@@ -110,6 +110,8 @@ extern "C" {
 #define ASC_AIRPLAY_FLAG_LEGACY_PAIRING 32 /* an Apple TV that needs the PIN pairing */
 #define ASC_AIRPLAY_FLAG_BUSY 64           /* its flags hint that another sender plays */
 #define ASC_AIRPLAY_FLAG_AIRPLAY2 128      /* it lists AirPlay 2 features */
+#define ASC_AIRPLAY_FLAG_OVER_AIRPLAY2 256 /* the AirPlay 2 switch is on and the sender reaches it over AirPlay 2 */
+#define ASC_AIRPLAY_FLAG_PAIRED 512        /* credentials are kept for it, which asc_airplay_forget_pairing drops */
 
 /* What a sender event reports (AscAirPlayEvent.kind). */
 #define ASC_AIRPLAY_EVENT_STATE 1    /* a speaker's state changed: .state */
