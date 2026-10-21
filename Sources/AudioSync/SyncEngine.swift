@@ -1,5 +1,6 @@
 import Foundation
 import CoreAudio
+import CoreWLAN
 
 /// The streaming session: one capture feeding one set of the core's parts
 /// (`EngineParts`: the equalizer and the delay ring), and one
@@ -116,6 +117,9 @@ final class StreamEngine {
         self.parts = parts
         isRunning = true
         DebugTrace.log("[AudioSync] session started: \(source) at \(capture.sampleRate) Hz")
+        if DebugTrace.enabled {
+            DispatchQueue.global(qos: .utility).async { DebugTrace.log("[AudioSync] network: \(WiFiNote.current())") }
+        }
     }
 
     /// Ends the session (S115, S186): every output and the AirPlay input
@@ -133,6 +137,7 @@ final class StreamEngine {
         isRunning = false
         self.parts = nil
         let leaving = renderers.keys.sorted().compactMap { uid in renderers[uid].map { (uid: uid, renderer: $0) } }
+        let bluetooth = bluetoothOutputs
         renderers = [:]
         let capture = self.capture
         let inputs = Self.inputsFadedCheck(ring: parts.ring, captureRate: capture.sampleRate)
@@ -142,7 +147,9 @@ final class StreamEngine {
         }, inputsFaded: inputs.faded, inputsFallbackNs: inputs.fallbackNs, stopCapture: {
             capture.halt()
         }, then: {
-            for output in leaving { StreamEngine.logStopped(output.uid, output.renderer, why: "session stopped") }
+            for output in leaving {
+                StreamEngine.logStopped(output.uid, output.renderer, why: "session stopped", bluetoothOutputs: bluetooth)
+            }
             DebugTrace.log("[AudioSync] session stopped")
             completion?()
         })
@@ -234,7 +241,17 @@ final class StreamEngine {
         try renderer.start(on: device, captureRate: capture.sampleRate, delayMs: delayMs)
         renderers[uid] = renderer
         DebugTrace.log("[AudioSync] output added: \(uid) on device \(device), delay \(delayMs) ms, gain \(gain)")
+        if DebugTrace.enabled {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self, weak renderer] in
+                guard let self, let renderer, self.renderers[uid] === renderer else { return }
+                DebugTrace.log("[AudioSync] output at 1 minute: \(uid), "
+                    + renderer.statusText(bluetoothOutputs: self.bluetoothOutputs))
+            }
+        }
     }
+
+    /// The running outputs on a Bluetooth device, for the debug log (S229).
+    private var bluetoothOutputs: Int { renderers.values.filter { $0.isBluetooth }.count }
 
     /// Switches output `uid` off; see `detachOutputs`.
     func detachOutput(uid: String) {
@@ -246,13 +263,16 @@ final class StreamEngine {
     /// 500 ms later, without holding up the main thread. Unknown UIDs are
     /// skipped.
     func detachOutputs(uids: [String]) {
+        let bluetooth = bluetoothOutputs
         let leaving = uids.sorted().compactMap { uid in
             renderers.removeValue(forKey: uid).map { (uid: uid, renderer: $0) }
         }
         guard !leaving.isEmpty else { return }
         DebugTrace.log("[AudioSync] output(s) fading out: " + leaving.map { $0.uid }.joined(separator: ", "))
         retirement.remove(leaving.map { $0.renderer }) {
-            for output in leaving { StreamEngine.logStopped(output.uid, output.renderer, why: "removed") }
+            for output in leaving {
+                StreamEngine.logStopped(output.uid, output.renderer, why: "removed", bluetoothOutputs: bluetooth)
+            }
         }
         watchFades()
     }
@@ -280,18 +300,31 @@ final class StreamEngine {
         retirement.stopLost(renderer)
         watchFades()
         guard renderers[uid] === renderer else { return }
+        let bluetooth = bluetoothOutputs
         renderers.removeValue(forKey: uid)
-        StreamEngine.logStopped(uid, renderer, why: "device lost")
+        StreamEngine.logStopped(uid, renderer, why: "device lost", bluetoothOutputs: bluetooth)
         onOutputGone?(uid)
     }
 
-    /// Logs what output `uid` rendered, how it stopped and what its reader counted.
-    private static func logStopped(_ uid: String, _ renderer: OutputRenderer, why reason: String) {
+    /// Logs what output `uid` rendered, how it stopped, what its reader
+    /// counted and what the observer saw, with `bluetoothOutputs` playing
+    /// until it stopped.
+    private static func logStopped(_ uid: String, _ renderer: OutputRenderer, why reason: String,
+                                   bluetoothOutputs: Int) {
         renderer.onDeviceGone = nil
         DebugTrace.log("[AudioSync] output stopped (\(reason)): \(uid), \(renderer.stopNote), "
-                + "\(renderer.framesRendered.load(ordering: .relaxed)) frames rendered, \(renderer.counters), "
-                + "slowed \(renderer.slowedFrames) frames, sped \(renderer.spedFrames) frames, "
-                + "shortfall \(renderer.shortfallFrames) frames, "
-                + "late callbacks \(renderer.lateCallbacks) (most \(String(format: "%.1f", renderer.lateMaxMs)) ms)")
+                + renderer.statusText(bluetoothOutputs: bluetoothOutputs))
+    }
+}
+
+extension WiFiNote {
+    /// Reads the Wi-Fi interface through CoreWLAN, which never shows a
+    /// prompt: what macOS withholds without Location Services reads as n/a.
+    /// The network's name and address are never asked for.
+    static func current() -> String {
+        guard let interface = CWWiFiClient.shared().interface() else { return "Wi-Fi n/a" }
+        let channel = interface.wlanChannel()
+        return text(poweredOn: interface.powerOn(), band: channel.map { $0.channelBand.rawValue },
+                    channel: channel?.channelNumber, rssi: interface.rssiValue())
     }
 }

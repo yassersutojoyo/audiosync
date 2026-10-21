@@ -92,6 +92,9 @@ final class OutputRenderer: FadingOutput {
     /// added to a fade's last output time (S185).
     private var latencyNs: UInt64 = 0
     private var aliveListener: (device: AudioObjectID, block: AudioObjectPropertyListenerBlock)?
+    private var overloadListener: (device: AudioObjectID, block: AudioObjectPropertyListenerBlock)?
+    /// The latest start's device is a Bluetooth one (Classic or LE).
+    private(set) var isBluetooth = false
     /// Bumped by every start and stop, so a listener call queued for an
     /// earlier start does nothing.
     private var generation: UInt64 = 0
@@ -133,6 +136,19 @@ final class OutputRenderer: FadingOutput {
     /// How late callbacks came against the earliest ones (S209).
     var lateMaxMs: Double { target?.renderer.lateMaxMs ?? 0 }
     var lateCallbacks: Int64 { target?.renderer.lateCallbacks ?? 0 }
+
+    /// The latest start's counters and the observer's values (S229), for the
+    /// debug log; main thread.
+    func statusText(bluetoothOutputs: Int) -> String {
+        let observed = OutputObservation(
+            leastSlackMs: target?.renderer.leastSlackMs, floorDropMs: target?.renderer.floorDropMs ?? 0,
+            shortageFrames: target?.renderer.shortageFrames ?? 0,
+            overloads: target?.overloads.load(ordering: .relaxed) ?? 0,
+            timeSteps: target?.renderer.timeSteps ?? 0, bluetoothOutputs: bluetoothOutputs)
+        return "\(framesRendered.load(ordering: .relaxed)) frames rendered, \(counters), "
+            + "slowed \(slowedFrames) frames, sped \(spedFrames) frames, shortfall \(shortfallFrames) frames, "
+            + "late callbacks \(lateCallbacks) (most \(String(format: "%.1f", lateMaxMs)) ms), \(observed.text)"
+    }
 
     /// Where the fade was at the end of the latest callback.
     var fadeState: CoreRenderer.FadeState { target?.renderer.fadeState ?? .closed }
@@ -179,7 +195,10 @@ final class OutputRenderer: FadingOutput {
         reportedLoss = false
         stopNote = "running"
         latencyNs = Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
+        isBluetooth = BluetoothIOBuffer.isBluetooth(
+            transport: Self.uint32(device, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal) ?? 0)
         installDeviceAliveListener(device)
+        installOverloadListener(device)
         startDebugReport()
         DebugTrace.log("[AudioSync] output unit started on device \(device): \(started.channels) channels at "
                 + "\(started.rate) Hz from \(captureRate) Hz, delay \(delayMs) ms, "
@@ -191,6 +210,7 @@ final class OutputRenderer: FadingOutput {
     func halt() {
         generation &+= 1
         uninstallDeviceAliveListener()
+        uninstallOverloadListener()
         debugTimer?.cancel()
         debugTimer = nil
         guard let live = halUnit else { return }
@@ -507,6 +527,40 @@ final class OutputRenderer: FadingOutput {
         AudioObjectRemovePropertyListenerBlock(listener.device, &address, DispatchQueue.main, listener.block)
     }
 
+    // MARK: - IO overloads (S229)
+
+    private static var overloadAddress: AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: kAudioDeviceProcessorOverload,
+                                   mScope: kAudioObjectPropertyScopeGlobal,
+                                   mElement: kAudioObjectPropertyElementMain)
+    }
+
+    private static let overloadQueue = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.overloads",
+                                                     qos: .utility)
+
+    /// Counts the IO cycles of `device` that ran past their deadline into
+    /// the running start's target, which the listener holds until `halt`.
+    private func installOverloadListener(_ device: AudioObjectID) {
+        guard let target else { return }
+        let block: AudioObjectPropertyListenerBlock = { _, _ in
+            _ = target.overloads.wrappingAdd(1, ordering: .relaxed)
+        }
+        var address = Self.overloadAddress
+        let status = AudioObjectAddPropertyListenerBlock(device, &address, Self.overloadQueue, block)
+        guard status == noErr else {
+            DebugTrace.log("[AudioSync] output device \(device): its IO overloads can't be counted (status \(status))")
+            return
+        }
+        overloadListener = (device, block)
+    }
+
+    private func uninstallOverloadListener() {
+        guard let listener = overloadListener else { return }
+        overloadListener = nil
+        var address = Self.overloadAddress
+        AudioObjectRemovePropertyListenerBlock(listener.device, &address, Self.overloadQueue, listener.block)
+    }
+
     // MARK: - Debug log
 
     /// While the debug log is on: one line for each second in which this
@@ -571,6 +625,39 @@ enum BluetoothIOBuffer {
     }
 }
 
+/// One output's observer values (S229) and the Bluetooth outputs playing, as
+/// the debug log shows them.
+struct OutputObservation {
+    /// nil until the core's warm-up has passed.
+    var leastSlackMs: Double?
+    var floorDropMs: Double
+    var shortageFrames: Int64
+    var overloads: Int64
+    var timeSteps: Int64
+    var bluetoothOutputs: Int
+
+    var text: String {
+        let slack = leastSlackMs.map { String(format: "%.1f ms", $0) } ?? "n/a"
+        return "least slack \(slack), floor drop \(String(format: "%.1f", floorDropMs)) ms, "
+            + "shortage \(shortageFrames) frames, IO overloads \(overloads), output-time steps \(timeSteps), "
+            + "Bluetooth outputs \(bluetoothOutputs)"
+    }
+}
+
+/// The Mac's Wi-Fi link as the debug log shows it once per session (S229):
+/// band, channel and signal strength, never the network's name or address.
+enum WiFiNote {
+    /// `band` is CoreWLAN's `CWChannelBand` raw value; a channel of 0 or a
+    /// band it doesn't name reads as unknown, and an RSSI of 0 as not given.
+    static func text(poweredOn: Bool, band: Int?, channel: Int?, rssi: Int?) -> String {
+        guard poweredOn else { return "Wi-Fi off" }
+        let bands = [1: "2.4 GHz", 2: "5 GHz", 3: "6 GHz"]
+        guard let channel, channel > 0, let name = band.flatMap({ bands[$0] }) else { return "Wi-Fi n/a" }
+        let signal = rssi.flatMap { $0 == 0 ? nil : "\($0) dBm" } ?? "n/a"
+        return "Wi-Fi \(name), channel \(channel), RSSI \(signal)"
+    }
+}
+
 /// What one start's render callback reads, fixed for that start. The unit's
 /// callback context: `OutputRenderer` keeps it until its next start, after
 /// that start's unit is gone, so the IO thread borrows it without a retain.
@@ -581,6 +668,8 @@ private final class RenderTarget {
     let channels: Int
     /// The timebase, read on the main thread.
     let clock = HostClock.shared
+    /// The device's IO overloads since this start (S229).
+    let overloads = Atomic<Int64>(0)
     /// For a time stamp without a host time: how far ahead of now the
     /// callback's buffer is output.
     let leadNs: UInt64

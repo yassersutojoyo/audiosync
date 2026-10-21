@@ -599,6 +599,28 @@ uint64_t asc_renderer_late_callbacks(const AscRenderer *renderer);
    handle. */
 uint64_t asc_renderer_shortfall_frames(const AscRenderer *renderer);
 
+/* Any thread: the capture frames by which the renderer's slow-down made up
+   shortages of its reader (S206), apart from the trims that follow the
+   capture's clock, in all; 0 for a NULL handle. */
+uint64_t asc_renderer_shortage_frames(const AscRenderer *renderer);
+
+/* Any thread: the observer's least slack, in ns of capture frames: W - P at
+   the start of a callback less what the callback needs, below 0 when a
+   callback found too few frames (S229). False, leaving *slack_ns alone, until
+   the output has played its warm-up and a callback was measured since, and
+   for a NULL handle. */
+bool asc_renderer_least_slack_ns(const AscRenderer *renderer, int64_t *slack_ns);
+
+/* Any thread: the observer's largest drop of the lateness floor below the
+   floor at the reader's latest anchor, in ns (S229); 0 without output times
+   or for a NULL handle. */
+uint64_t asc_renderer_floor_drop_ns(const AscRenderer *renderer);
+
+/* Any thread: the observer's steps in the device's output times, callbacks
+   whose output time lay more than 1 ms off the previous callback's plus its
+   frames (S229); 0 without output times or for a NULL handle. */
+uint64_t asc_renderer_time_steps(const AscRenderer *renderer);
+
 /* ---- Delay helpers ------------------------------------------------------- */
 
 /*

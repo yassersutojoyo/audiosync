@@ -1244,6 +1244,8 @@ impl<D: Driver> Controller<D> {
                     slowed_frames: playing.control.slowed_frames(),
                     sped_frames: playing.control.sped_frames(),
                     shortfall_frames: playing.control.shortfall_frames(),
+                    shortage_frames: playing.control.shortage_frames(),
+                    least_slack_ns: playing.control.least_slack_ns(),
                 })
                 .collect();
             let airplay = self.airplay.as_ref().and_then(AirPlaySpeakers::status);
@@ -2555,6 +2557,10 @@ struct OutputStatus {
     slowed_frames: u64,
     sped_frames: u64,
     shortfall_frames: u64,
+    /// The shortages its slow-down made up (S206) and its least slack, `None`
+    /// before the observer's warm-up (S229).
+    shortage_frames: u64,
+    least_slack_ns: Option<i64>,
 }
 
 /// A status line: what the session captures from `source` and how fast
@@ -2579,7 +2585,7 @@ fn describe_status(
             "\n  output {}: delay {} ms ({} frames), volume {} (gain {:.3}), lag {} frames; \
              primes {}, resyncs {}, starved reads {} ({} frames), drift skips {} ({} frames), \
              drift silences {} ({} frames), rejected copies {}, slowed {} frames, \
-             sped {} frames, shortfall {} frames",
+             sped {} frames, shortfall {} frames, shortage {} frames, least slack {}",
             output.label,
             output.hold_back_ms,
             output.delay_frames,
@@ -2598,6 +2604,10 @@ fn describe_status(
             output.slowed_frames,
             output.sped_frames,
             output.shortfall_frames,
+            output.shortage_frames,
+            output
+                .least_slack_ns
+                .map_or("n/a".to_owned(), |ns| format!("{:.1} ms", ns as f64 / 1e6)),
         ));
     }
     if outputs.is_empty() {
@@ -4536,7 +4546,8 @@ mod tests {
         // Nothing reads the mock's ring, so every reader counter is 0.
         let counters = "lag 0 frames; primes 0, resyncs 0, starved reads 0 (0 frames), \
                         drift skips 0 (0 frames), drift silences 0 (0 frames), rejected copies 0, \
-                        slowed 0 frames, sped 0 frames, shortfall 0 frames";
+                        slowed 0 frames, sped 0 frames, shortfall 0 frames, shortage 0 frames, \
+                        least slack n/a";
         let outputs = messages.iter().filter(|m| m.starts_with("  output "));
         assert!(outputs.clone().count() == 2 && outputs.clone().all(|m| m.ends_with(counters)));
         let _ = std::fs::remove_dir_all(dir);

@@ -326,6 +326,22 @@ final class CoreRenderer {
     /// Any thread: the device frames the converter couldn't produce and that
     /// played as silence, in all; 0 unless the core's read sizing is wrong.
     var shortfallFrames: Int64 { Int64(clamping: asc_renderer_shortfall_frames(handle)) }
+
+    /// Any thread: the capture frames by which the slow-down made up the
+    /// reader's shortages (S206), apart from the trims.
+    var shortageFrames: Int64 { Int64(clamping: asc_renderer_shortage_frames(handle)) }
+
+    /// Any thread: the observer's least slack in ms, below 0 when a callback
+    /// found too few frames; nil before its warm-up has passed (S229).
+    var leastSlackMs: Double? {
+        var slack: Int64 = 0
+        return asc_renderer_least_slack_ns(handle, &slack) ? Double(slack) / 1_000_000 : nil
+    }
+
+    /// Any thread: the observer's largest drop of the lateness floor below the
+    /// anchor's, in ms, and its steps in the device's output times (S229).
+    var floorDropMs: Double { Double(asc_renderer_floor_drop_ns(handle)) / 1_000_000 }
+    var timeSteps: Int64 { Int64(clamping: asc_renderer_time_steps(handle)) }
 }
 
 /// The core's volume curve: slider positions (0…100) and linear gain (S70, S71).

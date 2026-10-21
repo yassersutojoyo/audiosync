@@ -2813,6 +2813,31 @@ do {
           "BT IO buffer: an unknown or unusable range leaves the request as it is")
 }
 
+// MARK: Observer line — per output values and the Wi-Fi link in the debug log (OutputObservation, WiFiNote, S229)
+do {
+    let measured = OutputObservation(leastSlackMs: -0.666, floorDropMs: 10.04, shortageFrames: 912, overloads: 3,
+                                     timeSteps: 1, bluetoothOutputs: 2)
+    check(measured.text == "least slack -0.7 ms, floor drop 10.0 ms, shortage 912 frames, IO overloads 3, "
+              + "output-time steps 1, Bluetooth outputs 2",
+          "observer: the line names every value with its unit", measured.text)
+    let early = OutputObservation(leastSlackMs: nil, floorDropMs: 0, shortageFrames: 0, overloads: 0,
+                                  timeSteps: 0, bluetoothOutputs: 0)
+    check(early.text.hasPrefix("least slack n/a, floor drop 0.0 ms,"),
+          "observer: before the core's warm-up the least slack reads n/a", early.text)
+    check(WiFiNote.text(poweredOn: true, band: 2, channel: 36, rssi: -52) == "Wi-Fi 5 GHz, channel 36, RSSI -52 dBm"
+              && WiFiNote.text(poweredOn: true, band: 1, channel: 6, rssi: -70) == "Wi-Fi 2.4 GHz, channel 6, RSSI -70 dBm"
+              && WiFiNote.text(poweredOn: true, band: 3, channel: 37, rssi: nil) == "Wi-Fi 6 GHz, channel 37, RSSI n/a",
+          "observer: the Wi-Fi line gives band, channel and RSSI")
+    check(WiFiNote.text(poweredOn: true, band: 2, channel: 36, rssi: 0) == "Wi-Fi 5 GHz, channel 36, RSSI n/a",
+          "observer: an RSSI of 0 is one macOS didn't give")
+    check(WiFiNote.text(poweredOn: true, band: 0, channel: 36, rssi: -50) == "Wi-Fi n/a"
+              && WiFiNote.text(poweredOn: true, band: 2, channel: 0, rssi: -50) == "Wi-Fi n/a"
+              && WiFiNote.text(poweredOn: true, band: nil, channel: nil, rssi: nil) == "Wi-Fi n/a",
+          "observer: a band or channel macOS withholds reads n/a")
+    check(WiFiNote.text(poweredOn: false, band: 2, channel: 36, rssi: -50) == "Wi-Fi off",
+          "observer: Wi-Fi switched off says so")
+}
+
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
 
 /// A host clock that the checks move on by hand and that `finishAll`'s pauses

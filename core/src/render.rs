@@ -43,6 +43,13 @@
 //! callbacks as they stood when the reader anchored, so lateness that
 //! builds slower than their floor leaks up is never taken for drift.
 //!
+//! The observer (S229): once an output has played [`OBSERVE_AFTER_MS`],
+//! the renderer keeps the least slack its reader had at the start of a
+//! callback over what that callback needs, the largest drop of the lateness
+//! floor below the anchor's, and the steps in the device's output times,
+//! next to the shortages S206's slow-down made up. It only measures:
+//! nothing it keeps changes what plays.
+//!
 //! Exact differences (S208): each renderer publishes its start lead and
 //! hold-back in its ring's [`SessionLeads`], and gives its reader its
 //! hold-back plus the session lead, less its converter's latency, so every
@@ -171,6 +178,16 @@ pub const LATE_COUNT_MS: u64 = 5;
 /// delay (S187, S159) instead of inserting the increase as silence (S47).
 pub const RESTART_INCREASE_MS: u32 = 5000;
 
+/// How long an output plays its reader's frames before the observer takes
+/// its values (S229): the span over which the trim measures its reference
+/// (S207), long after the lateness floor has formed (S209).
+pub const OBSERVE_AFTER_MS: u32 = TRACK_MS;
+
+/// How far a callback's output time may lie from the previous callback's
+/// plus that one's frames at the device's rate before the observer counts
+/// a step in the device's output times (S229), in ns.
+pub const OUTPUT_TIME_STEP_NS: u64 = 1_000_000;
+
 /// Where a renderer that follows the capture's clock stands (S207).
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tracking {
@@ -284,6 +301,14 @@ struct Shared {
     late_max_ns: AtomicU64,
     /// Callbacks later than [`LATE_COUNT_MS`] (S209).
     late_callbacks: AtomicU64,
+    /// The observer's least slack, in ns; `i64::MAX` before its first
+    /// value (S229).
+    least_slack_ns: AtomicI64,
+    /// The observer's largest drop of the lateness floor below the
+    /// anchor's, in ns (S229).
+    floor_drop_ns: AtomicU64,
+    /// The observer's steps in the device's output times (S229).
+    time_steps: AtomicU64,
     /// The ring whose session lead counts this renderer, and its slot
     /// there, `None` when every slot was taken (S208).
     ring: Arc<Ring>,
@@ -352,6 +377,9 @@ impl RendererControl {
                 sped_frames: AtomicU64::new(0),
                 late_max_ns: AtomicU64::new(0),
                 late_callbacks: AtomicU64::new(0),
+                least_slack_ns: AtomicI64::new(i64::MAX),
+                floor_drop_ns: AtomicU64::new(0),
+                time_steps: AtomicU64::new(0),
                 ring,
                 slot,
             }),
@@ -477,6 +505,29 @@ impl RendererControl {
     pub fn shortfall_frames(&self) -> u64 {
         self.shared.shortfall_frames.load(Ordering::Relaxed)
     }
+
+    /// The least slack the reader had at the start of a callback, in ns of
+    /// capture frames: `W - P` less what the callback needs, below 0 when a
+    /// callback found too few frames (S229). `None` until the output has
+    /// played [`OBSERVE_AFTER_MS`] and a callback was measured since.
+    pub fn least_slack_ns(&self) -> Option<i64> {
+        let slack = self.shared.least_slack_ns.load(Ordering::Relaxed);
+        (slack != i64::MAX).then_some(slack)
+    }
+
+    /// The most the lateness floor fell below the floor at the reader's
+    /// latest anchor, after the observer's warm-up, in ns (S229); 0 without
+    /// output times.
+    pub fn floor_drop_ns(&self) -> u64 {
+        self.shared.floor_drop_ns.load(Ordering::Relaxed)
+    }
+
+    /// The callbacks whose output time stepped off the previous callback's
+    /// by more than [`OUTPUT_TIME_STEP_NS`], after the observer's warm-up
+    /// (S229); 0 without output times.
+    pub fn time_steps(&self) -> u64 {
+        self.shared.time_steps.load(Ordering::Relaxed)
+    }
 }
 
 /// The stop's fade-out, as the renderer sees it.
@@ -562,6 +613,15 @@ pub struct Renderer {
     /// The lowest and second lowest `now - output time` seen, in ns, with
     /// their leak (S209).
     earliest: Option<[i64; 2]>,
+    /// [`OBSERVE_AFTER_MS`] in device frames, and the device frames played
+    /// so far, counted until they reach it (S229).
+    observe_after: u64,
+    played: u64,
+    /// The latest callback's output time and frames (S229).
+    previous_output: Option<(u64, usize)>,
+    /// What the observer published last (S229).
+    least_slack_ns: i64,
+    floor_drop_ns: u64,
 }
 
 impl fmt::Debug for Renderer {
@@ -631,6 +691,11 @@ impl Renderer {
             tracking: RESTART,
             track_frames: f64::from(device_rate) * f64::from(TRACK_MS) / 1000.0,
             earliest: None,
+            observe_after: u64::from(device_rate) * u64::from(OBSERVE_AFTER_MS) / 1000,
+            played: 0,
+            previous_output: None,
+            least_slack_ns: i64::MAX,
+            floor_drop_ns: 0,
         })
     }
 
@@ -787,6 +852,8 @@ impl Renderer {
         }
         self.take_requests();
         self.follow_session_lead();
+        // Before the trim, so a shortage shows as the slack it was.
+        self.observe(frames, time, shift_ns);
         self.keep_reader_off_w(frames, now);
         let ramp = self.stage.begin(self.gain.get(), frames);
         let read_capacity = self.stereo.len() / 2;
@@ -1041,6 +1108,52 @@ impl Renderer {
         };
         let anchor = *self.anchor_floor.get_or_insert(floor);
         floor.saturating_sub(anchor)
+    }
+
+    /// The observer at the start of a callback of `frames` device frames
+    /// output at `time`, whose lateness floor lies `shift_ns` off the
+    /// anchor's (S229). Once the output has played [`OBSERVE_AFTER_MS`], it
+    /// counts a step in the output times, keeps the floor's largest drop
+    /// below the anchor's and, while the output plays and no stop is under
+    /// way, the reader's least slack over the callback's need. It publishes
+    /// only a new extreme.
+    fn observe(&mut self, frames: usize, time: Option<u64>, shift_ns: i64) {
+        let previous = match time {
+            Some(time) => self.previous_output.replace((time, frames)),
+            None => self.previous_output.take(),
+        };
+        if self.played < self.observe_after {
+            if !self.fade.is_closed() {
+                self.played += frames as u64;
+            }
+            return;
+        }
+        let shared = &*self.shared;
+        if let (Some(time), Some((last, last_frames))) = (time, previous) {
+            let span = (last_frames as u64).saturating_mul(1_000_000_000)
+                / u64::from(self.device_rate.max(1));
+            if time.abs_diff(last.saturating_add(span)) > OUTPUT_TIME_STEP_NS {
+                shared.time_steps.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let drop = u64::try_from(shift_ns.saturating_neg()).unwrap_or(0);
+        if drop > self.floor_drop_ns {
+            self.floor_drop_ns = drop;
+            shared.floor_drop_ns.store(drop, Ordering::Relaxed);
+        }
+        if self.stop != Stop::None || self.fade.is_closed() {
+            return;
+        }
+        let need = self.resampler.input_frames_for(frames);
+        let Some(next) = self.reader.next_read(need, true) else {
+            return;
+        };
+        let slack = next.readable.saturating_sub(need as i64);
+        let slack_ns = slack.saturating_mul(1_000_000_000) / i64::from(self.capture_rate.max(1));
+        if slack_ns < self.least_slack_ns {
+            self.least_slack_ns = slack_ns;
+            shared.least_slack_ns.store(slack_ns, Ordering::Relaxed);
+        }
     }
 
     /// Takes the control's requests at the start of a callback (S190).
