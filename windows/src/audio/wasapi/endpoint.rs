@@ -3,13 +3,14 @@
 //! its own, in the multithreaded apartment and registered with MMCSS.
 //!
 //! A stop fades the output out over 20 ms (S185) and keeps the stream
-//! running, rendering zeros, until the endpoint has played the fade: it holds
-//! nothing but zeros and its stream latency has passed since. Only then does
-//! the thread stop the stream and mark the output faded, so the end of the
-//! fade is never cut; it stops anyway after [`STOP_FADE_CAP`] of audio, or
-//! at once when the output is dropped (S186). The drop waits for the thread
-//! as a [`Worker`] does: stopping the stream can hang while Windows audio
-//! doesn't answer.
+//! running, rendering zeros, until the endpoint has played the fade: its
+//! clock has passed the fade's last frame (or, without a clock, it holds
+//! nothing but zeros and its stream latency has passed since; Windows often
+//! reports that latency as 0). Only then does the thread stop the stream and
+//! mark the output faded, so the end of the fade is never cut; it stops
+//! anyway after [`STOP_FADE_CAP`] of audio, or at once when the output is
+//! dropped (S186). The drop waits for the thread as a [`Worker`] does:
+//! stopping the stream can hang while Windows audio doesn't answer.
 
 use std::slice;
 use std::sync::Arc;
@@ -22,7 +23,8 @@ use windows::Win32::Foundation::{WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
     AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_NOPERSIST,
-    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, IAudioClient, IAudioRenderClient, WAVEFORMATEX,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, IAudioClient, IAudioClock, IAudioRenderClient,
+    WAVEFORMATEX,
 };
 use windows::Win32::System::Com::CLSCTX_ALL;
 use windows::Win32::System::Threading::{WaitForMultipleObjects, WaitForSingleObject};
@@ -38,7 +40,7 @@ use crate::audio::controller::RendererHandle;
 use crate::audio::outputs::{
     RenderFormat, StreamSetup, period_frames, render_buffer_hns, render_format,
 };
-use crate::audio::render::RenderPipeline;
+use crate::audio::render::{EndpointQueue, RenderPipeline};
 
 /// The flags of every render stream: event-driven, and without volume
 /// settings that Windows would remember for AudioSync's session.
@@ -207,6 +209,8 @@ struct RenderStream {
     buffer_frames: u32,
     /// The stream latency Windows reports, in device frames.
     latency_frames: u32,
+    /// The stream's clock and its frequency, unless Windows gave none.
+    clock: Option<(IAudioClock, u64)>,
     /// The device's default period, in device frames: what each wake
     /// refills when it is on time.
     period_frames: usize,
@@ -268,6 +272,13 @@ fn open_stream(id: &str) -> Result<RenderStream, BackendError> {
         let buffer_frames = client
             .GetBufferSize()
             .map_err(|error| device_error("IAudioClient::GetBufferSize", &error))?;
+        let clock = client.GetService::<IAudioClock>().ok().and_then(|clock| {
+            let frequency = clock
+                .GetFrequency()
+                .ok()
+                .filter(|&frequency| frequency > 0)?;
+            Some((clock, frequency))
+        });
         // In 100 ns units; a stream that can't tell counts as having none.
         let latency = client.GetStreamLatency().unwrap_or(0).max(0) as u64;
         let latency_frames =
@@ -279,6 +290,7 @@ fn open_stream(id: &str) -> Result<RenderStream, BackendError> {
             format,
             buffer_frames,
             latency_frames,
+            clock,
             period_frames: period_frames(default_period, format.rate),
         })
     }
@@ -322,6 +334,8 @@ fn render_loop(stream: &RenderStream, pipeline: &mut RenderPipeline, signals: &S
     let cap_frames = (u128::from(stream.format.rate) * STOP_FADE_CAP.as_millis() / 1000) as u32;
     // Frames written since the stop request.
     let mut stopping: Option<u32> = None;
+    // Frames written since the start, the silent prefill included.
+    let mut written_total = u64::from(stream.buffer_frames);
     loop {
         let wait = match stopping {
             // SAFETY: both handles live as long as this loop.
@@ -353,7 +367,14 @@ fn render_loop(stream: &RenderStream, pipeline: &mut RenderPipeline, signals: &S
         let Ok(padding) = (unsafe { stream.client.GetCurrentPadding() }) else {
             return true;
         };
-        if stopping.is_some() && pipeline.has_played_its_fade(padding, stream.latency_frames) {
+        if stopping.is_some()
+            && pipeline.has_played_its_fade(EndpointQueue {
+                padding,
+                clock_queued: clock_queued(stream, written_total),
+                latency_frames: stream.latency_frames,
+                rate: stream.format.rate,
+            })
+        {
             pipeline.mark_faded();
             return false;
         }
@@ -379,6 +400,7 @@ fn render_loop(stream: &RenderStream, pipeline: &mut RenderPipeline, signals: &S
             if unsafe { stream.render.ReleaseBuffer(available, flags) }.is_err() {
                 return true;
             }
+            written_total += u64::from(available);
         }
         if let Some(written) = stopping.as_mut() {
             *written = written.saturating_add(available);
@@ -387,6 +409,17 @@ fn render_loop(stream: &RenderStream, pipeline: &mut RenderPipeline, signals: &S
             }
         }
     }
+}
+
+/// The frames of `written` the stream's clock says the endpoint hasn't
+/// played yet, or `None` without a clock reading. Real-time: no allocation.
+fn clock_queued(stream: &RenderStream, written: u64) -> Option<u64> {
+    let (clock, frequency) = stream.clock.as_ref()?;
+    let mut position = 0u64;
+    // SAFETY: a call on the clock of the stream this thread owns.
+    unsafe { clock.GetPosition(&raw mut position, None) }.ok()?;
+    let played = u128::from(position) * u128::from(stream.format.rate) / u128::from(*frequency);
+    Some(written.saturating_sub(u64::try_from(played).unwrap_or(u64::MAX)))
 }
 
 #[cfg(test)]
