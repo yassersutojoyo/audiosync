@@ -424,7 +424,7 @@ final class OutputRenderer: FadingOutput {
         guard let frames = BluetoothIOBuffer.frames(requested: BluetoothIOBuffer.requested(raw),
                                                     transport: transport, range: range) else {
             DebugTrace.log("[AudioSync] BT IO buffer: \(BluetoothIOBuffer.environmentKey)=\(raw) ignored "
-                + "(not a whole number from 2048 to 4096); device \(device) \"\(name)\" left at "
+                + "(not a whole number from 256 to 4096); device \(device) \"\(name)\" left at "
                 + "\(before.map(String.init(describing:)) ?? "?") frames")
             return
         }
@@ -593,12 +593,12 @@ final class OutputRenderer: FadingOutput {
     }
 }
 
-/// The developer-only `AUDIOSYNC_BT_IO_FRAMES` switch: a larger IO buffer
-/// for Bluetooth outputs, to tell at a sitting whether the buffer size plays
-/// a part when two or more of them chop. Unset, nothing changes.
+/// The developer-only `AUDIOSYNC_BT_IO_FRAMES` switch: another IO buffer size
+/// for Bluetooth outputs, smaller or larger, to tell at a sitting whether the
+/// buffer size plays a part when two or more of them chop. Unset, nothing changes.
 enum BluetoothIOBuffer {
     static let environmentKey = "AUDIOSYNC_BT_IO_FRAMES"
-    static let allowed: ClosedRange<UInt32> = 2048...4096
+    static let allowed: ClosedRange<UInt32> = 256...4096
 
     static func isBluetooth(transport: UInt32) -> Bool {
         transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
