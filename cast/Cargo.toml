@@ -9,6 +9,9 @@ repository = "https://github.com/yassersutojoyo/audiosync"
 publish = false
 
 [dependencies]
+# The FLAC encoder of the fallback format (C63, C84). Without default
+# features: no worker threads, no logging and no serde.
+flacenc = { version = "0.5.1", default-features = false }
 # Random request id starts (C29).
 getrandom = "0.4.3"
 # Live mDNS browsing of _googlecast._tcp (C10). Without default features: no
@@ -27,6 +30,8 @@ serde_json = { version = "1.0.140", default-features = false, features = ["std"]
 sha2 = { version = "0.11.0", default-features = false }
 
 [dev-dependencies]
+# Decodes the FLAC stream in the tests to check it against the input.
+claxon = "0.4.3"
 # The fake receiver's TLS server and its self-signed certificate, made in
 # each test. Test-only: the sender itself speaks TLS through native-tls.
 rcgen = { version = "0.14.5", default-features = false, features = ["crypto", "ring"] }

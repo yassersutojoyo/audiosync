@@ -14,7 +14,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::audio::{AudioReader, FRAME_BYTES, StreamFormat};
+use crate::audio::{AudioReader, Codec, FRAME_BYTES, StreamFormat};
 
 /// The queue in front of a reader that doesn't keep up (C64).
 pub const QUEUE_LIMIT: Duration = Duration::from_secs(2);
@@ -31,6 +31,11 @@ const ACCEPT_POLL: Duration = Duration::from_millis(20);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// Connections served at once: the stream, its replacement (C61), artwork.
 const MAX_CONNECTIONS: usize = 4;
+/// How long a refused connection is kept open to read the rest of its
+/// request, so the close is not a reset that would lose the answer.
+const REFUSED_LINGER: Duration = Duration::from_secs(1);
+/// Refused connections kept lingering at once; the oldest is closed first.
+const MAX_REFUSED: usize = 16;
 /// How long a stop waits for the connection threads (C87).
 const STOP_GRACE: Duration = Duration::from_millis(500);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -79,7 +84,8 @@ pub enum ServerEvent {
         head: bool,
         range: bool,
     },
-    /// A request answered with an error status (C57, C58).
+    /// A request answered with an error status: 403 (C58), 404 (C57), 405,
+    /// or 503 when four connections are open already.
     Refused { from: IpAddr, status: u16 },
     /// A stream response ended.
     ResponseEnded(ResponseEnd),
@@ -97,6 +103,8 @@ pub enum ResponseEnd {
     Replaced,
     /// The server stopped.
     Stopped,
+    /// The encoder failed; the device may fetch again.
+    EncodeFailed,
 }
 
 /// Counters the session reads for its diagnostics (C78, C79, C85).
@@ -186,9 +194,17 @@ struct Live {
     queue: BlockQueue,
 }
 
-struct Shared {
+/// The stream's format and the path it is served under; the codec can
+/// change once, for the fallback of C84.
+struct Route {
     format: StreamFormat,
-    stream_path: String,
+    path: String,
+}
+
+struct Shared {
+    /// The pump's rate and block size, the same in every codec.
+    pump_format: StreamFormat,
+    route: Mutex<Route>,
     allowed: Vec<IpAddr>,
     artwork: Mutex<Option<Artwork>>,
     live: Mutex<Live>,
@@ -271,8 +287,11 @@ impl StreamServer {
         let format = config.format;
         let limit_frames = format.rate() as usize * QUEUE_LIMIT.as_millis() as usize / 1000;
         let shared = Arc::new(Shared {
-            format,
-            stream_path: format!("/{token}.{}", format.extension()),
+            pump_format: format,
+            route: Mutex::new(Route {
+                format,
+                path: format!("/{token}.{}", format.extension()),
+            }),
             allowed: config.allowed,
             artwork: Mutex::new(None),
             live: Mutex::new(Live {
@@ -327,12 +346,25 @@ impl StreamServer {
         format!(
             "http://{}{}",
             authority(self.address),
-            self.shared.stream_path
+            lock(&self.shared.route).path
         )
     }
 
     pub fn format(&self) -> StreamFormat {
-        self.shared.format
+        lock(&self.shared.route).format
+    }
+
+    /// Serves the stream in `codec` from now on, under the same token with
+    /// that codec's extension, and returns the new URL (C84). The old URL
+    /// gets 404; a response already open runs on until a new `GET`
+    /// replaces it (C61).
+    pub fn set_codec(&self, codec: Codec) -> String {
+        {
+            let mut route = lock(&self.shared.route);
+            route.format = route.format.with_codec(codec);
+            route.path = format!("/{}.{}", self.token, codec.name());
+        }
+        self.url()
     }
 
     /// Serves `bytes` as the track artwork under a new random path and
@@ -420,7 +452,9 @@ impl Drop for StreamServer {
 }
 
 fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
+    let mut refused: VecDeque<(TcpStream, Instant)> = VecDeque::new();
     while !shared.stopped.load(Ordering::SeqCst) {
+        drain_refused(&mut refused);
         match listener.accept() {
             Ok((stream, peer)) => {
                 // Accepted sockets inherit the listener's non-blocking mode
@@ -431,12 +465,18 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
                         from: peer.ip(),
                         status: 403,
                     });
-                    refuse(stream);
+                    linger(&mut refused, refuse(stream, "403 Forbidden"));
                     continue;
                 }
                 let mut connections = lock(&shared.connections);
                 connections.retain(|(_, thread)| !thread.is_finished());
                 if connections.len() >= MAX_CONNECTIONS {
+                    drop(connections);
+                    shared.report(ServerEvent::Refused {
+                        from: peer.ip(),
+                        status: 503,
+                    });
+                    linger(&mut refused, refuse(stream, "503 Service Unavailable"));
                     continue;
                 }
                 drop(connections);
@@ -479,20 +519,49 @@ struct Request {
     range: bool,
 }
 
-/// 403 from the accept thread, without a thread of its own: what already
-/// arrived is read so the close is not a reset, and nothing is waited for.
-fn refuse(mut stream: TcpStream) {
-    if stream.set_nonblocking(true).is_ok() {
-        let mut buffer = [0u8; 1024];
+/// An error status from the accept thread, without a thread of its own.
+/// The connection stays open for [`REFUSED_LINGER`] while the accept loop
+/// reads what the client still sends: closing with unread data would reset
+/// the connection, and a reset can discard the answer before the client
+/// reads it.
+fn refuse(mut stream: TcpStream, status: &str) -> Option<TcpStream> {
+    stream.set_nonblocking(true).ok()?;
+    let response = format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    let _ = stream.write(response.as_bytes());
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    Some(stream)
+}
+
+fn linger(refused: &mut VecDeque<(TcpStream, Instant)>, stream: Option<TcpStream>) {
+    let Some(stream) = stream else {
+        return;
+    };
+    if refused.len() >= MAX_REFUSED {
+        refused.pop_front();
+    }
+    refused.push_back((stream, Instant::now() + REFUSED_LINGER));
+}
+
+/// Reads and discards what refused clients sent; closes each once the
+/// client closed its side or its time is up.
+fn drain_refused(refused: &mut VecDeque<(TcpStream, Instant)>) {
+    let now = Instant::now();
+    let mut buffer = [0u8; 1024];
+    refused.retain_mut(|(stream, until)| {
+        if now >= *until {
+            return false;
+        }
         for _ in 0..8 {
-            if !matches!(stream.read(&mut buffer), Ok(count) if count > 0) {
-                break;
+            match stream.read(&mut buffer) {
+                Ok(0) => return false,
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return true,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => return false,
             }
         }
-    }
-    let _ =
-        stream.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-    let _ = stream.shutdown(std::net::Shutdown::Write);
+        true
+    });
 }
 
 fn read_request(stream: &mut TcpStream) -> Option<Request> {
@@ -564,13 +633,17 @@ fn serve(mut stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>) {
     if shared.stopped.load(Ordering::SeqCst) {
         return simple_response(&mut stream, "404 Not Found", "");
     }
-    if request.path == shared.stream_path {
+    let stream_format = {
+        let route = lock(&shared.route);
+        (request.path == route.path).then_some(route.format)
+    };
+    if let Some(format) = stream_format {
         shared.report(ServerEvent::Fetch {
             from,
             head,
             range: request.range,
         });
-        return serve_stream(stream, head, &shared);
+        return serve_stream(stream, head, format, &shared);
     }
     let artwork = lock(&shared.artwork)
         .as_ref()
@@ -604,10 +677,10 @@ fn write_chunk(stream: &mut TcpStream, data: &[u8]) -> io::Result<()> {
     stream.write_all(b"\r\n")
 }
 
-fn serve_stream(mut stream: TcpStream, head: bool, shared: &Shared) {
+fn serve_stream(mut stream: TcpStream, head: bool, format: StreamFormat, shared: &Shared) {
     let headers = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
-        shared.format.content_type()
+        format.content_type()
     );
     if stream.write_all(headers.as_bytes()).is_err() || head {
         let _ = stream.flush();
@@ -623,7 +696,7 @@ fn serve_stream(mut stream: TcpStream, head: bool, shared: &Shared) {
         live.generation
     };
     shared.wake.notify_all();
-    let end = stream_body(&mut stream, mine, shared);
+    let end = stream_body(&mut stream, mine, format, shared);
     {
         let mut live = lock(&shared.live);
         if live.generation == mine {
@@ -638,8 +711,16 @@ fn serve_stream(mut stream: TcpStream, head: bool, shared: &Shared) {
     shared.report(ServerEvent::ResponseEnded(end));
 }
 
-fn stream_body(stream: &mut TcpStream, mine: u64, shared: &Shared) -> ResponseEnd {
-    if write_chunk(stream, &shared.format.stream_header()).is_err() {
+fn stream_body(
+    stream: &mut TcpStream,
+    mine: u64,
+    format: StreamFormat,
+    shared: &Shared,
+) -> ResponseEnd {
+    let Ok(mut encoder) = format.encoder() else {
+        return ResponseEnd::EncodeFailed;
+    };
+    if write_chunk(stream, &format.stream_header()).is_err() {
         return ResponseEnd::ClosedByDevice;
     }
     loop {
@@ -662,15 +743,17 @@ fn stream_body(stream: &mut TcpStream, mine: u64, shared: &Shared) -> ResponseEn
                     .0;
             }
         };
-        if write_chunk(stream, &block)
+        let frames = (block.len() / FRAME_BYTES) as u64;
+        let Ok(bytes) = encoder.encode(block) else {
+            return ResponseEnd::EncodeFailed;
+        };
+        if write_chunk(stream, &bytes)
             .and_then(|()| stream.flush())
             .is_err()
         {
             return ResponseEnd::ClosedByDevice;
         }
-        shared
-            .frames_sent
-            .fetch_add((block.len() / FRAME_BYTES) as u64, Ordering::Relaxed);
+        shared.frames_sent.fetch_add(frames, Ordering::Relaxed);
     }
 }
 
@@ -678,7 +761,7 @@ fn stream_body(stream: &mut TcpStream, mine: u64, shared: &Shared) -> ResponseEn
 /// (C64). Without a response the ring is drained, so a new response starts
 /// at the newest audio (C61).
 fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
-    let format = shared.format;
+    let format = shared.pump_format;
     let block_frames = format.block_frames();
     let backlog_frames = format.rate() as usize * RING_BACKLOG.as_millis() as usize / 1000;
     let underrun_blocks = (UNDERRUN.as_millis() / BLOCK.as_millis()) as u64;

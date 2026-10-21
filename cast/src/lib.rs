@@ -21,10 +21,13 @@
 //! - [`error`]: the typed errors and the connect backoff.
 //! - [`media`]: the `LOAD` payload, `MEDIA_STATUS` and the media and
 //!   volume errors.
-//! - [`audio`], [`stream`]: the host's audio ring and the HTTP server the
-//!   device fetches the live WAV stream from.
-//! - [`session`]: one Cast session end to end, with recovery, Resync,
-//!   volume, diagnostics and teardown.
+//! - [`audio`], [`stream`]: the host's audio ring, the WAV and FLAC
+//!   formats, and the HTTP server the device fetches the live stream from.
+//! - [`session`]: one Cast session end to end, with the FLAC fallback,
+//!   recovery, Resync, volume, diagnostics and teardown.
+//! - [`host`]: what the host apps call. A worker thread owns the session
+//!   and makes every network call; the host sends commands and polls
+//!   events, so its UI thread never waits on the network.
 
 pub mod audio;
 pub mod channel;
@@ -32,6 +35,7 @@ pub mod client;
 pub mod discovery;
 pub mod error;
 pub mod framing;
+pub mod host;
 pub mod ids;
 pub mod media;
 pub mod message;

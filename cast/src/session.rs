@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::audio::{AudioReader, StreamFormat};
+use crate::audio::{AudioReader, Codec, StreamFormat};
 use crate::channel::{Event, PlaybackEnd};
 use crate::client::{CastClient, QUIT_BUDGET};
 use crate::error::{Backoff, ConnectError, EndReason, LaunchError};
@@ -142,6 +142,13 @@ pub enum SessionEvent {
     /// The device saw the stream end while the sender kept it open, and the
     /// sender loaded it again once (C86).
     Reloaded,
+    /// The device refused WAV before it played, and the sender loads FLAC
+    /// once instead (C84).
+    FormatFallback {
+        from: Codec,
+        to: Codec,
+        reason: MediaError,
+    },
     /// From the stream server, for the log.
     Stream(ServerEvent),
     Ended(SessionEnd),
@@ -152,8 +159,21 @@ pub enum SessionEvent {
 pub struct SessionConfig {
     /// The device's addresses and port (C15, C16).
     pub addresses: Vec<SocketAddr>,
+    /// The format to try first: WAV, or the one that last worked on this
+    /// device (C84).
     pub format: StreamFormat,
     pub metadata: Metadata,
+}
+
+/// Whether a failed first `LOAD` in `codec` is retried in FLAC (C84):
+/// `LOAD_FAILED`, or `IDLE` with `ERROR` before the first `PLAYING`, with
+/// WAV.
+pub fn falls_back_to_flac(codec: Codec, error: &MediaError) -> bool {
+    codec == Codec::Wav
+        && matches!(
+            error,
+            MediaError::LoadFailed { .. } | MediaError::Idle(IdleReason::Error)
+        )
 }
 
 /// Connects, retrying while `selected` stays true: after 1 s, then doubling
@@ -291,11 +311,16 @@ impl CastSession {
             error_recovered: false,
             finished_reloaded: false,
         };
-        if let Err(error) = session.load_until_playing() {
+        if let Err(error) = session.load_with_fallback() {
             session.teardown(STOP_BUDGET);
             return Err(error.into());
         }
         Ok(session)
+    }
+
+    /// The format the device plays, after any fallback (C84).
+    pub fn format(&self) -> StreamFormat {
+        self.server.format()
     }
 
     /// The flag the host clears when the user deselects the device; retries
@@ -477,6 +502,26 @@ impl CastSession {
         }
     }
 
+    /// The first `LOAD`, and the one retry in FLAC that C84 allows.
+    fn load_with_fallback(&mut self) -> Result<(), MediaError> {
+        let error = match self.load_until_playing() {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        let from = self.server.format().codec();
+        if !falls_back_to_flac(from, &error) {
+            return Err(error);
+        }
+        self.load.url = self.server.set_codec(Codec::Flac);
+        self.load.content_type = self.server.format().content_type().to_owned();
+        self.report(SessionEvent::FormatFallback {
+            from,
+            to: Codec::Flac,
+            reason: error,
+        });
+        self.load_until_playing()
+    }
+
     /// Sends `LOAD` and waits for `PLAYING` (C49), for the device's fetch
     /// (C85) and for failures (C83); resets the drift counters (C79).
     fn load_until_playing(&mut self) -> Result<(), MediaError> {
@@ -505,6 +550,9 @@ impl CastSession {
             }
             if self.server.stats().fetches == fetches && replied.elapsed() >= FETCH_TIMEOUT {
                 return Err(MediaError::NoFetch);
+            }
+            if !self.selected.load(Ordering::SeqCst) {
+                return Err(MediaError::Ended(EndReason::Stopped));
             }
         }
     }
@@ -623,6 +671,7 @@ impl CastSession {
         };
         match result {
             Ok(relaunched) => self.report(SessionEvent::Recovered { relaunched }),
+            Err(_) if !self.selected.load(Ordering::SeqCst) => self.end(SessionEnd::Deselected),
             Err(error) => self.end(SessionEnd::Failed(error)),
         }
     }

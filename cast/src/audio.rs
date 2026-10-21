@@ -1,23 +1,54 @@
-//! The host's audio handoff (C8) and the stream formats (C62, C63).
+//! The host's audio handoff (C8), the stream formats (C62, C63) and their
+//! encoders.
 //!
 //! The host writes stereo frames into a preallocated single-producer,
 //! single-consumer ring; the stream server's pump thread reads them. The
 //! write never allocates, locks, blocks or logs.
 
+use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::time::Duration;
+
+use flacenc::bitsink::ByteSink;
+use flacenc::component::{BitRepr, StreamInfo};
+use flacenc::config;
+use flacenc::error::{Verified, Verify};
+use flacenc::source::{Fill, FrameBuf};
 
 /// Channels of every stream (C63).
 pub const CHANNELS: usize = 2;
 /// Bytes of one 16-bit stereo frame.
 pub const FRAME_BYTES: usize = 4;
 
-/// The container and codec of one session's stream (C63). FLAC, the
-/// fallback of C84, comes with its encoder in a later stage.
+/// Bits per sample of every stream (C63).
+pub const BITS_PER_SAMPLE: u32 = 16;
+
+/// The container and codec of one session's stream (C63).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Codec {
     /// 16-bit LPCM in WAV, the first choice.
     Wav,
+    /// FLAC in its native stream format, the fallback (C84).
+    Flac,
+}
+
+impl Codec {
+    /// The name the host stores per device (C84), also the file extension.
+    pub fn name(self) -> &'static str {
+        match self {
+            Codec::Wav => "wav",
+            Codec::Flac => "flac",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Codec> {
+        match name {
+            "wav" => Some(Codec::Wav),
+            "flac" => Some(Codec::Flac),
+            _ => None,
+        }
+    }
 }
 
 /// A stream's codec and sample rate (C63).
@@ -38,6 +69,15 @@ impl StreamFormat {
         StreamFormat::new(Codec::Wav, rate)
     }
 
+    pub fn flac(rate: u32) -> Option<StreamFormat> {
+        StreamFormat::new(Codec::Flac, rate)
+    }
+
+    /// The same rate in another codec.
+    pub fn with_codec(self, codec: Codec) -> StreamFormat {
+        StreamFormat { codec, ..self }
+    }
+
     pub fn codec(self) -> Codec {
         self.codec
     }
@@ -50,14 +90,13 @@ impl StreamFormat {
     pub fn content_type(self) -> &'static str {
         match self.codec {
             Codec::Wav => "audio/wav",
+            Codec::Flac => "audio/flac",
         }
     }
 
     /// The file extension of the stream path.
     pub fn extension(self) -> &'static str {
-        match self.codec {
-            Codec::Wav => "wav",
-        }
+        self.codec.name()
     }
 
     /// Frames in one 20 ms block (C64).
@@ -65,13 +104,139 @@ impl StreamFormat {
         self.rate as usize / 50
     }
 
+    /// What the encoder adds to the latency (C72). None for WAV, and none
+    /// for FLAC either: each 20 ms block the pump hands over becomes one
+    /// whole FLAC frame and is sent at once.
+    pub fn encoder_delay(self) -> Duration {
+        Duration::ZERO
+    }
+
     /// The header every response starts with (C61, C63). For WAV the RIFF
-    /// and data sizes are unknown and hold their largest value.
+    /// and data sizes are unknown and hold their largest value; for FLAC
+    /// the STREAMINFO total sample count is 0 (unknown).
     pub fn stream_header(self) -> Vec<u8> {
         match self.codec {
             Codec::Wav => wav_header(self.rate),
+            Codec::Flac => flac_header(self.rate, self.block_frames() as u16),
         }
     }
+
+    /// A fresh encoder for one response (C61).
+    pub fn encoder(self) -> Result<BlockEncoder, EncodeError> {
+        let flac = match self.codec {
+            Codec::Wav => None,
+            Codec::Flac => Some(FlacEncoder::new(self)?),
+        };
+        Ok(BlockEncoder { flac })
+    }
+}
+
+/// Why a block could not be encoded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EncodeError(pub String);
+
+impl fmt::Display for EncodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "could not encode the stream: {}", self.0)
+    }
+}
+
+impl std::error::Error for EncodeError {}
+
+fn encode_error(what: impl fmt::Debug) -> EncodeError {
+    EncodeError(format!("{what:?}"))
+}
+
+/// Turns the pump's 20 ms blocks of little-endian 16-bit stereo into the
+/// bytes of one response's body.
+pub struct BlockEncoder {
+    flac: Option<FlacEncoder>,
+}
+
+impl BlockEncoder {
+    /// The bytes for one block; WAV passes it through.
+    pub fn encode(&mut self, block: Vec<u8>) -> Result<Vec<u8>, EncodeError> {
+        match &mut self.flac {
+            None => Ok(block),
+            Some(flac) => flac.encode(&block),
+        }
+    }
+}
+
+/// Frame numbers of a fixed-block-size stream are 31-bit (RFC 9639 §9.1.5).
+const FLAC_FRAME_NUMBERS: usize = 1 << 31;
+
+/// FLAC frames of a fixed block size, one per pump block, numbered from 0
+/// in each response.
+struct FlacEncoder {
+    config: Verified<config::Encoder>,
+    info: StreamInfo,
+    buffer: FrameBuf,
+    block_frames: usize,
+    frame_number: usize,
+}
+
+impl FlacEncoder {
+    fn new(format: StreamFormat) -> Result<FlacEncoder, EncodeError> {
+        let block_frames = format.block_frames();
+        let config = config::Encoder::default()
+            .into_verified()
+            .map_err(|(_, error)| encode_error(error))?;
+        let info = StreamInfo::new(format.rate as usize, CHANNELS, BITS_PER_SAMPLE as usize)
+            .map_err(encode_error)?;
+        let buffer = FrameBuf::with_size(CHANNELS, block_frames).map_err(encode_error)?;
+        Ok(FlacEncoder {
+            config,
+            info,
+            buffer,
+            block_frames,
+            frame_number: 0,
+        })
+    }
+
+    fn encode(&mut self, block: &[u8]) -> Result<Vec<u8>, EncodeError> {
+        // Only the last frame of a fixed-block-size stream may be shorter,
+        // and a live stream has no last frame.
+        if block.len() != self.block_frames * FRAME_BYTES {
+            return Err(EncodeError(format!(
+                "a block of {} bytes is not {} frames",
+                block.len(),
+                self.block_frames
+            )));
+        }
+        self.buffer.fill_le_bytes(block, 2).map_err(encode_error)?;
+        let frame = flacenc::encode_fixed_size_frame(
+            &self.config,
+            &self.buffer,
+            self.frame_number,
+            &self.info,
+        )
+        .map_err(encode_error)?;
+        self.frame_number = (self.frame_number + 1) % FLAC_FRAME_NUMBERS;
+        let mut sink = ByteSink::with_capacity(frame.count_bits());
+        frame.write(&mut sink).map_err(encode_error)?;
+        Ok(sink.into_inner())
+    }
+}
+
+/// `fLaC`, then STREAMINFO as the only metadata block (RFC 9639 §6, §8.1,
+/// §8.2): a fixed block size, frame sizes unknown (0), the rate, two
+/// channels of 16 bits, a total sample count of 0 (unknown) and no MD5.
+fn flac_header(rate: u32, block_frames: u16) -> Vec<u8> {
+    let mut header = Vec::with_capacity(42);
+    header.extend_from_slice(b"fLaC");
+    // The last metadata block, type 0 (STREAMINFO), 34 bytes long.
+    header.extend_from_slice(&[0x80, 0, 0, 34]);
+    header.extend_from_slice(&block_frames.to_be_bytes());
+    header.extend_from_slice(&block_frames.to_be_bytes());
+    header.extend_from_slice(&[0; 6]);
+    // 20 bits of rate, 3 of channels - 1, 5 of bits - 1, 36 of samples.
+    let packed: u64 = (u64::from(rate) << 44)
+        | ((CHANNELS as u64 - 1) << 41)
+        | ((u64::from(BITS_PER_SAMPLE) - 1) << 36);
+    header.extend_from_slice(&packed.to_be_bytes());
+    header.extend_from_slice(&[0; 16]);
+    header
 }
 
 fn wav_header(rate: u32) -> Vec<u8> {
