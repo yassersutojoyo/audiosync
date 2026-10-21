@@ -19,6 +19,13 @@ struct Notice: Identifiable, Equatable {
     static let capture = "capture"      // streaming started but no audio arrives
     static let login = "login"          // Launch at Login
     static let airplaySender = "airplay-sender"   // AudioSync's own AirPlay sender couldn't start
+    /// A Google Cast speaker, by its device ID.
+    static func cast(_ device: String) -> String { CastID.app(device) }
+    static let castSender = "cast-sender"   // the Google Cast sender stopped working
+    /// The subjects in `list` about a Google Cast speaker.
+    static func castSubjects(in list: NoticeList) -> [String] {
+        list.items.map(\.subject).filter { $0.hasPrefix(CastID.prefix) }
+    }
     /// Now Playing may not control this player.
     static func automation(_ bundleID: String) -> String { "automation:" + bundleID }
 }
