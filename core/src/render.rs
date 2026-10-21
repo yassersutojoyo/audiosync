@@ -1152,7 +1152,9 @@ impl Renderer {
             let own = usize::try_from(trim).unwrap_or(0);
             let slowed = short.max(own);
             if self.resampler.slow_down(slowed, frames - 1) {
-                self.count_trim(slowed as f64, (slowed - own) as f64);
+                let kept = (slowed - own) as u64;
+                let kept = kept - self.pay_anchor_fall(kept);
+                self.count_trim(slowed as f64, kept as f64);
                 self.shared
                     .slowed_frames
                     .fetch_add(slowed as u64, Ordering::Relaxed);
@@ -1292,6 +1294,23 @@ impl Renderer {
         }
         let anchor = *anchor;
         (floor.saturating_sub(anchor), anchored.saturating_sub(floor))
+    }
+
+    /// Lets `frames` capture frames by which the output already plays later,
+    /// a dry read's silence or a slow-down kept for a shortage, pay toward
+    /// what the anchor floor still has to fall to the floor (S209), so the
+    /// trim doesn't move the output later by as much again. Returns the
+    /// frames paid.
+    fn pay_anchor_fall(&mut self, frames: u64) -> u64 {
+        let rate = u64::from(self.capture_rate.max(1));
+        let floor = self.late_floor();
+        let (Some(floor), Some(anchor)) = (floor, self.anchor_floor.as_mut()) else {
+            return 0;
+        };
+        let owed_ns = u64::try_from(anchor.saturating_sub(floor)).unwrap_or(0);
+        let paid_ns = (frames.saturating_mul(1_000_000_000) / rate).min(owed_ns);
+        *anchor = anchor.saturating_sub(i64::try_from(paid_ns).unwrap_or(i64::MAX));
+        (paid_ns.saturating_mul(rate) / 1_000_000_000).min(frames)
     }
 
     /// The observer at the start of a callback of `frames` device frames
@@ -1443,6 +1462,9 @@ impl Renderer {
             // Anchored, corrected, dry or rejected: the fill the renderer
             // kept is gone, and a new reference is measured (S207).
             self.tracking = RESTART;
+        }
+        if report.starved > 0 {
+            self.pay_anchor_fall(report.starved as u64);
         }
         if report.correction != Correction::None {
             self.anchor_floor = self.late_floor();
