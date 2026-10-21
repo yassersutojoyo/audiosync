@@ -194,6 +194,37 @@ pub const OUTPUT_TIME_STEP_NS: u64 = 1_000_000;
 /// a block early against the capture's writes still finds its frames.
 pub const BLUETOOTH_LEAD_FRAMES: usize = 512;
 
+/// The output latencies a Bluetooth device may report and be believed, in
+/// ns (S231): Android's window for a Bluetooth delay report, 50 to 1000 ms.
+pub const BLUETOOTH_LATENCY_MIN_NS: u64 = 50_000_000;
+pub const BLUETOOTH_LATENCY_MAX_NS: u64 = 1_000_000_000;
+
+/// What a Bluetooth output's latency is taken to be when its report lies
+/// outside the window and none before it was plausible (S231): the 149.3 ms
+/// a 44.1 kHz Bluetooth speaker reported on the Mac, rounded.
+pub const BLUETOOTH_LATENCY_DEFAULT_NS: u64 = 150_000_000;
+
+fn plausible_bluetooth_latency(ns: u64) -> bool {
+    (BLUETOOTH_LATENCY_MIN_NS..=BLUETOOTH_LATENCY_MAX_NS).contains(&ns)
+}
+
+/// The output latency a host uses for a device that reported `reported_ns`
+/// (S231): any device's report as it is, except a Bluetooth one's outside
+/// the window, which gives way to `last_plausible_ns`, the latest report
+/// inside it for the same output, else [`BLUETOOTH_LATENCY_DEFAULT_NS`].
+pub fn windowed_latency_ns(
+    reported_ns: u64,
+    bluetooth: bool,
+    last_plausible_ns: Option<u64>,
+) -> u64 {
+    if !bluetooth || plausible_bluetooth_latency(reported_ns) {
+        return reported_ns;
+    }
+    last_plausible_ns
+        .filter(|&ns| plausible_bluetooth_latency(ns))
+        .unwrap_or(BLUETOOTH_LATENCY_DEFAULT_NS)
+}
+
 /// Where a renderer that follows the capture's clock stands (S207).
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tracking {
@@ -317,6 +348,10 @@ struct Shared {
     time_steps: AtomicU64,
     /// The host said the device is Bluetooth (S230).
     bluetooth: AtomicBool,
+    /// The output latency the device reported and the one the host uses,
+    /// in ns (S231); they differ only when the report was rejected.
+    reported_latency_ns: AtomicU64,
+    output_latency_ns: AtomicU64,
     /// The ring whose session lead counts this renderer, and its slot
     /// there, `None` when every slot was taken (S208).
     ring: Arc<Ring>,
@@ -398,6 +433,8 @@ impl RendererControl {
                 floor_drop_ns: AtomicU64::new(0),
                 time_steps: AtomicU64::new(0),
                 bluetooth: AtomicBool::new(false),
+                reported_latency_ns: AtomicU64::new(0),
+                output_latency_ns: AtomicU64::new(0),
                 ring,
                 slot,
             }),
@@ -559,6 +596,31 @@ impl RendererControl {
     /// [`BLUETOOTH_LEAD_FRAMES`], or 0 for any other (S230).
     pub fn extra_lead_frames(&self) -> i64 {
         self.shared.extra_lead_frames() as i64
+    }
+
+    /// Hands the renderer the output latency its device reported and
+    /// returns the one to use, [`windowed_latency_ns`] with the renderer's
+    /// own Bluetooth flag (S231). Call it after [`Self::set_bluetooth`]. It
+    /// only records: the start lead and the session lead never take it.
+    pub fn set_reported_latency(&self, reported_ns: u64, last_plausible_ns: Option<u64>) -> u64 {
+        let bluetooth = self.shared.bluetooth.load(Ordering::Acquire);
+        let used = windowed_latency_ns(reported_ns, bluetooth, last_plausible_ns);
+        self.shared
+            .reported_latency_ns
+            .store(reported_ns, Ordering::Relaxed);
+        self.shared.output_latency_ns.store(used, Ordering::Relaxed);
+        used
+    }
+
+    /// The output latency in use, in ns (S231); 0 before one was reported.
+    pub fn output_latency_ns(&self) -> u64 {
+        self.shared.output_latency_ns.load(Ordering::Relaxed)
+    }
+
+    /// The device's report when the window rejected it, in ns (S231).
+    pub fn rejected_latency_ns(&self) -> Option<u64> {
+        let reported = self.shared.reported_latency_ns.load(Ordering::Relaxed);
+        (reported != self.output_latency_ns()).then_some(reported)
     }
 }
 

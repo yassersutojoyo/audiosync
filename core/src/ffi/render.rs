@@ -594,6 +594,51 @@ pub unsafe extern "C" fn asc_renderer_extra_lead_frames(renderer: *const AscRend
     unsafe { control_side(renderer) }.map_or(0, RendererControl::extra_lead_frames)
 }
 
+/// Control thread, after [`asc_renderer_set_bluetooth`]: hands the renderer
+/// the output latency its device reported and returns the one to use
+/// (S231). `last_plausible_ns` is the latest report the window accepted for
+/// the same output, 0 for none; a null handle returns `reported_ns`.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_set_reported_latency(
+    renderer: *mut AscRenderer,
+    reported_ns: u64,
+    last_plausible_ns: u64,
+) -> u64 {
+    let last = (last_plausible_ns != 0).then_some(last_plausible_ns);
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(reported_ns, |control| {
+        control.set_reported_latency(reported_ns, last)
+    })
+}
+
+/// Any thread: the output latency the device reported, in ns, when the
+/// window rejected it (S231); false, leaving `latency_ns` alone, otherwise.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer; `latency_ns` is null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_rejected_latency_ns(
+    renderer: *const AscRenderer,
+    latency_ns: *mut u64,
+) -> bool {
+    // SAFETY: by the caller's contract the handle is null or live.
+    let Some(rejected) =
+        unsafe { control_side(renderer) }.and_then(RendererControl::rejected_latency_ns)
+    else {
+        return false;
+    };
+    if !latency_ns.is_null() {
+        // SAFETY: non-null, and writable by the caller's contract.
+        unsafe { latency_ns.write(rejected) };
+    }
+    true
+}
+
 /// Any thread: asks the renderer to fade out over F device frames from its
 /// next callback and render exact zeros after them until it stops (S185).
 ///
@@ -1248,6 +1293,50 @@ mod tests {
             // Untimed renders publish no output time.
             assert!(!asc_renderer_fade_end_time_ns(c, ptr::null_mut()));
             asc_renderer_destroy(c);
+            asc_ring_writer_destroy(writer);
+            asc_ring_destroy(ring);
+        }
+    }
+
+    // covers: S231
+    #[test]
+    fn a_c_renderer_windows_a_bluetooth_device_s_reported_latency() {
+        const MS: u64 = 1_000_000;
+        let (ring, writer) = c_ring();
+        let mut rejected = 7u64;
+        // SAFETY: the handles are live, used from this one thread, then
+        // destroyed once; `rejected` is writable.
+        unsafe {
+            let wired = asc_renderer_create(ring, 48_000, 48_000, 2, 1.0);
+            let speaker = asc_renderer_create(ring, 48_000, 44_100, 2, 1.0);
+            asc_renderer_set_bluetooth(speaker, true);
+            assert_eq!(asc_renderer_set_reported_latency(wired, 0, 0), 0);
+            assert!(!asc_renderer_rejected_latency_ns(wired, &mut rejected));
+            assert_eq!(rejected, 7);
+            assert_eq!(asc_renderer_set_reported_latency(speaker, 0, 0), 150 * MS);
+            assert!(asc_renderer_rejected_latency_ns(speaker, &mut rejected));
+            assert_eq!(rejected, 0);
+            let absurd = 30_000 * MS;
+            assert_eq!(
+                asc_renderer_set_reported_latency(speaker, absurd, 180 * MS),
+                180 * MS
+            );
+            assert!(asc_renderer_rejected_latency_ns(speaker, ptr::null_mut()));
+            assert_eq!(
+                asc_renderer_set_reported_latency(speaker, 149 * MS, 180 * MS),
+                149 * MS
+            );
+            assert!(!asc_renderer_rejected_latency_ns(speaker, &mut rejected));
+            assert_eq!(
+                asc_renderer_set_reported_latency(ptr::null_mut(), absurd, 0),
+                absurd
+            );
+            assert!(!asc_renderer_rejected_latency_ns(
+                ptr::null(),
+                &mut rejected
+            ));
+            asc_renderer_destroy(speaker);
+            asc_renderer_destroy(wired);
             asc_ring_writer_destroy(writer);
             asc_ring_destroy(ring);
         }

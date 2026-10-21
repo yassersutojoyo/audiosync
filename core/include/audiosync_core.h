@@ -551,6 +551,22 @@ void asc_renderer_set_bluetooth(AscRenderer *renderer, bool bluetooth);
 int64_t asc_renderer_extra_lead_frames(const AscRenderer *renderer);
 
 /*
+ * Control thread, after asc_renderer_set_bluetooth: the output latency the
+ * device reported, in ns; returns the one to use (S231). A Bluetooth
+ * device's report outside 50 to 1000 ms gives way to last_plausible_ns (the
+ * latest report accepted for the same output, 0 for none), else 150 ms. A
+ * NULL handle returns reported_ns.
+ */
+uint64_t asc_renderer_set_reported_latency(AscRenderer *renderer, uint64_t reported_ns,
+                                           uint64_t last_plausible_ns);
+
+/*
+ * Any thread: the output latency the device reported, in ns, when the
+ * window rejected it (S231); false, leaving *latency_ns alone, otherwise.
+ */
+bool asc_renderer_rejected_latency_ns(const AscRenderer *renderer, uint64_t *latency_ns);
+
+/*
  * Any thread, before the output stops: fade out over 20 ms of device frames
  * from the next callback, then render exact zeros until the output stops.
  */
