@@ -846,15 +846,19 @@ impl AscAirPlay {
         }
         // Forgotten for this handle even when the file can't be written.
         let _ = self.identity.remove(id);
-        let key = self
-            .listed
-            .get(id)
-            .map(|info| info.device.key.clone())
-            .or_else(|| self.added.get(id).map(|added| added.key.clone()));
-        if let Some(key) = key {
+        if let Some(key) = self.homekit_key(id) {
             self.sender.forget_homekit(&key);
         }
         true
+    }
+
+    /// The key the sender knows the receiver `id` by, for dropping its copy
+    /// of the receiver's AirPlay 2 credentials.
+    fn homekit_key(&self, id: &str) -> Option<DeviceKey> {
+        self.listed
+            .get(id)
+            .map(|info| info.device.key.clone())
+            .or_else(|| self.added.get(id).map(|added| added.key.clone()))
     }
 
     /// Keeps the strings of a receiver change and describes it with
@@ -3918,6 +3922,39 @@ mod tests {
         let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info)));
         assert_eq!(report.availability, AIRPLAY_NEEDS_PIN);
         assert_eq!(report.flags & AIRPLAY_FLAG_PAIRED, 0);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    #[test]
+    fn forget_reaches_the_senders_airplay2_credentials_of_a_receiver_no_longer_listed() {
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        let mut blob = vec![1u8];
+        blob.extend_from_slice(b"01234567-89AB-CDEF-0123-456789ABCDEF");
+        blob.extend_from_slice(&[5; 64]);
+        blob.extend_from_slice(b"receiver");
+        let credentials = HomeKitCredentials::from_bytes(&blob).expect("a credential blob");
+        let id = "02005E005353";
+        let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x53]));
+        inside(handle).pairing.insert(id.to_owned(), key.clone());
+        inside(handle).take_in(SenderEvent::Pairing {
+            key: key.clone(),
+            event: PairingEvent::HomeKitPaired(credentials),
+        });
+        inside(handle).take_in(SenderEvent::Receiver(ReceiverEvent::Gone(key.clone())));
+        assert!(inside(handle).listed.get(id).is_none() && inside(handle).added.get(id).is_none());
+        assert_eq!(
+            inside(handle).homekit_key(id),
+            Some(key),
+            "the sender keeps the credentials it paired with after the receiver is gone"
+        );
+        let c_id = CString::new(id).expect("no NUL");
+        // SAFETY: a live handle, used by this thread only; a local C string.
+        unsafe {
+            assert!(asc_airplay_forget_pairing(handle, c_id.as_ptr()));
+        }
+        assert_eq!(inside(handle).identity.get(id), None);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
