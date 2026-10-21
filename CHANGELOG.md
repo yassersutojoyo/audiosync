@@ -49,7 +49,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Windows (preview, not released yet)
 
 - A Windows 11 version, written in Rust, for x64 and ARM64 PCs. It's built to play all system audio or one app on the PC's own outputs and Bluetooth speakers, each with its own delay, through the same equalizer. It isn't released: it goes out with a release only as an unsigned preview, and only after I've tried that build on a real Windows 11 PC.
-- AirPlay from Windows, through AudioSync's own AirPlay sender. It plays to receivers that take AirPlay 1, and the PC's own outputs wait for the AirPlay speakers so everything stays in step. An Apple TV that asks for a code gets a PIN prompt, and the pairing is kept for the current Windows user until Forget Pairing. Receivers that ask for a password, or that only play AirPlay 2, are listed with a note and stay off. This part hasn't been tried with a real speaker or Apple TV yet.
+- AirPlay from Windows, through AudioSync's own AirPlay sender. It plays to receivers that take AirPlay 1, and the PC's own outputs wait for the AirPlay speakers so everything stays in step. An Apple TV that asks for a code gets a PIN prompt, and the pairing is kept for the current Windows user until Forget Pairing. A receiver that asks for a password opens a prompt when you turn it on, and AudioSync keeps the password in memory until it quits. Receivers that only play AirPlay 2 are listed with a note and stay off. This part hasn't been tried with a real speaker or Apple TV yet.
 - A Windows 11 look: Mica in the title bars, the system's rounded corners and shadow on the tray flyout, and speaker rows that line up.
 - When the source can also be heard straight from an output you listen to, a notice says you may hear it twice, and Show How opens a short guide with the steps and a button for the right Settings page.
 - Bluetooth hands-free endpoints (the call profile) are left out of the speaker list, since they carry mono call audio and opening one puts the headset in call mode. A headset's stereo output is still listed.
@@ -73,6 +73,12 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - The window fits a 1366×768 screen at 150% scaling.
 - As on the Mac, when a speaker that's on sits at 25% or less, or is muted, in Windows, its row says so and one click sets it to 75% or unmutes it. If Windows audio stops answering, reading or fixing that volume can no longer freeze the window: AudioSync gives up after five seconds and tries again a little later.
 - A speaker that disappears always gets its notice, a USB device plugged into another port keeps its settings, short Windows audio errors (after sleep, for example) are retried, and an output that doesn't answer holds up the window for about five seconds at most.
+- Launch at Sign-In, in the File menu and the tray menu, starts AudioSync in the tray when you sign in to Windows. If Windows has it turned off under Settings > Apps > Startup, AudioSync opens that page and a notice says to turn it on there.
+- An input device, such as a microphone or line in, can be the source. A notice tells you when it isn't connected, gets unplugged while streaming, or is blocked by Windows' microphone privacy settings, with a button that opens them.
+- AirPlay receivers with a screen, such as a TV, show the playing track's title, artist, album and artwork, read from the media sessions Windows lists. Without a track they show AudioSync's own labels with the source's name, and an input device's name as the artist, as on the Mac.
+- Help > AudioSync Guide (F1) opens a guide written for Windows. It doesn't cover input devices, track info, Launch at Sign-In or AirPlay passwords yet.
+- The PIN dialog no longer cuts off its contents, the main window can't be made smaller than its controls need, and a speaker's volume slider has its own line in the speaker's row.
+- Stopping a speaker lets its short fade-out play to the end instead of cutting off the last few milliseconds.
 
 ## 0.4.1 - 2026-10-17
 
