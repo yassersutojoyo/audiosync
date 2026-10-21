@@ -399,6 +399,11 @@ impl Reader {
         self.floor_shift = frames;
     }
 
+    /// Jf, as last set.
+    pub fn floor_shift_frames(&self) -> i64 {
+        self.floor_shift
+    }
+
     /// The frames the next read can go on with (S206): `W - P`, with W
     /// loaded now, when a read of `frames` frames made now would go on from
     /// where the last one ended, with drift corrections held (`held`, S188)

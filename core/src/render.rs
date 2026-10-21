@@ -938,6 +938,12 @@ impl Renderer {
         self.reader.lead_frames()
     }
 
+    /// Jf at the last callback, in capture frames (S209): below 0 while the
+    /// anchor floor still falls toward callbacks earlier than it.
+    pub fn floor_shift_frames(&self) -> i64 {
+        self.reader.floor_shift_frames()
+    }
+
     /// Fills `out`, interleaved with [`Renderer::channels`] channels.
     pub fn render(&mut self, out: &mut [f32]) {
         self.render_inner(out, None, None);
