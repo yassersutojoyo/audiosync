@@ -20,6 +20,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Sound now fades in over about 20 ms when it starts and fades out when it stops, on local and AirPlay speakers alike.
 - Building from source now needs a Rust toolchain, since the app links a small Rust library.
 - A delay you've typed but not applied yet is marked, with a hint to press Return (Enter on Windows).
+- A speaker's delay, shown at the top right of its row, changes as soon as you apply a new one, with a short roll and a brief tint. With Reduce Motion on it fades instead.
 - In the main window, the speaker list fades out under the header instead of being cut off by a hard edge, and the header band drags the window again.
 - The Guide's setup section is now called First Steps, with clearer tips for lining up your speakers.
 
