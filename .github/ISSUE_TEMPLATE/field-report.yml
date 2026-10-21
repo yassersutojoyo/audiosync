@@ -58,11 +58,12 @@ body:
     id: outputs
     attributes:
       label: Outputs and their delays
-      description: One line per output that was on, with its make and model if you know it, and the delay you set. Write 0 ms for outputs you left alone.
+      description: One line per local output that was on, with its make and model if you know it, and the delay you set (0 ms if you left it alone). AirPlay speakers share one AirPlay delay, so list them by name and give that delay once.
       placeholder: |
-        MacBook Air speakers: 0 ms
         Sony WH-1000XM4 (Bluetooth): -220 ms
-        HomePod mini (AirPlay): 0 ms
+        USB DAC: 0 ms
+        AirPlay speakers: HomePod mini
+        AirPlay delay: 0 ms
     validations:
       required: true
 
