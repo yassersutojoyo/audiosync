@@ -143,9 +143,15 @@ OpenSSL through `openssl` (Apache-2.0), `openssl-sys` (MIT), `openssl-macros`,
 `openssl-probe`, `foreign-types`, `foreign-types-shared` and `bitflags`, with
 `tempfile`, `rustix`, `linux-raw-sys` and `errno`; `prost` and `prost-derive`
 (Apache-2.0) for the protocol buffer messages, with `bytes` (MIT), `anyhow`,
-`itertools` and `either`; and on `mdns-sd`, `getrandom`, `sha2` and
-`serde_json` with the crates they build on, listed above. The others are under
-MIT OR Apache-2.0. Its tests also use `rcgen`, `rustls` (Apache-2.0 OR ISC OR
+`itertools` and `either`; `flacenc` (Apache-2.0) to encode the FLAC stream
+some devices need instead of WAV, with `crc`, `crc-catalog`, `heapless`,
+`hash32`, `stable_deref_trait`, `md-5`, `digest`, `block-buffer`,
+`crypto-common`, `generic-array` (MIT), `byteorder` (Unlicense OR MIT),
+`num-traits`, `rustversion`, `seq-macro`, `version_check` and, at build time,
+`built` (MIT); and on `mdns-sd`, `getrandom`, `sha2` and `serde_json` with the
+crates they build on, listed above. The others are under MIT OR Apache-2.0. Its
+tests also use `claxon` (Apache-2.0) to decode that FLAC stream, and `rcgen`,
+`rustls` (Apache-2.0 OR ISC OR
 MIT), `ring` (Apache-2.0 AND ISC), `rustls-webpki` and `untrusted` (ISC) for a
 fake device's TLS server, with `rustls-pki-types`, `yasna`, `x509-parser`,
 `asn1-rs`, `der-parser`, `oid-registry`, `nom` (MIT), `data-encoding` (MIT),

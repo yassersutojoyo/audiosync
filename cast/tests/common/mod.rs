@@ -65,6 +65,8 @@ pub struct Behavior {
     pub answer_ping: bool,
     pub on_launch: OnLaunch,
     pub on_load: OnLoad,
+    /// A `LOAD` of this `contentType` is answered this way instead.
+    pub on_load_of: Option<(&'static str, OnLoad)>,
     pub answer_media_stop: bool,
     pub answer_stop: bool,
     /// Apps already running when the sender connects.
@@ -83,6 +85,7 @@ impl Default for Behavior {
             answer_ping: true,
             on_launch: OnLaunch::Start,
             on_load: OnLoad::Play,
+            on_load_of: None,
             answer_media_stop: true,
             answer_stop: true,
             apps: Vec::new(),
@@ -435,7 +438,11 @@ impl Device {
 
     fn load(&mut self, message: &CastMessage, payload: &Value, id: u64) -> Vec<CastMessage> {
         let transport = message.destination_id.clone();
-        let on_load = self.behavior.on_load.clone();
+        let content_type = payload["media"]["contentType"].as_str().unwrap_or("");
+        let on_load = match &self.behavior.on_load_of {
+            Some((kind, special)) if *kind == content_type => special.clone(),
+            _ => self.behavior.on_load.clone(),
+        };
         if on_load == OnLoad::Ignore {
             return Vec::new();
         }

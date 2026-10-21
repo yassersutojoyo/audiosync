@@ -119,9 +119,7 @@ fn a_request_from_an_address_that_is_not_the_device_gets_403() {
     let (server, _writer) = server(vec![IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7))]);
     let mut stream = get(&server, "GET", "");
     let (head, _) = http::read_response(&mut stream, Duration::ZERO);
-    // Refused on accept, without reading on: the close may reach the client
-    // as a reset before the 403 does.
-    assert!(matches!(http::status(&head), 403 | 0), "{head}");
+    assert_eq!(http::status(&head), 403, "{head}");
     assert!(events(&server).contains(&ServerEvent::Refused {
         from: LOCAL,
         status: 403
@@ -265,13 +263,16 @@ fn audio_leaves_in_20_ms_blocks_at_real_time_starting_at_the_newest() {
         frames <= allowed,
         "{frames} frames in {elapsed:?}: faster than real time"
     );
+    let samples: Vec<i16> = audio
+        .iter()
+        .flat_map(|chunk| chunk.as_chunks::<2>().0.iter())
+        .map(|pair| i16::from_le_bytes(*pair))
+        .collect();
     assert!(
-        audio
-            .iter()
-            .flat_map(|chunk| chunk.as_chunks::<2>().0.iter())
-            .all(|pair| matches!(i16::from_le_bytes([pair[0], pair[1]]), 5 | 0)),
+        samples.iter().all(|sample| matches!(sample, 5 | 0)),
         "the backlog written before the GET was sent"
     );
+    assert!(samples.contains(&5), "only silence was sent");
     stop.store(true, Ordering::SeqCst);
     feeder.join().expect("feeder");
     server.stop();
@@ -352,11 +353,19 @@ fn idle_and_trickling_connections_cannot_pin_the_server() {
         .map(|_| TcpStream::connect(server.address()).expect("connects"))
         .collect();
     thread::sleep(Duration::from_millis(200));
-    let mut extra = TcpStream::connect(server.address()).expect("connects");
+    let (address, path) = http::split_url(&server.url()).expect("url");
+    let mut extra =
+        http::request(address, &format!("GET {path} HTTP/1.1\r\n\r\n")).expect("connects");
+    let (head, _) = http::read_response(&mut extra, Duration::ZERO);
+    assert_eq!(http::status(&head), 503, "a fifth connection is refused");
     assert!(
         closed_within(&mut extra, Duration::from_secs(2)),
-        "a fifth connection is refused"
+        "and closed"
     );
+    assert!(events(&server).contains(&ServerEvent::Refused {
+        from: LOCAL,
+        status: 503
+    }));
     // One byte a second never completes a request: one deadline for all.
     let started = Instant::now();
     let mut trickle = idle.remove(0);
@@ -383,12 +392,13 @@ fn the_stream_server_writes_the_samples_as_given() {
     let (_, body) = http::read_response(&mut stream, Duration::from_millis(200));
     let chunks = http::chunks(&body);
     assert!(chunks.len() > 1);
-    assert!(
-        chunks[1..]
-            .iter()
-            .flat_map(|chunk| chunk.as_chunks::<2>().0.iter())
-            .all(|pair| matches!(i16::from_le_bytes([pair[0], pair[1]]), -12_345 | 0))
-    );
+    let samples: Vec<i16> = chunks[1..]
+        .iter()
+        .flat_map(|chunk| chunk.as_chunks::<2>().0.iter())
+        .map(|pair| i16::from_le_bytes(*pair))
+        .collect();
+    assert!(samples.iter().all(|sample| matches!(sample, -12_345 | 0)));
+    assert!(samples.contains(&-12_345), "only silence was sent");
     stop.store(true, Ordering::SeqCst);
     feeder.join().expect("feeder");
     server.stop();
