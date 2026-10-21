@@ -15,6 +15,7 @@ use crate::discovery::{CastDevice, DeviceId, DeviceKind};
 use crate::error::{ConnectError, EndReason, LaunchError};
 use crate::framing::{FrameReader, encode_frame};
 use crate::ids::RequestIds;
+use crate::media::{LoadRequest, MediaError, VolumeError};
 use crate::status::{AppSession, ReceiverStatus};
 
 /// TCP connect and TLS handshake limit per address.
@@ -113,6 +114,8 @@ pub struct CastClient {
     local_address: SocketAddr,
     fingerprint: Option<Fingerprint>,
     buffer: Vec<u8>,
+    /// Kept apart from the queue, which the host may have drained.
+    ended: Option<EndReason>,
 }
 
 impl fmt::Debug for CastClient {
@@ -194,6 +197,7 @@ impl CastClient {
             local_address,
             fingerprint,
             buffer: vec![0; 16 * 1024],
+            ended: None,
         };
         loop {
             client.step(READ_SLICE);
@@ -258,6 +262,74 @@ impl CastClient {
         }
     }
 
+    /// Sends `LOAD` and waits for its reply; returns the media session
+    /// (C46, C49, C50). `PLAYING` is reported later as [`Event::Playing`].
+    pub fn load(&mut self, request: &LoadRequest) -> Result<i64, MediaError> {
+        let since = self.next_event;
+        self.channel.load(Instant::now(), request)?;
+        loop {
+            let found = self.events.iter().position(|(seq, event)| {
+                *seq >= since && matches!(event, Event::Loaded { .. } | Event::LoadFailed(_))
+            });
+            if let Some(index) = found {
+                return match self.events.remove(index) {
+                    Some((_, Event::Loaded { media_session_id })) => Ok(media_session_id),
+                    Some((_, Event::LoadFailed(error))) => Err(error),
+                    _ => unreachable!("position matched a load result"),
+                };
+            }
+            if let Some(reason) = self.end_reason() {
+                return Err(MediaError::Ended(reason));
+            }
+            self.step(READ_SLICE);
+        }
+    }
+
+    /// Picks the app back up after a reconnect (C81); see
+    /// [`Channel::resume`].
+    pub fn resume(
+        &mut self,
+        app: &AppSession,
+        media_session_id: Option<i64>,
+        content_id: &str,
+    ) -> bool {
+        let resumed = self
+            .channel
+            .resume(Instant::now(), app, media_session_id, content_id);
+        self.flush();
+        resumed
+    }
+
+    /// The app the channel talks to.
+    pub fn app(&self) -> Option<&AppSession> {
+        self.channel.app()
+    }
+
+    pub fn media_session_id(&self) -> Option<i64> {
+        self.channel.media_session_id()
+    }
+
+    /// Sets the device volume level (C65, C67, C70).
+    pub fn set_volume(&mut self, level: f64) -> Result<(), VolumeError> {
+        let result = self.channel.set_volume(Instant::now(), level);
+        self.flush();
+        result
+    }
+
+    /// Mutes or unmutes the device (C65).
+    pub fn set_muted(&mut self, muted: bool) -> Result<(), VolumeError> {
+        let result = self.channel.set_muted(muted);
+        self.flush();
+        result
+    }
+
+    /// One volume step up or down (C69); returns the level asked for.
+    pub fn step_volume(&mut self, up: bool) -> Result<f64, VolumeError> {
+        let result = self.channel.step_volume(Instant::now(), up);
+        self.flush();
+        result
+    }
+
     /// Runs the channel for `duration`: reads, answers, heartbeats.
     pub fn run_for(&mut self, duration: Duration) {
         let until = Instant::now() + duration;
@@ -270,6 +342,11 @@ impl CastClient {
         }
     }
 
+    /// The end of the channel, once it ended.
+    pub fn end_reason(&self) -> Option<EndReason> {
+        self.ended.clone()
+    }
+
     /// The next event the channel reported. A host that doesn't poll loses
     /// the oldest status and drop reports beyond [`MAX_EVENTS`].
     pub fn poll_event(&mut self) -> Option<Event> {
@@ -278,6 +355,11 @@ impl CastClient {
 
     /// Tears the session down and closes TLS (C44, C87), within `budget`.
     pub fn stop(mut self, budget: Duration) -> EndReason {
+        self.stop_in_place(budget)
+    }
+
+    /// [`CastClient::stop`] for an owner that keeps the client.
+    pub fn stop_in_place(&mut self, budget: Duration) -> EndReason {
         let until = Instant::now() + budget;
         self.channel.stop(Instant::now());
         while !self.channel.is_ended() && Instant::now() < until {
@@ -286,13 +368,6 @@ impl CastClient {
         self.flush();
         let _ = self.stream.shutdown();
         self.end_reason().unwrap_or(EndReason::Stopped)
-    }
-
-    fn end_reason(&self) -> Option<EndReason> {
-        self.events.iter().find_map(|(_, event)| match event {
-            Event::Ended(reason) => Some(reason.clone()),
-            _ => None,
-        })
     }
 
     fn step(&mut self, wait: Duration) {
@@ -328,13 +403,18 @@ impl CastClient {
         self.channel.tick(Instant::now());
         self.flush();
         while let Some(event) = self.channel.poll_event() {
+            if let Event::Ended(reason) = &event {
+                self.ended.get_or_insert_with(|| reason.clone());
+            }
             self.events.push_back((self.next_event, event));
             self.next_event += 1;
             if self.events.len() > MAX_EVENTS {
-                let routine = self
-                    .events
-                    .iter()
-                    .position(|(_, event)| matches!(event, Event::Status(_) | Event::Dropped(_)));
+                let routine = self.events.iter().position(|(_, event)| {
+                    matches!(
+                        event,
+                        Event::Status(_) | Event::Dropped(_) | Event::MediaStatus(_)
+                    )
+                });
                 if let Some(index) = routine {
                     self.events.remove(index);
                 }

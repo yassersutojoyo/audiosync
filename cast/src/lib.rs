@@ -19,14 +19,22 @@
 //! - [`client`]: TLS to the device, accepting any certificate and
 //!   recording its fingerprint.
 //! - [`error`]: the typed errors and the connect backoff.
-//!
-//! The stream server, `LOAD`, volume and timing come in later stages.
+//! - [`media`]: the `LOAD` payload, `MEDIA_STATUS` and the media and
+//!   volume errors.
+//! - [`audio`], [`stream`]: the host's audio ring and the HTTP server the
+//!   device fetches the live WAV stream from.
+//! - [`session`]: one Cast session end to end, with recovery, Resync,
+//!   volume, diagnostics and teardown.
 
+pub mod audio;
 pub mod channel;
 pub mod client;
 pub mod discovery;
 pub mod error;
 pub mod framing;
 pub mod ids;
+pub mod media;
 pub mod message;
+pub mod session;
 pub mod status;
+pub mod stream;
