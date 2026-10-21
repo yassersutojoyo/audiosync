@@ -509,6 +509,7 @@ dependencies = [
  "tray-icon",
  "windows",
  "windows-core",
+ "windows-future",
  "zeroize",
 ]
 

@@ -3,9 +3,10 @@
 //! Previous, Play or Pause, and Next for that session.
 //!
 //! The sessions are Windows' system media transport controls, read through
-//! [`MediaControls`] (`audio::wasapi::MediaCardReader` on Windows, a fake in
-//! tests). They are read only while the main window shows, as the Mac reads
-//! its players only while the window or a receiver needs them. With the
+//! [`MediaControls`] (on Windows, the card's half of
+//! `audio::wasapi::read_media_sessions`; a fake in tests). They are read
+//! only while the main window shows, as the Mac reads its players only
+//! while the window or a receiver needs them. With the
 //! whole system as the source, the session that plays counts, else the first
 //! paused one; with one app, that app's own; an input device has none, so
 //! the card hides. Without a session that counts, the card hides too.

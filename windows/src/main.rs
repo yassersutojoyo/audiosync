@@ -214,14 +214,13 @@ impl From<slint::PlatformError> for StartError {
 fn backend(
     log: &DebugLog,
     labels: &audio::now_playing::SharedLabels,
+    track_reader: audio::wasapi::MediaSessionReader,
 ) -> Result<Box<dyn ui_model::Backend>, StartError> {
     let mut audio = audio::wasapi::open().map_err(StartError::Audio)?;
     log.log(|| "audio: the WASAPI backend is open".to_owned());
     audio.set_debug_log(log.clone());
     start_airplay(&mut audio, log);
-    audio.set_track_reader(Box::new(audio::wasapi::MediaSessionReader::start(
-        log.clone(),
-    )));
+    audio.set_track_reader(Box::new(track_reader));
     audio.set_receiver_labels(labels.clone());
     let settings_file = settings::SettingsFile::default_path().map_or_else(
         settings::SettingsFile::in_memory,
@@ -341,14 +340,16 @@ fn run(
     #[cfg(windows)]
     let labels = audio::now_playing::SharedLabels::default();
     #[cfg(windows)]
-    let backend = backend(log, &labels)?;
+    let (track_reader, card_reader) = audio::wasapi::read_media_sessions(log.clone());
+    #[cfg(windows)]
+    let backend = backend(log, &labels, track_reader)?;
     #[cfg(not(windows))]
     let backend = backend(log)?;
     let app = view::App::new(backend, log.clone())?;
     #[cfg(windows)]
     labels.set(receiver_labels(&app.strings()));
     #[cfg(windows)]
-    app.set_media_controls(Box::new(audio::wasapi::MediaCardReader::start(log.clone())));
+    app.set_media_controls(Box::new(card_reader));
 
     #[cfg(windows)]
     if let Some(instance) = instance {
