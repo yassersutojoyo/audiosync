@@ -295,7 +295,9 @@ impl Sessions {
 }
 
 /// A session as track info sees it, and its media properties.
-fn describe(session: &Session) -> windows::core::Result<(MediaSession, MediaProperties)> {
+pub(super) fn describe(
+    session: &Session,
+) -> windows::core::Result<(MediaSession, MediaProperties)> {
     let properties = session.TryGetMediaPropertiesAsync()?.join()?;
     let playing = session.GetPlaybackInfo()?.PlaybackStatus()? == PlaybackStatus::Playing;
     let described = MediaSession {

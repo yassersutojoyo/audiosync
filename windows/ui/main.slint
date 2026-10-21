@@ -1,6 +1,7 @@
 // The main window: the same sections as the macOS app's main window, in the
 // same order. Header (mark, wordmark, status, streaming switch), notices,
-// then a left column (audio source, master volume, equalizer) and the
+// then a left column (audio source, Now Playing, master volume, equalizer)
+// and the
 // speaker list (This PC, Groups, Connected Speakers). The menu bar carries
 // the Windows shortcuts. Tab order follows the reading order.
 
@@ -8,7 +9,7 @@ import { ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { GroupItem, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, NoticeStack, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, NoticeStack, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -235,6 +236,127 @@ component EqualizerCard inherits Rectangle {
     }
 }
 
+// The Now Playing card: the track of the media session that counts for the
+// chosen source, with Previous, Play or Pause, and Next, as on the Mac.
+component NowPlayingCard inherits Card {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> playing;
+    in property <bool> has-artwork;
+    in property <image> artwork;
+    // Which button has the keyboard focus (0 to 2), -1 for none: the app
+    // hands the focus on before the card hides.
+    in-out property <int> focused-button: -1;
+    // 0 Previous, 1 Play or Pause, 2 Next.
+    callback transport(int);
+
+    accessible-role: groupbox;
+    accessible-label: Strings.now-playing;
+
+    VerticalLayout {
+        spacing: 10px;
+
+        HorizontalLayout {
+            spacing: 12px;
+
+            Rectangle {
+                width: 56px;
+                height: 56px;
+                border-radius: Fluent.radius-card;
+                clip: true;
+                background: Tokens.text.with-alpha(0.06);
+
+                if root.has-artwork: Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.artwork;
+                    image-fit: cover;
+                    accessible-role: none;
+                }
+
+                if !root.has-artwork: Glyph {
+                    width: parent.width;
+                    height: parent.height;
+                    glyph: Glyphs.music-note;
+                    color: Tokens.secondary-text;
+                    font-size: 20px;
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 3px;
+                horizontal-stretch: 1;
+
+                Text {
+                    text: root.title;
+                    font-weight: 600;
+                    color: Tokens.text;
+                    wrap: word-wrap;
+                    overflow: elide;
+                    max-height: 40px;
+                }
+
+                if root.subtitle != "": Text {
+                    text: root.subtitle;
+                    font-size: Tokens.font-size-callout;
+                    color: Tokens.secondary-text;
+                    overflow: elide;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 20px;
+
+            IconButton {
+                glyph: Glyphs.previous;
+                label: Strings.previous-track;
+                clicked => {
+                    root.transport(0);
+                }
+                focus-changed(has) => {
+                    root.note-focus(0, has);
+                }
+            }
+
+            IconButton {
+                width: 40px;
+                height: 40px;
+                glyph: root.playing ? Glyphs.pause : Glyphs.play;
+                glyph-size: 20px;
+                label: root.playing ? Strings.pause : Strings.play;
+                clicked => {
+                    root.transport(1);
+                }
+                focus-changed(has) => {
+                    root.note-focus(1, has);
+                }
+            }
+
+            IconButton {
+                glyph: Glyphs.next;
+                label: Strings.next-track;
+                clicked => {
+                    root.transport(2);
+                }
+                focus-changed(has) => {
+                    root.note-focus(2, has);
+                }
+            }
+        }
+    }
+
+    function note-focus(button: int, has: bool) {
+        if has {
+            root.focused-button = button;
+        } else if root.focused-button == button {
+            root.focused-button = -1;
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     in property <bool> running;
     in property <string> status;
@@ -242,6 +364,14 @@ export component MainWindow inherits Window {
     in property <int> source-index;
     in property <float> master-volume;
     in property <bool> equalizer-on;
+    // The Now Playing card, while a media session counts for the source.
+    in property <bool> now-playing-shown;
+    in property <string> now-playing-title;
+    in property <string> now-playing-subtitle;
+    in property <bool> now-playing-playing;
+    in property <bool> now-playing-has-artwork;
+    in property <image> now-playing-artwork;
+    in-out property <int> now-playing-focused-button: -1;
     in property <[SpeakerItem]> this-pc;
     in property <[SpeakerItem]> connected;
     in property <[GroupItem]> groups;
@@ -275,6 +405,8 @@ export component MainWindow inherits Window {
     callback source-selected(int);
     callback master-volume-changed(float);
     callback equalizer-requested();
+    // A Now Playing button: 0 Previous, 1 Play or Pause, 2 Next.
+    callback now-playing-transport(int);
     callback speaker-toggled(string);
     callback speaker-volume-changed(string, float);
     callback sync-toggled(string);
@@ -342,6 +474,11 @@ export component MainWindow inherits Window {
 
     public function focus-streaming-switch() {
         power.focus();
+    }
+
+    // The Now Playing card is about to hide with the focus on a button.
+    public function focus-source() {
+        source.focus();
     }
 
     title: Strings.main-window-title;
@@ -613,6 +750,18 @@ export component MainWindow inherits Window {
                                     self.current-index = root.source-index;
                                 }
                             }
+                        }
+                    }
+
+                    if root.now-playing-shown: NowPlayingCard {
+                        title: root.now-playing-title;
+                        subtitle: root.now-playing-subtitle;
+                        playing: root.now-playing-playing;
+                        has-artwork: root.now-playing-has-artwork;
+                        artwork: root.now-playing-artwork;
+                        focused-button <=> root.now-playing-focused-button;
+                        transport(button) => {
+                            root.now-playing-transport(button);
                         }
                     }
 

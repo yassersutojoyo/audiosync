@@ -14,6 +14,7 @@ mod devices;
 mod endpoint;
 mod loopback;
 mod media;
+mod media_card;
 mod processes;
 mod routing;
 mod volume;
@@ -35,6 +36,7 @@ use super::process::ProcessTable;
 use super::routing::{EndpointAudio, EndpointVolume};
 
 pub use media::MediaSessionReader;
+pub use media_card::MediaCardReader;
 
 /// The platform calls of the Windows backend.
 pub struct WasapiDriver {

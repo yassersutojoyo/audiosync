@@ -26,6 +26,7 @@ mod data_folder;
 mod debug_log;
 mod guide;
 mod launch_at_login;
+mod now_playing_card;
 mod os_version;
 #[cfg(any(windows, test))]
 mod placement;
@@ -323,6 +324,8 @@ fn run(
     #[cfg(windows)] instance: Option<&single_instance::Instance>,
 ) -> Result<(), StartError> {
     let app = view::App::new(backend(log)?, log.clone())?;
+    #[cfg(windows)]
+    app.set_media_controls(Box::new(audio::wasapi::MediaCardReader::start(log.clone())));
 
     #[cfg(windows)]
     if let Some(instance) = instance {
