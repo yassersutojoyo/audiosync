@@ -78,7 +78,7 @@ use audiosync_airplay::sender::{
     AIRPLAY2_SWITCH_ENV, NowPlaying, ReceiverEvent, ReceiverInfo, Sender, SenderConfig,
     SenderEvent, SpeakerError, SpeakerEvent, SpeakerOptions, SpeakerState, airplay2_switch,
 };
-use audiosync_airplay::stream::SpeakerLatency;
+use audiosync_airplay::stream::{MAX_DELAY, SpeakerLatency};
 use audiosync_airplay::volume::{MIN_DB, Volume};
 
 use super::{host_slice, stereo_samples};
@@ -224,6 +224,10 @@ pub const AIRPLAY_PAIRINGS_FAILED: i32 = -1;
 /// The pairings file can't be read or isn't in the expected format: it is
 /// ignored, and the next pairing replaces it.
 pub const AIRPLAY_PAIRINGS_IGNORED: i32 = -2;
+
+/// The largest hold-back [`asc_airplay_set_hold_back`] applies, in ms: the
+/// sender's limit on a speaker's delay (P99).
+pub const AIRPLAY_MAX_DELAY_MS: i32 = MAX_DELAY.as_millis() as i32;
 /// A newer AudioSync wrote the pairings file: it is ignored and left as it
 /// is, and pairings made now last until the handle is destroyed.
 pub const AIRPLAY_PAIRINGS_NEWER: i32 = -3;
@@ -353,6 +357,8 @@ pub struct AscAirPlay {
     ending: HashMap<String, Option<Device>>,
     /// The master position, 0 to 100.
     master: f64,
+    /// Every speaker's delay d_s ([`asc_airplay_set_hold_back`]).
+    hold_back: Duration,
     /// Whether a call on this handle or its input panicked, or discovery
     /// died, and where the panic happened; shared with the input.
     death: Arc<Death>,
@@ -1171,6 +1177,7 @@ pub(crate) fn create_with(open_browser: OpenBrowser) -> *mut AscAirPlay {
                 pairing: HashMap::new(),
                 ending: HashMap::new(),
                 master: 100.0,
+                hold_back: Duration::ZERO,
                 death: Arc::new(Death::new()),
                 panics_before,
                 failure_reported: false,
@@ -1352,8 +1359,8 @@ pub unsafe extern "C" fn asc_airplay_next_event(
 }
 
 /// Adds the receiver discovery lists under `id` as a speaker, at slider
-/// position `volume` (0 to 100) times the master, with no delay of its own:
-/// a session starts at once, and its state, errors and latency come as
+/// position `volume` (0 to 100) times the master, held back by the
+/// hold-back set last ([`asc_airplay_set_hold_back`]): a session starts at once, and its state, errors and latency come as
 /// events. Its sessions use the password handed over for it
 /// ([`asc_airplay_set_password`]) and verify with the stored credentials,
 /// if any. Adding a speaker already added applies the volume, the password
@@ -1390,6 +1397,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
             let position = volume.clamp(0.0, 100.0);
             let key = device.key.clone();
             let mut options = SpeakerOptions::new(speaker_volume(position, airplay.master));
+            options.delay = airplay.hold_back;
             options.password = airplay.passwords.get(id).cloned();
             options.credentials = airplay.store.get(id).cloned();
             airplay.sender.add_speaker(device, options);
@@ -1491,6 +1499,41 @@ pub unsafe extern "C" fn asc_airplay_set_master(airplay: *mut AscAirPlay, master
                     .sender
                     .set_volume(&added.key, speaker_volume(added.position, airplay.master));
             }
+        })
+    }
+}
+
+/// Holds every speaker back by `hold_back_ms` on top of L, live, and every
+/// speaker added later, so they meet an output that plays later than L,
+/// such as a Google Cast speaker with a longer offset (C77). The sender caps
+/// a speaker's delay at [`AIRPLAY_MAX_DELAY_MS`] (P99); past it the speakers
+/// play early by the rest. A value below 0 or not finite counts as 0.
+/// Returns the hold-back applied, in ms; 0 for a null or dead handle.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_set_hold_back(
+    airplay: *mut AscAirPlay,
+    hold_back_ms: f64,
+) -> f64 {
+    let hold_back = if hold_back_ms.is_finite() {
+        Duration::from_secs_f64(hold_back_ms.clamp(0.0, millis(MAX_DELAY)) / 1000.0)
+    } else {
+        Duration::ZERO
+    };
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, 0.0, |airplay| {
+            if hold_back != airplay.hold_back {
+                airplay.hold_back = hold_back;
+                for added in airplay.added.values() {
+                    airplay.sender.set_delay(&added.key, hold_back);
+                }
+            }
+            millis(hold_back)
         })
     }
 }
@@ -2841,6 +2884,39 @@ mod tests {
             "{stopped:?}"
         );
         assert!(receiver.methods().contains(&Method::Teardown));
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    #[test]
+    fn the_hold_back_delays_every_speaker_up_to_the_sender_limit() {
+        // SAFETY: a null handle is allowed.
+        let null = unsafe { asc_airplay_set_hold_back(ptr::null_mut(), 500.0) };
+        assert_eq!(null, 0.0);
+        let receiver = Loopback::start();
+        let id = "02005E005322";
+        let mut handle = listing(vec![loopback_record(id, "Den", receiver.port)]);
+        let c_id = c_string(id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe {
+            assert_eq!(asc_airplay_set_hold_back(handle, 5000.0), 3000.0);
+            assert_eq!(asc_airplay_set_hold_back(handle, f64::NAN), 0.0);
+            assert_eq!(asc_airplay_set_hold_back(handle, -20.0), 0.0);
+            assert_eq!(asc_airplay_set_hold_back(handle, 1000.0), 1000.0);
+            assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 100.0));
+        }
+        let events = events_until(handle, |seen| {
+            seen.iter()
+                .any(|e| e.kind == AIRPLAY_EVENT_LATENCY && e.id == id)
+        });
+        // A speaker added later starts at L + the hold-back.
+        let latency = events.last().unwrap();
+        assert!((latency.latency_ms - 2750.0).abs() < 0.01, "{latency:?}");
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe {
+            assert_eq!(asc_airplay_set_hold_back(handle, 1250.0), 1250.0);
+            assert!(asc_airplay_remove_speaker(handle, c_id.as_ptr()));
+        }
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
