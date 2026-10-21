@@ -254,7 +254,7 @@ fn only_the_source_apps_own_quit_ends_the_session() {
     let spotify = app("com.spotify.client");
     assert!(spotify.depends_on_app(Some("com.spotify.client")));
     let ended = reaction(&Incident::SourceAppQuit);
-    assert!(ended.stop_session && ended.deselect_airplay && !ended.alert);
+    assert!(ended.stop_session && !ended.deselect_airplay && !ended.alert);
     // Another app quitting changes nothing.
     assert!(!spotify.depends_on_app(Some("com.apple.Music")));
     assert!(!spotify.depends_on_app(Some("com.spotify.client.helper")));

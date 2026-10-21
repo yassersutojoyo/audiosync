@@ -14,18 +14,34 @@
 //!
 //! WASAPI keeps up to a whole endpoint buffer queued, so the end of a fade is
 //! heard well after it was rendered: an output counts as faded only once the
-//! endpoint holds nothing but zeros and its stream latency has passed since
-//! ([`RenderPipeline::has_played_its_fade`]).
+//! endpoint's clock has played past the fade's last frame, or without a
+//! clock, once it holds nothing but zeros and its stream latency has passed
+//! since ([`RenderPipeline::has_played_its_fade`]).
 
 use std::sync::Arc;
 
 use audiosync_core::clock;
 use audiosync_core::reader::Reader;
-use audiosync_core::render::{Renderer, RendererControl, endpoint_faded};
+use audiosync_core::render::{Renderer, RendererControl, fade_tail_frames};
 use audiosync_core::volume::SharedGain;
 
 use super::SESSION_RATE;
 use super::backend::BackendError;
+
+/// What an endpoint still holds when the render loop asks whether a fade has
+/// played, in device frames.
+#[derive(Clone, Copy, Debug)]
+pub struct EndpointQueue {
+    /// Frames queued in the stream buffer (`GetCurrentPadding`).
+    pub padding: u32,
+    /// Frames written but not yet played by the endpoint's clock
+    /// (`IAudioClock`), when it could be read.
+    pub clock_queued: Option<u64>,
+    /// The stream latency the endpoint reports (`GetStreamLatency`).
+    pub latency_frames: u32,
+    /// The device rate.
+    pub rate: u32,
+}
 
 /// The render pipeline of one output, owned by its render thread.
 ///
@@ -97,17 +113,22 @@ impl RenderPipeline {
         self.renderer.render_at(out, clock::now_ns());
     }
 
-    /// Whether the endpoint has played the requested fade-out (S185): it
-    /// holds `padding` frames (`GetCurrentPadding`), all of them written
-    /// after the fade's last frame, and at least `latency_frames` more
-    /// (`GetStreamLatency` at the device rate) have played since.
+    /// Whether the endpoint has played the requested fade-out (S185): the
+    /// frames written after its last frame cover what `queue` says is still
+    /// queued ([`fade_tail_frames`]).
     #[cfg_attr(
         not(windows),
         expect(dead_code, reason = "the WASAPI render loop asks it")
     )]
-    pub fn has_played_its_fade(&self, padding: u32, latency_frames: u32) -> bool {
+    pub fn has_played_its_fade(&self, queue: EndpointQueue) -> bool {
         self.renderer.frames_after_fade().is_some_and(|after| {
-            endpoint_faded(after, u64::from(padding), u64::from(latency_frames))
+            after
+                >= fade_tail_frames(
+                    u64::from(queue.padding),
+                    queue.clock_queued,
+                    u64::from(queue.latency_frames),
+                    queue.rate,
+                )
         })
     }
 
@@ -291,32 +312,85 @@ mod tests {
         );
     }
 
+    /// What the endpoint holds, as the render loop reads it at 48 kHz.
+    fn queue(padding: u32, clock_queued: Option<u64>, latency_frames: u32) -> EndpointQueue {
+        EndpointQueue {
+            padding,
+            clock_queued,
+            latency_frames,
+            rate: 48_000,
+        }
+    }
+
+    #[test]
+    fn a_fade_has_played_only_once_the_endpoint_clock_has_passed_its_end() {
+        let mut s = primed(SESSION_RATE);
+        live(&mut s, 2_400, 480);
+        s.control.request_fade_out();
+        live(&mut s, 480, 480);
+        play(&mut s, 480, 480);
+        // Only zeros are queued, but the clock says 30 ms more than the
+        // padding is written and not yet played: the end of the fade is
+        // among them, and GetStreamLatency says 0.
+        play(&mut s, 480, 480);
+        let behind = 480 + 1_440;
+        assert!(
+            !s.pipeline.has_played_its_fade(queue(480, Some(behind), 0)),
+            "the clock hasn't reached the fade's last frame"
+        );
+        play(&mut s, 1_440, 480);
+        assert!(s.pipeline.has_played_its_fade(queue(480, Some(behind), 0)));
+    }
+
+    #[test]
+    fn a_clock_far_behind_the_padding_holds_a_stop_at_most_the_tail_cap() {
+        let mut s = primed(SESSION_RATE);
+        live(&mut s, 2_400, 480);
+        s.control.request_fade_out();
+        live(&mut s, 480, 480);
+        play(&mut s, 480, 480);
+        // A clock 1 s behind counts as the padding plus 100 ms.
+        play(&mut s, 480 + 4_320, 480);
+        assert!(!s.pipeline.has_played_its_fade(queue(480, Some(48_480), 0)));
+        play(&mut s, 480, 480);
+        assert!(s.pipeline.has_played_its_fade(queue(480, Some(48_480), 0)));
+        // A clock ahead of the padding (it counted a glitch's silence)
+        // still waits for the padding.
+        assert!(!s.pipeline.has_played_its_fade(queue(9_999, Some(0), 0)));
+    }
+
     #[test]
     fn an_output_is_faded_only_when_the_endpoint_holds_nothing_but_zeros() {
         let mut s = primed(SESSION_RATE);
         live(&mut s, 2_400, 480);
-        assert!(!s.pipeline.has_played_its_fade(0, 0), "no stop asked for");
+        assert!(
+            !s.pipeline.has_played_its_fade(queue(0, None, 0)),
+            "no stop asked for"
+        );
         s.control.request_fade_out();
         live(&mut s, 480, 480);
         assert!(
-            !s.pipeline.has_played_its_fade(0, 0),
+            !s.pipeline.has_played_its_fade(queue(0, None, 0)),
             "half the fade rendered"
         );
         // The fade's last frame is this callback's last.
         play(&mut s, 480, 480);
-        assert!(s.pipeline.has_played_its_fade(0, 0));
+        assert!(s.pipeline.has_played_its_fade(queue(0, None, 0)));
         assert!(
-            !s.pipeline.has_played_its_fade(480, 0),
+            !s.pipeline.has_played_its_fade(queue(480, None, 0)),
             "the endpoint still holds the end of the fade"
         );
         play(&mut s, 480, 480);
-        assert!(s.pipeline.has_played_its_fade(480, 0), "only zeros queued");
         assert!(
-            !s.pipeline.has_played_its_fade(480, 240),
+            s.pipeline.has_played_its_fade(queue(480, None, 0)),
+            "only zeros queued"
+        );
+        assert!(
+            !s.pipeline.has_played_its_fade(queue(480, None, 240)),
             "the stream latency hasn't passed since"
         );
         play(&mut s, 240, 240);
-        assert!(s.pipeline.has_played_its_fade(480, 240));
+        assert!(s.pipeline.has_played_its_fade(queue(480, None, 240)));
         assert!(!s.control.is_faded());
         s.pipeline.mark_faded();
         assert!(s.control.is_faded());

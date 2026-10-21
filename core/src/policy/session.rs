@@ -454,7 +454,6 @@ pub struct Reaction {
 pub fn reaction(incident: &Incident) -> Reaction {
     let failed_start = |origin: StartOrigin| Reaction {
         stop_session: true,
-        deselect_airplay: true,
         notice: Some(NoticeSubject::Start),
         alert: origin == StartOrigin::User,
         ..Reaction::default()
@@ -477,9 +476,9 @@ pub fn reaction(incident: &Incident) -> Reaction {
             restart: Some(StartOrigin::FormatChange),
             ..Reaction::default()
         },
+        // The speakers stay chosen, so the next start plays to them again.
         Incident::SourceLost | Incident::SourceAppQuit => Reaction {
             stop_session: true,
-            deselect_airplay: true,
             notice: Some(NoticeSubject::Source),
             ..Reaction::default()
         },
