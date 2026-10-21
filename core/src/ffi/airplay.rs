@@ -3505,10 +3505,16 @@ mod tests {
                 AIRPLAY_PAIRINGS_FAILED
             );
             inside(handle).airplay2 = false;
-            assert_eq!(asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()), 0);
+            assert_eq!(
+                asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()),
+                0
+            );
             assert!(!path.exists(), "nothing is written with the switch off");
             inside(handle).airplay2 = true;
-            assert_eq!(asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()), 0);
+            assert_eq!(
+                asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()),
+                0
+            );
             assert!(path.exists(), "the new device ID is written at once");
         }
         let device_id = inside(handle).identity.device_id();

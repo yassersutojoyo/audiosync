@@ -324,7 +324,11 @@ impl PairingStore {
                     .as_deref()
                     .map(|path| data_folder::keep_aside(path, AIRPLAY2_IGNORED_FILE_NAME));
                 let writable = random && !matches!(kept, Some(Err(_)));
-                (identity, writable, format!("{reason}; kept aside and replaced"))
+                (
+                    identity,
+                    writable,
+                    format!("{reason}; kept aside and replaced"),
+                )
             }
         };
         let fresh_file = !found.starts_with("credentials");
@@ -715,7 +719,10 @@ pub mod tests {
         assert_eq!(again, device_id);
         assert_eq!(found, "credentials for 1 speaker(s)");
         assert_eq!(store.homekit("02005E005302"), Some(&homekit(0xC3)));
-        assert!(store.contains("02005E005301"), "the pairings file is its own");
+        assert!(
+            store.contains("02005E005301"),
+            "the pairings file is its own"
+        );
     }
 
     #[test]
