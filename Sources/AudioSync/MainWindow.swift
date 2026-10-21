@@ -536,7 +536,8 @@ struct SpeakerRow: View {
                         Spacer()
                         // No delay field on AirPlay rows, nor on the reference's (S181).
                         if speaker.offsetMs != nil {
-                            DelayValueButton(model: model, id: speaker.id, label: t.delay(of: speaker.name),
+                            DelayValueButton(model: model, id: speaker.id, draft: model.draft(for: speaker.id),
+                                             label: t.delay(of: speaker.name),
                                              showsTimer: true, focus: $delayFocused)
                         }
                         optionsMenu(t)
@@ -567,7 +568,8 @@ struct SpeakerRow: View {
                 }
             }
             if showSync, let ms = model.savedDelay(of: speaker.id) {
-                SyncControls(kind: .offset(hasReference: model.hasLocalReference), ms: ms,
+                SyncControls(model: model, id: speaker.id,
+                             kind: .offset(hasReference: model.hasLocalReference), ms: ms,
                              label: t.delay(of: speaker.name), text: t, draft: model.draft(for: speaker.id),
                              escape: {
                     delayFocused = true
@@ -646,10 +648,12 @@ struct AirPlayDelayRow: View {
                     .accessibilityHidden(true)
                 Text(t.airPlayDelay)
                 Spacer()
-                DelayValueButton(model: model, id: Self.id, label: t.airPlayDelay, focus: $delayFocused)
+                DelayValueButton(model: model, id: Self.id, draft: model.draft(for: Self.id),
+                                 label: t.airPlayDelay, focus: $delayFocused)
             }
             if expanded {
-                SyncControls(kind: .airPlay, ms: model.airPlayDelayMs, label: t.airPlayDelay, text: t,
+                SyncControls(model: model, id: Self.id, kind: .airPlay, ms: model.airPlayDelayMs,
+                             label: t.airPlayDelay, text: t,
                              draft: model.draft(for: Self.id), escape: {
                     delayFocused = true
                     model.dropDelayTyping()
@@ -672,10 +676,12 @@ struct AirPlayDelayRow: View {
 /// A row's delay value, which opens and closes its panel. It reads the saved
 /// delay from the model by ID (`DelayBadge`), so a delay applied with the
 /// panel open shows at once; the new number rolls in (a crossfade under
-/// Reduce Motion) over a brief teal highlight.
+/// Reduce Motion), and a brief teal highlight marks each apply from the
+/// row's own panel.
 private struct DelayValueButton: View {
     @ObservedObject var model: AppModel
     let id: String
+    @ObservedObject var draft: SyncDraft
     /// VoiceOver's label, also used to announce a new value.
     let label: String
     var showsTimer = false
@@ -703,7 +709,7 @@ private struct DelayValueButton: View {
             .foregroundStyle(expanded ? Brand.tealText : Brand.secondaryText)
             // At its 12% peak the highlight keeps the readable teal at 4.7:1 on
             // a playing row in light mode, 5.1:1 in dark.
-            .keyframeAnimator(initialValue: 0.0, trigger: ms) { content, tint in
+            .keyframeAnimator(initialValue: 0.0, trigger: draft.applied) { content, tint in
                 content.background {
                     RoundedRectangle(cornerRadius: 4)
                         .fill(Brand.teal.opacity(0.12 * tint))
@@ -722,9 +728,11 @@ private struct DelayValueButton: View {
         .accessibilityLabel(label)
         .accessibilityValue(value)
         .accessibilityHint(t.syncAdjust)
-        // The field keeps VoiceOver's focus while the panel is open.
-        .onChange(of: ms) { _, now in
-            guard expanded, now != nil, let shown = model.savedDelayText(of: id) else { return }
+        .onChange(of: value) { _, now in DebugTrace.log("[AudioSync] delay value \(id) shows \(now)") }
+        // Only for the field being typed in, which keeps VoiceOver's focus;
+        // Command-S applying other open panels stays quiet.
+        .onChange(of: draft.applied) { _, _ in
+            guard draft.fieldFocused, let shown = model.savedDelayText(of: id) else { return }
             AccessibilityNotification.Announcement(t.delaySet(label, to: shown)).post()
         }
     }
@@ -789,6 +797,10 @@ struct SyncControls: View {
         case airPlay
     }
 
+    /// Not observed: read only by the debug trace of an apply.
+    let model: AppModel
+    /// The row's key in `delayPanels` and the drafts.
+    let id: String
     let kind: Kind
     let ms: Double
     /// The field's VoiceOver label.
@@ -842,7 +854,7 @@ struct SyncControls: View {
                 .accessibilityHint(cue)
                 .focused($fieldFocused)
                 // Applies and keeps the panel open, to try the next value.
-                .onSubmit { commit() }
+                .onSubmit { commit("Return") }
                 .onChange(of: fieldFocused) { _, focused in draft.fieldFocused = focused }
                 Text(text.millisecondsUnit).font(.callout).foregroundStyle(Brand.secondaryText)
                 step(10)
@@ -879,14 +891,14 @@ struct SyncControls: View {
         .onAppear { draft.field.show(ms, format: shown) }
         .onChange(of: ms) { _, value in draft.field.show(value, format: shown) }
         // Command-S, or a click on another row's delay.
-        .onChange(of: draft.applyRequests) { _, _ in commit() }
+        .onChange(of: draft.applyRequests) { _, _ in commit("apply request") }
         // The hint is read only on focus: VoiceOver hears the range once as
         // the number goes out of it, not at every keystroke after.
         .onChange(of: outOfRange) { _, now in
             if now { AccessibilityNotification.Announcement(rangeMessage).post() }
         }
         // A panel closing applies what was typed, unless Escape dropped it.
-        .onDisappear(perform: commit)
+        .onDisappear { commit("panel closed") }
     }
 
     /// A keystroke or a paste. The field goes on showing a character it
@@ -932,8 +944,22 @@ struct SyncControls: View {
 
     /// Apply the typed value, once (Return and the panel closing after it
     /// both get here).
-    private func commit() {
-        if let value = draft.field.commit(saved: ms, sanitize: clamped, format: shown) { apply(value) }
+    private func commit(_ how: String) {
+        let typed = draft.field.isEditing ? draft.field.text : nil
+        if let value = draft.field.commit(saved: ms, sanitize: clamped, format: shown) {
+            applied(value, how)
+        } else if let typed {
+            DebugTrace.log("[AudioSync] delay \(id) \(how): typed \"\(typed)\" applies nothing, saved \(shown(ms))")
+        }
+    }
+
+    /// Applies `value`, counts it for the row's delay value
+    /// (`SyncDraft.applied`) and traces what that value reads after.
+    private func applied(_ value: Double, _ how: String) {
+        apply(value)
+        draft.applied += 1
+        DebugTrace.log("[AudioSync] delay \(id) \(how): saved \(shown(ms)) -> \(shown(value)), "
+            + "row value reads \(model.savedDelayText(of: id) ?? "none")")
     }
 
     private func step(_ delta: Int) -> some View {
@@ -941,7 +967,7 @@ struct SyncControls: View {
             // A step applies at once and drops any typing, so the panel
             // closing later doesn't apply the old typed text over it.
             draft.field.discard(saved: ms, format: shown)
-            apply(ms + Double(delta))
+            applied(ms + Double(delta), "step")
         }
             .accessibilityLabel(text.delayStepAccessibility(delta))
             .controlSize(.small)
