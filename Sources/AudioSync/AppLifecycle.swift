@@ -81,11 +81,41 @@ enum AppLifecycle {
     /// streaming off holds it back.
     static func restartsAfterFormatChange(userStopped: Bool) -> Bool { !userStopped }
 
-    /// The app that just quit was the source of a running session: the
-    /// session ends, with the AirPlay speakers released and a notice (S142,
-    /// S164, EC6). Any other quit, or one while nothing streams, changes nothing.
-    static func endsSession(source: AudioSource, quitBundleID: String?, streaming: Bool) -> Bool {
-        streaming && source.endsWhenAppQuits(quitBundleID)
+    /// How the source app quitting reaches the host (S227 e, f).
+    enum SourceQuitReport {
+        /// macOS says an app quit; `streaming` is whether a session runs.
+        case terminated(bundleID: String?, streaming: Bool)
+        /// The running capture found its app gone and stopped the session.
+        case captureLost(SourceCapture.CaptureError)
+        /// The rebuild after a capture format change couldn't start.
+        case rebuildFailed(Error)
+    }
+
+    /// The app that quit and what the session does about it (S142, S164,
+    /// S227, EC6), or nil when the report concerns no session: another app,
+    /// nothing streaming, a source that isn't an app, a loss with another cause.
+    /// A second report of the same quit finds the session stopped or the
+    /// source switched, so it gives nil.
+    static func sourceQuit(_ report: SourceQuitReport, source: AudioSource,
+                           setting: WhenSourceQuits) -> (bundleID: String, action: SourceQuit.Action)? {
+        let quit: String?
+        let streaming: SourceQuit.Streaming
+        switch report {
+        case .terminated(let bundleID, let running):
+            quit = bundleID
+            streaming = running ? .running : .off
+        case .captureLost(let error):
+            guard case .appNotRunning(let bundleID) = error else { return nil }
+            quit = bundleID
+            streaming = .running
+        case .rebuildFailed(let error):
+            guard case .appNotRunning(let bundleID)? = error as? SourceCapture.CaptureError else { return nil }
+            quit = bundleID
+            streaming = .rebuilding
+        }
+        guard let quit else { return nil }
+        let action = SourceQuit.decide(setting: setting, source: source, quitBundleID: quit, streaming: streaming)
+        return action == .keep ? nil : (quit, action)
     }
 }
 

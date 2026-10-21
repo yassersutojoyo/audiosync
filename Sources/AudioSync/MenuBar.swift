@@ -77,6 +77,7 @@ final class AppModel: ObservableObject {
         var renameSpeaker: (String, String, String) -> Void = { _, _, _ in }
         var setLaunchAtLogin: (Bool) -> Void = { _ in }
         var setShowVirtualDevices: (Bool) -> Void = { _ in }
+        var setSwitchWhenSourceQuits: (Bool) -> Void = { _ in }
         var setAppearance: (AppAppearance) -> Void = { _ in }
         var transport: (NowPlayingMonitor.Command) -> Void = { _ in }
         var quit: () -> Void = {}
@@ -114,6 +115,7 @@ final class AppModel: ObservableObject {
     @Published var groups: [Group] = []
     @Published var launchAtLogin = false
     @Published var showVirtualDevices = false
+    @Published var switchWhenSourceQuits = false
     @Published var appearance = AppAppearance.system
     /// Rows whose sync controls are expanded. Lives here rather than in view
     /// @State: the Command Line Tools toolchain ships without SwiftUI's macro plugins.

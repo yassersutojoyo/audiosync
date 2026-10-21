@@ -206,6 +206,14 @@ struct UIStrings {
         "\(name) quit, so streaming has stopped."
     }
 
+    /// The source app quit and the source became the whole system (S227);
+    /// `started` false when streaming couldn't start with it.
+    func sourceSwitchedToSystem(name: String, started: Bool) -> String {
+        started ? "\(name) quit, so AudioSync switched to \(sourceSystem)."
+            : "\(name) quit, so the source is now \(sourceSystem), but streaming couldn't start with it."
+    }
+    var switchToSystemWhenSourceQuits: String { "Switch to \(sourceSystem) When the Source App Quits" }
+
     /// An AirPlay speaker was switched off by AudioSync, not by the user.
     func airPlayTurnedOff(name: String, reason: AirPlayPairing.Reason) -> String {
         switch reason {
@@ -641,6 +649,9 @@ struct UIStrings {
           doesn't open at login; click the Dock icon to bring it back.
         - Appearance: in the gear menu, or in the AudioSync menu. Match System
           follows macOS; Light or Dark keeps AudioSync's windows that way.
+        - When the source app quits, streaming stops. To keep playing all system
+          audio instead, turn on 'Switch to All System Audio When the Source App
+          Quits' in the gear menu or the AudioSync menu.
 
         Speaker Notes
         \(guideCodeNote)

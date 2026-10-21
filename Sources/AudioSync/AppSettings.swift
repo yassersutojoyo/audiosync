@@ -40,6 +40,8 @@ struct AppSettings: Equatable {
         static let showVirtualDevices = "showVirtualOutputDevices"
         /// `AppAppearance.defaultsValue` (S155).
         static let appearance = "appearance"
+        /// `WhenSourceQuits.defaultsValue` (S227): "stop", or "system" to switch.
+        static let whenSourceQuits = "whenSourceQuits"
         /// `Equalizer.Settings` as JSON (S24, `StoredEqualizer`).
         static let equalizer = "equalizerSettings"
         /// One delay in ms for every local speaker, from before delays were
@@ -94,6 +96,7 @@ struct AppSettings: Equatable {
     var speakerNames = SpeakerNames()
     var showVirtualDevices = false
     var appearance = AppAppearance.system
+    var whenSourceQuits = WhenSourceQuits.stop
     /// D0 of the migration: what a local speaker without a delay of its own
     /// played with before the local delay model (S77, S179).
     var defaultDelayMs = AppSettings.standardDelayMs
@@ -124,6 +127,7 @@ struct AppSettings: Equatable {
         s.groups = decodeGroups(read(Keys.groups) as? Data)
         s.showVirtualDevices = read(Keys.showVirtualDevices) as? Bool ?? false
         s.appearance = AppAppearance(defaultsValue: read(Keys.appearance) as? String)
+        s.whenSourceQuits = WhenSourceQuits(defaultsValue: read(Keys.whenSourceQuits) as? String)
         return s
     }
 
@@ -230,6 +234,8 @@ struct SettingsStore {
     func save(showVirtualDevices: Bool) { write(showVirtualDevices, Keys.showVirtualDevices) }
 
     func save(appearance: AppAppearance) { write(appearance.defaultsValue, Keys.appearance) }
+
+    func save(whenSourceQuits: WhenSourceQuits) { write(whenSourceQuits.defaultsValue, Keys.whenSourceQuits) }
 
     /// The AirPlay delay (S178).
     func save(airPlayDelay: AirPlayDelay) {

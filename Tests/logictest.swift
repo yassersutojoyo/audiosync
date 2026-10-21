@@ -1693,13 +1693,6 @@ do {
     check(SourceSwitch.decide(from: music, to: music, streaming: true) == .none,
           "EC5 source: choosing the same source changes nothing")
 
-    // EC6: the source app quits.
-    check(music.endsWhenAppQuits("com.apple.Music"), "EC6 app quit: the source app quitting ends the session")
-    check(!music.endsWhenAppQuits("com.spotify.client"), "EC6 app quit: another app quitting changes nothing")
-    check(!AudioSource.system.endsWhenAppQuits("com.apple.Music"), "EC6 app quit: the whole-system source never ends on a quit")
-    check(!AudioSource.input(uid: "mic").endsWhenAppQuits("com.apple.Music"), "EC6 app quit: an input source never ends on a quit")
-    check(!music.endsWhenAppQuits(nil), "EC6 app quit: an app without a bundle ID changes nothing")
-
     // EC8: every speaker off, then one on again.
     check(StreamingPolicy.isIdle(streaming: true, enabledAirPlay: [], enabledLocal: []),
           "EC8 all off: streaming stops when the last speaker is switched off")
@@ -2074,7 +2067,7 @@ do {
     let fresh = store.load()
     check(fresh == AppSettings() && fresh.source == .system && fresh.master == 100 && fresh.defaultDelayMs == 2000
             && fresh.enabledAirPlay.isEmpty && fresh.enabledLocal.isEmpty && fresh.groups.isEmpty
-            && !fresh.showVirtualDevices && fresh.appearance == .system,
+            && !fresh.showVirtualDevices && fresh.appearance == .system && fresh.whenSourceQuits == .stop,
           "settings: nothing stored gives the defaults (whole system, master 100, delays 2000 ms)")
 
     var wanted = AppSettings()
@@ -2089,6 +2082,7 @@ do {
     wanted.autoConnect = ["ap:airplay-2"]
     wanted.showVirtualDevices = true
     wanted.appearance = .dark
+    wanted.whenSourceQuits = .system
     store.save(source: wanted.source)
     store.save(ids: wanted.enabledAirPlay, forKey: Keys.enabledAirPlay)
     store.save(ids: wanted.enabledLocal, forKey: Keys.enabledLocal)
@@ -2100,6 +2094,7 @@ do {
     store.save(ids: wanted.autoConnect, forKey: Keys.autoConnect)
     store.save(showVirtualDevices: wanted.showVirtualDevices)
     store.save(appearance: wanted.appearance)
+    store.save(whenSourceQuits: wanted.whenSourceQuits)
     check(store.load() == wanted, "settings: every saved setting comes back unchanged")
     check(stored.values[Keys.enabledAirPlay] as? [String] == ["airplay-1", "airplay-2"],
           "settings: a set of speakers is stored as a sorted list")
@@ -2149,7 +2144,7 @@ do {
         (Keys.localVolumes, "localVolumePosByUID"), (Keys.localDelays, "localDelayMsByUID"),
         (Keys.airplayVolumes, "airPlayVolumeByID"), (Keys.groups, "speakerGroups"),
         (Keys.autoConnect, "autoConnectSpeakers"), (Keys.showVirtualDevices, "showVirtualOutputDevices"),
-        (Keys.appearance, "appearance"), (Keys.equalizer, "equalizerSettings"),
+        (Keys.appearance, "appearance"), (Keys.whenSourceQuits, "whenSourceQuits"), (Keys.equalizer, "equalizerSettings"),
         (Keys.legacyDelayMs, "delayMs"), (Keys.legacyLocalGains, "localGainByUID"),
         (Keys.retiredEngineChoice, "engineImpl"), (Keys.retiredAirPlayChoice, "airplayImpl"),
         (Keys.localOffsets, "localOffsetMsByUID"),
@@ -3182,13 +3177,61 @@ do {
             && !AppLifecycle.restartsAfterFormatChange(userStopped: true),
           "EC4 rate: a format change rebuilds the session the engine stopped, unless the user switched streaming off")
     let music = AudioSource.app(bundleID: "com.apple.Music")
-    check(AppLifecycle.endsSession(source: music, quitBundleID: "com.apple.Music", streaming: true),
-          "EC6 app quit: the source app quitting while streaming stops the session")
-    check(!AppLifecycle.endsSession(source: music, quitBundleID: "com.apple.Music", streaming: false),
-          "EC6 app quit: the source app quitting while stopped changes nothing")
-    check(!AppLifecycle.endsSession(source: .system, quitBundleID: "com.apple.Music", streaming: true)
-            && !AppLifecycle.endsSession(source: music, quitBundleID: nil, streaming: true),
-          "EC6 app quit: another source, or an app without a bundle ID, keeps streaming")
+    typealias Report = AppLifecycle.SourceQuitReport
+    // A default argument can't use `music`, hence the nil.
+    func quit(_ report: Report, _ source: AudioSource? = nil, _ setting: WhenSourceQuits = .stop) -> String {
+        guard let answer = AppLifecycle.sourceQuit(report, source: source ?? music, setting: setting) else { return "keep" }
+        return "\(answer.action) \(answer.bundleID)"
+    }
+    let musicQuit = Report.terminated(bundleID: "com.apple.Music", streaming: true)
+    check(quit(musicQuit) == "stop com.apple.Music",
+          "EC6 app quit: the source app quitting while streaming stops the session", quit(musicQuit))
+    check(quit(.terminated(bundleID: "com.apple.Music", streaming: false)) == "keep"
+            && quit(.terminated(bundleID: "com.apple.Music", streaming: false), music, .system) == "keep",
+          "EC6 app quit: the source app quitting while stopped changes nothing, under either setting (S227 a)")
+    check(quit(musicQuit, .system, .system) == "keep" && quit(musicQuit, .input(uid: "mic"), .system) == "keep"
+            && quit(.terminated(bundleID: nil, streaming: true), music, .system) == "keep"
+            && quit(.terminated(bundleID: "com.spotify.client", streaming: true), music, .system) == "keep",
+          "EC6 app quit: another source, another app or an app without a bundle ID keeps streaming (S227 b)")
+    for setting in [WhenSourceQuits.stop, .system] {
+        check(quit(musicQuit, .system, setting) == "keep",
+              "EC6 app quit: the whole-system source never ends on a quit, under either setting (S164, S227 b)", "\(setting)")
+        check(quit(.terminated(bundleID: nil, streaming: true), music, setting) == "keep",
+              "EC6 app quit: an app without a bundle ID changes nothing, under either setting (S164)", "\(setting)")
+    }
+
+    // S227: the setting, through the core's decision.
+    check(quit(musicQuit, music, .system) == "switchToSystem com.apple.Music",
+          "source quit: with the switch on, the source app quitting while streaming switches to the whole system (S227)",
+          quit(musicQuit, music, .system))
+    let lost = Report.captureLost(.appNotRunning("com.apple.Music"))
+    check(quit(lost) == "stop com.apple.Music" && quit(lost, music, .system) == "switchToSystem com.apple.Music",
+          "source quit: the capture finding its app gone counts as that app quitting (S227 f)",
+          "\(quit(lost)), \(quit(lost, music, .system))")
+    check(quit(.captureLost(.inputDisconnected), music, .system) == "keep"
+            && quit(.captureLost(.aggregateDeviceFailed(1)), music, .system) == "keep",
+          "source quit: a capture lost for another cause is no app quit (S21 still applies)")
+    let rebuild = Report.rebuildFailed(SourceCapture.CaptureError.appNotRunning("com.apple.Music"))
+    check(quit(rebuild) == "stop com.apple.Music" && quit(rebuild, music, .system) == "switchToSystem com.apple.Music",
+          "source quit: an app gone when the format-change rebuild starts stops it, or rebuilds with the whole system (S227 e)",
+          "\(quit(rebuild)), \(quit(rebuild, music, .system))")
+    check(quit(.rebuildFailed(SourceCapture.CaptureError.formatUnusable(1)), music, .system) == "keep",
+          "source quit: a rebuild that fails for another cause is no app quit")
+    // After a switch the source is the whole system; after a stop nothing streams.
+    check(quit(musicQuit, .system, .system) == "keep"
+            && quit(.terminated(bundleID: "com.apple.Music", streaming: false)) == "keep",
+          "source quit: the same quit reported again (the capture, then macOS) acts once (S227 f)")
+    check(WhenSourceQuits(defaultsValue: nil) == .stop && WhenSourceQuits(defaultsValue: "stop") == .stop
+            && WhenSourceQuits(defaultsValue: "System") == .stop && WhenSourceQuits(defaultsValue: "switch") == .stop
+            && WhenSourceQuits(defaultsValue: "system") == .system,
+          "source quit: the setting reads stop unless it says system (S227)")
+    let t = UIStrings()
+    let switched = t.sourceSwitchedToSystem(name: "Music", started: true)
+    let notStarted = t.sourceSwitchedToSystem(name: "Music", started: false)
+    check(switched.contains("Music") && switched.contains(t.sourceSystem)
+            && notStarted.contains("Music") && notStarted.contains(t.sourceSystem) && notStarted != switched,
+          "source quit: the notice names the app and All System Audio, also when the whole system couldn't start (S227)",
+          "\(switched) / \(notStarted)")
 }
 
 // MARK: The way out on an exit signal (SignalQuit, AppLifecycle.swift)
