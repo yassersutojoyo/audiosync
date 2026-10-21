@@ -695,6 +695,11 @@ enum NativeAirPlayPairings {
         folder(in: applicationSupport).appendingPathComponent(fileName)
     }
 
+    /// The AirPlay 2 device ID and HomeKit credentials, next to the pairings.
+    static func airPlay2File(in applicationSupport: URL) -> URL {
+        folder(in: applicationSupport).appendingPathComponent("airplay2-identity.dat")
+    }
+
     /// Where builds before the folder kept the file: in `appFolder(in:)`.
     static func olderFile(in applicationSupport: URL) -> URL {
         appFolder(in: applicationSupport).appendingPathComponent(fileName)

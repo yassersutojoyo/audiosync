@@ -11,6 +11,7 @@ use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
+use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{Sender, SenderConfig, SpeakerEvent, SpeakerOptions, SpeakerState};
 use audiosync_airplay::volume::Volume;
 
@@ -275,5 +276,72 @@ fn a_refused_airplay2_speaker_starts_once_the_session_ends() {
     );
     assert_eq!(second.fake().connections, 1);
     assert_eq!(third.fake().connections, 0);
+    sender.shutdown();
+}
+
+// covers: P5, P152
+#[test]
+fn homekit_credentials_and_the_device_id_persist_through_the_host() {
+    let _serial = serial();
+    let mut fake = FakeAp2::new();
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x80),
+    )]));
+    let server = Ap2Server::start(fake);
+    let (sender, _host) = start();
+    sender.set_airplay2_device_id([0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F]);
+    let mut events = Events::default();
+
+    // A password pairing hands its credentials to the host.
+    let device = airplay2_only(&server, 48);
+    let key = device.key.clone();
+    let mut with_password = options();
+    with_password.password = Some(Secret::new("3939".to_owned()));
+    sender.add_speaker(device.clone(), with_password);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?} {:?}",
+        events.of(&key),
+        server.fake().keys()
+    );
+    let stored = events
+        .of(&key)
+        .into_iter()
+        .find_map(|event| match event {
+            SpeakerEvent::HomeKitPaired(credentials) => Some(credentials),
+            _ => None,
+        })
+        .expect("the credentials reach the host");
+    assert!(!format!("{stored:?}").contains("seed"));
+    let setup = server.fake().last("SETUP session").cloned().expect("SETUP");
+    let body = common::ap2::read_dict(&setup.body).expect("plist");
+    assert_eq!(
+        body.get("deviceID").and_then(plist::Value::as_string),
+        Some("0A:0B:0C:0D:0E:0F")
+    );
+    sender.shutdown();
+
+    // A new sender, as after a relaunch: the stored credentials verify, and
+    // no pair-setup goes out.
+    server.fake().requests.clear();
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let mut stored_options = options();
+    stored_options.homekit_credentials = Some(stored);
+    sender.add_speaker(device, stored_options);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?} {:?}",
+        events.of(&key),
+        server.fake().keys()
+    );
+    let keys = server.fake().keys();
+    assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    assert!(!keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
     sender.shutdown();
 }

@@ -88,6 +88,7 @@ pub(crate) enum Command {
     },
     SubmitPin(DeviceKey, Secret),
     CancelPairing(DeviceKey),
+    SetAirPlay2DeviceId([u8; 6]),
     Shutdown,
 }
 
@@ -1075,6 +1076,7 @@ impl Driver {
             }
             Command::SetLatency(frames) => self.stream.set_latency(frames, now),
             Command::RestartTimeline => self.stream.restart(now),
+            Command::SetAirPlay2DeviceId(id) => self.device_id = id,
             Command::StartDiscovery(browser) => {
                 self.browser = Some(browser);
                 self.poll_discovery();

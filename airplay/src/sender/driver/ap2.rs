@@ -324,8 +324,12 @@ impl Driver {
             Ap2Event::Server(server) => self.emit_speaker(key, SpeakerEvent::Server(server)),
             Ap2Event::Credentials(credentials) => {
                 // Kept for the sender's lifetime, so later sessions verify
-                // instead of pairing again.
-                self.homekit.insert(key.clone(), credentials);
+                // instead of pairing again, and handed to the host to store.
+                if let Some(speaker) = self.speakers.get_mut(key) {
+                    speaker.options.homekit_credentials = Some(credentials.clone());
+                }
+                self.homekit.insert(key.clone(), credentials.clone());
+                self.emit_speaker(key, SpeakerEvent::HomeKitPaired(credentials));
             }
             Ap2Event::TimingChosen(timing) => {
                 if timing == Timing::Ptp {

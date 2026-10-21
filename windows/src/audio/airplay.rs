@@ -148,6 +148,14 @@ pub trait AirPlayLink {
     /// driver thread ended): it lists, plays and reports nothing anymore,
     /// and only a new sender brings AirPlay back.
     fn is_running(&self) -> bool;
+
+    /// Whether the hidden AirPlay 2 switch is on for this sender.
+    fn airplay2(&self) -> bool {
+        false
+    }
+
+    /// The stored AirPlay 2 device ID, for its AirPlay 2 sessions.
+    fn set_airplay2_device_id(&mut self, _id: [u8; 6]) {}
 }
 
 /// A sender a [`SenderStarter`] started.
@@ -180,6 +188,7 @@ pub type SenderStarter = Box<dyn FnMut() -> Option<StartedSender>>;
 /// The real sender.
 pub struct SenderLink {
     sender: Sender,
+    airplay2: bool,
 }
 
 impl SenderLink {
@@ -192,8 +201,9 @@ impl SenderLink {
             airplay2: airplay2_switch(std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref()),
             ..SenderConfig::default()
         };
+        let airplay2 = config.airplay2;
         let (sender, input) = Sender::start(config)?;
-        Ok((SenderLink { sender }, input))
+        Ok((SenderLink { sender, airplay2 }, input))
     }
 
     /// Starts browsing for receivers.
@@ -258,6 +268,14 @@ impl AirPlayLink for SenderLink {
 
     fn is_running(&self) -> bool {
         self.sender.is_running()
+    }
+
+    fn airplay2(&self) -> bool {
+        self.airplay2
+    }
+
+    fn set_airplay2_device_id(&mut self, id: [u8; 6]) {
+        self.sender.set_airplay2_device_id(id);
     }
 }
 
@@ -660,7 +678,7 @@ impl AirPlaySpeakers {
         store: PairingStore,
     ) -> AirPlaySpeakers {
         let latency = link.latency();
-        AirPlaySpeakers {
+        let mut speakers = AirPlaySpeakers {
             link,
             listed: BTreeMap::new(),
             settings: BTreeMap::new(),
@@ -684,7 +702,20 @@ impl AirPlaySpeakers {
             store_kept_aside: None,
             now_playing: None,
             log,
+        };
+        speakers.open_airplay2();
+        speakers
+    }
+
+    /// Hands a sender with the hidden AirPlay 2 switch on the stored device
+    /// ID; with the switch off the identity file is never touched.
+    fn open_airplay2(&mut self) {
+        if !self.link.airplay2() {
+            return;
         }
+        let (id, found) = self.store.open_airplay2();
+        self.log.log(|| format!("AirPlay 2 identity: {found}"));
+        self.link.set_airplay2_device_id(id);
     }
 
     /// Takes in whether a write of the pairings' file worked: a change from
@@ -731,6 +762,7 @@ impl AirPlaySpeakers {
         self.password_asks.retain(|_, ask| !ask.pair);
         self.latency = self.link.latency();
         self.stopped = false;
+        self.open_airplay2();
         self.log.log(|| {
             format!(
                 "AirPlay: a new sender runs, L = {} ms; the speakers that were on join once listed",
@@ -1301,6 +1333,7 @@ impl AirPlaySpeakers {
         let mut options = SpeakerOptions::new(airplay_volume(settings.volume, self.master));
         options.delay = speaker_delay(settings.delay_ms);
         options.credentials = self.store.get(id).cloned();
+        options.homekit_credentials = self.store.homekit(id).cloned();
         options.password = self.password(id);
         options
     }
@@ -1792,6 +1825,20 @@ impl AirPlaySpeakers {
             SpeakerEvent::Server(server) => {
                 self.log
                     .log(|| format!("AirPlay speaker {} server: {server}", self.label(id)));
+                false
+            }
+            SpeakerEvent::HomeKitPaired(credentials) => {
+                let saved = self.store.insert_homekit(id, credentials);
+                self.log.log(|| {
+                    let saved = match &saved {
+                        Ok(()) => String::new(),
+                        Err(error) => format!(" for this run only ({error})"),
+                    };
+                    format!(
+                        "AirPlay speaker {}: paired on AirPlay 2, credentials kept{saved}",
+                        self.label(id)
+                    )
+                });
                 false
             }
             SpeakerEvent::Methods(_)
