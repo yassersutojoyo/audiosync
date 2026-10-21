@@ -59,7 +59,7 @@
 //!   renderer then publishes the output time of the fade's last frame, when
 //!   the host gives each callback's output time (the Mac), and counts the
 //!   frames it rendered after that frame, which the host compares with what
-//!   its endpoint still holds (Windows, [`endpoint_faded`]).
+//!   its endpoint still holds (Windows, [`fade_tail_frames`]).
 //! - [`RendererControl::set_delay_frames`] while the renderer plays fades out
 //!   first; only after the fade-out's last frame does the reader get the new
 //!   delay and its resync request, so it still lands exactly on the delay
