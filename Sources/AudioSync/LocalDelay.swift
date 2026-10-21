@@ -120,6 +120,10 @@ enum LocalDelay {
         return kept
     }
 
+    /// The field's text after an edit is one it can hold, so the edit goes
+    /// in; otherwise the field blocks it before it shows.
+    static func fieldAccepts(_ proposed: String) -> Bool { fieldText(proposed) == proposed }
+
     /// An offset typed in a speaker's delay field, clamped to S175's range;
     /// nil for text the field ignores.
     static func parseOffset(_ text: String) -> Double? { wholeMs(text).flatMap(sanitizedOffset) }
@@ -193,8 +197,8 @@ struct AirPlayDelay: Equatable {
 }
 
 /// A delay field's typed text (S181). Keystrokes only change the text; the
-/// value applies on commit (Return, Command-S, its panel closing; see
-/// `DelayPanels`), once, so typing "220" doesn't re-time the outputs at 2 and
+/// value applies on commit (Return, Command-S, the focus leaving the field,
+/// its panel closing; see `DelayPanels`), once, so typing "220" doesn't re-time the outputs at 2 and
 /// 22 ms on the way. Text the field can't read, or the saved value typed
 /// again, applies nothing, and the field shows the saved value again.
 struct DelayFieldDraft: Equatable {
@@ -210,7 +214,7 @@ struct DelayFieldDraft: Equatable {
         isEditing = true
     }
 
-    /// Return, Command-S or its panel closing: the value to apply (clamped
+    /// Return, Command-S, the focus leaving or its panel closing: the value to apply (clamped
     /// to the delay's range by `sanitize`, and shown that way), or nil when
     /// there is nothing to apply. A second commit without typing in between
     /// returns nil.
@@ -248,7 +252,30 @@ struct DelayFieldDraft: Equatable {
         text = format(saved)
     }
 
-    /// Drop the typing and show the saved value (a step button applied one).
+    /// The keyboard focus came to the field or left it: leaving commits
+    /// like Return, whatever took the focus (Tab, another field, a click on
+    /// a control).
+    mutating func focusChanged(to focused: Bool, saved: Double, sanitize: (Double) -> Double?,
+                               format: (Double) -> String) -> Double? {
+        focused ? nil : commit(saved: saved, sanitize: sanitize, format: format)
+    }
+
+    /// A step button: `delta` on top of the typed value when it reads, else
+    /// on the saved one, so typing 100 and then +10 applies 110, once. Nil
+    /// when the result is the saved value (a step past the range's end).
+    mutating func step(_ delta: Double, saved: Double, sanitize: (Double) -> Double?,
+                       format: (Double) -> String) -> Double? {
+        let typed = isEditing ? LocalDelay.wholeMs(text).flatMap(sanitize) : nil
+        isEditing = false
+        guard let value = sanitize((typed ?? saved) + delta), value != saved else {
+            text = format(saved)
+            return nil
+        }
+        text = format(value)
+        return value
+    }
+
+    /// Drop the typing and show the saved value.
     mutating func discard(saved: Double, format: (Double) -> String) {
         isEditing = false
         text = format(saved)
@@ -260,11 +287,12 @@ struct DelayFieldDraft: Equatable {
 }
 
 /// The delay panels that are open (S181). A click on a row's delay value or
-/// anywhere on its row toggles that row's panel, and every other panel's
-/// typing applies first, those panels staying open. A click in the window
-/// outside every speaker row closes them all, applying each one's typing;
-/// Escape drops every typed delay and closes them all. Return and Command-S
-/// apply without closing; leaving a field for another control applies nothing.
+/// anywhere on its row (its open panel's blank space included) toggles that
+/// row's panel, and every other panel's typing applies first, those panels
+/// staying open. A click in the window outside every speaker row closes them
+/// all, applying each one's typing; Escape drops every typed delay and closes
+/// them all. Return, Command-S and leaving a field for another control apply
+/// without closing.
 struct DelayPanels: Equatable {
     private(set) var open: Set<String> = []
 

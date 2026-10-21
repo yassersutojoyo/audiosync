@@ -231,12 +231,28 @@ final class SyncDraft: ObservableObject {
     /// row's delay value tints on it, and not when its number changes for
     /// another reason.
     @Published var applied = 0
-    /// A keystroke the field can't take, shown until the next run of the
-    /// main loop (`SyncControls`).
-    @Published var rejected: String?
-    /// The field has the keyboard focus, which its row's delay value takes
-    /// back when a click outside closes the panel.
-    var fieldFocused = false
+    /// The field just blocked a keystroke or part of a paste: it shows the
+    /// error outline and says what it takes until the next keystroke it
+    /// keeps, or for a moment.
+    @Published private(set) var blocked = false
+    private var unblock: DispatchWorkItem?
+    /// The field has the keyboard focus: its error outline then also stands
+    /// in for the focus ring, and its row's delay value takes the focus back
+    /// when the panel closes under it.
+    @Published var fieldFocused = false
+
+    func block() {
+        blocked = true
+        unblock?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.blocked = false }
+        unblock = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: item)
+    }
+
+    func clearBlock() {
+        unblock?.cancel()
+        if blocked { blocked = false }
+    }
 }
 
 // MARK: - Status item and panel
