@@ -524,6 +524,11 @@ pub struct App {
     /// Windows by themselves, after it AudioSync sets their palette and
     /// frame, for Match System too.
     themed_by_hand: Cell<bool>,
+    /// The main window's native window and the menu bar theme last sent to
+    /// it. muda answers that message by toggling the window's activation,
+    /// which comes back as a focus that applies the frame again, so it is sent
+    /// only when it changed.
+    menu_bar_theme: Cell<Option<(isize, bool)>>,
     /// Whether each window got its Windows 11 frame, as last logged.
     frames: RefCell<HashMap<&'static str, bool>>,
     /// Called after every refresh, e.g. to update the tray icon and tooltip.
@@ -680,6 +685,7 @@ impl App {
             tray_available: Cell::new(false),
             appearance: Cell::new(ui_model::Appearance::System),
             themed_by_hand: Cell::new(false),
+            menu_bar_theme: Cell::new(None),
             frames: RefCell::default(),
             on_refresh: RefCell::new(None),
             notice_announcer: RefCell::default(),
@@ -891,9 +897,25 @@ impl App {
             self.guide.window(),
             self.help.window(),
         ] {
-            let main = std::ptr::eq(window, self.main.window());
             self.theme_frame(window);
-            crate::platform::repaint_frame(window, main, dark);
+            if std::ptr::eq(window, self.main.window()) {
+                self.theme_menu_bar();
+            } else {
+                crate::platform::repaint_frame(window, false, dark);
+            }
+        }
+    }
+
+    /// Sends the main window's menu bar the appearance, unless that native
+    /// window already has it (`menu_bar_theme`).
+    fn theme_menu_bar(&self) {
+        let window = self.main.window();
+        let Some(id) = crate::platform::native_id(window) else {
+            return;
+        };
+        let dark = self.shows_dark();
+        if self.menu_bar_theme.replace(Some((id, dark))) != Some((id, dark)) {
+            crate::platform::repaint_frame(window, true, dark);
         }
     }
 
@@ -921,7 +943,7 @@ impl App {
         // Slint gives the main window's menu bar the Windows theme when it
         // creates it.
         if self.themed_by_hand.get() && std::ptr::eq(window, self.main.window()) {
-            crate::platform::repaint_frame(window, true, self.shows_dark());
+            self.theme_menu_bar();
         }
         // Before the event loop runs there is no native window yet; the
         // window's first focus (see `follow_frame`) tries again.
@@ -1018,6 +1040,7 @@ impl App {
                         with_app(&weak, |app| {
                             app.use_brand_accent(window(app));
                             if app.themed_by_hand.get() {
+                                app.menu_bar_theme.set(None);
                                 app.follow_appearance();
                             }
                         });

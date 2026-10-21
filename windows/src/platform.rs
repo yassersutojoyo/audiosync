@@ -501,6 +501,26 @@ pub fn repaint_frame(window: &slint::Window, menu_bar: bool, dark: bool) {
 #[cfg(not(windows))]
 pub fn repaint_frame(_window: &slint::Window, _menu_bar: bool, _dark: bool) {}
 
+/// The handle of `window`'s native window, to tell it from one created after
+/// it; `None` while it has none.
+#[cfg(windows)]
+pub fn native_id(window: &slint::Window) -> Option<isize> {
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    window
+        .with_winit_window(|window| match window.window_handle().ok()?.as_raw() {
+            RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
+            _ => None,
+        })
+        .flatten()
+}
+
+#[cfg(not(windows))]
+pub fn native_id(_window: &slint::Window) -> Option<isize> {
+    None
+}
+
 /// Whether the taskbar (and the notification area) uses the light theme, so
 /// the tray icon picks its dark-on-light variant. Dark when it can't be read,
 /// the Windows 11 default.
