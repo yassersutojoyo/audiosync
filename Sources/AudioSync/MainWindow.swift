@@ -825,6 +825,24 @@ private struct DelayValueButton: View {
     }
 }
 
+/// The one ring `DelayFieldRings` asks for, as a single shape: a change of
+/// state moves and recolors it, and never fades a second ring in beside it.
+/// The focus ring sits 3 pt outside the bezel like AppKit's; the red outline
+/// sits on the bezel, or 2 pt outside it while the field has the focus.
+private struct DelayFieldRing: View {
+    let rings: DelayFieldRings
+
+    var body: some View {
+        let outset: CGFloat = rings.focusRing ? 3 : rings.redOutsideBezel ? 2 : 0
+        let width: CGFloat = rings.focusRing ? 3 : rings.redOutsideBezel ? 2 : 1.5
+        RoundedRectangle(cornerRadius: 6 + outset)
+            .strokeBorder(rings.focusRing ? Color(nsColor: .keyboardFocusIndicatorColor) : Brand.errorText,
+                          lineWidth: width)
+            .padding(-outset)
+            .opacity(rings.focusRing || rings.redOutlines > 0 ? 1 : 0)
+    }
+}
+
 /// The dashed line under a delay field that holds typing not yet applied.
 private struct DraftUnderline: Shape {
     func path(in rect: CGRect) -> Path {
@@ -837,8 +855,8 @@ private struct DraftUnderline: Shape {
 
 /// A delay field as an AppKit text field. SwiftUI's own field shows a
 /// keystroke before its binding can turn it down, so a blocked character
-/// flashed in and out; a formatter here blocks it before it shows. It also
-/// hides the focus ring while the panel's error outline stands in for it.
+/// flashed in and out; a formatter here blocks it before it shows. AppKit's
+/// focus ring is off: `DelayFieldRing` draws the one ring the field shows.
 private struct DelayTextField: NSViewRepresentable {
     /// The row's key in `delayPanels`, for the main window's click monitor.
     let rowID: String
@@ -846,7 +864,6 @@ private struct DelayTextField: NSViewRepresentable {
     let placeholder: String
     let label: String
     let hint: String
-    let showsError: Bool
     let typed: (String) -> Void
     /// A keystroke, or part of a paste, the field turned down.
     let blocked: () -> Void
@@ -860,6 +877,8 @@ private struct DelayTextField: NSViewRepresentable {
         let field = Field()
         field.isBezeled = true
         field.bezelStyle = .roundedBezel
+        // Off from the start; turned off mid-edit it stayed drawn (`DelayFieldRings.appKitRing`).
+        field.focusRingType = .none
         field.alignment = .center
         field.font = .monospacedDigitSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize,
                                                 weight: .regular)
@@ -884,12 +903,6 @@ private struct DelayTextField: NSViewRepresentable {
         field.placeholderString = placeholder
         field.setAccessibilityLabel(label)
         field.setAccessibilityHelp(hint)
-        let ring: NSFocusRingType = showsError ? .none : .default
-        if field.focusRingType != ring {
-            field.focusRingType = ring
-            field.noteFocusRingMaskChanged()
-            field.currentEditor()?.noteFocusRingMaskChanged()
-        }
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
@@ -1048,6 +1061,11 @@ struct SyncControls: View {
     let escape: () -> Void
     let apply: (Double) -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// AppKit hides the focus ring while the window isn't active; the drawn
+    /// one follows.
+    @Environment(\.appearsActive) private var appearsActive
+
     var body: some View {
         // Typing not yet applied: a dashed underline under the field and a
         // hint under the steps, so the cue isn't color alone. Out of range,
@@ -1058,12 +1076,12 @@ struct SyncControls: View {
         let invalid = outOfRange || draft.blocked
         let problem = outOfRange ? rangeMessage : text.delayFieldTakes
         let cue = invalid ? problem : pending ? text.delayDraftHint : ""
+        let rings = DelayFieldRings(invalid: invalid, focused: draft.fieldFocused && appearsActive)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 4) {
                 step(-100)
                 step(-10)
                 DelayTextField(rowID: id, text: draft.field.text, placeholder: text.delayFieldLabel, label: label, hint: cue,
-                               showsError: invalid,
                                typed: { typed in
                                    draft.clearBlock()
                                    draft.field.type(typed)
@@ -1077,23 +1095,12 @@ struct SyncControls: View {
                                escape: escape,
                                focusChanged: focusChanged)
                 .frame(width: 72)
-                // The outline animates in and out; while the field has the
-                // focus a second ring stands in for the focus ring, which
-                // would clash with it (`DelayTextField` hides that one).
+                .focusEffectDisabled()
                 .overlay {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(Brand.errorText, lineWidth: 1.5)
-                        RoundedRectangle(cornerRadius: 8)
-                            .strokeBorder(Brand.errorText, lineWidth: 2)
-                            .padding(-3)
-                            .opacity(draft.fieldFocused ? 1 : 0)
-                    }
-                    .opacity(invalid ? 1 : 0)
-                    .animation(.easeOut(duration: 0.15), value: invalid)
-                    .animation(.easeOut(duration: 0.15), value: draft.fieldFocused)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+                    DelayFieldRing(rings: rings)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: rings)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
                 // Below the focus ring, so the two don't overlap.
                 .overlay(alignment: .bottom) {

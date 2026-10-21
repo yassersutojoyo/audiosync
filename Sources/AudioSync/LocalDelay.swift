@@ -286,8 +286,10 @@ struct DelayFieldDraft: Equatable {
     mutating func drop() { isEditing = false }
 }
 
-/// The rings around a delay field, from whether its text is invalid (out of
-/// range, or a keystroke just blocked) and whether it has the keyboard focus.
+/// The ring around a delay field, from whether its text is invalid (out of
+/// range, or a keystroke just blocked) and whether it has the keyboard focus:
+/// one at most. While invalid, a red outline replaces the focus ring and,
+/// focused, sits where the focus ring goes, so it marks the focus too.
 struct DelayFieldRings: Equatable {
     /// A ring in the system's focus color.
     let focusRing: Bool
@@ -296,14 +298,15 @@ struct DelayFieldRings: Equatable {
     /// The red outline sits outside the bezel, where the focus ring goes,
     /// rather than on it.
     let redOutsideBezel: Bool
-    /// AppKit draws its own focus ring for the field.
-    let appKitRing: Bool
+    /// AppKit draws its own focus ring for the field. Never: turned off while
+    /// the field was being edited, it stayed under the red outline (Mac check,
+    /// 2026-10-21), so `focusRing` draws in its place.
+    var appKitRing: Bool { false }
 
     init(invalid: Bool, focused: Bool) {
         focusRing = focused && !invalid
-        redOutlines = invalid ? (focused ? 2 : 1) : 0
+        redOutlines = invalid ? 1 : 0
         redOutsideBezel = invalid && focused
-        appKitRing = !invalid
     }
 }
 
