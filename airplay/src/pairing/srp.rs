@@ -202,7 +202,7 @@ impl SrpGroup {
     }
 
     fn params(&self) -> FixedMontyParams<{ U4096::LIMBS }> {
-        // Both primes are odd, and a group is only made from those
+        // Every RFC 5054 prime is odd, and a group is only made from those
         // constants, so this never fails.
         let modulus = Odd::new(widen(self.prime)).expect("an odd prime");
         FixedMontyParams::new_vartime(modulus)

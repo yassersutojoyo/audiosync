@@ -287,6 +287,18 @@ impl FakeHomeKit {
         self.connections += 1;
     }
 
+    /// The premaster secret S, padded, a client with this a gets against the
+    /// B of the last M2: for tests that need a short S.
+    pub fn premaster_of(&self, a: &[u8]) -> Vec<u8> {
+        let group = Group::new();
+        pad(&group.premaster(&public_of(a), &self.verifier, &self.b_pub, &self.b))
+    }
+
+    /// B of the last M2, as sent.
+    pub fn b_pub(&self) -> &[u8] {
+        &self.b_pub
+    }
+
     fn next_secret(&mut self) -> Vec<u8> {
         self.counter += 1;
         sha512(&[b"fake b", &self.counter.to_be_bytes()])[..32].to_vec()

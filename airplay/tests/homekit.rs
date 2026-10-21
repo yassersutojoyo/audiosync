@@ -360,6 +360,41 @@ fn srp_draws_a_until_a_is_full_and_retries_once_after_a_short_b() {
     assert!(matches!(end, SetupStep::Paired(_)), "{end:?}");
     assert_eq!(retries, 1);
 
+    // A full-length B but an S with a leading zero byte: the padding
+    // receiver answers M3 with error 2, and the sender retries once from M1.
+    let mut fake = FakeHomeKit::new("3939");
+    fake.hash_padded = true;
+    let mut setup = PairSetup::transient();
+    let m1 = setup.start();
+    let m2 = fake.answer(&m1);
+    assert_ne!(fake.b_pub()[0], 0, "B is full length");
+    let short_s = (0u32..8192)
+        .map(|i| hap::sha512(&[b"s", &i.to_be_bytes()])[..32].to_vec())
+        .find(|a| hap::public_of(a)[0] != 0 && fake.premaster_of(a)[0] == 0)
+        .expect("an a with a short S");
+    let mut entropy = TestEntropy::scripted(vec![short_s]);
+    let SetupStep::Send(m3) = setup.handle_response(&m2, &mut entropy) else {
+        panic!("M3");
+    };
+    let answer = fake.answer(&m3);
+    assert_eq!(hap::item(&hap::untlv(&answer.body), 7), Some(&[2][..]));
+    assert_eq!(
+        setup.handle_response(&answer, &mut entropy),
+        SetupStep::Retry
+    );
+    fake.new_connection();
+    let mut request = setup.restart();
+    assert_eq!(hap::untlv(&request.body), hap::untlv(&m1.body), "M1 again");
+    let end = loop {
+        let response = fake.answer(&request);
+        match setup.handle_response(&response, &mut entropy) {
+            SetupStep::Send(next) => request = next,
+            end => break end,
+        }
+    };
+    assert!(matches!(end, SetupStep::Transient(_)), "{end:?}");
+    assert_eq!(fake.connections, 2);
+
     // A retry that fails the same way is mapped as P150 says.
     let mut fake = FakeHomeKit::new("3939");
     fake.hash_padded = true;

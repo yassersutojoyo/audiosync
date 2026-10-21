@@ -101,8 +101,8 @@ For Apple TV pairing the sender also brings in RustCrypto's `sha1`, `sha2`,
 (`aead`, `cipher`, `ghash`, `polyval`, `universal-hash`, `inout`,
 `cpufeatures`, `cpubits`, `cmov`, `ctutils`, `rand_core`), and for HomeKit
 pairing RustCrypto's `chacha20poly1305` and `hkdf` with `chacha20`,
-`poly1305` and `hmac`, all MIT OR Apache-2.0; `ed25519-dalek`, `x25519-dalek` and `curve25519-dalek`
-(BSD-3-Clause) with `ed25519` and `signature` (Apache-2.0 OR MIT) and
+`poly1305` and `hmac`, all MIT OR Apache-2.0; `ed25519-dalek`,
+`x25519-dalek` and `curve25519-dalek` (BSD-3-Clause) with `ed25519` and `signature` (Apache-2.0 OR MIT) and
 `subtle` (BSD-3-Clause); `zeroize` (Apache-2.0 OR MIT); and `plist` (MIT) for
 the pairing's property lists, with `quick-xml` (MIT) and `time`,
 `time-core`, `deranged`, `powerfmt` and `num-conv` (MIT OR Apache-2.0), next
