@@ -620,7 +620,11 @@ fn audio_after_a_masked_range_or_a_dry_read_fades_in() {
     let resume = rig.played.len();
     assert!(rig.played[resume - N..].iter().all(|&sample| sample == 0.0));
     rig.ticks(4);
-    assert!(rig.played[resume..resume + LATENCY].iter().all(|&sample| sample == 0.0));
+    assert!(
+        rig.played[resume..resume + LATENCY]
+            .iter()
+            .all(|&sample| sample == 0.0)
+    );
     assert_fade(
         &rig.played[resume + LATENCY..],
         f64::from(A),

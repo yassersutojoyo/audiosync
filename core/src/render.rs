@@ -1019,8 +1019,8 @@ impl Renderer {
         };
         let callback = steady.max(frames);
         let block = self.reader.ring().block_frames().min(self.block_cap);
-        let lead =
-            reader_frames_bound(callback, self.capture_rate, self.device_rate).saturating_add(block);
+        let lead = reader_frames_bound(callback, self.capture_rate, self.device_rate)
+            .saturating_add(block);
         self.reader
             .set_lead_frames(i64::try_from(lead).unwrap_or(i64::MAX));
     }

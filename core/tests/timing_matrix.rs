@@ -1067,8 +1067,10 @@ fn the_capture_rate_output_that_sets_the_lead_runs_dry_only_after_a_late_start()
             "case {} runs dry without its wander:
 {}",
             case.k,
-            outcome.lines.join("
-")
+            outcome.lines.join(
+                "
+"
+            )
         );
     }
 }
@@ -1105,11 +1107,22 @@ fn a_late_second_callback_still_corrects_drift_or_plays_early_in_a_mac_case() {
             case.k, early_ms
         ));
     }
-    println!("{}", lines.join("
-"));
-    assert!(shown > 0, "no case shows it any more:
-{}", lines.join("
-"));
+    println!(
+        "{}",
+        lines.join(
+            "
+"
+        )
+    );
+    assert!(
+        shown > 0,
+        "no case shows it any more:
+{}",
+        lines.join(
+            "
+"
+        )
+    );
 }
 
 // covers: S85, S206, S207, S208
@@ -1119,17 +1132,21 @@ fn every_windows_case_holds_every_invariant() {
     // apply there: with every 48 kHz output converting at ratio 1 the
     // whole Windows platform passes, stall cases included.
     let cases = matrix().cases_where(|c| c.platform == Platform::Windows);
-    assert!(cases.iter().any(|(case, _)| {
-        case.devices.iter().any(|d| d.rate == CAPTURE_RATE)
-    }));
+    assert!(
+        cases
+            .iter()
+            .any(|(case, _)| { case.devices.iter().any(|d| d.rate == CAPTURE_RATE) })
+    );
     for (case, outcome) in cases {
         assert!(
             !outcome.fails.iter().any(|&f| f),
             "case {}:
 {}",
             case.k,
-            outcome.lines.join("
-")
+            outcome.lines.join(
+                "
+"
+            )
         );
     }
 }
@@ -1225,14 +1242,25 @@ fn a_bluetooth_output_that_sets_the_lead_gains_a_block_of_slack_and_the_others_f
         let mut bluetooth = wired.clone();
         bluetooth.devices[0].bluetooth = true;
         let (before, after) = (simulate(&wired), simulate(&bluetooth));
-        let report = format!("{}
-{}", before.lines.join("
-"), after.lines.join("
-"));
+        let report = format!(
+            "{}
+{}",
+            before.lines.join(
+                "
+"
+            ),
+            after.lines.join(
+                "
+"
+            )
+        );
         println!("{report}");
         for outcome in [&before, &after] {
             assert!(!outcome.fails.iter().any(|&f| f), "{report}");
-            assert!(outcome.dry_from_start.iter().all(|&dry| dry == 0), "{report}");
+            assert!(
+                outcome.dry_from_start.iter().all(|&dry| dry == 0),
+                "{report}"
+            );
         }
         let (was, is) = (before.slack_ms[0].unwrap(), after.slack_ms[0].unwrap());
         assert!(was > 0.0, "{platform:?}: {was} ms of slack");

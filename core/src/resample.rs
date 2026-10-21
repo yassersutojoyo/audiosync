@@ -757,7 +757,13 @@ mod tests {
                 0 => -0.0,
                 1 => 0.0,
                 2 => f32::from_bits(1 + i as u32 % 1000),
-                3 => if i % 2 == 0 { f32::MAX } else { f32::MIN },
+                3 => {
+                    if i % 2 == 0 {
+                        f32::MAX
+                    } else {
+                        f32::MIN
+                    }
+                }
                 _ => {
                     x ^= x << 13;
                     x ^= x >> 7;
@@ -780,7 +786,11 @@ mod tests {
         let differing = (0..48_000)
             .filter(|&j| {
                 (0..2).any(|c| {
-                    let want = if j < 21 { 0.0f32 } else { input[(j - 21) * 2 + c] };
+                    let want = if j < 21 {
+                        0.0f32
+                    } else {
+                        input[(j - 21) * 2 + c]
+                    };
                     out[j * 2 + c].to_bits() != want.to_bits()
                 })
             })
@@ -816,7 +826,9 @@ mod tests {
     fn at_ratio_one_only_a_trimming_call_filters_and_the_copy_goes_on_at_the_new_delay() {
         for (ahead, delay) in [(false, 22), (true, 20)] {
             let mut r = Resampler::new_at_ratio_one(48_000, 48_000).unwrap();
-            let source: Vec<f32> = (0..4096 * 2).map(|i| ((i / 2) as f32 * 0.01).sin()).collect();
+            let source: Vec<f32> = (0..4096 * 2)
+                .map(|i| ((i / 2) as f32 * 0.01).sin())
+                .collect();
             let mut at = 0;
             let before = pull(&mut r, &source, &mut at, 512, 512);
             let trimmed = if ahead {
@@ -837,7 +849,11 @@ mod tests {
             assert!(exact < 16, "ahead {ahead}: {exact} frames copied mid-trim");
             for j in 0..1024 {
                 let i = 1024 + j - delay;
-                assert_eq!(after[j * 2].to_bits(), source[i * 2].to_bits(), "ahead {ahead}, frame {j}");
+                assert_eq!(
+                    after[j * 2].to_bits(),
+                    source[i * 2].to_bits(),
+                    "ahead {ahead}, frame {j}"
+                );
             }
         }
     }
