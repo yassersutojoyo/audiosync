@@ -53,7 +53,7 @@ Provenance. Written on 2026-10-21 from public sources: Google's Cast developer d
 ## 3. Connection
 
 - **C19** The sender opens one TCP connection to the device (C15) and runs TLS over it as the client. The connection stays open for the whole session; every Cast message in both directions travels on it. *Source:* community protocol write-ups [oakbits], [node-castv2]; RFC 8446 and RFC 5246 (TLS).
-- **C20** Devices differ in the cipher suites they offer. The write-up lists ECDHE-RSA-AES128-GCM-SHA256 for the first Chromecast, ECDHE-RSA-AES256-GCM-SHA384 for Nexus Player and ECDHE-RSA-AES256-SHA (a CBC suite) for Chromecast Audio. The sender's TLS configuration MUST allow TLS 1.2 with ECDHE-RSA key exchange, both AES-GCM and AES-CBC-SHA suites included, and MAY offer TLS 1.3 as well. *Source:* community protocol write-up [oakbits]. *Required:* a connection that fails the handshake is reported with the TLS alert it got (C80), so a device with yet another suite shows up in the log.
+- **C20** Devices differ in the cipher suites they offer. The write-up lists ECDHE-RSA-AES128-GCM-SHA256 for the first Chromecast, ECDHE-RSA-AES256-GCM-SHA384 for Nexus Player and ECDHE-RSA-AES256-SHA (a CBC suite) for Chromecast Audio. The sender's TLS configuration MUST allow TLS 1.2 with ECDHE-RSA key exchange and AES-GCM suites, SHOULD also allow the AES-CBC-SHA suites so that older devices connect, and MAY offer TLS 1.3 as well. *Source:* community protocol write-up [oakbits] (2016; devices may have changed since). *Required:* a connection that fails the handshake is reported with the TLS alert it got (C80), so a device with another suite or protocol version shows up in the log; G4 tracks what older devices accept.
 - **C21** The device's TLS certificate is not issued for a host name and does not chain to a public certificate authority. The sender MUST NOT verify the chain or the host name, and MUST NOT fail the connection because of the certificate. It records the certificate's SHA-256 fingerprint per device `id` for diagnostics only; a changed fingerprint is logged and never blocks. *Source:* observed behavior of open-source senders [pychromecast] (TLS client with host name checking and certificate verification both off); AudioSync design. G4 tracks how often devices change certificates.
 - **C22** The channel is therefore encrypted but not authenticated: another host on the network could pose as the device. The sender sends nothing over it that is secret beyond the session's stream URL (C57), which is worth one session of audio and dies with it. *Source:* derived from C21; AudioSync design.
 - **C23** Each message on the channel is a 4-byte unsigned big-endian length followed by that many bytes of one serialized `CastMessage`. The length counts only the message bytes, not itself. Reads assemble a whole message before parsing; a message can arrive split across TLS records or several can arrive in one. *Source:* community protocol write-ups [node-castv2], [oakbits]; observed behavior of open-source senders [pychromecast].
@@ -73,7 +73,7 @@ Provenance. Written on 2026-10-21 from public sources: Google's Cast developer d
 - **C28** Messages on those four namespaces use `payload_type` `STRING`, with one JSON object in `payload_utf8`. Every object has a string `type` that names the message. Unknown `type` values and unknown fields are ignored; a payload that isn't valid JSON drops that one message and is logged, without closing the channel. *Source:* community protocol write-up [node-castv2] (JSON in the UTF-8 field); RFC 8259; AudioSync design.
 - **C29** Requests on the receiver and media namespaces carry an integer `requestId`. The sender starts at a random positive value per channel and adds one per request, never uses 0, and never reuses a value on that channel. The device echoes the `requestId` in its reply and in the status broadcast the request caused; spontaneous status updates carry 0. A request without a reply within its own timeout counts as failed. Connection and heartbeat messages carry no `requestId`. *Source:* Google Cast media messages [cast-messages]; community protocol write-up [node-castv2]; observed behavior of open-source senders [pychromecast] (PONG without a request id).
 - **C30** Device authentication runs on `urn:x-cast:com.google.cast.tp.deviceauth`: a sender that chooses to authenticate the device sends a challenge to `receiver-0` as a binary payload, and the device answers either with a response (a signature, the device certificate and the intermediate certificates that chain it to Google) or with an error (an internal error, or that the connection is not TLS). It lets a sender check that it talks to a genuine Cast device. *Source:* community protocol write-up [node-castv2]; [oakbits] (the messages are defined in the same protocol file as `CastMessage`).
-- **C31** No source reports that a Cast device or the Default Media Receiver requires a sender to authenticate the device, or authenticates the sender in turn: the write-up calls the step optional from the sender's side, while official SDKs perform it. The sender in this version does not send the challenge and ignores any inbound message on the device authentication namespace. *Source:* community protocol write-up [node-castv2]; observed behavior of open-source senders [pychromecast], [go-chromecast], [catt] (none of the parts studied sends the challenge before launching the Default Media Receiver). G14 tracks a device that would refuse.
+- **C31** No source reports that a Cast device or the Default Media Receiver requires a sender to authenticate the device, or authenticates the sender in turn: the write-up calls the step optional from the sender's side, while official SDKs perform it. The sender in this version does not send the challenge and ignores any inbound message on the device authentication namespace. *Source:* community protocol write-up [node-castv2]; observed behavior of open-source senders [pychromecast] (its connection code, as read, launches the Default Media Receiver without a device authentication step). G14 tracks a device that would refuse.
 
 ## 4. Session
 
@@ -158,3 +158,96 @@ Provenance. Written on 2026-10-21 from public sources: Google's Cast developer d
 - **C86** While playing, `IDLE` with `INTERRUPTED` or `CANCELLED`, or a `MEDIA_STATUS` naming another `mediaSessionId` or content, means someone else replaced or stopped the stream: C43 applies, no reload. `IDLE` with `ERROR` is reported and handled as C81 once, then ends the session. `IDLE` with `FINISHED` happens only when the stream response ended; if the sender did not end it, it reloads once. *Source:* Google Cast media messages [cast-messages]; observed behavior of open-source senders [go-chromecast] (`FINISHED` and `INTERRUPTED` treated as the end of playback); AudioSync design.
 - **C87** When the user stops the stream, the sender, in order: sends media `STOP` with the `mediaSessionId`; sends receiver `STOP` with the recorded `sessionId` if the status still lists the Default Media Receiver with that `sessionId`; sends `CLOSE` to the `transportId` and to `receiver-0`; closes TLS; ends the stream response and closes the listener. Each step waits at most 2 s for a reply, and a missing reply never blocks the next step. It never stops an app it did not launch or reuse. *Source:* Google Cast media messages [cast-messages] (media `STOP`); community protocol write-up [node-castv2] (`STOP`, `CLOSE`); AudioSync design.
 - **C88** When the host quits, the sender runs C87 with 3 s in total, then drops whatever is left. A device left with a loaded app and no sender is harmless: the app goes idle when its fetch ends, and the device drops the dead channel (C35). *Source:* AudioSync design; community protocol write-up [node-castv2].
+
+## 9. Gaps
+
+What a sender needs that no source used here settles. Each gap names the clauses it touches and what would close it. Gaps marked *hardware* need a real Cast device.
+
+- **G1 Cast groups** (C3, C14). Unknown: whether a group's own port speaks the same channel protocol, whether the Default Media Receiver launched there plays on every member, what latency a group adds, and whether port alone tells a group apart. Settle: *hardware*, a group of two Cast speakers; connect to the group's port, launch, `LOAD` the WAV stream, record what each member plays and the platform status of the group and its members.
+- **G2 Several Cast devices in one stream** (C2). Unknown: how far apart two devices fed the same stream play, and whether that spread holds over a run. Settle: *hardware*, two devices side by side, each with its own session, a click train recorded by one microphone; ten starts, 60 minutes each.
+- **G3 TXT keys** (C13). Unknown: what `ca`, `rs`, `st`, `bs`, `cd`, `rm` and `nf` mean, and which of the two readings of `ca` is right. Settle: TXT records captured from several models in several states (idle, playing, in a group), compared key by key; any Google documentation that names them.
+- **G4 Receiver TLS** (C20, C21). Unknown: how long a device keeps its TLS certificate, whether it changes on reboot or on a schedule, and which TLS versions and suites older models accept today. Settle: *hardware*, the fingerprint and negotiated suite logged at every connect over a week, with reboots, on old and new models.
+- **G5 Live WAV and FLAC** (C63). Unknown: whether each model plays WAV whose size fields hold their largest value, whether playback stops when the declared size runs out (after about 6 h 12 min at 48 000 Hz), and whether native FLAC with an unknown length plays and starts as fast. Settle: *hardware*, per model and format, one start and one run longer than 6 h 30 min.
+- **G6 HTTP behavior** (C59, C60). Unknown: whether every model accepts a chunked body for each format, what request headers it sends (`Range`, `Icy-MetaData` and others), and whether any model insists on `206`. Settle: *hardware*, the stream server logs request headers from each model; a fake-receiver test cannot answer it.
+- **G7 Latency and drift** (C74, C75, C77, C79). Unknown: the startup latency per model and format with this sender, how much it varies between starts, and how fast it drifts. This gap decides whether Cast can ever be more than a measured offset. Settle: *hardware*, the host plays a click train to a local speaker and the Cast device, one microphone records both; ten starts per format, then a 60-minute run with the offset logged every minute.
+- **G8 What `currentTime` means for a live stream** (C73, C78). Unknown: whether it advances with what is heard, from what zero, and how often the device reports it unasked. Settle: *hardware*, during the G7 run, log `currentTime` next to the measured offset and the duration sent.
+- **G9 Start behavior** (C48, C52). Unknown: whether `BUFFERED` instead of `LIVE`, or an explicit `PLAY` after `LOAD`, changes how much the receiver buffers before `PLAYING`. Settle: *hardware*, G7's start measurement repeated for each variant.
+- **G10 Metadata updates** (C54). Unknown: a way to change title, artist or artwork of a playing live item on the Default Media Receiver without a reload. Settle: Google's media and queue documentation read for such a message, then *hardware*, the candidate tried during playback.
+- **G11 Volume** (C69). Unknown: whether devices round levels to `stepInterval`, and how `level` maps to loudness. Settle: *hardware*, levels in small steps sent and the reported level logged; loudness measured at a few levels.
+- **G12 Device heartbeat timeout** (C35). Unknown: how long a device waits for a silent sender before it closes the channel. Settle: *hardware*, the sender stops answering `PING` and logs when the device closes.
+- **G13 Newer firmware** (C26, C47). Unknown: whether any current device needs `contentUrl` instead of `contentId`, or a sender id other than `sender-0` for app traffic. Settle: *hardware*, the session run against the newest devices at hand; a failure there is retried with `contentUrl` set and a random sender id.
+- **G14 Device authentication** (C31). Unknown: whether any device or firmware refuses a sender that skips the device authentication step. No source reports one. Settle: watch for a `CLOSE` or `LAUNCH_ERROR` right after connect on any device, and record the model and firmware.
+
+## 10. Test map
+
+The sender's tests run against a fake receiver in the same process: a TLS server on an ephemeral port with a self-signed certificate that speaks the framing of section 3, answers on the connection, heartbeat, receiver and media namespaces as this document describes, and acts as the device for the HTTP fetch, with switches for each case below (slow or missing replies, error replies, `CLOSE`, an app taken over, a fetch that never comes, a slow reader). A fake multicast DNS responder serves the discovery cases. Names are suggestions; what matters is what each test checks. Gaps marked *hardware* in section 9 can't be settled in CI.
+
+| Test | Clauses | Checks |
+|---|---|---|
+| scope_limits | C1 to C7, C9 | a second Cast device in one stream is refused with a reason; a group is listed and refused; no message carries a host name, user name or hardware address |
+| audio_handoff_realtime | C8 | the host's write call does not allocate or block, checked with an allocation counter and a stalled network thread |
+| discovery_browse | C10, C11, C15 | PTR, SRV, TXT and address records resolve to a device with the announced address and port; subtype instances are ignored |
+| discovery_txt | C12, C13 | `id`, `fn`, `md`, `ve` and `ic` are read; an instance without a valid UUID `id` is skipped; unknown keys and strings without `=` are ignored; `ca` changes nothing |
+| discovery_groups_and_merge | C14, C16, C17, C18 | a port other than 8009 marks a group; one `id` on two interfaces is one device; a goodbye during a session keeps the device listed; a manual address works without TXT |
+| tls_any_certificate | C19, C20, C21 | a self-signed certificate with a wrong host name is accepted; a TLS 1.2 server offering only ECDHE-RSA-AES256-SHA connects; a changed fingerprint is logged and allowed |
+| framing | C23, C24, C25 | messages split across reads and several in one read are parsed; a length over 65 536 or a broken message closes the channel; outbound messages decode as the fields of C24 |
+| endpoints_and_json | C26, C27, C28 | messages for another destination or namespace are dropped; malformed JSON drops one message and keeps the channel |
+| request_ids | C29 | ids start random and non-zero, increase by one, never repeat; replies match their request; a missing reply times out |
+| device_auth_ignored | C30, C31 | no challenge is sent; an inbound deviceauth message is ignored |
+| connect_and_status | C32, C33, C37, C38 | `CONNECT` then `GET_STATUS` go to `receiver-0`; defaults apply to missing volume fields; an unasked `RECEIVER_STATUS` updates the state |
+| heartbeat | C34, C35, C36 | `PING` every 5 s; each device `PING` gets a `PONG`; 15 s of silence closes the channel |
+| launch | C39, C40, C41, C42 | an idle device gets `LAUNCH` of `CC1AD845`; a running Default Media Receiver is reused; `CANCELLED` retries once; no status in 15 s fails; `CONNECT` goes to the `transportId` before any media message |
+| taken_over | C43, C86 | the app disappearing from the status, or `IDLE` with `INTERRUPTED`, ends the session as taken over with no relaunch |
+| load_message | C45 to C48, C53 | `LOAD` has the URL in `contentId`, no `contentUrl`, `streamType` `LIVE`, `duration` -1, `autoplay` true, music metadata without empty fields |
+| load_flow | C49, C50, C51, C52 | one `LOAD` at a time; `mediaSessionId` is recorded; no `PLAYING` in 20 s fails; no `PAUSE`, `PLAY` or `SEEK` is ever sent; `BUFFERING` after `PLAYING` is counted |
+| metadata_no_reload | C54 | a host track change sends no new `LOAD` |
+| stream_url_and_access | C55, C56, C57, C58 | the URL uses the channel's local address and an ephemeral port; a wrong path gets 404; another source address gets 403; the token dies with the session |
+| stream_http | C59, C60, C61 | `200`, chunked, the headers of C59, no `Content-Length`; `Range` is ignored; a second `GET` ends the first; a reset by the client logs no error |
+| stream_formats | C62, C63 | the WAV header has the format of C63 and largest-value sizes; the FLAC stream starts with STREAMINFO with total samples 0 and decodes with a reference decoder |
+| stream_pacing | C64 | bytes leave at real time in 20 ms blocks; a new response starts at the newest audio; a stalled reader caps the queue at 2 s and counts drops |
+| volume | C65 to C71 | `SET_VOLUME` goes to `receiver-0` with `level` or `muted`; levels are clamped; `fixed` sends nothing; step actions use `stepInterval`; a status change moves the control without an echo; drags send at most one message per 100 ms; samples are never scaled |
+| timing_reports | C72 to C79 | the per-second diagnostics carry the fields of C78; drops and rebuffers add up to a drift total; above 250 ms a restart is offered; no delay changes without the user |
+| errors | C80, C83, C84, C85 | connect retries back off from 1 s to 30 s; each error reply gives its own reason; WAV failure falls back to FLAC once; no fetch in 10 s gives the firewall message |
+| recovery | C81, C82 | a dead channel reconnects and reuses a running app; a vanished app relaunches; `CLOSE` from the app reconnects once |
+| teardown | C87, C88 | stop sends media `STOP`, receiver `STOP` only for the app's own `sessionId`, `CLOSE` to both endpoints, then closes TLS and the listener; silent replies don't hold it past 2 s per step or 3 s at quit |
+| hardware_latency | C74 to C77 | *hardware*: G7, G8 and G9 |
+
+## Sources
+
+Every clause rests on the sources below or is marked as AudioSync's design. Google's Cast documentation pages are published under the Creative Commons Attribution 4.0 License (code samples under Apache-2.0); facts were taken from them in our own words. Open-source projects were read for behavior only; their licenses are named because they were read, and no code or text from any of them is in AudioSync. Issue threads and the community write-up carry no license; only the facts they report were used.
+
+- [cast-media]: Google Cast, Supported Media (CC BY 4.0): https://developers.google.com/cast/docs/media
+- [cast-messages]: Google Cast, Media Playback Messages (CC BY 4.0): https://developers.google.com/cast/docs/media/messages
+- [cast-receiver]: Google Cast, Web Receiver overview (CC BY 4.0): https://developers.google.com/cast/docs/web_receiver
+- [cast-mediainfo]: Google Cast Web Receiver reference, MediaInformation (CC BY 4.0): https://developers.google.com/cast/docs/reference/web_receiver/cast.framework.messages.MediaInformation
+- [cast-volume]: Google Cast Web Sender reference, chrome.cast.Volume (CC BY 4.0): https://developers.google.com/cast/docs/reference/web_sender/chrome.cast.Volume
+- [cast-namespace]: Google Cast Web Sender reference, chrome.cast (VolumeControlType) (CC BY 4.0): https://developers.google.com/cast/docs/reference/web_sender/chrome.cast
+- [google-group-delay]: Google Nest Help, How to correct group playback delay (Google support page; facts only): https://support.google.com/googlenest/answer/6318642
+- [node-castv2]: thibauts/node-castv2, README protocol description (MIT): https://github.com/thibauts/node-castv2
+- [oakbits]: Romain Picard, Google Cast protocol: discovery and connection, 2016 (no license stated; facts only): https://oakbits.com/google-cast-protocol-discovery-and-connection.html
+- [pychromecast]: home-assistant-libs/pychromecast, socket client, heartbeat, receiver, media and discovery modules (MIT): https://github.com/home-assistant-libs/pychromecast
+- [go-chromecast]: vishen/go-chromecast, application and DNS packages (Apache-2.0): https://github.com/vishen/go-chromecast
+- [catt]: skorokithakis/catt, README, HTTP server and utility modules (BSD-2-Clause): https://github.com/skorokithakis/catt
+- [mkchromecast]: muammar/mkchromecast, README (MIT): https://github.com/muammar/mkchromecast
+- [mkchromecast-61]: muammar/mkchromecast issue 61, user reports on delay (no license; facts only): https://github.com/muammar/mkchromecast/issues/61
+- [gnd-359]: GNOME Network Displays issue 359, user report on Chromecast latency (no license; facts only): https://gitlab.gnome.org/GNOME/gnome-network-displays/-/issues/359
+- [protobuf-encoding]: Protocol Buffers, Encoding (Google documentation page, all rights reserved; facts only): https://protobuf.dev/programming-guides/encoding/
+
+Standards: RFC 2119, RFC 3986 (URIs), RFC 5246 (TLS 1.2), RFC 5737 (documentation addresses), RFC 6762 (mDNS), RFC 6763 (DNS-SD), RFC 8259 (JSON), RFC 8446 (TLS 1.3), RFC 9110 (HTTP semantics), RFC 9112 (HTTP/1.1), RFC 9639 (FLAC), all at https://www.rfc-editor.org/.
+
+[cast-media]: https://developers.google.com/cast/docs/media
+[cast-messages]: https://developers.google.com/cast/docs/media/messages
+[cast-receiver]: https://developers.google.com/cast/docs/web_receiver
+[cast-mediainfo]: https://developers.google.com/cast/docs/reference/web_receiver/cast.framework.messages.MediaInformation
+[cast-volume]: https://developers.google.com/cast/docs/reference/web_sender/chrome.cast.Volume
+[cast-namespace]: https://developers.google.com/cast/docs/reference/web_sender/chrome.cast
+[google-group-delay]: https://support.google.com/googlenest/answer/6318642
+[node-castv2]: https://github.com/thibauts/node-castv2
+[oakbits]: https://oakbits.com/google-cast-protocol-discovery-and-connection.html
+[pychromecast]: https://github.com/home-assistant-libs/pychromecast
+[go-chromecast]: https://github.com/vishen/go-chromecast
+[catt]: https://github.com/skorokithakis/catt
+[mkchromecast]: https://github.com/muammar/mkchromecast
+[mkchromecast-61]: https://github.com/muammar/mkchromecast/issues/61
+[gnd-359]: https://gitlab.gnome.org/GNOME/gnome-network-displays/-/issues/359
+[protobuf-encoding]: https://protobuf.dev/programming-guides/encoding/
