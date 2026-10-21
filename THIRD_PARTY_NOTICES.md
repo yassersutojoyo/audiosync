@@ -43,6 +43,8 @@ password digests; `getrandom` with `cfg-if` for random identifiers; for Apple
 TV pairing, RustCrypto's `sha1`, `sha2`, `aes`, `aes-gcm`, `ctr` and
 `crypto-bigint` with `aead`, `cipher`, `ghash`, `polyval`, `universal-hash`,
 `inout`, `cpufeatures`, `cpubits`, `cmov`, `ctutils` and `rand_core`;
+for HomeKit pairing, RustCrypto's `chacha20poly1305` and `hkdf` with
+`chacha20`, `poly1305` and `hmac`;
 `ed25519-dalek`, `x25519-dalek` and `curve25519-dalek` (BSD-3-Clause) with
 `ed25519`, `signature` and `subtle` (BSD-3-Clause); `zeroize`; and `plist`
 (MIT) for the pairing's property lists, with `quick-xml` (MIT), `time`,
@@ -97,9 +99,10 @@ digests, and `getrandom` with `cfg-if` for random session identifiers.
 For Apple TV pairing the sender also brings in RustCrypto's `sha1`, `sha2`,
 `aes`, `aes-gcm`, `ctr` and `crypto-bigint` with the crates they build on
 (`aead`, `cipher`, `ghash`, `polyval`, `universal-hash`, `inout`,
-`cpufeatures`, `cpubits`, `cmov`, `ctutils`, `rand_core`), all MIT OR
-Apache-2.0; `ed25519-dalek`, `x25519-dalek` and `curve25519-dalek`
-(BSD-3-Clause) with `ed25519` and `signature` (Apache-2.0 OR MIT) and
+`cpufeatures`, `cpubits`, `cmov`, `ctutils`, `rand_core`), and for HomeKit
+pairing RustCrypto's `chacha20poly1305` and `hkdf` with `chacha20`,
+`poly1305` and `hmac`, all MIT OR Apache-2.0; `ed25519-dalek`,
+`x25519-dalek` and `curve25519-dalek` (BSD-3-Clause) with `ed25519` and `signature` (Apache-2.0 OR MIT) and
 `subtle` (BSD-3-Clause); `zeroize` (Apache-2.0 OR MIT); and `plist` (MIT) for
 the pairing's property lists, with `quick-xml` (MIT) and `time`,
 `time-core`, `deranged`, `powerfmt` and `num-conv` (MIT OR Apache-2.0), next
@@ -128,6 +131,28 @@ code based on the work of the Independent JPEG Group. The script fails when a
 crate's license isn't allowed by `windows/deny.toml`, or when a crate's source
 points to a license file the package doesn't ship and the script doesn't
 supply.
+
+## AudioSync's own Google Cast sender (in development, in neither app)
+
+`cast/` is AudioSync's own Google Cast sender (GPL-3.0-or-later). Neither app
+contains it yet. It builds on `native-tls` (MIT OR Apache-2.0) for the TLS
+connection to the device, which uses the platform's TLS stack: `schannel`
+(MIT) on Windows, `security-framework`, `security-framework-sys`,
+`core-foundation` and `core-foundation-sys` on macOS, and on Linux the system
+OpenSSL through `openssl` (Apache-2.0), `openssl-sys` (MIT), `openssl-macros`,
+`openssl-probe`, `foreign-types`, `foreign-types-shared` and `bitflags`, with
+`tempfile`, `rustix`, `linux-raw-sys` and `errno`; `prost` and `prost-derive`
+(Apache-2.0) for the protocol buffer messages, with `bytes` (MIT), `anyhow`,
+`itertools` and `either`; and on `mdns-sd`, `getrandom`, `sha2` and
+`serde_json` with the crates they build on, listed above. The others are under
+MIT OR Apache-2.0. Its tests also use `rcgen`, `rustls` (Apache-2.0 OR ISC OR
+MIT), `ring` (Apache-2.0 AND ISC), `rustls-webpki` and `untrusted` (ISC) for a
+fake device's TLS server, with `rustls-pki-types`, `yasna`, `x509-parser`,
+`asn1-rs`, `der-parser`, `oid-registry`, `nom` (MIT), `data-encoding` (MIT),
+`time`, `time-core`, `deranged`, `powerfmt`, `num-conv`, `subtle`
+(BSD-3-Clause) and `zeroize`; those are never part of a build that ships. CI
+checks every crate of `cast/`, development dependencies included, with `cargo
+deny check licenses` against `cast/deny.toml`.
 
 ## Trademarks
 

@@ -3,25 +3,32 @@
 # tests/spec_coverage.rs fails if a clause listed here gains a `// covers:`
 # test, so this list only shrinks. "Partly done" names what already exists.
 
-# AirPlay 2 (behind its flag, blocked by the gaps of section 11).
+# AirPlay 2 (behind its flag until the real-receiver checks of G17).
 P41 GET /info and binary-plist bodies: AirPlay 2 stage.
 P42 AirPlay 2 request order: AirPlay 2 stage.
 P43 Session SETUP body (et 0 without ekey and eiv; Unsupported, not Lost, when the stream SETUP then fails): AirPlay 2 stage.
 P44 Stream SETUP body: AirPlay 2 stage.
-P61 Transient or PIN pairing choice: AirPlay 2 stage.
-P62 TLV8: AirPlay 2 stage.
-P63 HomeKit pair-setup: AirPlay 2 stage (G4).
-P64 Transient pairing: AirPlay 2 stage (G4).
-P65 PIN pairing M5 and M6: AirPlay 2 stage (G4).
-P66 HomeKit pair-verify: AirPlay 2 stage (G4).
 P67 Encrypted RTSP framing: AirPlay 2 stage.
 P68 Control channel keys: AirPlay 2 stage.
-P69 Frame nonces and additional data: AirPlay 2 stage (G6).
+P69 Frame nonces and additional data: AirPlay 2 stage.
 P70 Event channel: AirPlay 2 stage.
-P71 Sealed realtime audio packets: AirPlay 2 stage (G7).
 P104 Timing protocol choice in SETUP: AirPlay 2 stage.
-P105 PTP: AirPlay 2 stage (G1).
 P106 SETPEERS: AirPlay 2 stage (G2).
-P107 Time announce packets: AirPlay 2 stage (G1).
-P108 Asking for NTP timing on the AirPlay 2 path: AirPlay 2 stage.
 P132 POST /feedback keep-alive: AirPlay 2 stage.
+P149 HomeKit pairing request lines and headers: AirPlay 2 stage. Partly done: the requests, their headers and status handling in homekit; the session connection that sends them and answers a 401 comes with the AirPlay 2 session.
+P153 Connection order and start of framing: AirPlay 2 stage.
+P155 Sealed realtime audio packets: AirPlay 2 stage.
+P156 Stream key and nonce counter: AirPlay 2 stage.
+P157 NTP first, one PTP retry: AirPlay 2 stage.
+P158 PTP service ports and role: AirPlay 2 stage.
+P159 PTP message header and clock identity: AirPlay 2 stage.
+P160 PTP Announce: AirPlay 2 stage.
+P161 PTP Sync and Follow_Up: AirPlay 2 stage.
+P162 PTP Delay_Resp and ignored messages: AirPlay 2 stage.
+P163 PTP time from the sender clock: AirPlay 2 stage.
+P164 Session SETUP under PTP: AirPlay 2 stage.
+P165 SETPEERS under PTP only: AirPlay 2 stage.
+P166 Time announce packets: AirPlay 2 stage.
+P167 PTP traffic start and stop: AirPlay 2 stage.
+P168 No buffered audio: AirPlay 2 stage.
+P169 One AirPlay 2 session at a time: AirPlay 2 stage.

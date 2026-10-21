@@ -157,6 +157,8 @@ pub(crate) struct Driver {
     retired: Vec<JoinHandle<()>>,
     /// Set by shutdown: sessions still open at this time are closed.
     stopping: Option<Instant>,
+    /// The AirPlay 2 switch (P2, P170).
+    airplay2: bool,
 }
 
 impl Driver {
@@ -185,7 +187,13 @@ impl Driver {
             now_playing: None,
             retired: Vec::new(),
             stopping: None,
+            airplay2: false,
         }
+    }
+
+    pub(crate) fn with_airplay2(mut self, on: bool) -> Driver {
+        self.airplay2 = on;
+        self
     }
 
     pub(crate) fn run(mut self) {
@@ -1015,11 +1023,14 @@ impl Driver {
             }
             let pcm = speaker.options.pcm && !self.directory.pcm_refused(key);
             let device = &speaker.device;
-            let (needs_pairing, plan) =
-                match super::plan_with(device, speaker.options.credentials.is_some()) {
-                    Err(ErrorKind::PairingRequired) => (true, Ok(())),
-                    plan => (false, plan),
-                };
+            let (needs_pairing, plan) = match super::plan_with(
+                device,
+                speaker.options.credentials.is_some(),
+                self.airplay2,
+            ) {
+                Err(ErrorKind::PairingRequired) => (true, Ok(())),
+                plan => (false, plan),
+            };
             plan.and_then(|()| device.choose_codec(pcm).map_err(ErrorKind::Unsupported))
                 .map(|codec| (codec, needs_pairing))
         };

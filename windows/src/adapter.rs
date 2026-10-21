@@ -420,6 +420,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         };
         self.view = ViewSettings {
             show_virtual_devices: saved.show_virtual_devices,
+            appearance: saved.appearance,
             window: saved.window,
         };
         self.saved = saved;
@@ -512,6 +513,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .collect(),
             equalizer: SavedEqualizer::from(self.equalizer),
             show_virtual_devices: self.view.show_virtual_devices,
+            appearance: self.view.appearance,
             window: self.view.window,
             airplay_adjustment_ms: self.audio.airplay_adjustment(),
             when_source_quits: self.when_source_quits.stored().to_owned(),
@@ -4764,6 +4766,7 @@ mod tests {
         adapter.set_equalizer(equalizer);
         adapter.set_view_settings(ViewSettings {
             show_virtual_devices: true,
+            appearance: ui_model::Appearance::Light,
             window: None,
         });
         assert!(adapter.snapshot().running);
@@ -4793,6 +4796,10 @@ mod tests {
         assert_eq!(state.groups, groups);
         assert_eq!(state.equalizer, equalizer);
         assert!(adapter.view_settings().show_virtual_devices);
+        assert_eq!(
+            adapter.view_settings().appearance,
+            ui_model::Appearance::Light
+        );
 
         // A new group gets the next number, and streaming starts from the
         // saved speakers when the user asks.
