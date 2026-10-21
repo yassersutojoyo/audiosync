@@ -13,7 +13,16 @@ export enum RowPart { none, toggle, delay, volume, sync, options }
 
 // The kind of output: the icon in a speaker's toggle, and the line under a
 // connected speaker's name.
-export enum SpeakerKind { airplay, built-in, headphones, bluetooth, usb, usb-headphones, usb-speakers, hdmi, display-port, virtual, other }
+export enum SpeakerKind { airplay, cast, built-in, headphones, bluetooth, usb, usb-headphones, usb-speakers, hdmi, display-port, virtual, other }
+
+// Where a Google Cast speaker that is on is: idle while streaming is off.
+export enum CastState { idle, connecting, playing, reconnecting }
+
+// What went wrong with a Google Cast speaker, for its notice.
+export enum CastProblem { busy, not-responding, refused, taken-over, connection-lost, group }
+
+// The speaker list's note about Google Cast while none is listed.
+export enum CastList { quiet, searching, none-found, failed }
 
 // Whether an AirPlay speaker can simply play.
 export enum Availability { open, needs-code, pairing, waiting-to-pair, pairing-not-yet, airplay2-not-yet, unsupported }
@@ -63,6 +72,14 @@ export struct SpeakerItem {
     // whole percent.
     device-volume: DeviceVolumeHint,
     device-volume-percent: int,
+    // A Google Cast speaker: its delay is the offset the user measured, and
+    // while it connects or plays it offers Mute and Resync.
+    cast: bool,
+    cast-state: CastState,
+    // The Cast speaker reports itself muted.
+    muted: bool,
+    // The Cast speaker's volume can't be changed from here.
+    volume-fixed: bool,
 }
 
 export struct GroupItem {
@@ -74,7 +91,7 @@ export struct GroupItem {
 }
 
 // What a notice is about, for its short name (Strings.notice-title).
-export enum NoticeKind { no-speaker, source-quit, source-switched, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-cant-play, airplay-stopped, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings }
+export enum NoticeKind { no-speaker, source-quit, source-switched, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-cant-play, airplay-stopped, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play }
 
 export struct NoticeItem {
     id: int,

@@ -33,10 +33,10 @@ use crate::ui_model::{
     ViewSettings, WindowFrame,
 };
 use crate::{
-    AboutDialog, AirPlayProblem, Availability, DeviceVolumeHint, EqualizerWindow, GroupItem,
-    GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, NoticeKind,
-    Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind,
-    Strings, Tokens, TrayFlyout,
+    AboutDialog, AirPlayProblem, Availability, CastList, CastProblem, CastState, DeviceVolumeHint,
+    EqualizerWindow, GroupItem, GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow,
+    NoticeItem, NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState,
+    SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout,
 };
 
 mod help_window;
@@ -1204,10 +1204,16 @@ impl App {
                 ui.sync_open.contains(&speaker.id),
                 draft,
             );
+            // A Cast speaker's offset only holds the others back (spec C77).
+            let min = if speaker.cast.is_some() {
+                0.0
+            } else {
+                ui_model::MIN_DELAY_MS
+            };
             row.delay_range_hint = range_hint(
                 &strings,
                 draft,
-                ui_model::MIN_DELAY_MS,
+                min,
                 ui_model::MAX_DELAY_MS,
                 format_offset_ms,
             );
@@ -1219,6 +1225,7 @@ impl App {
             .set_connected_virtual_hidden(only_virtual_outputs_hidden(&connected, lists));
         self.main.set_airplay_none_found(state.airplay_none_found);
         self.flyout.set_airplay_none_found(state.airplay_none_found);
+        self.main.set_cast_list(cast_list(state.cast_list));
         let listed = |s: &&ui_model::Speaker| lists(s);
         let this_pc: Vec<SpeakerItem> = this_pc
             .into_iter()
@@ -1556,6 +1563,14 @@ impl App {
         let w = weak.clone();
         main.on_device_volume_fix_requested(move |id| {
             with_app(&w, |app| app.update(|b| b.fix_device_volume(&id)))
+        });
+        let w = weak.clone();
+        main.on_cast_muted_requested(move |id, muted| {
+            with_app(&w, |app| app.update(|b| b.set_speaker_muted(&id, muted)))
+        });
+        let w = weak.clone();
+        main.on_cast_resync_requested(move |id| {
+            with_app(&w, |app| app.update(|b| b.resync_speaker(&id)))
         });
         let w = weak.clone();
         main.on_group_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_group(&id))));
@@ -2569,6 +2584,7 @@ pub fn speaker_kind(kind: ui_model::SpeakerKind) -> SpeakerKind {
     use ui_model::SpeakerKind as K;
     match kind {
         K::AirPlay => SpeakerKind::Airplay,
+        K::Cast => SpeakerKind::Cast,
         K::BuiltIn => SpeakerKind::BuiltIn,
         K::Headphones => SpeakerKind::Headphones,
         K::Bluetooth => SpeakerKind::Bluetooth,
@@ -2609,6 +2625,38 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::TimingUnavailable => AirPlayProblem::TimingUnavailable,
         P::OneAirPlay2Speaker => AirPlayProblem::OneAirplay2Speaker,
         P::Unsupported => AirPlayProblem::Unsupported,
+    }
+}
+
+fn cast_problem(problem: ui_model::CastProblem) -> CastProblem {
+    use ui_model::CastProblem as P;
+    match problem {
+        P::Busy => CastProblem::Busy,
+        P::NotResponding => CastProblem::NotResponding,
+        P::Refused => CastProblem::Refused,
+        P::TakenOver => CastProblem::TakenOver,
+        P::ConnectionLost => CastProblem::ConnectionLost,
+        P::Group => CastProblem::Group,
+    }
+}
+
+fn cast_state(state: ui_model::CastState) -> CastState {
+    use ui_model::CastState as S;
+    match state {
+        S::Idle => CastState::Idle,
+        S::Connecting => CastState::Connecting,
+        S::Playing => CastState::Playing,
+        S::Reconnecting => CastState::Reconnecting,
+    }
+}
+
+fn cast_list(list: ui_model::CastList) -> CastList {
+    use ui_model::CastList as L;
+    match list {
+        L::Quiet => CastList::Quiet,
+        L::Searching => CastList::Searching,
+        L::NoneFound => CastList::NoneFound,
+        L::Failed => CastList::Failed,
     }
 }
 
@@ -2662,6 +2710,12 @@ pub fn speaker_item(
         paired: speaker.paired,
         device_volume,
         device_volume_percent,
+        cast: speaker.cast.is_some(),
+        cast_state: speaker
+            .cast
+            .map_or(CastState::Idle, |cast| cast_state(cast.state)),
+        muted: speaker.cast.is_some_and(|cast| cast.muted),
+        volume_fixed: speaker.cast.is_some_and(|cast| cast.volume_fixed),
     }
 }
 
@@ -2797,6 +2851,9 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         | NoticeMessage::AirPlayCantPlay { speaker, problem } => {
             strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
         }
+        NoticeMessage::CastCantPlay { speaker, problem } => {
+            strings.invoke_notice_cast(cast_problem(*problem), speaker.as_str().into())
+        }
         NoticeMessage::AirPlayStopped => strings.get_notice_airplay_stopped(),
         NoticeMessage::SettingsNotSaved => strings.get_notice_settings_not_saved(),
         NoticeMessage::PairingsNotSaved => strings.get_notice_pairings_not_saved(),
@@ -2858,6 +2915,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::AirPlayCantPlay { speaker, .. } => {
             (NoticeKind::AirplayCantPlay, speaker.as_str())
         }
+        NoticeMessage::CastCantPlay { speaker, .. } => (NoticeKind::CastCantPlay, speaker.as_str()),
         NoticeMessage::AirPlayStopped => (NoticeKind::AirplayStopped, ""),
         NoticeMessage::SettingsNotSaved => (NoticeKind::SettingsNotSaved, ""),
         NoticeMessage::PairingsNotSaved => (NoticeKind::PairingsNotSaved, ""),
@@ -4026,6 +4084,50 @@ mod tests {
             let label = app.strings().invoke_speaker_kind(speaker_kind(kind));
             assert_eq!(label.as_str(), "USB", "{kind:?}");
         }
+    }
+
+    #[test]
+    fn a_cast_row_names_its_kind_and_says_where_it_is() {
+        let app = app_over(MockBackend::new());
+        let state = MockBackend::new().snapshot();
+        let mut speaker = state.speaker("local:desk").unwrap().clone();
+        speaker.kind = ui_model::SpeakerKind::Cast;
+        speaker.cast = Some(ui_model::CastRow {
+            state: ui_model::CastState::Connecting,
+            muted: true,
+            volume_fixed: false,
+        });
+        let row = speaker_item(&state, &speaker, true, false, None);
+        assert_eq!(row.kind, SpeakerKind::Cast);
+        assert!(row.cast && row.muted && !row.volume_fixed);
+        assert_eq!(row.cast_state, CastState::Connecting);
+        let strings = app.strings();
+        assert_eq!(
+            strings.invoke_speaker_kind(row.kind).as_str(),
+            "Google Cast"
+        );
+        assert_eq!(
+            strings
+                .invoke_cast_note(row.cast_state, row.muted, false)
+                .as_str(),
+            "Connecting…"
+        );
+        assert_eq!(
+            strings
+                .invoke_cast_note(CastState::Playing, true, false)
+                .as_str(),
+            "Muted on the speaker"
+        );
+
+        let busy = NoticeMessage::CastCantPlay {
+            speaker: "Kitchen".to_owned(),
+            problem: ui_model::CastProblem::Busy,
+        };
+        assert!(notice_text(&strings, &busy).starts_with("Only one Google Cast speaker"));
+        assert_eq!(notice_title(&strings, &busy).as_str(), "Kitchen can't play");
+
+        speaker.cast = None;
+        assert!(!speaker_item(&state, &speaker, true, false, None).cast);
     }
 
     #[test]

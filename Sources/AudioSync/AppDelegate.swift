@@ -170,6 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// The device ID each local output was last started on, by UID, so a
     /// sync notices a device that came back under a new ID (EC1).
     var localBoundDevices: [String: AudioObjectID] = [:]
+    /// The microphone calibration under way, if any (S232).
+    var calibrationRun: CalibrationRun?
 
     // MARK: - Session
 

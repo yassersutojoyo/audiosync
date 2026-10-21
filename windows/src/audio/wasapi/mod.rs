@@ -27,9 +27,8 @@ use audiosync_core::render::RendererControl;
 use audiosync_core::ring::RingWriter;
 use audiosync_core::volume::SharedGain;
 
-use super::airplay::FeedLease;
 use super::backend::BackendError;
-use super::capture::CaptureTarget;
+use super::capture::{CaptureTarget, Feeds};
 use super::controller::{Controller, Driver};
 use super::outputs::{Endpoint, EndpointReading, Listing};
 use super::process::ProcessTable;
@@ -123,9 +122,9 @@ impl Driver for WasapiDriver {
         target: CaptureTarget,
         writer: RingWriter,
         equalizer: EqProcessor,
-        airplay: Option<FeedLease>,
+        feeds: Feeds,
     ) -> Result<loopback::LoopbackCapture, BackendError> {
-        loopback::start(target, writer, equalizer, airplay)
+        loopback::start(target, writer, equalizer, feeds)
     }
 
     fn start_renderer(

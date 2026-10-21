@@ -9,7 +9,7 @@
 import { Button, Slider, Switch } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Availability, DeviceVolumeHint, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
+import { Availability, CastState, DeviceVolumeHint, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
 
 import "../../brand/fonts/Poppins-Medium.ttf";
 
@@ -87,7 +87,7 @@ export global Glyphs {
     }
 
     public pure function speaker(kind: SpeakerKind) -> string {
-        if kind == SpeakerKind.airplay {
+        if kind == SpeakerKind.airplay || kind == SpeakerKind.cast {
             return root.network;
         }
         // The device's form wins over its bus; the kind line still says USB.
@@ -756,6 +756,8 @@ export component SyncControls inherits VerticalLayout {
     in property <string> range-hint;
     // The reference output's name; empty without one.
     in property <string> reference-name;
+    // A Google Cast speaker's offset, which says so instead of the sync hint.
+    in property <bool> cast;
     callback stepped(int);
     callback edited(string);
     // Enter in the field: apply what was typed.
@@ -871,7 +873,7 @@ export component SyncControls inherits VerticalLayout {
         }
 
         SecondaryText {
-            text: Strings.sync-hint(root.reference-name);
+            text: root.cast ? Strings.cast-sync-hint : Strings.sync-hint(root.reference-name);
         }
     }
 }
@@ -1017,6 +1019,9 @@ export component SpeakerRow inherits Rectangle {
     callback forget-pairing();
     // The fix after the device-volume hint.
     callback device-volume-fix();
+    // A Google Cast speaker's Mute (true) or Unmute (false), and its Resync.
+    callback cast-muted(bool);
+    callback cast-resync();
     // The part of the row with the keyboard focus changed; none: the row
     // lost it.
     callback focus-changed(RowPart);
@@ -1049,6 +1054,8 @@ export component SpeakerRow inherits Rectangle {
     property <bool> badge-focused;
     property <bool> delay-focused;
     property <bool> fix-focused;
+    property <bool> mute-focused;
+    property <bool> resync-focused;
     property <bool> sync-focused;
     property <bool> options-focused;
     // The sync controls go without reporting that they lost the focus.
@@ -1058,7 +1065,10 @@ export component SpeakerRow inherits Rectangle {
             root.sync-focused = false;
         }
     }
-    property <RowPart> focused-part: self.sync-focused ? RowPart.sync : self.options-focused ? RowPart.options : self.delay-focused ? RowPart.delay : volume-slider.slider-focused || self.fix-focused ? RowPart.volume : self.badge-focused ? RowPart.toggle : RowPart.none;
+    property <RowPart> focused-part: self.sync-focused ? RowPart.sync : self.options-focused ? RowPart.options : self.delay-focused ? RowPart.delay : volume-slider.slider-focused || self.fix-focused || self.mute-focused || self.resync-focused ? RowPart.volume : self.badge-focused ? RowPart.toggle : RowPart.none;
+    // A Google Cast speaker that connects or plays: its volume, Mute and
+    // Resync reach it.
+    property <bool> cast-live: root.item.cast && root.item.state != RowState.off && root.item.cast-state != CastState.idle;
     changed focused-part => {
         root.focus-changed(self.focused-part);
     }
@@ -1066,7 +1076,8 @@ export component SpeakerRow inherits Rectangle {
     // The line under the name: the kind of a connected speaker, and the note
     // of one that can't simply play, or that is on but can't play right now
     // ("Waiting for device", "Reconnecting…").
-    property <string> note: Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.row-note(root.item.state);
+    property <string> cast-note: Strings.cast-note(root.item.cast-state, root.item.muted, root.item.availability == Availability.unsupported);
+    property <string> note: root.item.cast && root.cast-note != "" ? root.cast-note : Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.row-note(root.item.state);
     property <string> caption: Strings.speaker-caption(root.item.show-kind ? Strings.speaker-kind(root.item.kind) : "", root.note);
 
     border-radius: Fluent.radius-control;
@@ -1086,13 +1097,31 @@ export component SpeakerRow inherits Rectangle {
             }
         }
         menu := ContextMenuArea {
+            // An idle Cast speaker's menu would be empty.
+            enabled: !root.item.cast || root.cast-live;
             Menu {
-                MenuItem {
+                // Auto-connect is for local and AirPlay speakers; a Cast
+                // speaker's menu holds the controls under its volume.
+                if !root.item.cast: MenuItem {
                     title: Strings.auto-connect;
                     checkable: true;
                     checked: root.item.auto-connect;
                     activated => {
                         root.auto-connect-toggled(!root.item.auto-connect);
+                    }
+                }
+
+                if root.cast-live && !root.item.volume-fixed: MenuItem {
+                    title: root.item.muted ? Strings.cast-unmute : Strings.cast-mute;
+                    activated => {
+                        root.cast-muted(!root.item.muted);
+                    }
+                }
+
+                if root.cast-live: MenuItem {
+                    title: Strings.cast-resync;
+                    activated => {
+                        root.cast-resync();
                     }
                 }
 
@@ -1270,6 +1299,8 @@ export component SpeakerRow inherits Rectangle {
                                     glyph: Glyphs.more;
                                     label: Strings.speaker-options(root.item.name);
                                     glyph-color: Tokens.teal-text;
+                                    // A Cast speaker's menu has nothing while it is idle.
+                                    enabled: !root.item.cast || root.cast-live;
                                     clicked => {
                                         // show() takes a point in the menu area, not in this button's layout.
                                         menu.show({
@@ -1302,7 +1333,7 @@ export component SpeakerRow inherits Rectangle {
                                     height: parent.height;
                                     volume: root.item.volume;
                                     label: Strings.volume-of(root.item.name);
-                                    enabled: root.item.state != RowState.off;
+                                    enabled: root.item.cast ? root.cast-live && !root.item.volume-fixed : root.item.state != RowState.off;
                                     changed(value) => {
                                         root.volume-changed(value);
                                     }
@@ -1356,6 +1387,34 @@ export component SpeakerRow inherits Rectangle {
                                     }
                                 }
                             }
+
+                            if root.cast-live: HorizontalLayout {
+                                alignment: start;
+                                spacing: 8px;
+
+                                if !root.item.volume-fixed: LinkButton {
+                                    text: root.item.muted ? Strings.cast-unmute : Strings.cast-mute;
+                                    label: Strings.cast-button-label(self.text, root.item.name);
+                                    changed keyboard-focused => {
+                                        root.mute-focused = self.keyboard-focused;
+                                    }
+                                    clicked => {
+                                        root.cast-muted(!root.item.muted);
+                                    }
+                                }
+
+                                LinkButton {
+                                    text: Strings.cast-resync;
+                                    label: Strings.cast-button-label(self.text, root.item.name);
+                                    accessible-description: Strings.cast-resync-help;
+                                    changed keyboard-focused => {
+                                        root.resync-focused = self.keyboard-focused;
+                                    }
+                                    clicked => {
+                                        root.cast-resync();
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1373,6 +1432,7 @@ export component SpeakerRow inherits Rectangle {
                             pending: root.item.delay-pending;
                             range-hint: root.item.delay-range-hint;
                             reference-name: root.item.reference-name;
+                            cast: root.item.cast;
                             init => {
                                 // The field keeps what was typed (the app's draft).
                                 if root.pending-focus == RowPart.sync {

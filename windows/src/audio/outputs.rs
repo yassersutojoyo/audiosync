@@ -360,6 +360,9 @@ pub struct OutputPolicy {
     listed: BTreeSet<String>,
     /// The reference among them (S174).
     reference: Option<String>,
+    /// The measured offset of the Google Cast speaker that is on (spec
+    /// C77); `None` while none is.
+    cast_offset: Option<Duration>,
 }
 
 impl OutputPolicy {
@@ -372,6 +375,26 @@ impl OutputPolicy {
             airplay_adjustment_ms: 0.0,
             listed: BTreeSet::new(),
             reference: None,
+            cast_offset: None,
+        }
+    }
+
+    /// Sets the Cast speaker's measured offset, or `None` while none is
+    /// on. Returns whether the hold-backs change.
+    pub fn set_cast_offset(&mut self, offset: Option<Duration>) -> bool {
+        let before = self.network_latency_ms();
+        self.cast_offset = offset;
+        before != self.network_latency_ms()
+    }
+
+    /// What local outputs wait for: L while an AirPlay speaker is chosen,
+    /// the Cast speaker's offset while one is on, the longer of the two
+    /// when both are.
+    fn network_latency_ms(&self) -> Option<f64> {
+        let cast = self.cast_offset.map(|offset| offset.as_secs_f64() * 1000.0);
+        match (self.airplay_latency_ms(), cast) {
+            (Some(airplay), Some(cast)) => Some(airplay.max(cast)),
+            (airplay, cast) => airplay.or(cast),
         }
     }
 
@@ -436,7 +459,7 @@ impl OutputPolicy {
             .map(|(other, _)| participant(other));
         let mut taking_part = vec![participant(id)];
         taking_part.extend(others);
-        hold_backs(&taking_part, self.airplay_latency_ms())
+        hold_backs(&taking_part, self.network_latency_ms())
             .first()
             .map_or(0.0, |(_, held)| *held)
     }
@@ -1247,6 +1270,30 @@ mod tests {
         // A new L while no speaker is chosen changes no delay.
         policy.set_airplay(sender(false, L));
         assert!(!policy.set_airplay(sender(false, Duration::from_secs(1))));
+    }
+
+    #[test]
+    fn outputs_wait_for_the_cast_offset_and_for_the_longer_of_it_and_l() {
+        let mut policy = policy_with(&["a", "b"]);
+        policy.set_delay_ms("a", 150.0);
+        assert!(policy.set_cast_offset(Some(Duration::from_millis(500))));
+        assert_eq!(policy.params("a").delay_frames, 31_200, "500 + 150 ms");
+        assert_eq!(policy.params("b").delay_frames, 24_000, "500 ms");
+        assert!(!policy.set_cast_offset(Some(Duration::from_millis(500))));
+
+        policy.set_airplay(sender(true, L));
+        assert_eq!(policy.params("b").delay_frames, 84_000, "L is longer");
+        assert!(policy.set_cast_offset(Some(Duration::from_secs(3))));
+        assert_eq!(
+            policy.params("b").delay_frames,
+            144_000,
+            "the offset is longer"
+        );
+
+        policy.set_airplay(sender(false, L));
+        assert!(policy.set_cast_offset(None));
+        assert_eq!(policy.params("a").delay_frames, 7_200);
+        assert_eq!(policy.params("b").delay_frames, 0);
     }
 
     fn mix(float32: bool, rate: u32, channels: u16, channel_mask: u32) -> MixFormat {

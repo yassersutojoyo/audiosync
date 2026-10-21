@@ -111,6 +111,17 @@ to `base64`, `indexmap` and `memchr`, which the app already contained.
 compiles are the ones in `windows/Cargo.lock`, which that build's
 `THIRD-PARTY-NOTICES.txt` names.
 
+The Windows app also contains AudioSync's own Google Cast sender (`cast/`,
+GPL-3.0-or-later), described in its own section below. Of the crates listed
+there, these reach the Windows executable on top of the ones above:
+`native-tls` (MIT OR Apache-2.0) with `schannel` (MIT) for the TLS connection,
+`prost` (Apache-2.0) for the protocol buffer messages, and `flacenc`
+(Apache-2.0) for the FLAC stream, with `crc`, `crc-catalog`, `heapless`,
+`hash32`, `md-5` 0.10, `digest` 0.10, `block-buffer` 0.10 and
+`crypto-common` 0.1 (MIT OR Apache-2.0), `generic-array` (MIT) and
+`byteorder` (Unlicense OR MIT). The macOS and Linux TLS crates and the
+build-time ones aren't compiled into it.
+
 The Windows app reads and writes its settings file with `serde` and
 `serde_json` (MIT OR Apache-2.0), which bring in `serde_core`, `serde_derive`
 and `itoa` (MIT OR Apache-2.0) and `zmij` (MIT), next to `memchr`, which the
@@ -132,10 +143,10 @@ crate's license isn't allowed by `windows/deny.toml`, or when a crate's source
 points to a license file the package doesn't ship and the script doesn't
 supply.
 
-## AudioSync's own Google Cast sender (in development, in neither app)
+## AudioSync's own Google Cast sender (in development)
 
-`cast/` is AudioSync's own Google Cast sender (GPL-3.0-or-later). Neither app
-contains it yet. It builds on `native-tls` (MIT OR Apache-2.0) for the TLS
+`cast/` is AudioSync's own Google Cast sender (GPL-3.0-or-later). The Windows
+app contains it; the macOS app doesn't yet. It builds on `native-tls` (MIT OR Apache-2.0) for the TLS
 connection to the device, which uses the platform's TLS stack: `schannel`
 (MIT) on Windows, `security-framework`, `security-framework-sys`,
 `core-foundation` and `core-foundation-sys` on macOS, and on Linux the system

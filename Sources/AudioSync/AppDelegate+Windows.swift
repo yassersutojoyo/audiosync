@@ -71,6 +71,8 @@ extension AppDelegate {
         a.setLocalEnabled = { [weak self] uid, on in self?.setLocalEnabled(uid, on) }
         a.setLocalVolume = { [weak self] uid, position in self?.setLocalVolume(uid, position) }
         a.setLocalOffset = { [weak self] uid, ms in self?.setLocalOffset(uid, ms) }
+        a.calibrate = { [weak self] uid in self?.startCalibration(uid) }
+        a.cancelCalibration = { [weak self] in self?.cancelCalibration() }
         a.setAirPlayDelay = { [weak self] ms in self?.setAirPlayDelay(ms) }
         a.openMainWindow = { [weak self] in self?.showMainWindow() }
         a.openGuide = { [weak self] in self?.openGuideWindow() }
@@ -219,6 +221,7 @@ extension AppDelegate {
         publish(\.switchWhenSourceQuits, whenSourceQuits == .system)
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
+        followCalibrationContext()
         menuBar?.setRunning(engine.isRunning)
         syncTrackInfo()
         scheduleDueReconcile()

@@ -52,6 +52,8 @@ pub struct Source {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpeakerKind {
     AirPlay,
+    /// A Google Cast speaker.
+    Cast,
     BuiltIn,
     Headphones,
     Bluetooth,
@@ -174,6 +176,72 @@ pub struct Speaker {
     /// Why a speaker that is on can't play right now, while streaming is
     /// on; it plays again by itself. `None` while it plays or is off.
     pub waiting: Option<Waiting>,
+    /// What only a Google Cast speaker's row shows.
+    pub cast: Option<CastRow>,
+}
+
+/// A Google Cast speaker's own state. Its delay is the measured offset the
+/// user sets, since Cast can't be kept in sync automatically.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CastRow {
+    pub state: CastState,
+    /// The speaker reports itself muted.
+    pub muted: bool,
+    /// The speaker's volume can't be changed from here.
+    pub volume_fixed: bool,
+}
+
+/// Where a Google Cast speaker that is on is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(dead_code, reason = "only the Windows backend plays to Cast")
+)]
+pub enum CastState {
+    /// Off, or on while streaming is off.
+    Idle,
+    Connecting,
+    Playing,
+    /// It played, and AudioSync is reaching it again.
+    Reconnecting,
+}
+
+/// What the speaker list says about Google Cast while no Cast speaker is
+/// listed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(dead_code, reason = "only the Windows backend looks for Cast")
+)]
+pub enum CastList {
+    /// Nothing: a Cast speaker is listed, or Cast isn't running.
+    #[default]
+    Quiet,
+    /// Discovery runs and has found nothing yet.
+    Searching,
+    /// Discovery has found nothing for a while.
+    NoneFound,
+    /// Discovery couldn't start or stopped.
+    Failed,
+}
+
+/// Why a Google Cast speaker can't play, as a notice words it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(dead_code, reason = "only the Windows backend posts notices")
+)]
+pub enum CastProblem {
+    /// Another Cast speaker is on; one plays at a time.
+    Busy,
+    NotResponding,
+    /// It turned the stream down.
+    Refused,
+    /// Another app started casting to it.
+    TakenOver,
+    ConnectionLost,
+    /// A speaker group, which AudioSync can't play to.
+    Group,
 }
 
 /// Why a speaker that is on can't play right now. Its row says so instead
@@ -363,6 +431,11 @@ pub enum NoticeMessage {
     /// The Run value is written, but Task Manager or Settings has AudioSync
     /// turned off as a startup app; it is turned on again there.
     LaunchAtLoginOffInSettings,
+    /// A Google Cast speaker can't play, so it is off.
+    CastCantPlay {
+        speaker: String,
+        problem: CastProblem,
+    },
 }
 
 /// How a speaker or group row shows: playing only while streaming is on.
@@ -429,6 +502,8 @@ pub struct AppState {
     pub airplay_none_found: bool,
     /// What a session does when the app it captures quits (spec S227).
     pub when_source_quits: WhenSourceQuits,
+    /// The speaker list's note about Google Cast discovery.
+    pub cast_list: CastList,
 }
 
 impl AppState {
@@ -515,6 +590,11 @@ pub trait Backend {
     fn set_speaker_enabled(&mut self, id: &str, on: bool);
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
     fn set_speaker_delay(&mut self, id: &str, ms: f64);
+    /// Mutes or unmutes a Google Cast speaker on the speaker itself.
+    fn set_speaker_muted(&mut self, _id: &str, _muted: bool) {}
+    /// The Resync button of a Google Cast speaker: it restarts its stream so
+    /// it plays at its set offset again.
+    fn resync_speaker(&mut self, _id: &str) {}
     /// The user entered `ms` in the AirPlay delay field.
     fn set_airplay_delay(&mut self, ms: f64);
     fn set_auto_connect(&mut self, id: &str, on: bool);
@@ -708,6 +788,7 @@ impl MockBackend {
             paired: false,
             device_volume: None,
             waiting: None,
+            cast: None,
         };
         let mut speakers = vec![
             // The reference: no delay of its own.
@@ -789,6 +870,7 @@ impl MockBackend {
             airplay_delay_ms: Some(1750.0),
             airplay_none_found: false,
             when_source_quits: WhenSourceQuits::Stop,
+            cast_list: CastList::Quiet,
         };
         MockBackend {
             state,
@@ -1130,6 +1212,7 @@ mod tests {
             paired: false,
             device_volume: None,
             waiting: None,
+            cast: None,
         };
         assert!(!speaker(SpeakerKind::Virtual, false).is_listed(false));
         assert!(speaker(SpeakerKind::Virtual, false).is_listed(true));

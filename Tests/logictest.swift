@@ -2,6 +2,7 @@
 // Run all tests with: Tests/run-tests.sh
 import Foundation
 import AppKit
+import CAudioSyncCore
 import CoreAudio
 import CoreServices
 import ImageIO
@@ -3559,6 +3560,173 @@ do {
     check(atOnce == ["quit", "exit 130"] && twice.log == ["quit", "exit 130", "quit done"],
           "quit: a second Ctrl-C while the quit steps run exits at once with 130, and nothing exits again later (S111)",
           "at once \(atOnce), later \(twice.log)")
+}
+
+// MARK: Microphone calibration — what the estimate does to an offset (CalibrationFlow.swift, S232-S234)
+do {
+    func answer(_ status: Int32, recording: Int32 = ASC_CALIBRATION_RECORDING_NONE, offset: Double = 0,
+                clamped: Bool = false) -> AscCalibration {
+        var r = AscCalibration()
+        r.status = UInt32(status)
+        r.recording = UInt32(recording)
+        r.offset_ms = offset
+        r.clamped = clamped
+        return r
+    }
+    let t = UIStrings()
+    var offsets = ["usb": 150.0]
+    let commit: (Double) -> Void = { offsets["usb"] = $0 }
+
+    let refusals: [(AscCalibration?, CalibrationFailure)] = [
+        (answer(ASC_CALIBRATION_TOO_SHORT, recording: ASC_CALIBRATION_RECORDING_REFERENCE, offset: 150), .tooShort(.reference)),
+        (answer(ASC_CALIBRATION_TOO_LONG, recording: ASC_CALIBRATION_RECORDING_CHOSEN, offset: 150), .tooLong(.chosen)),
+        (answer(ASC_CALIBRATION_CLIPPED, recording: ASC_CALIBRATION_RECORDING_CHOSEN, offset: 150), .clipped(.chosen)),
+        (answer(ASC_CALIBRATION_TOO_QUIET, recording: ASC_CALIBRATION_RECORDING_REFERENCE, offset: 150), .tooQuiet(.reference)),
+        (answer(ASC_CALIBRATION_AMBIGUOUS_ECHO, recording: ASC_CALIBRATION_RECORDING_CHOSEN, offset: 150), .ambiguousEcho(.chosen)),
+        (answer(ASC_CALIBRATION_IMPLAUSIBLE, offset: 150), .implausible),
+        (nil, .tooShort(nil)),
+    ]
+    for (result, failure) in refusals {
+        let phase = CalibrationFlow.finish(result, commit: commit)
+        let message = t.calibrationMessage(phase) ?? ""
+        check(phase == .failed(failure) && offsets == ["usb": 150] && message.contains("wasn't changed"),
+              "calibration: a refusal (\(failure)) changes no offset and says why (S232)", "\(phase), \(offsets), \(message)")
+    }
+
+    // Refusals the host makes before the estimate say why and that nothing changed.
+    let hostRefusals: [CalibrationFailure] = [.microphoneDenied, .noMicrophone, .sourceSilent, .interrupted,
+                                              .notPlaying, .noReference, .unsupportedRate]
+    for failure in hostRefusals {
+        let message = t.calibrationMessage(.failed(failure)) ?? ""
+        check(message.hasSuffix(" The delay wasn't changed.") && message.count > " The delay wasn't changed.".count + 10,
+              "calibration: a refusal (\(failure)) says why and that the delay wasn't changed", message)
+    }
+
+    // Both runs record with one input: a switch to another device, even at
+    // the same rate, would change the input latency between them (S232).
+    let builtIn = CalibrationMicrophoneID(device: 51, rate: 48_000)
+    check(CalibrationFlow.microphoneCheck(first: nil, now: builtIn, largestHoldBackMs: 2000) == nil
+            && CalibrationFlow.microphoneCheck(first: builtIn, now: builtIn, largestHoldBackMs: 2000) == nil
+            && CalibrationFlow.microphoneCheck(first: builtIn, now: CalibrationMicrophoneID(device: 77, rate: 48_000),
+                                               largestHoldBackMs: 2000) == .interrupted
+            && CalibrationFlow.microphoneCheck(first: builtIn, now: CalibrationMicrophoneID(device: 51, rate: 44_100),
+                                               largestHoldBackMs: 2000) == .interrupted
+            && CalibrationFlow.microphoneCheck(first: nil, now: CalibrationMicrophoneID(device: 51, rate: 192_000),
+                                               largestHoldBackMs: 20_000) == .tooLong(nil),
+          "calibration: the chosen speaker's run must record with the reference's microphone")
+
+    let accepted = CalibrationFlow.finish(answer(ASC_CALIBRATION_ACCEPTED, offset: -37), commit: commit)
+    let acceptedText = t.calibrationMessage(accepted) ?? ""
+    check(accepted == .done(offsetMs: -37, clamped: false) && offsets == ["usb": -37]
+            && acceptedText == "Delay set to −37 ms.",
+          "calibration: an accepted estimate commits its offset through the offset path (S232)",
+          "\(accepted), \(offsets), \(acceptedText)")
+
+    let clamped = CalibrationFlow.finish(answer(ASC_CALIBRATION_ACCEPTED, offset: -2000, clamped: true), commit: commit)
+    let clampedText = t.calibrationMessage(clamped) ?? ""
+    check(clamped == .done(offsetMs: -2000, clamped: true) && offsets == ["usb": -2000]
+            && clampedText.contains("end of the range") && clampedText.contains("out of sync")
+            && clampedText != t.calibrationMessage(.done(offsetMs: -2000, clamped: false)),
+          "calibration: a clamped estimate is filled in and says it was clamped (S232)", clampedText)
+
+    check(CalibrationFlow.finish(answer(ASC_CALIBRATION_ACCEPTED, offset: .nan), commit: commit) == .failed(.implausible)
+            && offsets == ["usb": -2000],
+          "calibration: an accepted answer without a finite offset changes nothing")
+
+    // When one may start: both the speaker and the reference play (S232).
+    check(CalibrationFlow.blocker(streaming: true, reference: nil, chosen: "usb", playing: ["usb"]) == .noReference
+            && CalibrationFlow.blocker(streaming: false, reference: "mac", chosen: "usb", playing: []) == .notPlaying
+            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["usb"]) == .notPlaying
+            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "mac", playing: ["mac"]) == .notPlaying
+            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["mac", "usb"]) == nil,
+          "calibration: starts only while streaming with the chosen speaker and the reference playing")
+
+    // Frame 0 is the moment the signal entered the outputs' paths, and each
+    // recording covers the largest hold-back, latency, the signal and a margin.
+    check(CalibrationFlow.trimStart(signalNs: 1_250_000_000, firstFrameNs: 1_000_000_000, rate: 48_000) == 12_000
+            && CalibrationFlow.trimStart(signalNs: 999_000_000, firstFrameNs: 1_000_000_000, rate: 48_000) == nil,
+          "calibration: each recording starts where the signal entered, and one that began later is refused")
+    check(CalibrationFlow.recordingFrames(largestHoldBackMs: 2000, rate: 48_000) == 180_000
+            && CalibrationFlow.recordingFrames(largestHoldBackMs: .nan, rate: 48_000) == 84_000,
+          "calibration: a recording lasts the largest hold-back plus latency, the 0.75 s signal and 0.5 s (S232)",
+          "\(CalibrationFlow.recordingFrames(largestHoldBackMs: 2000, rate: 48_000))")
+
+    // The whole path through the core on synthetic recordings: the chosen
+    // output heard 100 ms after the reference is held back 100 ms less.
+    if let signal = CalibrationFlow.signal(rate: 48_000) {
+        func room(arrivalFrame: Int) -> [Float] {
+            var out = [Float](repeating: 0, count: 96_000)
+            var seed: UInt32 = 7
+            for i in out.indices {
+                seed = seed &* 1_664_525 &+ 1_013_904_223
+                out[i] = (Float(seed >> 8) / Float(1 << 24) - 0.5) * 0.002
+            }
+            for (i, s) in signal.enumerated() { out[arrivalFrame + i] += s * 0.5 }
+            return out
+        }
+        var stored = ["usb": 150.0]
+        let result = CalibrationFlow.estimate(signal: signal, reference: room(arrivalFrame: 4_800),
+                                              chosen: room(arrivalFrame: 9_600), rate: 48_000, oldOffsetMs: 150)
+        let phase = CalibrationFlow.finish(result) { stored["usb"] = $0 }
+        check(phase == .done(offsetMs: 50, clamped: false) && stored == ["usb": 50],
+              "calibration: a speaker heard 100 ms after the reference ends up 100 ms lower (S232)",
+              "\(phase), \(stored)")
+        let silent = [Float](repeating: 0, count: 96_000)
+        let refused = CalibrationFlow.finish(CalibrationFlow.estimate(signal: signal, reference: silent,
+                                                                      chosen: room(arrivalFrame: 9_600),
+                                                                      rate: 48_000, oldOffsetMs: 150)) { stored["usb"] = $0 }
+        check(refused == .failed(.tooQuiet(.reference)) && stored == ["usb": 50],
+              "calibration: a silent reference recording is refused and changes nothing (S234)", "\(refused)")
+    } else {
+        check(false, "calibration: the core makes the test signal at 48 kHz (S233)")
+    }
+
+    // A run cut off while its sweep is on the way keeps the one output heard
+    // and the music silent until the sweep has played out through the
+    // hold-backs; one cut off before it played gives the outputs back at once.
+    let settle = CalibrationFlow.settleSeconds(signalSent: true, sameSession: true, largestHoldBackMs: 2000)
+    check(settle == CalibrationFlow.quietSeconds(largestHoldBackMs: 2000) && settle >= 2
+            && CalibrationFlow.settleSeconds(signalSent: false, sameSession: true, largestHoldBackMs: 2000) == 0
+            && CalibrationFlow.settleSeconds(signalSent: true, sameSession: false, largestHoldBackMs: 2000) == 0,
+          "calibration: an abort during playing restores the outputs only after the sweep played out (S185)",
+          "\(settle) s")
+
+    // A recording past the estimate's limit at the microphone's rate is refused before anything plays.
+    check(CalibrationFlow.fits(largestHoldBackMs: 20_000, rate: 48_000)
+            && !CalibrationFlow.fits(largestHoldBackMs: 20_000, rate: 192_000)
+            && CalibrationFlow.fits(largestHoldBackMs: 2000, rate: 192_000),
+          "calibration: a long hold-back at a high microphone rate is refused up front (S232, S234)")
+
+    check(t.calibrationMessage(.cancelled) == "Calibration cancelled. The delay wasn't changed."
+            && t.calibrationMessage(.running(.preparing)) == nil && t.calibrationMessage(.idle) == nil,
+          "calibration: a cancel says nothing changed")
+
+    // A shown line goes once it no longer describes the speaker.
+    let shownIn = CalibrationContext(streaming: true, reference: "mac", speakerOn: true)
+    let shown = CalibrationStatus(uid: "usb", phase: .done(offsetMs: 40, clamped: false), context: shownIn)
+    var streamingOff = shownIn
+    streamingOff.streaming = false
+    var otherReference = shownIn
+    otherReference.reference = nil
+    var speakerOff = shownIn
+    speakerOff.speakerOn = false
+    let measuring = CalibrationStatus(uid: "usb", phase: .running(.measuring(.reference)), context: shownIn,
+                                      holdsOutputs: true)
+    check(shown.following(shownIn) == shown
+            && [streamingOff, otherReference, speakerOff].allSatisfy { shown.following($0).phase(of: "usb") == .idle }
+            && shown.offsetChanged("usb").phase(of: "usb") == .idle && shown.offsetChanged("bt") == shown
+            && measuring.following(streamingOff) == measuring && measuring.offsetChanged("usb") == measuring,
+          "calibration: a result goes when its offset, streaming, the reference or the speaker's switch changes")
+
+    check(CalibrationFlow.unavailable(streaming: false, hasReference: true, speakerOn: true) == .notPlaying
+            && CalibrationFlow.unavailable(streaming: true, hasReference: true, speakerOn: false) == .notPlaying
+            && CalibrationFlow.unavailable(streaming: true, hasReference: false, speakerOn: true) == .noReference
+            && CalibrationFlow.unavailable(streaming: true, hasReference: true, speakerOn: true) == nil,
+          "calibration: the button is off while streaming or the speaker is off, or without a reference")
+
+    let status = CalibrationStatus(uid: "usb", phase: .running(.measuring(.chosen)))
+    check(status.phase(of: "usb") == .running(.measuring(.chosen)) && status.phase(of: "bt") == .idle && status.isRunning,
+          "calibration: only the speaker being calibrated shows its progress")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

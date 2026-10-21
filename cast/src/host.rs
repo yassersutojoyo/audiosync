@@ -48,7 +48,7 @@ const TICK: Duration = Duration::from_millis(50);
 /// Events waiting for a host that doesn't poll.
 pub const MAX_HOST_EVENTS: usize = 256;
 /// What [`CastHost::shutdown`] waits beyond the teardown budget of C88.
-const SHUTDOWN_MARGIN: Duration = Duration::from_millis(500);
+pub const SHUTDOWN_MARGIN: Duration = Duration::from_millis(500);
 
 /// How a Cast output relates to the host's other outputs (C73, C77).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -454,10 +454,11 @@ fn keyboard_shortcuts_are_declared() {
 /// speaker kind, what a listed speaker can't do yet, the AirPlay delay field
 /// (spec S181), which shows only while the AirPlay sender runs, and the notice
 /// that the sender stopped or couldn't start, with its Retry button and its
-/// short name for the dismiss button, and the
-/// note that discovery has found no speaker yet, which shows only while it
-/// runs, and the note that a speaker waits for the one AirPlay 2 slot, which
-/// only the hidden AirPlay 2 switch can bring up; an empty Connected Speakers list otherwise says just that it's
+/// short name for the dismiss button, and the note that discovery has found
+/// no speaker yet (alone, or with Google Cast's in one sentence), which
+/// shows only while it runs. The note and row state for a speaker waiting
+/// for the one AirPlay 2 slot show only behind the hidden AirPlay 2 switch.
+/// An empty Connected Speakers list otherwise says just that it's
 /// empty, or that its virtual outputs are hidden. Seven strings of the
 /// AudioSync Guide name AirPlay too, with the receivers the sender plays,
 /// the ones it can't yet, and the track info it sends.
@@ -477,6 +478,9 @@ fn no_text_promises_airplay() {
                 || line.contains("return @tr(\"AirPlay stopped\");")
                 || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
                 || line.contains("plays one AirPlay 2 speaker at a time, so {} waits.")
+                || line.contains(
+                    "network-none-found: @tr(\"No AirPlay or Google Cast speakers found yet.",
+                )
                 || [
                     "help-intro",
                     "help-start",

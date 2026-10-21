@@ -163,6 +163,96 @@ struct UIStrings {
                   : "Increase delay by \(delta) \(millisecondsUnit)"
     }
 
+    // MARK: Microphone calibration (S232)
+
+    let calibrateWithMicrophone = "Calibrate with Microphone"
+    func calibrateLabel(of name: String) -> String { "Calibrate \(name) with the microphone" }
+    let calibrationHint = "Put the microphone where you listen. AudioSync pauses the music, plays a short, "
+        + "quiet sweep on the built-in speakers and then on this speaker, and sets this speaker's delay from the difference."
+    let calibrationCancel = "Cancel"
+    func calibrationCancelLabel(of name: String) -> String { "Cancel calibrating \(name)" }
+    let openMicrophoneSettings = "Open Microphone Settings"
+
+    /// The calibrate button's tooltip and VoiceOver hint while it is off.
+    func calibrationUnavailable(_ reason: CalibrationFailure) -> String {
+        reason == .noReference
+            ? "Calibration measures against the Mac's built-in speakers, and they aren't listed."
+            : "Turn on streaming and this speaker to calibrate it."
+    }
+
+    /// What a running calibration is doing.
+    func calibrationStep(_ step: CalibrationPhase.Step) -> String {
+        switch step {
+        case .preparing: "Pausing the music…"
+        case .measuring(.reference): "Listening to the built-in speakers…"
+        case .measuring(.chosen): "Listening to this speaker…"
+        case .estimating: "Working out the delay…"
+        }
+    }
+
+    /// The line under the button once a calibration ended; nil while none
+    /// did or one runs.
+    func calibrationMessage(_ phase: CalibrationPhase) -> String? {
+        switch phase {
+        case .idle, .running:
+            return nil
+        case .done(let ms, let clamped):
+            return clamped
+                ? "Delay set to \(offsetValue(ms: ms)), the end of the range. The measured difference is larger, "
+                    + "so this speaker stays a little out of sync."
+                : "Delay set to \(offsetValue(ms: ms))."
+        case .failed(let failure):
+            return calibrationFailure(failure) + " The delay wasn't changed."
+        case .cancelled:
+            return "Calibration cancelled. The delay wasn't changed."
+        }
+    }
+
+    func calibrationFailure(_ failure: CalibrationFailure) -> String {
+        switch failure {
+        case .noReference:
+            return "Calibration measures against the Mac's built-in speakers, and they aren't listed."
+        case .notPlaying:
+            return "Turn on streaming, this speaker and the built-in speakers first."
+        case .microphoneDenied:
+            return "AudioSync isn't allowed to use the microphone. Turn it on in System Settings, "
+                + "Privacy & Security, Microphone."
+        case .noMicrophone:
+            return "AudioSync couldn't record from the microphone. Check the input in System Settings, Sound."
+        case .unsupportedRate:
+            return "The audio source runs at a sample rate calibration can't use."
+        case .sourceSilent:
+            return "The audio source isn't sending audio, so the test sound couldn't play. "
+                + "Play something, or choose \(sourceSystem) as the source, and try again."
+        case .interrupted:
+            return "Streaming, the speakers or their delays changed during the measurement."
+        case .tooShort:
+            return "The recording was too short. Try again."
+        case .tooLong:
+            return "The delays are too long to measure in one recording at the microphone's sample rate. "
+                + "Lower the largest delay, or set the microphone to 48 kHz in Audio MIDI Setup, and try again."
+        case .clipped(let which):
+            return "The microphone was overloaded while \(calibrationSubject(which)) played. "
+                + "Turn the volume down or move the microphone farther away, and try again."
+        case .tooQuiet(let which):
+            return "The microphone barely heard \(calibrationSubject(which)). "
+                + "Turn the volume up or move the microphone closer, and try again."
+        case .ambiguousEcho(let which):
+            return "An echo or another sound was almost as loud as \(calibrationSubject(which)). "
+                + "Give the microphone a clear line to both speakers and try again."
+        case .implausible:
+            return "The two speakers were too far apart to measure."
+        }
+    }
+
+    private func calibrationSubject(_ which: CalibrationRecording?) -> String {
+        switch which {
+        case .reference: "the built-in speakers"
+        case .chosen: "this speaker"
+        case nil: "a speaker"
+        }
+    }
+
     // MARK: Main menu
 
     let menuAbout = "About AudioSync"
