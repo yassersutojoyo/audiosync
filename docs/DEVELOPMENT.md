@@ -63,6 +63,8 @@ It writes to `/tmp/audiosync-debug.log`, which starts over at every launch and s
 
 Every local output that's switched on has its own macOS volume and mute read through Core Audio (`DeviceVolume.swift`), and followed with property listeners until it's switched off or unplugged. The log gets one line when an output is first read (`output <UID> device volume: 13%, not muted; volume settable on the main element, …`), one when what its row shows changes (`fine → low`), and one per click on the fix, with what was written, how each write went and what the device reports afterwards. The only write is that click; nothing else touches a device's own volume.
 
+`AUDIOSYNC_BT_IO_FRAMES` is a diagnostic switch for one listening session, not a setting: set to a whole number from 2048 to 4096, every Bluetooth output (Classic or LE) asks macOS for that IO buffer size, clamped to the device's range, before it starts; other outputs, and every output without the variable, stay exactly as they are. It tells whether a bigger buffer changes the chop you hear with two or more Bluetooth outputs at once. With the debug log on, each Bluetooth output that starts gets one `BT IO buffer:` line with the device, its transport, the request, the device's range, the size before and the size read back. For example: `AUDIOSYNC_BT_IO_FRAMES=4096 AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`.
+
 The Windows app has the same switch. Exit it from the tray icon's menu, then start it from PowerShell in the folder that holds `audiosync.exe`:
 
 ```powershell

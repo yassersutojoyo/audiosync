@@ -2639,6 +2639,38 @@ do {
           "delay field input: the out-of-range hint names the range and the value Return applies")
 }
 
+// MARK: Bluetooth IO buffer switch — AUDIOSYNC_BT_IO_FRAMES, Bluetooth outputs only (BluetoothIOBuffer)
+do {
+    typealias B = BluetoothIOBuffer
+    let bt = kAudioDeviceTransportTypeBluetooth, le = kAudioDeviceTransportTypeBluetoothLE
+    let wide: (minimum: Double, maximum: Double)? = (15, 8192)
+    check(B.requested(nil) == nil && B.requested("") == nil && B.requested("abc") == nil
+              && B.requested("3000.5") == nil && B.requested("-2048") == nil,
+          "BT IO buffer: unset, empty or not a whole number asks for nothing")
+    check(B.requested("2047") == nil && B.requested("4097") == nil,
+          "BT IO buffer: a value outside 2048 to 4096 asks for nothing")
+    check(B.requested("2048") == 2048 && B.requested(" 4096 ") == 4096 && B.requested("3072") == 3072,
+          "BT IO buffer: a whole number from 2048 to 4096 is the request")
+    check(B.frames(requested: nil, transport: bt, range: wide) == nil,
+          "BT IO buffer: no request leaves a Bluetooth device untouched")
+    check(B.frames(requested: 4096, transport: kAudioDeviceTransportTypeBuiltIn, range: wide) == nil
+              && B.frames(requested: 4096, transport: kAudioDeviceTransportTypeUSB, range: wide) == nil
+              && B.frames(requested: 4096, transport: kAudioDeviceTransportTypeAirPlay, range: wide) == nil
+              && B.frames(requested: 4096, transport: 0, range: wide) == nil,
+          "BT IO buffer: a device that isn't Bluetooth is never touched")
+    check(B.frames(requested: 4096, transport: bt, range: wide) == 4096
+              && B.frames(requested: 2048, transport: le, range: wide) == 2048,
+          "BT IO buffer: Bluetooth Classic and LE devices get the request inside their range")
+    check(B.frames(requested: 4096, transport: bt, range: (15, 2048)) == 2048
+              && B.frames(requested: 2048, transport: bt, range: (3000.2, 8192)) == 3001,
+          "BT IO buffer: the request is clamped to the device's range")
+    check(B.frames(requested: 3072, transport: bt, range: nil) == 3072
+              && B.frames(requested: 3072, transport: bt, range: (8192, 15)) == 3072
+              && B.frames(requested: 3072, transport: bt, range: (Double.nan, 8192)) == 3072
+              && B.frames(requested: 3072, transport: bt, range: (1e12, 1e13)) == 3072,
+          "BT IO buffer: an unknown or unusable range leaves the request as it is")
+}
+
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
 
 /// A host clock that the checks move on by hand and that `finishAll`'s pauses
