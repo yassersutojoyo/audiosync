@@ -17,7 +17,7 @@
 //! - I4: over the last quarter, any two outputs' mean delays, less their
 //!   latencies and hold-backs, lie within a capture block plus 2 ms.
 //! - I5: over the last quarter, each output's delay stays within 2 ms.
-//! - I6: an output without wander whose clock is at least 50 ppm off is
+//! - I6: an output without wander whose clock is at least 20 ppm off is
 //!   trimmed with its clock by 9/10 of what it gained, against it by at most
 //!   16 frames.
 //! - I7: with AirPlay chosen, the session lead stays 0 and no output
@@ -57,16 +57,19 @@ const HELD_MS: f64 = 100.0;
 const AIRPLAY_MS: f64 = 1700.0;
 
 /// Main's failing cases per invariant on the pinned seed, I1 to I8. A count
-/// above its maximum fails; each step of the design sets them to its own
-/// measured counts and says why one rose.
+/// above its maximum fails, and so does one below it until the maximum is
+/// lowered to it, so the ratchet never goes slack and every CI system proves
+/// the same counts. Each step of the design sets them to its own measured
+/// counts and says why one rose.
 const RATCHET: [usize; 8] = [14, 34, 3, 31, 44, 32, 0, 2];
 
 /// I4: how far apart outputs may play beyond a capture block, in ms.
 const ALIGN_SLACK_MS: f64 = 2.0;
 /// I5: how far an output's delay may move over the last quarter, in ms.
 const STEADY_MS: f64 = 2.0;
-/// I6: outputs whose clock is this many ppm off or more are judged.
-const TRIM_JUDGED_PPM: f64 = 50.0;
+/// I6: outputs whose clock is this many ppm off or more are judged. Real
+/// clocks sit a few to tens of ppm off, so the trim has to hold there too.
+const TRIM_JUDGED_PPM: f64 = 20.0;
 /// I6: the share of what the clock gained it is trimmed by, at least.
 const TRIM_WITH_SHARE: f64 = 0.9;
 /// I6: frames trimmed against the clock, at most.
@@ -956,7 +959,7 @@ fn matrix() -> &'static Matrix {
 
 // covers: S50, S206, S207, S208, S209
 #[test]
-fn the_matrix_fails_no_more_cases_per_invariant_than_main() {
+fn the_matrix_fails_exactly_the_ratchets_cases_per_invariant() {
     let matrix = matrix();
     let counts = matrix.counts();
     let table: Vec<String> = NAMES
@@ -976,8 +979,8 @@ fn the_matrix_fails_no_more_cases_per_invariant_than_main() {
         counts
             .iter()
             .zip(RATCHET)
-            .all(|(&count, most)| count <= most),
-        "more failing cases than the ratchet allows: {}\n{}",
+            .all(|(&count, most)| count == most),
+        "failing cases differ from the ratchet (above: a regression; below: lower RATCHET): {}\n{}",
         table.join(", "),
         matrix.report()
     );
