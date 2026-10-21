@@ -206,6 +206,9 @@ struct MainView: View {
             }
             Toggle(t.launchAtLogin, isOn: Binding(get: { model.launchAtLogin },
                                                   set: { model.actions.setLaunchAtLogin($0) }))
+            Toggle(t.switchToSystemWhenSourceQuits,
+                   isOn: Binding(get: { model.switchWhenSourceQuits },
+                                 set: { model.actions.setSwitchWhenSourceQuits($0) }))
             Divider()
             Button(t.guideTitle) { model.actions.openGuide() }
         } label: {
