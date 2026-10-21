@@ -3647,6 +3647,47 @@ mod tests {
         assert_eq!(again.get(id), Some(&credentials));
     }
 
+    #[test]
+    fn an_airplay2_pin_pairing_reads_as_paired_and_forget_removes_it() {
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        let mut record = airplay2_only();
+        record.txt.push(b"flags=0x8".to_vec());
+        let device =
+            Device::from_records(record.device_key(), None, Some(&record)).expect("a device");
+        let id = receiver_id(&device.key);
+        let mut info = ReceiverInfo::new(device);
+        // Planned as the sender plans it with the AirPlay 2 switch on.
+        info.plan = Ok(());
+        inside(handle).listed.insert(id.clone(), info.clone());
+        let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info.clone())));
+        assert_eq!(report.availability, AIRPLAY_NEEDS_PAIRING);
+
+        let mut blob = vec![1u8];
+        blob.extend_from_slice(b"01234567-89AB-CDEF-0123-456789ABCDEF");
+        blob.extend_from_slice(&[7; 64]);
+        blob.extend_from_slice(b"receiver");
+        let credentials = HomeKitCredentials::from_bytes(&blob).expect("a credential blob");
+        let _ = inside(handle).identity.insert(&id, credentials);
+        let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info.clone())));
+        assert_eq!(
+            report.availability, AIRPLAY_AVAILABLE,
+            "paired on AirPlay 2"
+        );
+
+        let c_id = CString::new(id.clone()).expect("no NUL");
+        // SAFETY: a live handle, used by this thread only; a local C string.
+        unsafe {
+            assert!(asc_airplay_forget_pairing(handle, c_id.as_ptr()));
+            assert!(!asc_airplay_forget_pairing(handle, c_id.as_ptr()));
+        }
+        assert_eq!(inside(handle).identity.get(&id), None);
+        let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info)));
+        assert_eq!(report.availability, AIRPLAY_NEEDS_PAIRING);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     fn pairing_events(events: &[Event]) -> Vec<(i32, String, i32)> {
         events
             .iter()
