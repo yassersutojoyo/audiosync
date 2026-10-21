@@ -338,6 +338,8 @@ pub struct PairSetup {
     /// B or S of this attempt is shorter than N, so a receiver that pads
     /// them computes another proof (P151).
     short_values: bool,
+    /// The receiver turned the PIN down (P150, error 2).
+    pin_rejected: bool,
     public: Vec<u8>,
     key: Zeroizing<Vec<u8>>,
     server_proof: Vec<u8>,
@@ -384,6 +386,7 @@ impl PairSetup {
             stage: SetupStage::Idle,
             retried: false,
             short_values: false,
+            pin_rejected: false,
             public: Vec::new(),
             key: Zeroizing::new(Vec::new()),
             server_proof: Vec::new(),
@@ -440,6 +443,12 @@ impl PairSetup {
         self.last.as_ref()
     }
 
+    /// Whether a PIN pairing failed because the receiver turned the PIN
+    /// down, so the host can start again for a new code (P151).
+    pub fn pin_rejected(&self) -> bool {
+        self.pin_rejected
+    }
+
     fn remember(&mut self, request: Request) -> Request {
         self.last = Some(request.clone());
         request
@@ -471,7 +480,10 @@ impl PairSetup {
     /// Error 2, or an M4 proof that doesn't check (P150).
     fn authentication(&mut self) -> SetupStep {
         let kind = match self.kind {
-            SetupKind::Pin => ErrorKind::PairingFailed,
+            SetupKind::Pin => {
+                self.pin_rejected = true;
+                ErrorKind::PairingFailed
+            }
             SetupKind::Password => ErrorKind::WrongPassword,
             SetupKind::Transient => ErrorKind::PairingRequired,
         };

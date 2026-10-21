@@ -4,5 +4,3 @@
 # test, so this list only shrinks. "Partly done" names what already exists.
 
 # AirPlay 2 (behind its flag until the real-receiver checks of G17).
-P149 HomeKit pairing request lines and headers: AirPlay 2 stage. Partly done: transient and password pair-setup and pair-verify on the session connection, with their headers and the 401 resend; the host-driven PIN pairing with `/pair-pin-start` comes later.
-P153 Connection order and start of framing: AirPlay 2 stage. Partly done: the order and the start of framing after a transient pair-setup, a password pair-setup and a pair-verify; the PIN pairing's `/pair-pin-start` comes with the host-driven PIN flow.

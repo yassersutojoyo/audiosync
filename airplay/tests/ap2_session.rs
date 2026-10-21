@@ -324,7 +324,7 @@ fn info_answer_may_be_only_the_txt_record() {
 }
 
 // Part of P149 and P153: transient and password pairing on the session
-// connection; the PIN pairing with `/pair-pin-start` comes later.
+// connection; tests/ap2_pin.rs covers the PIN pairing.
 #[test]
 fn pairing_goes_on_the_session_connection() {
     let rig = transient();
