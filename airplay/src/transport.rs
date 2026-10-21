@@ -112,6 +112,13 @@ pub(crate) enum IoEvent {
     Control { session: SessionKey, bytes: Vec<u8> },
     /// A timing request arrived at `at` and was answered (P91, P131).
     TimingRequest { session: SessionKey, at: Instant },
+    /// What looks like a Delay_Req reached the PTP event socket at `at`
+    /// (P162).
+    Ptp {
+        bytes: Vec<u8>,
+        source: SocketAddr,
+        at: Instant,
+    },
 }
 
 /// How the threads reach the driver: false once it is gone, which ends the
@@ -446,13 +453,107 @@ impl Drop for RtspIo {
     }
 }
 
+/// The PTP service's sockets on ports 319 and 320 (P158), bound only while
+/// the AirPlay 2 switch is on and an AirPlay 2 session may need them. One
+/// thread reads the event socket and hands what may be a Delay_Req to the
+/// driver with its arrival time; nothing else is read.
+#[derive(Debug)]
+pub(crate) struct PtpIo {
+    event: Arc<UdpSocket>,
+    general: UdpSocket,
+    stop: Arc<AtomicBool>,
+    threads: Vec<JoinHandle<()>>,
+}
+
+impl PtpIo {
+    /// Binds both ports on every address of `family`'s kind; either bind
+    /// failing makes PTP unavailable (P158).
+    pub(crate) fn open(
+        family: IpAddr,
+        ports: crate::ptp::PtpPorts,
+        notify: impl Notify,
+    ) -> io::Result<PtpIo> {
+        let any = match family {
+            IpAddr::V4(_) => IpAddr::from([0u8; 4]),
+            IpAddr::V6(_) => IpAddr::from([0u16; 8]),
+        };
+        let event = UdpSocket::bind(SocketAddr::new(any, ports.event))?;
+        let general = UdpSocket::bind(SocketAddr::new(any, ports.general))?;
+        for socket in [&event, &general] {
+            socket.set_read_timeout(Some(POLL_INTERVAL))?;
+            socket.set_write_timeout(Some(UDP_SEND_TIMEOUT))?;
+        }
+        let mut io = PtpIo {
+            event: Arc::new(event),
+            general,
+            stop: Arc::new(AtomicBool::new(false)),
+            threads: Vec::new(),
+        };
+        let thread = spawn(
+            "airplay-ptp",
+            ptp_loop(io.event.clone(), io.stop.clone(), notify),
+            || {},
+        )?;
+        io.threads.push(thread);
+        Ok(io)
+    }
+
+    /// Sends one message; a failed send is dropped, since the next Sync
+    /// follows within 125 ms.
+    pub(crate) fn send(&self, port: crate::ptp::PtpPort, to: SocketAddr, bytes: &[u8]) {
+        let socket = match port {
+            crate::ptp::PtpPort::Event => &*self.event,
+            crate::ptp::PtpPort::General => &self.general,
+        };
+        let _ = socket.send_to(bytes, to);
+    }
+
+    /// Stops the thread, whose handle comes back for the caller to join;
+    /// the sockets close when the thread lets go of its own.
+    pub(crate) fn close(mut self) -> Vec<JoinHandle<()>> {
+        self.stop.store(true, Ordering::Release);
+        std::mem::take(&mut self.threads)
+    }
+}
+
+impl Drop for PtpIo {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+    }
+}
+
+fn ptp_loop(
+    socket: Arc<UdpSocket>,
+    stop: Arc<AtomicBool>,
+    notify: impl Notify,
+) -> impl FnOnce() + Send + 'static {
+    move || {
+        let mut buf = [0u8; DATAGRAM_BYTES];
+        while !stop.load(Ordering::Acquire) {
+            match socket.recv_from(&mut buf) {
+                Ok((len, source)) => {
+                    let at = Instant::now();
+                    if !crate::ptp::may_be_delay_req(&buf[..len]) {
+                        continue;
+                    }
+                    let bytes = buf[..len].to_vec();
+                    if !notify(IoEvent::Ptp { bytes, source, at }) {
+                        break;
+                    }
+                }
+                Err(error) => idle_after(&error),
+            }
+        }
+    }
+}
+
 /// Whether a datagram from `source` came from the session's receiver,
 /// whose address (in canonical form) is `receiver`, from any port, since
 /// receivers pick their own (P86, P91). An IPv4 or IPv6 link-local address
 /// must match exactly. Any other IPv6 address only needs the same /64
 /// prefix: a receiver may send from one of its temporary addresses
 /// (RFC 8981), which keeps the prefix and changes the rest.
-fn from_receiver(source: SocketAddr, receiver: IpAddr) -> bool {
+pub(crate) fn from_receiver(source: SocketAddr, receiver: IpAddr) -> bool {
     match (source.ip().to_canonical(), receiver) {
         (IpAddr::V6(source), IpAddr::V6(receiver)) if !receiver.is_unicast_link_local() => {
             source.octets()[..8] == receiver.octets()[..8]

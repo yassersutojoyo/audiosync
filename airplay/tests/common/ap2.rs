@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -217,6 +217,9 @@ pub struct FakeAp2 {
     pub bodies: HashMap<String, Vec<u8>>,
     /// The stream SETUP answer leaves out `dataPort`.
     pub no_data_port: bool,
+    /// The `dataPort` and `controlPort` of the stream SETUP answer.
+    pub data_port: u16,
+    pub control_port: u16,
     /// Answers sent, for the frame counts.
     pub framing: Option<FakeFraming>,
     pub events: Option<FakeFraming>,
@@ -248,6 +251,8 @@ impl FakeAp2 {
             silent: Vec::new(),
             bodies: HashMap::new(),
             no_data_port: false,
+            data_port: DATA_PORT,
+            control_port: RECEIVER_CONTROL_PORT,
             framing: None,
             events: None,
             secret: None,
@@ -393,11 +398,11 @@ impl FakeAp2 {
             "SETUP stream" => {
                 let mut entries = vec![
                     ("type", int(96)),
-                    ("controlPort", int(i64::from(RECEIVER_CONTROL_PORT))),
+                    ("controlPort", int(i64::from(self.control_port))),
                     ("streamID", int(STREAM_ID)),
                 ];
                 if !self.no_data_port {
-                    entries.push(("dataPort", int(i64::from(DATA_PORT))));
+                    entries.push(("dataPort", int(i64::from(self.data_port))));
                 }
                 plist(dict(&[("streams", Value::Array(vec![dict(&entries)]))]))
             }
@@ -600,6 +605,70 @@ impl Ap2Rig {
     }
 }
 
+/// The `shk` of the last stream SETUP the fake read (P44, P156).
+pub fn stream_key(fake: &FakeAp2) -> Option<[u8; 32]> {
+    let request = fake.last("SETUP stream")?;
+    let body = read_dict(&request.body)?;
+    let stream = body.get("streams")?.as_array()?.first()?.as_dictionary()?;
+    let shk = stream.get("shk")?.as_data()?;
+    shk.try_into().ok()
+}
+
+/// An audio packet as the fake receiver opens it (P155): the 12-byte RTP
+/// header, the 16-byte tag and the 8-byte little-endian counter after the
+/// ciphertext, the nonce four zero bytes and that counter, the additional
+/// data header bytes 4 to 11.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenedPacket {
+    pub header: [u8; 12],
+    pub payload: Vec<u8>,
+    pub counter: u64,
+}
+
+impl OpenedPacket {
+    pub fn seq(&self) -> u16 {
+        u16::from_be_bytes([self.header[2], self.header[3]])
+    }
+
+    pub fn timestamp(&self) -> u32 {
+        u32::from_be_bytes([
+            self.header[4],
+            self.header[5],
+            self.header[6],
+            self.header[7],
+        ])
+    }
+}
+
+/// Opens one sealed packet with `key`, or `None` when it doesn't check.
+pub fn open_packet(key: &[u8; 32], bytes: &[u8]) -> Option<OpenedPacket> {
+    if bytes.len() < 36 {
+        return None;
+    }
+    let end = bytes.len() - 24;
+    let mut header = [0u8; 12];
+    header.copy_from_slice(&bytes[..12]);
+    let tag = Tag::try_from(&bytes[end..end + 16]).ok()?;
+    let mut trailer = [0u8; 8];
+    trailer.copy_from_slice(&bytes[end + 16..]);
+    let mut nonce = [0u8; 12];
+    nonce[4..].copy_from_slice(&trailer);
+    let mut payload = bytes[12..end].to_vec();
+    ChaCha20Poly1305::new(key.into())
+        .decrypt_inout_detached(
+            &nonce.into(),
+            &bytes[4..12],
+            payload.as_mut_slice().into(),
+            &tag,
+        )
+        .ok()?;
+    Some(OpenedPacket {
+        header,
+        payload,
+        counter: u64::from_le_bytes(trailer),
+    })
+}
+
 /// A [`FakeAp2`] on loopback sockets: an RTSP listener and an event
 /// listener, each connection served on its own thread. The event
 /// connection gets one `POST /command` as soon as it opens.
@@ -609,6 +678,9 @@ pub struct Ap2Server {
     /// The answers the sender wrote on the event connection.
     pub event_answers: Arc<Mutex<Vec<Response>>>,
     stop: Arc<AtomicBool>,
+    /// Open data and control ports for a fake that names none of its own,
+    /// so the audio has somewhere to go and no send comes back unreachable.
+    _udp: Vec<UdpSocket>,
 }
 
 impl Ap2Server {
@@ -618,6 +690,14 @@ impl Ap2Server {
         rtsp.set_nonblocking(true).expect("nonblocking");
         events.set_nonblocking(true).expect("nonblocking");
         fake.event_port = events.local_addr().expect("address").port();
+        let mut udp = Vec::new();
+        for port in [&mut fake.data_port, &mut fake.control_port] {
+            if *port == DATA_PORT || *port == RECEIVER_CONTROL_PORT {
+                let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("a UDP socket");
+                *port = socket.local_addr().expect("address").port();
+                udp.push(socket);
+            }
+        }
         let address = rtsp.local_addr().expect("address");
         let fake = Arc::new(Mutex::new(fake));
         let event_answers = Arc::new(Mutex::new(Vec::new()));
@@ -641,6 +721,7 @@ impl Ap2Server {
             fake,
             event_answers,
             stop,
+            _udp: udp,
         }
     }
 

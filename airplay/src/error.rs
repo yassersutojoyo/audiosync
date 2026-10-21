@@ -202,4 +202,7 @@ pub enum Warning {
     /// check out against the Ed25519 key it gave at pairing; the
     /// verification goes on (P56).
     ReceiverSignatureInvalid,
+    /// PTP port 319 or 320 couldn't be bound, so a receiver that needs PTP
+    /// timing is Unsupported; told once per sender (P158).
+    PtpUnavailable,
 }

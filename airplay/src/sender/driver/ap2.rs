@@ -1,12 +1,30 @@
 //! The driver's side of the AirPlay 2 path (P2, P169, P170): one session at
 //! a time, on an RTSP connection with the session's UDP sockets and an event
-//! connection of its own. Nothing here runs while the switch is off: only
-//! `start_session` calls [`Driver::start_ap2`], and only with it on.
+//! connection of its own, its sealed audio in the shared stream (P155), and
+//! the PTP service while it uses PTP timing (P158, P167). Nothing here runs
+//! while the switch is off: only `start_session` calls
+//! [`Driver::start_ap2`], and only with it on.
+
+use std::net::IpAddr;
 
 use super::*;
 
-use crate::ap2::{Ap2Config, Ap2Event, Ap2Output, Ap2Session, Ap2State, Timing};
-use crate::error::UnsupportedReason;
+use crate::ap2::bodies::uuid_text;
+use crate::ap2::session::{FEATURE_PTP, with_port};
+use crate::ap2::{Ap2Config, Ap2Event, Ap2Output, Ap2Session, Ap2State, PtpPeer, Timing};
+use crate::error::{UnsupportedReason, Warning};
+use crate::ptp::{MessageType, PtpService, clock_identity};
+use crate::session::MediaDestinations;
+use crate::stream::Ap2Audio;
+use crate::transport::PtpIo;
+
+/// The bound PTP service (P158).
+pub(super) struct PtpRun {
+    pub(super) service: PtpService,
+    io: PtpIo,
+    peer: PtpPeer,
+    v6: bool,
+}
 
 /// An AirPlay 2 session that is starting, ready or closing.
 pub(super) struct Ap2Active {
@@ -18,6 +36,8 @@ pub(super) struct Ap2Active {
     pub(super) events_attempt: u32,
     pub(super) io: Option<SessionIo>,
     pub(super) events_io: Option<RtspIo>,
+    /// The speaker in the stream once the stream is set up and flushed.
+    pub(super) stream_id: Option<stream::SpeakerId>,
 }
 
 impl Driver {
@@ -46,6 +66,14 @@ impl Driver {
             error.detail = Some("the random number source is unavailable");
             return self.refuse(key, error, now);
         };
+        // The PTP ports are bound only for a receiver that may take PTP:
+        // one that took it before or sets features bit 41 (P157, P158).
+        let ptp_family = self.speakers.get(key).and_then(|speaker| {
+            let wants = self.ptp_timing.contains(key) || speaker.device.features().has(FEATURE_PTP);
+            let first = speaker.device.airplay_socket_addrs().first().copied();
+            first.filter(|_| wants).map(|address| address.ip())
+        });
+        let ptp = ptp_family.and_then(|family| self.ptp_peer(key, family));
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
@@ -64,9 +92,7 @@ impl Driver {
             .or_else(|| self.homekit.get(key).cloned());
         config.password = speaker.options.password.clone();
         config.device_id = self.device_id;
-        // No PTP service runs yet, so the session asks for NTP only and a
-        // receiver that refuses it is Unsupported (timing) (P157, P158).
-        config.ptp = None;
+        config.ptp = ptp;
         config.timing = if self.ptp_timing.contains(key) {
             Timing::Ptp
         } else {
@@ -83,6 +109,7 @@ impl Driver {
             events_attempt: 0,
             io: None,
             events_io: None,
+            stream_id: None,
         }));
         self.sessions.insert(session_key, key.clone());
         self.sessions.insert(events_key, key.clone());
@@ -133,18 +160,157 @@ impl Driver {
         }
     }
 
-    /// Closes both connections and the UDP sockets of the session.
+    /// Closes both connections and the UDP sockets of the session, takes
+    /// its speaker out of the stream and stops the PTP traffic (P167).
     pub(super) fn release_ap2(&mut self, key: &DeviceKey) {
         let Some(active) = self.ap2_active(key) else {
             return;
         };
         let io = active.io.take();
         let events = active.events_io.take();
+        let stream_id = active.stream_id.take();
         if let Some(io) = io {
             self.retired.extend(io.close());
         }
         if let Some(events) = events {
             self.retired.extend(events.close());
+        }
+        if let Some(id) = stream_id {
+            self.stream.remove_speaker(id);
+            self.stream_ids.remove(&id);
+        }
+        if let Some(run) = &mut self.ptp {
+            run.service.stop();
+        }
+    }
+
+    /// The AirPlay 2 session is over: the PTP ports are let go.
+    pub(super) fn close_ptp(&mut self) {
+        if let Some(run) = self.ptp.take() {
+            self.retired.extend(run.io.close());
+        }
+    }
+
+    /// The PTP service for a session to a receiver in `family`'s address
+    /// family, bound now if it isn't (P158). When a port can't be bound the
+    /// host is told once and the session goes without PTP.
+    fn ptp_peer(&mut self, key: &DeviceKey, family: IpAddr) -> Option<PtpPeer> {
+        let v6 = family.to_canonical().is_ipv6();
+        if let Some(run) = &self.ptp
+            && run.v6 == v6
+        {
+            return Some(run.peer.clone());
+        }
+        self.close_ptp();
+        let mut random = [0u8; 22];
+        OsEntropy.fill(&mut random).ok()?;
+        let mut identity_random = [0u8; 6];
+        identity_random.copy_from_slice(&random[..6]);
+        let mut uuid = [0u8; 16];
+        uuid.copy_from_slice(&random[6..]);
+        let identity = clock_identity(identity_random);
+        match PtpIo::open(family.to_canonical(), self.ptp_ports, self.notify()) {
+            Ok(io) => {
+                let peer = PtpPeer {
+                    clock_id: u64::from_be_bytes(identity),
+                    id: uuid_text(uuid),
+                };
+                let service =
+                    PtpService::new(self.stream.clock(), identity, self.ptp_receiver_ports);
+                self.ptp = Some(PtpRun {
+                    service,
+                    io,
+                    peer: peer.clone(),
+                    v6,
+                });
+                Some(peer)
+            }
+            Err(_) => {
+                if !self.ptp_unavailable_told {
+                    self.ptp_unavailable_told = true;
+                    self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpUnavailable));
+                }
+                None
+            }
+        }
+    }
+
+    /// Sends what the PTP service queued; a Sync's Follow_Up carries the
+    /// time read right after the Sync left (P161). True when anything went.
+    pub(super) fn send_ptp(&mut self) -> bool {
+        let Some(run) = &mut self.ptp else {
+            return false;
+        };
+        let mut sent = false;
+        while let Some(transmit) = run.service.poll_transmit() {
+            sent = true;
+            run.io.send(transmit.port, transmit.to, &transmit.bytes);
+            if transmit.kind == MessageType::Sync {
+                run.service.sync_sent(transmit.sequence_id, Instant::now());
+            }
+        }
+        sent
+    }
+
+    /// The stream is set up and flushed (P42): the speaker joins the stream
+    /// with its sealed packets (P155), and time-announce packets under PTP
+    /// (P166).
+    fn ap2_ready(&mut self, key: &DeviceKey, now: Instant) {
+        let clock_identity = self.ptp.as_ref().map(|run| run.service.identity());
+        let Some(speaker) = self.speakers.get_mut(key) else {
+            return;
+        };
+        let Phase::Ap2(active) = &mut speaker.phase else {
+            return;
+        };
+        let (Some(remote), Some(ports)) = (active.session.remote(), active.session.stream()) else {
+            return;
+        };
+        let ids = active.session.ids();
+        let ptp = active.session.timing() == Timing::Ptp;
+        let mut config = SpeakerConfig::new(
+            Codec::Alac,
+            MediaDestinations {
+                audio: with_port(remote, ports.data_port),
+                control: with_port(remote, ports.control_port),
+            },
+            ids.ssrc,
+            ids.first_seq,
+            ids.first_rtptime,
+        );
+        config.delay = speaker.options.delay;
+        config.airplay2 = Some(Ap2Audio {
+            key: active.session.stream_key(),
+            clock_identity: clock_identity.filter(|_| ptp),
+        });
+        let id = self
+            .stream
+            .add_speaker_with_counters(config, speaker.counters.clone(), now);
+        active.stream_id = Some(id);
+        self.stream_ids.insert(id, key.clone());
+    }
+
+    /// Sends one of the stream's datagrams from the session's control
+    /// socket, once the stream is ready.
+    pub(super) fn ap2_transmit(&mut self, key: &DeviceKey, transmit: Transmit, now: Instant) {
+        let Some(active) = self.ap2_active(key) else {
+            return;
+        };
+        if active.session.state() != Ap2State::Ready {
+            return;
+        }
+        let Some(io) = &active.io else {
+            return;
+        };
+        if let Some(result) = io.send(transmit.from, transmit.to, &transmit.bytes) {
+            active.session.handle_udp_send(result, now);
+        }
+    }
+
+    /// The stream restarted a speaker: FLUSH on its session (P100, P143).
+    pub(super) fn ap2_flush(&mut self, key: &DeviceKey, seq: u16, rtptime: u32, now: Instant) {
+        if let Some(active) = self.ap2_active(key) {
+            active.session.flush(seq, rtptime, now);
         }
     }
 
@@ -160,9 +326,19 @@ impl Driver {
             Ap2Event::TimingChosen(timing) => {
                 if timing == Timing::Ptp {
                     self.ptp_timing.insert(key.clone());
+                    let remote = self
+                        .ap2_active(key)
+                        .and_then(|active| active.session.remote());
+                    if let (Some(run), Some(remote)) = (&mut self.ptp, remote) {
+                        run.service.start(remote.ip(), now);
+                    }
+                } else {
+                    // P158: the service runs only while the session uses PTP.
+                    self.close_ptp();
                 }
             }
             Ap2Event::Ready(_) => {
+                self.ap2_ready(key, now);
                 if let Some(speaker) = self.speakers.get_mut(key) {
                     speaker.backoff.on_playing();
                 }
@@ -192,6 +368,7 @@ impl Driver {
             | IoEvent::RtspClosed { session, .. }
             | IoEvent::Control { session, .. }
             | IoEvent::TimingRequest { session, .. } => *session,
+            IoEvent::Ptp { .. } => return,
         };
         if session == active.events_key {
             return events_io_event(active, event, notify, now);
@@ -229,9 +406,13 @@ impl Driver {
                     active.session.handle_connection_closed(now);
                 }
             }
-            // No audio flows yet, so no retransmission request is served.
-            IoEvent::Control { .. } => {}
+            IoEvent::Control { bytes, .. } => {
+                if let Some(id) = active.stream_id {
+                    self.stream.handle_control_packet(id, &bytes, now);
+                }
+            }
             IoEvent::TimingRequest { at, .. } => active.session.handle_timing_request(at),
+            IoEvent::Ptp { .. } => {}
         }
     }
 }
@@ -272,6 +453,6 @@ fn events_io_event(
                 active.session.handle_events_closed(now);
             }
         }
-        IoEvent::Control { .. } | IoEvent::TimingRequest { .. } => {}
+        IoEvent::Control { .. } | IoEvent::TimingRequest { .. } | IoEvent::Ptp { .. } => {}
     }
 }

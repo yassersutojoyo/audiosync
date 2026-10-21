@@ -54,6 +54,7 @@ pub mod ids;
 pub mod input;
 pub mod metadata;
 pub mod pairing;
+pub mod ptp;
 pub mod rate;
 pub mod reconnect;
 pub mod rtp;
