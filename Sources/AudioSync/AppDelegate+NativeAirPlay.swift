@@ -134,6 +134,13 @@ extension AppDelegate {
             clearNotices([SpeakerKey.make(id: id, airplay: true)])
             syncNativeSpeakers()   // it joins with its new credentials
             pushModel()
+        case .waiting(let id, let waits):
+            if waits {
+                postNotice(text.nativeAirPlayOneAirPlay2(name: shownName(airPlay: id)),
+                           subject: SpeakerKey.make(id: id, airplay: true),
+                           title: text.nativeAirPlayWaitingTitle(name: shownName(airPlay: id)))
+            }
+            pushModel()   // the row says it waits, or no longer
         }
     }
 
@@ -309,6 +316,8 @@ extension AppDelegate {
         let plan = native.model.plan(streaming: engine.isRunning, enabled: enabledAirPlay)
         guard !plan.isEmpty else { return }
         for id in plan.remove {
+            // Switched off or streaming stopped: it no longer waits for the slot.
+            if native.model.isWaiting(id) { clearNotices([SpeakerKey.make(id: NativeAirPlayID.app(id), airplay: true)]) }
             native.remove(id)
             DebugTrace.log("[AudioSync] native AirPlay: removed \(nativeLabel(id))")
         }
@@ -376,7 +385,6 @@ extension AppDelegate {
         case .unreachable: return text.airPlayTurnedOff(name: name, reason: .unreachable)
         case .cantPlay: return text.nativeAirPlayCantPlay(name: name)
         case .timingUnavailable: return text.nativeAirPlayTimingUnavailable(name: name)
-        case .oneAirPlay2: return text.nativeAirPlayOneAirPlay2(name: name)
         case .cancelled: return text.airPlayTurnedOff(name: name, reason: .cancelled)
         case .pairingFailed: return text.nativeAirPlayPairingFailed(name: name)
         case .stillNeedsCode: return text.airPlayTurnedOff(name: name, reason: .stillNeedsCode)

@@ -86,8 +86,8 @@ extension AppDelegate {
         if origin == .user { showAlert(message, style: style) }
     }
 
-    func postNotice(_ message: String, subject: String, settings: PrivacyPane? = nil) {
-        appModel.notices.post(message, subject: subject, settings: settings)
+    func postNotice(_ message: String, subject: String, title: String? = nil, settings: PrivacyPane? = nil) {
+        appModel.notices.post(message, subject: subject, title: title, settings: settings)
     }
 
     /// Drop the notices about `subjects`; their cause is gone (or the user

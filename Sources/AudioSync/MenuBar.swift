@@ -28,6 +28,11 @@ final class AppModel: ObservableObject {
         /// A Google Cast speaker's session and its device's own volume state;
         /// nil for every other speaker.
         var cast: CastRow? = nil
+        /// An AirPlay speaker the sender reaches over AirPlay 2 (only with
+        /// the AirPlay 2 switch on).
+        var airPlay2 = false
+        /// An AirPlay 2 speaker waiting for the slot another one holds (P169).
+        var waitingForAirPlay2 = false
 
         /// A speaker AudioSync streams to through AirPlay, not a local output.
         var isAirPlay: Bool { tag == .airplay }
@@ -744,8 +749,9 @@ struct MenuBarView: View {
             }
             ForEach(layout.connected) { speaker in
                 CompactRow(name: speaker.name, symbol: speaker.tag.symbol, state: model.state(of: speaker),
-                           text: t, height: rowHeight, hint: speaker.cast.flatMap(t.castNote),
-                           renamedFrom: speaker.renamedFrom, kind: speaker.tag,
+                           text: t, height: rowHeight,
+                           hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2),
+                           renamedFrom: speaker.renamedFrom, kind: speaker.tag, airPlay2: speaker.airPlay2,
                            availability: speaker.availability,
                            deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
                     model.setEnabled(speaker, model.state(of: speaker).clickTurnsOn)
@@ -768,6 +774,7 @@ private struct CompactRow: View {
     var renamedFrom: String? = nil
     /// The kind of output, shown as a small icon after the name.
     var kind: SpeakerTag? = nil
+    var airPlay2 = false
     var availability: SpeakerAvailability = .open
     /// A switched-on local output's device volume hint: a glyph, with the
     /// hint as its tooltip and in the VoiceOver hint (S198).
@@ -784,7 +791,7 @@ private struct CompactRow: View {
                     .font(.callout.weight(state == .playing ? .semibold : .regular))
                     .lineLimit(1)
                 if let kind {
-                    SpeakerTypeIcon(kind: kind, state: state, text: text, font: .caption)
+                    SpeakerTypeIcon(kind: kind, state: state, text: text, font: .caption, airPlay2: airPlay2)
                 }
                 Spacer(minLength: 4)
                 AvailabilityNote(availability: availability, text: text)
@@ -799,7 +806,8 @@ private struct CompactRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hover.isHovered = $0 }
-        .accessibilityLabel(text.speakerLabel(name: name, tag: kind.map(text.speakerTag), renamedFrom: renamedFrom))
+        .accessibilityLabel(text.speakerLabel(name: name, tag: kind.map { text.speakerTag($0, airPlay2: airPlay2) },
+                                              renamedFrom: renamedFrom))
         .accessibilityValue(text.value(state))
         .accessibilityHint(text.rowHint(state, note: hint ?? deviceVolume?.accessibilityNote
                                             ?? text.availability(availability)))
@@ -923,13 +931,14 @@ struct SpeakerTypeIcon: View {
     let state: SpeakerState
     let text: UIStrings
     var font: Font = .caption
+    var airPlay2 = false
 
     var body: some View {
         glyph
             .foregroundStyle(color)
             .fixedSize()
             .layoutPriority(1)   // a long name truncates first; the icon stays whole
-            .help(text.speakerTag(kind))
+            .help(text.speakerTag(kind, airPlay2: airPlay2))
             .accessibilityHidden(true)   // read in the row's label
     }
 
@@ -1109,6 +1118,11 @@ struct NoticeBanner<Footer: View>: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 VStack(alignment: .leading, spacing: 2) {
+                    if let title = notice.title {
+                        Text(title)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                    }
                     Text(notice.text)
                         .font(.caption)
                         .lineLimit(lineLimit)

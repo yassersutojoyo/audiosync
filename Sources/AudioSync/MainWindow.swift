@@ -528,7 +528,7 @@ struct SpeakerRow: View {
     /// speaker's name; VoiceOver reads it in the row's label.
     var showTag = false
 
-    private var tag: String? { showTag ? model.text.speakerTag(speaker.tag) : nil }
+    private var tag: String? { showTag ? model.text.speakerTag(speaker.tag, airPlay2: speaker.airPlay2) : nil }
 
     private var showSync: Bool { model.delayPanels.isOpen(speaker.id) }
 
@@ -554,7 +554,7 @@ struct SpeakerRow: View {
                 .accessibilityLabel(t.speakerLabel(name: speaker.name, tag: tag,
                                                    renamedFrom: speaker.renamedFrom))
                 .accessibilityValue(t.value(state))
-                .accessibilityHint(t.rowHint(state, note: castNote ?? t.availability(speaker.availability)))
+                .accessibilityHint(t.rowHint(state, note: note ?? t.availability(speaker.availability)))
                 .accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker) }
                 .help(t.help(state))
 
@@ -573,12 +573,12 @@ struct SpeakerRow: View {
                                     .exclusively(before: TapGesture().onEnded { rowTapped() }))
                         }
                         if showTag {
-                            SpeakerTypeIcon(kind: speaker.tag, state: state, text: t)
+                            SpeakerTypeIcon(kind: speaker.tag, state: state, text: t, airPlay2: speaker.airPlay2)
                         }
                         AvailabilityNote(availability: speaker.availability, text: t)
-                        if let castNote {
+                        if let note {
                             // Read in the speaker's hint.
-                            Text(castNote)
+                            Text(note)
                                 .font(.caption)
                                 .foregroundStyle(Brand.secondaryText)
                                 .lineLimit(1)
@@ -706,7 +706,10 @@ struct SpeakerRow: View {
         }
     }
 
-    private var castNote: String? { speaker.cast.flatMap(model.text.castNote) }
+    /// What a Cast speaker does, or that an AirPlay 2 speaker waits for the slot.
+    private var note: String? {
+        model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2)
+    }
 
     /// The device's own volume moves only while a session reaches it.
     private var volumeAdjustable: Bool {

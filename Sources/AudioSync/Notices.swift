@@ -9,6 +9,8 @@ struct Notice: Identifiable, Equatable {
     let subject: String
     let text: String
     let date: Date
+    /// A few words above the text, for a notice about a state that lasts.
+    var title: String? = nil
     /// The System Settings pane that fixes the problem, offered as a button.
     var settings: PrivacyPane? = nil
     var id: String { subject }
@@ -56,10 +58,10 @@ struct NoticeList: Equatable {
 
     /// Adds `text` about `subject`, replacing an older notice about it. The
     /// oldest notice drops off past `capacity`. `settings`: the pane that fixes it.
-    mutating func post(_ text: String, subject: String, at date: Date = Date(),
+    mutating func post(_ text: String, subject: String, at date: Date = Date(), title: String? = nil,
                        settings: PrivacyPane? = nil) {
         items.removeAll { $0.subject == subject }
-        items.insert(Notice(subject: subject, text: text, date: date, settings: settings), at: 0)
+        items.insert(Notice(subject: subject, text: text, date: date, title: title, settings: settings), at: 0)
         if items.count > Self.capacity { items.removeLast(items.count - Self.capacity) }
     }
 

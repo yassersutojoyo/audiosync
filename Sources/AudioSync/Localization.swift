@@ -354,11 +354,15 @@ struct UIStrings {
             + "Another app may be using ports 319 and 320."
     }
 
-    /// Another AirPlay 2 speaker plays, and only one can at a time.
+    /// Another AirPlay 2 speaker plays, and only one can at a time: this one
+    /// stays on and starts once the other stops (P169).
     func nativeAirPlayOneAirPlay2(name: String) -> String {
-        "AudioSync plays one AirPlay 2 speaker at a time, so \(name) was turned off. "
-            + "Turn it on again once the other one stops."
+        "AudioSync plays one AirPlay 2 speaker at a time, so \(name) waits. It starts once the other one stops."
     }
+    /// That notice's title.
+    func nativeAirPlayWaitingTitle(name: String) -> String { "\(name) waiting" }
+    /// Under the name of a speaker waiting for the AirPlay 2 slot.
+    let waitingForAirPlay2 = "Waiting for the other AirPlay 2 speaker"
 
     // MARK: AirPlay pairing prompt
 
@@ -478,10 +482,11 @@ struct UIStrings {
     let thisMacNone = "No built-in output"
 
     /// A connected speaker's kind of output: the type icon's tooltip and part
-    /// of the row's VoiceOver label.
-    func speakerTag(_ tag: SpeakerTag) -> String {
+    /// of the row's VoiceOver label. `airPlay2`: an AirPlay speaker the
+    /// sender reaches over AirPlay 2.
+    func speakerTag(_ tag: SpeakerTag, airPlay2: Bool = false) -> String {
         switch tag {
-        case .airplay: return "AirPlay"
+        case .airplay: return airPlay2 ? "AirPlay 2" : "AirPlay"
         case .systemAirPlay: return "macOS AirPlay"
         case .cast: return "Google Cast"
         case .builtIn: return "Built-in"
@@ -641,6 +646,12 @@ struct UIStrings {
 
     // MARK: Google Cast speakers
 
+    /// The note under a speaker's name, also read in its VoiceOver hint:
+    /// what a Cast speaker does, or that an AirPlay 2 speaker waits.
+    func rowNote(cast: CastRow?, waitingForAirPlay2: Bool) -> String? {
+        if let cast { return castNote(cast) }
+        return waitingForAirPlay2 ? self.waitingForAirPlay2 : nil
+    }
     /// Under a Cast speaker's name: a group can't play, and one that is on
     /// says where it is; nil otherwise.
     func castNote(_ row: CastRow) -> String? {
