@@ -568,6 +568,77 @@ pub unsafe extern "C" fn asc_renderer_delay_frames(renderer: *const AscRenderer)
     unsafe { control_side(renderer) }.map_or(0, RendererControl::delay_frames)
 }
 
+/// Control thread, before the renderer's first callback: whether its device
+/// is Bluetooth, which adds a capture block to its start lead (S230).
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_set_bluetooth(renderer: *mut AscRenderer, bluetooth: bool) {
+    // SAFETY: by the caller's contract the handle is null or live.
+    if let Some(control) = unsafe { control_side(renderer) } {
+        control.set_bluetooth(bluetooth);
+    }
+}
+
+/// Any thread: what the start lead adds for a Bluetooth device, in capture
+/// frames (S230); 0 for any other device or a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_extra_lead_frames(renderer: *const AscRenderer) -> i64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::extra_lead_frames)
+}
+
+/// Control thread, after [`asc_renderer_set_bluetooth`]: hands the renderer
+/// the output latency its device reported and returns the one to use
+/// (S231). `last_plausible_ns` is the latest report the window accepted for
+/// the same output, 0 for none; a null handle returns `reported_ns`.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_set_reported_latency(
+    renderer: *mut AscRenderer,
+    reported_ns: u64,
+    last_plausible_ns: u64,
+) -> u64 {
+    let last = (last_plausible_ns != 0).then_some(last_plausible_ns);
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(reported_ns, |control| {
+        control.set_reported_latency(reported_ns, last)
+    })
+}
+
+/// Any thread: the output latency the device reported, in ns, when the
+/// window rejected it (S231); false, leaving `latency_ns` alone, otherwise.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer; `latency_ns` is null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_rejected_latency_ns(
+    renderer: *const AscRenderer,
+    latency_ns: *mut u64,
+) -> bool {
+    // SAFETY: by the caller's contract the handle is null or live.
+    let Some(rejected) =
+        unsafe { control_side(renderer) }.and_then(RendererControl::rejected_latency_ns)
+    else {
+        return false;
+    };
+    if !latency_ns.is_null() {
+        // SAFETY: non-null, and writable by the caller's contract.
+        unsafe { latency_ns.write(rejected) };
+    }
+    true
+}
+
 /// Any thread: asks the renderer to fade out over F device frames from its
 /// next callback and render exact zeros after them until it stops (S185).
 ///
@@ -751,6 +822,71 @@ pub unsafe extern "C" fn asc_renderer_late_callbacks(renderer: *const AscRendere
 pub unsafe extern "C" fn asc_renderer_shortfall_frames(renderer: *const AscRenderer) -> u64 {
     // SAFETY: by the caller's contract the handle is null or live.
     unsafe { control_side(renderer) }.map_or(0, RendererControl::shortfall_frames)
+}
+
+/// Any thread: the capture frames by which the renderer's slow-down made up
+/// shortages of its reader (S206), apart from the trims that follow the
+/// capture's clock, in all; 0 for a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_shortage_frames(renderer: *const AscRenderer) -> u64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::shortage_frames)
+}
+
+/// Any thread: the observer's least slack, in ns of capture frames: `W - P`
+/// at the start of a callback less what the callback needs, below 0 when a
+/// callback found too few frames (S229). False, leaving `slack_ns` alone,
+/// until the output has played its warm-up and a callback was measured
+/// since, and for a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer; `slack_ns` is null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_least_slack_ns(
+    renderer: *const AscRenderer,
+    slack_ns: *mut i64,
+) -> bool {
+    // SAFETY: by the caller's contract the handle is null or live.
+    let Some(slack) = unsafe { control_side(renderer) }.and_then(RendererControl::least_slack_ns)
+    else {
+        return false;
+    };
+    if !slack_ns.is_null() {
+        // SAFETY: non-null, and writable by the caller's contract.
+        unsafe { slack_ns.write(slack) };
+    }
+    true
+}
+
+/// Any thread: the observer's largest drop of the lateness floor below the
+/// floor at the reader's latest anchor, in ns (S229); 0 without output
+/// times or for a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_floor_drop_ns(renderer: *const AscRenderer) -> u64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::floor_drop_ns)
+}
+
+/// Any thread: the observer's steps in the device's output times, callbacks
+/// whose output time lay more than 1 ms off the previous callback's plus
+/// its frames (S229); 0 without output times or for a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_time_steps(renderer: *const AscRenderer) -> u64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::time_steps)
 }
 
 #[cfg(test)]
@@ -1102,6 +1238,7 @@ mod tests {
         // SAFETY: `ring` is live.
         let c = unsafe { asc_renderer_create(ring, 48_000, 44_100, 2, 0.8) };
         assert!(!c.is_null());
+        control.set_bluetooth(true);
         control.set_delay_frames(4800);
         let mut rust_out = vec![0.0f32; 512 * 2];
         let mut c_out = vec![0.0f32; 512 * 2];
@@ -1109,6 +1246,9 @@ mod tests {
         // buffer holds the frames passed with it.
         unsafe {
             assert_eq!(asc_renderer_fade_frames(c), 882);
+            assert_eq!(asc_renderer_extra_lead_frames(c), 0);
+            asc_renderer_set_bluetooth(c, true);
+            assert_eq!(asc_renderer_extra_lead_frames(c), 512);
             asc_renderer_set_delay_frames(c, 4800);
             let history = wave(9600, 7);
             asc_ring_write(writer, history.as_ptr(), 9600);
@@ -1139,6 +1279,12 @@ mod tests {
             assert_eq!(asc_renderer_late_max_ns(c), control.late_max_ns());
             assert_eq!(asc_renderer_late_callbacks(c), control.late_callbacks());
             assert_eq!(asc_renderer_shortfall_frames(c), rust.shortfall_frames());
+            assert_eq!(asc_renderer_shortage_frames(c), control.shortage_frames());
+            let mut slack = i64::MIN;
+            let measured = asc_renderer_least_slack_ns(c, &mut slack);
+            assert_eq!(measured.then_some(slack), control.least_slack_ns());
+            assert_eq!(asc_renderer_floor_drop_ns(c), control.floor_drop_ns());
+            assert_eq!(asc_renderer_time_steps(c), control.time_steps());
             assert!(asc_renderer_fade_rendered(c));
             assert!(
                 c_out.iter().all(|&s| s == 0.0),
@@ -1147,6 +1293,50 @@ mod tests {
             // Untimed renders publish no output time.
             assert!(!asc_renderer_fade_end_time_ns(c, ptr::null_mut()));
             asc_renderer_destroy(c);
+            asc_ring_writer_destroy(writer);
+            asc_ring_destroy(ring);
+        }
+    }
+
+    // covers: S231
+    #[test]
+    fn a_c_renderer_windows_a_bluetooth_device_s_reported_latency() {
+        const MS: u64 = 1_000_000;
+        let (ring, writer) = c_ring();
+        let mut rejected = 7u64;
+        // SAFETY: the handles are live, used from this one thread, then
+        // destroyed once; `rejected` is writable.
+        unsafe {
+            let wired = asc_renderer_create(ring, 48_000, 48_000, 2, 1.0);
+            let speaker = asc_renderer_create(ring, 48_000, 44_100, 2, 1.0);
+            asc_renderer_set_bluetooth(speaker, true);
+            assert_eq!(asc_renderer_set_reported_latency(wired, 0, 0), 0);
+            assert!(!asc_renderer_rejected_latency_ns(wired, &mut rejected));
+            assert_eq!(rejected, 7);
+            assert_eq!(asc_renderer_set_reported_latency(speaker, 0, 0), 150 * MS);
+            assert!(asc_renderer_rejected_latency_ns(speaker, &mut rejected));
+            assert_eq!(rejected, 0);
+            let absurd = 30_000 * MS;
+            assert_eq!(
+                asc_renderer_set_reported_latency(speaker, absurd, 180 * MS),
+                180 * MS
+            );
+            assert!(asc_renderer_rejected_latency_ns(speaker, ptr::null_mut()));
+            assert_eq!(
+                asc_renderer_set_reported_latency(speaker, 149 * MS, 180 * MS),
+                149 * MS
+            );
+            assert!(!asc_renderer_rejected_latency_ns(speaker, &mut rejected));
+            assert_eq!(
+                asc_renderer_set_reported_latency(ptr::null_mut(), absurd, 0),
+                absurd
+            );
+            assert!(!asc_renderer_rejected_latency_ns(
+                ptr::null(),
+                &mut rejected
+            ));
+            asc_renderer_destroy(speaker);
+            asc_renderer_destroy(wired);
             asc_ring_writer_destroy(writer);
             asc_ring_destroy(ring);
         }
@@ -1234,9 +1424,11 @@ mod tests {
             asc_renderer_render_timed(null, block.as_mut_ptr(), 4, 1);
             asc_renderer_set_gain(null, 1.0);
             asc_renderer_set_delay_frames(null, 100);
+            asc_renderer_set_bluetooth(null, true);
             asc_renderer_request_fade_out(null);
             assert_eq!(asc_renderer_gain(null), 0.0);
             assert_eq!(asc_renderer_delay_frames(null), 0);
+            assert_eq!(asc_renderer_extra_lead_frames(null), 0);
             assert!(!asc_renderer_fade_rendered(null));
             assert!(!asc_renderer_fade_end_time_ns(null, &mut end));
             assert!(!asc_renderer_faded_by_time(null, 0, u64::MAX));
@@ -1249,6 +1441,12 @@ mod tests {
             assert_eq!(asc_renderer_late_max_ns(null), 0);
             assert_eq!(asc_renderer_late_callbacks(null), 0);
             assert_eq!(asc_renderer_shortfall_frames(null), 0);
+            assert_eq!(asc_renderer_shortage_frames(null), 0);
+            let mut slack = 7;
+            assert!(!asc_renderer_least_slack_ns(null, &mut slack));
+            assert_eq!(slack, 7);
+            assert_eq!(asc_renderer_floor_drop_ns(null), 0);
+            assert_eq!(asc_renderer_time_steps(null), 0);
             asc_renderer_destroy(null);
             let renderer = asc_renderer_create(ring, 48_000, 48_000, 2, 1.0);
             asc_renderer_render(renderer, ptr::null_mut(), 4);

@@ -43,12 +43,14 @@ pub mod airplay;
 pub mod device_volume;
 pub mod render;
 pub mod ring;
+pub mod source_quit;
 pub mod sync;
 
 pub use self::airplay::*;
 pub use self::device_volume::*;
 pub use self::render::*;
 pub use self::ring::*;
+pub use self::source_quit::*;
 pub use self::sync::*;
 
 /// Version of this C interface, bumped on any incompatible change; the header's
@@ -369,12 +371,13 @@ mod tests {
     const HEADER: &str = include_str!("../include/audiosync_core.h");
 
     /// Every source file of the C interface, by its path under `src/`.
-    const SOURCES: [(&str, &str); 6] = [
+    const SOURCES: [(&str, &str); 7] = [
         ("ffi.rs", include_str!("ffi.rs")),
         ("ffi/airplay.rs", include_str!("ffi/airplay.rs")),
         ("ffi/device_volume.rs", include_str!("ffi/device_volume.rs")),
         ("ffi/render.rs", include_str!("ffi/render.rs")),
         ("ffi/ring.rs", include_str!("ffi/ring.rs")),
+        ("ffi/source_quit.rs", include_str!("ffi/source_quit.rs")),
         ("ffi/sync.rs", include_str!("ffi/sync.rs")),
     ];
 
@@ -1042,6 +1045,15 @@ mod tests {
                 "ASC_DEVICE_VOLUME_MUTED_AND_LOW",
                 DEVICE_VOLUME_MUTED_AND_LOW.to_string(),
             ),
+            ("ASC_SOURCE_QUIT_KEEP", SOURCE_QUIT_KEEP.to_string()),
+            ("ASC_SOURCE_QUIT_STOP", SOURCE_QUIT_STOP.to_string()),
+            (
+                "ASC_SOURCE_QUIT_SWITCH_TO_SYSTEM",
+                SOURCE_QUIT_SWITCH_TO_SYSTEM.to_string(),
+            ),
+            ("ASC_STREAMING_OFF", STREAMING_OFF.to_string()),
+            ("ASC_STREAMING_RUNNING", STREAMING_RUNNING.to_string()),
+            ("ASC_STREAMING_REBUILDING", STREAMING_REBUILDING.to_string()),
         ]
         .into_iter()
         .map(|(name, value)| (name.to_owned(), value))

@@ -6,7 +6,10 @@
 //! reads judges drift once; one late, larger callback never raises the lead
 //! for good; an output whose hold-back covers the lead keeps its timing
 //! exactly; and two outputs, the earliest one converting, sound exactly
-//! their hold-backs apart, also when the earliest joins later (S208).
+//! their hold-backs apart, also when the earliest joins later (S208); a
+//! Bluetooth output's start lead counts one capture block more, which moves
+//! the others only when it sets the session lead (S230); and a Bluetooth
+//! output's implausible latency report gives way without moving any (S231).
 //!
 //! The capture writes fixed blocks at 48 kHz on its own clock (512 frames,
 //! the Mac's tap; 480, a Windows loopback period); the device pulls fixed
@@ -30,7 +33,8 @@ use std::sync::Arc;
 use audiosync_core::fade::FadeState;
 use audiosync_core::reader::{Reader, ReaderCounters};
 use audiosync_core::render::{
-    LEAD_BLOCK_CAP_MS, Renderer, RendererControl, SLOW_DOWN_SHARE, reader_frames_bound,
+    BLUETOOTH_LATENCY_DEFAULT_NS, BLUETOOTH_LEAD_FRAMES, LEAD_BLOCK_CAP_MS, Renderer,
+    RendererControl, SLOW_DOWN_SHARE, reader_frames_bound,
 };
 use audiosync_core::resample::Resampler;
 use audiosync_core::ring::{Ring, RingWriter};
@@ -1050,4 +1054,135 @@ fn the_session_lead_moves_the_other_outputs_only_when_it_changes() {
             (0, 0, 0)
         );
     }
+}
+
+// covers: S208, S230
+#[test]
+fn a_bluetooth_output_adds_a_capture_block_to_its_own_start_lead_only() {
+    let ring = Ring::for_rate(RATE).unwrap();
+    let mut writer = ring.writer().unwrap();
+    let gain = Arc::new(SharedGain::new(1.0));
+    let make = |rate: u32, delay: i64, bluetooth: bool| {
+        let reader = Reader::new(Arc::clone(&ring), RATE);
+        let control = RendererControl::new(&reader);
+        control.set_bluetooth(bluetooth);
+        control.set_delay_frames(delay);
+        let renderer = Renderer::new(reader, &control, Arc::clone(&gain), RATE, rate, 2).unwrap();
+        (renderer, control)
+    };
+    let block = BLUETOOTH_LEAD_FRAMES as i64;
+    let block_ns = block * 1_000_000_000 / i64::from(RATE);
+    write_blocks(&mut writer, 480, 100);
+    let (mut built_in, built_in_control) = make(48_000, 0, false);
+    assert_eq!(built_in_control.extra_lead_frames(), 0);
+    play(&mut writer, &mut [&mut built_in], 100);
+    assert_eq!(built_in_control.reader().delay_frames(), 480);
+    // One callback's lead and nothing more: every callback finds exactly
+    // what it needs.
+    assert_eq!(built_in_control.least_slack_ns(), Some(0));
+    // Held back beyond its start lead and the block: nothing moves.
+    let (mut far, far_control) = make(48_000, 4_800, true);
+    assert_eq!(far_control.extra_lead_frames(), block);
+    play(&mut writer, &mut [&mut built_in, &mut far], 50);
+    assert_eq!(ring.session_leads().session_lead(), 480);
+    assert_eq!(built_in_control.counters().resyncs, 0);
+    assert_eq!(far_control.reader().delay_frames(), 4_800 + 480);
+    far_control.request_fade_out();
+    play(&mut writer, &mut [&mut built_in, &mut far], 5);
+    drop((far, far_control));
+    // At hold-back 0 it sets the session lead a block later: the built-in
+    // speakers re-anchor once with it, their hold-back unchanged, and both
+    // keep the block as slack.
+    let (mut buds, buds_control) = make(48_000, 0, true);
+    play(&mut writer, &mut [&mut built_in, &mut buds], 100);
+    assert_eq!(ring.session_leads().session_lead(), 480 + block);
+    assert_eq!(built_in_control.counters().resyncs, 1);
+    assert_eq!(built_in_control.reader().delay_frames(), 480 + block);
+    assert_eq!(buds_control.reader().delay_frames(), 480 + block);
+    assert_eq!(buds_control.least_slack_ns(), Some(block_ns));
+    // A converting one adds the block to its own start lead in the same way.
+    buds_control.request_fade_out();
+    play(&mut writer, &mut [&mut built_in, &mut buds], 5);
+    drop((buds, buds_control));
+    let latency = Resampler::new(RATE, 44_100).unwrap().latency_frames() as i64;
+    let (mut speaker, speaker_control) = make(44_100, 0, true);
+    play(&mut writer, &mut [&mut built_in, &mut speaker], 100);
+    let lead = start_lead_44_1(441) + block;
+    assert_eq!(ring.session_leads().session_lead(), lead);
+    assert_eq!(built_in_control.reader().delay_frames(), lead);
+    assert_eq!(speaker_control.reader().delay_frames(), lead - latency);
+    for control in [&built_in_control, &speaker_control] {
+        let c = control.counters();
+        assert_eq!(
+            (c.starved_renders, c.drift_skips, c.drift_silences),
+            (0, 0, 0)
+        );
+    }
+}
+
+// covers: S208, S231
+#[test]
+fn a_bluetooth_output_s_implausible_reported_latency_gives_way_and_leaves_the_session_lead_alone() {
+    const MS: u64 = 1_000_000;
+    let ring = Ring::for_rate(RATE).unwrap();
+    let mut writer = ring.writer().unwrap();
+    let gain = Arc::new(SharedGain::new(1.0));
+    let make = |bluetooth: bool| {
+        let reader = Reader::new(Arc::clone(&ring), RATE);
+        let control = RendererControl::new(&reader);
+        control.set_bluetooth(bluetooth);
+        control.set_delay_frames(0);
+        let renderer = Renderer::new(reader, &control, Arc::clone(&gain), RATE, 44_100, 2).unwrap();
+        (renderer, control)
+    };
+    write_blocks(&mut writer, 480, 100);
+    let (mut built_in, built_in_control) = make(false);
+    let (mut speaker, speaker_control) = make(true);
+    play(&mut writer, &mut [&mut built_in, &mut speaker], 100);
+    let lead = start_lead_44_1(441) + BLUETOOTH_LEAD_FRAMES as i64;
+    assert_eq!(ring.session_leads().session_lead(), lead);
+    let settled = |control: &RendererControl| (control.reader().delay_frames(), control.counters());
+    let before = [settled(&built_in_control), settled(&speaker_control)];
+    // No plausible report before: the default, whatever the report.
+    for reported in [0, 30_000 * MS, 50 * MS - 1, 1_000 * MS + 1, u64::MAX] {
+        let used = speaker_control.set_reported_latency(reported, None);
+        assert_eq!(used, BLUETOOTH_LATENCY_DEFAULT_NS, "reported {reported} ns");
+        assert_eq!(speaker_control.output_latency_ns(), used);
+        assert_eq!(speaker_control.rejected_latency_ns(), Some(reported));
+        play(&mut writer, &mut [&mut built_in, &mut speaker], 20);
+        assert_eq!(ring.session_leads().session_lead(), lead);
+    }
+    // The output's latest plausible report, when there is one.
+    assert_eq!(
+        speaker_control.set_reported_latency(30_000 * MS, Some(180 * MS)),
+        180 * MS
+    );
+    assert_eq!(speaker_control.rejected_latency_ns(), Some(30_000 * MS));
+    assert_eq!(
+        speaker_control.set_reported_latency(0, Some(5 * MS)),
+        BLUETOOTH_LATENCY_DEFAULT_NS
+    );
+    // Inside the window, its edges included: as reported.
+    for reported in [50 * MS, 149_297_000, 1_000 * MS] {
+        assert_eq!(
+            speaker_control.set_reported_latency(reported, Some(180 * MS)),
+            reported
+        );
+        assert_eq!(speaker_control.rejected_latency_ns(), None);
+    }
+    // Any other output's report stays as it is.
+    for reported in [0, 30_000 * MS] {
+        assert_eq!(
+            built_in_control.set_reported_latency(reported, None),
+            reported
+        );
+        assert_eq!(built_in_control.rejected_latency_ns(), None);
+    }
+    play(&mut writer, &mut [&mut built_in, &mut speaker], 20);
+    assert_eq!(ring.session_leads().session_lead(), lead);
+    assert_eq!(
+        [settled(&built_in_control), settled(&speaker_control)],
+        before,
+        "no output moved: the same delay, no resync, no dry read"
+    );
 }

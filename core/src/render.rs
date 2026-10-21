@@ -39,7 +39,16 @@
 //! Late callbacks (S209): given each callback's output time and the time
 //! it reads at, the renderer moves its reader's delay by how much later
 //! than its earliest callbacks this one came, so a late callback anchors
-//! and judges drift where an early one would.
+//! where an early one would. Drift is judged against the earliest
+//! callbacks as they stood when the reader anchored, so lateness that
+//! builds slower than their floor leaks up is never taken for drift.
+//!
+//! The observer (S229): once an output has played [`OBSERVE_AFTER_MS`],
+//! the renderer keeps the least slack its reader had at the start of a
+//! callback over what that callback needs, the largest drop of the lateness
+//! floor below the anchor's, and the steps in the device's output times,
+//! next to the shortages S206's slow-down made up. It only measures:
+//! nothing it keeps changes what plays.
 //!
 //! Exact differences (S208): each renderer publishes its start lead and
 //! hold-back in its ring's [`SessionLeads`], and gives its reader its
@@ -59,7 +68,7 @@
 //!   renderer then publishes the output time of the fade's last frame, when
 //!   the host gives each callback's output time (the Mac), and counts the
 //!   frames it rendered after that frame, which the host compares with what
-//!   its endpoint still holds (Windows, [`endpoint_faded`]).
+//!   its endpoint still holds (Windows, [`fade_tail_frames`]).
 //! - [`RendererControl::set_delay_frames`] while the renderer plays fades out
 //!   first; only after the fade-out's last frame does the reader get the new
 //!   delay and its resync request, so it still lands exactly on the delay
@@ -98,6 +107,12 @@ pub const RENDER_CHUNK: usize = 512;
 /// The longest a host waits for its outputs' fade-outs at a stop or a
 /// removal before it stops them anyway (S186).
 pub const STOP_FADE_CAP: Duration = Duration::from_millis(500);
+
+/// The most a Windows endpoint's clock may hold a fade-out past the queued
+/// buffer (S185). The four endpoints measured on a PC lay 4 to 30 ms past
+/// it; a clock that says more (a stalled position, or a driver that counts
+/// a Bluetooth link) delays a stop by at most this, well inside S186's cap.
+pub const FADE_TAIL_CAP: Duration = Duration::from_millis(100);
 
 /// No output time published yet.
 const NO_TIME: u64 = u64::MAX;
@@ -159,6 +174,57 @@ pub const EARLIEST_LEAK_NS_PER_S: u64 = 1_000_000;
 /// [`Renderer::late_callbacks`] (S209).
 pub const LATE_COUNT_MS: u64 = 5;
 
+/// A delay increase larger than this, in ms, restarts the reader at the new
+/// delay (S187, S159) instead of inserting the increase as silence (S47).
+pub const RESTART_INCREASE_MS: u32 = 5000;
+
+/// How long an output plays its reader's frames before the observer takes
+/// its values (S229): the span over which the trim measures its reference
+/// (S207), long after the lateness floor has formed (S209).
+pub const OBSERVE_AFTER_MS: u32 = TRACK_MS;
+
+/// How far a callback's output time may lie from the previous callback's
+/// plus that one's frames at the device's rate before the observer counts
+/// a step in the device's output times (S229), in ns.
+pub const OUTPUT_TIME_STEP_NS: u64 = 1_000_000;
+
+/// What a Bluetooth output adds to its start lead, in capture frames
+/// (S230): one capture block, the 512 frames the Mac's capture writes per IO
+/// cycle by default (a Windows packet holds 480), so a callback that comes
+/// a block early against the capture's writes still finds its frames.
+pub const BLUETOOTH_LEAD_FRAMES: usize = 512;
+
+/// The output latencies a Bluetooth device may report and be believed, in
+/// ns (S231): Android's window for a Bluetooth delay report, 50 to 1000 ms.
+pub const BLUETOOTH_LATENCY_MIN_NS: u64 = 50_000_000;
+pub const BLUETOOTH_LATENCY_MAX_NS: u64 = 1_000_000_000;
+
+/// What a Bluetooth output's latency is taken to be when its report lies
+/// outside the window and none before it was plausible (S231): the 149.3 ms
+/// a 44.1 kHz Bluetooth speaker reported on the Mac, rounded.
+pub const BLUETOOTH_LATENCY_DEFAULT_NS: u64 = 150_000_000;
+
+fn plausible_bluetooth_latency(ns: u64) -> bool {
+    (BLUETOOTH_LATENCY_MIN_NS..=BLUETOOTH_LATENCY_MAX_NS).contains(&ns)
+}
+
+/// The output latency a host uses for a device that reported `reported_ns`
+/// (S231): any device's report as it is, except a Bluetooth one's outside
+/// the window, which gives way to `last_plausible_ns`, the latest report
+/// inside it for the same output, else [`BLUETOOTH_LATENCY_DEFAULT_NS`].
+pub fn windowed_latency_ns(
+    reported_ns: u64,
+    bluetooth: bool,
+    last_plausible_ns: Option<u64>,
+) -> u64 {
+    if !bluetooth || plausible_bluetooth_latency(reported_ns) {
+        return reported_ns;
+    }
+    last_plausible_ns
+        .filter(|&ns| plausible_bluetooth_latency(ns))
+        .unwrap_or(BLUETOOTH_LATENCY_DEFAULT_NS)
+}
+
 /// Where a renderer that follows the capture's clock stands (S207).
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tracking {
@@ -190,13 +256,25 @@ pub fn reader_frames_bound(device_frames: usize, capture_rate: u32, device_rate:
     ((frames * from).div_ceil(to) + from / to + 4) as usize
 }
 
-/// Whether an endpoint has played a renderer's fade-out (S185, Windows): the
-/// renderer wrote `frames_after_fade` frames after the fade's last frame,
-/// the endpoint still holds `padding` frames, so only zeros are queued once
-/// `padding` is no larger than that count, and the frames it played since
-/// cover the stream latency, `latency_frames` at the device rate.
-pub fn endpoint_faded(frames_after_fade: u64, padding: u64, latency_frames: u64) -> bool {
-    frames_after_fade >= padding.saturating_add(latency_frames)
+/// How many frames a Windows endpoint must have taken after a fade-out's
+/// last frame before that frame has played (S185), at `rate`: what its
+/// clock says is written but not yet played (`clock_queued`), never less
+/// than the queued buffer (`padding`) nor more than the buffer plus
+/// [`FADE_TAIL_CAP`]. Without a clock reading, the buffer plus the stream
+/// latency the endpoint reports (`latency_frames`).
+pub fn fade_tail_frames(
+    padding: u64,
+    clock_queued: Option<u64>,
+    latency_frames: u64,
+    rate: u32,
+) -> u64 {
+    match clock_queued {
+        Some(queued) => {
+            let cap = u64::from(rate) * FADE_TAIL_CAP.as_millis() as u64 / 1000;
+            queued.clamp(padding, padding.saturating_add(cap))
+        }
+        None => padding.saturating_add(latency_frames),
+    }
 }
 
 /// Whether a fade-out whose last frame is output at `fade_end_ns` has played
@@ -252,12 +330,28 @@ struct Shared {
     /// Capture frames the converter was slowed down by in all (S206,
     /// S207).
     slowed_frames: AtomicU64,
+    /// The shortages S206's slow-down made up, in capture frames.
+    shortage_frames: AtomicU64,
     /// Capture frames the converter was sped up by in all (S207).
     sped_frames: AtomicU64,
     /// The largest lateness of a callback, in ns (S209).
     late_max_ns: AtomicU64,
     /// Callbacks later than [`LATE_COUNT_MS`] (S209).
     late_callbacks: AtomicU64,
+    /// The observer's least slack, in ns; `i64::MAX` before its first
+    /// value (S229).
+    least_slack_ns: AtomicI64,
+    /// The observer's largest drop of the lateness floor below the
+    /// anchor's, in ns (S229).
+    floor_drop_ns: AtomicU64,
+    /// The observer's steps in the device's output times (S229).
+    time_steps: AtomicU64,
+    /// The host said the device is Bluetooth (S230).
+    bluetooth: AtomicBool,
+    /// The output latency the device reported and the one the host uses,
+    /// in ns (S231); they differ only when the report was rejected.
+    reported_latency_ns: AtomicU64,
+    output_latency_ns: AtomicU64,
     /// The ring whose session lead counts this renderer, and its slot
     /// there, `None` when every slot was taken (S208).
     ring: Arc<Ring>,
@@ -267,6 +361,15 @@ struct Shared {
 impl Shared {
     fn leads(&self) -> &SessionLeads {
         self.ring.session_leads()
+    }
+
+    /// What a Bluetooth device adds to the start lead (S230).
+    fn extra_lead_frames(&self) -> usize {
+        if self.bluetooth.load(Ordering::Acquire) {
+            BLUETOOTH_LEAD_FRAMES
+        } else {
+            0
+        }
     }
 }
 
@@ -322,9 +425,16 @@ impl RendererControl {
                 state: AtomicU8::new(state_code(FadeState::Closed)),
                 shortfall_frames: AtomicU64::new(0),
                 slowed_frames: AtomicU64::new(0),
+                shortage_frames: AtomicU64::new(0),
                 sped_frames: AtomicU64::new(0),
                 late_max_ns: AtomicU64::new(0),
                 late_callbacks: AtomicU64::new(0),
+                least_slack_ns: AtomicI64::new(i64::MAX),
+                floor_drop_ns: AtomicU64::new(0),
+                time_steps: AtomicU64::new(0),
+                bluetooth: AtomicBool::new(false),
+                reported_latency_ns: AtomicU64::new(0),
+                output_latency_ns: AtomicU64::new(0),
                 ring,
                 slot,
             }),
@@ -426,6 +536,11 @@ impl RendererControl {
         self.shared.slowed_frames.load(Ordering::Relaxed)
     }
 
+    /// [`Renderer::shortage_frames`], from any thread (S206).
+    pub fn shortage_frames(&self) -> u64 {
+        self.shared.shortage_frames.load(Ordering::Relaxed)
+    }
+
     /// [`Renderer::sped_frames`], from any thread (S207).
     pub fn sped_frames(&self) -> u64 {
         self.shared.sped_frames.load(Ordering::Relaxed)
@@ -444,6 +559,68 @@ impl RendererControl {
     /// [`Renderer::shortfall_frames`], from any thread.
     pub fn shortfall_frames(&self) -> u64 {
         self.shared.shortfall_frames.load(Ordering::Relaxed)
+    }
+
+    /// The least slack the reader had at the start of a callback, in ns of
+    /// capture frames: `W - P` less what the callback needs, below 0 when a
+    /// callback found too few frames (S229). `None` until the output has
+    /// played [`OBSERVE_AFTER_MS`] and a callback was measured since.
+    pub fn least_slack_ns(&self) -> Option<i64> {
+        let slack = self.shared.least_slack_ns.load(Ordering::Relaxed);
+        (slack != i64::MAX).then_some(slack)
+    }
+
+    /// The most the lateness floor fell below the floor at the reader's
+    /// latest anchor, after the observer's warm-up, in ns (S229); 0 without
+    /// output times.
+    pub fn floor_drop_ns(&self) -> u64 {
+        self.shared.floor_drop_ns.load(Ordering::Relaxed)
+    }
+
+    /// The callbacks whose output time stepped off the previous callback's
+    /// by more than [`OUTPUT_TIME_STEP_NS`], after the observer's warm-up
+    /// (S229); 0 without output times.
+    pub fn time_steps(&self) -> u64 {
+        self.shared.time_steps.load(Ordering::Relaxed)
+    }
+
+    /// Tells the renderer whether its device is Bluetooth, which adds
+    /// [`BLUETOOTH_LEAD_FRAMES`] to its start lead (S230). Call it before the
+    /// output's first callback and before [`Renderer::set_period_frames`]:
+    /// the start lead is published once.
+    pub fn set_bluetooth(&self, bluetooth: bool) {
+        self.shared.bluetooth.store(bluetooth, Ordering::Release);
+    }
+
+    /// What the start lead adds for a Bluetooth device, in capture frames:
+    /// [`BLUETOOTH_LEAD_FRAMES`], or 0 for any other (S230).
+    pub fn extra_lead_frames(&self) -> i64 {
+        self.shared.extra_lead_frames() as i64
+    }
+
+    /// Hands the renderer the output latency its device reported and
+    /// returns the one to use, [`windowed_latency_ns`] with the renderer's
+    /// own Bluetooth flag (S231). Call it after [`Self::set_bluetooth`]. It
+    /// only records: the start lead and the session lead never take it.
+    pub fn set_reported_latency(&self, reported_ns: u64, last_plausible_ns: Option<u64>) -> u64 {
+        let bluetooth = self.shared.bluetooth.load(Ordering::Acquire);
+        let used = windowed_latency_ns(reported_ns, bluetooth, last_plausible_ns);
+        self.shared
+            .reported_latency_ns
+            .store(reported_ns, Ordering::Relaxed);
+        self.shared.output_latency_ns.store(used, Ordering::Relaxed);
+        used
+    }
+
+    /// The output latency in use, in ns (S231); 0 before one was reported.
+    pub fn output_latency_ns(&self) -> u64 {
+        self.shared.output_latency_ns.load(Ordering::Relaxed)
+    }
+
+    /// The device's report when the window rejected it, in ns (S231).
+    pub fn rejected_latency_ns(&self) -> Option<u64> {
+        let reported = self.shared.reported_latency_ns.load(Ordering::Relaxed);
+        (reported != self.output_latency_ns()).then_some(reported)
     }
 }
 
@@ -507,6 +684,11 @@ pub struct Renderer {
     reader_delay: i64,
     /// The converter's fixed latency, in capture frames (S62).
     latency: i64,
+    /// [`RESTART_INCREASE_MS`] in capture frames.
+    restart_increase: i64,
+    /// The floor of the lateness when the reader last anchored, in ns
+    /// (S209); `None` until a callback has a floor.
+    anchor_floor: Option<i64>,
     /// The start lead is published: the host gave the period, or the
     /// first callback came. Not before, so a renderer whose hold-back the
     /// host hasn't set yet never moves the session lead (S208).
@@ -525,6 +707,15 @@ pub struct Renderer {
     /// The lowest and second lowest `now - output time` seen, in ns, with
     /// their leak (S209).
     earliest: Option<[i64; 2]>,
+    /// [`OBSERVE_AFTER_MS`] in device frames, and the device frames played
+    /// so far, counted until they reach it (S229).
+    observe_after: u64,
+    played: u64,
+    /// The latest callback's output time and frames (S229).
+    previous_output: Option<(u64, usize)>,
+    /// What the observer published last (S229).
+    least_slack_ns: i64,
+    floor_drop_ns: u64,
 }
 
 impl fmt::Debug for Renderer {
@@ -585,6 +776,8 @@ impl Renderer {
             hold_back: control.shared.delay.load(Ordering::Relaxed),
             reader_delay: control.reader.delay_frames(),
             latency,
+            restart_increase: i64::from(capture_rate) * i64::from(RESTART_INCREASE_MS) / 1000,
+            anchor_floor: None,
             start_lead_fixed: false,
             awaiting_resync: false,
             correction_due: false,
@@ -592,6 +785,11 @@ impl Renderer {
             tracking: RESTART,
             track_frames: f64::from(device_rate) * f64::from(TRACK_MS) / 1000.0,
             earliest: None,
+            observe_after: u64::from(device_rate) * u64::from(OBSERVE_AFTER_MS) / 1000,
+            played: 0,
+            previous_output: None,
+            least_slack_ns: i64::MAX,
+            floor_drop_ns: 0,
         })
     }
 
@@ -638,6 +836,14 @@ impl Renderer {
     /// conversion.
     pub fn slowed_frames(&self) -> u64 {
         self.shared.slowed_frames.load(Ordering::Relaxed)
+    }
+
+    /// The shortages S206's slow-down made up, in capture frames: what the
+    /// reader held less than a callback needed. Part of
+    /// [`Renderer::slowed_frames`], and 0 while the lead covers every
+    /// callback.
+    pub fn shortage_frames(&self) -> u64 {
+        self.shared.shortage_frames.load(Ordering::Relaxed)
     }
 
     /// Capture frames the converter was sped up by to follow the capture's
@@ -724,15 +930,24 @@ impl Renderer {
         let late = late_ns as u128 * u128::from(self.capture_rate) / 1_000_000_000;
         self.reader
             .set_late_frames(i64::try_from(late).unwrap_or(i64::MAX));
+        let shift_ns = self.floor_shift_ns();
+        let shift = i128::from(shift_ns) * i128::from(self.capture_rate) / 1_000_000_000;
+        self.reader
+            .set_floor_shift_frames(shift.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64);
         // The capture's clock is judged at the time the callback would have
-        // read at had it come as early as the earliest ones.
-        let now = now.map(|now| now.saturating_sub(late_ns));
+        // read at had it come as early as the earliest ones did when the
+        // reader anchored.
+        let judged_ns = i128::from(late_ns) + i128::from(shift_ns);
+        let now =
+            now.map(|now| (i128::from(now) - judged_ns).clamp(0, i128::from(u64::MAX)) as u64);
         if !self.start_lead_fixed {
             self.publish_start_lead(frames);
             self.start_lead_fixed = true;
         }
         self.take_requests();
         self.follow_session_lead();
+        // Before the trim, so a shortage shows as the slack it was.
+        self.observe(frames, time, shift_ns);
         self.keep_reader_off_w(frames, now);
         let ramp = self.stage.begin(self.gain.get(), frames);
         let read_capacity = self.stereo.len() / 2;
@@ -864,6 +1079,9 @@ impl Renderer {
                 self.shared
                     .slowed_frames
                     .fetch_add(slowed as u64, Ordering::Relaxed);
+                self.shared
+                    .shortage_frames
+                    .fetch_add(short as u64, Ordering::Relaxed);
             }
             return;
         }
@@ -966,6 +1184,72 @@ impl Renderer {
         };
     }
 
+    /// The floor that this callback's lateness was measured from (S209):
+    /// none before a second timed callback.
+    fn late_floor(&self) -> Option<i64> {
+        self.earliest
+            .map(|[_, floor]| floor)
+            .filter(|&floor| floor != i64::MAX)
+    }
+
+    /// How far the lateness floor moved since the reader last anchored, in
+    /// ns (S209). The floor leaks up and drops with the callbacks, so
+    /// lateness that builds or fades slower than the leak moves the floor
+    /// instead of Jt; judged against the anchor's floor, it stays lateness.
+    fn floor_shift_ns(&mut self) -> i64 {
+        let Some(floor) = self.late_floor() else {
+            return 0;
+        };
+        let anchor = *self.anchor_floor.get_or_insert(floor);
+        floor.saturating_sub(anchor)
+    }
+
+    /// The observer at the start of a callback of `frames` device frames
+    /// output at `time`, whose lateness floor lies `shift_ns` off the
+    /// anchor's (S229). Once the output has played [`OBSERVE_AFTER_MS`], it
+    /// counts a step in the output times, keeps the floor's largest drop
+    /// below the anchor's and, while the output plays and no stop is under
+    /// way, the reader's least slack over the callback's need. It publishes
+    /// only a new extreme.
+    fn observe(&mut self, frames: usize, time: Option<u64>, shift_ns: i64) {
+        let previous = match time {
+            Some(time) => self.previous_output.replace((time, frames)),
+            None => self.previous_output.take(),
+        };
+        if self.played < self.observe_after {
+            if !self.fade.is_closed() {
+                self.played += frames as u64;
+            }
+            return;
+        }
+        let shared = &*self.shared;
+        if let (Some(time), Some((last, last_frames))) = (time, previous) {
+            let span = (last_frames as u64).saturating_mul(1_000_000_000)
+                / u64::from(self.device_rate.max(1));
+            if time.abs_diff(last.saturating_add(span)) > OUTPUT_TIME_STEP_NS {
+                shared.time_steps.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let drop = u64::try_from(shift_ns.saturating_neg()).unwrap_or(0);
+        if drop > self.floor_drop_ns {
+            self.floor_drop_ns = drop;
+            shared.floor_drop_ns.store(drop, Ordering::Relaxed);
+        }
+        if self.stop != Stop::None || self.fade.is_closed() {
+            return;
+        }
+        let need = self.resampler.input_frames_for(frames);
+        let Some(next) = self.reader.next_read(need, true) else {
+            return;
+        };
+        let slack = next.readable.saturating_sub(need as i64);
+        let slack_ns = slack.saturating_mul(1_000_000_000) / i64::from(self.capture_rate.max(1));
+        if slack_ns < self.least_slack_ns {
+            self.least_slack_ns = slack_ns;
+            shared.least_slack_ns.store(slack_ns, Ordering::Relaxed);
+        }
+    }
+
     /// Takes the control's requests at the start of a callback (S190).
     fn take_requests(&mut self) {
         if self.stop == Stop::None && self.shared.fade_out.load(Ordering::Acquire) {
@@ -981,7 +1265,8 @@ impl Renderer {
     /// Publishes the start lead for a steady callback of `callback` device
     /// frames (S208): that callback without conversion; with it, the most
     /// that callback can ask the reader for, plus the cap on the capture's
-    /// block and the converter's latency.
+    /// block and the converter's latency. A Bluetooth output adds a capture
+    /// block (S230).
     fn publish_start_lead(&self, callback: usize) {
         let Some(slot) = self.shared.slot else {
             return;
@@ -992,7 +1277,8 @@ impl Renderer {
             reader_frames_bound(callback, self.capture_rate, self.device_rate)
                 .saturating_add(self.block_cap)
                 .saturating_add(self.latency as usize)
-        };
+        }
+        .saturating_add(self.shared.extra_lead_frames());
         self.shared
             .leads()
             .set_lead(slot, i64::try_from(lead).unwrap_or(i64::MAX));
@@ -1033,8 +1319,14 @@ impl Renderer {
     }
 
     fn give_reader_delay(&mut self) {
+        let given = self.reader_delay;
         self.reader_delay = self.wanted_reader_delay();
         self.reader_control.set_delay_frames(self.reader_delay);
+        if self.reader_delay.saturating_sub(given) > self.restart_increase {
+            // S187: seconds of silence read as an output that stopped, so it
+            // plays the new delay's frames at once, even ones it played before.
+            self.reader_control.reset_prime();
+        }
         self.awaiting_resync = true;
     }
 
@@ -1061,6 +1353,9 @@ impl Renderer {
             // Anchored, corrected, dry or rejected: the fill the renderer
             // kept is gone, and a new reference is measured (S207).
             self.tracking = RESTART;
+        }
+        if report.correction != Correction::None {
+            self.anchor_floor = self.late_floor();
         }
         if self.awaiting_resync
             && matches!(report.correction, Correction::Resync | Correction::Prime)

@@ -150,6 +150,16 @@ extern "C" {
 #define ASC_DEVICE_VOLUME_MUTED 3         /* muted, at a volume that isn't low or isn't known */
 #define ASC_DEVICE_VOLUME_MUTED_AND_LOW 4 /* muted, and 25 % or less too */
 
+/* What asc_source_quit_decide answers. */
+#define ASC_SOURCE_QUIT_KEEP 0             /* nothing changes */
+#define ASC_SOURCE_QUIT_STOP 1             /* stop, post the "source" notice, drop a pending rebuild */
+#define ASC_SOURCE_QUIT_SWITCH_TO_SYSTEM 2 /* go on with whole-system audio, store it, post the notice */
+
+/* Whether streaming is on when an app quits (asc_source_quit_decide's streaming). */
+#define ASC_STREAMING_OFF 0        /* no session runs */
+#define ASC_STREAMING_RUNNING 1    /* a session runs */
+#define ASC_STREAMING_REBUILDING 2 /* a session is being rebuilt (a capture format change): counts as on */
+
 /* ---- Version and volume ------------------------------------------------- */
 
 /* The crate version, for example "0.1.0" (static string, never freed). */
@@ -532,6 +542,30 @@ void asc_renderer_set_delay_frames(AscRenderer *renderer, int64_t frames);
 /* Any thread: the newest delay asked for, in capture-rate frames. */
 int64_t asc_renderer_delay_frames(const AscRenderer *renderer);
 
+/* Control thread, before the renderer's first callback: whether its device is
+   Bluetooth, which adds a capture block to its start lead (S230). */
+void asc_renderer_set_bluetooth(AscRenderer *renderer, bool bluetooth);
+
+/* Any thread: what the start lead adds for a Bluetooth device, in capture
+   frames (S230); 0 for any other device or a NULL handle. */
+int64_t asc_renderer_extra_lead_frames(const AscRenderer *renderer);
+
+/*
+ * Control thread, after asc_renderer_set_bluetooth: the output latency the
+ * device reported, in ns; returns the one to use (S231). A Bluetooth
+ * device's report outside 50 to 1000 ms gives way to last_plausible_ns (the
+ * latest report accepted for the same output, 0 for none), else 150 ms. A
+ * NULL handle returns reported_ns.
+ */
+uint64_t asc_renderer_set_reported_latency(AscRenderer *renderer, uint64_t reported_ns,
+                                           uint64_t last_plausible_ns);
+
+/*
+ * Any thread: the output latency the device reported, in ns, when the
+ * window rejected it (S231); false, leaving *latency_ns alone, otherwise.
+ */
+bool asc_renderer_rejected_latency_ns(const AscRenderer *renderer, uint64_t *latency_ns);
+
 /*
  * Any thread, before the output stops: fade out over 20 ms of device frames
  * from the next callback, then render exact zeros until the output stops.
@@ -588,6 +622,28 @@ uint64_t asc_renderer_late_callbacks(const AscRenderer *renderer);
    played as silence, in all (0 unless the read sizing is wrong); 0 for a NULL
    handle. */
 uint64_t asc_renderer_shortfall_frames(const AscRenderer *renderer);
+
+/* Any thread: the capture frames by which the renderer's slow-down made up
+   shortages of its reader (S206), apart from the trims that follow the
+   capture's clock, in all; 0 for a NULL handle. */
+uint64_t asc_renderer_shortage_frames(const AscRenderer *renderer);
+
+/* Any thread: the observer's least slack, in ns of capture frames: W - P at
+   the start of a callback less what the callback needs, below 0 when a
+   callback found too few frames (S229). False, leaving *slack_ns alone, until
+   the output has played its warm-up and a callback was measured since, and
+   for a NULL handle. */
+bool asc_renderer_least_slack_ns(const AscRenderer *renderer, int64_t *slack_ns);
+
+/* Any thread: the observer's largest drop of the lateness floor below the
+   floor at the reader's latest anchor, in ns (S229); 0 without output times
+   or for a NULL handle. */
+uint64_t asc_renderer_floor_drop_ns(const AscRenderer *renderer);
+
+/* Any thread: the observer's steps in the device's output times, callbacks
+   whose output time lay more than 1 ms off the previous callback's plus its
+   frames (S229); 0 without output times or for a NULL handle. */
+uint64_t asc_renderer_time_steps(const AscRenderer *renderer);
 
 /* ---- Delay helpers ------------------------------------------------------- */
 
@@ -763,6 +819,20 @@ bool asc_device_volume_decision_changed(bool has_previous, uint32_t previous, ui
  * "muted and low") as a static string; NULL for a value that is no decision.
  */
 const char *asc_device_volume_decision_name(uint32_t decision_code);
+
+/* ---- When the source app quits ------------------------------------------ */
+
+/*
+ * What a session does when an app quits (S227): ASC_SOURCE_QUIT_STOP or
+ * ASC_SOURCE_QUIT_SWITCH_TO_SYSTEM only when streaming is on and `quit_app`
+ * is the bundle ID of the app `source` captures, else ASC_SOURCE_QUIT_KEEP.
+ * `setting` is the stored setting ("system" switches; anything else, NULL
+ * included, stops) and `source` the stored source ("" or NULL the whole
+ * system, "input:<uid>" an input device, else an app's bundle ID). A string
+ * that isn't UTF-8 counts as NULL and an unknown `streaming` as
+ * ASC_STREAMING_OFF. Pure function for the control thread.
+ */
+uint32_t asc_source_quit_decide(const char *setting, const char *source, const char *quit_app, uint32_t streaming);
 
 /* ---- AirPlay sender (AudioSync's own, airplay/) ----------------------------- */
 
