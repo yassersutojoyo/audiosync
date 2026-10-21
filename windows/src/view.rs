@@ -62,6 +62,9 @@ struct UiState {
     /// What is typed in each speaker's delay field, by speaker ID.
     delay_drafts: HashMap<String, TypedDelay>,
     airplay_delay_draft: TypedDelay,
+    /// The speaker whose name is being edited in its row, and what is typed
+    /// there; one at a time (spec S228).
+    rename: Option<(String, String)>,
     /// View > Show Virtual Devices; off at launch, like the Mac's default.
     show_virtual: bool,
     listed_virtual: ListedVirtual,
@@ -964,6 +967,21 @@ impl App {
 
     /// Reads a snapshot and shows it in every window.
     pub fn refresh(&self) {
+        // A speaker that went mid-rename takes its name along; back, it
+        // shows that name, its field closed.
+        let gone = {
+            let mut ui = self.ui.borrow_mut();
+            let open = ui.rename.as_ref().map(|(id, _)| id.clone());
+            match open {
+                Some(id) if self.backend.borrow().snapshot().speaker(&id).is_none() => {
+                    ui.rename.take()
+                }
+                _ => None,
+            }
+        };
+        if let Some((id, text)) = gone {
+            self.backend.borrow_mut().rename_speaker(&id, &text);
+        }
         let state = self.snapshot();
         let strings = self.strings();
         {
@@ -995,6 +1013,10 @@ impl App {
                 ui_model::MAX_DELAY_MS,
                 format_offset_ms,
             );
+            if let Some((_, text)) = ui.rename.as_ref().filter(|(id, _)| *id == speaker.id) {
+                row.renaming = true;
+                row.name_text = text.as_str().into();
+            }
             row
         };
         let (this_pc, connected) = state.layout();
@@ -1323,7 +1345,22 @@ impl App {
         let w = weak.clone();
         main.on_airplay_delay_cancelled(move || with_app(&w, |app| app.end_delay_typing(false)));
         let w = weak.clone();
-        main.on_blank_clicked(move || with_app(&w, |app| app.end_delay_typing(true)));
+        main.on_blank_clicked(move || {
+            with_app(&w, |app| {
+                app.end_rename(true);
+                app.end_delay_typing(true);
+            })
+        });
+        let w = weak.clone();
+        main.on_speaker_rename_requested(move |id| with_app(&w, |app| app.start_rename(&id)));
+        let w = weak.clone();
+        main.on_speaker_rename_edited(move |id, text| {
+            with_app(&w, |app| app.edit_rename(&id, &text))
+        });
+        let w = weak.clone();
+        main.on_speaker_rename_committed(move |_| with_app(&w, |app| app.end_rename(true)));
+        let w = weak.clone();
+        main.on_speaker_rename_cancelled(move |_| with_app(&w, |app| app.end_rename(false)));
         let w = weak.clone();
         main.on_auto_connect_toggled(move |id, on| {
             with_app(&w, |app| app.update(|b| b.set_auto_connect(&id, on)))
@@ -1793,6 +1830,7 @@ impl App {
     /// click on its row). What was typed in the other delay fields applies
     /// first, their controls staying open; closing applies its own typing.
     fn toggle_sync(&self, id: &str) {
+        self.end_rename(true);
         self.apply_delay_typing(Some(id));
         let closed = {
             let mut ui = self.ui.borrow_mut();
@@ -1917,12 +1955,13 @@ impl App {
     /// Saves the settings now, with the main window's frame: the app is
     /// about to quit.
     pub fn save_settings(&self) {
-        // Quit drops a typed delay that wasn't applied, so a focus loss as
-        // the window goes applies nothing either.
+        // Quit drops a typed delay or name that wasn't applied, so a focus
+        // loss as the window goes applies nothing either.
         {
             let mut ui = self.ui.borrow_mut();
             ui.delay_drafts.clear();
             ui.airplay_delay_draft.cancel();
+            ui.rename = None;
         }
         self.remember_view();
         self.backend.borrow_mut().save_settings();
@@ -1993,6 +2032,59 @@ impl App {
         self.refresh();
         if let Some(id) = focused {
             self.focus_delay_button(&id);
+        }
+    }
+
+    /// Rename… in a speaker's menu, or a double-click on its name: its row
+    /// shows a name field with the focus. A rename open in another row
+    /// applies first; one open in this row keeps its typing.
+    fn start_rename(&self, id: &str) {
+        let open = self
+            .ui
+            .borrow()
+            .rename
+            .as_ref()
+            .map(|(open, _)| open.clone());
+        if open.as_deref() != Some(id) {
+            self.end_rename(true);
+            let Some(name) = self.snapshot().speaker(id).map(|s| s.name.clone()) else {
+                return;
+            };
+            self.ui.borrow_mut().rename = Some((id.to_owned(), name));
+            self.refresh();
+        }
+        self.main.set_focus_speaker_part(RowPart::Name);
+        self.main.set_focus_speaker_id(id.into());
+    }
+
+    fn edit_rename(&self, id: &str, text: &str) {
+        if let Some((open, typed)) = self.ui.borrow_mut().rename.as_mut()
+            && open == id
+        {
+            *typed = text.to_owned();
+        }
+    }
+
+    /// Ends the rename open in a row, if any: Enter or a click outside the
+    /// field applies the name (`apply`), Escape keeps the old one. The
+    /// keyboard focus, when it was in the field, goes to the row's toggle,
+    /// which Narrator reads with the name.
+    fn end_rename(&self, apply: bool) {
+        let Some((id, text)) = self.ui.borrow_mut().rename.take() else {
+            return;
+        };
+        let focused = matches!(
+            &self.main_focus.borrow().speaker,
+            Some((focused, RowPart::Name)) if focused.as_str() == id
+        );
+        if apply {
+            self.update(|b| b.rename_speaker(&id, &text));
+        } else {
+            self.refresh();
+        }
+        if focused {
+            self.main.set_focus_speaker_part(RowPart::Toggle);
+            self.main.set_focus_speaker_id(id.as_str().into());
         }
     }
 
@@ -2156,6 +2248,7 @@ impl App {
     fn close_main(&self) {
         // With a tray this is a click outside the controls, so what was typed
         // applies; without one it quits, and a quit drops it.
+        self.end_rename(self.tray_available.get());
         self.end_delay_typing(self.tray_available.get());
         self.remember_view();
         let _ = self.main.hide();
@@ -2405,9 +2498,19 @@ pub fn speaker_item(
 ) -> SpeakerItem {
     let delay = format_offset_ms(speaker.delay_ms.unwrap_or(0.0));
     let (device_volume, device_volume_percent) = device_volume_hint(speaker.device_volume);
+    let renamed = speaker.name != speaker.system_name;
     SpeakerItem {
         id: speaker.id.as_str().into(),
         name: speaker.name.as_str().into(),
+        system_name: if renamed {
+            speaker.system_name.as_str().into()
+        } else {
+            SharedString::default()
+        },
+        device_name: speaker.system_name.as_str().into(),
+        // Set by the caller while the name is edited (`App::refresh`).
+        renaming: false,
+        name_text: SharedString::default(),
         kind: speaker_kind(speaker.kind),
         show_kind,
         state: row_state(state.speaker_state(speaker)),
@@ -3045,7 +3148,7 @@ mod tests {
             .invoke_delay_edited("local:bt".into(), "-200".into());
 
         // The blank part of the desk's row, right of its name.
-        click(window, 420.0, 625.0);
+        click(window, 600.0, 625.0);
         assert_eq!(
             delay_of(&app, "local:bt"),
             Some(-200.0),
@@ -3058,7 +3161,7 @@ mod tests {
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
         app.main.invoke_airplay_delay_edited("2100".into());
-        click(window, 420.0, 625.0);
+        click(window, 600.0, 625.0);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),
@@ -3068,10 +3171,10 @@ mod tests {
         assert!(!open(&app).contains("local:desk"), "and closed it");
 
         // The reference row has no delay: a click there is outside.
-        click(window, 420.0, 625.0);
+        click(window, 600.0, 625.0);
         app.main
             .invoke_delay_edited("local:desk".into(), "300".into());
-        click(window, 420.0, 190.0);
+        click(window, 600.0, 190.0);
         assert_eq!(delay_of(&app, "local:desk"), Some(300.0));
         assert!(open(&app).is_empty());
     }
@@ -3156,7 +3259,7 @@ mod tests {
     #[test]
     fn a_click_on_the_no_airplay_note_under_a_list_works_like_one_on_the_last_row() {
         let app = app_with_the_no_airplay_note(true);
-        click(app.main.window(), 420.0, 525.0);
+        click(app.main.window(), 600.0, 525.0);
         assert!(
             app.ui.borrow().sync_open.contains("local:desk"),
             "the desk's controls opened"
@@ -3185,30 +3288,26 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_the_blank_space_of_open_sync_controls_stays_inside_them() {
+    fn a_click_on_the_blank_space_of_open_sync_controls_closes_them_and_applies_the_typing() {
         let app = app_with_the_no_airplay_note(true);
-        click(app.main.window(), 420.0, 525.0);
-        app.main
-            .invoke_delay_edited("local:desk".into(), "400".into());
         // The open controls fill the desk's row from y 600 to 680: right of
         // the steps, then right of the line under them.
-        for (x, y) in [(900.0, 619.0), (600.0, 649.0)] {
+        for (x, y, ms) in [(900.0, 619.0, 400.0), (600.0, 649.0, 300.0)] {
+            app.main.invoke_sync_toggled("local:desk".into());
+            draw_frames();
+            app.main
+                .invoke_delay_edited("local:desk".into(), format!("{ms}").into());
             click(app.main.window(), x, y);
             assert!(
-                app.ui.borrow().sync_open.contains("local:desk"),
-                "the controls stay open at {x}, {y}"
+                app.ui.borrow().sync_open.is_empty(),
+                "the controls closed at {x}, {y}"
             );
-            assert!(desk_row(&app).delay_pending, "with their typing");
-            assert_eq!(delay_of(&app, "local:desk"), Some(120.0));
+            assert_eq!(
+                delay_of(&app, "local:desk"),
+                Some(ms),
+                "closing applied the typing"
+            );
         }
-        // The row's own blank space, above them, still closes them.
-        click(app.main.window(), 600.0, 545.0);
-        assert!(app.ui.borrow().sync_open.is_empty());
-        assert_eq!(
-            delay_of(&app, "local:desk"),
-            Some(400.0),
-            "closing applied it"
-        );
     }
 
     #[test]
@@ -3490,6 +3589,169 @@ mod tests {
         let state = app.snapshot();
         assert_eq!(state.speaker("local:desk").unwrap().delay_ms, Some(120.0));
         assert_eq!(state.airplay_delay_ms, Some(1750.0));
+    }
+
+    fn name_of(app: &App, id: &str) -> String {
+        app.snapshot().speaker(id).unwrap().name.clone()
+    }
+
+    #[test]
+    fn a_rename_applies_on_enter_and_escape_keeps_the_old_name() {
+        let app = app_over(MockBackend::new());
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        let row = row_of(&app, "local:desk");
+        assert!(row.renaming && row.name_text == "Desk Speaker");
+        assert_eq!(app.main.get_focus_speaker_part(), RowPart::Name);
+
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "  Desk left ".into());
+        assert_eq!(
+            name_of(&app, "local:desk"),
+            "Desk Speaker",
+            "typing applies nothing"
+        );
+        app.main
+            .invoke_speaker_rename_committed("local:desk".into());
+        assert_eq!(name_of(&app, "local:desk"), "Desk left");
+        let row = row_of(&app, "local:desk");
+        assert!(!row.renaming);
+        assert_eq!(
+            row.system_name, "Desk Speaker",
+            "the tooltip keeps the device name"
+        );
+
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "Other".into());
+        app.main
+            .invoke_speaker_rename_cancelled("local:desk".into());
+        assert_eq!(name_of(&app, "local:desk"), "Desk left", "Escape keeps it");
+        assert!(app.ui.borrow().rename.is_none());
+
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "".into());
+        app.main
+            .invoke_speaker_rename_committed("local:desk".into());
+        assert_eq!(
+            name_of(&app, "local:desk"),
+            "Desk Speaker",
+            "empty brings it back"
+        );
+        assert_eq!(row_of(&app, "local:desk").system_name, "");
+    }
+
+    #[test]
+    fn one_rename_at_a_time_and_a_click_outside_applies_it() {
+        let app = app_over(MockBackend::new());
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        assert_eq!(
+            app.ui.borrow().rename,
+            Some(("local:desk".to_owned(), "Desk".to_owned())),
+            "asked again, it keeps the typing"
+        );
+
+        app.main.invoke_speaker_rename_requested("local:bt".into());
+        assert_eq!(
+            name_of(&app, "local:desk"),
+            "Desk",
+            "the open rename applied first"
+        );
+        assert!(!row_of(&app, "local:desk").renaming);
+        assert!(row_of(&app, "local:bt").renaming);
+
+        app.main
+            .invoke_speaker_rename_edited("local:bt".into(), "Headset".into());
+        app.main.invoke_blank_clicked();
+        assert_eq!(name_of(&app, "local:bt"), "Headset");
+        assert!(app.ui.borrow().rename.is_none());
+    }
+
+    #[test]
+    fn a_speaker_gone_mid_rename_closes_its_field() {
+        let app = app_over(MockBackend::new());
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
+        let mut unplugged = MockBackend::new();
+        unplugged.retain_speakers(|s| s.id != "local:desk");
+        *app.backend.borrow_mut() = Box::new(unplugged);
+        app.refresh();
+        assert!(app.ui.borrow().rename.is_none());
+
+        *app.backend.borrow_mut() = Box::new(MockBackend::new());
+        app.refresh();
+        assert!(
+            !row_of(&app, "local:desk").renaming,
+            "back, its field stays closed"
+        );
+    }
+
+    #[test]
+    fn a_double_click_on_a_name_renames_and_a_single_one_is_a_click_on_the_row() {
+        let app = app_over(MockBackend::new());
+        draw_frames();
+        let window = app.main.window();
+        // The desk's name.
+        click(window, 420.0, 625.0);
+        click(window, 420.0, 625.0);
+        assert!(
+            row_of(&app, "local:desk").renaming,
+            "the double-click renames"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        draw_frames();
+        assert!(
+            app.ui.borrow().sync_open.is_empty(),
+            "and doesn't open the sync controls"
+        );
+
+        app.main
+            .invoke_speaker_rename_cancelled("local:desk".into());
+        draw_frames();
+        click(window, 420.0, 625.0);
+        assert!(
+            app.ui.borrow().sync_open.is_empty(),
+            "one click waits for a second"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        draw_frames();
+        assert!(
+            app.ui.borrow().sync_open.contains("local:desk"),
+            "then works like a click on the row"
+        );
+    }
+
+    #[test]
+    fn rename_in_the_menu_opens_the_name_field_with_the_focus() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        draw_frames();
+        assert_eq!(
+            app.main_focus.borrow().speaker,
+            Some(("local:desk".into(), RowPart::Name)),
+            "the field took the focus"
+        );
+        press(app.main.window(), Key::Escape);
+        assert!(app.ui.borrow().rename.is_none(), "Escape closed it");
+        draw_frames();
+        assert_eq!(
+            app.main_focus.borrow().speaker,
+            Some(("local:desk".into(), RowPart::Toggle)),
+            "the focus went to the row's toggle"
+        );
     }
 
     #[test]

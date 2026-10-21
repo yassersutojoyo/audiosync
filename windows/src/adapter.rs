@@ -80,6 +80,7 @@ use crate::settings::{
     self, KeptAside, SavedEqualizer, SavedGroup, SavedInput, SavedSource, SavedSpeaker, Settings,
     SettingsFile,
 };
+use crate::speaker_names::SpeakerNames;
 use crate::ui_model::{
     self, AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage,
     PasswordPrompt, PinPhase, PinPrompt, Source, SourceKind, Speaker, SpeakerKind, ViewSettings,
@@ -205,6 +206,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     airplay_quiet_polls: u32,
     /// The speaker keys marked auto-connect.
     auto_connect: BTreeSet<String>,
+    /// The names the user gave speakers (spec S228).
+    custom_names: SpeakerNames,
     groups: Vec<Group>,
     next_group: u64,
     gate: AutoStartGate,
@@ -300,6 +303,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             airplay_quiet_polls: 0,
             airplay_names: BTreeMap::new(),
             auto_connect: BTreeSet::new(),
+            custom_names: SpeakerNames::default(),
             groups: Vec::new(),
             next_group: 1,
             gate: AutoStartGate::default(),
@@ -379,6 +383,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             });
         }
         self.auto_connect = saved.auto_connect.clone();
+        self.custom_names = SpeakerNames::from_saved(&saved.speaker_names);
         self.groups = saved
             .groups
             .iter()
@@ -501,6 +506,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             outputs,
             airplay,
             auto_connect: self.auto_connect.clone(),
+            speaker_names: self.custom_names.saved(),
             groups: self
                 .groups
                 .iter()
@@ -659,12 +665,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.audio.enabled_airplay().iter().any(|on| on == id)
     }
 
-    /// The name of an AirPlay speaker as last listed.
+    /// The name an AirPlay speaker shows: the user's, else the one last
+    /// listed.
     fn airplay_name(&self, id: &str) -> String {
-        self.airplay_names
-            .get(id)
-            .cloned()
-            .unwrap_or_else(|| id.to_owned())
+        let system = self.airplay_names.get(id).map_or(id, String::as_str);
+        self.custom_names.shown(&airplay_key(id), system)
     }
 
     fn is_enabled(&self, endpoint_id: &str) -> bool {
@@ -674,12 +679,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .any(|id| id == endpoint_id)
     }
 
-    /// The name of an output as last listed.
+    /// The name an output shows: the user's, else the one last listed.
     fn output_name(&self, endpoint_id: &str) -> String {
-        self.names
+        let system = self
+            .names
             .get(endpoint_id)
-            .cloned()
-            .unwrap_or_else(|| endpoint_id.to_owned())
+            .map_or(endpoint_id, String::as_str);
+        self.custom_names.shown(&speaker_key(endpoint_id), system)
     }
 
     fn chosen_name(&self) -> String {
@@ -892,6 +898,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if self.auto_connect.remove(&from_key) {
             self.auto_connect.insert(to_key.clone());
         }
+        self.custom_names.move_key(&from_key, &to_key);
         for group in &mut self.groups {
             if let Some(place) = group.members.iter().position(|key| *key == from_key) {
                 if group.members.contains(&to_key) {
@@ -1599,8 +1606,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let id = airplay_key(&speaker.id);
         Speaker {
             auto_connect: self.auto_connect.contains(&id),
+            name: self.custom_names.shown(&id, &speaker.name),
+            system_name: speaker.name,
             id,
-            name: speaker.name,
             kind: SpeakerKind::AirPlay,
             enabled: speaker.enabled,
             volume: speaker.volume,
@@ -1638,8 +1646,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let id = speaker_key(&output.id);
         Speaker {
             auto_connect: self.auto_connect.contains(&id),
+            name: self.custom_names.shown(&id, &output.name),
+            system_name: output.name,
             id,
-            name: output.name,
             kind: speaker_kind(output.kind),
             enabled: output.enabled,
             volume: output.volume,
@@ -1710,7 +1719,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             .outputs()
             .into_iter()
             .find(|output| output.is_reference)
-            .map(|output| output.name);
+            .map(|output| {
+                self.custom_names
+                    .shown(&speaker_key(&output.id), &output.name)
+            });
         let pin_prompt = self.audio.airplay_pin_prompt();
         let prompted = pin_prompt.as_ref().map(|prompt| prompt.id.as_str());
         AppState {
@@ -1889,6 +1901,23 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         };
         if let Some(adjustment) = native_airplay_adjustment_ms(ms, sender) {
             self.audio.set_airplay_adjustment(adjustment);
+        }
+    }
+
+    fn rename_speaker(&mut self, id: &str, name: &str) {
+        let system = match SpeakerKey::parse(id) {
+            Some(SpeakerKey::Local(endpoint_id)) => self.names.get(&endpoint_id).cloned(),
+            Some(SpeakerKey::AirPlay(airplay_id)) => self.airplay_names.get(&airplay_id).cloned(),
+            None => None,
+        };
+        // A speaker never listed has no system name to come back to.
+        let Some(system) = system else {
+            return;
+        };
+        if self.custom_names.rename(id, name, &system) {
+            let shown = self.custom_names.shown(id, &system);
+            self.log
+                .log(|| format!("speaker {id} ({system}) is shown as {shown}"));
         }
     }
 
@@ -4742,6 +4771,37 @@ mod tests {
     }
 
     #[test]
+    fn a_renamed_speaker_keeps_its_name_across_a_restart_until_it_is_cleared() {
+        let dir = test_dir("adapter-speaker-rename");
+        let path = dir.join(settings::FILE_NAME);
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.poll();
+        adapter.rename_speaker(&key(SPEAKERS), "  Desk\nleft ");
+        adapter.rename_speaker("lc:never-listed", "Ghost");
+        let speakers = speaker_of(&adapter, &key(SPEAKERS));
+        assert_eq!(speakers.name, "Desk left");
+        assert_eq!(speakers.system_name, "Speakers");
+        assert_eq!(speaker_of(&adapter, &key(HEADPHONES)).name, "Headphones");
+        adapter.save_settings();
+
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.poll();
+        assert_eq!(speaker_of(&adapter, &key(SPEAKERS)).name, "Desk left");
+        let (saved, _) = SettingsFile::at(path.clone()).load();
+        assert_eq!(
+            saved.speaker_names.len(),
+            1,
+            "a speaker never listed isn't named"
+        );
+
+        adapter.rename_speaker(&key(SPEAKERS), "");
+        assert_eq!(speaker_of(&adapter, &key(SPEAKERS)).name, "Speakers");
+        adapter.save_settings();
+        let (saved, _) = SettingsFile::at(path).load();
+        assert!(saved.speaker_names.is_empty(), "cleared, nothing is kept");
+    }
+
+    #[test]
     fn the_users_choices_survive_a_restart_without_streaming() {
         let dir = test_dir("adapter-settings-restart");
         let path = dir.join(settings::FILE_NAME);
@@ -4811,6 +4871,18 @@ mod tests {
         audio.connect_output_as("bluetooth", "Earbuds", OutputKind::Bluetooth);
         audio.connect_output_as("tv", "TV", OutputKind::Hdmi);
         audio
+    }
+
+    #[test]
+    fn the_sync_hint_names_a_renamed_reference_by_its_new_name() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        adapter.poll();
+        adapter.rename_speaker(&key("builtin"), "Desk");
+        assert_eq!(adapter.snapshot().reference_name.as_deref(), Some("Desk"));
     }
 
     #[test]

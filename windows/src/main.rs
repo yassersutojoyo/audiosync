@@ -34,6 +34,7 @@ mod platform;
 mod settings;
 #[cfg(any(windows, test))]
 mod single_instance;
+mod speaker_names;
 // Generated from brand/tokens.json: rustfmt leaves it as the generator wrote it.
 #[cfg(test)]
 #[rustfmt::skip]

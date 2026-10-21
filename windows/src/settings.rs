@@ -8,7 +8,7 @@
 //! AirPlay speaker's switch, volume and delay (outputs by endpoint ID,
 //! AirPlay speakers by the ID they announce), the AirPlay delay adjustment,
 //! the master volume, the
-//! auto-connect marks, the groups, the equalizer, View > Show Virtual
+//! auto-connect marks, the names the user gave speakers, the groups, the equalizer, View > Show Virtual
 //! Devices, and the main window's place and size.
 //!
 //! The file carries a format version ([`VERSION`]). A file from an older
@@ -38,6 +38,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::speaker_names::SpeakerNames;
 use audiosync_core::eq::{BAND_COUNT, EqSettings};
 use audiosync_core::policy::delay::{
     MAX_DELAY_MS, MAX_OFFSET_MS, MIN_OFFSET_MS, sanitize_airplay_adjustment_ms,
@@ -258,6 +259,9 @@ pub struct Settings {
     pub airplay: BTreeMap<String, SavedSpeaker>,
     /// The speakers marked auto-connect, by speaker key.
     pub auto_connect: BTreeSet<String>,
+    /// The names the user gave speakers, by speaker key (spec S228).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub speaker_names: BTreeMap<String, String>,
     pub groups: Vec<SavedGroup>,
     pub equalizer: SavedEqualizer,
     /// View > Show Virtual Devices.
@@ -283,6 +287,7 @@ impl Default for Settings {
             outputs: BTreeMap::new(),
             airplay: BTreeMap::new(),
             auto_connect: BTreeSet::new(),
+            speaker_names: BTreeMap::new(),
             groups: Vec::new(),
             equalizer: SavedEqualizer::default(),
             show_virtual_devices: false,
@@ -413,6 +418,15 @@ impl Settings {
                 .filter(|key| usable_key(key))
                 .take(MAX_ENTRIES)
                 .collect(),
+            speaker_names: SpeakerNames::from_saved(
+                &self
+                    .speaker_names
+                    .into_iter()
+                    .filter(|(key, _)| usable_key(key))
+                    .take(MAX_ENTRIES)
+                    .collect(),
+            )
+            .saved(),
             groups,
             equalizer: SavedEqualizer::from(self.equalizer.settings()),
             show_virtual_devices: self.show_virtual_devices,
@@ -724,6 +738,10 @@ mod tests {
         settings
             .auto_connect
             .insert("lc:{0.0.0.00000000}.{speakers}".to_owned());
+        settings.speaker_names.insert(
+            "lc:{0.0.0.00000000}.{speakers}".to_owned(),
+            "Desk".to_owned(),
+        );
         settings.groups.push(SavedGroup {
             id: "group:3".to_owned(),
             name: "Downstairs".to_owned(),
@@ -738,6 +756,53 @@ mod tests {
             gains_db: vec![4.0, 3.0, 0.0, 0.0, -1.5, 0.0, 0.0, 2.0, 2.5, 3.0],
         };
         settings
+    }
+
+    #[test]
+    fn speaker_names_are_kept_cleared_and_unusable_entries_skipped() {
+        let file = SettingsFile::at(test_dir("settings-speaker-names").join(FILE_NAME));
+        let mut names = SpeakerNames::default();
+        names.rename("lc:desk", "Desk", "Speakers");
+        names.rename("ap:kitchen", "Kitchen left", "Kitchen");
+        let settings = Settings {
+            speaker_names: names.saved(),
+            ..Settings::default()
+        };
+        file.save(&settings).expect("saved");
+        let (read, _) = file.load();
+        let mut names = SpeakerNames::from_saved(&read.speaker_names);
+        assert_eq!(
+            names.shown("lc:desk", "Speakers"),
+            "Desk",
+            "kept across a restart"
+        );
+        assert_eq!(names.shown("ap:kitchen", "Kitchen"), "Kitchen left");
+        assert_eq!(names.shown("lc:other", "Other"), "Other", "an unknown key");
+
+        names.rename("lc:desk", "", "Speakers");
+        let settings = Settings {
+            speaker_names: names.saved(),
+            ..Settings::default()
+        };
+        file.save(&settings).expect("saved");
+        let (read, _) = file.load();
+        assert!(
+            !read.speaker_names.contains_key("lc:desk"),
+            "cleared, the key goes"
+        );
+        assert_eq!(read.speaker_names.len(), 1);
+
+        let text = r#"{"version": 2, "speaker_names": {
+            "lc:desk": "  Desk  ", "nonsense": "Name", "ap:": "Name", "lc:blank": "  "
+        }}"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        assert_eq!(
+            read.speaker_names,
+            BTreeMap::from([("lc:desk".to_owned(), "Desk".to_owned())]),
+            "unusable keys and blank names are skipped"
+        );
+        let without = Settings::default().to_json();
+        assert!(!without.contains("speaker_names"), "no names, no field");
     }
 
     #[test]

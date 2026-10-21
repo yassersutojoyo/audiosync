@@ -39,6 +39,10 @@ component SpeakerSection inherits VerticalLayout {
     callback auto-connect-toggled(string, bool);
     callback forget-pairing(string);
     callback device-volume-fix(string);
+    callback rename-requested(string);
+    callback rename-edited(string, string);
+    callback rename-committed(string);
+    callback rename-cancelled(string);
     // The part of a row with the keyboard focus changed; none: it lost it.
     callback focus-changed(string, RowPart);
     // A row built while this is its speaker's ID, or already built when it
@@ -115,6 +119,18 @@ component SpeakerSection inherits VerticalLayout {
                 }
                 device-volume-fix => {
                     root.device-volume-fix(speaker.id);
+                }
+                rename-requested => {
+                    root.rename-requested(speaker.id);
+                }
+                rename-edited(text) => {
+                    root.rename-edited(speaker.id, text);
+                }
+                rename-committed => {
+                    root.rename-committed(speaker.id);
+                }
+                rename-cancelled => {
+                    root.rename-cancelled(speaker.id);
                 }
             }
         }
@@ -296,6 +312,13 @@ export component MainWindow inherits Window {
     // typed delay and keep the sync controls open.
     callback delay-apply-requested();
     callback auto-connect-toggled(string, bool);
+    // Rename… in a speaker's menu, or a double-click on its name.
+    callback speaker-rename-requested(string);
+    callback speaker-rename-edited(string, string);
+    // Enter in a speaker's name field: apply the name.
+    callback speaker-rename-committed(string);
+    // Escape in a speaker's name field: keep the old name.
+    callback speaker-rename-cancelled(string);
     callback forget-pairing-requested(string);
     // The fix under a speaker's device-volume hint.
     callback device-volume-fix-requested(string);
@@ -719,6 +742,18 @@ export component MainWindow inherits Window {
                         auto-connect-toggled(id, on) => {
                             root.auto-connect-toggled(id, on);
                         }
+                        rename-requested(id) => {
+                            root.speaker-rename-requested(id);
+                        }
+                        rename-edited(id, text) => {
+                            root.speaker-rename-edited(id, text);
+                        }
+                        rename-committed(id) => {
+                            root.speaker-rename-committed(id);
+                        }
+                        rename-cancelled(id) => {
+                            root.speaker-rename-cancelled(id);
+                        }
                     }
 
                     if root.groups.length > 0: VerticalLayout {
@@ -818,6 +853,18 @@ export component MainWindow inherits Window {
                         }
                         auto-connect-toggled(id, on) => {
                             root.auto-connect-toggled(id, on);
+                        }
+                        rename-requested(id) => {
+                            root.speaker-rename-requested(id);
+                        }
+                        rename-edited(id, text) => {
+                            root.speaker-rename-edited(id, text);
+                        }
+                        rename-committed(id) => {
+                            root.speaker-rename-committed(id);
+                        }
+                        rename-cancelled(id) => {
+                            root.speaker-rename-cancelled(id);
                         }
                     }
 
