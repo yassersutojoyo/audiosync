@@ -99,6 +99,12 @@ pub const RENDER_CHUNK: usize = 512;
 /// removal before it stops them anyway (S186).
 pub const STOP_FADE_CAP: Duration = Duration::from_millis(500);
 
+/// The most a Windows endpoint's clock may hold a fade-out past the queued
+/// buffer (S185). The four endpoints measured on a PC lay 4 to 30 ms past
+/// it; a clock that says more (a stalled position, or a driver that counts
+/// a Bluetooth link) delays a stop by at most this, well inside S186's cap.
+pub const FADE_TAIL_CAP: Duration = Duration::from_millis(100);
+
 /// No output time published yet.
 const NO_TIME: u64 = u64::MAX;
 
@@ -190,13 +196,25 @@ pub fn reader_frames_bound(device_frames: usize, capture_rate: u32, device_rate:
     ((frames * from).div_ceil(to) + from / to + 4) as usize
 }
 
-/// Whether an endpoint has played a renderer's fade-out (S185, Windows): the
-/// renderer wrote `frames_after_fade` frames after the fade's last frame,
-/// the endpoint still holds `padding` frames, so only zeros are queued once
-/// `padding` is no larger than that count, and the frames it played since
-/// cover the stream latency, `latency_frames` at the device rate.
-pub fn endpoint_faded(frames_after_fade: u64, padding: u64, latency_frames: u64) -> bool {
-    frames_after_fade >= padding.saturating_add(latency_frames)
+/// How many frames a Windows endpoint must have taken after a fade-out's
+/// last frame before that frame has played (S185), at `rate`: what its
+/// clock says is written but not yet played (`clock_queued`), never less
+/// than the queued buffer (`padding`) nor more than the buffer plus
+/// [`FADE_TAIL_CAP`]. Without a clock reading, the buffer plus the stream
+/// latency the endpoint reports (`latency_frames`).
+pub fn fade_tail_frames(
+    padding: u64,
+    clock_queued: Option<u64>,
+    latency_frames: u64,
+    rate: u32,
+) -> u64 {
+    match clock_queued {
+        Some(queued) => {
+            let cap = u64::from(rate) * FADE_TAIL_CAP.as_millis() as u64 / 1000;
+            queued.clamp(padding, padding.saturating_add(cap))
+        }
+        None => padding.saturating_add(latency_frames),
+    }
 }
 
 /// Whether a fade-out whose last frame is output at `fade_end_ns` has played
