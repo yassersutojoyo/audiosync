@@ -19,7 +19,7 @@ fn resolved(instance: &str, port: u16, addresses: &[IpAddr], txt: &[(&str, &str)
     let info = ServiceInfo::new(
         SERVICE_TYPE,
         instance,
-        "device.local.",
+        "speaker.local.",
         addresses,
         port,
         txt,
@@ -77,8 +77,15 @@ fn a_resolved_instance_becomes_a_device_with_its_announced_address_and_port() {
     assert!(browser.is_dead());
 
     // Another service type is not a Cast device.
-    let other = ServiceInfo::new("_http._tcp.local.", "x", "h.local.", &[v4(1)][..], 80, None)
-        .expect("service");
+    let other = ServiceInfo::new(
+        "_http._tcp.local.",
+        "x",
+        "speaker.local.",
+        &[v4(1)][..],
+        80,
+        None,
+    )
+    .expect("service");
     assert_eq!(
         browse_event(ServiceEvent::ServiceResolved(Box::new(
             other.as_resolved_service()
