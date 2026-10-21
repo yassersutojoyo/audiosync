@@ -556,3 +556,36 @@ fn a_late_second_callback_does_not_set_the_floor_drift_is_judged_from() {
         );
     }
 }
+
+// covers: S206, S207
+#[test]
+#[ignore = "open: an output that does not convert has no trim and a lead of one callback, so a fast clock runs it dry once per block it gains"]
+fn a_48_khz_output_that_does_not_convert_on_a_fast_clock_never_runs_dry() {
+    // Callbacks on time, 50 ppm fast: a block of 512 frames every 213 s,
+    // four in 900 s.
+    let on_time = |device: Device| Device {
+        wander_ms: 0.0,
+        bursts: Bursts::Own { one_in: u64::MAX },
+        ..device
+    };
+    let mut found = Vec::new();
+    for (case, devices) in [
+        ("alone", vec![on_time(earbuds(0, 2))]),
+        (
+            "with 44.1 kHz",
+            vec![on_time(earbuds(0, 2)), on_time(headset(0, 0))],
+        ),
+    ] {
+        let seen = run(&devices, 50.0, 900);
+        let starved: Vec<u64> = seen
+            .counters
+            .iter()
+            .map(|c| settled_corrections(c).0)
+            .collect();
+        found.push((case, starved));
+    }
+    assert!(
+        found.iter().all(|(_, starved)| starved[0] == 0),
+        "{found:?}"
+    );
+}
