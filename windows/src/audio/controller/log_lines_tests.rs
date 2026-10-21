@@ -386,13 +386,17 @@ fn a_status_line_shows_what_a_real_reader_and_render_pipeline_count() {
         slowed_frames: control.slowed_frames(),
         sped_frames: control.sped_frames(),
         shortfall_frames: control.shortfall_frames(),
+        shortage_frames: control.shortage_frames(),
+        least_slack_ns: control.least_slack_ns(),
     };
     let app = SourceId::App { root_pid: APP_PID };
     // A capture and a render thread in step: anchored once, nothing to
     // correct. The receiver converts and plays alone, so its reader sits at
     // its start lead less the converter's latency (S208), one period's reads
     // and the 25 ms cap on the block (485 + 1200 frames), above the 10 ms
-    // hold-back: 1205 frames behind W after each period.
+    // hold-back: 1205 frames behind W after each period. Each period reads
+    // as much as the packet written just before it, so its least slack is
+    // that lag too (S229).
     assert_eq!(
         describe_status(&app, span, &[status()], Some("AirPlay: L = 2000 ms")),
         format!(
@@ -401,7 +405,8 @@ fn a_status_line_shows_what_a_real_reader_and_render_pipeline_count() {
              output \"HDMI\" ({HDMI_ID}): delay 10 ms (480 frames), volume 50 (gain 0.250), \
              lag 1205 frames; primes 1, resyncs 0, starved reads 0 (0 frames), \
              drift skips 0 (0 frames), drift silences 0 (0 frames), rejected copies 0, \
-             slowed 0 frames, sped 0 frames, shortfall 0 frames\n\
+             slowed 0 frames, sped 0 frames, shortfall 0 frames, shortage 0 frames, \
+             least slack 25.1 ms\n\
              AirPlay: L = 2000 ms"
         )
     );

@@ -21,6 +21,7 @@ let package = Package(
                 .linkedFramework("AppKit"),
                 .linkedFramework("CoreAudio"),
                 .linkedFramework("AudioToolbox"),
+                .linkedFramework("CoreWLAN"),
                 .linkedLibrary("audiosync_core"),
                 .unsafeFlags(["-L", coreLibraryDir])
             ]
