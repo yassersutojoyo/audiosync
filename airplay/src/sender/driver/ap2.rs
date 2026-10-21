@@ -156,13 +156,19 @@ impl Driver {
         self.homekit.insert(key.clone(), credentials);
     }
 
-    /// Drops HomeKit credentials the receiver turned down, so the next start
-    /// pairs again (P154), and tells the host to delete its stored copy.
-    fn forget_homekit(&mut self, key: &DeviceKey) {
+    /// Drops the HomeKit credentials kept for a device, so its next session
+    /// pairs again.
+    pub(super) fn forget_homekit(&mut self, key: &DeviceKey) {
         if let Some(speaker) = self.speakers.get_mut(key) {
             speaker.options.homekit_credentials = None;
         }
         self.homekit.remove(key);
+    }
+
+    /// Drops HomeKit credentials the receiver turned down (P154), and tells
+    /// the host to delete its stored copy.
+    fn reject_homekit(&mut self, key: &DeviceKey) {
+        self.forget_homekit(key);
         self.emit_speaker(key, SpeakerEvent::HomeKitRejected);
     }
 
@@ -406,7 +412,7 @@ impl Driver {
             Ap2Event::Failed(error) => {
                 let verifying = self.ap2_active(key).is_some_and(|active| active.verifying);
                 if verifying && error.kind == ErrorKind::PairingRequired {
-                    self.forget_homekit(key);
+                    self.reject_homekit(key);
                 }
                 self.on_failed(key, error, now);
             }

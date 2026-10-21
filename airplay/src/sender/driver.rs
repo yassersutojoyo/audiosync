@@ -89,6 +89,7 @@ pub(crate) enum Command {
     },
     SubmitPin(DeviceKey, Secret),
     CancelPairing(DeviceKey),
+    ForgetHomeKit(DeviceKey),
     SetAirPlay2DeviceId([u8; 6]),
     Shutdown,
 }
@@ -1207,6 +1208,7 @@ impl Driver {
                     run.pairing.cancel(now);
                 }
             }
+            Command::ForgetHomeKit(key) => self.forget_homekit(&key),
             Command::Shutdown => self.shutdown(now),
         }
     }

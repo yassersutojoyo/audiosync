@@ -226,6 +226,26 @@ fn a_wrong_pin_ends_the_pairing_as_a_wrong_pin() {
     assert_eq!(rig.failure(), Some((ErrorKind::Busy, false)));
 }
 
+// covers: P149
+#[test]
+fn a_pair_verify_that_fails_after_m6_pairs_nothing() {
+    let mut fake = pin_receiver();
+    fake.hap.wrong_m2_signature = true;
+    let mut rig = PinRig::new(fake);
+    assert_eq!(rig.submit(PIN), Ok(()));
+    let keys = rig.fake.keys();
+    assert_eq!(
+        keys.iter().filter(|key| *key == "POST /pair-setup").count(),
+        3,
+        "{keys:?}"
+    );
+    assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    let (_, wrong_pin) = rig.failure().expect("the pairing fails");
+    assert!(!wrong_pin);
+    assert_eq!(rig.credentials(), None, "no credentials without a verify");
+    assert_eq!(rig.pairing.state(), PairingState::Closed);
+}
+
 // covers: P136
 #[test]
 fn a_cancel_or_a_close_while_waiting_ends_the_pairing() {
