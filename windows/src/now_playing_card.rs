@@ -13,6 +13,7 @@
 //! The card keeps the last track while the window is hidden, so it shows at
 //! once when the window comes back, and changes with the first new reading.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::ui_model::AppState;
@@ -69,6 +70,51 @@ pub fn cover_size(width: u32, height: u32, side: u32) -> (u32, u32) {
         u32::try_from(length).unwrap_or(u32::MAX).max(side)
     };
     (scaled(width), scaled(height))
+}
+
+/// Artwork kept for at most this many tracks.
+const ARTWORK_CACHE: usize = 32;
+
+/// The card's artwork, made once per track by key. A failed attempt isn't
+/// kept, so the next reading tries again; only a track's first failure is
+/// handed back to be logged.
+#[derive(Default)]
+pub struct ArtworkCache {
+    made: HashMap<String, Option<CardArtwork>>,
+    failed: HashSet<String>,
+}
+
+impl ArtworkCache {
+    /// What was made for `key`, if an attempt worked.
+    pub fn get(&self, key: &str) -> Option<Option<CardArtwork>> {
+        self.made.get(key).cloned()
+    }
+
+    /// Takes an attempt for `key`: the artwork, and the error when it is
+    /// the track's first.
+    pub fn keep<E>(
+        &mut self,
+        key: &str,
+        attempt: Result<Option<CardArtwork>, E>,
+    ) -> (Option<CardArtwork>, Option<E>) {
+        match attempt {
+            Ok(artwork) => {
+                if self.made.len() >= ARTWORK_CACHE {
+                    self.made.clear();
+                }
+                self.failed.remove(key);
+                self.made.insert(key.to_owned(), artwork.clone());
+                (artwork, None)
+            }
+            Err(error) => {
+                if self.failed.len() >= ARTWORK_CACHE {
+                    self.failed.clear();
+                }
+                let first = self.failed.insert(key.to_owned());
+                (None, first.then_some(error))
+            }
+        }
+    }
 }
 
 /// What the card shows of a session.
@@ -369,6 +415,25 @@ mod tests {
         assert_eq!(cover_size(100, 333, 112), (112, 373));
         assert_eq!(cover_size(56, 56, 112), (112, 112), "scaled up");
         assert_eq!(cover_size(0, 10, 112), (112, 1120));
+    }
+
+    #[test]
+    fn failed_artwork_is_tried_again_and_logged_once() {
+        let art = CardArtwork {
+            side: 1,
+            rgba: Arc::from(&[1, 2, 3, 4][..]),
+        };
+        let mut cache = ArtworkCache::default();
+        assert_eq!(cache.keep("a", Err("busy")), (None, Some("busy")));
+        assert_eq!(cache.get("a"), None, "a failure isn't kept");
+        assert_eq!(cache.keep("a", Err("busy")), (None, None), "logged once");
+        assert_eq!(
+            cache.keep::<&str>("a", Ok(Some(art.clone()))),
+            (Some(art.clone()), None)
+        );
+        assert_eq!(cache.get("a"), Some(Some(art)));
+        assert_eq!(cache.keep::<&str>("b", Ok(None)), (None, None));
+        assert_eq!(cache.get("b"), Some(None), "an empty image is kept");
     }
 
     #[test]

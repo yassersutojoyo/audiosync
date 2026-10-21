@@ -11,7 +11,6 @@
 //! Like the receivers' reader, nothing else waits on the thread: the UI
 //! thread meets it only under a lock held for a copy.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
@@ -33,15 +32,13 @@ use super::media::describe;
 use crate::audio::now_playing::{Follow, MediaSession, POLL_INTERVAL, pick};
 use crate::debug_log::DebugLog;
 use crate::now_playing_card::{
-    ARTWORK_SIDE, CardArtwork, CardSource, CardTrack, MediaControls, Transport, cover_size,
+    ARTWORK_SIDE, ArtworkCache, CardArtwork, CardSource, CardTrack, MediaControls, Transport,
+    cover_size,
 };
 
 /// How soon the sessions are read again after a button: long enough for
 /// most apps to have changed their state.
 const AFTER_COMMAND: Duration = Duration::from_millis(400);
-
-/// Artwork kept for at most this many tracks.
-const ARTWORK_CACHE: usize = 32;
 
 #[derive(Default)]
 struct State {
@@ -176,8 +173,8 @@ fn follow_for(source: CardSource) -> Follow {
 #[derive(Default)]
 struct CardSessions {
     manager: Option<SessionManager>,
-    /// Card artwork by track; `None` for a thumbnail that couldn't be read.
-    artwork: HashMap<String, Option<CardArtwork>>,
+    /// Card artwork by track.
+    artwork: ArtworkCache,
     /// The last reading failed, and said so.
     failing: bool,
     /// The last track read, for the log.
@@ -281,9 +278,9 @@ impl CardSessions {
         });
     }
 
-    /// The track's artwork for the card, decoded once per track. A session
-    /// without a thumbnail may get one a moment later, so that is asked
-    /// again.
+    /// The track's artwork for the card, decoded once per track. A missing
+    /// thumbnail may come a moment later and a failed read may be passing,
+    /// so both are asked again at the next reading ([`ArtworkCache`]).
     fn artwork(
         &mut self,
         session: &MediaSession,
@@ -291,8 +288,8 @@ impl CardSessions {
         log: &DebugLog,
     ) -> Option<CardArtwork> {
         let key = format!("{}|{}|{}", session.app_id, session.title, session.album);
-        if let Some(cached) = self.artwork.get(&key) {
-            return cached.clone();
+        if let Some(made) = self.artwork.get(&key) {
+            return made;
         }
         let Ok(thumbnail) = properties.Thumbnail() else {
             return None;
@@ -302,22 +299,15 @@ impl CardSessions {
             .and_then(|operation| operation.join())
             .and_then(|stream| stream.cast::<IRandomAccessStream>())
             .and_then(|stream| card_artwork(&stream));
-        let artwork = match decoded {
-            Ok(artwork) => artwork,
-            Err(error) => {
-                log.log(|| {
-                    format!(
-                        "now playing card: the artwork of \"{}\" couldn't be read: {error}",
-                        session.title
-                    )
-                });
-                None
-            }
-        };
-        if self.artwork.len() >= ARTWORK_CACHE {
-            self.artwork.clear();
+        let (artwork, error) = self.artwork.keep(&key, decoded);
+        if let Some(error) = error {
+            log.log(|| {
+                format!(
+                    "now playing card: the artwork of \"{}\" couldn't be read: {error}",
+                    session.title
+                )
+            });
         }
-        self.artwork.insert(key, artwork.clone());
         artwork
     }
 }
