@@ -88,6 +88,7 @@ pub(crate) enum Command {
     },
     SubmitPin(DeviceKey, Secret),
     CancelPairing(DeviceKey),
+    SetAirPlay2DeviceId([u8; 6]),
     Shutdown,
 }
 
@@ -146,6 +147,23 @@ struct Speaker {
     /// The AirPlay 1 attempt ended in Unsupported or Refused, which sends
     /// the speaker to the AirPlay 2 path while the switch is on (P2).
     airplay1_outcome: Option<ErrorKind>,
+    /// Refused only because another AirPlay 2 session ran (P169): it starts
+    /// once that session ends for good.
+    ap2_waiting: bool,
+    /// Its AirPlay 2 session failed and waits for its own retry, so it
+    /// keeps the one AirPlay 2 place (P169).
+    ap2_retry: bool,
+}
+
+impl Speaker {
+    /// Runs the AirPlay 2 session, or waits to retry it (P169).
+    fn holds_ap2(&self) -> bool {
+        match self.phase {
+            Phase::Ap2(_) => true,
+            Phase::Waiting(_) => self.ap2_retry,
+            _ => false,
+        }
+    }
 }
 
 pub(crate) struct Driver {
@@ -776,6 +794,7 @@ impl Driver {
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
+        let was_ap2 = matches!(speaker.phase, Phase::Ap2(_));
         let closing = speaker.removing || self.stopping.is_some();
         let alac_retry = error.fallback == Some(Codec::Alac) && !closing;
         // An AirPlay 1 attempt that ended in Unsupported or Refused moves
@@ -796,6 +815,7 @@ impl Driver {
         } else {
             speaker.backoff.on_failure(error.kind, now)
         };
+        speaker.ap2_retry = was_ap2 && retry_at.is_some();
         let next = match retry_at {
             _ if closing => Phase::Idle,
             Some(at) => Phase::Waiting(at),
@@ -822,20 +842,51 @@ impl Driver {
             let state = retry_at.map_or(SpeakerState::Failed, |at| SpeakerState::Retrying { at });
             self.emit_speaker(key, SpeakerEvent::State(state));
         }
+        // A session that retries keeps its place; one that gave up hands it on.
+        if was_ap2 && retry_at.is_none() {
+            self.wake_ap2_waiter(now);
+        }
     }
 
     /// A teardown finished.
     fn on_closed(&mut self, key: &DeviceKey, now: Instant) {
+        let was_ap2 = self
+            .speakers
+            .get(key)
+            .is_some_and(|speaker| matches!(speaker.phase, Phase::Ap2(_)));
         self.end_session(key, Phase::Idle);
         let Some(speaker) = self.speakers.get(key) else {
             return;
         };
         if speaker.removing || self.stopping.is_some() {
             self.stopped(key);
+            if was_ap2 {
+                self.wake_ap2_waiter(now);
+            }
         } else {
             // Added again while it was being removed.
             self.start_session(key, now);
         }
+    }
+
+    /// The AirPlay 2 session ended for good: the first speaker refused only
+    /// because it ran starts now (P169), through the usual restart.
+    fn wake_ap2_waiter(&mut self, now: Instant) {
+        if self.stopping.is_some() || self.speakers.values().any(Speaker::holds_ap2) {
+            return;
+        }
+        let Some((key, speaker)) = self.speakers.iter_mut().find(|(_, speaker)| {
+            speaker.ap2_waiting && !speaker.removing && matches!(speaker.phase, Phase::Failed)
+        }) else {
+            return;
+        };
+        speaker.ap2_waiting = false;
+        speaker.phase = Phase::Waiting(now);
+        let key = key.clone();
+        self.emit_speaker(
+            &key,
+            SpeakerEvent::State(SpeakerState::Retrying { at: now }),
+        );
     }
 
     /// Reports a speaker stopped, and forgets it if the host removed it.
@@ -1035,6 +1086,7 @@ impl Driver {
             }
             Command::SetLatency(frames) => self.stream.set_latency(frames, now),
             Command::RestartTimeline => self.stream.restart(now),
+            Command::SetAirPlay2DeviceId(id) => self.device_id = id,
             Command::StartDiscovery(browser) => {
                 self.browser = Some(browser);
                 self.poll_discovery();
@@ -1083,6 +1135,8 @@ impl Driver {
                     phase: Phase::Idle,
                     removing: false,
                     airplay1_outcome: None,
+                    ap2_waiting: false,
+                    ap2_retry: false,
                 },
             );
             self.start_session(&key, now);
@@ -1111,10 +1165,16 @@ impl Driver {
             return;
         };
         speaker.removing = true;
+        let held = speaker.holds_ap2();
         match &mut speaker.phase {
             Phase::Active(active) => active.session.teardown(now),
             Phase::Ap2(active) => active.session.teardown(now),
-            Phase::Waiting(_) | Phase::Failed | Phase::Idle => self.stopped(key),
+            Phase::Waiting(_) | Phase::Failed | Phase::Idle => {
+                self.stopped(key);
+                if held {
+                    self.wake_ap2_waiter(now);
+                }
+            }
         }
     }
 
@@ -1146,6 +1206,10 @@ impl Driver {
     /// OPTIONS before PairingRequired is reported, so a receiver that can't
     /// take AirPlay 1 audio is Unsupported instead (P46).
     fn start_session(&mut self, key: &DeviceKey, now: Instant) {
+        if let Some(speaker) = self.speakers.get_mut(key) {
+            speaker.ap2_waiting = false;
+            speaker.ap2_retry = false;
+        }
         if self.airplay2 {
             if let Some(device) = self.directory.device(key).cloned()
                 && let Some(speaker) = self.speakers.get_mut(key)
@@ -1558,6 +1622,8 @@ mod tests {
                 })),
                 removing: false,
                 airplay1_outcome: None,
+                ap2_waiting: false,
+                ap2_retry: false,
             },
         );
 

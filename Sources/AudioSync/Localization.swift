@@ -348,6 +348,18 @@ struct UIStrings {
         "\(name) can't play from AudioSync's own AirPlay sender yet, so it was turned off."
     }
 
+    /// The receiver turned NTP timing down, and PTP timing isn't available.
+    func nativeAirPlayTimingUnavailable(name: String) -> String {
+        "\(name) needs PTP timing, which isn't available, so it's off. "
+            + "Another app may be using ports 319 and 320."
+    }
+
+    /// Another AirPlay 2 speaker plays, and only one can at a time.
+    func nativeAirPlayOneAirPlay2(name: String) -> String {
+        "AudioSync plays one AirPlay 2 speaker at a time, so \(name) was turned off. "
+            + "Turn it on again once the other one stops."
+    }
+
     // MARK: AirPlay pairing prompt
 
     func pairTitle(name: String) -> String { "Pair with \(name)" }

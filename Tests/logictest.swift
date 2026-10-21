@@ -1304,7 +1304,9 @@ do {
             && model.apply(.error(id: "A1", .pairingRequired, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsCode)
             && model.apply(.error(id: "A1", .wrongPassword, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsPassword)
             && model.apply(.error(id: "A1", .unsupported, retryMs: 5, detail: "")) == .turnOff("native:A1", .cantPlay)
-            && model.apply(.error(id: "A1", .incompatible, retryMs: 5, detail: "")) == .turnOff("native:A1", .cantPlay),
+            && model.apply(.error(id: "A1", .incompatible, retryMs: 5, detail: "")) == .turnOff("native:A1", .cantPlay)
+            && model.apply(.error(id: "A1", .timingUnavailable, retryMs: nil, detail: "")) == .turnOff("native:A1", .timingUnavailable)
+            && model.apply(.error(id: "A1", .oneAirPlay2, retryMs: nil, detail: "")) == .turnOff("native:A1", .oneAirPlay2),
           "native airplay: an error the sender won't retry turns the speaker off, with why")
     model.removed("A1")
     check(model.apply(.state(id: "A1", .playing, retryMs: nil)) == nil

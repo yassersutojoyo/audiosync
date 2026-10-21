@@ -246,7 +246,7 @@ fn encode(entries: &BTreeMap<String, Credentials>) -> io::Result<Zeroizing<Vec<u
 }
 
 /// The next length-prefixed field of `rest`, which moves past it.
-fn take_field<'a>(rest: &mut &'a [u8]) -> Option<&'a [u8]> {
+pub(crate) fn take_field<'a>(rest: &mut &'a [u8]) -> Option<&'a [u8]> {
     let (len, after) = rest.split_first_chunk::<2>()?;
     let len = usize::from(u16::from_le_bytes(*len));
     let (field, after) = after.split_at_checked(len)?;
@@ -282,7 +282,7 @@ fn create_private(path: &Path) -> io::Result<File> {
 /// Writes `bytes` to `path` through `<path>.tmp`, created new (a leftover
 /// from a crash is removed first), flushed to disk and renamed over `path`.
 /// The folder is created, for its owner only, when missing.
-fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(folder) = path
         .parent()
         .filter(|folder| !folder.as_os_str().is_empty())

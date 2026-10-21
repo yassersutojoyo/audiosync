@@ -11,6 +11,7 @@ use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
+use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{Sender, SenderConfig, SpeakerEvent, SpeakerOptions, SpeakerState};
 use audiosync_airplay::volume::Volume;
 
@@ -211,5 +212,264 @@ fn airplay1_refusal_moves_to_airplay2() {
         .fake()
         .keys()
         .contains(&"FLUSH".to_owned())));
+    sender.shutdown();
+}
+
+// covers: P169
+#[test]
+fn a_refused_airplay2_speaker_starts_once_the_session_ends() {
+    let _serial = serial();
+    let first = Ap2Server::start(FakeAp2::new());
+    let second = Ap2Server::start(FakeAp2::new());
+    let third = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start();
+    let mut events = Events::default();
+
+    let a = airplay2_only(&first, 45);
+    let a_key = a.key.clone();
+    sender.add_speaker(a, options());
+    assert!(
+        events
+            .wait_state(&sender, &a_key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?}",
+        events.of(&a_key)
+    );
+
+    // Two more are refused while the first plays; the host drops one.
+    let b = airplay2_only(&second, 46);
+    let b_key = b.key.clone();
+    sender.add_speaker(b, options());
+    let c = airplay2_only(&third, 47);
+    let c_key = c.key.clone();
+    sender.add_speaker(c, options());
+    for key in [&b_key, &c_key] {
+        assert!(
+            events
+                .wait_state(&sender, key, 1, LONG, |s| *s == SpeakerState::Failed)
+                .is_some(),
+            "{:?}",
+            events.of(key)
+        );
+    }
+    sender.remove_speaker(&c_key);
+    assert!(
+        events
+            .wait_state(&sender, &c_key, 1, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
+
+    // The first session ends: the one still wanted takes its place.
+    sender.remove_speaker(&a_key);
+    assert!(
+        events
+            .wait_state(&sender, &b_key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?}",
+        events.of(&b_key)
+    );
+    assert_eq!(
+        errors(&events, &b_key),
+        vec![ErrorKind::Unsupported(
+            UnsupportedReason::OneAirPlay2Session
+        )]
+    );
+    assert_eq!(second.fake().connections, 1);
+    assert_eq!(third.fake().connections, 0);
+    sender.shutdown();
+}
+
+// covers: P169
+#[test]
+fn an_airplay2_session_waiting_for_its_retry_keeps_its_place_until_removed() {
+    let _serial = serial();
+    let mut busy = FakeAp2::new();
+    busy.status.insert("SETUP session".to_owned(), 453);
+    let first = Ap2Server::start(busy);
+    let second = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start();
+    let mut events = Events::default();
+
+    let a = airplay2_only(&first, 50);
+    let a_key = a.key.clone();
+    sender.add_speaker(a, options());
+    assert!(
+        events
+            .wait_state(&sender, &a_key, 1, LONG, |s| matches!(
+                s,
+                SpeakerState::Retrying { .. }
+            ))
+            .is_some(),
+        "{:?}",
+        events.of(&a_key)
+    );
+
+    // Between its retries the busy session still holds the slot.
+    let b = airplay2_only(&second, 51);
+    let b_key = b.key.clone();
+    sender.add_speaker(b, options());
+    assert!(
+        events
+            .wait_state(&sender, &b_key, 1, LONG, |s| *s == SpeakerState::Failed)
+            .is_some(),
+        "{:?}",
+        events.of(&b_key)
+    );
+    assert_eq!(
+        errors(&events, &b_key),
+        vec![ErrorKind::Unsupported(
+            UnsupportedReason::OneAirPlay2Session
+        )]
+    );
+
+    // The host drops the busy one: the refused one starts.
+    sender.remove_speaker(&a_key);
+    assert!(
+        events
+            .wait_state(&sender, &b_key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?}",
+        events.of(&b_key)
+    );
+    assert_eq!(second.fake().connections, 1);
+    sender.shutdown();
+}
+
+// covers: P5, P152
+#[test]
+fn homekit_credentials_and_the_device_id_persist_through_the_host() {
+    let _serial = serial();
+    let mut fake = FakeAp2::new();
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x80),
+    )]));
+    let server = Ap2Server::start(fake);
+    let (sender, _host) = start();
+    sender.set_airplay2_device_id([0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F]);
+    let mut events = Events::default();
+
+    // A password pairing hands its credentials to the host.
+    let device = airplay2_only(&server, 48);
+    let key = device.key.clone();
+    let mut with_password = options();
+    with_password.password = Some(Secret::new("3939".to_owned()));
+    sender.add_speaker(device.clone(), with_password);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?} {:?}",
+        events.of(&key),
+        server.fake().keys()
+    );
+    let stored = events
+        .of(&key)
+        .into_iter()
+        .find_map(|event| match event {
+            SpeakerEvent::HomeKitPaired(credentials) => Some(credentials),
+            _ => None,
+        })
+        .expect("the credentials reach the host");
+    assert!(!format!("{stored:?}").contains("seed"));
+    let setup = server.fake().last("SETUP session").cloned().expect("SETUP");
+    let body = common::ap2::read_dict(&setup.body).expect("plist");
+    assert_eq!(
+        body.get("deviceID").and_then(plist::Value::as_string),
+        Some("0A:0B:0C:0D:0E:0F")
+    );
+    sender.shutdown();
+
+    // A new sender, as after a relaunch: the stored credentials verify, and
+    // no pair-setup goes out.
+    server.fake().requests.clear();
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let mut stored_options = options();
+    stored_options.homekit_credentials = Some(stored);
+    sender.add_speaker(device, stored_options);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?} {:?}",
+        events.of(&key),
+        server.fake().keys()
+    );
+    let keys = server.fake().keys();
+    assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    assert!(!keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
+    sender.shutdown();
+}
+
+// covers: P154
+#[test]
+fn rejected_homekit_credentials_are_dropped_and_the_next_start_pairs_again() {
+    let _serial = serial();
+    let mut fake = FakeAp2::new();
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x80),
+    )]));
+    let server = Ap2Server::start(fake);
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let device = airplay2_only(&server, 49);
+    let key = device.key.clone();
+    let with_password = || {
+        let mut options = options();
+        options.password = Some(Secret::new("3939".to_owned()));
+        options
+    };
+    sender.add_speaker(device.clone(), with_password());
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?}",
+        events.of(&key)
+    );
+    sender.remove_speaker(&key);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
+
+    // The receiver forgets AudioSync, so the verification fails.
+    server.fake().hap.paired.clear();
+    sender.add_speaker(device.clone(), with_password());
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Failed)
+            .is_some(),
+        "{:?}",
+        events.of(&key)
+    );
+    assert_eq!(errors(&events, &key), vec![ErrorKind::PairingRequired]);
+    assert!(
+        events.of(&key).contains(&SpeakerEvent::HomeKitRejected),
+        "the host is told to delete its copy"
+    );
+    sender.remove_speaker(&key);
+    assert!(
+        events
+            .wait_state(&sender, &key, 2, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
+
+    // The next start pairs again with the password instead of verifying.
+    server.fake().requests.clear();
+    sender.add_speaker(device, with_password());
+    assert!(
+        events
+            .wait_state(&sender, &key, 2, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?} {:?}",
+        events.of(&key),
+        server.fake().keys()
+    );
+    let keys = server.fake().keys();
+    assert!(keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
     sender.shutdown();
 }
