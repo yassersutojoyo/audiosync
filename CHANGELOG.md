@@ -10,7 +10,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Changed
 
-- A Bluetooth speaker or headset now keeps about 10 ms more audio buffered, so it's less likely to run short right after it starts. When it's the earliest of your local speakers and no AirPlay speaker is on, everything plays about 10 ms later against the screen; the delays between your speakers stay as you set them.
+- A Bluetooth speaker or headset now keeps about 10 ms more audio buffered, so it's less likely to run short right after it starts. When it's the earliest of your local speakers and no AirPlay speaker is on, everything plays up to about 10 ms later against the screen; the delays between your speakers stay as you set them.
 
 ### Fixed
 
