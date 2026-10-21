@@ -578,6 +578,7 @@ struct Output {
     /// up by then.
     trim_judged_from: f64,
     trim_from: Option<(u64, u64)>,
+    trace: Vec<String>,
 }
 
 impl Output {
@@ -657,6 +658,7 @@ struct Outcome {
     /// the lowest Jf, Jf 2 s after the late callbacks came on time, its
     /// delay before then and its mean delay over the last quarter.
     falls: Vec<Option<Fall>>,
+    traces: Vec<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -746,6 +748,7 @@ fn simulate(case: &Case) -> Outcome {
                 trim_judged_from: d
                     .first_late
                     .map_or(SETTLED, |(_, until)| until + FALLEN_AFTER),
+                trace: Vec::new(),
                 trim_from: None,
             };
             output.schedule();
@@ -870,6 +873,36 @@ fn simulate(case: &Case) -> Outcome {
             if value != 0.0 {
                 let captured_at = value * 1e6 / f64::from(CAPTURE_RATE) - capture_origin;
                 o.delay_before_ms = (played_at - captured_at) * 1000.0;
+            }
+            if let Some(until) = o.observed_until
+                && o.d.first_late.is_some()
+                && frames > 0
+                && ((pull_at > until - 0.1 && pull_at < until + 0.6)
+                    || (o.trace.len() < 400 && (pull_at * 2.0).fract() < 0.02))
+            {
+                let value = f64::from(out[(frames - 1) * 2]);
+                let delay = if value != 0.0 {
+                    (played_at - (value * 1e6 / f64::from(CAPTURE_RATE) - capture_origin)) * 1000.0
+                } else {
+                    f64::NAN
+                };
+                let c = o.control.counters();
+                o.trace.push(format!(
+                "    t {:.4} nom {:.4} delay {:.2} jf {:.2} lag {} slowed {} short {} sped {} starved {}/{} primes {} resyncs {} fade {:?}",
+                pull_at,
+                o.nominal(o.pulls),
+                delay,
+                o.renderer.floor_shift_frames() as f64 / 48.0,
+                o.control.lag_frames(),
+                o.control.slowed_frames(),
+                o.control.shortage_frames(),
+                o.control.sped_frames(),
+                c.starved_renders,
+                c.starved_frames,
+                c.primes,
+                c.resyncs,
+                o.renderer.fade_state(),
+            ));
             }
         }
         if o.trim_from.is_none() && pull_at >= o.trim_judged_from {
@@ -1007,6 +1040,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         dry_from_start,
         norms,
         falls,
+        traces: outputs.iter().map(|o| o.trace.clone()).collect(),
     }
 }
 
@@ -1308,6 +1342,10 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
         if !ok {
             lines.extend(seen.lines.iter().cloned());
             lines.extend(on_time.lines.iter().cloned());
+            lines.push(String::from("  late o0:"));
+            lines.extend(seen.traces[0].iter().cloned());
+            lines.push(String::from("  twin o0:"));
+            lines.extend(on_time.traces[0].iter().cloned());
         }
     }
     println!("{}", lines.join("\n"));
