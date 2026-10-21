@@ -276,6 +276,27 @@ final class CoreRenderer {
     /// The newest delay asked for, in capture-rate frames.
     var delayFrames: Int64 { asc_renderer_delay_frames(handle) }
 
+    /// Control thread, before the output starts: whether its device is
+    /// Bluetooth, which adds a capture block to its start lead (S230).
+    func setBluetooth(_ bluetooth: Bool) { asc_renderer_set_bluetooth(handle, bluetooth) }
+
+    /// Any thread: what the start lead adds for a Bluetooth device, in ms;
+    /// 0 for any other (S230).
+    var extraLeadMs: Double { Double(asc_renderer_extra_lead_frames(handle)) * 1000 / Double(captureRate) }
+
+    /// Control thread, after `setBluetooth`: the output latency the device
+    /// reported, in ns; returns the one to use (S231). `lastPlausibleNs` is
+    /// the latest report the window accepted for the same output, 0 for none.
+    func setReportedLatency(_ reportedNs: UInt64, lastPlausibleNs: UInt64) -> UInt64 {
+        asc_renderer_set_reported_latency(handle, reportedNs, lastPlausibleNs)
+    }
+
+    /// The device's report when the window rejected it, in ns (S231).
+    var rejectedLatencyNs: UInt64? {
+        var rejected: UInt64 = 0
+        return asc_renderer_rejected_latency_ns(handle, &rejected) ? rejected : nil
+    }
+
     /// Any thread: fade out from the next callback, then exact zeros until
     /// the output stops (S185).
     func requestFadeOut() { asc_renderer_request_fade_out(handle) }
@@ -326,6 +347,22 @@ final class CoreRenderer {
     /// Any thread: the device frames the converter couldn't produce and that
     /// played as silence, in all; 0 unless the core's read sizing is wrong.
     var shortfallFrames: Int64 { Int64(clamping: asc_renderer_shortfall_frames(handle)) }
+
+    /// Any thread: the capture frames by which the slow-down made up the
+    /// reader's shortages (S206), apart from the trims.
+    var shortageFrames: Int64 { Int64(clamping: asc_renderer_shortage_frames(handle)) }
+
+    /// Any thread: the observer's least slack in ms, below 0 when a callback
+    /// found too few frames; nil before its warm-up has passed (S229).
+    var leastSlackMs: Double? {
+        var slack: Int64 = 0
+        return asc_renderer_least_slack_ns(handle, &slack) ? Double(slack) / 1_000_000 : nil
+    }
+
+    /// Any thread: the observer's largest drop of the lateness floor below the
+    /// anchor's, in ms, and its steps in the device's output times (S229).
+    var floorDropMs: Double { Double(asc_renderer_floor_drop_ns(handle)) / 1_000_000 }
+    var timeSteps: Int64 { Int64(clamping: asc_renderer_time_steps(handle)) }
 }
 
 /// The core's volume curve: slider positions (0…100) and linear gain (S70, S71).

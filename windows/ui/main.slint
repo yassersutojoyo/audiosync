@@ -251,6 +251,7 @@ export component MainWindow inherits Window {
     in property <string> notice-announcement;
     // View > Show Virtual Devices: virtual outputs are listed even while off.
     in property <bool> show-virtual-devices;
+    in property <bool> switch-source-on-quit;
     // File > Launch at Sign-In: what the Run key says, read again by Rust.
     in property <bool> launch-at-login;
     // The AirPlay delay, shown while an AirPlay sender runs: what its field
@@ -305,6 +306,7 @@ export component MainWindow inherits Window {
     callback new-group-requested();
     callback refresh-devices();
     callback show-virtual-devices-toggled(bool);
+    callback switch-source-on-quit-toggled(bool);
     callback launch-at-login-toggled(bool);
     callback notice-dismissed(int);
     callback notices-dismissed-all();
@@ -388,6 +390,15 @@ export component MainWindow inherits Window {
             }
 
             MenuSeparator { }
+
+            MenuItem {
+                title: Strings.switch-source-on-quit;
+                checkable: true;
+                checked: root.switch-source-on-quit;
+                activated => {
+                    root.switch-source-on-quit-toggled(!root.switch-source-on-quit);
+                }
+            }
 
             MenuItem {
                 title: Strings.launch-at-login;

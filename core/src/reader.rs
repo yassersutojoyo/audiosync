@@ -319,6 +319,9 @@ pub struct Reader {
     /// Jr: how late the renderer's callback came, in capture frames (S209);
     /// 0 for a reader without one.
     late: i64,
+    /// Jf: how far the floor Jr is measured from moved since the reader
+    /// anchored, in capture frames (S209); drift is judged at `De + Jf`.
+    floor_shift: i64,
     /// Test hook run between the copy and the post-copy check.
     #[cfg(test)]
     before_check: Option<Box<dyn FnMut() + Send>>,
@@ -354,6 +357,7 @@ impl Reader {
             reanchor: false,
             lead: 0,
             late: 0,
+            floor_shift: 0,
             #[cfg(test)]
             before_check: None,
         }
@@ -384,6 +388,15 @@ impl Reader {
     /// Jr, as last set.
     pub fn late_frames(&self) -> i64 {
         self.late
+    }
+
+    /// Sets Jf, how far the floor of the renderer's lateness moved since
+    /// the reader's latest anchor, in capture frames (S209). Only the drift
+    /// judgement uses it: a read judges its error `e = (W - P) - (De + Jf)`
+    /// against the dead band, and anchors at `W - De` as before. Called by
+    /// the renderer that owns the reader, on its thread.
+    pub fn set_floor_shift_frames(&mut self, frames: i64) {
+        self.floor_shift = frames;
     }
 
     /// The frames the next read can go on with (S206): `W - P`, with W
@@ -439,7 +452,7 @@ impl Reader {
             return None;
         }
         if !held {
-            let e = (w - position) - delay;
+            let e = (w - position) - delay.saturating_add(self.floor_shift);
             if e > tolerance || e < -tolerance {
                 return None;
             }
@@ -581,7 +594,7 @@ impl Reader {
             // `oldest` is still 0, reads silence in step 3 and follows the
             // dead-band rules.
             let de = effective(self.delay(given, false));
-            let e = (w - p) - de;
+            let e = (w - p) - de.saturating_add(self.floor_shift);
             let correction = if self.reanchor || (oldest > 0 && p < oldest) {
                 Correction::Overrun
             } else if e > t {

@@ -1693,13 +1693,6 @@ do {
     check(SourceSwitch.decide(from: music, to: music, streaming: true) == .none,
           "EC5 source: choosing the same source changes nothing")
 
-    // EC6: the source app quits.
-    check(music.endsWhenAppQuits("com.apple.Music"), "EC6 app quit: the source app quitting ends the session")
-    check(!music.endsWhenAppQuits("com.spotify.client"), "EC6 app quit: another app quitting changes nothing")
-    check(!AudioSource.system.endsWhenAppQuits("com.apple.Music"), "EC6 app quit: the whole-system source never ends on a quit")
-    check(!AudioSource.input(uid: "mic").endsWhenAppQuits("com.apple.Music"), "EC6 app quit: an input source never ends on a quit")
-    check(!music.endsWhenAppQuits(nil), "EC6 app quit: an app without a bundle ID changes nothing")
-
     // EC8: every speaker off, then one on again.
     check(StreamingPolicy.isIdle(streaming: true, enabledAirPlay: [], enabledLocal: []),
           "EC8 all off: streaming stops when the last speaker is switched off")
@@ -1777,6 +1770,13 @@ do {
     check(TrackMetadata.jpeg(NSImage(cgImage: big, size: NSSize(width: 1200, height: 800))) != nil,
           "artwork: an NSImage (a player's artwork, AudioSync's icon) is encoded too")
 }
+
+// MARK: Track info — a player with no track is not an error
+check(NowPlayingMonitor.meansNoTrack(-1728) && NowPlayingMonitor.meansNoTrack(-1712),
+      "AppleScript: no current track (-1728) and a timeout (-1712) read as no track, not logged")
+check(!NowPlayingMonitor.meansNoTrack(-1743) && !NowPlayingMonitor.meansNoTrack(nil)
+      && !NowPlayingMonitor.meansNoTrack(-2753),
+      "AppleScript: Automation refused (-1743) and other errors are still logged")
 
 // MARK: Track info — what AirPlay receivers with a screen show
 do {
@@ -2067,7 +2067,7 @@ do {
     let fresh = store.load()
     check(fresh == AppSettings() && fresh.source == .system && fresh.master == 100 && fresh.defaultDelayMs == 2000
             && fresh.enabledAirPlay.isEmpty && fresh.enabledLocal.isEmpty && fresh.groups.isEmpty
-            && !fresh.showVirtualDevices && fresh.appearance == .system,
+            && !fresh.showVirtualDevices && fresh.appearance == .system && fresh.whenSourceQuits == .stop,
           "settings: nothing stored gives the defaults (whole system, master 100, delays 2000 ms)")
 
     var wanted = AppSettings()
@@ -2082,6 +2082,7 @@ do {
     wanted.autoConnect = ["ap:airplay-2"]
     wanted.showVirtualDevices = true
     wanted.appearance = .dark
+    wanted.whenSourceQuits = .system
     store.save(source: wanted.source)
     store.save(ids: wanted.enabledAirPlay, forKey: Keys.enabledAirPlay)
     store.save(ids: wanted.enabledLocal, forKey: Keys.enabledLocal)
@@ -2093,6 +2094,7 @@ do {
     store.save(ids: wanted.autoConnect, forKey: Keys.autoConnect)
     store.save(showVirtualDevices: wanted.showVirtualDevices)
     store.save(appearance: wanted.appearance)
+    store.save(whenSourceQuits: wanted.whenSourceQuits)
     check(store.load() == wanted, "settings: every saved setting comes back unchanged")
     check(stored.values[Keys.enabledAirPlay] as? [String] == ["airplay-1", "airplay-2"],
           "settings: a set of speakers is stored as a sorted list")
@@ -2142,12 +2144,12 @@ do {
         (Keys.localVolumes, "localVolumePosByUID"), (Keys.localDelays, "localDelayMsByUID"),
         (Keys.airplayVolumes, "airPlayVolumeByID"), (Keys.groups, "speakerGroups"),
         (Keys.autoConnect, "autoConnectSpeakers"), (Keys.showVirtualDevices, "showVirtualOutputDevices"),
-        (Keys.appearance, "appearance"), (Keys.equalizer, "equalizerSettings"),
+        (Keys.appearance, "appearance"), (Keys.whenSourceQuits, "whenSourceQuits"), (Keys.equalizer, "equalizerSettings"),
         (Keys.legacyDelayMs, "delayMs"), (Keys.legacyLocalGains, "localGainByUID"),
         (Keys.retiredEngineChoice, "engineImpl"), (Keys.retiredAirPlayChoice, "airplayImpl"),
         (Keys.localOffsets, "localOffsetMsByUID"),
         (Keys.airPlayDelay, "airPlayDelayMs"), (Keys.nativeAirPlayAdjustment, "nativeAirPlayAdjustmentMs"),
-        (Keys.localDelaysMigrated, "localDelayModelMigrated"),
+        (Keys.localDelaysMigrated, "localDelayModelMigrated"), (Keys.speakerNames, "speakerNamesByKey"),
     ]
     let renamed = pinned.filter { $0.0 != $0.1 }.map(\.1)
     check(renamed.isEmpty, "settings: every UserDefaults key keeps the name existing installs use",
@@ -2353,6 +2355,87 @@ do {
           "speaker row: the reference has no delay field")
 }
 
+// MARK: Speaker names — a name the user gives a speaker, by speaker key (SpeakerNames)
+do {
+    final class Stored { var values: [String: Any] = [:] }
+    let stored = Stored()
+    let store = SettingsStore(read: { stored.values[$0] }, write: { value, key in stored.values[key] = value })
+    let usb = SpeakerKey.make(id: "usb-uid", airplay: false)
+    let homePod = SpeakerKey.make(id: "hp-1", airplay: true)
+
+    var names = store.load().speakerNames
+    check(names.shown(key: usb, system: "USB Audio") == "USB Audio" && names.renamed(key: usb) == nil,
+          "speaker names: a speaker shows its system name until renamed")
+
+    let changed = names.rename(key: usb, to: "  Desk\nspeaker  ", system: "USB Audio")
+    names.rename(key: homePod, to: "Kitchen", system: "HomePod")
+    check(changed && names.shown(key: usb, system: "USB Audio") == "Desk speaker"
+              && names.shown(key: homePod, system: "HomePod") == "Kitchen",
+          "speaker names: a rename shows, trimmed and on one line", "usb: \(names.shown(key: usb, system: "USB Audio"))")
+
+    store.save(speakerNames: names)
+    let stored1 = stored.values[AppSettings.Keys.speakerNames] as? [String: String]
+    let reloaded = store.load().speakerNames
+    check(AppSettings.Keys.speakerNames == "speakerNamesByKey" && stored1 == [usb: "Desk speaker", homePod: "Kitchen"]
+              && reloaded == names,
+          "speaker names: names are kept by speaker key under speakerNamesByKey and read back after a relaunch",
+          "stored: \(String(describing: stored1))")
+
+    let cleared = names.rename(key: usb, to: "   ", system: "USB Audio")
+    let same = names.rename(key: homePod, to: "HomePod", system: "HomePod")
+    check(cleared && same && names.shown(key: usb, system: "USB Audio") == "USB Audio"
+              && names.shown(key: homePod, system: "HomePod 2") == "HomePod 2" && names.custom.isEmpty,
+          "speaker names: an empty name, or the system name typed again, brings back the system name")
+    store.save(speakerNames: names)
+    check(stored.values[AppSettings.Keys.speakerNames] == nil && store.load().speakerNames.custom.isEmpty,
+          "speaker names: with no name left the key is removed")
+
+    let unchanged = names.rename(key: usb, to: "", system: "USB Audio")
+    let long = names.rename(key: usb, to: String(repeating: "x", count: 80), system: "USB Audio")
+    check(!unchanged && long && names.renamed(key: usb)?.count == SpeakerNames.maxLength,
+          "speaker names: clearing an unrenamed speaker changes nothing; a long name is cut to 60 characters")
+
+    stored.values[AppSettings.Keys.speakerNames] = ["a": 5, "b": "  ", "c": "Den"] as [String: Any]
+    check(store.load().speakerNames.custom == ["c": "Den"],
+          "speaker names: a stored entry that isn't a name is skipped")
+
+    let deskTarget = SpeakerRename.Target(id: "usb-uid", key: usb, system: "USB Audio")
+    let kitchenTarget = SpeakerRename.Target(id: "hp-1", key: homePod, system: "HomePod")
+    var rename = SpeakerRename()
+    let opened = rename.start(deskTarget, name: "USB Audio")
+    rename.text = "Desk"
+    let again = rename.start(deskTarget, name: "USB Audio")
+    check(opened == nil && again == nil && rename.text == "Desk" && rename.target == deskTarget,
+          "speaker rename: starting a rename shows the name; starting it again keeps the typing")
+
+    let handed = rename.start(kitchenTarget, name: "HomePod")
+    check(handed == SpeakerRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
+              && rename.target == kitchenTarget && rename.text == "HomePod",
+          "speaker rename: renaming another speaker applies the open rename first",
+          "handed: \(String(describing: handed))")
+
+    rename.text = "Kitchen"
+    let otherCommit = rename.commit(id: "usb-uid")
+    let commit = rename.commit(id: "hp-1")
+    check(otherCommit == nil && commit == SpeakerRename.Apply(key: homePod, system: "HomePod", typed: "Kitchen")
+              && rename.target == nil,
+          "speaker rename: Return applies the speaker's own rename once, never another's")
+
+    _ = rename.start(deskTarget, name: "USB Audio")
+    rename.drop()
+    check(rename.target == nil && rename.commit(id: "usb-uid") == nil,
+          "speaker rename: Escape drops the typing, and the focus leaving after it applies nothing")
+
+    _ = rename.start(deskTarget, name: "USB Audio")
+    rename.text = "Desk"
+    let stillListed = rename.listed(["usb-uid", "hp-1"])
+    let gone = rename.listed(["hp-1"])
+    let back = rename.listed(["usb-uid", "hp-1"])
+    check(stillListed == nil && gone == SpeakerRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
+              && back == nil && rename.target == nil,
+          "speaker rename: a speaker gone mid-rename applies its typing, and its rename doesn't open again when it returns")
+}
+
 // MARK: Delay field — typed text applies on Return or focus loss, once (DelayFieldDraft)
 do {
     let t = UIStrings()
@@ -2402,10 +2485,19 @@ do {
           "delay field: the AirPlay delay clamps to 20 000 ms on commit", "text: \(air.text)")
 
     air.type("12")
-    air.discard(saved: 1810, format: plain)   // a step button applied 1810 meanwhile
-    check(air.text == "1810" && !air.isEditing && air.commit(saved: 1810, sanitize: airPlay, format: plain) == nil,
-          "delay field: a step button drops the typed text, so a later focus loss applies nothing",
-          "text: \(air.text)")
+    let stepped = air.step(10, saved: 1800, sanitize: airPlay, format: plain)
+    check(stepped == 22 && air.text == "22" && !air.isEditing
+              && air.commit(saved: 22, sanitize: airPlay, format: plain) == nil,
+          "delay field: a step applies on top of the typed value once, so a later focus loss applies nothing more",
+          "stepped: \(String(describing: stepped)), text: \(air.text)")
+    air.type("")
+    let unread = air.step(-100, saved: 1810, sanitize: airPlay, format: plain)
+    let resting = air.step(100, saved: 1710, sanitize: airPlay, format: plain)
+    let floor = air.step(-100, saved: 0, sanitize: airPlay, format: plain)
+    check(unread == 1710 && resting == 1810 && floor == nil && air.text == "0",
+          "delay field: a step without readable typing applies on top of the saved value; at the range's end it applies nothing",
+          "unread: \(String(describing: unread)), resting: \(String(describing: resting)), text: \(air.text)")
+    air.show(1810, format: plain)
 
     air.show(1900, format: plain)
     check(air.text == "1900", "delay field: a new saved value shows when nothing is being typed")
@@ -2429,9 +2521,9 @@ do {
     cue.type("5")
     cue.discard(saved: 22, format: signed)   // Escape
     check(!cue.isPending(saved: 22, format: signed), "delay field cue: Escape clears the draft")
-    cue.type("5")
-    cue.discard(saved: 32, format: signed)   // a step button
-    check(!cue.isPending(saved: 32, format: signed), "delay field cue: a step clears the draft")
+    cue.type("22")
+    let step = cue.step(10, saved: 22, sanitize: offset, format: signed)
+    check(step == 32 && !cue.isPending(saved: 32, format: signed), "delay field cue: a step clears the draft")
     cue.type("40")
     check(cue.isPending(saved: 32, format: signed) && cue.isPending(saved: 50, format: signed),
           "delay field cue: a saved value changing under the typing keeps the draft")
@@ -2500,14 +2592,30 @@ do {
     for id in panels.open.sorted() { commitTyped(id) }   // Command-S
     check(delays == ["usb": 410, "dock": 77] && retimes == 3 && panels.open == ["usb", "dock"],
           "delay panels: Command-S applies every open panel's typing and leaves them open", "delays: \(delays)")
-    typed["dock"]?.type("-30")   // focus moved on to another control meanwhile
-    check(delays["dock"] == 77, "delay panels: leaving the field applies nothing")
+    // The focus leaves the field: Tab, a click in another field, or a click on
+    // a control that doesn't take the focus (a slider, a button), which ends
+    // the typing first.
+    func leave(_ id: String) {
+        if let v = typed[id]?.focusChanged(to: false, saved: delays[id] ?? 0, sanitize: offset, format: signed) {
+            delays[id] = v
+            retimes += 1
+        }
+    }
+    typed["dock"]?.type("-40")
+    let entering = typed["dock"]?.focusChanged(to: true, saved: 77, sanitize: offset, format: signed)
+    leave("dock")
+    leave("dock")
+    check(entering == nil && delays["dock"] == -40 && retimes == 4 && panels.open == ["usb", "dock"],
+          "delay panels: leaving the field for another control applies its typing once and leaves every panel open",
+          "delays: \(delays)")
+    typed["dock"]?.type("-30")
     change { $0.toggle("dock") }   // its delay value, or a click on its row's box
-    check(delays["dock"] == -30 && retimes == 4 && panels.open == ["usb"],
+    leave("dock")
+    check(delays["dock"] == -30 && retimes == 5 && panels.open == ["usb"],
           "delay panels: a click on a row's delay or box applies its typing and closes its panel",
           "delays: \(delays)")
     change { $0.toggle("dock") }
-    check(panels.open == ["usb", "dock"] && retimes == 4,
+    check(panels.open == ["usb", "dock"] && retimes == 5,
           "delay panels: a click on a closed row's box opens its panel and applies nothing")
 
     typed["usb"]?.type("380"); typed["dock"]?.type("55")
@@ -2544,8 +2652,91 @@ do {
     let before = retimes
     for id in typed.keys { typed[id]?.drop() }   // Escape
     clickOutside()
+    leave("usb"); leave("dock")   // the field loses the focus as its panel goes
     check(delays == ["usb": -250, "dock": 66] && retimes == before && panels.open.isEmpty,
-          "delay panels: Escape drops every typing and closes every panel", "delays: \(delays)")
+          "delay panels: Escape drops every typing and closes every panel; the focus leaving after it applies nothing",
+          "delays: \(delays)")
+
+    // A click while typing, as the main window's click monitor sees it, then
+    // the clicked control's own action.
+    func click(typingIn row: String, onField: Bool = false, onStepOf stepRow: String? = nil, delta: Double = 0) {
+        if DelayPanels.clickEndsTyping(typingIn: row, onField: onField, onStepOf: stepRow) { leave(row) }
+        if let stepRow, let v = typed[stepRow]?.step(delta, saved: delays[stepRow] ?? 0, sanitize: offset, format: signed) {
+            delays[stepRow] = v
+            retimes += 1
+        }
+    }
+    openBoth()
+    var start = retimes
+    typed["dock"]?.type("100")
+    click(typingIn: "dock", onStepOf: "dock", delta: 10)
+    check(delays["dock"] == 110 && retimes == start + 1 && typed["dock"]?.isEditing == false,
+          "delay panels: typing 100 and then a click on its own +10 applies 110, once",
+          "delays: \(delays), re-timings: \(retimes - start)")
+    start = retimes
+    typed["dock"]?.type("200")
+    click(typingIn: "dock", onStepOf: "usb", delta: 10)
+    check(delays == ["usb": -240, "dock": 200] && retimes == start + 2,
+          "delay panels: a click on another panel's step applies the typing first, then that step",
+          "delays: \(delays)")
+    start = retimes
+    typed["dock"]?.type("300")
+    click(typingIn: "dock", onField: true)
+    leave("dock")   // the other field takes the focus
+    check(delays["dock"] == 300 && retimes == start + 1,
+          "delay panels: a click into another field applies the typing once, as the focus moves", "delays: \(delays)")
+}
+
+// MARK: Delay value — a row's delay value follows every applied delay while its panel stays open (DelayBadge)
+do {
+    let t = UIStrings()
+    let offset = LocalDelay.sanitizedOffset
+    let signed = t.offsetNumber
+    let air = "airplay-delay"
+    // The model values as pushModel leaves them after each apply.
+    var offsets: [String: Double] = ["usb": 400, "dock": 10]
+    var airPlayMs = 1800.0
+    func shown(_ id: String) -> String? {
+        DelayBadge.text(of: id, airPlayID: air, airPlayMs: airPlayMs,
+                        rows: [(id: "builtin", offsetMs: nil), (id: "usb", offsetMs: offsets["usb"]),
+                               (id: "dock", offsetMs: offsets["dock"])],
+                        text: t)
+    }
+    var fields = ["usb": DelayFieldDraft(), "dock": DelayFieldDraft()]
+    func commit(_ ids: Set<String>) {
+        for id in ids.sorted() {
+            if let v = fields[id]?.commit(saved: offsets[id] ?? 0, sanitize: offset, format: signed) { offsets[id] = v }
+        }
+    }
+    var panels = DelayPanels()
+    panels.toggle("usb")
+    panels.toggle("dock")
+    check(shown("usb") == "+400 ms", "delay value: a row shows its saved offset", "shown: \(shown("usb") ?? "nil")")
+
+    var seen: [String] = []
+    fields["usb"]?.type("450")
+    commit(["usb"])   // Return
+    seen.append(shown("usb") ?? "nil")
+    fields["usb"]?.type("-120")
+    commit(panels.open)   // Command-S
+    seen.append(shown("usb") ?? "nil")
+    fields["usb"]?.type("75")
+    commit(panels.toggle("dock"))   // a click on the other row
+    seen.append(shown("usb") ?? "nil")
+    check(seen == ["+450 ms", "−120 ms", "+75 ms"] && panels.isOpen("usb"),
+          "delay value: Return, Command-S and a click on another row each show the applied offset while its panel stays open",
+          "seen: \(seen)")
+
+    fields["usb"]?.type("30")
+    let closing = panels.open
+    panels.closeAll()   // a click on the window's background
+    commit(closing)
+    check(shown("usb") == "+30 ms", "delay value: a click outside the rows shows the applied offset",
+          "shown: \(shown("usb") ?? "nil")")
+
+    airPlayMs = 2100
+    check(shown(air) == "2100 ms" && shown("builtin") == nil && shown("gone") == nil,
+          "delay value: the AirPlay delay row shows L; the reference and an unlisted row show none")
 }
 
 // MARK: Delay field input — digits after one leading sign; out of range is marked (LocalDelay.fieldText)
@@ -2555,6 +2746,11 @@ do {
                                   "12+": "12", "+-5": "+5", " 40": "40", "abc": "", "++": "+", "": ""]
     let wrong = kept.filter { LocalDelay.fieldText($0.key) != $0.value }.keys.sorted()
     check(wrong.isEmpty, "delay field input: only digits after one leading + or − can be typed", "\(wrong)")
+
+    let proposed = ["12", "+", "−250", "", "12a", "1+", "+-", " 4", "x"]
+    let blocked = proposed.filter { !LocalDelay.fieldAccepts($0) }
+    check(blocked == ["12a", "1+", "+-", " 4", "x"],
+          "delay field input: a keystroke the field can't take is blocked before it shows", "blocked: \(blocked)")
 
     var field = DelayFieldDraft()
     field.show(0, format: t.offsetNumber)
@@ -2583,6 +2779,69 @@ do {
     check(t.delayOutOfRange(lowest: "−2000", highest: "+20000", applies: "−2000")
               == "The range is −2000 to +20000 ms. Return applies −2000.",
           "delay field input: the out-of-range hint names the range and the value Return applies")
+}
+
+// MARK: Bluetooth IO buffer switch: AUDIOSYNC_BT_IO_FRAMES, Bluetooth outputs only (BluetoothIOBuffer)
+do {
+    typealias B = BluetoothIOBuffer
+    let bt = kAudioDeviceTransportTypeBluetooth, le = kAudioDeviceTransportTypeBluetoothLE
+    let wide: (minimum: Double, maximum: Double)? = (15, 8192)
+    check(B.requested(nil) == nil && B.requested("") == nil && B.requested("abc") == nil
+              && B.requested("3000.5") == nil && B.requested("-2048") == nil,
+          "BT IO buffer: unset, empty or not a whole number asks for nothing")
+    check(B.requested("255") == nil && B.requested("4097") == nil && B.requested("0") == nil,
+          "BT IO buffer: a value outside 256 to 4096 asks for nothing")
+    check(B.requested("256") == 256 && B.requested("1024") == 1024 && B.requested(" 4096 ") == 4096
+              && B.requested("3072") == 3072,
+          "BT IO buffer: a whole number from 256 to 4096 is the request")
+    check(B.frames(requested: nil, transport: bt, range: wide) == nil,
+          "BT IO buffer: no request leaves a Bluetooth device untouched")
+    check(B.frames(requested: 4096, transport: kAudioDeviceTransportTypeBuiltIn, range: wide) == nil
+              && B.frames(requested: 4096, transport: kAudioDeviceTransportTypeUSB, range: wide) == nil
+              && B.frames(requested: 4096, transport: kAudioDeviceTransportTypeAirPlay, range: wide) == nil
+              && B.frames(requested: 4096, transport: 0, range: wide) == nil,
+          "BT IO buffer: a device that isn't Bluetooth is never touched")
+    check(B.frames(requested: 4096, transport: bt, range: wide) == 4096
+              && B.frames(requested: 2048, transport: le, range: wide) == 2048,
+          "BT IO buffer: Bluetooth Classic and LE devices get the request inside their range")
+    check(B.frames(requested: 4096, transport: bt, range: (15, 2048)) == 2048
+              && B.frames(requested: 2048, transport: bt, range: (3000.2, 8192)) == 3001,
+          "BT IO buffer: the request is clamped to the device's range")
+    check(B.frames(requested: 3072, transport: bt, range: nil) == 3072
+              && B.frames(requested: 3072, transport: bt, range: (8192, 15)) == 3072
+              && B.frames(requested: 3072, transport: bt, range: (Double.nan, 8192)) == 3072
+              && B.frames(requested: 3072, transport: bt, range: (1e12, 1e13)) == 3072,
+          "BT IO buffer: an unknown or unusable range leaves the request as it is")
+}
+
+// MARK: Observer line — per output values and the Wi-Fi link in the debug log (OutputObservation, WiFiNote, S229)
+do {
+    let measured = OutputObservation(leastSlackMs: -0.666, floorDropMs: 10.04, shortageFrames: 912, overloads: 3,
+                                     timeSteps: 1, bluetoothOutputs: 2)
+    check(measured.text == "least slack -0.7 ms, floor drop 10.0 ms, shortage 912 frames, IO overloads 3, "
+              + "output-time steps 1, Bluetooth outputs 2",
+          "observer: the line names every value with its unit", measured.text)
+    let early = OutputObservation(leastSlackMs: nil, floorDropMs: 0, shortageFrames: 0, overloads: 0,
+                                  timeSteps: 0, bluetoothOutputs: 0)
+    check(early.text.hasPrefix("least slack n/a, floor drop 0.0 ms,"),
+          "observer: before the core's warm-up the least slack reads n/a", early.text)
+    let rejected = OutputObservation(leastSlackMs: 1, floorDropMs: 0, shortageFrames: 0, overloads: 0, timeSteps: 0,
+                                     bluetoothOutputs: 1, rejectedLatencyNs: 30_000_000_000, latencyNs: 150_000_000)
+    check(rejected.text.hasSuffix("Bluetooth outputs 1, reported latency 30000.0 ms outside 50 to 1000 ms, used 150.0 ms")
+              && !measured.text.contains("reported latency"),
+          "observer: a latency report the window rejected shows with the value used instead", rejected.text)
+    check(WiFiNote.text(poweredOn: true, band: 2, channel: 36, rssi: -52) == "Wi-Fi 5 GHz, channel 36, RSSI -52 dBm"
+              && WiFiNote.text(poweredOn: true, band: 1, channel: 6, rssi: -70) == "Wi-Fi 2.4 GHz, channel 6, RSSI -70 dBm"
+              && WiFiNote.text(poweredOn: true, band: 3, channel: 37, rssi: nil) == "Wi-Fi 6 GHz, channel 37, RSSI n/a",
+          "observer: the Wi-Fi line gives band, channel and RSSI")
+    check(WiFiNote.text(poweredOn: true, band: 2, channel: 36, rssi: 0) == "Wi-Fi 5 GHz, channel 36, RSSI n/a",
+          "observer: an RSSI of 0 is one macOS didn't give")
+    check(WiFiNote.text(poweredOn: true, band: 0, channel: 36, rssi: -50) == "Wi-Fi n/a"
+              && WiFiNote.text(poweredOn: true, band: 2, channel: 0, rssi: -50) == "Wi-Fi n/a"
+              && WiFiNote.text(poweredOn: true, band: nil, channel: nil, rssi: nil) == "Wi-Fi n/a",
+          "observer: a band or channel macOS withholds reads n/a")
+    check(WiFiNote.text(poweredOn: false, band: 2, channel: 36, rssi: -50) == "Wi-Fi off",
+          "observer: Wi-Fi switched off says so")
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
@@ -2759,6 +3018,43 @@ do {
         } else {
             check(false, "fade: an output is faded once the host clock passes its last faded frame's output time "
                     + "plus its latency", "the core's renderer could not be made")
+        }
+    }
+
+    // S230: an output the host marks as Bluetooth adds a capture block of
+    // 512 frames to its start lead, which its start line logs in ms.
+    do {
+        let name = "bluetooth lead: a Bluetooth output's start lead counts a capture block more"
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 4),
+           let wired = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 48_000, channels: 2, gain: 1),
+           let buds = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 44_100, channels: 2, gain: 1) {
+            buds.setBluetooth(true)
+            check(wired.extraLeadMs == 0 && abs(buds.extraLeadMs - 512.0 / 48) < 1e-9, name,
+                  "wired \(wired.extraLeadMs) ms, Bluetooth \(buds.extraLeadMs) ms")
+        } else {
+            check(false, name, "the core's renderer could not be made")
+        }
+    }
+
+    // S231: a Bluetooth output's latency report outside 50 to 1000 ms gives
+    // way to its latest plausible one, else 150 ms; any other stays as it is.
+    do {
+        let name = "bluetooth latency: a report outside the window gives way, any other output's stays"
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 4),
+           let wired = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 48_000, channels: 2, gain: 1),
+           let buds = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 44_100, channels: 2, gain: 1) {
+            buds.setBluetooth(true)
+            let unknown = buds.setReportedLatency(0, lastPlausibleNs: 0)
+            let unknownRejected = buds.rejectedLatencyNs
+            let absurd = buds.setReportedLatency(30_000_000_000, lastPlausibleNs: 180_000_000)
+            let plausible = buds.setReportedLatency(149_297_000, lastPlausibleNs: 180_000_000)
+            let wiredUsed = wired.setReportedLatency(0, lastPlausibleNs: 0)
+            check(unknown == 150_000_000 && unknownRejected == 0 && absurd == 180_000_000
+                      && plausible == 149_297_000 && buds.rejectedLatencyNs == nil
+                      && wiredUsed == 0 && wired.rejectedLatencyNs == nil, name,
+                  "\(unknown), \(String(describing: unknownRejected)), \(absurd), \(plausible), \(wiredUsed)")
+        } else {
+            check(false, name, "the core's renderer could not be made")
         }
     }
 
@@ -3017,13 +3313,61 @@ do {
             && !AppLifecycle.restartsAfterFormatChange(userStopped: true),
           "EC4 rate: a format change rebuilds the session the engine stopped, unless the user switched streaming off")
     let music = AudioSource.app(bundleID: "com.apple.Music")
-    check(AppLifecycle.endsSession(source: music, quitBundleID: "com.apple.Music", streaming: true),
-          "EC6 app quit: the source app quitting while streaming stops the session")
-    check(!AppLifecycle.endsSession(source: music, quitBundleID: "com.apple.Music", streaming: false),
-          "EC6 app quit: the source app quitting while stopped changes nothing")
-    check(!AppLifecycle.endsSession(source: .system, quitBundleID: "com.apple.Music", streaming: true)
-            && !AppLifecycle.endsSession(source: music, quitBundleID: nil, streaming: true),
-          "EC6 app quit: another source, or an app without a bundle ID, keeps streaming")
+    typealias Report = AppLifecycle.SourceQuitReport
+    // A default argument can't use `music`, hence the nil.
+    func quit(_ report: Report, _ source: AudioSource? = nil, _ setting: WhenSourceQuits = .stop) -> String {
+        guard let answer = AppLifecycle.sourceQuit(report, source: source ?? music, setting: setting) else { return "keep" }
+        return "\(answer.action) \(answer.bundleID)"
+    }
+    let musicQuit = Report.terminated(bundleID: "com.apple.Music", streaming: true)
+    check(quit(musicQuit) == "stop com.apple.Music",
+          "EC6 app quit: the source app quitting while streaming stops the session", quit(musicQuit))
+    check(quit(.terminated(bundleID: "com.apple.Music", streaming: false)) == "keep"
+            && quit(.terminated(bundleID: "com.apple.Music", streaming: false), music, .system) == "keep",
+          "EC6 app quit: the source app quitting while stopped changes nothing, under either setting (S227 a)")
+    check(quit(musicQuit, .system, .system) == "keep" && quit(musicQuit, .input(uid: "mic"), .system) == "keep"
+            && quit(.terminated(bundleID: nil, streaming: true), music, .system) == "keep"
+            && quit(.terminated(bundleID: "com.spotify.client", streaming: true), music, .system) == "keep",
+          "EC6 app quit: another source, another app or an app without a bundle ID keeps streaming (S227 b)")
+    for setting in [WhenSourceQuits.stop, .system] {
+        check(quit(musicQuit, .system, setting) == "keep",
+              "EC6 app quit: the whole-system source never ends on a quit, under either setting (S164, S227 b)", "\(setting)")
+        check(quit(.terminated(bundleID: nil, streaming: true), music, setting) == "keep",
+              "EC6 app quit: an app without a bundle ID changes nothing, under either setting (S164)", "\(setting)")
+    }
+
+    // S227: the setting, through the core's decision.
+    check(quit(musicQuit, music, .system) == "switchToSystem com.apple.Music",
+          "source quit: with the switch on, the source app quitting while streaming switches to the whole system (S227)",
+          quit(musicQuit, music, .system))
+    let lost = Report.captureLost(.appNotRunning("com.apple.Music"))
+    check(quit(lost) == "stop com.apple.Music" && quit(lost, music, .system) == "switchToSystem com.apple.Music",
+          "source quit: the capture finding its app gone counts as that app quitting (S227 f)",
+          "\(quit(lost)), \(quit(lost, music, .system))")
+    check(quit(.captureLost(.inputDisconnected), music, .system) == "keep"
+            && quit(.captureLost(.aggregateDeviceFailed(1)), music, .system) == "keep",
+          "source quit: a capture lost for another cause is no app quit (S21 still applies)")
+    let rebuild = Report.rebuildFailed(SourceCapture.CaptureError.appNotRunning("com.apple.Music"))
+    check(quit(rebuild) == "stop com.apple.Music" && quit(rebuild, music, .system) == "switchToSystem com.apple.Music",
+          "source quit: an app gone when the format-change rebuild starts stops it, or rebuilds with the whole system (S227 e)",
+          "\(quit(rebuild)), \(quit(rebuild, music, .system))")
+    check(quit(.rebuildFailed(SourceCapture.CaptureError.formatUnusable(1)), music, .system) == "keep",
+          "source quit: a rebuild that fails for another cause is no app quit")
+    // After a switch the source is the whole system; after a stop nothing streams.
+    check(quit(musicQuit, .system, .system) == "keep"
+            && quit(.terminated(bundleID: "com.apple.Music", streaming: false)) == "keep",
+          "source quit: the same quit reported again (the capture, then macOS) acts once (S227 f)")
+    check(WhenSourceQuits(defaultsValue: nil) == .stop && WhenSourceQuits(defaultsValue: "stop") == .stop
+            && WhenSourceQuits(defaultsValue: "System") == .stop && WhenSourceQuits(defaultsValue: "switch") == .stop
+            && WhenSourceQuits(defaultsValue: "system") == .system,
+          "source quit: the setting reads stop unless it says system (S227)")
+    let t = UIStrings()
+    let switched = t.sourceSwitchedToSystem(name: "Music", started: true)
+    let notStarted = t.sourceSwitchedToSystem(name: "Music", started: false)
+    check(switched.contains("Music") && switched.contains(t.sourceSystem)
+            && notStarted.contains("Music") && notStarted.contains(t.sourceSystem) && notStarted != switched,
+          "source quit: the notice names the app and All System Audio, also when the whole system couldn't start (S227)",
+          "\(switched) / \(notStarted)")
 }
 
 // MARK: The way out on an exit signal (SignalQuit, AppLifecycle.swift)
