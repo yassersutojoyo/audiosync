@@ -49,7 +49,9 @@
 //!
 //! Speakers are named by the core's speaker keys: `lc:` and the endpoint ID
 //! for a local output, `ap:` and the speaker's ID for an AirPlay speaker, so
-//! groups and auto-connect marks hold both. Sources are `system`, or `app:` with the app's process ID
+//! groups and auto-connect marks hold both. A Google Cast speaker is `cc:`
+//! and its device ID; it stays out of groups, since one plays at a time.
+//! Sources are `system`, or `app:` with the app's process ID
 //! and executable (`app:2000:spotify.exe`), so a process ID that Windows gives
 //! to another app later is never taken for the chosen one.
 //!
@@ -58,6 +60,7 @@
 //! audio backend logs what it did itself.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 use audiosync_core::eq::EqSettings;
 use audiosync_core::policy::delay::{native_airplay_adjustment_ms, native_airplay_latency_ms};
@@ -70,20 +73,22 @@ use audiosync_core::policy::speakers::{NoticeSubject, Notices, SpeakerKey, renam
 
 use crate::audio::backend::{
     AirPlayAvailability, AirPlayInfo, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
-    OutputInfo, OutputKind, SourceId, SourceInfo, StopReason,
+    CastDiscovery, CastInfo, CastProblem, CastStatus, OutputInfo, OutputKind, SourceId, SourceInfo,
+    StopReason,
 };
 use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
 use crate::audio::capture::WHOLE_SYSTEM_NAME;
 use crate::audio::routing::{DirectPath, DirectReason};
+use crate::data_folder;
 use crate::debug_log::DebugLog;
 use crate::settings::{
     self, KeptAside, SavedEqualizer, SavedGroup, SavedInput, SavedSource, SavedSpeaker, Settings,
     SettingsFile,
 };
 use crate::ui_model::{
-    self, AppState, Availability, Backend, Group, GroupError, Notice, NoticeMessage,
-    PasswordPrompt, PinPhase, PinPrompt, Source, SourceKind, Speaker, SpeakerKind, ViewSettings,
-    Waiting, clamp_delay_ms,
+    self, AppState, Availability, Backend, CastList, CastRow, CastState, Group, GroupError, Notice,
+    NoticeMessage, PasswordPrompt, PinPhase, PinPrompt, Source, SourceKind, Speaker, SpeakerKind,
+    ViewSettings, Waiting, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -97,6 +102,10 @@ const SOURCE_POLLS: u32 = 6;
 /// Public while AudioSync is allowed on Private ones only, keeps the
 /// receivers' answers out, and the list would just stay empty.
 const NONE_FOUND_POLLS: u32 = 40;
+
+/// The prefix of a Google Cast speaker's UI ID; the core's speaker keys
+/// know only local and AirPlay speakers.
+const CAST_PREFIX: &str = "cc:";
 
 /// The UI's ID of the whole-system source.
 const SYSTEM_KEY: &str = "system";
@@ -203,6 +212,14 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// listed; from [`NONE_FOUND_POLLS`] on, the speaker list says none was
     /// found.
     airplay_quiet_polls: u32,
+    /// The last name of every Google Cast speaker listed, by device ID.
+    cast_names: BTreeMap<String, String>,
+    /// Polls in a row with Cast discovery running and no Cast speaker
+    /// listed, as for AirPlay.
+    cast_quiet_polls: u32,
+    /// Where the Cast speakers' offsets and formats are kept; `None` keeps
+    /// them until AudioSync quits.
+    cast_file: Option<PathBuf>,
     /// The speaker keys marked auto-connect.
     auto_connect: BTreeSet<String>,
     groups: Vec<Group>,
@@ -299,6 +316,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             airplay_listed: BTreeSet::new(),
             airplay_quiet_polls: 0,
             airplay_names: BTreeMap::new(),
+            cast_names: BTreeMap::new(),
+            cast_quiet_polls: 0,
+            cast_file: None,
             auto_connect: BTreeSet::new(),
             groups: Vec::new(),
             next_group: 1,
@@ -628,9 +648,21 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.audio.running_source().is_some()
     }
 
-    /// Speakers turned on, local and AirPlay, connected or not (S162).
+    /// Speakers turned on, local, AirPlay and Cast, connected or not (S162).
     fn enabled_count(&self) -> usize {
-        self.enabled_local() + self.audio.enabled_airplay().len()
+        self.enabled_local() + self.enabled_network()
+    }
+
+    /// AirPlay and Google Cast speakers turned on: the session rules count
+    /// them alike.
+    fn enabled_network(&self) -> usize {
+        let cast = self
+            .audio
+            .cast_speakers()
+            .iter()
+            .filter(|speaker| speaker.enabled)
+            .count();
+        self.audio.enabled_airplay().len() + cast
     }
 
     /// Local outputs turned on that were listed at some point in this run,
@@ -653,7 +685,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             event,
             self.running(),
             self.enabled_local(),
-            self.audio.enabled_airplay().len(),
+            self.enabled_network(),
         )
     }
 
@@ -713,6 +745,133 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// say so then.
     fn airplay_none_found(&self) -> bool {
         self.airplay_quiet_polls >= NONE_FOUND_POLLS
+    }
+
+    /// The speaker list's note about Google Cast discovery.
+    fn cast_list(&self) -> CastList {
+        match self.audio.cast_discovery() {
+            CastDiscovery::Off => CastList::Quiet,
+            CastDiscovery::Failed => CastList::Failed,
+            CastDiscovery::Browsing if !self.audio.cast_speakers().is_empty() => CastList::Quiet,
+            CastDiscovery::Browsing if self.cast_quiet_polls >= NONE_FOUND_POLLS => {
+                CastList::NoneFound
+            }
+            CastDiscovery::Browsing => CastList::Searching,
+        }
+    }
+
+    /// Counts one more poll of Cast discovery without a Cast speaker, or
+    /// starts over; returns whether the speaker list's note changed.
+    fn count_cast_quiet(&mut self) -> bool {
+        let shown = self.cast_list();
+        let browsing = self.audio.cast_discovery() == CastDiscovery::Browsing;
+        if browsing && self.audio.cast_speakers().is_empty() {
+            self.cast_quiet_polls = self.cast_quiet_polls.saturating_add(1);
+        } else {
+            self.cast_quiet_polls = 0;
+        }
+        let shows = self.cast_list();
+        if shows != shown {
+            self.log
+                .log(|| format!("Cast: the speaker list's note is now {shows:?}"));
+        }
+        shows != shown
+    }
+
+    /// Keeps the Cast speakers' offsets and formats in `path` from now on.
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "only the Windows app keeps a file")
+    )]
+    pub fn set_cast_file(&mut self, path: Option<PathBuf>) {
+        self.cast_file = path;
+    }
+
+    /// Writes the Cast speakers' offsets and formats to their file. One that
+    /// can't be written gets the settings' notice: the change lasts until
+    /// AudioSync quits.
+    fn save_cast_memory(&mut self) {
+        let (Some(path), Some(json)) = (self.cast_file.as_ref(), self.audio.cast_memory_json())
+        else {
+            return;
+        };
+        if let Err(error) = data_folder::write_atomically(path, json.as_bytes()) {
+            self.log
+                .log(|| format!("Cast: the speakers' file couldn't be written: {error}"));
+            self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
+        }
+    }
+
+    /// The name of a Cast speaker as last listed.
+    fn cast_name(&self, id: &str) -> String {
+        self.cast_names
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| id.to_owned())
+    }
+
+    /// The user switched a Cast speaker on or off. One that can't play
+    /// stays off, with a notice saying why; a second one is refused while
+    /// one is on.
+    fn set_cast_enabled(&mut self, id: &str, on: bool) {
+        self.log.log(|| {
+            let state = if on { "on" } else { "off" };
+            format!("the user switched {} {state}", self.cast_name(id))
+        });
+        if on {
+            self.notices.clear(&[NoticeSubject::Cast]);
+        }
+        match self.audio.set_cast_enabled(id, on) {
+            Err(problem) => self.cast_cant_play(id, problem),
+            Ok(()) if on => self.start_if_switched_on(),
+            Ok(()) => self.stop_if_idle(),
+        }
+        self.take_events();
+    }
+
+    /// Tells why a Cast speaker can't play; it is off.
+    fn cast_cant_play(&mut self, id: &str, problem: CastProblem) {
+        let speaker = self.cast_name(id);
+        self.post(
+            NoticeSubject::Cast,
+            NoticeMessage::CastCantPlay {
+                speaker,
+                problem: ui_cast_problem(problem),
+            },
+        );
+        self.stop_if_idle();
+    }
+
+    /// A Google Cast speaker's row.
+    fn cast_speaker(&self, speaker: CastInfo) -> Speaker {
+        Speaker {
+            id: cast_key(&speaker.id),
+            name: speaker.name,
+            kind: SpeakerKind::Cast,
+            enabled: speaker.enabled,
+            volume: speaker.volume,
+            delay_ms: Some(speaker.offset_ms),
+            auto_connect: false,
+            availability: if speaker.group {
+                Availability::Unsupported
+            } else {
+                Availability::Open
+            },
+            paired: false,
+            device_volume: None,
+            waiting: (speaker.enabled && speaker.status == CastStatus::Reconnecting)
+                .then_some(Waiting::Reconnecting),
+            cast: Some(CastRow {
+                state: match speaker.status {
+                    CastStatus::Idle => CastState::Idle,
+                    CastStatus::Connecting => CastState::Connecting,
+                    CastStatus::Playing => CastState::Playing,
+                    CastStatus::Reconnecting => CastState::Reconnecting,
+                },
+                muted: speaker.muted,
+                volume_fixed: speaker.volume_fixed,
+            }),
+        }
     }
 
     /// Counts one more poll with AirPlay discovery running and no AirPlay
@@ -1408,6 +1567,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             BackendEvent::HeardTwice { paths } => self.heard_twice_changed(paths),
             BackendEvent::AirPlayChanged => self.airplay_listed(),
+            BackendEvent::CastChanged => {
+                for speaker in self.audio.cast_speakers() {
+                    self.cast_names.insert(speaker.id, speaker.name);
+                }
+            }
+            BackendEvent::CastPlaying { .. } => {
+                self.notices.clear(&[NoticeSubject::Cast]);
+            }
+            BackendEvent::CastFailed { id, problem } => self.cast_cant_play(&id, problem),
+            BackendEvent::CastMemoryChanged => self.save_cast_memory(),
             BackendEvent::AirPlayPlaying { id } => {
                 self.reconnecting.remove(&id);
                 self.clear_if(airplay_subject(&id), |message| {
@@ -1619,6 +1788,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             device_volume: None,
             waiting: (speaker.enabled && self.reconnecting.contains(&speaker.id))
                 .then_some(Waiting::Reconnecting),
+            cast: None,
         }
     }
 
@@ -1655,6 +1825,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .and_then(|device_volume| device_volume.hint()),
             waiting: (output.enabled && self.busy.contains(&output.id))
                 .then_some(Waiting::ForDevice),
+            cast: None,
         }
     }
 
@@ -1734,6 +1905,12 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                         .into_iter()
                         .map(|speaker| self.airplay_speaker(speaker, prompted)),
                 )
+                .chain(
+                    self.audio
+                        .cast_speakers()
+                        .into_iter()
+                        .map(|speaker| self.cast_speaker(speaker)),
+                )
                 .collect(),
             groups: self.groups.clone(),
             equalizer: self.equalizer,
@@ -1757,6 +1934,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                     wrong: prompt.wrong,
                 }),
             when_source_quits: self.when_source_quits,
+            cast_list: self.cast_list(),
         }
     }
 
@@ -1825,6 +2003,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn set_speaker_enabled(&mut self, id: &str, on: bool) {
+        if let Some(cast_id) = cast_id(id) {
+            self.set_cast_enabled(cast_id, on);
+            return;
+        }
         let endpoint_id = match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => endpoint_id,
             Some(SpeakerKey::AirPlay(airplay_id)) => {
@@ -1857,6 +2039,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn set_speaker_volume(&mut self, id: &str, position: f64) {
+        if let Some(cast_id) = cast_id(id) {
+            self.audio.set_cast_volume(cast_id, position);
+            return;
+        }
         match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => {
                 self.audio.set_output_volume(&endpoint_id, position);
@@ -1868,8 +2054,14 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         }
     }
 
-    /// A local output's delay, or an AirPlay speaker's own delay d_s.
+    /// A local output's delay, an AirPlay speaker's own delay d_s, or a
+    /// Cast speaker's measured offset (never negative).
     fn set_speaker_delay(&mut self, id: &str, ms: f64) {
+        if let Some(cast_id) = cast_id(id) {
+            self.audio
+                .set_cast_offset(cast_id, clamp_delay_ms(ms).max(0.0));
+            return;
+        }
         match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => {
                 self.audio
@@ -1880,6 +2072,22 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                     .set_airplay_delay(&airplay_id, clamp_delay_ms(ms));
             }
             None => {}
+        }
+    }
+
+    fn set_speaker_muted(&mut self, id: &str, muted: bool) {
+        if let Some(cast_id) = cast_id(id) {
+            self.log.log(|| {
+                let state = if muted { "muted" } else { "unmuted" };
+                format!("the user {state} {}", self.cast_name(cast_id))
+            });
+            self.audio.set_cast_muted(cast_id, muted);
+        }
+    }
+
+    fn resync_speaker(&mut self, id: &str) {
+        if let Some(cast_id) = cast_id(id) {
+            self.audio.resync_cast(cast_id);
         }
     }
 
@@ -2154,6 +2362,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             changed |= self.refresh_sources();
         }
         changed |= self.count_airplay_quiet();
+        changed |= self.count_cast_quiet();
         changed |= self.keep_settings_aside(true);
         changed |= self.persist();
         changed
@@ -2229,6 +2438,27 @@ fn speaker_key(endpoint_id: &str) -> String {
 /// The UI's ID of an AirPlay speaker.
 fn airplay_key(id: &str) -> String {
     SpeakerKey::AirPlay(id.to_owned()).to_string()
+}
+
+fn cast_key(id: &str) -> String {
+    format!("{CAST_PREFIX}{id}")
+}
+
+/// The device ID in a Cast speaker's UI ID; `None` for any other speaker.
+fn cast_id(key: &str) -> Option<&str> {
+    key.strip_prefix(CAST_PREFIX)
+}
+
+fn ui_cast_problem(problem: CastProblem) -> ui_model::CastProblem {
+    use ui_model::CastProblem as P;
+    match problem {
+        CastProblem::Busy => P::Busy,
+        CastProblem::NotResponding => P::NotResponding,
+        CastProblem::Refused => P::Refused,
+        CastProblem::TakenOver => P::TakenOver,
+        CastProblem::ConnectionLost => P::ConnectionLost,
+        CastProblem::Group => P::Group,
+    }
 }
 
 /// What a notice about one local output is about.
@@ -2312,17 +2542,24 @@ mod tests {
     use audiosync_airplay::error::{ErrorKind, SessionError};
     use audiosync_airplay::pairing::PairingEvent;
     use audiosync_airplay::sender::{SenderEvent, SpeakerState as AirPlayState};
+    use audiosync_cast::discovery::DEVICE_PORT;
+    use audiosync_cast::error::ConnectError;
+    use audiosync_cast::host::{AttemptId, DeviceMemory, HostEvent};
+    use audiosync_cast::session::{SessionEnd, SessionError as CastSessionError, SessionEvent};
 
     use super::*;
     use crate::audio::airplay::StartedSender;
     use crate::audio::airplay::tests::{APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, device, id_of};
     use crate::audio::capture::{CaptureTarget, LoopbackMode};
+    use crate::audio::cast::tests::{
+        FakeCast, KITCHEN as CAST_KITCHEN, LIVING as CAST_LIVING, id as cast_device,
+    };
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
     use crate::audio::pairings::PairingStore;
     use crate::audio::pairings::tests::credentials;
     use crate::audio::routing::HOLD_CHECKS;
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
-    use crate::ui_model::{MAX_DELAY_MS, MIN_DELAY_MS, SpeakerState};
+    use crate::ui_model::{CastProblem as UiCastProblem, MAX_DELAY_MS, MIN_DELAY_MS, SpeakerState};
 
     const SPEAKERS: &str = "speakers";
     const HEADPHONES: &str = "headphones";
@@ -5455,5 +5692,202 @@ mod tests {
         adapter.poll();
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The two outputs, and Kitchen and Living Room as Google Cast speakers.
+    fn cast_adapter() -> (AudioAdapter<MockBackend>, FakeCast) {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.connect_output(HEADPHONES, "Headphones");
+        let fake = FakeCast::default();
+        fake.announce(CAST_KITCHEN, "Kitchen", DEVICE_PORT);
+        fake.announce(CAST_LIVING, "Living Room", DEVICE_PORT);
+        audio.set_cast(fake.link());
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.poll();
+        (adapter, fake)
+    }
+
+    /// The UI's ID of a Google Cast speaker.
+    fn cc(id: &str) -> String {
+        format!("cc:{id}")
+    }
+
+    fn cast_ended(attempt: u64, end: SessionEnd) -> HostEvent {
+        HostEvent::Ended {
+            attempt: AttemptId(attempt),
+            device: cast_device(CAST_KITCHEN),
+            end,
+        }
+    }
+
+    fn cast_cant_play(speaker: &str, problem: UiCastProblem) -> NoticeMessage {
+        NoticeMessage::CastCantPlay {
+            speaker: speaker.to_owned(),
+            problem,
+        }
+    }
+
+    #[test]
+    fn cast_speakers_are_connected_speakers_of_their_own_kind() {
+        let (adapter, _) = cast_adapter();
+        let state = adapter.snapshot();
+        let row = state.speaker(&cc(CAST_KITCHEN)).expect("Kitchen is listed");
+        assert_eq!(row.kind, SpeakerKind::Cast);
+        assert_eq!(row.delay_ms, Some(0.0), "the offset the user sets");
+        assert_eq!(row.cast.map(|cast| cast.state), Some(CastState::Idle));
+        assert!(!row.enabled);
+        let (this_pc, connected) = state.layout();
+        assert!(this_pc.is_empty());
+        let names: Vec<&str> = connected.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Headphones", "Kitchen", "Living Room", "Speakers"]);
+        assert_eq!(state.cast_list, CastList::Quiet);
+    }
+
+    #[test]
+    fn the_cast_list_says_it_searches_then_that_none_was_found() {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let fake = FakeCast::default();
+        audio.set_cast(fake.link());
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.poll();
+        assert_eq!(adapter.snapshot().cast_list, CastList::Searching);
+        for _ in 0..NONE_FOUND_POLLS {
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().cast_list, CastList::NoneFound);
+        fake.announce(CAST_KITCHEN, "Kitchen", DEVICE_PORT);
+        assert!(adapter.poll());
+        assert_eq!(adapter.snapshot().cast_list, CastList::Quiet);
+    }
+
+    #[test]
+    fn a_cast_speaker_alone_streams_and_shows_where_it_is() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        let state = adapter.snapshot();
+        assert!(state.running, "one Cast speaker is enough");
+        let row = state.speaker(&cc(CAST_KITCHEN)).unwrap();
+        assert!(row.enabled);
+        assert_eq!(row.cast.unwrap().state, CastState::Connecting);
+        assert_eq!(fake.state().started, [cast_device(CAST_KITCHEN)]);
+        assert!(adapter.audio.driver().capture_feeds_cast());
+
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: cast_device(CAST_KITCHEN),
+            event: SessionEvent::Playing,
+        });
+        assert!(adapter.poll());
+        let row = adapter
+            .snapshot()
+            .speaker(&cc(CAST_KITCHEN))
+            .cloned()
+            .unwrap();
+        assert_eq!(row.cast.unwrap().state, CastState::Playing);
+
+        adapter.set_speaker_muted(&cc(CAST_KITCHEN), true);
+        adapter.resync_speaker(&cc(CAST_KITCHEN));
+        adapter.set_speaker_volume(&cc(CAST_KITCHEN), 25.0);
+        assert_eq!(fake.state().mutes, [true]);
+        assert_eq!(fake.state().resyncs, 1);
+        assert_eq!(fake.state().volumes, [0.25]);
+
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), false);
+        assert!(!adapter.snapshot().running, "nothing is on anymore");
+        assert_eq!(fake.state().stops, 1);
+    }
+
+    #[test]
+    fn a_second_cast_speaker_is_refused_with_a_notice() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
+        assert!(messages(&adapter).contains(&cast_cant_play("Living Room", UiCastProblem::Busy)));
+        let state = adapter.snapshot();
+        assert!(!state.speaker(&cc(CAST_LIVING)).unwrap().enabled);
+        assert!(state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
+        assert!(state.running);
+    }
+
+    #[test]
+    fn a_cast_session_that_ends_badly_turns_its_speaker_off_with_a_notice() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        fake.report(cast_ended(
+            1,
+            SessionEnd::Failed(CastSessionError::Connect(ConnectError::NoAddress)),
+        ));
+        adapter.poll();
+        assert!(
+            messages(&adapter).contains(&cast_cant_play("Kitchen", UiCastProblem::NotResponding))
+        );
+        let state = adapter.snapshot();
+        assert!(!state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
+        assert!(!state.running);
+
+        // Turned on again, the notice goes.
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        assert!(messages(&adapter).is_empty());
+    }
+
+    #[test]
+    fn a_late_end_of_an_older_cast_attempt_changes_nothing() {
+        let (mut adapter, fake) = cast_adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), false);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        assert_eq!(fake.state().started.len(), 2);
+        fake.report(cast_ended(1, SessionEnd::TakenOver));
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+        assert!(
+            adapter
+                .snapshot()
+                .speaker(&cc(CAST_KITCHEN))
+                .unwrap()
+                .enabled
+        );
+    }
+
+    #[test]
+    fn a_cast_delay_is_its_offset_that_local_outputs_wait_for_and_is_saved() {
+        let (mut adapter, fake) = cast_adapter();
+        let file = test_dir("cast-memory").join("cast-speakers.json");
+        adapter.set_cast_file(Some(file.clone()));
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 400.0);
+        assert_eq!(
+            fake.state().memory.offset(&cast_device(CAST_KITCHEN)),
+            Some(std::time::Duration::from_millis(400))
+        );
+        assert_eq!(
+            adapter
+                .snapshot()
+                .speaker(&cc(CAST_KITCHEN))
+                .unwrap()
+                .delay_ms,
+            Some(400.0)
+        );
+        assert_eq!(local_delay(&adapter, SPEAKERS), 19_200, "400 ms");
+        adapter.poll();
+        let saved = std::fs::read_to_string(&file).expect("the file is written");
+        assert_eq!(DeviceMemory::from_json(&saved), fake.state().memory);
+
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), -300.0);
+        assert_eq!(
+            adapter
+                .snapshot()
+                .speaker(&cc(CAST_KITCHEN))
+                .unwrap()
+                .delay_ms,
+            Some(0.0),
+            "an offset only holds the others back"
+        );
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), false);
+        assert_eq!(local_delay(&adapter, SPEAKERS), 0);
     }
 }

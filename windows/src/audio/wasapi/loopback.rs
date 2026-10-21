@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::ring::RingWriter;
 
-use crate::audio::airplay::FeedLease;
+use crate::audio::capture::Feeds;
 use windows::Win32::Foundation::{E_ACCESSDENIED, E_FAIL, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
@@ -137,12 +137,12 @@ impl Drop for LoopbackCapture {
 }
 
 /// Starts capturing `target`, writing through `equalizer` and `writer`, and
-/// to `airplay`.
+/// to `feeds`.
 pub(super) fn start(
     target: CaptureTarget,
     writer: RingWriter,
     equalizer: EqProcessor,
-    airplay: Option<FeedLease>,
+    feeds: Feeds,
 ) -> Result<LoopbackCapture, BackendError> {
     let input = matches!(target, CaptureTarget::Input { .. });
     let (source, call) = match &target {
@@ -166,7 +166,7 @@ pub(super) fn start(
         let captured = Arc::clone(&captured);
         spawn_worker("audiosync-capture", move |ready| {
             run(
-                &target, writer, equalizer, airplay, &stop, &failure, &ended, &captured, ready,
+                &target, writer, equalizer, feeds, &stop, &failure, &ended, &captured, ready,
             );
         })?
     };
@@ -194,7 +194,7 @@ fn run(
     target: &CaptureTarget,
     writer: RingWriter,
     equalizer: EqProcessor,
-    airplay: Option<FeedLease>,
+    feeds: Feeds,
     stop: &Event,
     failure: &AtomicI32,
     ended: &AtomicBool,
@@ -209,7 +209,7 @@ fn run(
         Ok(stream) => stream,
         Err(error) => return ready.fail(error),
     };
-    let mut converter = match CaptureConverter::new(stream.format, writer, equalizer, airplay) {
+    let mut converter = match CaptureConverter::new(stream.format, writer, equalizer, feeds) {
         Ok(converter) => converter,
         Err(error) => return ready.fail(error),
     };
@@ -620,7 +620,7 @@ mod tests {
                 },
                 writer,
                 processor,
-                None,
+                Feeds::default(),
             )
             .unwrap_or_else(|error| panic!("{} didn't start: {error}", input.name));
             let started = Instant::now();

@@ -6,7 +6,7 @@
 // English only for now. @tr marks each string for Slint's gettext translation
 // when a second language is added.
 
-import { SpeakerKind, Availability, AirPlayProblem, DeviceVolumeHint, GuidePage, NoticeKind, PinPhase, RowState } from "types.slint";
+import { SpeakerKind, Availability, AirPlayProblem, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, NoticeKind, PinPhase, RowState } from "types.slint";
 
 export global Strings {
     // Main window
@@ -33,6 +33,20 @@ export global Strings {
     // Under Connected Speakers once AirPlay discovery has run for 20 seconds
     // without finding a speaker (a firewall or a Public network blocks it).
     out property <string> airplay-none-found: @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).");
+    // Under Connected Speakers while no Google Cast speaker is listed: the
+    // search runs, has found nothing for 20 seconds, or couldn't start.
+    public pure function cast-list(state: CastList) -> string {
+        if state == CastList.searching {
+            return @tr("Looking for Google Cast speakers…");
+        }
+        if state == CastList.none-found {
+            return @tr("No Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).");
+        }
+        if state == CastList.failed {
+            return @tr("AudioSync can't look for Google Cast speakers right now. Restart AudioSync to try again.");
+        }
+        return "";
+    }
     out property <string> master-volume-title: @tr("Master Volume");
     out property <string> master-volume: @tr("Master volume");
     out property <string> dismiss-all-notices: @tr("Dismiss All");
@@ -375,6 +389,26 @@ export global Strings {
         return @tr("AudioSync can't play to {}, so it's off.", speaker);
     }
 
+    // A Google Cast speaker can't play, so it is off.
+    public pure function notice-cast(problem: CastProblem, speaker: string) -> string {
+        if problem == CastProblem.busy {
+            return @tr("Only one Google Cast speaker can play at a time, so {} stays off. Turn the other one off first.", speaker);
+        }
+        if problem == CastProblem.not-responding {
+            return @tr("{} isn't responding, so it's off. Check that it's on and on this PC's network, then turn it on again.", speaker);
+        }
+        if problem == CastProblem.refused {
+            return @tr("{} declined the stream, so it's off. Turn it on again to try once more.", speaker);
+        }
+        if problem == CastProblem.taken-over {
+            return @tr("Another app started casting to {}, so it's off in AudioSync.", speaker);
+        }
+        if problem == CastProblem.connection-lost {
+            return @tr("{} lost its connection, so it's off. Turn it on again to reconnect.", speaker);
+        }
+        return @tr("{} is a speaker group, which AudioSync can't play to. Turn on one of its speakers instead.", speaker);
+    }
+
     // Windows can't mute the captured app, so it also plays straight from
     // some outputs, undelayed, next to AudioSync's delayed copies. `mute`
     // names the ones AudioSync doesn't play to (muting them helps), `shared`
@@ -470,13 +504,13 @@ export global Strings {
     // heading and one text per section, paragraphs split by a blank line.
     // Each claim follows what windows/src does; nothing the Mac app alone does.
     out property <string> help-title: @tr("AudioSync Guide");
-    out property <string> help-intro: @tr("AudioSync plays your PC's sound on AirPlay speakers and on the outputs connected to this PC at the same time, and lines them up with a delay for each speaker.");
+    out property <string> help-intro: @tr("AudioSync plays your PC's sound on AirPlay and Google Cast speakers and on the outputs connected to this PC at the same time, and lines them up with a delay for each speaker.");
     out property <string> help-start-title: @tr("First Steps");
-    out property <string> help-start: @tr("The main window holds every control. The AudioSync icon in the notification area opens AudioSync quick settings, with the Streaming switch, the source, the volume and the speakers. Closing the window keeps AudioSync running there, and streaming goes on. To quit, choose File > Exit.\n\nUnder Audio Source, pick what to play: All System Audio, one app that plays sound, or an input device, such as a microphone or line in. If Windows blocks microphone access for desktop apps, a notice says so, with a button that opens those privacy settings.\n\nThe speakers are listed under This PC (the PC's own speakers or line out, and headphones on its jack), then your groups, then Connected Speakers: AirPlay speakers and every other output, such as USB, Bluetooth or HDMI, with its kind under its name.\n\nSelect a speaker's round button to turn it on; streaming starts with it. Select it again to turn it off. When you turn the Streaming switch off, your speakers stay chosen with an outlined button, and they play again when you turn streaming on or select any speaker.");
+    out property <string> help-start: @tr("The main window holds every control. The AudioSync icon in the notification area opens AudioSync quick settings, with the Streaming switch, the source, the volume and the speakers. Closing the window keeps AudioSync running there, and streaming goes on. To quit, choose File > Exit.\n\nUnder Audio Source, pick what to play: All System Audio, one app that plays sound, or an input device, such as a microphone or line in. If Windows blocks microphone access for desktop apps, a notice says so, with a button that opens those privacy settings.\n\nThe speakers are listed under This PC (the PC's own speakers or line out, and headphones on its jack), then your groups, then Connected Speakers: AirPlay and Google Cast speakers and every other output, such as USB, Bluetooth or HDMI, with its kind under its name.\n\nSelect a speaker's round button to turn it on; streaming starts with it. Select it again to turn it off. When you turn the Streaming switch off, your speakers stay chosen with an outlined button, and they play again when you turn streaming on or select any speaker.");
     out property <string> help-sync-title: @tr("Sync");
-    out property <string> help-sync: @tr("The PC's own speakers are the reference and have no delay. Every other local speaker shows its delay relative to them. Without a reference, the speaker with the lowest value plays first and the others wait by the difference.\n\nTo change a delay, select the speaker's row or its value. The −100, −10, +10 and +100 buttons apply at once. You can also type a number, with + or − in front if you like, and apply it with Enter or Ctrl+S (File > Apply Typed Delay); the controls stay open. Selecting the row again, or clicking outside every speaker row, applies what you typed and closes the controls. Escape drops what you typed. A number out of range gets a red outline and a line that gives the range.\n\nHeard a speaker before the others? Raise its delay. Heard it late? Lower it, below 0 if needed.\n\nThe AirPlay Delay card under Connected Speakers sets how long the speakers on this PC wait for the AirPlay speakers. If the AirPlay speakers sound late, raise it; if they sound early, lower it. AudioSync keeps the AirPlay speakers in step with each other, so they have no delay of their own.\n\nTune with two speakers at first, then add the others one at a time. A track with sharp sounds, such as drums or speech, makes an offset easy to hear.");
+    out property <string> help-sync: @tr("The PC's own speakers are the reference and have no delay. Every other local speaker shows its delay relative to them. Without a reference, the speaker with the lowest value plays first and the others wait by the difference.\n\nTo change a delay, select the speaker's row or its value. The −100, −10, +10 and +100 buttons apply at once. You can also type a number, with + or − in front if you like, and apply it with Enter or Ctrl+S (File > Apply Typed Delay); the controls stay open. Selecting the row again, or clicking outside every speaker row, applies what you typed and closes the controls. Escape drops what you typed. A number out of range gets a red outline and a line that gives the range.\n\nHeard a speaker before the others? Raise its delay. Heard it late? Lower it, below 0 if needed.\n\nThe AirPlay Delay card under Connected Speakers sets how long the speakers on this PC wait for the AirPlay speakers. If the AirPlay speakers sound late, raise it; if they sound early, lower it. AudioSync keeps the AirPlay speakers in step with each other, so they have no delay of their own.\n\nAudioSync can't sync Google Cast speakers automatically, so each one has an offset you set by ear in its row. If the Cast speaker sounds late, raise it, and the other speakers wait longer; if it sounds early, lower it. AudioSync keeps the offset for that speaker. One Google Cast speaker plays at a time. While it plays, Resync under its volume restarts the stream, with a short gap, so it lines up at its offset again.\n\nTune with two speakers at first, then add the others one at a time. A track with sharp sounds, such as drums or speech, makes an offset easy to hear.");
     out property <string> help-volume-title: @tr("Volume");
-    out property <string> help-volume: @tr("Each speaker has its own volume slider, and Master Volume sets the level of all of them at once, AirPlay speakers included.\n\nWhen a local speaker that is on is turned down low or muted in Windows, a line under its slider says so, with a button that fixes it. AudioSync changes the Windows volume only when you select that button.");
+    out property <string> help-volume: @tr("Each speaker has its own volume slider, and Master Volume sets the level of all of them at once, AirPlay speakers included. A Google Cast speaker's slider sets the speaker's own volume, which Master Volume leaves alone, and Mute under it mutes the speaker itself.\n\nWhen a local speaker that is on is turned down low or muted in Windows, a line under its slider says so, with a button that fixes it. AudioSync changes the Windows volume only when you select that button.");
     out property <string> help-bluetooth-title: @tr("Bluetooth");
     out property <string> help-bluetooth: @tr("Bluetooth speakers and headphones add a lag of their own, so they often need a delay below 0. They also take a little longer to start playing.\n\nFor a headset, AudioSync lists its stereo output and leaves out its Hands-Free output and microphone, which carry call audio.");
     out property <string> help-double-title: @tr("Hearing Sound Twice");
@@ -568,6 +602,9 @@ export global Strings {
         if kind == NoticeKind.launch-at-login-off-in-settings {
             return @tr("startup app turned off");
         }
+        if kind == NoticeKind.cast-cant-play {
+            return @tr("{} can't play", name);
+        }
         return @tr("double audio");
     }
 
@@ -635,9 +672,42 @@ export global Strings {
         return "";
     }
 
+    // The note under a Google Cast speaker's name: a group can't play, and
+    // one that is on says where it is; empty otherwise.
+    public pure function cast-note(state: CastState, muted: bool, group: bool) -> string {
+        if group {
+            return @tr("Speaker groups not supported");
+        }
+        if state == CastState.connecting {
+            return @tr("Connecting…");
+        }
+        if muted {
+            return @tr("Muted on the speaker");
+        }
+        return "";
+    }
+
+    // Under a Google Cast speaker's volume while it connects or plays.
+    out property <string> cast-mute: @tr("Mute");
+    out property <string> cast-unmute: @tr("Unmute");
+    out property <string> cast-resync: @tr("Resync");
+    out property <string> cast-resync-help: @tr("Restarts the stream, with a short gap, so this speaker plays at its delay again");
+
+    // What Narrator reads for those buttons: what the button shows, so speech
+    // input finds it by its text, then the speaker ("Mute, Kitchen").
+    public pure function cast-button-label(text: string, name: string) -> string {
+        return @tr("{0}, {1}", text, name);
+    }
+
+    // Beside a Google Cast speaker's delay, in place of the sync hint.
+    out property <string> cast-sync-hint: @tr("AudioSync can't sync Google Cast speakers automatically, so it keeps the others only roughly in step with this one. Set this by ear: heard this speaker late? Raise the value, and the other speakers wait longer. Heard it early? Lower it. AudioSync keeps it for this speaker; check it again when you start it.");
+
     public pure function speaker-kind(kind: SpeakerKind) -> string {
         if kind == SpeakerKind.airplay {
             return @tr("AirPlay");
+        }
+        if kind == SpeakerKind.cast {
+            return @tr("Google Cast");
         }
         if kind == SpeakerKind.built-in {
             return @tr("Built-in");

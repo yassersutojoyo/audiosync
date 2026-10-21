@@ -245,6 +245,69 @@ impl AirPlayAvailability {
     }
 }
 
+/// What a Google Cast speaker that is on is doing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CastStatus {
+    /// Off, or on while streaming is off.
+    Idle,
+    /// Connecting, starting the player on the device, or loading the
+    /// stream.
+    Connecting,
+    /// The device plays the stream.
+    Playing,
+    /// The connection dropped and AudioSync reconnects.
+    Reconnecting,
+}
+
+/// What went wrong with a Google Cast speaker, for a notice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CastProblem {
+    /// Another Cast speaker is on: one plays at a time (spec C2).
+    Busy,
+    /// It didn't answer.
+    NotResponding,
+    /// It wouldn't start the player, or turned the stream down.
+    Refused,
+    /// Another app or device started playing on it.
+    TakenOver,
+    /// The connection was lost and couldn't be brought back.
+    ConnectionLost,
+    /// A Cast group, which AudioSync can't play to (spec C3).
+    Group,
+}
+
+/// Whether Google Cast discovery runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CastDiscovery {
+    /// No Cast sender runs.
+    Off,
+    Browsing,
+    /// Discovery couldn't start or stopped, so no Cast speaker is listed.
+    Failed,
+}
+
+/// A Google Cast speaker on the network, and its settings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CastInfo {
+    /// Its ID: the device `id` it announces, in hex.
+    pub id: String,
+    /// The name it announces.
+    pub name: String,
+    /// A Cast group, listed but never played to.
+    pub group: bool,
+    /// Whether the user turned it on.
+    pub enabled: bool,
+    /// The device's volume as it last reported it, 0 to 100.
+    pub volume: f64,
+    pub muted: bool,
+    /// The device's volume is locked (`controlType` `fixed`, spec C68).
+    pub volume_fixed: bool,
+    /// The user's measured offset in milliseconds, 0 to 20 000: how long
+    /// the other outputs wait for this speaker while it is on (spec C77).
+    pub offset_ms: f64,
+    pub status: CastStatus,
+}
+
 /// Something the UI should know about, from [`AudioBackend::poll`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BackendEvent {
@@ -335,6 +398,25 @@ pub enum BackendEvent {
     /// did, so none is listed; [`AudioBackend::retry_airplay`] starts a new
     /// sender.
     AirPlayStopped,
+    /// Google Cast speakers appeared, changed or went away, or one's state
+    /// changed: list them again.
+    CastChanged,
+    /// A Google Cast speaker plays.
+    CastPlaying {
+        /// The speaker's ID.
+        id: String,
+    },
+    /// A Google Cast speaker couldn't play, or stopped, so it was turned
+    /// off.
+    CastFailed {
+        /// The speaker's ID.
+        id: String,
+        /// Why.
+        problem: CastProblem,
+    },
+    /// What AudioSync keeps per Cast device (offsets, formats) changed:
+    /// save it.
+    CastMemoryChanged,
     /// Whether the pairings' file could be written, reported when that
     /// changes: `false` once a write failed (the pairings added or forgotten
     /// since last only until AudioSync quits), `true` once one worked again.
@@ -617,6 +699,43 @@ pub trait AudioBackend {
     /// sender lists them. A new sender that can't start reports
     /// `AirPlayStopped` again.
     fn retry_airplay(&mut self);
+
+    /// The Google Cast speakers on the network, by name, with their
+    /// settings; empty while there is no Cast sender.
+    fn cast_speakers(&self) -> Vec<CastInfo> {
+        Vec::new()
+    }
+
+    fn cast_discovery(&self) -> CastDiscovery {
+        CastDiscovery::Off
+    }
+
+    /// Turns a Cast speaker on or off. One plays at a time: turning one on
+    /// while another is on is refused with [`CastProblem::Busy`] (spec C2).
+    /// While streaming, one turned on connects at once.
+    fn set_cast_enabled(&mut self, _id: &str, _enabled: bool) -> Result<(), CastProblem> {
+        Err(CastProblem::NotResponding)
+    }
+
+    /// Sets a Cast speaker's device volume, 0 to 100.
+    fn set_cast_volume(&mut self, _id: &str, _position: f64) {}
+
+    fn set_cast_muted(&mut self, _id: &str, _muted: bool) {}
+
+    /// Sets a Cast speaker's measured offset in milliseconds, clamped to 0
+    /// to 20 000: while it is on, the other outputs wait that long for it
+    /// (spec C77). A value that isn't finite is ignored.
+    fn set_cast_offset(&mut self, _id: &str, _offset_ms: f64) {}
+
+    /// The user's Resync: the playing Cast speaker loads the stream again,
+    /// back at its starting latency, after a short gap (spec C79).
+    fn resync_cast(&mut self, _id: &str) {}
+
+    /// What AudioSync keeps per Cast device, as JSON to save; `None` while
+    /// there is no Cast sender.
+    fn cast_memory_json(&self) -> Option<String> {
+        None
+    }
 
     /// What a session does when the app it captures quits (spec S227).
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits);

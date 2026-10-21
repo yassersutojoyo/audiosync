@@ -321,6 +321,8 @@ pub enum NoticeSubject {
     PairingsKeptAside,
     /// The system's sound outputs as a whole: none is active (Windows).
     SoundOutput,
+    /// The Google Cast speakers, of which one plays at a time (Windows).
+    Cast,
 }
 
 /// A privacy setting a notice can open (S153); the host maps it to its settings app.

@@ -7,7 +7,7 @@
 import { ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Appearance, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
+import { Appearance, CastList, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
 import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, NoticeStack, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
@@ -21,7 +21,7 @@ export { Strings } from "strings.slint";
 export { Palette } from "std-widgets.slint";
 // The brand teal, for the standard controls' accent (src/view.rs).
 export { Tokens } from "tokens.slint";
-export { AirPlayProblem, Appearance, Availability, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
+export { AirPlayProblem, Appearance, Availability, CastList, CastProblem, CastState, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
 
 // A titled card of speaker rows, with a note when it has none.
 component SpeakerSection inherits VerticalLayout {
@@ -39,6 +39,8 @@ component SpeakerSection inherits VerticalLayout {
     callback auto-connect-toggled(string, bool);
     callback forget-pairing(string);
     callback device-volume-fix(string);
+    callback cast-muted(string, bool);
+    callback cast-resync(string);
     // The part of a row with the keyboard focus changed; none: it lost it.
     callback focus-changed(string, RowPart);
     // A row built while this is its speaker's ID, or already built when it
@@ -115,6 +117,12 @@ component SpeakerSection inherits VerticalLayout {
                 }
                 device-volume-fix => {
                     root.device-volume-fix(speaker.id);
+                }
+                cast-muted(muted) => {
+                    root.cast-muted(speaker.id, muted);
+                }
+                cast-resync => {
+                    root.cast-resync(speaker.id);
                 }
             }
         }
@@ -393,6 +401,8 @@ export component MainWindow inherits Window {
     in property <bool> connected-virtual-hidden;
     // AirPlay discovery runs but has found no speaker for 20 seconds.
     in property <bool> airplay-none-found;
+    // What the Google Cast search says while it lists no speaker.
+    in property <CastList> cast-list;
     in property <string> airplay-delay-text;
     // The AirPlay delay field holds typing not yet applied.
     in property <bool> airplay-delay-pending;
@@ -432,6 +442,9 @@ export component MainWindow inherits Window {
     callback forget-pairing-requested(string);
     // The fix under a speaker's device-volume hint.
     callback device-volume-fix-requested(string);
+    // A Google Cast speaker's Mute or Unmute, and its Resync.
+    callback cast-muted-requested(string, bool);
+    callback cast-resync-requested(string);
     callback group-toggled(string);
 
     callback group-rename-requested(string);
@@ -974,9 +987,18 @@ export component MainWindow inherits Window {
                         focus-changed(id, part) => {
                             root.speaker-focus-changed(id, part);
                         }
+                        cast-muted(id, muted) => {
+                            root.cast-muted-requested(id, muted);
+                        }
+                        cast-resync(id) => {
+                            root.cast-resync-requested(id);
+                        }
                         // While AirPlay finds nothing, the note says what to
-                        // check, after the hidden virtual outputs' note.
-                        note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + Strings.airplay-none-found : Strings.airplay-none-found) : root.connected.length > 0 ? "" : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
+                        // check, after the hidden virtual outputs' note; the
+                        // Google Cast search's note comes last.
+                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + Strings.airplay-none-found : Strings.airplay-none-found) : root.connected.length > 0 ? "" : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
+                        property <string> cast-note: Strings.cast-list(root.cast-list);
+                        note: self.cast-note == "" ? self.list-note : self.list-note == "" || self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                         toggled(id) => {
                             root.speaker-toggled(id);
                         }

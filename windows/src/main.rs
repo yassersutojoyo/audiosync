@@ -221,18 +221,59 @@ fn backend(
     log.log(|| "audio: the WASAPI backend is open".to_owned());
     audio.set_debug_log(log.clone());
     start_airplay(&mut audio, log);
+    let cast_file = start_cast(&mut audio, log);
     audio.set_track_reader(Box::new(track_reader));
     audio.set_receiver_labels(labels.clone());
     let settings_file = settings::SettingsFile::default_path().map_or_else(
         settings::SettingsFile::in_memory,
         settings::SettingsFile::at,
     );
-    Ok(Box::new(adapter::AudioAdapter::with_settings(
+    let mut adapter = adapter::AudioAdapter::with_settings(
         audio,
         platform::notice_time,
         log.clone(),
         settings_file,
-    )))
+    );
+    adapter.set_cast_file(cast_file);
+    Ok(Box::new(adapter))
+}
+
+/// The file that keeps each Google Cast speaker's offset and audio format.
+#[cfg(windows)]
+const CAST_FILE_NAME: &str = "cast-speakers.json";
+
+/// Starts the Google Cast host with the speakers' offsets and formats from
+/// their file, and returns that file for the changes; `None` when Windows
+/// names no data folder, so they last until AudioSync quits. Without a host
+/// no Cast speaker is listed.
+#[cfg(windows)]
+fn start_cast(
+    audio: &mut audio::wasapi::WasapiBackend,
+    log: &DebugLog,
+) -> Option<std::path::PathBuf> {
+    use audiosync_cast::host::DeviceMemory;
+    let path = data_folder::folder().map(|folder| folder.join(CAST_FILE_NAME));
+    let memory = match path.as_deref().map(data_folder::read_at_launch) {
+        None => DeviceMemory::default(),
+        Some(Ok(bytes)) => DeviceMemory::from_json(&String::from_utf8_lossy(&bytes)),
+        Some(Err(error)) => {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                log.log(|| format!("Cast: the speakers' file couldn't be read: {error}"));
+            }
+            DeviceMemory::default()
+        }
+    };
+    match audio::cast::HostLink::start(memory) {
+        Ok((link, browse_error)) => {
+            match browse_error {
+                Some(error) => log.log(|| format!("Cast: discovery couldn't start: {error}")),
+                None => log.log(|| "Cast: browsing for speakers".to_owned()),
+            }
+            audio.set_cast(Box::new(link));
+        }
+        Err(error) => log.log(|| format!("Cast: the host couldn't start: {error}")),
+    }
+    path
 }
 
 /// What AirPlay receivers show while no track counts, from the strings.
@@ -455,8 +496,9 @@ fn run(
 #[cfg(test)]
 mod tests {
     /// A quit first waits for the outputs' fade-outs, at most the cap of
-    /// S186, and then for the AirPlay sender's teardown and the debug log's
-    /// flush. Together they stay within the 5 s budget.
+    /// S186, and then for the AirPlay sender's teardown, while the Google
+    /// Cast host shuts down on a thread of its own; then the debug log
+    /// flushes. Together they stay within the 5 s budget.
     #[test]
     fn the_fade_cap_and_the_quit_waits_fit_in_5_s() {
         use audiosync_airplay::session::TEARDOWN_TIMEOUT;
@@ -466,10 +508,10 @@ mod tests {
         let fade = STOP_FADE_CAP.as_secs_f64();
         assert_eq!(fade, 0.5);
         assert_eq!(QUIT_BUDGET, 5.0);
-        assert!(
-            fade + TEARDOWN_TIMEOUT.as_secs_f64() + super::LOG_FLUSH_AT_EXIT.as_secs_f64()
-                <= QUIT_BUDGET
-        );
+        // `CastHost::shutdown` waits its quit budget plus a private 0.5 s.
+        let cast = audiosync_cast::client::QUIT_BUDGET.as_secs_f64() + 0.5;
+        let airplay = fade + TEARDOWN_TIMEOUT.as_secs_f64();
+        assert!(airplay.max(cast) + super::LOG_FLUSH_AT_EXIT.as_secs_f64() <= QUIT_BUDGET);
     }
 
     /// The About dialog, opened from the top-level menu, names AudioSync's

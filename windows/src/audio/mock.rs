@@ -29,9 +29,8 @@ use audiosync_core::render::RendererControl;
 use audiosync_core::ring::RingWriter;
 use audiosync_core::volume::SharedGain;
 
-use super::airplay::FeedLease;
 use super::backend::{BackendError, OutputKind};
-use super::capture::{CAPTURE_ATTEMPTS, CaptureAttempt, CaptureTarget, LoopbackMode};
+use super::capture::{CAPTURE_ATTEMPTS, CaptureAttempt, CaptureTarget, Feeds, LoopbackMode};
 use super::controller::{CaptureHandle, CaptureState, Controller, Driver, RendererHandle};
 use super::outputs::{
     Endpoint, EndpointProperties, EndpointReading, Listing, RenderFormat, StreamSetup,
@@ -136,8 +135,8 @@ struct CaptureLink {
     writer: Option<RingWriter>,
     /// The processing half of the capture's equalizer.
     equalizer: EqProcessor,
-    /// The AirPlay sender's feed, until the capture stops.
-    airplay: Option<FeedLease>,
+    /// The network senders' feeds, until the capture stops.
+    feeds: Feeds,
 }
 
 fn lock(link: &Mutex<CaptureLink>) -> std::sync::MutexGuard<'_, CaptureLink> {
@@ -164,7 +163,7 @@ impl Drop for MockCapture {
     fn drop(&mut self) {
         let mut link = lock(&self.link);
         link.writer = None;
-        link.airplay = None;
+        link.feeds = Feeds::default();
     }
 }
 
@@ -317,7 +316,14 @@ impl MockDriver {
     pub fn capture_feeds_airplay(&self) -> bool {
         self.capture
             .as_ref()
-            .is_some_and(|link| lock(link).airplay.is_some())
+            .is_some_and(|link| lock(link).feeds.airplay.is_some())
+    }
+
+    /// Whether the running capture feeds the Google Cast sender.
+    pub fn capture_feeds_cast(&self) -> bool {
+        self.capture
+            .as_ref()
+            .is_some_and(|link| lock(link).feeds.cast.is_some())
     }
 
     /// The endpoint ID of every output started, in order.
@@ -558,7 +564,7 @@ impl Driver for MockDriver {
         target: CaptureTarget,
         writer: RingWriter,
         equalizer: EqProcessor,
-        airplay: Option<FeedLease>,
+        feeds: Feeds,
     ) -> Result<MockCapture, BackendError> {
         self.capture_attempts += 1;
         if let Some(error) = &self.capture_error {
@@ -578,7 +584,7 @@ impl Driver for MockDriver {
             state: CaptureState::Running,
             writer: Some(writer),
             equalizer,
-            airplay,
+            feeds,
         }));
         self.capture = Some(Arc::clone(&link));
         Ok(MockCapture { link })
