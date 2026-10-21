@@ -115,11 +115,36 @@ extension AppDelegate {
                                     latencyMs: wait ?? airPlayLatencyMs)
     }
 
+    /// Holds the AirPlay speakers or the Cast feed back, live, so both play
+    /// at the longer of L and the Cast offset (C77), and says so in a notice
+    /// when the AirPlay sender's delay limit leaves its speakers ahead.
+    func syncNetworkHoldBacks() {
+        let airPlay = airPlayChosenAndListed ? airPlayLatencyMs : nil
+        let cast = castModel.anchorMs
+        let wanted = NetworkHoldBack.airPlayMs(airPlay: airPlay, cast: cast)
+        if let native = nativeAirPlay, native.setHoldBack(wanted) {
+            DebugTrace.log("[AudioSync] AirPlay speakers held back \(Int(NetworkHoldBack.airPlayAppliedMs(wanted).rounded())) ms "
+                + "for the Google Cast speaker (asked \(Int(wanted.rounded())) ms)")
+        }
+        let castWait = NetworkHoldBack.castMs(airPlay: airPlay, cast: cast)
+        if let sender = castSender, sender.setHoldBack(castWait) {
+            DebugTrace.log("[AudioSync] Cast: the feed is held back \(Int(castWait.rounded())) ms to meet L")
+        }
+        let device = cast == nil ? nil : castModel.enabled
+        guard let step = airPlayAheadNotice.update(device: device, aheadMs: NetworkHoldBack.airPlayAheadMs(wanted)) else { return }
+        if let cleared = step.clear { clearNotices([Notice.airPlayAhead(cleared)]) }
+        if let shown = step.post {
+            postNotice(text.airPlayAheadOfCast(tenths: shown.tenths, speaker: castName(shown.device)),
+                       subject: Notice.airPlayAhead(shown.device))
+        }
+    }
+
     /// Gives every running local speaker whose hold-back changed its new one
     /// (S177): called whenever the speakers taking part, an offset, the
     /// reference, whether an AirPlay speaker is chosen, or L may have changed.
     /// One whose hold-back is the same gets no call, so it doesn't resync.
     func retimeLocalOutputs() {
+        syncNetworkHoldBacks()   // the same changes move how long AirPlay and Cast wait for each other
         guard engine.isRunning else {
             localHoldBacks = [:]
             return

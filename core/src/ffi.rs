@@ -1045,6 +1045,7 @@ mod tests {
                 "ASC_AIRPLAY_PAIRINGS_FAILED",
                 AIRPLAY_PAIRINGS_FAILED.to_string(),
             ),
+            ("ASC_AIRPLAY_MAX_DELAY_MS", AIRPLAY_MAX_DELAY_MS.to_string()),
             (
                 "ASC_AIRPLAY_PAIRINGS_IGNORED",
                 AIRPLAY_PAIRINGS_IGNORED.to_string(),
