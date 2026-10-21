@@ -24,6 +24,7 @@ export global Strings {
     // AirPlay speaker. Its row says so instead of showing it as playing.
     out property <string> waiting-for-device: @tr("Waiting for device");
     out property <string> reconnecting: @tr("Reconnecting…");
+    out property <string> waiting-for-airplay2: @tr("Waiting for the other AirPlay 2 speaker");
     out property <string> status-off: @tr("Off");
     out property <string> connected-none: @tr("No connected speakers");
     // The flyout's speaker list when it has no speaker and no group.
@@ -581,6 +582,9 @@ export global Strings {
         if kind == NoticeKind.airplay-retrying {
             return @tr("{} reconnecting", name);
         }
+        if kind == NoticeKind.airplay-waiting {
+            return @tr("{} waiting", name);
+        }
         if kind == NoticeKind.airplay-cant-play {
             return @tr("{} can't play", name);
         }
@@ -629,7 +633,8 @@ export global Strings {
         if state == RowState.will-play {
             return root.will-play;
         }
-        if state == RowState.waiting-for-device || state == RowState.reconnecting {
+        if state == RowState.waiting-for-device || state == RowState.reconnecting
+                || state == RowState.waiting-for-airplay2 {
             return root.row-note(state);
         }
         return root.on;
@@ -643,6 +648,9 @@ export global Strings {
         }
         if state == RowState.reconnecting {
             return root.reconnecting;
+        }
+        if state == RowState.waiting-for-airplay2 {
+            return root.waiting-for-airplay2;
         }
         return "";
     }

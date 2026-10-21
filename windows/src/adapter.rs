@@ -268,10 +268,10 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// ([`BackendEvent::OutputBusy`]), by endpoint ID: their rows say so
     /// rather than show them playing.
     busy: BTreeSet<String>,
-    /// The AirPlay speakers AudioSync keeps trying to reach
-    /// ([`BackendEvent::AirPlayTrouble`]), by ID: their rows say so rather
-    /// than show them playing.
-    reconnecting: BTreeSet<String>,
+    /// The AirPlay speakers AudioSync keeps trying to reach, or that wait
+    /// for the one AirPlay 2 slot ([`BackendEvent::AirPlayTrouble`]), by ID:
+    /// their rows say so rather than show them playing.
+    reconnecting: BTreeMap<String, Waiting>,
     /// The windows' own settings.
     view: ViewSettings,
     /// What a session does when the app it captures quits (spec S227).
@@ -346,7 +346,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             outputs_known: false,
             no_output_noticed: false,
             busy: BTreeSet::new(),
-            reconnecting: BTreeSet::new(),
+            reconnecting: BTreeMap::new(),
             view: ViewSettings::default(),
             when_source_quits: WhenSourceQuits::Stop,
         };
@@ -1500,7 +1500,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let outputs = self.audio.enabled_outputs();
         self.busy.retain(|id| outputs.contains(id));
         let airplay = self.audio.enabled_airplay();
-        self.reconnecting.retain(|id| airplay.contains(id));
+        self.reconnecting.retain(|id, _| airplay.contains(id));
     }
 
     fn handle(&mut self, event: BackendEvent) {
@@ -1594,7 +1594,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 });
             }
             BackendEvent::AirPlayTrouble { id, problem } => {
-                self.reconnecting.insert(id.clone());
+                let waiting = if problem == AirPlayProblem::OneAirPlay2Speaker {
+                    Waiting::ForAirPlay2Slot
+                } else {
+                    Waiting::Reconnecting
+                };
+                self.reconnecting.insert(id.clone(), waiting);
                 let speaker = self.airplay_name(&id);
                 self.post(
                     airplay_subject(&id),
@@ -1796,8 +1801,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
             paired: speaker.paired,
             // An AirPlay speaker's volume is its own slider (S192).
             device_volume: None,
-            waiting: (speaker.enabled && self.reconnecting.contains(&speaker.id))
-                .then_some(Waiting::Reconnecting),
+            waiting: self
+                .reconnecting
+                .get(&speaker.id)
+                .copied()
+                .filter(|_| speaker.enabled),
             cast: None,
         }
     }
@@ -4647,10 +4655,9 @@ mod tests {
             ErrorKind::Unsupported(UnsupportedReason::OneAirPlay2Session),
         );
         adapter.poll();
-        let state = state_of(&adapter, &ap(&kitchen));
-        assert!(
-            matches!(state, SpeakerState::Waiting(waiting) if waiting != ui_model::Waiting::Reconnecting),
-            "{state:?}"
+        assert_eq!(
+            state_of(&adapter, &ap(&kitchen)),
+            SpeakerState::Waiting(ui_model::Waiting::ForAirPlay2Slot)
         );
         fake.state(&kitchen, AirPlayState::Playing);
         adapter.poll();

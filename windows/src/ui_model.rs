@@ -261,6 +261,9 @@ pub enum Waiting {
     /// An AirPlay speaker that stopped playing, which AudioSync keeps trying
     /// to reach.
     Reconnecting,
+    /// An AirPlay speaker that waits for the one AirPlay 2 slot; it starts
+    /// once the other AirPlay 2 speaker stops.
+    ForAirPlay2Slot,
 }
 
 /// Where a pairing's PIN prompt is.

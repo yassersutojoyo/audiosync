@@ -478,6 +478,7 @@ fn no_text_promises_airplay() {
                 || line.contains("return @tr(\"AirPlay stopped\");")
                 || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
                 || line.contains("plays one AirPlay 2 speaker at a time, so {} waits.")
+                || line.contains("@tr(\"Waiting for the other AirPlay 2 speaker\")")
                 || line.contains(
                     "network-none-found: @tr(\"No AirPlay or Google Cast speakers found yet.",
                 )

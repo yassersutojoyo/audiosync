@@ -2577,6 +2577,7 @@ pub fn row_state(state: SpeakerState) -> RowState {
         SpeakerState::Playing => RowState::Playing,
         SpeakerState::Waiting(ui_model::Waiting::ForDevice) => RowState::WaitingForDevice,
         SpeakerState::Waiting(ui_model::Waiting::Reconnecting) => RowState::Reconnecting,
+        SpeakerState::Waiting(ui_model::Waiting::ForAirPlay2Slot) => RowState::WaitingForAirplay2,
     }
 }
 
@@ -2909,6 +2910,10 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::SpeakerFailed { speaker } => (NoticeKind::SpeakerFailed, speaker.as_str()),
         NoticeMessage::SpeakerLost { speaker } => (NoticeKind::SpeakerLost, speaker.as_str()),
         NoticeMessage::SpeakerBusy { speaker } => (NoticeKind::SpeakerBusy, speaker.as_str()),
+        NoticeMessage::AirPlayRetrying {
+            speaker,
+            problem: ui_model::AirPlayProblem::OneAirPlay2Speaker,
+        } => (NoticeKind::AirplayWaiting, speaker.as_str()),
         NoticeMessage::AirPlayRetrying { speaker, .. } => {
             (NoticeKind::AirplayRetrying, speaker.as_str())
         }
@@ -3254,6 +3259,11 @@ mod tests {
         assert_eq!(
             read(RowState::Reconnecting),
             (reconnecting.clone(), turn_off.clone(), reconnecting)
+        );
+        let slot = "Waiting for the other AirPlay 2 speaker".to_owned();
+        assert_eq!(
+            read(RowState::WaitingForAirplay2),
+            (slot.clone(), turn_off.clone(), slot)
         );
         assert_eq!(
             read(RowState::Playing),
@@ -4592,6 +4602,13 @@ mod tests {
                 problem: ui_model::AirPlayProblem::ConnectionLost,
             }),
             "Dismiss: Kitchen reconnecting"
+        );
+        assert_eq!(
+            dismiss_label(NoticeMessage::AirPlayRetrying {
+                speaker: "Kitchen".into(),
+                problem: ui_model::AirPlayProblem::OneAirPlay2Speaker,
+            }),
+            "Dismiss: Kitchen waiting"
         );
         // The names say what happened: the speaker was turned off, and the
         // unreadable file was kept.
