@@ -5,13 +5,14 @@
 
 mod common;
 
+use std::net::{Ipv4Addr, UdpSocket};
 use std::time::Duration;
 
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
-use audiosync_airplay::rtsp::Request;
+use audiosync_airplay::rtsp::{Method, Request};
 use audiosync_airplay::sender::{
     AIRPLAY2_SWITCH_ENV, Sender, SenderConfig, SpeakerEvent, SpeakerOptions, SpeakerState,
     airplay2_switch,
@@ -36,6 +37,9 @@ const PCM_TXT: &[&str] = &[
 const AIRPLAY_TXT: &[&str] = &["features=0x0,0x10040", "flags=0x4", "model=Speaker1,1"];
 
 const LONG: Duration = Duration::from_secs(15);
+
+/// The PTP event and general ports (P158).
+const PTP_PORTS: [u16; 2] = [319, 320];
 
 /// Paths and header values that only the AirPlay 2 path sends (P170).
 const AIRPLAY2_ONLY_PATHS: &[&str] = &[
@@ -101,6 +105,15 @@ fn assert_no_airplay2(requests: &[Request]) {
             request.uri
         );
         assert!(!request.headers.contains("X-Apple-HKP"), "{}", key(request));
+        assert_ne!(request.method, Method::SetPeers);
+        assert!(!request.body.starts_with(b"bplist00"), "{}", key(request));
+        for value in request.headers.get_all("Content-Type") {
+            assert!(
+                value != "application/x-apple-binary-plist" && value != "/peer-list-changed",
+                "{}",
+                key(request)
+            );
+        }
         assert!(
             !request.headers.contains("X-Apple-ProtocolVersion"),
             "{}",
@@ -164,6 +177,22 @@ fn the_switch_is_off_unless_the_host_sets_it() {
 #[test]
 fn ap2_switch_off_silent() {
     let _serial = serial();
+    // PTP event and general ports (P158): held here to catch any datagram
+    // to the loopback receivers, where the host allows binding them.
+    let ptp: Vec<UdpSocket> = PTP_PORTS
+        .iter()
+        .filter_map(|&port| UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).ok())
+        .collect();
+    for socket in &ptp {
+        socket.set_nonblocking(true).expect("nonblocking");
+    }
+    if ptp.len() < PTP_PORTS.len() {
+        eprintln!(
+            "note: the PTP datagram check holds {} of {} ports; the host refused the rest",
+            ptp.len(),
+            PTP_PORTS.len()
+        );
+    }
 
     // A device with both services goes over AirPlay 1 with the same request
     // shapes whether the switch is on or off, and nothing AirPlay 2 leaves.
@@ -205,6 +234,46 @@ fn ap2_switch_off_silent() {
         .collect();
     assert_no_airplay2(&requests);
 
+    // One whose AirPlay 1 attempt ends Unsupported stays Unsupported.
+    let behavior = Behavior {
+        public: Some("OPTIONS, SETUP, RECORD, TEARDOWN".to_owned()),
+        ..Behavior::default()
+    };
+    let receiver = NetReceiver::start(behavior);
+    let (sender, _host) = start(false);
+    let mut events = Events::default();
+    let device = dual_device(&receiver, 35);
+    let key = device.key.clone();
+    sender.add_speaker(device, options());
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Failed)
+            .is_some(),
+        "{:?}",
+        events.of(&key)
+    );
+    let kinds: Vec<ErrorKind> = events
+        .of(&key)
+        .into_iter()
+        .filter_map(|event| match event {
+            SpeakerEvent::Error(error) => Some(error.error.kind),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![ErrorKind::Unsupported(UnsupportedReason::Methods)]
+    );
+    sender.shutdown();
+    let requests: Vec<Request> = receiver
+        .log()
+        .requests
+        .iter()
+        .map(|(_, request)| request.clone())
+        .collect();
+    assert_eq!(requests.len(), 1, "only the OPTIONS");
+    assert_no_airplay2(&requests);
+
     // A device with only `_airplay._tcp` is Unsupported ("AirPlay 2 only")
     // without a connection.
     let receiver = NetReceiver::start(Behavior::default());
@@ -241,4 +310,38 @@ fn ap2_switch_off_silent() {
     );
     sender.shutdown();
     assert!(receiver.log().connections.is_empty());
+
+    let mut buffer = [0u8; 512];
+    for socket in &ptp {
+        assert!(socket.recv_from(&mut buffer).is_err(), "a PTP datagram");
+    }
+    drop(ptp);
+
+    // With the switch off the sender binds no PTP port.
+    let free: Vec<u16> = PTP_PORTS
+        .iter()
+        .copied()
+        .filter(|&port| UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).is_ok())
+        .collect();
+    if free.len() < PTP_PORTS.len() {
+        eprintln!("note: the PTP port bind check runs only for {free:?}; the host holds the rest");
+    }
+    let (sender, _host) = start(false);
+    let receiver = NetReceiver::start(Behavior::default());
+    let mut events = Events::default();
+    let device = dual_device(&receiver, 34);
+    let key = device.key.clone();
+    sender.add_speaker(device, options());
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some()
+    );
+    for port in free {
+        assert!(
+            UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).is_ok(),
+            "port {port} is bound"
+        );
+    }
+    sender.shutdown();
 }

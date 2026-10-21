@@ -37,10 +37,13 @@
 //!   with SHA-512, the HKDF and ChaCha20-Poly1305 steps), which only the
 //!   AirPlay 2 session uses.
 //!
-//! The AirPlay 2 session comes later, behind its switch (P2), which is off
-//! by default ([`sender::SenderConfig::airplay2`]).
+//! - [`ap2`]: the AirPlay 2 session from `GET /info` to TEARDOWN, with the
+//!   encrypted framing, the event connection and the `/feedback`
+//!   keep-alive, behind the hidden switch (P2), which is off by default
+//!   ([`sender::SenderConfig::airplay2`]). Its audio packets come later.
 
 pub mod alac;
+pub mod ap2;
 pub mod audio;
 pub mod clock;
 pub mod digest;
