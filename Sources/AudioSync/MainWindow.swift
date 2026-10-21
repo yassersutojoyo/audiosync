@@ -131,7 +131,7 @@ struct MainView: View {
                         speakerSection(t.thisMacSection, speakers: layout.thisMac, empty: t.thisMacNone)
                         if !model.groups.isEmpty { groupsSection(t) }
                         speakerSection(t.connectedSection, speakers: layout.connected,
-                                       empty: model.airPlayEmptyText, connected: true,
+                                       empty: model.networkEmptyText, connected: true,
                                        problem: model.airPlayProblem,
                                        localNetworkHint: model.localNetworkHint)
                     }
@@ -386,10 +386,10 @@ struct MainView: View {
                         Divider().padding(.leading, 52)
                         AirPlayDelayRow(model: model)
                     }
-                    if connected && problem == nil && !speakers.isEmpty && !hasAirPlay {
-                        // Local speakers only: say where AirPlay stands, under them.
+                    if connected && problem == nil && !speakers.isEmpty, let note = model.networkNote {
+                        // Say where AirPlay or the Google Cast search stands, under the rows.
                         Divider()
-                        emptyNote(empty, hint: hint, under: speakers)
+                        emptyNote(note, hint: hasAirPlay ? nil : hint, under: speakers)
                     }
                 }
             }
@@ -532,8 +532,6 @@ struct SpeakerRow: View {
 
     private var showSync: Bool { model.delayPanels.isOpen(speaker.id) }
 
-    private var isAirPlay: Bool { speaker.isAirPlay }
-
     private var state: SpeakerState { model.state(of: speaker) }
 
     /// Keyboard focus on the volume slider and on the device volume fix: the
@@ -556,7 +554,7 @@ struct SpeakerRow: View {
                 .accessibilityLabel(t.speakerLabel(name: speaker.name, tag: tag,
                                                    renamedFrom: speaker.renamedFrom))
                 .accessibilityValue(t.value(state))
-                .accessibilityHint(t.rowHint(state, note: t.availability(speaker.availability)))
+                .accessibilityHint(t.rowHint(state, note: castNote ?? t.availability(speaker.availability)))
                 .accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker) }
                 .help(t.help(state))
 
@@ -578,6 +576,14 @@ struct SpeakerRow: View {
                             SpeakerTypeIcon(kind: speaker.tag, state: state, text: t)
                         }
                         AvailabilityNote(availability: speaker.availability, text: t)
+                        if let castNote {
+                            // Read in the speaker's hint.
+                            Text(castNote)
+                                .font(.caption)
+                                .foregroundStyle(Brand.secondaryText)
+                                .lineLimit(1)
+                                .accessibilityHidden(true)
+                        }
                         if speaker.autoConnect {
                             Image(systemName: "bolt.fill")
                                 .font(.caption2)
@@ -596,11 +602,13 @@ struct SpeakerRow: View {
                         optionsMenu(t)
                     }
                     HStack(spacing: 8) {
-                        Slider(value: Binding(get: { speaker.volume }, set: setVolume), in: 0...100)
+                        Slider(value: Binding(get: { speaker.volume }, set: { model.setVolume(speaker, $0) }),
+                               in: 0...100)
                             .controlSize(.small)
-                            .disabled(!speaker.enabled)
+                            .disabled(!volumeAdjustable)
                             .accessibilityLabel(t.volume(of: speaker.name))
                             .accessibilityValue(t.volumeValue(speaker.volume))
+                            .hintAndHelp(speaker.cast?.volumeFixed == true ? t.castVolumeFixed : nil)
                             .focused($volumeFocused)
                         Text(t.volumeValue(speaker.volume))
                             .font(.caption.monospacedDigit())
@@ -618,24 +626,29 @@ struct SpeakerRow: View {
                             model.actions.fixDeviceVolume(speaker.id)
                         }
                     }
+                    if let cast = speaker.cast, cast.live, !cast.group { castButtons(cast, t) }
                 }
             }
             if showSync, let ms = model.savedDelay(of: speaker.id) {
                 SyncControls(model: model, id: speaker.id,
-                             kind: .offset(hasReference: model.hasLocalReference), ms: ms,
+                             kind: speaker.isCast ? .cast : .offset(hasReference: model.hasLocalReference), ms: ms,
                              label: t.delay(of: speaker.name), text: t, draft: model.draft(for: speaker.id),
                              escape: {
                     // Dropped first: the field losing the focus would apply it.
                     model.dropDelayTyping()
                     delayFocused = true
-                }) {
-                    model.actions.setLocalOffset(speaker.id, $0)
+                }) { ms in
+                    if speaker.isCast { model.actions.setCastOffset(speaker.id, ms) }
+                    else { model.actions.setLocalOffset(speaker.id, ms) }
                 }
                 .padding(.leading, 44)
                 .transition(.opacity)
-                CalibrationControl(model: model, id: speaker.id, name: speaker.name, speakerOn: speaker.enabled)
-                    .padding(.leading, 44)
-                    .transition(.opacity)
+                // A Cast speaker's timing isn't known to the microphone sweep's model.
+                if !speaker.isCast {
+                    CalibrationControl(model: model, id: speaker.id, name: speaker.name, speakerOn: speaker.enabled)
+                        .padding(.leading, 44)
+                        .transition(.opacity)
+                }
             }
         }
         .onChange(of: showSync) { _, open in
@@ -682,7 +695,49 @@ struct SpeakerRow: View {
     @ViewBuilder
     private func menuItems(_ t: UIStrings) -> some View {
         Button(t.renameSpeaker) { model.startRename(speaker) }
-        autoConnectToggle(t)
+        if let cast = speaker.cast {
+            // A Cast speaker never turns itself on: the menu has its session's actions.
+            if cast.live && !cast.group {
+                Button(cast.muted ? t.castUnmute : t.castMute) { model.actions.setCastMuted(speaker.id, !cast.muted) }
+                Button(t.castResync) { model.actions.resyncCast(speaker.id) }
+            }
+        } else {
+            autoConnectToggle(t)
+        }
+    }
+
+    private var castNote: String? { speaker.cast.flatMap(model.text.castNote) }
+
+    /// The device's own volume moves only while a session reaches it.
+    private var volumeAdjustable: Bool {
+        guard let cast = speaker.cast else { return speaker.enabled }
+        return speaker.enabled && cast.live && !cast.volumeFixed
+    }
+
+    /// Mute and Resync under a Cast speaker's volume while it connects or plays.
+    private func castButtons(_ cast: CastRow, _ t: UIStrings) -> some View {
+        HStack(spacing: 14) {
+            castButton(cast.muted ? t.castUnmute : t.castMute, help: cast.muted ? t.castUnmuteHelp : t.castMuteHelp, t) {
+                model.actions.setCastMuted(speaker.id, !cast.muted)
+            }
+            castButton(t.castResync, help: t.castResyncHelp, t) { model.actions.resyncCast(speaker.id) }
+        }
+    }
+
+    private func castButton(_ title: String, help: String, _ t: UIStrings,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                // Primary text, like the device volume fix: the brand teal can
+                // fall below 4.5:1 on a playing row.
+                .foregroundStyle(.primary)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityLabel(t.castButtonLabel(title, name: speaker.name))
+        .accessibilityHint(help)
+        .help(help)
     }
 
     private func optionsMenu(_ t: UIStrings) -> some View {
@@ -702,14 +757,14 @@ struct SpeakerRow: View {
                                             set: { model.actions.setAutoConnect(speaker.key, $0) }))
     }
 
-    private func toggle(_ on: Bool) {
-        if isAirPlay { model.actions.setAirPlayEnabled(speaker.id, on) }
-        else { model.actions.setLocalEnabled(speaker.id, on) }
-    }
+    private func toggle(_ on: Bool) { model.setEnabled(speaker, on) }
+}
 
-    private func setVolume(_ v: Double) {
-        if isAirPlay { model.actions.setAirPlayVolume(speaker.id, v) }
-        else { model.actions.setLocalVolume(speaker.id, v) }
+private extension View {
+    /// `text` as the VoiceOver hint and the tooltip; neither when nil.
+    @ViewBuilder
+    func hintAndHelp(_ text: String?) -> some View {
+        if let text { accessibilityHint(text).help(text) } else { self }
     }
 }
 
@@ -1046,6 +1101,8 @@ struct SyncControls: View {
         case offset(hasReference: Bool)
         /// The AirPlay delay, 0 to 20 000 ms (S178).
         case airPlay
+        /// A Google Cast speaker's offset, set by ear, 0 to 20 000 ms (CAST_SPEC C74-C77).
+        case cast
     }
 
     /// Not observed: read for the saved delay as it is now, and by the debug
@@ -1186,6 +1243,7 @@ struct SyncControls: View {
         switch kind {
         case .offset(let hasReference): return text.offsetHint(hasReference: hasReference)
         case .airPlay: return text.airPlayDelayHint
+        case .cast: return text.castSyncHint
         }
     }
 
@@ -1194,6 +1252,7 @@ struct SyncControls: View {
         switch kind {
         case .offset: return LocalDelay.sanitizedOffset(typed)
         case .airPlay: return LocalDelay.sanitizedAirPlayDelay(typed)
+        case .cast: return CastModel.clampedOffset(typed)
         }
     }
 
@@ -1201,7 +1260,7 @@ struct SyncControls: View {
     private func shown(_ value: Double) -> String {
         switch kind {
         case .offset: return text.offsetNumber(value)
-        case .airPlay: return String(Int(value.rounded()))
+        case .airPlay, .cast: return String(Int(value.rounded()))
         }
     }
 

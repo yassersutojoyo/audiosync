@@ -16,7 +16,8 @@ extension AppDelegate {
             clearNotices([Notice.source, Notice.start, Notice.capture])
         }
         defer { refreshStreamingViews() }   // every path, including failures, refreshes the switch
-        guard StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay, enabledLocal: enabledLocal) else {
+        guard StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay.union(castSwitchedOn),
+                                         enabledLocal: enabledLocal) else {
             notify(text.chooseSpeakerBeforeStart, origin: origin, subject: Notice.start, style: .informational)
             return
         }
@@ -55,6 +56,7 @@ extension AppDelegate {
         session += 1
         restartNativeTimeline()   // a new capture: AudioSync's own sender starts a new timeline (P143)
         applyAirPlaySelection()   // the sender's speakers join, each at its own volume
+        syncCast()   // the Cast speaker that is on connects
         syncLocalOutputs(origin: origin)
         verifyAudioFlowing(origin: origin)
     }
@@ -127,6 +129,7 @@ extension AppDelegate {
     func stopEngine() {
         engine.stop()   // the outputs and the AirPlay input fade out, then capture and the outputs end (S186)
         syncNativeSpeakers()   // nothing streams: AudioSync's own sender's speakers leave
+        syncCast()   // and the Cast session ends
         clearNotices([Notice.capture])   // about this session's audio, which just ended
         refreshStreamingViews()
     }

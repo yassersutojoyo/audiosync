@@ -36,7 +36,7 @@ extension AppDelegate {
 
     /// With every speaker switched off there is nothing to stream to.
     func stopIfIdle() {
-        if StreamingPolicy.isIdle(streaming: engine.isRunning, enabledAirPlay: playableAirPlay,
+        if StreamingPolicy.isIdle(streaming: engine.isRunning, enabledAirPlay: playableAirPlay.union(castSwitchedOn),
                                   enabledLocal: enabledLocal) {
             stopEngine()
         }
@@ -104,11 +104,15 @@ extension AppDelegate {
     }
 
     /// The hold-back of every local speaker taking part: switched on and
-    /// listed now (S172, S176).
+    /// listed now (S172, S176). They wait for L while an AirPlay speaker is
+    /// chosen, for the Cast speaker's offset while one is, and for the
+    /// longer of the two when both are.
     func localHoldBackTargets() -> [String: Double] {
-        LocalDelay.holdBacks(takingPart: localListed.filter(enabledLocal.contains), reference: localReference,
-                             offsets: localOffsetMs, airPlayChosen: airPlayChosenAndListed,
-                             latencyMs: airPlayLatencyMs)
+        let wait = CastModel.networkWaitMs(airPlay: airPlayChosenAndListed ? airPlayLatencyMs : nil,
+                                           cast: castModel.anchorMs)
+        return LocalDelay.holdBacks(takingPart: localListed.filter(enabledLocal.contains), reference: localReference,
+                                    offsets: localOffsetMs, airPlayChosen: wait != nil,
+                                    latencyMs: wait ?? airPlayLatencyMs)
     }
 
     /// Gives every running local speaker whose hold-back changed its new one

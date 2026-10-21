@@ -64,6 +64,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// When AudioSync's own sender may start again after a start failed.
     var nativeStarts = NativeSenderStarts()
 
+    // MARK: - Google Cast speakers (`+Cast`)
+
+    /// The core's Cast sender, made by the first speaker reconcile; nil
+    /// before that and after it stopped working.
+    var castSender: CastSender?
+    /// The Cast devices listed, the one that is on, and its session.
+    var castModel = CastModel()
+
     // MARK: - Settings kept between launches (AppSettings.swift)
 
     typealias Keys = AppSettings.Keys
@@ -460,7 +468,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// Quit (S110, S186): stop the session, letting the outputs and the
     /// AirPlay inputs fade out (at most 0.5 s), then tear AudioSync's own
-    /// AirPlay sender down, which ends every speaker's session. An exit
+    /// AirPlay sender down, which ends every speaker's session, while the
+    /// Cast sender's teardown runs beside them. An exit
     /// signal runs the same steps before it exits (S111, `SignalQuit` in
     /// main.swift). Runs once, whichever asks first.
     func runQuitSteps() {
@@ -468,6 +477,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         quitStepsRan = true
         Self.exiting.store(true, ordering: .relaxed)
         DebugTrace.log("[AudioSync] quitting")
+        // Its destroy waits up to about 3.5 s for a session's teardown, so it
+        // runs beside the fades and the AirPlay sender's teardown.
+        let castTeardown = castSender?.beginShutdown()
+        let castDeadline = DispatchTime.now() + CastSender.shutdownWait
+        castSender = nil
         appModel.dropDelayDrafts()
         safetyNetTimer?.invalidate()
         dueTimer?.invalidate()
@@ -479,5 +493,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         nowPlaying.stopWatching()
         localNetworkProbe.stopBrowsing()
         deviceVolumes.stopFollowing()   // removes the listeners, writes nothing (S192, S195)
+        if castTeardown?.wait(timeout: castDeadline) == .timedOut {
+            DebugTrace.log("[AudioSync] Cast: the sender's teardown didn't finish in time")
+        }
     }
 }

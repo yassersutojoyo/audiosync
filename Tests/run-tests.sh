@@ -34,7 +34,7 @@ CORE=(-I Sources/CAudioSyncCore -L core/target/universal-apple-darwin/release -l
   -framework Security -framework CoreFoundation)
 # The engine's parts on the core, with what they need to compile.
 ENGINE_PARTS=(EngineParts.swift CoreEngine.swift OutputRenderer.swift OutputFades.swift Equalizer.swift Diagnostics.swift
-  NativeAirPlayTap.swift CalibrationTap.swift)
+  NativeAirPlayTap.swift CastTap.swift CalibrationTap.swift)
 
 build() {   # build <name> <test file> <source files…> [-- <more swiftc arguments…>]
   local name=$1 test=$2; shift 2
@@ -125,7 +125,7 @@ if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
   build logic Tests/logictest.swift TrackMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
     AirPlayPairing.swift Notices.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \
     AudioDevices.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift \
-    NativeReceiver.swift NativeAirPlayModel.swift WindowRules.swift AppSettings.swift SpeakerNames.swift AppLifecycle.swift LocalDelay.swift DeviceVolume.swift \
+    NativeReceiver.swift NativeAirPlayModel.swift CastModel.swift CastSender.swift WindowRules.swift AppSettings.swift SpeakerNames.swift AppLifecycle.swift LocalDelay.swift DeviceVolume.swift \
     Localization.swift CalibrationFlow.swift ProcessTapCapture.swift SyncEngine.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
   "$OUT/logic/run" || status=1
   echo "▶ core (the app's wrappers of the core)"

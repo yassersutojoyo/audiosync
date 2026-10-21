@@ -483,6 +483,7 @@ struct UIStrings {
         switch tag {
         case .airplay: return "AirPlay"
         case .systemAirPlay: return "macOS AirPlay"
+        case .cast: return "Google Cast"
         case .builtIn: return "Built-in"
         case .bluetooth: return "Bluetooth"
         case .usb: return "USB"
@@ -638,6 +639,86 @@ struct UIStrings {
         + "Heard the AirPlay speakers late? Raise it."
     let millisecondsUnit = "ms"
 
+    // MARK: Google Cast speakers
+
+    /// Under a Cast speaker's name: a group can't play, and one that is on
+    /// says where it is; nil otherwise.
+    func castNote(_ row: CastRow) -> String? {
+        if row.group { return "Speaker groups not supported" }
+        switch row.status {
+        case .connecting: return "Connecting…"
+        case .reconnecting: return "Reconnecting…"
+        case .playing: return row.muted ? "Muted on the speaker" : nil
+        case .idle: return nil
+        }
+    }
+    /// Under a Cast speaker's volume while it connects or plays.
+    let castMute = "Mute"
+    let castUnmute = "Unmute"
+    let castMuteHelp = "Mutes the speaker itself"
+    let castUnmuteHelp = "Unmutes the speaker itself"
+    let castResync = "Resync"
+    let castResyncHelp = "Restarts the stream, with a short gap, so this speaker plays at its delay again"
+    /// What VoiceOver reads for those buttons: the button's text, so Voice
+    /// Control finds it by what it shows, then the speaker ("Mute, Kitchen").
+    func castButtonLabel(_ text: String, name: String) -> String { "\(text), \(name)" }
+    /// The volume slider's hint when the device's volume can't be changed.
+    let castVolumeFixed = "This speaker's volume can't be changed from AudioSync."
+    /// Under a Cast speaker's delay field, in place of the sync hint (CAST_SPEC C74-C77).
+    let castSyncHint = "AudioSync can't sync Google Cast speakers automatically, so it keeps the others only "
+        + "roughly in step with this one. Set this by ear: heard this speaker late? Raise the value, and the "
+        + "other speakers wait longer. Heard it early? Lower it. AudioSync keeps it for this speaker; check it "
+        + "again when you start it."
+
+    /// What Connected Speakers says about the network speakers it doesn't
+    /// list: no AirPlay speaker (`airPlayNone`), then how the Google Cast
+    /// search goes; nil when there is nothing to say.
+    func networkSpeakersNote(airPlayNone: Bool, cast: CastListState) -> String? {
+        switch (airPlayNone, cast) {
+        case (true, .noneFound): return "No AirPlay or Google Cast speakers found on this network"
+        case (true, .quiet): return airPlayNoneFound
+        case (true, _): return airPlayNoneFound + ". " + (castList(cast) ?? "")
+        case (false, _): return castList(cast)
+        }
+    }
+    /// The Google Cast search while it lists no speaker; nil when quiet.
+    func castList(_ state: CastListState) -> String? {
+        switch state {
+        case .quiet: return nil
+        case .searching: return "Looking for Google Cast speakers…"
+        case .noneFound:
+            return "No Google Cast speakers found on this network. Make sure this Mac is on the same network as "
+                + "your speakers, and that AudioSync is allowed in System Settings → Privacy & Security → Local Network."
+        case .failed: return "AudioSync can't look for Google Cast speakers right now. Restart AudioSync to try again."
+        }
+    }
+
+    /// The notice when the Cast sender stopped working with `speaker` on.
+    func castSenderStopped(speaker: String) -> String {
+        "Google Cast stopped working in AudioSync, so \(speaker) is off. Restart AudioSync to use Google Cast speakers again."
+    }
+
+    /// The notice when a Cast speaker can't play, or stopped, and is off.
+    func castProblem(_ problem: CastProblem, name: String) -> String {
+        switch problem {
+        case .busy:
+            return "Only one Google Cast speaker can play at a time, so \(name) stays off. Turn the other one off first."
+        case .notResponding:
+            return "\(name) isn't responding, so it's off. Check that it's on and on this Mac's network, then turn it on again."
+        case .refused:
+            return "\(name) declined the stream, so it's off. Turn it on again to try once more."
+        case .blocked:
+            return "\(name) couldn't reach the stream on this Mac, so it's off. If the macOS firewall is on, "
+                + "allow incoming connections for AudioSync in System Settings → Network → Firewall, then turn it on again."
+        case .takenOver:
+            return "Another app started casting to \(name), so it's off in AudioSync."
+        case .connectionLost:
+            return "\(name) lost its connection, so it's off. Turn it on again to reconnect."
+        case .group:
+            return "\(name) is a speaker group, which AudioSync can't play to. Turn on one of its speakers instead."
+        }
+    }
+
     // MARK: Equalizer
 
     let equalizerTitle = "Equalizer"
@@ -696,7 +777,7 @@ struct UIStrings {
         By Yasser Sutojoyo Kusumo
 
         AudioSync plays your Mac's sound (the whole system, one app, or an input device)
-        through HomePod/AirPlay speakers and local speakers connected to this Mac
+        through HomePod/AirPlay and Google Cast speakers and local speakers connected to this Mac
         (jack, HDMI, USB-C, Bluetooth), then aligns them with a per-speaker delay
         relative to the Mac's built-in speakers.
 
@@ -714,7 +795,7 @@ struct UIStrings {
            "Anyone on the Same Network".
         4. Speakers are listed under 'This Mac' (the Mac's own speakers and
            headphone jack), then your groups, then 'Connected Speakers': every
-           AirPlay, Bluetooth, USB, HDMI or other output, by name, each with a
+           AirPlay, Google Cast, Bluetooth, USB, HDMI or other output, by name, each with a
            small icon for its kind (in color while it plays).
         5. Click a speaker's round icon to start streaming to it. Click it again to turn
            it off. Turning streaming off keeps your speakers chosen: their icons
@@ -762,6 +843,15 @@ struct UIStrings {
         AudioSync sends to AirPlay speakers itself. If its AirPlay sender stops
         after an internal error, Connected Speakers says so, with a Retry button.
 
+        Google Cast
+        AudioSync can't sync Google Cast speakers automatically, so each one has
+        an offset you set by ear: click the time next to it. If the Cast speaker
+        sounds late, raise it, and the other speakers wait longer; if it sounds
+        early, lower it. AudioSync keeps the offset for that speaker. One Google
+        Cast speaker plays at a time, and speaker groups made in the Google Home
+        app can't play. While it plays, Resync under its volume restarts the
+        stream, with a short gap, so it lines up at its offset again.
+
         Notices
         When something needs your attention, such as a speaker that was switched
         off or a source that quit, a notice appears at the top of the window and
@@ -786,6 +876,8 @@ struct UIStrings {
         Volume
         Local speakers' sliders follow how loudness is heard: halfway is about −18 dB.
         AirPlay speakers use the AirPlay volume scale.
+        A Google Cast speaker's slider sets the speaker's own volume, which
+        Master Volume leaves alone, and Mute under it mutes the speaker itself.
 
         Notes
         - AirPlay speakers are kept in step with each other by AudioSync's AirPlay

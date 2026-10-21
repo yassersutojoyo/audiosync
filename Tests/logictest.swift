@@ -3516,9 +3516,12 @@ do {
     check(SignalQuit.step(signal: SIGINT, quitBegun: true) == .exitNow(status: 130)
             && SignalQuit.step(signal: SIGTERM, quitBegun: true) == .exitNow(status: 143),
           "quit: an exit signal while the quit steps run exits at once with its own status (S111)")
-    check(SignalQuit.limit == 3,
-          "quit: a signal waits at most 3 s for the quit steps, past the 500 ms fade cap and the sender's teardown (S111, S186)",
-          "\(SignalQuit.limit) s")
+    // The Cast teardown's deadline counts from the start of the quit steps,
+    // beside the fades and the AirPlay teardown, so it alone must fit.
+    let fadeCap = Double(ASC_STOP_FADE_CAP_MS) / 1000
+    check(CastSender.shutdownWait < SignalQuit.limit && fadeCap < CastSender.shutdownWait,
+          "quit: the Cast teardown's wait fits under a signal's limit and outlasts the fades (S111, S186)",
+          "wait \(CastSender.shutdownWait) s, fades \(fadeCap) s, limit \(SignalQuit.limit) s")
 
     // The order: the exit waits for the quit steps, then carries the signal's status.
     let ordered = SignalQuitProbe()
@@ -3727,6 +3730,184 @@ do {
     let status = CalibrationStatus(uid: "usb", phase: .running(.measuring(.chosen)))
     check(status.phase(of: "usb") == .running(.measuring(.chosen)) && status.phase(of: "bt") == .idle && status.isRunning,
           "calibration: only the speaker being calibrated shows its progress")
+}
+
+// MARK: Google Cast speakers: one session, matched by attempt (CastModel)
+do {
+    let kitchen = "0123456789abcdef0123456789abcdef"
+    let den = "fedcba9876543210fedcba9876543210"
+    var m = CastModel()
+    m.apply(.appeared(CastDevice(id: kitchen, name: "Kitchen"), offsetMs: 250))
+    m.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
+    m.apply(.appeared(CastDevice(id: "group1", name: "Everywhere", group: true), offsetMs: nil))
+    check(m.rows == [den, "group1", kitchen] && m.offset(of: kitchen) == 250 && m.offset(of: den) == 0,
+          "cast: rows by name, offsets from the device memory")
+
+    check(m.turnOn("group1") == .group && m.enabled == nil, "cast: a group stays off with a notice")
+    check(m.turnOn(kitchen) == nil && m.turnOn(den) == .busy && m.enabled == kitchen,
+          "cast: a second speaker stays off while one is on")
+    check(m.plan(streaming: false) == .none && m.plan(streaming: true) == .start(kitchen),
+          "cast: a session starts only while streaming")
+    m.startSent(kitchen)
+    check(m.plan(streaming: true) == .none && m.status(of: kitchen) == .connecting,
+          "cast: nothing new while a start waits for its attempt number")
+    check(m.started(kitchen, attempt: 3, refusal: ASC_CAST_REFUSED_NONE) == .changed
+            && m.attempt?.number == 3 && m.status(of: kitchen) == .connecting,
+          "cast: the attempt number comes back, connecting")
+
+    check(m.apply(.started(attempt: 2)) == nil && m.status(of: kitchen) == .connecting,
+          "cast: an event of an older attempt is dropped")
+    check(m.apply(.ended(attempt: 2, .failed(.connect))) == nil && m.enabled == kitchen,
+          "cast: a late end of an older attempt never turns the speaker off")
+    check(m.apply(.started(attempt: 3)) == .playing(kitchen) && m.status(of: kitchen) == .playing,
+          "cast: the current attempt plays")
+    check(m.apply(.volume(attempt: 3, CastVolume(level: 0.4, muted: true, fixed: false))) == .changed
+            && approx(m.volume(of: kitchen), 40, 1e-9) && m.volumes[kitchen]?.muted == true,
+          "cast: the device's volume and mute follow its status")
+    check(m.setVolume(kitchen, position: 70) == 0.7 && approx(m.volume(of: kitchen), 70, 1e-9)
+            && m.setVolume(den, position: 50) == nil && m.setVolume(kitchen, position: .nan) == nil,
+          "cast: the slider sets the device's level only while its session runs")
+    check(m.apply(.recovering(attempt: 3)) == .changed && m.status(of: kitchen) == .reconnecting
+            && m.apply(.recovered(attempt: 3)) == .playing(kitchen),
+          "cast: a lost channel reconnects and plays again")
+    check(m.anchorMs == 250 && CastModel.networkWaitMs(airPlay: 2000, cast: m.anchorMs) == 2000
+            && CastModel.networkWaitMs(airPlay: nil, cast: 250) == 250
+            && CastModel.networkWaitMs(airPlay: 100, cast: 250) == 250
+            && CastModel.networkWaitMs(airPlay: nil, cast: nil) == nil,
+          "cast: local outputs wait the longer of the AirPlay delay and the Cast offset")
+
+    var takenOver = m
+    check(takenOver.apply(.ended(attempt: 3, .takenOver)) == .turnedOff(kitchen, problem: .takenOver)
+            && takenOver.enabled == nil && takenOver.attempt == nil && takenOver.anchorMs == nil,
+          "cast: another app casting turns the speaker off with a notice")
+    var stopped = m
+    check(stopped.turnOff(kitchen) && stopped.plan(streaming: true) == .stop, "cast: turning it off stops its session")
+    stopped.stopSent()
+    check(stopped.apply(.ended(attempt: 3, .stopped)) == nil && stopped.plan(streaming: true) == .none,
+          "cast: the end of a stopped session is stale and says nothing")
+    let streamingOff = m
+    check(streamingOff.plan(streaming: false) == .stop && streamingOff.enabled == kitchen,
+          "cast: streaming off stops the session and keeps the speaker chosen")
+
+    var refused = CastModel()
+    refused.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
+    _ = refused.turnOn(den)
+    refused.startSent(den)
+    check(refused.started(den, attempt: 0, refusal: ASC_CAST_REFUSED_BUSY) == .turnedOff(den, problem: .busy)
+            && refused.enabled == nil && refused.status(of: den) == .idle,
+          "cast: attempt 0 means refused, and the speaker goes off")
+
+    check(CastEnd.failed(.connect).problem == .notResponding && CastEnd.failed(.launch).problem == .refused
+            && CastEnd.failed(.noFetch).problem == .blocked && CastEnd.failed(.stream).problem == .connectionLost
+            && CastEnd.failed(.group).problem == .group && CastEnd.failed(nil).problem == .notResponding
+            && CastEnd.stopped.problem == nil && CastEnd.deselected.problem == nil,
+          "cast: each way a session ends maps to its notice, or none")
+
+    var failed = m
+    check(failed.apply(.failed(detail: "")) == .senderFailed(wasOn: kitchen) && failed.enabled == nil && failed.rows.isEmpty
+            && failed.listState(now: Date()) == .failed,
+          "cast: a sender that stopped working empties the list and says so")
+
+    check(CastModel.clampedOffset(-5) == 0 && CastModel.clampedOffset(20_001) == 20_000
+            && CastModel.clampedOffset(12.6) == 13 && CastModel.clampedOffset(.infinity) == nil,
+          "cast: the offset field takes 0 to 20000 whole ms")
+    var offsets = m
+    check(offsets.setOffset(kitchen, ms: 250) == nil && offsets.setOffset(kitchen, ms: 30_000) == 20_000
+            && offsets.offset(of: kitchen) == 20_000, "cast: an offset is stored clamped, and only when it changes")
+
+    let start = Date()
+    var listed = CastModel()
+    check(listed.listState(now: start) == .quiet, "cast: no note before the search starts")
+    listed.discovery = .browsing(since: start)
+    check(listed.listState(now: start + 5) == .searching && listed.listState(now: start + 20) == .noneFound,
+          "cast: searching, then none found after 20 s")
+    listed.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
+    check(listed.listState(now: start + 30) == .quiet, "cast: no note once a speaker is listed")
+    listed.apply(.gone(id: den))
+    check(listed.rows.isEmpty && listed.listState(now: start + 30) == .noneFound, "cast: a speaker that goes leaves the list")
+
+    var raw = AscCastEvent()
+    raw.kind = ASC_CAST_EVENT_ENDED
+    raw.attempt = 7
+    raw.reason = ASC_CAST_END_FAILED
+    raw.error = ASC_CAST_ERROR_NO_FETCH
+    check(CastEvent(raw) == .ended(attempt: 7, .failed(.noFetch)), "cast: an ended event copies its reason and error")
+    raw = AscCastEvent()
+    raw.kind = ASC_CAST_EVENT_VOLUME
+    raw.attempt = 7
+    raw.level = 0.25
+    raw.volume_fixed = true
+    check(CastEvent(raw) == .volume(attempt: 7, CastVolume(level: 0.25, muted: false, fixed: true))
+            && CastEvent(raw)?.attempt == 7, "cast: a volume event copies level, mute and fixed")
+    raw.kind = 999
+    check(CastEvent(raw) == nil, "cast: an unknown event kind is skipped")
+    let change: CastDeviceChange? = kitchen.withCString { id in
+        "Kitchen".withCString { name in
+            "Nest Audio".withCString { model in
+                CastDeviceChange(AscCastDevice(event: ASC_CAST_APPEARED, id: id, name: name, model: model,
+                                               flags: UInt32(ASC_CAST_FLAG_GROUP)),
+                                 offsetMs: { $0 == kitchen ? 40 : nil })
+            }
+        }
+    }
+    check(change == .appeared(CastDevice(id: kitchen, name: "Kitchen", model: "Nest Audio", group: true), offsetMs: 40),
+          "cast: a discovery report copies its strings, flags and stored offset")
+
+    let t = UIStrings()
+    var notices = NoticeList()
+    notices.post(t.castProblem(.busy, name: "Den"), subject: Notice.cast(den))
+    notices.post(t.castProblem(.notResponding, name: "Kitchen"), subject: Notice.cast(kitchen))
+    notices.post(t.castProblem(.connectionLost, name: "Kitchen"), subject: Notice.cast(kitchen))
+    check(notices.count == 2 && notices.newest?.text.contains("Kitchen") == true
+            && notices.items.last?.text.contains("Den") == true,
+          "cast: one notice per speaker, the newest replacing the older one")
+    var senderGone = notices
+    senderGone.post("Source quit", subject: Notice.source)
+    let castSubjects = Notice.castSubjects(in: senderGone)
+    let cleared = senderGone.clear(castSubjects)
+    check(Set(castSubjects) == [Notice.cast(den), Notice.cast(kitchen)]
+            && cleared && senderGone.items.map(\.subject) == [Notice.source],
+          "cast: a sender that stopped clears every speaker's notice, and only those")
+    check(t.castSenderStopped(speaker: "Kitchen").contains("Kitchen"), "cast: the sender's notice names the speaker that went off")
+    var idleFailure = CastModel()
+    check(idleFailure.apply(.failed(detail: "")) == .senderFailed(wasOn: nil), "cast: no speaker named when none was on")
+    check(t.castList(.noneFound)?.contains("Local Network") == true, "cast: none found points to Local Network access")
+    let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost, .group]
+    check(problems.allSatisfy { let text = t.castProblem($0, name: "Den"); return text.contains("Den") && !text.contains("\u{2014}") },
+          "cast: every notice names the speaker, with no em dash")
+    check(t.networkSpeakersNote(airPlayNone: true, cast: .noneFound) == "No AirPlay or Google Cast speakers found on this network"
+            && t.networkSpeakersNote(airPlayNone: true, cast: .quiet) == t.airPlayNoneFound
+            && t.networkSpeakersNote(airPlayNone: false, cast: .searching) == t.castList(.searching)
+            && t.networkSpeakersNote(airPlayNone: false, cast: .quiet) == nil
+            && t.networkSpeakersNote(airPlayNone: true, cast: .failed)?.hasPrefix(t.airPlayNoneFound) == true,
+          "cast: Connected Speakers says where AirPlay and the Cast search stand")
+    check(t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: true)) == "Speaker groups not supported"
+            && t.castNote(CastRow(status: .connecting, muted: false, volumeFixed: false, group: false)) == "Connecting…"
+            && t.castNote(CastRow(status: .playing, muted: true, volumeFixed: false, group: false)) == "Muted on the speaker"
+            && t.castNote(CastRow(status: .playing, muted: false, volumeFixed: false, group: false)) == nil,
+          "cast: the note under a speaker's name")
+}
+
+// MARK: Google Cast device memory: saved atomically, read back by a new sender
+do {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-cast-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = CastMemoryFile.file(in: dir)
+    check(url.lastPathComponent == "cast-devices.json" && url.deletingLastPathComponent().lastPathComponent == "AudioSync"
+            && CastMemoryFile.load(from: url) == nil, "cast memory: in AudioSync's folder, nothing before a save")
+    let id = "0123456789abcdef0123456789abcdef"
+    var first = asc_cast_create(nil)
+    check(first != nil && asc_cast_offset_ms(first, id) == -1 && asc_cast_set_offset(first, id, 1234.4)
+            && !asc_cast_set_offset(first, id, -1), "cast memory: an offset is stored, a negative one refused")
+    let json = asc_cast_memory_json(first).map { String(cString: $0) }
+    asc_cast_destroy(&first)
+    var saved = false
+    if let json { saved = (try? CastMemoryFile.save(json, to: url)) != nil }
+    let loaded = CastMemoryFile.load(from: url)
+    check(saved && loaded == json && first == nil, "cast memory: the JSON is written and read back whole")
+    var second = asc_cast_create(loaded)
+    check(asc_cast_offset_ms(second, id) == 1234, "cast memory: a new sender starts with the stored offset")
+    asc_cast_destroy(&second)
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
