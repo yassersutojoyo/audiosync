@@ -100,5 +100,78 @@ fn per_block(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, per_block);
+/// One capture block through four local outputs on one 48 kHz ring: each
+/// reads, converts and maps onto a stereo device buffer at `device_rate`.
+/// `ratio_one` makes the converters the renderer's (S85), otherwise equal
+/// rates pass through; `trimming` keeps a one-frame trim under way in every
+/// callback, each new trim going the other way from the last one any
+/// output started (so outputs 0 and 2 mostly speed up, 1 and 3 slow down).
+fn four_outputs(c: &mut Criterion, name: &str, device_rate: u32, ratio_one: bool, trimming: bool) {
+    let mut group = c.benchmark_group("per_512_frame_block");
+    group.throughput(Throughput::Elements(N as u64));
+    let (ring, mut writer, block) = primed(48_000);
+    let t = tolerance_frames(48_000);
+    let mut outputs: Vec<(Reader, Resampler)> = (0..4)
+        .map(|_| {
+            let resampler = if ratio_one {
+                Resampler::new_at_ratio_one(48_000, device_rate)
+            } else {
+                Resampler::new(48_000, device_rate)
+            };
+            (Reader::new(Arc::clone(&ring), 48_000), resampler.unwrap())
+        })
+        .collect();
+    let steps = N * device_rate as usize / 48_000 - 1;
+    let mut dst = vec![0.0f32; N * 2];
+    let mut out = vec![0.0f32; 4 * N * 2];
+    let mut device = vec![0.0f32; 4 * N * 2];
+    let mut ahead = false;
+    group.bench_function(name, |b| {
+        b.iter(|| {
+            writer.write(&block, N);
+            for (i, (reader, resampler)) in outputs.iter_mut().enumerate() {
+                if trimming && !resampler.is_trimming() {
+                    ahead = !ahead;
+                    if ahead {
+                        resampler.speed_up(1, steps);
+                    } else {
+                        resampler.slow_down(1, steps);
+                    }
+                }
+                reader.read(&mut dst, N, 96_000 + 480 * i as i64, t);
+                let (_, made) = resampler.process(&dst, &mut out);
+                black_box(convert::map_to_device(&out, made, 0.5, &mut device, 2));
+            }
+        })
+    });
+    group.finish();
+}
+
+fn local_outputs(c: &mut Criterion) {
+    four_outputs(c, "four_48000_outputs_passthrough", 48_000, false, false);
+    four_outputs(c, "four_48000_outputs_copy_only", 48_000, true, false);
+    four_outputs(
+        c,
+        "four_48000_outputs_every_callback_trimming",
+        48_000,
+        true,
+        true,
+    );
+    four_outputs(
+        c,
+        "four_44100_outputs_every_callback_trimming",
+        44_100,
+        true,
+        true,
+    );
+    four_outputs(
+        c,
+        "four_96000_outputs_every_callback_trimming",
+        96_000,
+        true,
+        true,
+    );
+}
+
+criterion_group!(benches, per_block, local_outputs);
 criterion_main!(benches);

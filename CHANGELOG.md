@@ -11,6 +11,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Changed
 
 - A Bluetooth speaker or headset now keeps about 10 ms more audio buffered, so it's less likely to run short right after it starts. When it's the earliest of your local speakers and no AirPlay speaker is on, everything plays up to about 10 ms later against the screen; the delays between your speakers stay as you set them.
+- When no AirPlay speaker is on and your earliest local speaker runs at the same sample rate as the captured audio, everything plays about 25 ms later against the screen than before, because that speaker now keeps the same buffer as one at another rate. The delays between your speakers stay as you set them.
 - When a local speaker drifts further than AudioSync can smooth out, it now waits longer before a short skip or moment of silence puts it back in time, so those come less often. Until then, such a speaker can sit a little further from the others than before.
 
 ### Fixed
@@ -19,7 +20,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, a delay field no longer shows a character it can't take for a moment before removing it: the keystroke is blocked, and the field gets the red outline with a note on what it takes. While the field has the focus, one red outline marks it in place of the blue focus ring.
 - On the Mac, a click on the empty space of an open delay panel closes it, like a click anywhere else on the speaker's row.
 - On the Mac, a Bluetooth speaker that reports a latency below 50 ms or above 1 second no longer cuts its fade-out short when you switch it off, or holds the stop for the full half second. AudioSync uses the last plausible latency it saw for that speaker instead, or 150 ms, and the debug log notes it. Your delays and the timing between speakers don't change.
-- A local speaker that plays later than your earliest one, because you set a delay on it or an AirPlay speaker is on, now keeps its timing when its clock runs a little fast or slow, as long as it runs at another sample rate than the captured audio. AudioSync now nudges its speed in small, smoothed steps, where before it drifted until a short skip or moment of silence put it back. Speakers whose clocks keep time are also no longer adjusted back and forth when the system wakes AudioSync a little late now and then.
+- A local speaker that plays later than your earliest one, because you set a delay on it or an AirPlay speaker is on, now keeps its timing when its clock runs a little fast or slow. AudioSync now nudges its speed in small, smoothed steps, where before it drifted until a short skip or moment of silence put it back. Speakers whose clocks keep time are also no longer adjusted back and forth when the system wakes AudioSync a little late now and then.
+- A local speaker at the same sample rate as the captured audio no longer runs short for a moment now and then when its clock runs a little fast. It gets the same small speed adjustments as a speaker at another rate, and plays the audio unchanged between them.
 
 ## [0.5.0] - 2026-10-21
 
