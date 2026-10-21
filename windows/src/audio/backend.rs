@@ -145,10 +145,14 @@ pub struct AirPlayInfo {
     pub delay_ms: f64,
     /// Whether it plays right now.
     pub playing: bool,
-    /// Whether AudioSync keeps credentials from pairing with it.
+    /// Whether AudioSync keeps credentials from pairing with it, on
+    /// AirPlay 1 or AirPlay 2.
     pub paired: bool,
     /// Whether a pairing with it is running.
     pub pairing: bool,
+    /// AudioSync reaches it over AirPlay 2, which happens only while the
+    /// AirPlay 2 switch is on.
+    pub airplay2: bool,
 }
 
 /// The PIN prompt of a running pairing: the Apple TV shows a PIN for the
