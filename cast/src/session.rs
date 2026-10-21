@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::audio::{AudioReader, StreamFormat};
+use crate::audio::{AudioReader, Codec, StreamFormat};
 use crate::channel::{Event, PlaybackEnd};
 use crate::client::{CastClient, QUIT_BUDGET};
 use crate::error::{Backoff, ConnectError, EndReason, LaunchError};
@@ -142,6 +142,13 @@ pub enum SessionEvent {
     /// The device saw the stream end while the sender kept it open, and the
     /// sender loaded it again once (C86).
     Reloaded,
+    /// The device refused WAV before it played, and the sender loads FLAC
+    /// once instead (C84).
+    FormatFallback {
+        from: Codec,
+        to: Codec,
+        reason: MediaError,
+    },
     /// From the stream server, for the log.
     Stream(ServerEvent),
     Ended(SessionEnd),
@@ -152,8 +159,21 @@ pub enum SessionEvent {
 pub struct SessionConfig {
     /// The device's addresses and port (C15, C16).
     pub addresses: Vec<SocketAddr>,
+    /// The format to try first: WAV, or the one that last worked on this
+    /// device (C84).
     pub format: StreamFormat,
     pub metadata: Metadata,
+}
+
+/// Whether a failed first `LOAD` in `codec` is retried in FLAC (C84):
+/// `LOAD_FAILED`, or `IDLE` with `ERROR` before the first `PLAYING`, with
+/// WAV.
+pub fn falls_back_to_flac(codec: Codec, error: &MediaError) -> bool {
+    codec == Codec::Wav
+        && matches!(
+            error,
+            MediaError::LoadFailed { .. } | MediaError::Idle(IdleReason::Error)
+        )
 }
 
 /// Connects, retrying while `selected` stays true: after 1 s, then doubling
@@ -211,6 +231,17 @@ pub struct CastSession {
     next_diagnostics: Instant,
     error_recovered: bool,
     finished_reloaded: bool,
+    /// Set by the host once it quits: every teardown from then on keeps to
+    /// [`QUIT_BUDGET`] (C88).
+    quitting: Arc<AtomicBool>,
+}
+
+fn teardown_budget(quitting: &AtomicBool) -> Duration {
+    if quitting.load(Ordering::SeqCst) {
+        QUIT_BUDGET
+    } else {
+        STOP_BUDGET
+    }
 }
 
 impl fmt::Debug for CastSession {
@@ -232,6 +263,19 @@ impl CastSession {
         selected: Arc<AtomicBool>,
         on_failure: impl FnMut(ConnectError, Duration),
     ) -> Result<CastSession, SessionError> {
+        let quitting = Arc::new(AtomicBool::new(false));
+        CastSession::start_with(config, reader, selected, quitting, on_failure)
+    }
+
+    /// [`CastSession::start`] with the host's quit flag: once it is set,
+    /// teardowns keep to [`QUIT_BUDGET`].
+    pub fn start_with(
+        config: SessionConfig,
+        reader: AudioReader,
+        selected: Arc<AtomicBool>,
+        quitting: Arc<AtomicBool>,
+        on_failure: impl FnMut(ConnectError, Duration),
+    ) -> Result<CastSession, SessionError> {
         let mut client = match connect_retrying(&config.addresses, &selected, on_failure) {
             Ok(client) => client,
             Err(error) => {
@@ -240,10 +284,11 @@ impl CastSession {
                 ));
             }
         };
+        client.set_selected(Arc::clone(&selected));
         let app = match client.launch() {
             Ok(app) => app,
             Err(error) => {
-                client.stop(STOP_BUDGET);
+                client.stop(teardown_budget(&quitting));
                 return Err(error.into());
             }
         };
@@ -258,7 +303,7 @@ impl CastSession {
         let server = match StreamServer::start(stream_config, reader) {
             Ok(server) => server,
             Err(error) => {
-                client.stop(STOP_BUDGET);
+                client.stop(teardown_budget(&quitting));
                 return Err(error.into());
             }
         };
@@ -290,12 +335,18 @@ impl CastSession {
             next_diagnostics: Instant::now(),
             error_recovered: false,
             finished_reloaded: false,
+            quitting,
         };
-        if let Err(error) = session.load_until_playing() {
-            session.teardown(STOP_BUDGET);
+        if let Err(error) = session.load_with_fallback() {
+            session.teardown(teardown_budget(&session.quitting));
             return Err(error.into());
         }
         Ok(session)
+    }
+
+    /// The format the device plays, after any fallback (C84).
+    pub fn format(&self) -> StreamFormat {
+        self.server.format()
     }
 
     /// The flag the host clears when the user deselects the device; retries
@@ -426,7 +477,8 @@ impl CastSession {
 
     /// The user stopped the stream (C87).
     pub fn stop(self) -> EndReason {
-        self.finish(STOP_BUDGET)
+        let budget = teardown_budget(&self.quitting);
+        self.finish(budget)
     }
 
     /// The host quits: the teardown of C87 within 3 s in total, then
@@ -467,7 +519,7 @@ impl CastSession {
         if self.ended {
             return;
         }
-        self.teardown(STOP_BUDGET);
+        self.teardown(teardown_budget(&self.quitting));
         self.report(SessionEvent::Ended(end));
     }
 
@@ -475,6 +527,26 @@ impl CastSession {
         while let Some(event) = self.server.poll_event() {
             self.report(SessionEvent::Stream(event));
         }
+    }
+
+    /// The first `LOAD`, and the one retry in FLAC that C84 allows.
+    fn load_with_fallback(&mut self) -> Result<(), MediaError> {
+        let error = match self.load_until_playing() {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        let from = self.server.format().codec();
+        if !falls_back_to_flac(from, &error) {
+            return Err(error);
+        }
+        self.load.url = self.server.set_codec(Codec::Flac);
+        self.load.content_type = self.server.format().content_type().to_owned();
+        self.report(SessionEvent::FormatFallback {
+            from,
+            to: Codec::Flac,
+            reason: error,
+        });
+        self.load_until_playing()
     }
 
     /// Sends `LOAD` and waits for `PLAYING` (C49), for the device's fetch
@@ -505,6 +577,9 @@ impl CastSession {
             }
             if self.server.stats().fetches == fetches && replied.elapsed() >= FETCH_TIMEOUT {
                 return Err(MediaError::NoFetch);
+            }
+            if !self.selected.load(Ordering::SeqCst) {
+                return Err(MediaError::Ended(EndReason::Stopped));
             }
         }
     }
@@ -592,7 +667,10 @@ impl CastSession {
             self.report(SessionEvent::ConnectFailed { error, retry_in });
         });
         self.client = match result {
-            Ok(client) => client,
+            Ok(mut client) => {
+                client.set_selected(Arc::clone(&self.selected));
+                client
+            }
             Err(None) => return self.end(SessionEnd::Deselected),
             Err(Some(error)) => return self.end(SessionEnd::Failed(error.into())),
         };
@@ -623,6 +701,7 @@ impl CastSession {
         };
         match result {
             Ok(relaunched) => self.report(SessionEvent::Recovered { relaunched }),
+            Err(_) if !self.selected.load(Ordering::SeqCst) => self.end(SessionEnd::Deselected),
             Err(error) => self.end(SessionEnd::Failed(error)),
         }
     }
