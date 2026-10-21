@@ -38,6 +38,7 @@
 pub mod airplay;
 pub mod backend;
 pub mod capture;
+pub mod cast;
 pub mod controller;
 #[cfg(test)]
 pub mod mock;

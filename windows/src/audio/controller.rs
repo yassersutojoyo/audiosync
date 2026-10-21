@@ -66,18 +66,17 @@ use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 
 use super::SESSION_RATE;
-use super::airplay::{
-    AirPlayLink, AirPlaySpeakers, FeedLease, FeedSlot, SenderStarter, StartedSender,
-};
+use super::airplay::{AirPlayLink, AirPlaySpeakers, FeedSlot, SenderStarter, StartedSender};
 use super::backend::{
     AirPlayInfo, AirPlayPasswordPrompt, AirPlayPinPrompt, AirPlayProblem, AudioBackend,
-    BackendError, BackendEvent, OutputInfo, OutputKind, SourceId, SourceInfo, StopReason,
-    TIMED_OUT,
+    BackendError, BackendEvent, CastDiscovery, CastInfo, CastProblem, OutputInfo, OutputKind,
+    SourceId, SourceInfo, StopReason, TIMED_OUT,
 };
 use super::capture::{
-    CaptureAttempt, CaptureTarget, LoopbackMode, SampleType, decide_capture, display_name,
+    CaptureAttempt, CaptureTarget, Feeds, LoopbackMode, SampleType, decide_capture, display_name,
     input_sources, running_app, source_list,
 };
+use super::cast::{CastLink, CastSpeakers};
 use super::now_playing::{Follow, SharedLabels, TrackInfo, TrackReader, TrackSource};
 #[cfg(test)]
 use super::outputs::OutputParams;
@@ -250,16 +249,16 @@ pub trait Driver {
     fn inputs(&mut self) -> Result<Vec<EndpointReading>, BackendError>;
 
     /// Starts capturing `target`, writing to the ring through
-    /// `equalizer` and `writer`, and handing the same audio to the AirPlay
-    /// sender's feed when there is one. Returns once the capture runs, or
-    /// with why it couldn't start. The feed goes back to its slot when the
+    /// `equalizer` and `writer`, and handing the same audio to the AirPlay and
+    /// Google Cast senders' feeds in `feeds`. Returns once the capture runs, or
+    /// with why it couldn't start. Each feed goes back to its slot when the
     /// capture stops.
     fn start_capture(
         &mut self,
         target: CaptureTarget,
         writer: RingWriter,
         equalizer: EqProcessor,
-        airplay: Option<FeedLease>,
+        feeds: Feeds,
     ) -> Result<Self::Capture, BackendError>;
 
     /// Starts rendering to `endpoint` through `reader`, controlled through
@@ -370,6 +369,8 @@ pub struct Controller<D: Driver> {
     airplay: Option<AirPlaySpeakers>,
     /// The sender's feed, which each capture borrows.
     feed: Option<FeedSlot>,
+    /// The Google Cast side, once its host runs; it holds its own feed.
+    cast: Option<CastSpeakers>,
     /// Starts a new sender when the user retries after the sender stopped
     /// or couldn't start.
     starter: Option<SenderStarter>,
@@ -444,6 +445,7 @@ impl<D: Driver> Controller<D> {
             routing: RoutingState::default(),
             airplay: None,
             feed: None,
+            cast: None,
             starter: None,
             waiting_store: None,
             retiring: Vec::new(),
@@ -531,6 +533,9 @@ impl<D: Driver> Controller<D> {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_debug_log(log.clone());
         }
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_debug_log(log.clone());
+        }
         self.track_info.set_debug_log(log.clone());
         self.log = log;
     }
@@ -570,12 +575,43 @@ impl<D: Driver> Controller<D> {
         }
     }
 
-    /// AirPlay speakers that are on join the stream, or leave it.
+    /// Plays to Google Cast speakers through `link`, fed by the capture.
+    pub fn set_cast(&mut self, link: Box<dyn CastLink>) {
+        let mut cast = CastSpeakers::new(link, self.log.clone());
+        cast.set_streaming(self.session.is_some());
+        self.cast = Some(cast);
+        self.sync_cast_rule();
+    }
+
+    /// AirPlay and Google Cast speakers that are on join the stream, or
+    /// leave it.
     fn airplay_streaming(&mut self, streaming: bool) {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_streaming(streaming);
         }
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_streaming(streaming);
+        }
         self.sync_airplay_rule();
+        self.sync_cast_rule();
+    }
+
+    /// Re-times the other outputs, live, when a Google Cast speaker is
+    /// switched on or off or its offset changes: they wait the larger of L
+    /// and that offset.
+    fn sync_cast_rule(&mut self) {
+        let anchor = self.cast.as_ref().and_then(CastSpeakers::anchor);
+        if !self.policy.set_cast_offset(anchor) {
+            return;
+        }
+        self.log.log(|| match anchor {
+            Some(offset) => format!(
+                "the other outputs wait for the Google Cast speaker: its offset is {} ms",
+                offset.as_millis()
+            ),
+            None => "no Google Cast speaker is on: the outputs no longer wait for one".to_owned(),
+        });
+        self.retime();
     }
 
     /// Re-times local outputs, live, when whether an AirPlay speaker is
@@ -1531,9 +1567,13 @@ impl<D: Driver> Controller<D> {
         let feed = self.feed.as_ref().and_then(FeedSlot::lease);
         let feeds_airplay = feed.is_some();
         let waits_for_feed = self.feed.is_some() && !feeds_airplay;
+        let feeds = Feeds {
+            airplay: feed,
+            cast: self.cast.as_ref().and_then(CastSpeakers::lease),
+        };
         let capture = self
             .driver
-            .start_capture(target.clone(), writer, processor, feed)?;
+            .start_capture(target.clone(), writer, processor, feeds)?;
         self.log
             .log(|| describe_capture_start(&target, capture.setup(), feeds_airplay));
         if waits_for_feed {
@@ -1684,10 +1724,21 @@ impl<D: Driver> Controller<D> {
 
 impl<D: Driver> Drop for Controller<D> {
     fn drop(&mut self) {
+        // The Cast host's quit runs beside the fade and the AirPlay
+        // teardown, so the quit stays within its budget.
+        let cast = self.cast.as_mut().and_then(CastSpeakers::begin_shutdown);
         self.next_start = None;
         self.end_session();
         self.reap(true);
         self.stop_following_device_volumes();
+        self.airplay = None;
+        if let Some(cast) = cast {
+            let clean = cast.join().unwrap_or(false);
+            if !clean {
+                self.log
+                    .log(|| "Google Cast: the host didn't stop in time".to_owned());
+            }
+        }
     }
 }
 
@@ -2064,6 +2115,62 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn cast_speakers(&self) -> Vec<CastInfo> {
+        self.cast
+            .as_ref()
+            .map(CastSpeakers::speakers)
+            .unwrap_or_default()
+    }
+
+    fn cast_discovery(&self) -> CastDiscovery {
+        self.cast
+            .as_ref()
+            .map_or(CastDiscovery::Off, CastSpeakers::discovery)
+    }
+
+    fn set_cast_enabled(&mut self, id: &str, enabled: bool) -> Result<(), CastProblem> {
+        let Some(cast) = self.cast.as_mut() else {
+            return if enabled {
+                Err(CastProblem::NotResponding)
+            } else {
+                Ok(())
+            };
+        };
+        let result = cast.set_enabled(id, enabled);
+        self.sync_cast_rule();
+        result
+    }
+
+    fn set_cast_volume(&mut self, id: &str, position: f64) {
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_volume(id, position);
+        }
+    }
+
+    fn set_cast_muted(&mut self, id: &str, muted: bool) {
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_muted(id, muted);
+        }
+    }
+
+    fn set_cast_offset(&mut self, id: &str, offset_ms: f64) {
+        if let Some(cast) = self.cast.as_mut()
+            && cast.set_offset(id, offset_ms)
+        {
+            self.sync_cast_rule();
+        }
+    }
+
+    fn resync_cast(&mut self, id: &str) {
+        if let Some(cast) = self.cast.as_mut() {
+            cast.resync(id);
+        }
+    }
+
+    fn cast_memory_json(&self) -> Option<String> {
+        self.cast.as_ref().and_then(CastSpeakers::memory_json)
+    }
+
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
         self.quit_watch.set_setting(setting);
     }
@@ -2178,6 +2285,11 @@ impl<D: Driver> AudioBackend for Controller<D> {
             let events = airplay.poll();
             self.pending.extend(events);
             self.sync_airplay_rule();
+        }
+        if let Some(cast) = self.cast.as_mut() {
+            let events = cast.poll();
+            self.pending.extend(events);
+            self.sync_cast_rule();
         }
         self.sync_track_info();
 
@@ -2708,6 +2820,12 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::DeviceVolumeChanged { id } => {
             format!("output {}: its own volume changed", label(names, id))
         }
+        BackendEvent::CastChanged => "the Google Cast speakers changed".to_owned(),
+        BackendEvent::CastPlaying { id } => format!("Google Cast speaker ({id}) plays"),
+        BackendEvent::CastFailed { id, problem } => {
+            format!("Google Cast speaker ({id}) can't play ({problem:?}); it is turned off")
+        }
+        BackendEvent::CastMemoryChanged => "the Google Cast settings changed".to_owned(),
         BackendEvent::PairingStore { saved: true } => {
             "the AirPlay pairings' file can be written again".to_owned()
         }
