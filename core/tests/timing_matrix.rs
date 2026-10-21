@@ -62,7 +62,6 @@ const HELD_MS: f64 = 100.0;
 /// With AirPlay chosen, every local output is held back this much or more.
 const AIRPLAY_MS: f64 = 1700.0;
 
-
 /// I4: how far apart outputs may play beyond a capture block, in ms.
 const ALIGN_SLACK_MS: f64 = 2.0;
 /// I5: how far an output's delay may move over the last quarter, in ms.
@@ -1028,8 +1027,13 @@ fn the_capture_rate_output_that_sets_the_lead_never_runs_dry_through_its_wander(
     // fast clock. The ratio-1 converter fixed the clock; an output that
     // anchored in a late stretch of its lateness wander still ran dry until
     // the anchor floor fell toward the wander's earlier callbacks.
-    let cases = matrix().cases_where(|c| !c.is_stall() && c.k % 8 == 0 && c.platform == Platform::Mac);
-    assert!(cases.iter().any(|(case, _)| case.devices[0].wander_ms > 0.0));
+    let cases =
+        matrix().cases_where(|c| !c.is_stall() && c.k % 8 == 0 && c.platform == Platform::Mac);
+    assert!(
+        cases
+            .iter()
+            .any(|(case, _)| case.devices[0].wander_ms > 0.0)
+    );
     for (case, outcome) in cases {
         assert!(
             !outcome.fails[0],
@@ -1083,9 +1087,7 @@ fn two_stray_early_stamps_move_no_output_by_more_than_2_ms() {
     // hardly move it, where following the floor at once moved such outputs
     // by up to 57 ms until the next anchor.
     let strayed: Vec<(&Case, &Outcome)> = matrix().cases_where(|c| {
-        !c.is_stall()
-            && c.platform == Platform::Mac
-            && c.devices.iter().any(|d| d.strays.is_some())
+        !c.is_stall() && c.platform == Platform::Mac && c.devices.iter().any(|d| d.strays.is_some())
     });
     assert!(!strayed.is_empty());
     let calm: Vec<Case> = strayed

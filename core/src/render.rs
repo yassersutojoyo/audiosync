@@ -1868,7 +1868,11 @@ mod tests {
         assert_eq!(s.renderer.anchor_floor, low);
         let counters = s.control.counters();
         assert_eq!(
-            (counters.drift_skips, counters.drift_silences, counters.starved_renders),
+            (
+                counters.drift_skips,
+                counters.drift_silences,
+                counters.starved_renders
+            ),
             (0, 0, 0),
             "{counters:?}"
         );
