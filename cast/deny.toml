@@ -2,14 +2,11 @@
 #
 # `cargo deny check licenses` (run from cast/, and in CI) fails when any
 # crate in the build graph, development dependencies included, is under a
-# license that is not on this list. The sender itself is MIT for now;
+# license that is not on this list. The sender itself is GPL-3.0-or-later;
 # third-party crates must be permissive. The list mirrors core/deny.toml.
 
 [graph]
-# The features this crate builds, not all of them: native-tls, rcgen and
-# rustls have optional backends (vendored OpenSSL, aws-lc) that the sender
-# and its tests never compile.
-all-features = false
+all-features = true
 
 [licenses]
 allow = [
@@ -22,6 +19,11 @@ allow = [
     "Unicode-3.0",
 ]
 confidence-threshold = 0.93
+exceptions = [
+    # AudioSync's own code is GPL-3.0-or-later; the exception names only our
+    # own crate, so no third-party crate may bring a GPL license in.
+    { crate = "audiosync-cast", allow = ["GPL-3.0-or-later"] },
+]
 # Test and build tools are held to the same list as the library.
 include-dev = true
 include-build = true

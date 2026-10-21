@@ -21,6 +21,9 @@ use crate::status::{AppSession, ReceiverStatus};
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// The longest a read waits before timers run again.
 const READ_SLICE: Duration = Duration::from_millis(50);
+/// Events kept for a host that doesn't poll: beyond this, the oldest
+/// status and drop reports go first; launch results and the end are kept.
+pub const MAX_EVENTS: usize = 64;
 /// The longest teardown at host quit (C88).
 pub const QUIT_BUDGET: Duration = Duration::from_secs(3);
 
@@ -102,7 +105,10 @@ pub struct CastClient {
     stream: TlsStream<TcpStream>,
     reader: FrameReader,
     channel: Channel,
-    events: VecDeque<Event>,
+    /// Each event with its sequence number, so a call waits only for
+    /// events reported after it started.
+    events: VecDeque<(u64, Event)>,
+    next_event: u64,
     address: SocketAddr,
     local_address: SocketAddr,
     fingerprint: Option<Fingerprint>,
@@ -133,14 +139,18 @@ impl CastClient {
     pub fn connect(addresses: &[SocketAddr], ids: RequestIds) -> Result<CastClient, ConnectError> {
         let mut ordered = addresses.to_vec();
         ordered.sort_by_key(SocketAddr::is_ipv6);
-        let mut last = ConnectError::NoAddress;
+        // The first error is the one reported: it belongs to the preferred
+        // address, usually IPv4.
+        let mut first = None;
         for address in ordered {
             match CastClient::connect_one(address, ids.clone()) {
                 Ok(client) => return Ok(client),
-                Err(error) => last = error,
+                Err(error) => {
+                    first.get_or_insert(error);
+                }
             }
         }
-        Err(last)
+        Err(first.unwrap_or(ConnectError::NoAddress))
     }
 
     fn connect_one(address: SocketAddr, ids: RequestIds) -> Result<CastClient, ConnectError> {
@@ -179,6 +189,7 @@ impl CastClient {
             reader: FrameReader::new(),
             channel: Channel::open(Instant::now(), ids),
             events: VecDeque::new(),
+            next_event: 0,
             address,
             local_address,
             fingerprint,
@@ -224,15 +235,21 @@ impl CastClient {
 
     /// Starts or reuses the Default Media Receiver and waits for it (C40 to
     /// C42).
+    /// The result is taken out of the event queue; results of earlier
+    /// launches never answer this one.
     pub fn launch(&mut self) -> Result<AppSession, LaunchError> {
+        let since = self.next_event;
         self.channel.launch(Instant::now())?;
         loop {
-            if let Some(found) = self.events.iter().find_map(|event| match event {
-                Event::Launched { app, .. } => Some(Ok(app.clone())),
-                Event::LaunchFailed(error) => Some(Err(error.clone())),
-                _ => None,
-            }) {
-                return found;
+            let found = self.events.iter().position(|(seq, event)| {
+                *seq >= since && matches!(event, Event::Launched { .. } | Event::LaunchFailed(_))
+            });
+            if let Some(index) = found {
+                return match self.events.remove(index) {
+                    Some((_, Event::Launched { app, .. })) => Ok(app),
+                    Some((_, Event::LaunchFailed(error))) => Err(error),
+                    _ => unreachable!("position matched a launch result"),
+                };
             }
             if let Some(reason) = self.end_reason() {
                 return Err(LaunchError::Ended(reason));
@@ -253,9 +270,10 @@ impl CastClient {
         }
     }
 
-    /// The next event the channel reported.
+    /// The next event the channel reported. A host that doesn't poll loses
+    /// the oldest status and drop reports beyond [`MAX_EVENTS`].
     pub fn poll_event(&mut self) -> Option<Event> {
-        self.events.pop_front()
+        self.events.pop_front().map(|(_, event)| event)
     }
 
     /// Tears the session down and closes TLS (C44, C87), within `budget`.
@@ -271,7 +289,7 @@ impl CastClient {
     }
 
     fn end_reason(&self) -> Option<EndReason> {
-        self.events.iter().find_map(|event| match event {
+        self.events.iter().find_map(|(_, event)| match event {
             Event::Ended(reason) => Some(reason.clone()),
             _ => None,
         })
@@ -310,7 +328,17 @@ impl CastClient {
         self.channel.tick(Instant::now());
         self.flush();
         while let Some(event) = self.channel.poll_event() {
-            self.events.push_back(event);
+            self.events.push_back((self.next_event, event));
+            self.next_event += 1;
+            if self.events.len() > MAX_EVENTS {
+                let routine = self
+                    .events
+                    .iter()
+                    .position(|(_, event)| matches!(event, Event::Status(_) | Event::Dropped(_)));
+                if let Some(index) = routine {
+                    self.events.remove(index);
+                }
+            }
         }
     }
 

@@ -278,6 +278,19 @@ fn one_id_on_several_interfaces_is_one_device_with_ipv4_first() {
         "the address that worked stays first"
     );
     list.remember_address(key, SocketAddr::new(v4(21), 8009));
+
+    // A link-local IPv6 address has no scope here, so it is never offered.
+    let link_local = IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0x10));
+    let scoped_away = ServiceRecord {
+        addresses: vec![link_local, v4(22)],
+        ..record(
+            "B._googlecast._tcp.local.",
+            8009,
+            &[b"id=00000000000000000000000000000001"],
+        )
+    };
+    let device = CastDevice::from_record(&scoped_away).expect("device");
+    assert_eq!(device.addresses, [v4(22)]);
     assert_eq!(
         list.get(key).expect("listed").addresses[0],
         SocketAddr::new(v4(21), 8009)

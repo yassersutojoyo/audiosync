@@ -7,7 +7,9 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr, TcpListener};
 use std::time::{Duration, Instant};
 
 use audiosync_cast::channel::Event;
-use audiosync_cast::client::{CastClient, Fingerprint, FingerprintBook, FingerprintChange};
+use audiosync_cast::client::{
+    CastClient, Fingerprint, FingerprintBook, FingerprintChange, MAX_EVENTS,
+};
 use audiosync_cast::discovery::{CastDevice, DeviceId, DeviceKind};
 use audiosync_cast::error::{Backoff, ConnectError, EndReason, LaunchError};
 use audiosync_cast::ids::RequestIds;
@@ -149,7 +151,33 @@ fn ipv4_is_tried_before_ipv6() {
     let ConnectError::Tcp { address, .. } = error else {
         panic!("{error}");
     };
-    assert_eq!(address, v6, "IPv6 was tried last");
+    assert_eq!(
+        address, v4,
+        "IPv4 was tried first, and its error is the one reported"
+    );
+}
+
+#[test]
+fn a_host_that_never_polls_keeps_a_bounded_event_queue() {
+    let device = FakeDevice::start(Behavior::default());
+    let mut client = connect(&device);
+    for _ in 0..(MAX_EVENTS * 2) {
+        device.send(Command::Send(json_message(
+            PLATFORM,
+            "*",
+            NS_RECEIVER,
+            json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {}}),
+        )));
+    }
+    client.run_for(Duration::from_millis(500));
+    let events = drain(&mut client);
+    assert!(events.len() <= MAX_EVENTS, "{} events", events.len());
+    assert!(
+        events.iter().any(|event| matches!(event, Event::Ready(_))),
+        "events other than status reports are kept"
+    );
+    let _ = client.stop(Duration::from_secs(1));
+    device.join();
 }
 
 // covers: C3
@@ -216,6 +244,50 @@ fn a_running_default_media_receiver_is_reused_over_the_wire() {
     assert!(!device.types().iter().any(|t| t == "LAUNCH"));
     let _ = client.stop(Duration::from_secs(2));
     device.join();
+}
+
+#[test]
+fn a_launch_after_a_refused_one_waits_for_its_own_answer() {
+    let device = FakeDevice::start(Behavior {
+        on_launch: OnLaunch::RefuseOnce("NOT_ALLOWED"),
+        ..Behavior::default()
+    });
+    let mut client = connect(&device);
+    assert!(matches!(client.launch(), Err(LaunchError::Refused { .. })));
+    // The host retries without draining the events first.
+    let app = client.launch().expect("the second launch starts the app");
+    assert_eq!(app.session_id, "session-2");
+    assert_eq!(device.types().iter().filter(|t| *t == "LAUNCH").count(), 2);
+    let _ = client.stop(Duration::from_secs(2));
+    device.join();
+}
+
+#[test]
+fn a_launch_after_a_timed_out_one_succeeds() {
+    let device = FakeDevice::start(Behavior {
+        on_launch: OnLaunch::IgnoreOnce,
+        ..Behavior::default()
+    });
+    let mut client = connect(&device);
+    // Device pings keep the channel alive through the 15 s launch timeout.
+    let pinger = {
+        let commands = device.commands();
+        std::thread::spawn(move || {
+            for _ in 0..40 {
+                let ping = json_message(PLATFORM, SENDER, NS_HEARTBEAT, json!({"type": "PING"}));
+                if commands.send(Command::Send(ping)).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        })
+    };
+    assert_eq!(client.launch(), Err(LaunchError::Timeout));
+    let app = client.launch().expect("the retry starts the app");
+    assert_eq!(app.session_id, "session-2");
+    let _ = client.stop(Duration::from_secs(2));
+    device.join();
+    let _ = pinger.join();
 }
 
 #[test]

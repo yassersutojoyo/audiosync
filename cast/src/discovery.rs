@@ -218,8 +218,14 @@ impl CastDevice {
 }
 
 /// IPv4 before IPv6, each in a fixed order, without repeats (C16).
+/// Link-local IPv6 addresses are left out: without their interface scope,
+/// which this list doesn't carry, no connection to them can be made.
 fn ordered(addresses: &[IpAddr]) -> Vec<IpAddr> {
-    let mut list = addresses.to_vec();
+    let mut list: Vec<IpAddr> = addresses
+        .iter()
+        .copied()
+        .filter(|ip| !matches!(ip, IpAddr::V6(v6) if (v6.segments()[0] & 0xffc0) == 0xfe80))
+        .collect();
     list.sort_by_key(|ip| (ip.is_ipv6(), *ip));
     list.dedup();
     list

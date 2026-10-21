@@ -30,6 +30,10 @@ pub enum OnLaunch {
     CancelOnce,
     /// `LAUNCH_ERROR` with `CANCELLED` every time.
     CancelAlways,
+    /// No answer to the first `LAUNCH`, then a start.
+    IgnoreOnce,
+    /// `LAUNCH_ERROR` with this reason once, then a start.
+    RefuseOnce(&'static str),
     Ignore,
 }
 
@@ -128,6 +132,11 @@ impl FakeDevice {
             commands,
             thread: Some(thread),
         }
+    }
+
+    /// A sender for commands from another thread.
+    pub fn commands(&self) -> mpsc::Sender<Command> {
+        self.commands.clone()
     }
 
     pub fn send(&self, command: Command) {
@@ -247,10 +256,15 @@ impl Device {
                 };
                 match &self.behavior.on_launch {
                     OnLaunch::Ignore => Vec::new(),
+                    OnLaunch::IgnoreOnce if self.launches == 1 => Vec::new(),
+                    OnLaunch::RefuseOnce(reason) if self.launches == 1 => vec![error(reason)],
                     OnLaunch::Refuse(reason) => vec![error(reason)],
                     OnLaunch::CancelAlways => vec![error("CANCELLED")],
                     OnLaunch::CancelOnce if self.launches == 1 => vec![error("CANCELLED")],
-                    OnLaunch::CancelOnce | OnLaunch::Start => {
+                    OnLaunch::CancelOnce
+                    | OnLaunch::IgnoreOnce
+                    | OnLaunch::RefuseOnce(_)
+                    | OnLaunch::Start => {
                         let session = format!("session-{}", self.launches);
                         let transport = format!("transport-{}", self.launches);
                         self.apps = vec![app(DEFAULT_MEDIA_RECEIVER, &session, &transport)];
