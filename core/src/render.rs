@@ -167,6 +167,10 @@ pub const EARLIEST_LEAK_NS_PER_S: u64 = 1_000_000;
 /// [`Renderer::late_callbacks`] (S209).
 pub const LATE_COUNT_MS: u64 = 5;
 
+/// A delay increase larger than this, in ms, restarts the reader at the new
+/// delay (S187, S159) instead of inserting the increase as silence (S47).
+pub const RESTART_INCREASE_MS: u32 = 5000;
+
 /// Where a renderer that follows the capture's clock stands (S207).
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tracking {
@@ -535,6 +539,8 @@ pub struct Renderer {
     reader_delay: i64,
     /// The converter's fixed latency, in capture frames (S62).
     latency: i64,
+    /// [`RESTART_INCREASE_MS`] in capture frames.
+    restart_increase: i64,
     /// The floor of the lateness when the reader last anchored, in ns
     /// (S209); `None` until a callback has a floor.
     anchor_floor: Option<i64>,
@@ -616,6 +622,7 @@ impl Renderer {
             hold_back: control.shared.delay.load(Ordering::Relaxed),
             reader_delay: control.reader.delay_frames(),
             latency,
+            restart_increase: i64::from(capture_rate) * i64::from(RESTART_INCREASE_MS) / 1000,
             anchor_floor: None,
             start_lead_fixed: false,
             awaiting_resync: false,
@@ -1103,8 +1110,14 @@ impl Renderer {
     }
 
     fn give_reader_delay(&mut self) {
+        let given = self.reader_delay;
         self.reader_delay = self.wanted_reader_delay();
         self.reader_control.set_delay_frames(self.reader_delay);
+        if self.reader_delay.saturating_sub(given) > self.restart_increase {
+            // S187: seconds of silence read as an output that stopped, so it
+            // plays the new delay's frames at once, even ones it played before.
+            self.reader_control.reset_prime();
+        }
         self.awaiting_resync = true;
     }
 
