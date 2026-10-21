@@ -957,7 +957,7 @@ fn matrix() -> &'static Matrix {
     })
 }
 
-// covers: S50, S206, S207, S208, S209
+// Known-failure probe on main for S50, S206, S207, S208, S209: it pins where main breaks them, so it is not coverage.
 #[test]
 fn the_matrix_fails_exactly_the_ratchets_cases_per_invariant() {
     let matrix = matrix();
@@ -986,7 +986,7 @@ fn the_matrix_fails_exactly_the_ratchets_cases_per_invariant() {
     );
 }
 
-// covers: S206
+// Known-failure probe on main for S206: it pins where main breaks them, so it is not coverage.
 #[test]
 fn every_mac_case_of_the_capture_rate_output_that_sets_the_lead_runs_dry() {
     // Finding 2: without conversion there is no trim and the lead is one
@@ -1004,7 +1004,7 @@ fn every_mac_case_of_the_capture_rate_output_that_sets_the_lead_runs_dry() {
     }
 }
 
-// covers: S208, S209
+// Known-failure probe on main for S208, S209: it pins where main breaks them, so it is not coverage.
 #[test]
 fn every_mac_case_with_a_late_second_callback_corrects_drift() {
     // The start re-anchor lands on the late second callback before the
