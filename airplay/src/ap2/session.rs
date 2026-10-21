@@ -21,7 +21,9 @@ use crate::homekit::{
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
 use crate::rtsp::{Message, Method, Parser, Request, Response};
 use crate::secret::Secret;
-use crate::session::{CONNECT_TIMEOUT, Connection, RESPONSE_TIMEOUT, TEARDOWN_TIMEOUT, TIMING_SILENCE};
+use crate::session::{
+    CONNECT_TIMEOUT, Connection, RESPONSE_TIMEOUT, TEARDOWN_TIMEOUT, TIMING_SILENCE,
+};
 use crate::volume::Volume;
 
 use super::bodies::{
@@ -585,12 +587,7 @@ impl Ap2Session {
         match self.state {
             Ap2State::Closed => {}
             Ap2State::TearingDown => self.finish(),
-            _ => self.fail(
-                ErrorKind::Lost,
-                None,
-                None,
-                Some("event connection closed"),
-            ),
+            _ => self.fail(ErrorKind::Lost, None, None, Some("event connection closed")),
         }
     }
 
@@ -970,7 +967,9 @@ impl Ap2Session {
         request
             .headers
             .push("Client-Instance", self.ids.client_instance_hex());
-        request.headers.push("DACP-ID", self.ids.client_instance_hex());
+        request
+            .headers
+            .push("DACP-ID", self.ids.client_instance_hex());
         request
             .headers
             .push("Active-Remote", self.ids.active_remote.to_string());
@@ -1115,9 +1114,7 @@ impl Ap2Session {
                 self.stream = Some(StreamPorts {
                     data_port,
                     control_port,
-                    stream_id: answer
-                        .stream_id
-                        .unwrap_or(i64::from(self.ids.session_id)),
+                    stream_id: answer.stream_id.unwrap_or(i64::from(self.ids.session_id)),
                 });
                 self.send(Kind::Flush, now, false);
             }

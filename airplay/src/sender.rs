@@ -101,6 +101,9 @@ pub struct SenderConfig {
     /// with [`airplay2_switch`]; while it is off nothing of the AirPlay 2
     /// path runs (P170).
     pub airplay2: bool,
+    /// The AirPlay 2 device ID (P5, P43): a random value the host made once
+    /// and stored. `None` gives a random one for this sender's lifetime.
+    pub airplay2_device_id: Option<[u8; 6]>,
 }
 
 /// The environment variable a host reads for [`SenderConfig::airplay2`].
@@ -118,6 +121,7 @@ impl Default for SenderConfig {
             input_frames: DEFAULT_INPUT_FRAMES,
             clock: None,
             airplay2: false,
+            airplay2_device_id: None,
         }
     }
 }
@@ -381,7 +385,7 @@ impl Sender {
             events_out,
             latency_frames.clone(),
         )
-        .with_airplay2(config.airplay2);
+        .with_airplay2(config.airplay2, config.airplay2_device_id);
         let handle = thread::Builder::new()
             .name("airplay-driver".to_owned())
             .spawn(move || driver.run())?;
@@ -398,7 +402,7 @@ impl Sender {
     }
 
     fn command(&self, command: Command) {
-        let _ = self.inputs.send(Input::Command(command));
+        let _ = self.inputs.send(Input::Command(Box::new(command)));
     }
 
     /// The sender clock: the host schedules its local outputs on it (P89).

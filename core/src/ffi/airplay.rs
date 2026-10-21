@@ -404,6 +404,9 @@ fn reason_code(reason: UnsupportedReason) -> i32 {
         UnsupportedReason::Methods => AIRPLAY_REASON_METHODS,
         UnsupportedReason::Format => AIRPLAY_REASON_FORMAT,
         UnsupportedReason::AirPlay2Only => AIRPLAY_REASON_AIRPLAY2_ONLY,
+        // Only the AirPlay 2 path, still behind its switch, gives these; the
+        // header has no codes for them yet.
+        UnsupportedReason::Timing | UnsupportedReason::OneAirPlay2Session => AIRPLAY_REASON_NONE,
     }
 }
 

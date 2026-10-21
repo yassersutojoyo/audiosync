@@ -236,7 +236,12 @@ impl Driver {
     }
 }
 
-fn events_io_event(active: &mut Ap2Active, event: IoEvent, notify: impl transport::Notify, now: Instant) {
+fn events_io_event(
+    active: &mut Ap2Active,
+    event: IoEvent,
+    notify: impl transport::Notify,
+    now: Instant,
+) {
     match event {
         IoEvent::Connected {
             attempt, stream, ..

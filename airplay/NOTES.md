@@ -186,7 +186,7 @@ Where the test vector comes from: the spec now lists it as data in P145, with th
 
 ### Layout
 
-- `sender.rs`: `SenderConfig::airplay2` (off by default) and `AIRPLAY2_SWITCH_ENV` with `airplay2_switch`, which a host uses to read `AUDIOSYNC_AIRPLAY2=1`. The driver passes the switch to `choose_path`; until the AirPlay 2 session exists, an AirPlay 2 path still ends in Unsupported ("AirPlay 2 only").
+- `sender.rs`: `SenderConfig::airplay2` (off by default) and `AIRPLAY2_SWITCH_ENV` with `airplay2_switch`, which a host uses to read `AUDIOSYNC_AIRPLAY2=1`. The driver passes the switch to `choose_path`; with it on, an AirPlay 2 path starts the AirPlay 2 session (next section).
 - `homekit.rs`: the pairing choice (`status_flags`, `choose_mode`, `check_mode`), `PairSetup` (transient, PIN, password, with the P151 retry), `PairVerify`, `Identity` and `HomeKitCredentials`; `homekit/tlv8.rs` the TLV8 codec, `homekit/keys.rs` HKDF-SHA-512, ChaCha20-Poly1305 with the message nonces and the Ed25519 signatures.
 - `pairing/srp.rs` now serves both pairings: each group names its hash (SHA-1 for the legacy groups, SHA-512 for the RFC 5054 3072-bit group with generator 5), and every value sits in a 4096-bit integer.
 
@@ -202,6 +202,33 @@ Tests: `tests/airplay2_switch.rs` (P2, P170) over loopback; `tests/homekit.rs` a
 - **P150**: item 8 (back-off) is read as a little-endian count of seconds, at most 8 bytes; the spec names no byte order.
 - **P151**: "B starts with a zero byte" is read as B shorter than 384 significant bytes or sent with a leading zero, so either form of a short B allows the one retry.
 - **P152**: the identifier is a version 4 UUID in lowercase text form (RFC 9562's output form).
+
+## AirPlay 2 session
+
+### Layout
+
+- `ap2/framing.rs`: the framed connection (P67 to P69) and the event connection's swapped keys (P70): 2-byte little-endian length, ChaCha20-Poly1305 with the length as additional data, 64-bit counters from 0 per direction.
+- `ap2/bodies.rs`: the binary-plist bodies (P41, P43, P44, P106, P164) and the readers of `/info`, the session SETUP answer and the stream SETUP answer.
+- `ap2/session.rs`: `Ap2Session`, one session from `GET /info` to TEARDOWN, sans-I/O like `session.rs`, with a second connection (the event connection) in its outputs.
+- `sender/driver/ap2.rs`: the driver's side: one AirPlay 2 session at a time (P169), its I/O under two session keys, the P2 path switch after an AirPlay 1 Unsupported or Refused, and HomeKit credentials from a password pairing kept for the sender's lifetime.
+
+### Design
+
+The order is P42's: `/info`, pairing (P153), session SETUP (framed from here on), the event connection, `/info`, RECORD, SETPEERS only under PTP, the volume, the stream SETUP once the event connection is open, FLUSH. The session reports `Ready` after the FLUSH answer, and the driver shows the speaker as Playing, though no audio goes out until the next stage (P155, P156). No PTP service exists yet, so the driver never offers PTP: a receiver that refuses the NTP session SETUP is Unsupported (timing). With a PTP peer in the config (tests only for now) the session does the one PTP retry of P157 on a new connection, sends the P164 body and SETPEERS, and the driver remembers the choice for the device.
+
+Tests: `tests/ap2_session.rs` against the sans-I/O fake receiver of `tests/common/ap2.rs`, which wraps the HomeKit fake and frames with its own HKDF and ChaCha20-Poly1305 steps, never through `ap2`; `tests/ap2_driver.rs` runs the same fake on loopback sockets through `Sender` for P169 and the P2 switch.
+
+### Spec readings
+
+- **P5, P43**: the device ID comes from `SenderConfig::airplay2_device_id`, which a host fills with a value it made once and stored; without one the driver draws a random ID for its lifetime. Either way the first byte is marked locally administered and unicast. The hosts don't store one yet.
+- **P41**: a failed first `/info` is a warning, and the pairing falls back to the TXT flags. Only the binary plist format is read, at most 8 KiB, with a read budget, so a hostile body can't nest the reader into a stack overflow.
+- **P42**: RECORD carries no `RTP-Info` or `Range`; FLUSH names the first packet. The stream ID comes from the stream SETUP answer, else the session ID.
+- **P43**: `isMultiSelectAirPlay` is false (one receiver, P2) and `sourceVersion` is the crate version. An answer without `eventPort`, or a stream SETUP answer without `controlPort`, is a protocol error.
+- **P61, P149**: a PIN pairing on the AirPlay 2 path gives PairingRequired in this stage; the host-driven PIN flow comes later.
+- **P70**: after the first connect and five retries, all refused, the speaker is unreachable; a closed event connection means the session is lost. A response, or an unparsable message, on the event connection is a protocol error.
+- **P132**: `/feedback` starts 2 s after the session SETUP answer and has no body. A request still unanswered at the next 2 s tick counts as one miss per tick, so a silent receiver is lost 6 s after the first unanswered one.
+- **P164, P165**: the sender's addresses in `timingPeerInfo` and SETPEERS are the connection's local address only.
+- **P169**: the refused second speaker gets no retry, as any Unsupported speaker; it can be added again once the first is removed.
 
 ## Dependencies and licenses
 
@@ -237,5 +264,5 @@ Tests: `tests/airplay2_switch.rs` (P2, P170) over loopback; `tests/homekit.rs` a
 
 ## Spec coverage
 
-`tests/spec_coverage.rs` reads the spec and fails unless every clause is named by a `// covers:` line or listed in `tests/spec_pending.txt`, never both. A clause counts as covered only when everything it asks of the sender is done; a test for part of a pending clause says "Part of P6" in a plain comment. After the audio, RTP and timing stage: 144 clauses, 101 covered, 43 pending (stream and transport 8, pairing crypto 14, AirPlay 2 21). After the transport stage: 109 covered, 35 pending (pairing crypto 14, AirPlay 2 21). After the pairing stage: 123 covered, 21 pending (all AirPlay 2). After the refined spec (P145 added): 145 clauses, 124 covered, 21 pending (all AirPlay 2; P43's new requirement waits for the AirPlay 2 session SETUP). After the input limits went into the spec (P146 to P148: RTSP size limits, header line reading, pairing answer cap): 148 clauses, 127 covered, 21 pending. After the AirPlay 2 switch and HomeKit pairing stage: 170 clauses, 142 covered, 28 pending (all AirPlay 2; P149 partly done).
+`tests/spec_coverage.rs` reads the spec and fails unless every clause is named by a `// covers:` line or listed in `tests/spec_pending.txt`, never both. A clause counts as covered only when everything it asks of the sender is done; a test for part of a pending clause says "Part of P6" in a plain comment. After the audio, RTP and timing stage: 144 clauses, 101 covered, 43 pending (stream and transport 8, pairing crypto 14, AirPlay 2 21). After the transport stage: 109 covered, 35 pending (pairing crypto 14, AirPlay 2 21). After the pairing stage: 123 covered, 21 pending (all AirPlay 2). After the refined spec (P145 added): 145 clauses, 124 covered, 21 pending (all AirPlay 2; P43's new requirement waits for the AirPlay 2 session SETUP). After the input limits went into the spec (P146 to P148: RTSP size limits, header line reading, pairing answer cap): 148 clauses, 127 covered, 21 pending. After the AirPlay 2 switch and HomeKit pairing stage: 170 clauses, 142 covered, 28 pending (all AirPlay 2; P149 partly done). After the AirPlay 2 session stage: 160 covered, 10 pending (the audio packets P155 and P156, the PTP service P158 to P163, P166 and P167).
  The test also checks that the IDs run P1 to Pn without gaps and that every clause names a source.

@@ -93,7 +93,8 @@ pub(crate) enum Command {
 
 /// Everything that reaches the driver, on one channel.
 pub(crate) enum Input {
-    Command(Command),
+    /// Boxed: a speaker's options carry its HomeKit credentials.
+    Command(Box<Command>),
     Io(IoEvent),
 }
 
@@ -210,8 +211,11 @@ impl Driver {
         }
     }
 
-    pub(crate) fn with_airplay2(mut self, on: bool) -> Driver {
+    pub(crate) fn with_airplay2(mut self, on: bool, device_id: Option<[u8; 6]>) -> Driver {
         self.airplay2 = on;
+        if let Some(id) = device_id {
+            self.device_id = id;
+        }
         self
     }
 
@@ -301,7 +305,7 @@ impl Driver {
     fn handle(&mut self, input: Input) {
         let now = Instant::now();
         match input {
-            Input::Command(command) => self.command(command, now),
+            Input::Command(command) => self.command(*command, now),
             Input::Io(event) => self.io_event(event, now),
         }
     }
@@ -1372,7 +1376,7 @@ impl Driver {
     }
 }
 
-/// Six random bytes for the AirPlay 2 device ID, new for each sender run
+/// Six random bytes for the AirPlay 2 device ID when the host stores none
 /// (P5). Without a random source the ID is all zeros, which the session
 /// SETUP still marks as locally administered.
 fn random_device_id() -> [u8; 6] {
@@ -1405,7 +1409,7 @@ mod tests {
         let run = thread::spawn(move || driver.run());
         let started = Instant::now();
         inputs
-            .send(Input::Command(Command::Shutdown))
+            .send(Input::Command(Box::new(Command::Shutdown)))
             .expect("the driver runs");
         run.join().expect("the driver ends");
         let took = started.elapsed();
@@ -1500,6 +1504,7 @@ mod tests {
                     stream_id: None,
                 })),
                 removing: false,
+                airplay1_outcome: None,
             },
         );
 
