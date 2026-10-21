@@ -3,9 +3,11 @@
 AudioSync's own code is licensed under GPL-3.0-or-later (see
 [`LICENSE`](LICENSE)). The app binary contains AudioSync's audio core (`core/`,
 written in Rust and under GPL-3.0-or-later like the rest of AudioSync) with
-AudioSync's own AirPlay sender (`airplay/`, GPL-3.0-or-later), and, compiled in with them, parts of the Rust standard
-library and the third-party crates the sender uses, see
-[App frameworks and libraries](#app-frameworks-and-libraries). Every build also
+AudioSync's own AirPlay sender (`airplay/`, GPL-3.0-or-later) and Google Cast
+sender (`cast/`, GPL-3.0-or-later), and, compiled in with them, parts of the Rust standard
+library and the third-party crates the senders use, see
+[App frameworks and libraries](#app-frameworks-and-libraries) and
+[AudioSync's own Google Cast sender](#audiosyncs-own-google-cast-sender). Every build also
 ships the Poppins font (`Contents/Resources/Fonts/`), see [Fonts](#fonts).
 AudioSync bundles no separate AirPlay engine.
 
@@ -132,10 +134,11 @@ crate's license isn't allowed by `windows/deny.toml`, or when a crate's source
 points to a license file the package doesn't ship and the script doesn't
 supply.
 
-## AudioSync's own Google Cast sender (in development, in neither app)
+## AudioSync's own Google Cast sender
 
-`cast/` is AudioSync's own Google Cast sender (GPL-3.0-or-later). Neither app
-contains it yet. It builds on `native-tls` (MIT OR Apache-2.0) for the TLS
+`cast/` is AudioSync's own Google Cast sender (GPL-3.0-or-later), still in
+development. The macOS app's audio core contains it, reached through the core's
+C interface, which brings the crates below into the app binary. It builds on `native-tls` (MIT OR Apache-2.0) for the TLS
 connection to the device, which uses the platform's TLS stack: `schannel`
 (MIT) on Windows, `security-framework`, `security-framework-sys`,
 `core-foundation` and `core-foundation-sys` on macOS, and on Linux the system

@@ -29,6 +29,11 @@ jobs:
           rustup default stable
           rustc --version
 
+      # The Cast sender's native-tls uses the system OpenSSL on Linux.
+      - name: OpenSSL headers (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+
       - name: Format
         run: cargo fmt --check
 

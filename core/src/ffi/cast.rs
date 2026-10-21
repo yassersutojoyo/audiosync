@@ -2001,8 +2001,8 @@ mod tests {
     fn discovered_devices_and_groups_cross_the_boundary() {
         let handle = create();
         let group = "fedcba9876543210fedcba9876543210";
-        let kitchen = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(10, 0, 0, 5));
-        let downstairs = record(group, "Downstairs", 32_000, Ipv4Addr::new(10, 0, 0, 6));
+        let kitchen = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 5));
+        let downstairs = record(group, "Downstairs", 32_000, Ipv4Addr::new(192, 0, 2, 6));
         browse(
             handle,
             vec![
@@ -2045,7 +2045,7 @@ mod tests {
     #[test]
     fn a_device_added_by_address_is_listed_until_a_browse_finds_its_id() {
         let handle = create();
-        add(handle, "10.0.0.5");
+        add(handle, "192.0.2.5");
         add(handle, "[fe80::1]:8010");
         let manual = |event: i32, id: &str, flags: u32| Change {
             event,
@@ -2057,15 +2057,15 @@ mod tests {
         assert_eq!(
             devices(handle),
             [
-                manual(CAST_APPEARED, "manual:10.0.0.5:8009", CAST_FLAG_MANUAL),
+                manual(CAST_APPEARED, "manual:192.0.2.5:8009", CAST_FLAG_MANUAL),
                 manual(CAST_APPEARED, "manual:[fe80::1]:8010", CAST_FLAG_MANUAL),
             ]
         );
-        let found = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(10, 0, 0, 5));
+        let found = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 5));
         browse(handle, vec![BrowseEvent::Resolved(found)], false);
         let seen = devices(handle);
         assert_eq!(seen.len(), 2, "{seen:?}");
-        assert_eq!(seen[0], manual(CAST_GONE, "manual:10.0.0.5:8009", 0));
+        assert_eq!(seen[0], manual(CAST_GONE, "manual:192.0.2.5:8009", 0));
         assert_eq!(
             (seen[1].event, seen[1].id.as_str()),
             (CAST_APPEARED, KITCHEN)
@@ -2153,7 +2153,7 @@ mod tests {
         let first = unsafe { asc_cast_create(stored.as_ptr()) };
         assert!(!first.is_null());
         let kitchen = CString::new(KITCHEN).unwrap();
-        let manual = c"manual:10.0.0.5:8009";
+        let manual = c"manual:192.0.2.5:8009";
         // SAFETY: a live handle, used by this thread only.
         let json = unsafe {
             assert_eq!(asc_cast_offset_ms(first, kitchen.as_ptr()), -1.0);
@@ -2195,8 +2195,8 @@ mod tests {
 
     #[test]
     fn manual_devices_have_stable_memory_ids_apart_from_each_other() {
-        let a = DeviceKey::Manual("10.0.0.5:8009".parse().unwrap());
-        let b = DeviceKey::Manual("10.0.0.6:8009".parse().unwrap());
+        let a = DeviceKey::Manual("192.0.2.5:8009".parse().unwrap());
+        let b = DeviceKey::Manual("192.0.2.6:8009".parse().unwrap());
         assert_eq!(memory_id(a), memory_id(a));
         assert_ne!(memory_id(a), memory_id(b));
         let id = DeviceId::parse(KITCHEN).unwrap();
@@ -2286,7 +2286,7 @@ mod tests {
         // SAFETY: a live handle, used by this thread only.
         unsafe {
             assert!(!asc_cast_start_discovery(handle));
-            assert!(!asc_cast_add_device(handle, c"10.0.0.7".as_ptr()));
+            assert!(!asc_cast_add_device(handle, c"192.0.2.7".as_ptr()));
             assert!(asc_cast_memory_json(handle).is_null());
             assert!(asc_cast_take_input(handle).is_null());
         }
@@ -2352,7 +2352,7 @@ mod tests {
     #[test]
     fn dead_discovery_reports_its_devices_gone_and_can_start_again() {
         let handle = create();
-        let found = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(10, 0, 0, 5));
+        let found = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 5));
         browse(handle, vec![BrowseEvent::Resolved(found)], true);
         let seen: Vec<i32> = devices(handle).iter().map(|change| change.event).collect();
         assert_eq!(seen, [CAST_APPEARED, CAST_GONE]);
