@@ -345,3 +345,71 @@ fn homekit_credentials_and_the_device_id_persist_through_the_host() {
     assert!(!keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
     sender.shutdown();
 }
+
+// covers: P154
+#[test]
+fn rejected_homekit_credentials_are_dropped_and_the_next_start_pairs_again() {
+    let _serial = serial();
+    let mut fake = FakeAp2::new();
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x80),
+    )]));
+    let server = Ap2Server::start(fake);
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let device = airplay2_only(&server, 49);
+    let key = device.key.clone();
+    let with_password = || {
+        let mut options = options();
+        options.password = Some(Secret::new("3939".to_owned()));
+        options
+    };
+    sender.add_speaker(device.clone(), with_password());
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?}",
+        events.of(&key)
+    );
+    sender.remove_speaker(&key);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
+
+    // The receiver forgets AudioSync, so the verification fails.
+    server.fake().hap.paired.clear();
+    sender.add_speaker(device.clone(), with_password());
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Failed)
+            .is_some(),
+        "{:?}",
+        events.of(&key)
+    );
+    assert_eq!(errors(&events, &key), vec![ErrorKind::PairingRequired]);
+    sender.remove_speaker(&key);
+    assert!(
+        events
+            .wait_state(&sender, &key, 2, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
+
+    // The next start pairs again with the password instead of verifying.
+    server.fake().requests.clear();
+    sender.add_speaker(device, with_password());
+    assert!(
+        events
+            .wait_state(&sender, &key, 2, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?} {:?}",
+        events.of(&key),
+        server.fake().keys()
+    );
+    let keys = server.fake().keys();
+    assert!(keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
+    sender.shutdown();
+}
