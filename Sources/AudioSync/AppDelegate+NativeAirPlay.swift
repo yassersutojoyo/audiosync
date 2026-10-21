@@ -375,6 +375,8 @@ extension AppDelegate {
         case .needsCode, .needsPassword: return text.airPlayTurnedOff(name: name, reason: .needsCode)
         case .unreachable: return text.airPlayTurnedOff(name: name, reason: .unreachable)
         case .cantPlay: return text.nativeAirPlayCantPlay(name: name)
+        case .timingUnavailable: return text.nativeAirPlayTimingUnavailable(name: name)
+        case .oneAirPlay2: return text.nativeAirPlayOneAirPlay2(name: name)
         case .cancelled: return text.airPlayTurnedOff(name: name, reason: .cancelled)
         case .pairingFailed: return text.nativeAirPlayPairingFailed(name: name)
         case .stillNeedsCode: return text.airPlayTurnedOff(name: name, reason: .stillNeedsCode)

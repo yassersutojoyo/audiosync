@@ -5,6 +5,7 @@
 //! (the macOS app or the Windows app) owns capture and output devices, and
 //! calls into this crate a whole buffer at a time.
 
+pub mod airplay2_identity;
 pub mod airplay_pairings;
 pub mod calibrate;
 pub mod channels;

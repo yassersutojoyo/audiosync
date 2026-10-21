@@ -268,11 +268,19 @@ final class NativeAirPlay {
         let moved = support.map { NativeAirPlayPairings.moveOlderFile(in: $0) } ?? .nothing
         let loaded = support.map { asc_airplay_open_pairings(created, NativeAirPlayPairings.file(in: $0).path) }
             ?? ASC_AIRPLAY_PAIRINGS_FAILED
+        // Reads and writes nothing while the hidden AirPlay 2 switch is off.
+        let airPlay2 = support.map {
+            asc_airplay_open_airplay2_identity(created, NativeAirPlayPairings.airPlay2File(in: $0).path)
+        }
         DispatchQueue.main.async {
             if let line = NativeAirPlayPairings.moveLogLine(moved) {
                 DebugTrace.log("[AudioSync] native AirPlay: " + line)
             }
             DebugTrace.log("[AudioSync] native AirPlay: " + Self.pairingsLogLine(loaded))
+            if let airPlay2, airPlay2 != 0 {
+                DebugTrace.log("[AudioSync] native AirPlay: AirPlay 2 identity file: "
+                    + (airPlay2 > 0 ? "\(airPlay2) paired receiver(s)" : "ignored or left as it is (code \(airPlay2))"))
+            }
             if !excluded {
                 DebugTrace.log("[AudioSync] native AirPlay: the pairings folder couldn't be kept out of backups")
             }
@@ -383,7 +391,8 @@ final class NativeAirPlay {
             guard let speakerState = Self.state(raw.state) else { return nil }
             return .state(id: id, speakerState, retryMs: speakerState == .retrying ? retry : nil)
         case ASC_AIRPLAY_EVENT_ERROR:
-            return .error(id: id, Self.problem(raw.error), retryMs: retry, detail: text(raw.detail))
+            return .error(id: id, Self.problem(raw.error, reason: raw.unsupported), retryMs: retry,
+                          detail: text(raw.detail))
         case ASC_AIRPLAY_EVENT_LATENCY:
             return .latency(id: id, ms: raw.latency_ms,
                             receiverFrames: raw.receiver_latency_frames >= 0 ? raw.receiver_latency_frames : nil)
@@ -413,6 +422,16 @@ final class NativeAirPlay {
         case ASC_AIRPLAY_STATE_FAILED: return .failed
         case ASC_AIRPLAY_STATE_STOPPED: return .stopped
         default: return nil
+        }
+    }
+
+    /// An unsupported session's reason, where the app words it apart.
+    static func problem(_ code: Int32, reason: Int32) -> NativeSpeakerEvent.Problem {
+        guard code == ASC_AIRPLAY_ERROR_UNSUPPORTED else { return Self.problem(code) }
+        switch reason {
+        case ASC_AIRPLAY_REASON_TIMING: return .timingUnavailable
+        case ASC_AIRPLAY_REASON_ONE_AIRPLAY2: return .oneAirPlay2
+        default: return .unsupported
         }
     }
 
@@ -449,6 +468,8 @@ final class NativeAirPlay {
         case ASC_AIRPLAY_REASON_METHODS: return "methods"
         case ASC_AIRPLAY_REASON_FORMAT: return "format"
         case ASC_AIRPLAY_REASON_AIRPLAY2_ONLY: return "AirPlay 2 only"
+        case ASC_AIRPLAY_REASON_TIMING: return "timing"
+        case ASC_AIRPLAY_REASON_ONE_AIRPLAY2: return "one AirPlay 2 speaker at a time"
         default: return nil
         }
     }

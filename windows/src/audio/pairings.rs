@@ -16,6 +16,13 @@
 //! moment), then every few seconds, and while the file still can't be read
 //! nothing is written over it: new pairings last until AudioSync quits.
 //!
+//! Next to it, [`AIRPLAY2_FILE_NAME`] keeps the AirPlay 2 path's device ID
+//! and the HomeKit credentials its pairings give, sealed the same way, in
+//! the byte form [`Airplay2Identity`] defines. It is read and written only
+//! once the hidden AirPlay 2 switch is on ([`PairingStore::open_airplay2`]);
+//! one that can't be decrypted or parsed is kept aside and replaced, one
+//! that can't be read is never written over.
+//!
 //! Before encryption the file holds a magic tag, then per speaker its ID and
 //! the credential blob the sender defines ([`Credentials::to_bytes`]), each
 //! with a 16-bit little-endian length. The plaintext lives only in buffers
@@ -28,7 +35,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::pairing::Credentials;
+use audiosync_airplay::sender::random_airplay2_device_id;
+use audiosync_core::airplay2_identity::{Airplay2Identity, Unreadable};
 use zeroize::Zeroizing;
 
 use crate::data_folder;
@@ -43,6 +53,21 @@ pub const IGNORED_FILE_NAME: &str = "airplay-pairings.ignored.dat";
 
 /// The first bytes of the decrypted file, with its format version.
 const MAGIC: &[u8] = b"AudioSync pairings 1\n";
+
+/// The AirPlay 2 identity's file name, next to [`FILE_NAME`].
+pub const AIRPLAY2_FILE_NAME: &str = "airplay2-identity.dat";
+
+/// What the copy of an AirPlay 2 identity file that was ignored is named
+/// after.
+const AIRPLAY2_IGNORED_FILE_NAME: &str = "airplay2-identity.ignored.dat";
+
+/// The AirPlay 2 identity, once the AirPlay 2 path asked for it.
+struct Airplay2File {
+    identity: Airplay2Identity,
+    /// False when the file couldn't be read, or a newer AudioSync wrote it,
+    /// or no random device ID could be made: nothing is written then.
+    writable: bool,
+}
 
 /// Encrypts and decrypts the file's contents: DPAPI for the current user in
 /// the app, something simpler in tests that run off Windows.
@@ -121,6 +146,8 @@ pub struct PairingStore {
     /// Polls left before [`PairingStore::keep_aside_if_due`] tries again to
     /// keep that file aside.
     keep_aside_wait: u32,
+    /// `None` until [`PairingStore::open_airplay2`].
+    airplay2: Option<Airplay2File>,
 }
 
 impl fmt::Debug for PairingStore {
@@ -149,6 +176,7 @@ impl PairingStore {
             keep_aside: false,
             kept_aside: None,
             keep_aside_wait: 0,
+            airplay2: None,
         }
     }
 
@@ -181,6 +209,7 @@ impl PairingStore {
             keep_aside: matches!(loaded, Loaded::Ignored(_)),
             kept_aside: None,
             keep_aside_wait: 0,
+            airplay2: None,
         };
         // While it can't be read, the next try is due a few seconds later.
         let _ = store.keep_ignored_aside();
@@ -259,6 +288,110 @@ impl PairingStore {
         self.save().map(|()| true)
     }
 
+    /// Reads the AirPlay 2 identity next to the file, once, when the hidden
+    /// AirPlay 2 switch is on, and returns its device ID with what was found
+    /// for the log (never a secret). A missing or ignored file gets a new
+    /// random device ID, written at once so it stays the same (P5).
+    pub fn open_airplay2(&mut self) -> ([u8; 6], String) {
+        if let Some(file) = &self.airplay2 {
+            return (file.identity.device_id(), "already open".to_owned());
+        }
+        let path = self.airplay2_path();
+        let fresh = || match random_airplay2_device_id() {
+            Some(id) => (Airplay2Identity::new(id), true),
+            None => (Airplay2Identity::new([0; 6]), false),
+        };
+        let read = match &path {
+            None => Ok(None),
+            Some(path) => read_airplay2(path, self.sealer),
+        };
+        let (identity, writable, found) = match read {
+            Ok(Some(identity)) => {
+                let found = format!("credentials for {} speaker(s)", identity.len());
+                (identity, true, found)
+            }
+            Ok(None) => {
+                let (identity, random) = fresh();
+                (identity, random, "no file yet".to_owned())
+            }
+            Err(Airplay2Read::Unreadable(reason)) => {
+                let identity = fresh().0;
+                (identity, false, format!("{reason}; left as it is"))
+            }
+            Err(Airplay2Read::Ignored(reason)) => {
+                let (identity, random) = fresh();
+                let kept = path
+                    .as_deref()
+                    .map(|path| data_folder::keep_aside(path, AIRPLAY2_IGNORED_FILE_NAME));
+                let writable = random && !matches!(kept, Some(Err(_)));
+                (
+                    identity,
+                    writable,
+                    format!("{reason}; kept aside and replaced"),
+                )
+            }
+        };
+        let fresh_file = !found.starts_with("credentials");
+        let device_id = identity.device_id();
+        self.airplay2 = Some(Airplay2File { identity, writable });
+        if fresh_file && let Err(error) = self.save_airplay2() {
+            return (
+                device_id,
+                format!("{found} (the file couldn't be written: {error})"),
+            );
+        }
+        (device_id, found)
+    }
+
+    /// The speaker's HomeKit credentials, once [`PairingStore::open_airplay2`]
+    /// read them.
+    pub fn homekit(&self, id: &str) -> Option<&HomeKitCredentials> {
+        self.airplay2.as_ref()?.identity.get(id)
+    }
+
+    /// Keeps the speaker's new HomeKit credentials and writes the AirPlay 2
+    /// identity file. When it can't be written they are still kept for this
+    /// run, and the error says why.
+    pub fn insert_homekit(&mut self, id: &str, credentials: HomeKitCredentials) -> io::Result<()> {
+        let Some(file) = &mut self.airplay2 else {
+            return Err(io::Error::other("the AirPlay 2 identity isn't open"));
+        };
+        if !file.identity.insert(id, credentials) {
+            return Ok(());
+        }
+        self.save_airplay2()
+    }
+
+    /// Forgets HomeKit credentials the speaker turned down (P154) and
+    /// writes the AirPlay 2 identity file; they are gone for this run even
+    /// when it can't be written.
+    pub fn remove_homekit(&mut self, id: &str) -> io::Result<()> {
+        let Some(file) = &mut self.airplay2 else {
+            return Ok(());
+        };
+        if !file.identity.remove(id) {
+            return Ok(());
+        }
+        self.save_airplay2()
+    }
+
+    fn airplay2_path(&self) -> Option<PathBuf> {
+        Some(self.path.as_deref()?.with_file_name(AIRPLAY2_FILE_NAME))
+    }
+
+    fn save_airplay2(&self) -> io::Result<()> {
+        let (Some(path), Some(file)) = (self.airplay2_path(), &self.airplay2) else {
+            return Ok(());
+        };
+        if !file.writable {
+            return Err(io::Error::other(
+                "the AirPlay 2 identity file is left as it is",
+            ));
+        }
+        let sealed = (self.sealer.seal)(&file.identity.to_bytes()?)?;
+        data_folder::write_atomically(&path, &sealed)
+    }
+
     /// Writes every entry to the file, through a temporary file renamed over
     /// it; removes the file once nothing is paired. A file ignored at launch
     /// is first kept aside ([`data_folder::keep_aside`] with
@@ -280,6 +413,41 @@ impl PairingStore {
         // Flushed to disk before it replaces the old file, so a power cut
         // leaves the old file or the new one, never an empty one.
         data_folder::write_atomically(path, &sealed)
+    }
+}
+
+/// Why the AirPlay 2 identity file can't be used (never a secret).
+enum Airplay2Read {
+    /// It can't be read now, or a newer AudioSync wrote it: never replaced.
+    Unreadable(String),
+    /// It can't be decrypted or parsed: kept aside and replaced.
+    Ignored(String),
+}
+
+/// The AirPlay 2 identity in the file at `path`, `None` without a file.
+fn read_airplay2(path: &Path, sealer: Sealer) -> Result<Option<Airplay2Identity>, Airplay2Read> {
+    let sealed = match data_folder::read_at_launch(path) {
+        Ok(sealed) => sealed,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(Airplay2Read::Unreadable(format!(
+                "the AirPlay 2 identity file can't be read: {error}"
+            )));
+        }
+    };
+    let plain = (sealer.open)(&sealed).map_err(|error| {
+        Airplay2Read::Ignored(format!(
+            "the AirPlay 2 identity file can't be decrypted for this Windows user: {error}"
+        ))
+    })?;
+    match Airplay2Identity::from_bytes(&plain) {
+        Ok(identity) => Ok(Some(identity)),
+        Err(Unreadable::Newer(version)) => Err(Airplay2Read::Unreadable(format!(
+            "a newer AudioSync wrote the AirPlay 2 identity file (format {version})"
+        ))),
+        Err(Unreadable::Format) => Err(Airplay2Read::Ignored(
+            "the AirPlay 2 identity file isn't in the expected format".to_owned(),
+        )),
     }
 }
 
@@ -526,6 +694,64 @@ pub mod tests {
         );
         assert!(store.contains("raop:Den TV"));
         assert!(!store.contains("02005E005302"));
+    }
+
+    pub fn homekit(fill: u8) -> HomeKitCredentials {
+        let mut blob = vec![1u8];
+        blob.extend_from_slice(b"01234567-89AB-CDEF-0123-456789ABCDEF");
+        blob.extend_from_slice(&[fill; 64]);
+        blob.extend_from_slice(b"receiver");
+        HomeKitCredentials::from_bytes(&blob).expect("a credential blob")
+    }
+
+    #[test]
+    fn the_airplay2_identity_survives_a_restart_sealed_and_only_once_asked_for() {
+        let folder = test_dir("pairings-airplay2");
+        let path = folder.join(FILE_NAME);
+        let identity = folder.join(AIRPLAY2_FILE_NAME);
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        store
+            .insert("02005E005301", credentials("0123456789ABCDEF", 0xA5))
+            .expect("saved");
+        assert!(!identity.exists(), "untouched while the switch is off");
+        assert!(store.insert_homekit("02005E005302", homekit(1)).is_err());
+
+        let (device_id, found) = store.open_airplay2();
+        assert_eq!(found, "no file yet");
+        assert!(identity.exists(), "the new device ID is written at once");
+        store
+            .insert_homekit("02005E005302", homekit(0xC3))
+            .expect("saved");
+        let on_disk = fs::read(&identity).expect("the file is there");
+        let secret = [0xC3u8; 32];
+        assert!(!on_disk.windows(secret.len()).any(|w| w == secret));
+
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        assert_eq!(store.homekit("02005E005302"), None, "read only once asked");
+        let (again, found) = store.open_airplay2();
+        assert_eq!(again, device_id);
+        assert_eq!(found, "credentials for 1 speaker(s)");
+        assert_eq!(store.homekit("02005E005302"), Some(&homekit(0xC3)));
+        assert!(
+            store.contains("02005E005301"),
+            "the pairings file is its own"
+        );
+    }
+
+    #[test]
+    fn an_airplay2_identity_that_cant_be_opened_is_kept_aside_and_replaced() {
+        let folder = test_dir("pairings-airplay2-ignored");
+        let identity = folder.join(AIRPLAY2_FILE_NAME);
+        fs::write(&identity, b"not sealed").expect("written");
+        let (mut store, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
+        let (device_id, found) = store.open_airplay2();
+        assert!(found.ends_with("kept aside and replaced"), "{found}");
+        assert_eq!(
+            copies_kept_aside(&folder, "airplay2-identity.ignored"),
+            [b"not sealed".to_vec()]
+        );
+        let (mut store, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
+        assert_eq!(store.open_airplay2().0, device_id);
     }
 
     #[test]

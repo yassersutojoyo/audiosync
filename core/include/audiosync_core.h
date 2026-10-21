@@ -98,6 +98,8 @@ extern "C" {
 #define ASC_AIRPLAY_REASON_METHODS 4       /* no ANNOUNCE, SETUP or RECORD */
 #define ASC_AIRPLAY_REASON_FORMAT 5        /* not 44 100 Hz, 16-bit stereo */
 #define ASC_AIRPLAY_REASON_AIRPLAY2_ONLY 6 /* only AirPlay 2 could serve it */
+#define ASC_AIRPLAY_REASON_TIMING 7        /* it refused NTP timing, and PTP can't take its place */
+#define ASC_AIRPLAY_REASON_ONE_AIRPLAY2 8  /* another AirPlay 2 speaker plays; one at a time */
 
 /* What discovery saw (AscAirPlayReceiver.flags), bit by bit. */
 #define ASC_AIRPLAY_FLAG_RAOP 1            /* announces _raop._tcp (AirPlay 1 audio) */
@@ -1167,6 +1169,19 @@ bool asc_airplay_set_now_playing(AscAirPlay *airplay, const char *title, const c
  * ASC_AIRPLAY_PAIRINGS_* code.
  */
 int32_t asc_airplay_open_pairings(AscAirPlay *airplay, const char *path);
+
+/*
+ * Opens the AirPlay 2 identity kept in the file at `path` (UTF-8), meant for
+ * once, before discovery starts: the device ID the AirPlay 2 path sends, made
+ * and written once when the file is missing, and the HomeKit credentials of
+ * the receivers it paired with, which later sessions verify with; new ones
+ * are written to it as pairings give them. Kept like the pairings file
+ * (versioned, mode 0600, replaced through a temporary file); it never holds
+ * a password and its credentials never cross this interface. With the hidden
+ * AirPlay 2 switch off it reads and writes nothing and returns 0. Returns how
+ * many receivers it holds credentials for, or an ASC_AIRPLAY_PAIRINGS_* code.
+ */
+int32_t asc_airplay_open_airplay2_identity(AscAirPlay *airplay, const char *path);
 
 /*
  * Starts a PIN pairing with the listed receiver `id` (one listed as

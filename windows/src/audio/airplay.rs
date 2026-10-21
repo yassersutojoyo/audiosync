@@ -148,6 +148,14 @@ pub trait AirPlayLink {
     /// driver thread ended): it lists, plays and reports nothing anymore,
     /// and only a new sender brings AirPlay back.
     fn is_running(&self) -> bool;
+
+    /// Whether the hidden AirPlay 2 switch is on for this sender.
+    fn airplay2(&self) -> bool {
+        false
+    }
+
+    /// The stored AirPlay 2 device ID, for its AirPlay 2 sessions.
+    fn set_airplay2_device_id(&mut self, _id: [u8; 6]) {}
 }
 
 /// A sender a [`SenderStarter`] started.
@@ -180,6 +188,7 @@ pub type SenderStarter = Box<dyn FnMut() -> Option<StartedSender>>;
 /// The real sender.
 pub struct SenderLink {
     sender: Sender,
+    airplay2: bool,
 }
 
 impl SenderLink {
@@ -192,8 +201,9 @@ impl SenderLink {
             airplay2: airplay2_switch(std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref()),
             ..SenderConfig::default()
         };
+        let airplay2 = config.airplay2;
         let (sender, input) = Sender::start(config)?;
-        Ok((SenderLink { sender }, input))
+        Ok((SenderLink { sender, airplay2 }, input))
     }
 
     /// Starts browsing for receivers.
@@ -258,6 +268,14 @@ impl AirPlayLink for SenderLink {
 
     fn is_running(&self) -> bool {
         self.sender.is_running()
+    }
+
+    fn airplay2(&self) -> bool {
+        self.airplay2
+    }
+
+    fn set_airplay2_device_id(&mut self, id: [u8; 6]) {
+        self.sender.set_airplay2_device_id(id);
     }
 }
 
@@ -480,6 +498,10 @@ pub fn problem(reason: UserReason) -> AirPlayProblem {
         // receiver that wants another kind of pairing.
         UserReason::PairingRequired => AirPlayProblem::PairingNotYet,
         UserReason::Unsupported(UnsupportedReason::AirPlay2Only) => AirPlayProblem::AirPlay2NotYet,
+        UserReason::Unsupported(UnsupportedReason::Timing) => AirPlayProblem::TimingUnavailable,
+        UserReason::Unsupported(UnsupportedReason::OneAirPlay2Session) => {
+            AirPlayProblem::OneAirPlay2Speaker
+        }
         UserReason::Unsupported(_) => AirPlayProblem::Unsupported,
     }
 }
@@ -659,7 +681,7 @@ impl AirPlaySpeakers {
         store: PairingStore,
     ) -> AirPlaySpeakers {
         let latency = link.latency();
-        AirPlaySpeakers {
+        let mut speakers = AirPlaySpeakers {
             link,
             listed: BTreeMap::new(),
             settings: BTreeMap::new(),
@@ -684,7 +706,20 @@ impl AirPlaySpeakers {
             store_kept_aside: None,
             now_playing: None,
             log,
+        };
+        speakers.open_airplay2();
+        speakers
+    }
+
+    /// Hands a sender with the hidden AirPlay 2 switch on the stored device
+    /// ID; with the switch off the identity file is never touched.
+    fn open_airplay2(&mut self) {
+        if !self.link.airplay2() {
+            return;
         }
+        let (id, found) = self.store.open_airplay2();
+        self.log.log(|| format!("AirPlay 2 identity: {found}"));
+        self.link.set_airplay2_device_id(id);
     }
 
     /// Takes in whether a write of the pairings' file worked: a change from
@@ -731,6 +766,7 @@ impl AirPlaySpeakers {
         self.password_asks.retain(|_, ask| !ask.pair);
         self.latency = self.link.latency();
         self.stopped = false;
+        self.open_airplay2();
         self.log.log(|| {
             format!(
                 "AirPlay: a new sender runs, L = {} ms; the speakers that were on join once listed",
@@ -1357,6 +1393,7 @@ impl AirPlaySpeakers {
         let mut options = SpeakerOptions::new(airplay_volume(settings.volume, self.master));
         options.delay = self.sent_delay(id);
         options.credentials = self.store.get(id).cloned();
+        options.homekit_credentials = self.store.homekit(id).cloned();
         options.password = self.password(id);
         options
     }
@@ -1812,6 +1849,12 @@ impl AirPlaySpeakers {
                         id: id.to_owned(),
                         problem,
                     });
+                } else if problem == AirPlayProblem::OneAirPlay2Speaker {
+                    // The sender starts it once the other session ends.
+                    events.push(BackendEvent::AirPlayTrouble {
+                        id: id.to_owned(),
+                        problem,
+                    });
                 } else {
                     self.turn_off(id, problem, events);
                 }
@@ -1842,6 +1885,34 @@ impl AirPlaySpeakers {
             SpeakerEvent::Server(server) => {
                 self.log
                     .log(|| format!("AirPlay speaker {} server: {server}", self.label(id)));
+                false
+            }
+            SpeakerEvent::HomeKitPaired(credentials) => {
+                let saved = self.store.insert_homekit(id, credentials);
+                self.log.log(|| {
+                    let saved = match &saved {
+                        Ok(()) => String::new(),
+                        Err(error) => format!(" for this run only ({error})"),
+                    };
+                    format!(
+                        "AirPlay speaker {}: paired on AirPlay 2, credentials kept{saved}",
+                        self.label(id)
+                    )
+                });
+                false
+            }
+            SpeakerEvent::HomeKitRejected => {
+                let saved = self.store.remove_homekit(id);
+                self.log.log(|| {
+                    let saved = match &saved {
+                        Ok(()) => String::new(),
+                        Err(error) => format!(" (the file couldn't be written: {error})"),
+                    };
+                    format!(
+                        "AirPlay speaker {}: turned down its AirPlay 2 credentials, forgotten{saved}",
+                        self.label(id)
+                    )
+                });
                 false
             }
             SpeakerEvent::Methods(_)
@@ -2390,6 +2461,32 @@ pub mod tests {
             fake.take_calls()[1..],
             [Call::Credentials(id, "0123456789ABCDEF".to_owned())]
         );
+    }
+
+    #[test]
+    fn homekit_credentials_a_receiver_rejects_are_deleted_from_the_file() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{homekit, sealer};
+
+        let path = crate::debug_log::test_dir("airplay2-homekit-rejected").join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        store.open_airplay2();
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        store.insert_homekit(&id, homekit(0x5A)).expect("saved");
+        let fake = FakeAirPlay::new();
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.push(SenderEvent::Speaker {
+            key: tv.key.clone(),
+            event: SpeakerEvent::HomeKitRejected,
+        });
+        airplay.poll();
+        assert_eq!(airplay.store.homekit(&id), None);
+        drop(airplay);
+
+        let (mut store, _) = PairingStore::open(path, sealer());
+        store.open_airplay2();
+        assert_eq!(store.homekit(&id), None, "gone from the file too");
     }
 
     #[test]
@@ -3179,6 +3276,47 @@ pub mod tests {
             Err(AirPlayProblem::NeedsPassword),
             "it asks for a password from then on"
         );
+    }
+
+    #[test]
+    fn a_speaker_waiting_for_the_airplay2_slot_stays_on_and_one_without_ptp_is_off() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        airplay.poll();
+        fake.fail(
+            &kitchen,
+            ErrorKind::Unsupported(UnsupportedReason::OneAirPlay2Session),
+        );
+        assert_eq!(
+            airplay.poll(),
+            [
+                BackendEvent::AirPlayChanged,
+                BackendEvent::AirPlayTrouble {
+                    id: id.clone(),
+                    problem: AirPlayProblem::OneAirPlay2Speaker
+                }
+            ]
+        );
+        assert_eq!(airplay.enabled_ids(), std::slice::from_ref(&id));
+        fake.take_calls();
+        fake.fail(&kitchen, ErrorKind::Unsupported(UnsupportedReason::Timing));
+        assert_eq!(
+            airplay.poll(),
+            [
+                BackendEvent::AirPlayChanged,
+                BackendEvent::AirPlayFailed {
+                    id: id.clone(),
+                    problem: AirPlayProblem::TimingUnavailable
+                }
+            ]
+        );
+        assert!(airplay.enabled_ids().is_empty());
     }
 
     /// The password receiver Study, listed while streaming, with its

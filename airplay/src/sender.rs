@@ -103,7 +103,8 @@ pub struct SenderConfig {
     /// path runs (P170).
     pub airplay2: bool,
     /// The AirPlay 2 device ID (P5, P43): a random value the host made once
-    /// and stored. `None` gives a random one for this sender's lifetime.
+    /// and stored ([`random_airplay2_device_id`]). `None` gives a random one
+    /// for this sender's lifetime, until [`Sender::set_airplay2_device_id`].
     pub airplay2_device_id: Option<[u8; 6]>,
     /// The ports the PTP service binds, 319 and 320 (P158); a test picks
     /// others so it doesn't need the real ones.
@@ -118,6 +119,15 @@ pub const AIRPLAY2_SWITCH_ENV: &str = "AUDIOSYNC_AIRPLAY2";
 /// The switch's value from the environment variable's: on only for `1`.
 pub fn airplay2_switch(value: Option<&str>) -> bool {
     value == Some("1")
+}
+
+/// A new random AirPlay 2 device ID for a host to store once (P5), or
+/// `None` when the random source is unavailable.
+pub fn random_airplay2_device_id() -> Option<[u8; 6]> {
+    use crate::ids::{Entropy, OsEntropy};
+    let mut id = [0u8; 6];
+    OsEntropy.fill(&mut id).ok()?;
+    Some(id)
 }
 
 impl Default for SenderConfig {
@@ -316,6 +326,15 @@ pub enum SpeakerEvent {
     AudioJack(JackStatus),
     /// The level a volume read reported (P122).
     VolumeReported(f64),
+    /// A PIN or password pairing on the AirPlay 2 path gave these HomeKit
+    /// credentials (P152): the host stores them where secrets go and hands
+    /// them back in [`SpeakerOptions::homekit_credentials`]. The sender
+    /// keeps them too, until it stops. `Debug` shows the identifiers only.
+    HomeKitPaired(HomeKitCredentials),
+    /// The receiver no longer takes the speaker's HomeKit credentials
+    /// (P154): the sender dropped its copy, and the host deletes the stored
+    /// one, so the next start pairs again. A PairingRequired error follows.
+    HomeKitRejected,
 }
 
 /// What the sender reports.
@@ -486,6 +505,12 @@ impl Sender {
             counters: counters.clone(),
         });
         counters
+    }
+
+    /// The stored AirPlay 2 device ID (P5, P43), for the AirPlay 2 sessions
+    /// that start from now on; a running one keeps the ID it sent.
+    pub fn set_airplay2_device_id(&self, id: [u8; 6]) {
+        self.command(Command::SetAirPlay2DeviceId(id));
     }
 
     /// Stops a speaker: its packets stop, TEARDOWN goes out, and its

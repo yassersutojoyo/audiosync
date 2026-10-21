@@ -456,12 +456,14 @@ fn keyboard_shortcuts_are_declared() {
 /// that AirPlay speakers playing can't wait long enough for a Google Cast
 /// speaker, with its short name, and the notice
 /// that the sender stopped or couldn't start, with its Retry button and its
-/// short name for the dismiss button, and the
-/// note that discovery has found no speaker yet (alone, or with Google
-/// Cast's in one sentence), which shows only while it runs; an empty Connected Speakers list otherwise says just that it's
-/// empty, or that its virtual outputs are hidden. Seven strings of the
-/// AudioSync Guide name AirPlay too, with the receivers the sender plays,
-/// the ones it can't yet, and the track info it sends.
+/// short name for the dismiss button, and the note that discovery has found
+/// no speaker yet (alone, or with Google Cast's in one sentence), which
+/// shows only while it runs. The note and row state for a speaker waiting
+/// for the one AirPlay 2 slot show only behind the hidden AirPlay 2 switch.
+/// An empty Connected Speakers list otherwise says just that it's empty, or
+/// that its virtual outputs are hidden. Seven strings of the AudioSync Guide
+/// name AirPlay too, with the receivers the sender plays, the ones it can't
+/// yet, and the track info it sends.
 #[test]
 fn no_text_promises_airplay() {
     let strings = include_str!("../ui/strings.slint");
@@ -481,6 +483,8 @@ fn no_text_promises_airplay() {
                 )
                 || line.contains("return @tr(\"AirPlay ahead of {}\", name);")
                 || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
+                || line.contains("plays one AirPlay 2 speaker at a time, so {} waits.")
+                || line.contains("@tr(\"Waiting for the other AirPlay 2 speaker\")")
                 || line.contains(
                     "network-none-found: @tr(\"No AirPlay or Google Cast speakers found yet.",
                 )

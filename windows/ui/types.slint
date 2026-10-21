@@ -2,9 +2,9 @@
 
 // How a speaker or group row shows: playing only while streaming is on. A
 // speaker that is on while streaming is on but can't play right now waits
-// for its device (another app holds it) or is reconnecting (AirPlay); a
-// group waits when every present member does.
-export enum RowState { off, will-play, playing, waiting-for-device, reconnecting }
+// for its device (another app holds it), is reconnecting (AirPlay) or waits
+// for the one AirPlay 2 slot; a group waits when every present member does.
+export enum RowState { off, will-play, playing, waiting-for-device, reconnecting, waiting-for-airplay2 }
 
 // The part of a speaker or group row that has, or is to take, the keyboard
 // focus: its toggle, delay button, volume, sync controls or options. A row
@@ -28,7 +28,7 @@ export enum CastList { quiet, searching, none-found, failed }
 export enum Availability { open, needs-code, pairing, waiting-to-pair, pairing-not-yet, airplay2-not-yet, unsupported }
 
 // What went wrong with an AirPlay speaker, for its notice.
-export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, unsupported }
+export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, timing-unavailable, one-airplay2-speaker, unsupported }
 
 // View > Appearance: as Windows is set, or always light or dark.
 export enum Appearance { system, light, dark }
@@ -91,7 +91,7 @@ export struct GroupItem {
 }
 
 // What a notice is about, for its short name (Strings.notice-title).
-export enum NoticeKind { no-speaker, source-quit, source-switched, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-cant-play, airplay-stopped, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast }
+export enum NoticeKind { no-speaker, source-quit, source-switched, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast }
 
 export struct NoticeItem {
     id: int,

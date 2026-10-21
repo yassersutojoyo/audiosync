@@ -143,6 +143,10 @@ pub enum AirPlayProblem {
     PairingNotYet,
     /// Only AirPlay 2 can play it.
     AirPlay2NotYet,
+    /// It turned NTP timing down, and PTP timing isn't available.
+    TimingUnavailable,
+    /// Another AirPlay 2 speaker plays; it starts once that one stops.
+    OneAirPlay2Speaker,
     /// AudioSync can't play to it.
     Unsupported,
 }
@@ -257,6 +261,9 @@ pub enum Waiting {
     /// An AirPlay speaker that stopped playing, which AudioSync keeps trying
     /// to reach.
     Reconnecting,
+    /// An AirPlay speaker that waits for the one AirPlay 2 slot; it starts
+    /// once the other AirPlay 2 speaker stops.
+    ForAirPlay2Slot,
 }
 
 /// Where a pairing's PIN prompt is.
