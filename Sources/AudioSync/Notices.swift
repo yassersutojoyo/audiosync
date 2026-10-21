@@ -27,6 +27,7 @@ struct Notice: Identifiable, Equatable {
 enum PrivacyPane: String, Equatable {
     case localNetwork = "Privacy_LocalNetwork"
     case automation = "Privacy_Automation"
+    case microphone = "Privacy_Microphone"
 
     var url: URL {
         URL(string: "x-apple.systempreferences:com.apple.preference.security?\(rawValue)")!

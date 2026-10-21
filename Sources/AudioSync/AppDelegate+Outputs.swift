@@ -9,9 +9,17 @@ extension AppDelegate {
 
     // MARK: - Speaker / source state (shared by the window and the menu bar panel)
 
-    /// A local speaker's linear gain, through the core's volume curve.
+    /// A local speaker's linear gain, through the core's volume curve; 0
+    /// while a calibration plays its signal through another output (S232).
     private func effectiveGain(_ uid: String) -> Double {
-        engine.gainCurve.outputGain(localPosition: localVolume[uid] ?? defaultVolume, masterPosition: masterVolume)
+        if let solo = calibrationRun?.soloUID, solo != uid { return 0 }
+        return engine.gainCurve.outputGain(localPosition: localVolume[uid] ?? defaultVolume,
+                                           masterPosition: masterVolume)
+    }
+
+    /// Every running local output gets its gain again.
+    func reapplyLocalGains() {
+        LocalOutputSync.reapplyGains(on: engine, gain: { effectiveGain($0) })
     }
 
     func setLocalEnabled(_ uid: String, _ on: Bool) {
@@ -59,6 +67,7 @@ extension AppDelegate {
     func setLocalOffset(_ uid: String, _ rawMs: Double) {
         guard let ms = LocalDelay.sanitizedOffset(rawMs) else { return }   // not finite: ignored
         localOffsetMs[uid] = ms
+        calibrationOffsetChanged(uid)
         retimeLocalOutputs()
         pushModel()
     }
