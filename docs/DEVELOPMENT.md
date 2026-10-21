@@ -96,6 +96,7 @@ Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) desc
 - `OutputRenderer.swift`: one Core Audio output per local speaker
 - `SyncEngine.swift`: `StreamEngine`, which ties capture, local outputs and AudioSync's AirPlay sender together
 - `LocalDelay.swift`: the local delay model: the reference, the hold-backs each local speaker plays at, the AirPlay delay and the one-time migration of older delays
+- `CalibrationFlow.swift`, `CalibrationTap.swift`, `CalibrationMicrophone.swift`, `AppDelegate+Calibration.swift`, `CalibrationViews.swift`: measuring a local speaker's offset with the microphone: the decisions, the test signal's way into the delay buffer, the recording kept in memory only, the run itself and its control under the speaker's delay
 - `NativeAirPlay.swift`, `NativeAirPlayTap.swift`: AudioSync's own AirPlay sender through the core's C interface, and the capture's way into it
 - `NativeAirPlayModel.swift`, `NativeReceiver.swift`: what the sender lists and plays, and the decisions the app makes from it, PIN and password pairing among them (`AirPlayPairing.swift` holds the access kinds and turn-off reasons)
 - `TrackMetadata.swift`: the track's title, artist and album, and its artwork scaled to a small JPEG, for AirPlay speakers with a screen (`ReceiverInfo.swift` decides what they show)

@@ -113,6 +113,17 @@ to `base64`, `indexmap` and `memchr`, which the app already contained.
 compiles are the ones in `windows/Cargo.lock`, which that build's
 `THIRD-PARTY-NOTICES.txt` names.
 
+The Windows app also contains AudioSync's own Google Cast sender (`cast/`,
+GPL-3.0-or-later), described in its own section below. Of the crates listed
+there, these reach the Windows executable on top of the ones above:
+`native-tls` (MIT OR Apache-2.0) with `schannel` (MIT) for the TLS connection,
+`prost` (Apache-2.0) for the protocol buffer messages, and `flacenc`
+(Apache-2.0) for the FLAC stream, with `crc`, `crc-catalog`, `heapless`,
+`hash32`, `md-5` 0.10, `digest` 0.10, `block-buffer` 0.10 and
+`crypto-common` 0.1 (MIT OR Apache-2.0), `generic-array` (MIT) and
+`byteorder` (Unlicense OR MIT). The macOS and Linux TLS crates and the
+build-time ones aren't compiled into it.
+
 The Windows app reads and writes its settings file with `serde` and
 `serde_json` (MIT OR Apache-2.0), which bring in `serde_core`, `serde_derive`
 and `itoa` (MIT OR Apache-2.0) and `zmij` (MIT), next to `memchr`, which the
@@ -137,22 +148,27 @@ supply.
 ## AudioSync's own Google Cast sender
 
 `cast/` is AudioSync's own Google Cast sender (GPL-3.0-or-later), still in
-development. The macOS app's audio core contains it, reached through the core's
-C interface, which brings the crates below into the app binary. It builds on `native-tls` (MIT OR Apache-2.0) for the TLS
-connection to the device, which uses the platform's TLS stack: `schannel`
+development. Both apps contain it: the Windows app links it directly, and the
+macOS app through its audio core's C interface, which brings the crates below
+into the app binary. It builds on `native-tls` (MIT OR Apache-2.0) for the TLS
+connection to the device, with `tempfile`, `rustix`, `errno`, `bitflags`,
+`fastrand` and `once_cell` (MIT OR Apache-2.0) on every platform; native-tls
+uses the platform's TLS stack: `schannel`
 (MIT) on Windows, `security-framework`, `security-framework-sys`,
 `core-foundation` and `core-foundation-sys` on macOS, and on Linux the system
 OpenSSL through `openssl` (Apache-2.0), `openssl-sys` (MIT), `openssl-macros`,
-`openssl-probe`, `foreign-types`, `foreign-types-shared` and `bitflags`, with
-`tempfile`, `rustix`, `linux-raw-sys` and `errno`; `prost` and `prost-derive`
+`openssl-probe`, `foreign-types`, `foreign-types-shared` and
+`linux-raw-sys`; `prost` and `prost-derive`
 (Apache-2.0) for the protocol buffer messages, with `bytes` (MIT), `anyhow`,
 `itertools` and `either`; `flacenc` (Apache-2.0) to encode the FLAC stream
 some devices need instead of WAV, with `crc`, `crc-catalog`, `heapless`,
 `hash32`, `stable_deref_trait`, `md-5`, `digest`, `block-buffer`,
 `crypto-common`, `generic-array` (MIT), `byteorder` (Unlicense OR MIT),
 `num-traits`, `rustversion`, `seq-macro`, `version_check` and, at build time,
-`built` (MIT) and `autocfg` (Apache-2.0 OR MIT, through `num-traits`); and on `mdns-sd`, `getrandom`, `sha2` and `serde_json` with the
-crates they build on, listed above. The others are under MIT OR Apache-2.0. Its
+`built` (MIT) and `autocfg` (Apache-2.0 OR MIT, through `num-traits`); `serde_json` (MIT OR Apache-2.0) for the
+messages' JSON, with `serde_core`, `itoa` (MIT OR Apache-2.0), `zmij` (MIT)
+and `memchr`, in the macOS app as well as the Windows one; and on `mdns-sd`,
+`getrandom` and `sha2` with the crates they build on, listed above. The others are under MIT OR Apache-2.0. Its
 tests also use `claxon` (Apache-2.0) to decode that FLAC stream, and `rcgen`,
 `rustls` (Apache-2.0 OR ISC OR
 MIT), `ring` (Apache-2.0 AND ISC), `rustls-webpki` and `untrusted` (ISC) for a

@@ -176,6 +176,13 @@ pub(crate) struct Driver {
     homekit: BTreeMap<DeviceKey, HomeKitCredentials>,
     /// The random device ID of the AirPlay 2 session SETUP (P5, P43).
     device_id: [u8; 6],
+    /// The PTP service, bound only while an AirPlay 2 session may need it
+    /// (P158, P170).
+    ptp: Option<ap2::PtpRun>,
+    ptp_ports: crate::ptp::PtpPorts,
+    ptp_receiver_ports: crate::ptp::PtpPorts,
+    /// The host was told that PTP is unavailable (P158).
+    ptp_unavailable_told: bool,
 }
 
 impl Driver {
@@ -208,7 +215,21 @@ impl Driver {
             ptp_timing: BTreeSet::new(),
             homekit: BTreeMap::new(),
             device_id: random_device_id(),
+            ptp: None,
+            ptp_ports: crate::ptp::PtpPorts::default(),
+            ptp_receiver_ports: crate::ptp::PtpPorts::default(),
+            ptp_unavailable_told: false,
         }
+    }
+
+    pub(crate) fn with_ptp_ports(
+        mut self,
+        local: crate::ptp::PtpPorts,
+        receiver: crate::ptp::PtpPorts,
+    ) -> Driver {
+        self.ptp_ports = local;
+        self.ptp_receiver_ports = receiver;
+        self
     }
 
     pub(crate) fn with_airplay2(mut self, on: bool, device_id: Option<[u8; 6]>) -> Driver {
@@ -315,6 +336,9 @@ impl Driver {
         if let Some(at) = self.stream.poll_timeout() {
             next = next.min(at);
         }
+        if let Some(at) = self.ptp.as_ref().and_then(|run| run.service.poll_timeout()) {
+            next = next.min(at);
+        }
         for speaker in self.speakers.values() {
             match &speaker.phase {
                 Phase::Active(active) => {
@@ -359,6 +383,11 @@ impl Driver {
     fn run_timers(&mut self, now: Instant) {
         if self.stream.poll_timeout().is_some_and(|at| at <= now) {
             self.stream.handle_timeout(now);
+        }
+        if let Some(run) = &mut self.ptp
+            && run.service.poll_timeout().is_some_and(|at| at <= now)
+        {
+            run.service.handle_timeout(now);
         }
         let mut due = Vec::new();
         for (key, speaker) in &mut self.speakers {
@@ -447,6 +476,9 @@ impl Driver {
             while let Some(transmit) = self.stream.poll_transmit() {
                 progressed = true;
                 self.transmit(transmit, now);
+            }
+            if self.send_ptp() {
+                progressed = true;
             }
             while let Some(event) = self.stream.poll_event() {
                 progressed = true;
@@ -624,7 +656,7 @@ impl Driver {
                     run.pairing.handle_connection_closed(now);
                 }
             }
-            IoEvent::Control { .. } | IoEvent::TimingRequest { .. } => {}
+            IoEvent::Control { .. } | IoEvent::TimingRequest { .. } | IoEvent::Ptp { .. } => {}
         }
     }
 
@@ -658,6 +690,7 @@ impl Driver {
             Phase::Ap2(active) => {
                 self.sessions.remove(&active.key);
                 self.sessions.remove(&active.events_key);
+                self.close_ptp();
             }
             Phase::Waiting(_) | Phase::Failed | Phase::Idle => {}
         }
@@ -722,6 +755,7 @@ impl Driver {
             software_volume: active.software_volume.then_some(speaker.options.volume),
             software_mute: active.software_mute,
             audio_latency,
+            airplay2: None,
         };
         let id = self
             .stream
@@ -820,6 +854,13 @@ impl Driver {
         let Some(key) = self.stream_ids.get(&transmit.speaker).cloned() else {
             return;
         };
+        if self
+            .speakers
+            .get(&key)
+            .is_some_and(|speaker| matches!(speaker.phase, Phase::Ap2(_)))
+        {
+            return self.ap2_transmit(&key, transmit, now);
+        }
         let Some(active) = self.active(&key) else {
             return;
         };
@@ -847,6 +888,7 @@ impl Driver {
                 if let Some(active) = self.active(&key) {
                     active.session.flush(seq, rtptime, now);
                 }
+                self.ap2_flush(&key, seq, rtptime, now);
             }
             StreamEvent::FirstSound { speaker, .. } => {
                 let Some(key) = self.stream_ids.get(&speaker).cloned() else {
@@ -873,6 +915,12 @@ impl Driver {
     }
 
     fn io_event(&mut self, event: IoEvent, now: Instant) {
+        if let IoEvent::Ptp { bytes, source, at } = event {
+            if let Some(run) = &mut self.ptp {
+                run.service.handle_message(&bytes, source, at);
+            }
+            return;
+        }
         let session = match &event {
             IoEvent::Connected { session, .. }
             | IoEvent::ConnectFailed { session, .. }
@@ -880,6 +928,7 @@ impl Driver {
             | IoEvent::RtspClosed { session, .. }
             | IoEvent::Control { session, .. }
             | IoEvent::TimingRequest { session, .. } => *session,
+            IoEvent::Ptp { .. } => return,
         };
         if let Some(key) = self.pairing_sessions.get(&session).cloned() {
             return self.pairing_io_event(&key, event, now);
@@ -945,6 +994,7 @@ impl Driver {
                 }
             }
             IoEvent::TimingRequest { at, .. } => active.session.handle_timing_request(at),
+            IoEvent::Ptp { .. } => {}
         }
     }
 
@@ -961,9 +1011,12 @@ impl Driver {
                     return;
                 };
                 speaker.options.delay = delay;
-                if let Phase::Active(active) = &speaker.phase
-                    && let Some(id) = active.stream_id
-                {
+                let id = match &speaker.phase {
+                    Phase::Active(active) => active.stream_id,
+                    Phase::Ap2(active) => active.stream_id,
+                    _ => None,
+                };
+                if let Some(id) = id {
                     self.stream.set_delay(id, delay, now);
                 }
             }

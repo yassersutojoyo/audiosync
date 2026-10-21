@@ -22,10 +22,11 @@ use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
 use crate::rtsp::{Message, Method, Parser, Request, Response};
 use crate::secret::Secret;
 use crate::session::{
-    CONNECT_TIMEOUT, Connection, RESPONSE_TIMEOUT, TEARDOWN_TIMEOUT, TIMING_SILENCE,
+    CONNECT_TIMEOUT, Connection, RESPONSE_TIMEOUT, TEARDOWN_TIMEOUT, TIMING_SILENCE, UdpSendResult,
 };
 use crate::volume::Volume;
 
+use super::audio::StreamKey;
 use super::bodies::{
     self, InfoAnswer, PEERS_CONTENT_TYPE, PLIST_CONTENT_TYPE, PROTOCOL_VERSION_HEADER, PtpPeer,
     STREAM_KEY_BYTES, SessionSetupBody, Timing,
@@ -279,6 +280,11 @@ pub struct Ap2Session {
     teardown_deadline: Option<Instant>,
     last_timing_request: Option<Instant>,
     server: Option<String>,
+    /// The sequence number and timestamp the next FLUSH names (P34, P42).
+    flush_point: (u16, u32),
+    flush_pending: bool,
+    /// Unreachable UDP sends in a row (P141).
+    udp_failures: u8,
 }
 
 type Output = Ap2Output;
@@ -355,7 +361,11 @@ impl Ap2Session {
             teardown_deadline: None,
             last_timing_request: None,
             server: None,
+            flush_point: (0, 0),
+            flush_pending: false,
+            udp_failures: 0,
         };
+        session.flush_point = (session.ids.first_seq, session.ids.first_rtptime);
         if drawn.is_err() {
             session.fail(
                 ErrorKind::Unreachable,
@@ -398,6 +408,47 @@ impl Ap2Session {
     /// The stream as set up, once the stream SETUP is answered.
     pub fn stream(&self) -> Option<StreamPorts> {
         self.stream
+    }
+
+    /// The address the session connected to (P17).
+    pub fn remote(&self) -> Option<SocketAddr> {
+        self.remote
+    }
+
+    /// The `shk` the stream SETUP carries (P156).
+    pub(crate) fn stream_key(&self) -> StreamKey {
+        StreamKey::new(*self.stream_key)
+    }
+
+    /// Restarts the stream through a FLUSH naming the first packet that
+    /// follows it (P34, P100, P143); the stream key and its nonce counter go
+    /// on (P156).
+    pub fn flush(&mut self, seq: u16, rtptime: u32, now: Instant) {
+        if self.state != Ap2State::Ready {
+            return;
+        }
+        self.flush_point = (seq, rtptime);
+        self.flush_pending = true;
+        self.drive(now);
+    }
+
+    /// The result of an audio, sync or resend datagram: two unreachable in
+    /// a row lose the speaker (P141).
+    pub fn handle_udp_send(&mut self, result: UdpSendResult, _now: Instant) {
+        match result {
+            UdpSendResult::Sent => self.udp_failures = 0,
+            UdpSendResult::Unreachable => {
+                self.udp_failures = self.udp_failures.saturating_add(1);
+                if self.udp_failures >= 2 {
+                    self.fail(
+                        ErrorKind::Lost,
+                        None,
+                        None,
+                        Some("two UDP sends in a row were unreachable"),
+                    );
+                }
+            }
+        }
     }
 
     /// Whether every byte on the RTSP connection is framed now (P67).
@@ -848,6 +899,10 @@ impl Ap2Session {
                     self.stream_setup_waiting = false;
                     return self.send(Kind::StreamSetup, now, false);
                 }
+                if self.state == Ap2State::Ready && self.flush_pending {
+                    self.flush_pending = false;
+                    return self.send(Kind::Flush, now, false);
+                }
                 if self.state == Ap2State::Ready
                     && let Some(volume) = self.pending_volume.take()
                 {
@@ -932,10 +987,7 @@ impl Ap2Session {
             Kind::Flush => {
                 request.headers.push(
                     "RTP-Info",
-                    format!(
-                        "seq={};rtptime={}",
-                        self.ids.first_seq, self.ids.first_rtptime
-                    ),
+                    format!("seq={};rtptime={}", self.flush_point.0, self.flush_point.1),
                 );
             }
             Kind::TeardownStream => {
@@ -1359,7 +1411,7 @@ impl Ap2Session {
 
 /// The address the session connected to, with another port and the same
 /// scope (P17).
-fn with_port(remote: SocketAddr, port: u16) -> SocketAddr {
+pub(crate) fn with_port(remote: SocketAddr, port: u16) -> SocketAddr {
     let mut address = remote;
     address.set_port(port);
     address

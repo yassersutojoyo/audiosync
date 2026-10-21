@@ -455,8 +455,8 @@ fn keyboard_shortcuts_are_declared() {
 /// (spec S181), which shows only while the AirPlay sender runs, and the notice
 /// that the sender stopped or couldn't start, with its Retry button and its
 /// short name for the dismiss button, and the
-/// note that discovery has found no speaker yet, which shows only while it
-/// runs; an empty Connected Speakers list otherwise says just that it's
+/// note that discovery has found no speaker yet (alone, or with Google
+/// Cast's in one sentence), which shows only while it runs; an empty Connected Speakers list otherwise says just that it's
 /// empty, or that its virtual outputs are hidden. Seven strings of the
 /// AudioSync Guide name AirPlay too, with the receivers the sender plays,
 /// the ones it can't yet, and the track info it sends.
@@ -475,6 +475,9 @@ fn no_text_promises_airplay() {
                 || line.contains("notice-retry-label: @tr(\"Retry starting AirPlay\")")
                 || line.contains("return @tr(\"AirPlay stopped\");")
                 || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
+                || line.contains(
+                    "network-none-found: @tr(\"No AirPlay or Google Cast speakers found yet.",
+                )
                 || [
                     "help-intro",
                     "help-start",
