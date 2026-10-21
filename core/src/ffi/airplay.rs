@@ -74,6 +74,7 @@ use audiosync_airplay::audio::SAMPLE_RATE;
 use audiosync_airplay::discovery::mdns::MdnsBrowser;
 use audiosync_airplay::discovery::{Browser, Device, DeviceKey, ServiceKind};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
+use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::input::InputWriter;
 use audiosync_airplay::metadata::TrackInfo;
 use audiosync_airplay::pairing::{Credentials, PairingEvent};
@@ -632,6 +633,11 @@ impl AscAirPlay {
                 let detail = self.store_paired(&id, credentials);
                 (AIRPLAY_EVENT_PAIRED, 0, AIRPLAY_REASON_NONE, detail)
             }
+            PairingEvent::HomeKitPaired(credentials) => {
+                self.pairing.remove(&id);
+                let detail = self.store_homekit_paired(&id, credentials);
+                (AIRPLAY_EVENT_PAIRED, 0, AIRPLAY_REASON_NONE, detail)
+            }
             PairingEvent::Failed { error, wrong_pin } => {
                 self.pairing.remove(&id);
                 let reason = error.kind.user_reason();
@@ -684,6 +690,9 @@ impl AscAirPlay {
         let paired = match event {
             PairingEvent::PinRequested => return,
             PairingEvent::Paired(credentials) => Some(self.store_paired(id, credentials)),
+            PairingEvent::HomeKitPaired(credentials) => {
+                Some(self.store_homekit_paired(id, credentials))
+            }
             PairingEvent::Failed { error, .. } => {
                 if error.kind.user_reason() == UserReason::WrongPassword {
                     self.passwords.remove(id);
@@ -718,6 +727,18 @@ impl AscAirPlay {
         let detail = match self.store.insert(id, credentials) {
             Ok(()) => String::new(),
             Err(error) => format!("the pairings file couldn't be written: {error}"),
+        };
+        self.relist(id);
+        detail
+    }
+
+    /// Stores the HomeKit credentials an AirPlay 2 PIN pairing with the
+    /// receiver `id` got (P152), and lists the receiver again. Returns the
+    /// detail for the host, as [`Self::store_paired`] does.
+    fn store_homekit_paired(&mut self, id: &str, credentials: HomeKitCredentials) -> String {
+        let detail = match self.identity.insert(id, credentials) {
+            Ok(()) => String::new(),
+            Err(error) => format!("the AirPlay 2 identity file couldn't be written: {error}"),
         };
         self.relist(id);
         detail
@@ -3582,6 +3603,48 @@ mod tests {
         let (again, loaded) = IdentityStore::open(path);
         assert_eq!(loaded, Loaded::Receivers(0));
         assert_eq!(again.get("02005E005351"), None);
+    }
+
+    #[test]
+    fn an_airplay2_pin_pairing_stores_its_credentials_and_reports_paired() {
+        let folder = scratch("airplay2-identity-pin");
+        let path = folder.join("identity.dat");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        // SAFETY: a live handle, used by this thread only; the path is a
+        // NUL-terminated string.
+        unsafe {
+            assert_eq!(
+                asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()),
+                0
+            );
+        }
+        let mut blob = vec![1u8];
+        blob.extend_from_slice(b"01234567-89AB-CDEF-0123-456789ABCDEF");
+        blob.extend_from_slice(&[9; 64]);
+        blob.extend_from_slice(b"receiver");
+        let credentials = HomeKitCredentials::from_bytes(&blob).expect("a credential blob");
+        let id = "02005E005352";
+        let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x52]));
+        inside(handle).pairing.insert(id.to_owned(), key.clone());
+        inside(handle).take_in(SenderEvent::Pairing {
+            key,
+            event: PairingEvent::HomeKitPaired(credentials.clone()),
+        });
+        let events = events_until(handle, |events| {
+            events.iter().any(|e| e.kind == AIRPLAY_EVENT_PAIRED)
+        });
+        assert_eq!(
+            pairing_events(&events),
+            vec![(AIRPLAY_EVENT_PAIRED, id.to_owned(), 0)]
+        );
+        assert!(inside(handle).pairing.is_empty());
+        assert_eq!(inside(handle).identity.get(id), Some(&credentials));
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+        let (again, _) = IdentityStore::open(path);
+        assert_eq!(again.get(id), Some(&credentials));
     }
 
     fn pairing_events(events: &[Event]) -> Vec<(i32, String, i32)> {
