@@ -492,7 +492,7 @@ struct NativeAirPlayModel {
         case .pairingFailed(let id, let wrongPin, let problem, _):
             guard stages[id]?.pairingRuns == true else { return nil }
             if wrongPin {
-                // The Apple TV shows a new PIN for a new pairing (P52).
+                // The receiver shows a new PIN for a new pairing (P52).
                 stages[id] = .pairing(afterWrongPin: true)
                 return .startPairing(id)
             }

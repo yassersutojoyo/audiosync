@@ -1370,6 +1370,10 @@ do {
                                                               + "after that, it connects without a PIN.")
             && !kinds.nativePairWrongPINMessage(name: "Loft").contains("TV"),
           "native airplay: the PIN prompt reads as on Windows, for an Apple TV and an AirPlay 2 receiver alike")
+    paths.apply(.appeared(NativeReceiver(id: "K1", name: "Attic", model: "", availability: .needsPin, reason: nil,
+                                         hints: ["airplay", "airplay2", "pairing", "over-airplay2"], overAirPlay2: true)))
+    check(paths.turnedOnByUser("K1") == .startPairing("K1") && paths.apply(.pinNeeded(id: "K1")) == .prompt,
+          "native airplay: a click on an AirPlay 2 receiver asking for a PIN pairs and prompts, as for an Apple TV")
     check(model.apply(.timeline(latencyMs: 1750, restarted: false)) == .latencyChanged
             && model.apply(.timeline(latencyMs: 1750, restarted: true)) == nil && model.latencyMs == 1750,
           "native airplay: local outputs line up again only when L changes")

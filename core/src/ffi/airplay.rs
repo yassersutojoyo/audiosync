@@ -355,6 +355,10 @@ pub struct AscAirPlay {
     /// How the AirPlay 1 attempt ended of each added speaker the sender
     /// then moved to AirPlay 2 (P2), by ID: its listing follows the path.
     airplay1_outcome: HashMap<String, ErrorKind>,
+    /// The keys of receivers the sender got AirPlay 2 credentials for this
+    /// run, by ID: it keeps them after the receiver is gone, so forgetting
+    /// must still reach it.
+    homekit_keys: HashMap<String, DeviceKey>,
     /// The paired receivers' credentials; in memory until the host opens
     /// its file ([`asc_airplay_open_pairings`]).
     store: PairingStore,
@@ -604,6 +608,7 @@ impl AscAirPlay {
                     // When the file can't be written they last for this
                     // handle; the sender keeps them as well.
                     let _ = self.identity.insert(&id, credentials);
+                    self.homekit_keys.insert(id, key);
                     return;
                 }
                 if event == SpeakerEvent::HomeKitRejected {
@@ -621,7 +626,13 @@ impl AscAirPlay {
             SenderEvent::Timeline {
                 latency, restarted, ..
             } => self.queue_event(Pending::Timeline { latency, restarted }),
-            SenderEvent::Pairing { key, event } => self.pairing_event(receiver_id(&key), event),
+            SenderEvent::Pairing { key, event } => {
+                let id = receiver_id(&key);
+                if matches!(event, PairingEvent::HomeKitPaired(_)) {
+                    self.homekit_keys.insert(id.clone(), key);
+                }
+                self.pairing_event(id, event)
+            }
             // Discovery's browser died (a bug in it): the sender no
             // longer lists anything new, so it counts as dead too.
             SenderEvent::DiscoveryFailed => self.death.dead.store(true, Ordering::Release),
@@ -846,7 +857,9 @@ impl AscAirPlay {
         }
         // Forgotten for this handle even when the file can't be written.
         let _ = self.identity.remove(id);
-        if let Some(key) = self.homekit_key(id) {
+        let key = self.homekit_key(id);
+        self.homekit_keys.remove(id);
+        if let Some(key) = key {
             self.sender.forget_homekit(&key);
         }
         true
@@ -859,6 +872,7 @@ impl AscAirPlay {
             .get(id)
             .map(|info| info.device.key.clone())
             .or_else(|| self.added.get(id).map(|added| added.key.clone()))
+            .or_else(|| self.homekit_keys.get(id).cloned())
     }
 
     /// Keeps the strings of a receiver change and describes it with
@@ -1313,6 +1327,7 @@ pub(crate) fn create_with(open_browser: OpenBrowser) -> *mut AscAirPlay {
                 event_strings: Default::default(),
                 listed: HashMap::new(),
                 airplay1_outcome: HashMap::new(),
+                homekit_keys: HashMap::new(),
                 added: HashMap::new(),
                 store: PairingStore::in_memory(),
                 airplay2,
@@ -3943,7 +3958,7 @@ mod tests {
             event: PairingEvent::HomeKitPaired(credentials),
         });
         inside(handle).take_in(SenderEvent::Receiver(ReceiverEvent::Gone(key.clone())));
-        assert!(inside(handle).listed.get(id).is_none() && inside(handle).added.get(id).is_none());
+        assert!(!inside(handle).listed.contains_key(id) && !inside(handle).added.contains_key(id));
         assert_eq!(
             inside(handle).homekit_key(id),
             Some(key),
