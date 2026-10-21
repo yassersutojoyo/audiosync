@@ -172,6 +172,15 @@ pub const STALE_STAMP_BLOCKS: u64 = 4;
 /// The most a callback's lateness moves its reader's delay, in ms (S209).
 pub const LATE_CAP_MS: u64 = 50;
 
+/// The device time, in ms, over which a renderer's timed callbacks form
+/// its lateness floor before any of them counts as late (S209). Whatever
+/// the callback size, the floor forms over the same span.
+pub const FLOOR_FORM_MS: u32 = 300;
+
+/// The fewest timed callbacks the floor forms over (S209), so a device
+/// with large callbacks still has a second lowest that is not its first.
+pub const FLOOR_FORM_CALLBACKS: u32 = 5;
+
 /// How fast the earliest lateness a renderer saw rises, in ns per second of
 /// device frames (S209). The floor never lies more than [`LATE_CAP_MS`]
 /// below the current callback, so early callbacks stop counting within 50 s.
@@ -698,9 +707,21 @@ pub struct Renderer {
     opening: usize,
     /// [`RESTART_INCREASE_MS`] in capture frames.
     restart_increase: i64,
-    /// The floor of the lateness when the reader last anchored, in ns
-    /// (S209); `None` until a callback has a floor.
+    /// The lowest the lateness floor has been since the reader last
+    /// anchored, in ns (S209); `None` until the floor has formed.
     anchor_floor: Option<i64>,
+    /// The floor as it stood at that anchor, for the observer (S229).
+    anchored_floor: Option<i64>,
+    /// Timed callbacks and their device frames until the floor has formed
+    /// (S209); `floor_formed` once they reach [`FLOOR_FORM_CALLBACKS`] and
+    /// `floor_form_frames`.
+    timed_callbacks: u32,
+    timed_frames: u64,
+    floor_form_frames: u64,
+    floor_formed: bool,
+    /// This callback is timed and its floor has not formed: it counts no
+    /// lateness, judges no drift and makes no start re-anchor (S208, S209).
+    warming: bool,
     /// The start lead is published: the host gave the period, or the
     /// first callback came. Not before, so a renderer whose hold-back the
     /// host hasn't set yet never moves the session lead (S208).
@@ -794,6 +815,12 @@ impl Renderer {
             opening: 0,
             restart_increase: i64::from(capture_rate) * i64::from(RESTART_INCREASE_MS) / 1000,
             anchor_floor: None,
+            anchored_floor: None,
+            timed_callbacks: 0,
+            timed_frames: 0,
+            floor_form_frames: u64::from(device_rate) * u64::from(FLOOR_FORM_MS) / 1000,
+            floor_formed: false,
+            warming: false,
             start_lead_fixed: false,
             awaiting_resync: false,
             correction_due: false,
@@ -932,8 +959,15 @@ impl Renderer {
         let frames = out.len() / channels;
         self.update_lead(frames);
         let late_ns = match (time, now) {
-            (Some(time), Some(now)) => self.lateness(time, now, frames),
-            _ => 0,
+            (Some(time), Some(now)) => {
+                let late_ns = self.lateness(time, now, frames);
+                self.form_floor(frames);
+                if self.warming { 0 } else { late_ns }
+            }
+            _ => {
+                self.warming = false;
+                0
+            }
         };
         if late_ns > 0 {
             let shared = &*self.shared;
@@ -945,7 +979,7 @@ impl Renderer {
         let late = late_ns as u128 * u128::from(self.capture_rate) / 1_000_000_000;
         self.reader
             .set_late_frames(i64::try_from(late).unwrap_or(i64::MAX));
-        let shift_ns = self.floor_shift_ns();
+        let (shift_ns, drop_ns) = self.floor_shift_ns();
         let shift = i128::from(shift_ns) * i128::from(self.capture_rate) / 1_000_000_000;
         self.reader
             .set_floor_shift_frames(shift.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64);
@@ -962,7 +996,7 @@ impl Renderer {
         self.take_requests();
         self.follow_session_lead();
         // Before the trim, so a shortage shows as the slack it was.
-        self.observe(frames, time, shift_ns);
+        self.observe(frames, time, drop_ns);
         self.keep_reader_off_w(frames, now);
         let ramp = self.stage.begin(self.gain.get(), frames);
         let read_capacity = self.stereo.len() / 2;
@@ -1048,6 +1082,20 @@ impl Renderer {
         // The floor is the second lowest, so one stray early callback, such
         // as a device's first, never counts.
         late.saturating_sub(second.max(floor)).clamp(0, cap) as u64
+    }
+
+    /// Counts a timed callback of `frames` device frames toward the floor
+    /// (S209) and sets [`Renderer::warming`] for it: the callback that
+    /// brings the count to [`FLOOR_FORM_CALLBACKS`] and the frames to
+    /// [`FLOOR_FORM_MS`] is the first one the floor counts for.
+    fn form_floor(&mut self, frames: usize) {
+        if !self.floor_formed {
+            self.timed_callbacks = self.timed_callbacks.saturating_add(1);
+            self.timed_frames = self.timed_frames.saturating_add(frames as u64);
+            self.floor_formed = self.timed_callbacks >= FLOOR_FORM_CALLBACKS
+                && self.timed_frames >= self.floor_form_frames;
+        }
+        self.warming = !self.floor_formed;
     }
 
     /// Trims the converter over a callback of `frames` device frames that
@@ -1193,33 +1241,41 @@ impl Renderer {
     }
 
     /// The floor that this callback's lateness was measured from (S209):
-    /// none before a second timed callback.
+    /// none until it has formed.
     fn late_floor(&self) -> Option<i64> {
+        if !self.floor_formed {
+            return None;
+        }
         self.earliest
             .map(|[_, floor]| floor)
             .filter(|&floor| floor != i64::MAX)
     }
 
-    /// How far the lateness floor moved since the reader last anchored, in
-    /// ns (S209). The floor leaks up and drops with the callbacks, so
-    /// lateness that builds or fades slower than the leak moves the floor
-    /// instead of Jt; judged against the anchor's floor, it stays lateness.
-    fn floor_shift_ns(&mut self) -> i64 {
+    /// How far the lateness floor lies above the anchor floor, and how far
+    /// the anchor floor fell below the floor at the reader's latest anchor,
+    /// in ns (S209, S229). The floor leaks up and drops with the callbacks,
+    /// so lateness that builds or fades slower than the leak moves the
+    /// floor instead of Jt; judged against the anchor floor, it stays
+    /// lateness. A floor below the anchor floor means the anchor was that
+    /// much too close to W, so the anchor floor follows it down.
+    fn floor_shift_ns(&mut self) -> (i64, i64) {
         let Some(floor) = self.late_floor() else {
-            return 0;
+            return (0, 0);
         };
-        let anchor = *self.anchor_floor.get_or_insert(floor);
-        floor.saturating_sub(anchor)
+        let anchored = *self.anchored_floor.get_or_insert(floor);
+        let anchor = self.anchor_floor.get_or_insert(floor);
+        *anchor = (*anchor).min(floor);
+        let anchor = *anchor;
+        (floor.saturating_sub(anchor), anchored.saturating_sub(anchor))
     }
 
     /// The observer at the start of a callback of `frames` device frames
-    /// output at `time`, whose lateness floor lies `shift_ns` off the
-    /// anchor's (S229). Once the output has played [`OBSERVE_AFTER_MS`], it
-    /// counts a step in the output times, keeps the floor's largest drop
-    /// below the anchor's and, while the output plays and no stop is under
-    /// way, the reader's least slack over the callback's need. It publishes
-    /// only a new extreme.
-    fn observe(&mut self, frames: usize, time: Option<u64>, shift_ns: i64) {
+    /// output at `time`, whose anchor floor lies `drop_ns` below the floor
+    /// at the anchor (S229). Once the output has played [`OBSERVE_AFTER_MS`],
+    /// it counts a step in the output times, keeps the largest drop and,
+    /// while the output plays and no stop is under way, the reader's least
+    /// slack over the callback's need. It publishes only a new extreme.
+    fn observe(&mut self, frames: usize, time: Option<u64>, drop_ns: i64) {
         let previous = match time {
             Some(time) => self.previous_output.replace((time, frames)),
             None => self.previous_output.take(),
@@ -1238,7 +1294,7 @@ impl Renderer {
                 shared.time_steps.fetch_add(1, Ordering::Relaxed);
             }
         }
-        let drop = u64::try_from(shift_ns.saturating_neg()).unwrap_or(0);
+        let drop = u64::try_from(drop_ns).unwrap_or(0);
         if drop > self.floor_drop_ns {
             self.floor_drop_ns = drop;
             shared.floor_drop_ns.store(drop, Ordering::Relaxed);
@@ -1298,8 +1354,13 @@ impl Renderer {
     }
 
     /// Re-anchors the reader when the session lead moved its delay (S208),
-    /// unless the output is stopping or a change already waits.
+    /// unless the output is stopping, a change already waits, or it plays
+    /// while its lateness floor forms (S209): a re-anchor then would land
+    /// as if its callback were on time.
     fn follow_session_lead(&mut self) {
+        if self.warming && !self.fade.is_closed() {
+            return;
+        }
         if self.stop == Stop::None
             && !self.delay_pending
             && self.wanted_reader_delay() != self.reader_delay
@@ -1339,7 +1400,8 @@ impl Renderer {
     /// is always held, and what it reports as due is ignored, since its
     /// error also counts the frames the callback has already read.
     fn read(&mut self, need: usize, at: usize) -> ReadReport {
-        let continued = at > 0;
+        // Until the floor has formed no drift is judged (S209).
+        let continued = at > 0 || self.warming;
         let hold = continued || !self.fade.is_closed();
         let block = &mut self.stereo[..need * 2];
         let report = if hold {
@@ -1359,6 +1421,7 @@ impl Renderer {
         }
         if report.correction != Correction::None {
             self.anchor_floor = self.late_floor();
+            self.anchored_floor = self.anchor_floor;
         }
         if self.awaiting_resync
             && matches!(report.correction, Correction::Resync | Correction::Prime)
