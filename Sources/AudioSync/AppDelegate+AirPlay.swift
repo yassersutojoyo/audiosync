@@ -206,56 +206,41 @@ extension AppDelegate {
                 nowPlaying.stopWatching()
             }
         }
-        if !sending {
-            sentTrackInfo = nil
-        } else if sentTrackInfo == nil {
-            sendTrackInfo()
-        }
+        if trackInfoFeed.modelUpdated(sending: sending) { sendTrackInfo() }
     }
 
     /// A new sender knows nothing of what plays: send everything again.
     func resendTrackInfo() {
-        guard sendsTrackInfo else { return }
-        sentTrackInfo = SentTrackInfo()
-        sendTrackInfo()
+        if trackInfoFeed.senderStarted(sending: sendsTrackInfo) { sendTrackInfo() }
     }
 
     /// Sends the sender what changed in what its receivers should show.
     func sendTrackInfo() {
-        guard sendsTrackInfo else { return }
-        let now = Date()
-        var sent = sentTrackInfo ?? SentTrackInfo()
-        defer { sentTrackInfo = sent }
-        // Right after polling starts, Now Playing's track is from before.
-        if let startedAt = nowPlaying.startedAt,
-           ReceiverInfo.awaitsReading(hasReading: nowPlaying.hasReading, pollingFor: now.timeIntervalSince(startedAt)) {
-            recheckTrackInfo(at: startedAt.addingTimeInterval(ReceiverInfo.readingWait), &sent)
-            return
+        let step = trackInfoFeed.send(sending: sendsTrackInfo, now: Date(), pollingSince: nowPlaying.startedAt,
+                                      hasReading: nowPlaying.hasReading, icon: NSApp.applicationIconImage) {
+            let track = nowPlaying.hasReading ? nowPlaying.track : nil
+            // The source's name as the source picker shows it; none while the
+            // picker doesn't list the source (an input device that was unplugged).
+            let sourceName = appModel.sources.first { $0.id == audioSource.defaultsValue }?.name
+            let untitled = TrackMetadata.Fields(title: text.receiverUntitled, artist: text.receiverUnnamedSource,
+                                                album: text.receiverAlbum)
+            let info = ReceiverInfo.decide(track: track, source: audioSource, sourceName: sourceName,
+                                           untitled: untitled)
+            return (info, track?.artwork)
         }
-        let track = nowPlaying.hasReading ? nowPlaying.track : nil
-        // The source's name as the source picker shows it; none while the
-        // picker doesn't list the source (an input device that was unplugged).
-        let sourceName = appModel.sources.first { $0.id == audioSource.defaultsValue }?.name
-        let untitled = TrackMetadata.Fields(title: text.receiverUntitled, artist: text.receiverUnnamedSource,
-                                            album: text.receiverAlbum)
-        let info = ReceiverInfo.decide(track: track, source: audioSource, sourceName: sourceName,
-                                       untitled: untitled)
-        let update = sent.update(info, artwork: track?.artwork, icon: NSApp.applicationIconImage, now: now)
-        if let fields = update.fields { nativeAirPlay?.setTrack(fields) }
-        if let date = update.waitUntil { recheckTrackInfo(at: date, &sent) }
-        guard let picture = update.picture else { return }
+        if let fields = step.fields { nativeAirPlay?.setTrack(fields) }
+        if let date = step.recheckAt { recheckTrackInfo(at: date) }
+        guard let picture = step.picture else { return }
         // Encoded on the sender's queue, so it gets an image of its own.
         let own = picture.copy() as? NSImage ?? picture
         nativeAirPlay?.setArtwork(own)
     }
 
-    /// Runs `sendTrackInfo` again at `date`, when a wait ends; once per date.
-    private func recheckTrackInfo(at date: Date, _ sent: inout SentTrackInfo) {
-        guard sent.recheckAt != date else { return }
-        sent.recheckAt = date
+    /// Runs `sendTrackInfo` again at `date`, when a wait ends.
+    private func recheckTrackInfo(at date: Date) {
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, date.timeIntervalSinceNow) + 0.05) { [weak self] in
             guard let self else { return }
-            if self.sentTrackInfo?.recheckAt == date { self.sentTrackInfo?.recheckAt = nil }
+            self.trackInfoFeed.recheckFired(at: date)
             self.sendTrackInfo()
         }
     }

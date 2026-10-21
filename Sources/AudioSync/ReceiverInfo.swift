@@ -131,3 +131,69 @@ struct SentTrackInfo {
         return update
     }
 }
+
+/// When track info goes to AudioSync's own sender, kept apart from AppKit so
+/// the logic suite can drive it: each event returns what to do, and the
+/// caller does it (`AppDelegate.sendTrackInfo`).
+struct TrackInfoFeed {
+    /// What the sender was given; nil while no receiver shows track info.
+    private(set) var sent: SentTrackInfo?
+
+    /// What one look gives the sender, and when to look again.
+    struct Step {
+        var fields: TrackMetadata.Fields?
+        var picture: NSImage?
+        /// Look again at this date (`recheckFired`, then `send`); nil when
+        /// there is no wait or this date is already scheduled.
+        var recheckAt: Date?
+    }
+
+    /// A model update; true when sending just started and everything goes out.
+    mutating func modelUpdated(sending: Bool) -> Bool {
+        guard sending else {
+            sent = nil
+            return false
+        }
+        return sent == nil
+    }
+
+    /// A new sender started; true when everything goes out again, even unchanged.
+    mutating func senderStarted(sending: Bool) -> Bool {
+        guard sending else { return false }
+        sent = SentTrackInfo()
+        return true
+    }
+
+    /// A scheduled look at `date` is running; a later wait may schedule it again.
+    mutating func recheckFired(at date: Date) {
+        if sent?.recheckAt == date { sent?.recheckAt = nil }
+    }
+
+    /// A look at what plays: Now Playing polls since `pollingSince` (nil while
+    /// it doesn't) and `shows` gives what receivers should show and the
+    /// track's artwork. `shows` isn't called while Now Playing's track is
+    /// still from before polling started.
+    mutating func send(sending: Bool, now: Date, pollingSince: Date?, hasReading: Bool, icon: NSImage?,
+                       shows: () -> (info: ReceiverInfo, artwork: NSImage?)) -> Step {
+        guard sending else { return Step() }
+        var sent = self.sent ?? SentTrackInfo()
+        defer { self.sent = sent }
+        var step = Step()
+        func recheck(at date: Date) {
+            guard sent.recheckAt != date else { return }
+            sent.recheckAt = date
+            step.recheckAt = date
+        }
+        if let pollingSince,
+           ReceiverInfo.awaitsReading(hasReading: hasReading, pollingFor: now.timeIntervalSince(pollingSince)) {
+            recheck(at: pollingSince.addingTimeInterval(ReceiverInfo.readingWait))
+            return step
+        }
+        let (info, artwork) = shows()
+        let update = sent.update(info, artwork: artwork, icon: icon, now: now)
+        step.fields = update.fields
+        step.picture = update.picture
+        if let date = update.waitUntil { recheck(at: date) }
+        return step
+    }
+}
