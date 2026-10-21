@@ -489,8 +489,8 @@ struct CastModel {
 }
 
 /// The device memory between runs: the core's JSON (per device, the format
-/// that last worked and the offset), next to the AirPlay pairings in
-/// AudioSync's Application Support folder.
+/// that last worked and the offset), in AudioSync's Application Support
+/// folder. It holds no secrets, so unlike the pairings it stays in backups.
 enum CastMemoryFile {
     static let fileName = "cast-devices.json"
 
