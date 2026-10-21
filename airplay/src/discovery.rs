@@ -331,7 +331,7 @@ pub enum SecurityMode {
     LegacyPairing,
     /// (d) RSA, `et` 1 without 0: unsupported (P59).
     Rsa,
-    /// (e) AirPlay 2 HomeKit-style pairing, partly documented (P61 to P71).
+    /// (e) AirPlay 2 HomeKit-style pairing (P61 to P70, P149 to P154).
     HomeKit,
 }
 

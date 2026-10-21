@@ -66,7 +66,8 @@ const PREVIEW_GUIDE_VAR: &str = "AUDIOSYNC_PREVIEW_GUIDE";
 const PREVIEW_HELP_VAR: &str = "AUDIOSYNC_PREVIEW_HELP";
 
 /// With the debug log on, `light` or `dark` here shows every window in that
-/// appearance, whatever Windows uses (`view::App::preview_theme`).
+/// appearance, whatever Windows uses, without saving it
+/// (`view::App::apply_appearance`).
 const PREVIEW_THEME_VAR: &str = "AUDIOSYNC_PREVIEW_THEME";
 
 /// With the debug log on, `code` or `wrong` here opens the PIN dialog of an
@@ -392,7 +393,11 @@ fn run(
                 if dark { "dark" } else { "light" }
             )
         });
-        app.preview_theme(dark);
+        app.apply_appearance(if dark {
+            ui_model::Appearance::Dark
+        } else {
+            ui_model::Appearance::Light
+        });
     }
     #[cfg(windows)]
     let tray_available = _tray.is_some();
@@ -486,6 +491,184 @@ mod tests {
         assert!(
             main.contains("MenuBar {") && main.contains("root.about-requested();"),
             "the top-level menu opens the About dialog"
+        );
+    }
+
+    /// The Mac's menu shortcuts and what each is on Windows: the `Strings`
+    /// title of the menu item, its `@keys`, and how the docs write it. The
+    /// Mac's Hide (Command-H), Hide Others (Option-Command-H), Minimize
+    /// (Command-M) and AudioSync window (Command-0) have none: Windows has no
+    /// hiding an app, minimizing is the title bar's (Windows+Down), and the
+    /// menu bar is in the main window itself. Its Edit menu is the text
+    /// fields' own Ctrl keys.
+    const MENU_SHORTCUTS: &[(&str, &str, &str, &str)] = &[
+        (
+            "Apply Typed Delay, Command-S",
+            "menu-apply-delay",
+            "Control + S",
+            "Ctrl+S",
+        ),
+        (
+            "Close Window, Command-W",
+            "menu-close-window",
+            "Control + W",
+            "Ctrl+W",
+        ),
+        (
+            "Quit AudioSync, Command-Q",
+            "menu-exit",
+            "Control + Q",
+            "Ctrl+Q",
+        ),
+        ("New Group, Command-N", "new-group", "Control + N", "Ctrl+N"),
+        ("Refresh Devices, Command-R", "refresh-devices", "F5", "F5"),
+        (
+            "Equalizer, Option-Command-E",
+            "equalizer",
+            "Control + E",
+            "Ctrl+E",
+        ),
+        ("AudioSync Guide, Command-?", "help-title", "F1", "F1"),
+    ];
+
+    /// Keys Windows itself takes, so no menu item may use them.
+    const RESERVED_BY_WINDOWS: &[&str] = &[
+        "Alt + F4",
+        "Alt + Tab",
+        "Alt + Space",
+        "Control + Escape",
+        "Control + Alt + Delete",
+        "F10",
+        "F12",
+    ];
+
+    #[test]
+    fn each_mac_menu_shortcut_has_its_windows_key_in_the_menu_and_the_docs() {
+        let main = include_str!("../ui/main.slint");
+        let docs = include_str!("../../docs/WINDOWS_UI.md");
+        let menu = &main[main.find("MenuBar {").expect("the menu bar is there")..];
+        let mut seen = std::collections::BTreeSet::new();
+        for (mac, title, keys, written) in MENU_SHORTCUTS {
+            let item = menu
+                .find(&format!("title: Strings.{title};"))
+                .unwrap_or_else(|| panic!("{mac}: the menu has its item"));
+            let rest = &menu[item..];
+            let end = rest.find('}').expect("the item ends");
+            assert!(
+                rest[..end].contains(&format!("shortcut: @keys({keys});")),
+                "{mac}: the item shows {keys}"
+            );
+            assert!(seen.insert(*keys), "{keys} is used once");
+            assert!(
+                !RESERVED_BY_WINDOWS.contains(keys),
+                "{keys} is Windows' own"
+            );
+            assert!(
+                docs.contains(&format!("| {written} |")),
+                "{mac}: docs/WINDOWS_UI.md lists {written} under Keyboard"
+            );
+        }
+        let shown = menu.matches("shortcut: @keys(").count();
+        assert_eq!(
+            shown,
+            MENU_SHORTCUTS.len(),
+            "every menu shortcut is in the table"
+        );
+    }
+
+    const CTRL_W: &str = "event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == \"w\")";
+    const CTRL_Q: &str = "if event.modifiers.control && event.text.to-lowercase() == \"q\" {\n                root.exit-requested();";
+
+    /// A checkout on Windows can have CRLF line endings; the snippets above
+    /// are written with LF.
+    fn lf(source: &str) -> String {
+        source.replace("\r\n", "\n")
+    }
+
+    /// The windows without a menu bar: the equalizer, both Guides and About.
+    fn windows_without_a_menu_bar() -> [(&'static str, &'static str, &'static str); 4] {
+        [
+            (
+                "equalizer",
+                include_str!("../ui/equalizer.slint"),
+                "root.close-requested();",
+            ),
+            (
+                "AudioSync Guide",
+                include_str!("../ui/help.slint"),
+                "root.close-requested();",
+            ),
+            (
+                "double-audio guide",
+                include_str!("../ui/guide.slint"),
+                "root.close-requested();",
+            ),
+            (
+                "About dialog",
+                include_str!("../ui/about.slint"),
+                "root.closed();",
+            ),
+        ]
+    }
+
+    /// Command-W closes whichever window is in front on the Mac; on Windows
+    /// the windows without a menu bar take Ctrl+W themselves, as Escape, and
+    /// a dialog cancels on it.
+    #[test]
+    fn ctrl_w_closes_the_windows_without_a_menu_bar() {
+        for (name, source, close) in windows_without_a_menu_bar() {
+            let source = lf(source);
+            let keys = &source[source.find("keys := FocusScope {").expect("its keys")..];
+            let first = &keys[..keys.find(close).expect("it closes")];
+            assert!(
+                first.contains(CTRL_W),
+                "the {name} closes on Escape and Ctrl+W"
+            );
+        }
+        let dialogs = lf(include_str!("../ui/dialogs.slint"));
+        assert_eq!(
+            dialogs.matches("if event.text == Key.Escape").count(),
+            dialogs
+                .matches(&format!(
+                    "if {CTRL_W} {{\n                root.cancelled();"
+                ))
+                .count(),
+            "every dialog that cancels on Escape cancels on Ctrl+W"
+        );
+    }
+
+    /// Command-Q quits from any window on the Mac, so Ctrl+Q does from the
+    /// windows without a menu bar too.
+    #[test]
+    fn ctrl_q_exits_from_the_windows_without_a_menu_bar() {
+        let view = include_str!("view.rs");
+        for (name, source, _) in windows_without_a_menu_bar() {
+            let source = lf(source);
+            let keys = &source[source.find("keys := FocusScope {").expect("its keys")..];
+            assert!(keys.contains(CTRL_Q), "the {name} exits on Ctrl+Q");
+        }
+        for window in ["equalizer", "help", "guide", "about"] {
+            assert!(
+                view.contains(&format!("self.{window}.on_exit_requested(quit);")),
+                "the {window} window's Ctrl+Q quits"
+            );
+        }
+    }
+
+    /// `platform::repaint_frame` sends muda's private `MENU_UPDATE_THEME`
+    /// (201), which only muda 0.19.3 is known to take; Slint asks for ^0.19.
+    #[test]
+    fn slint_draws_the_menu_bar_with_muda_0_19_3() {
+        let lock = include_str!("../Cargo.lock");
+        let winit = &lock[lock
+            .find("name = \"i-slint-backend-winit\"")
+            .expect("Slint's winit backend is locked")..];
+        let winit = &winit[..winit.find("[[package]]").unwrap_or(winit.len())];
+        assert!(
+            winit.contains("\"muda 0.19.3\""),
+            "Slint's muda moved off 0.19.3: check that its MENU_UPDATE_THEME is still \
+             message 201 with dark 0 and light 1 before changing MUDA_MENU_BAR_THEME \
+             in platform.rs"
         );
     }
 

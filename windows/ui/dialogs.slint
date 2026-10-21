@@ -43,7 +43,7 @@ export component GroupNameDialog inherits Dialog {
 
     keys := FocusScope {
         key-pressed(event) => {
-            if event.text == Key.Escape {
+            if event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == "w") {
                 root.cancelled();
                 return accept;
             }
@@ -146,7 +146,7 @@ export component PinDialog inherits Dialog {
 
     FocusScope {
         key-pressed(event) => {
-            if event.text == Key.Escape {
+            if event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == "w") {
                 root.cancelled();
                 return accept;
             }
@@ -267,7 +267,7 @@ export component PasswordDialog inherits Dialog {
 
     FocusScope {
         key-pressed(event) => {
-            if event.text == Key.Escape {
+            if event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == "w") {
                 root.cancelled();
                 return accept;
             }
