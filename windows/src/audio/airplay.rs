@@ -145,6 +145,9 @@ pub trait AirPlayLink {
     /// Stops a pairing.
     fn cancel_pairing(&mut self, key: &DeviceKey);
 
+    /// Forgets the AirPlay 2 credentials the sender keeps for a device.
+    fn forget_homekit(&mut self, key: &DeviceKey);
+
     /// False once the sender stopped by itself after an internal error (its
     /// driver thread ended): it lists, plays and reports nothing anymore,
     /// and only a new sender brings AirPlay back.
@@ -265,6 +268,10 @@ impl AirPlayLink for SenderLink {
 
     fn cancel_pairing(&mut self, key: &DeviceKey) {
         self.sender.cancel_pairing(key);
+    }
+
+    fn forget_homekit(&mut self, key: &DeviceKey) {
+        self.sender.forget_homekit(key);
     }
 
     fn is_running(&self) -> bool {
@@ -489,9 +496,15 @@ pub fn availability(info: &ReceiverInfo, paired: bool) -> AirPlayAvailability {
 }
 
 /// Whether the sender reaches a receiver over AirPlay 2: only with the
-/// switch on, and only one that AirPlay 1 can't drive (P2).
-pub fn reached_over_airplay2(info: &ReceiverInfo, airplay2: bool) -> bool {
-    airplay2 && info.device.choose_path(true, None) == Ok(ProtocolPath::AirPlay2)
+/// switch on, and only one that AirPlay 1 can't drive, by discovery or by
+/// how its last AirPlay 1 attempt ended (`airplay1_outcome`, P2), the input
+/// the sender decides on.
+pub fn reached_over_airplay2(
+    info: &ReceiverInfo,
+    airplay2: bool,
+    airplay1_outcome: Option<ErrorKind>,
+) -> bool {
+    airplay2 && info.device.choose_path(true, airplay1_outcome) == Ok(ProtocolPath::AirPlay2)
 }
 
 /// Whether a receiver reached over AirPlay 2 can play: one whose flags ask
@@ -675,6 +688,9 @@ pub struct AirPlaySpeakers {
     /// pairing their flags didn't announce (P61): they count as asking for
     /// one until paired or AudioSync quits.
     pin_seen: BTreeSet<String>,
+    /// How the last AirPlay 1 attempt of a speaker ended when that moved it
+    /// to AirPlay 2, as the sender keeps it while the speaker stays added.
+    airplay1_outcome: BTreeMap<String, ErrorKind>,
     streaming: bool,
     master: f64,
     latency: Duration,
@@ -725,6 +741,7 @@ impl AirPlaySpeakers {
             password_attempts: BTreeSet::new(),
             password_seen: BTreeSet::new(),
             pin_seen: BTreeSet::new(),
+            airplay1_outcome: BTreeMap::new(),
             streaming: false,
             master,
             latency,
@@ -914,7 +931,7 @@ impl AirPlaySpeakers {
     /// What discovery and the credentials kept say about a receiver, on
     /// the path the sender takes to it.
     fn availability_of(&self, id: &str, info: &ReceiverInfo) -> AirPlayAvailability {
-        if !reached_over_airplay2(info, self.link.airplay2()) {
+        if !self.reached_over_airplay2(id, info) {
             return availability(info, self.store.contains(id));
         }
         let paired = self.store.homekit(id).is_some();
@@ -930,7 +947,12 @@ impl AirPlaySpeakers {
     fn over_airplay2(&self, id: &str) -> bool {
         self.listed
             .get(id)
-            .is_some_and(|listed| reached_over_airplay2(&listed.info, self.link.airplay2()))
+            .is_some_and(|listed| self.reached_over_airplay2(id, &listed.info))
+    }
+
+    fn reached_over_airplay2(&self, id: &str, info: &ReceiverInfo) -> bool {
+        let outcome = self.airplay1_outcome.get(id).copied();
+        reached_over_airplay2(info, self.link.airplay2(), outcome)
     }
 
     /// Whether a listed speaker can join the stream: it can play, or it asks
@@ -1184,7 +1206,16 @@ impl AirPlaySpeakers {
         if self.store.homekit(id).is_none() {
             return false;
         }
+        let key = self
+            .listed
+            .get(id)
+            .map(|listed| listed.device().key.clone())
+            .or_else(|| self.added.get(id).map(|added| added.key.clone()));
+        if let Some(key) = key {
+            self.link.forget_homekit(&key);
+        }
         let saved = self.store.remove_homekit(id);
+        self.store_written(saved.is_ok());
         self.log.log(|| {
             let saved = match &saved {
                 Ok(()) => String::new(),
@@ -1486,6 +1517,7 @@ impl AirPlaySpeakers {
         for id in leaving {
             if let Some(added) = self.added.remove(&id) {
                 self.link.remove_speaker(&added.key);
+                self.airplay1_outcome.remove(&id);
                 self.log
                     .log(|| format!("AirPlay speaker {} removed", self.label(&id)));
             }
@@ -1794,12 +1826,30 @@ impl AirPlaySpeakers {
         }
     }
 
+    /// Keeps what the sender learns from an AirPlay 1 attempt that ended in
+    /// Unsupported or Refused with a retry: with the switch on, it moves the
+    /// speaker to AirPlay 2 at once (P2).
+    fn note_path_switch(&mut self, id: &str, kind: ErrorKind, retrying: bool) {
+        let moved = retrying
+            && self.link.airplay2()
+            && matches!(kind, ErrorKind::Unsupported(_) | ErrorKind::Refused)
+            && self.listed.get(id).is_some_and(|listed| {
+                let device = &listed.info.device;
+                device.choose_path(true, None) == Ok(ProtocolPath::AirPlay1)
+                    && device.choose_path(true, Some(kind)) == Ok(ProtocolPath::AirPlay2)
+            });
+        if moved {
+            self.airplay1_outcome.insert(id.to_owned(), kind);
+        }
+    }
+
     /// Keeps the AirPlay 2 credentials a pairing with the speaker `id` gave
     /// (P152); when the file can't be written they last until AudioSync
     /// quits.
     fn keep_homekit(&mut self, id: &str, credentials: HomeKitCredentials) {
         self.pin_seen.remove(id);
         let saved = self.store.insert_homekit(id, credentials);
+        self.store_written(saved.is_ok());
         self.log.log(|| {
             let saved = match &saved {
                 Ok(()) => String::new(),
@@ -1894,9 +1944,7 @@ impl AirPlaySpeakers {
                 retry_at,
             }) => {
                 let mut problem = problem(reason);
-                // The Apple TV turned the stored credentials down (it was
-                // reset, or the pairing was removed on it): they are
-                // forgotten, and switching it on pairs it again.
+                self.note_path_switch(id, error.kind, retry_at.is_some());
                 // A speaker reached over AirPlay 2 that wants a pairing:
                 // switching it on pairs it with a PIN, or with its password
                 // when it asks for one (P61, P154).
@@ -1912,6 +1960,9 @@ impl AirPlaySpeakers {
                         self.pin_seen.insert(id.to_owned());
                     }
                 } else if problem == AirPlayProblem::PairingNotYet && self.store.contains(id) {
+                    // The Apple TV turned the stored credentials down (it
+                    // was reset, or the pairing was removed on it): they are
+                    // forgotten, and switching it on pairs it again.
                     problem = AirPlayProblem::NeedsPin;
                     let forgotten = self.store.remove(id);
                     self.store_written(forgotten.is_ok());
@@ -1953,6 +2004,7 @@ impl AirPlaySpeakers {
                     // The user's switch-on asks for it; the speaker stays on
                     // meanwhile.
                     self.link.remove_speaker(&added.key);
+                    self.airplay1_outcome.remove(id);
                     self.queue_password_ask(id, turned_down, false);
                     return true;
                 }
@@ -2011,6 +2063,7 @@ impl AirPlaySpeakers {
             }
             SpeakerEvent::HomeKitRejected => {
                 let saved = self.store.remove_homekit(id);
+                self.store_written(saved.is_ok());
                 self.log.log(|| {
                     let saved = match &saved {
                         Ok(()) => String::new(),
@@ -2234,6 +2287,7 @@ pub mod tests {
         StartPairing(String),
         SubmitPin(String, String),
         CancelPairing(String),
+        ForgetHomeKit(String),
     }
 
     #[derive(Default)]
@@ -2453,6 +2507,13 @@ pub mod tests {
                 .borrow_mut()
                 .calls
                 .push(Call::CancelPairing(speaker_id(key)));
+        }
+
+        fn forget_homekit(&mut self, key: &DeviceKey) {
+            self.0
+                .borrow_mut()
+                .calls
+                .push(Call::ForgetHomeKit(speaker_id(key)));
         }
 
         fn is_running(&self) -> bool {
@@ -2691,12 +2752,90 @@ pub mod tests {
         assert!(row.paired && row.enabled);
         assert_eq!(row.availability, AirPlayAvailability::Open);
 
+        fake.take_calls();
         airplay.forget_pairing(&id);
         assert_eq!(airplay.store.homekit(&id), None);
+        assert!(
+            fake.take_calls().contains(&Call::ForgetHomeKit(id.clone())),
+            "the sender forgets its copy too"
+        );
         assert_eq!(
             airplay.speakers()[0].availability,
             AirPlayAvailability::NeedsPin
         );
+    }
+
+    #[test]
+    fn a_forgotten_airplay2_pairing_the_file_cant_take_is_reported() {
+        use crate::audio::pairings::tests::{homekit, sealer};
+        use crate::audio::pairings::{AIRPLAY2_FILE_NAME, FILE_NAME};
+
+        let folder = crate::debug_log::test_dir("airplay2-forget-unsaved");
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let (store, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        pin_shown(&fake, &mut airplay, &tv);
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(&tv, PairingEvent::HomeKitPaired(homekit(0x44)));
+        let events = airplay.poll();
+        assert!(
+            !events.contains(&BackendEvent::PairingStore { saved: false }),
+            "{events:?}"
+        );
+        let file = folder.join(AIRPLAY2_FILE_NAME);
+        assert!(file.exists(), "written at once");
+
+        // A folder where the file goes: nothing can be written there.
+        std::fs::remove_file(&file).expect("the file is removed");
+        std::fs::create_dir(&file).expect("the folder is made");
+        airplay.forget_pairing(&id);
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::PairingStore { saved: false }),
+            "{events:?}"
+        );
+        assert_eq!(airplay.store.homekit(&id), None, "forgotten all the same");
+    }
+
+    #[test]
+    fn a_speaker_airplay1_refuses_follows_the_sender_to_airplay2() {
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        let both = den(true);
+        let id = id_of(&both);
+        fake.appear(&both);
+        airplay.poll();
+        assert!(!airplay.speakers()[0].airplay2, "AirPlay 1 first");
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.set_streaming(true);
+
+        // Refused on AirPlay 1: the sender moves it to AirPlay 2 at once.
+        fake.fail(&both, ErrorKind::Refused);
+        airplay.poll();
+        assert!(airplay.speakers()[0].airplay2);
+        assert_eq!(
+            airplay.speakers()[0].availability,
+            AirPlayAvailability::Open
+        );
+
+        // Off, the sender forgets the refusal and tries AirPlay 1 again.
+        assert_eq!(airplay.set_enabled(&id, false), Ok(()));
+        assert!(!airplay.speakers()[0].airplay2);
+
+        // With the switch off, a refusal moves nothing.
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        fake.appear(&both);
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.set_streaming(true);
+        fake.fail(&both, ErrorKind::Refused);
+        airplay.poll();
+        assert!(!airplay.speakers()[0].airplay2);
     }
 
     #[test]

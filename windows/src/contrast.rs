@@ -472,6 +472,8 @@ fn no_text_promises_airplay() {
             !line.contains("AirPlay")
                 || line.contains("@tr(\"AirPlay\")")
                 || line.contains("@tr(\"AirPlay 2\")")
+                || line.contains("couldn't save your AirPlay pairings,")
+                || line.contains("couldn't read your AirPlay pairings when it started,")
                 || line.contains("not supported yet")
                 || line.contains("doesn't support yet")
                 || line.contains("property <string> airplay-delay-")
