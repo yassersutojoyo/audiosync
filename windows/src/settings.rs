@@ -9,7 +9,7 @@
 //! AirPlay speakers by the ID they announce), the AirPlay delay adjustment,
 //! the master volume, the
 //! auto-connect marks, the groups, the equalizer, View > Show Virtual
-//! Devices, and the main window's place and size.
+//! Devices, View > Appearance, and the main window's place and size.
 //!
 //! The file carries a format version ([`VERSION`]). A file from an older
 //! version is read for the fields it has; one from a newer version, one that
@@ -98,6 +98,29 @@ pub const MAX_WINDOW: (f64, f64) = (16_384.0, 16_384.0);
 /// The farthest a saved window position may be from the origin, in physical
 /// pixels: Windows' own coordinate range.
 pub const MAX_POSITION: i32 = 32_000;
+
+/// View > Appearance: every window light or dark, or as Windows is set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+/// A value another build wrote, or none, follows Windows instead of making
+/// the whole file unreadable.
+impl<'de> Deserialize<'de> for Appearance {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            Some("light") => Appearance::Light,
+            Some("dark") => Appearance::Dark,
+            _ => Appearance::System,
+        })
+    }
+}
 
 /// What AudioSync captures.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -262,6 +285,8 @@ pub struct Settings {
     pub equalizer: SavedEqualizer,
     /// View > Show Virtual Devices.
     pub show_virtual_devices: bool,
+    /// View > Appearance.
+    pub appearance: Appearance,
     /// The main window's place and size, once it has been shown.
     pub window: Option<WindowFrame>,
     /// The AirPlay delay adjustment A in milliseconds, −2000 to +20 000: the
@@ -286,6 +311,7 @@ impl Default for Settings {
             groups: Vec::new(),
             equalizer: SavedEqualizer::default(),
             show_virtual_devices: false,
+            appearance: Appearance::System,
             window: None,
             airplay_adjustment_ms: 0.0,
             when_source_quits: WhenSourceQuits::Stop.stored().to_owned(),
@@ -416,6 +442,7 @@ impl Settings {
             groups,
             equalizer: SavedEqualizer::from(self.equalizer.settings()),
             show_virtual_devices: self.show_virtual_devices,
+            appearance: self.appearance,
             window: self.window.and_then(clamp_window),
             airplay_adjustment_ms: sanitize_airplay_adjustment_ms(self.airplay_adjustment_ms)
                 .unwrap_or(0.0),
@@ -696,6 +723,7 @@ mod tests {
             },
             master_volume: 72.5,
             show_virtual_devices: true,
+            appearance: Appearance::Dark,
             window: Some(WindowFrame {
                 x: -1200,
                 y: 40,
@@ -754,6 +782,33 @@ mod tests {
                 adjusted: false
             }
         );
+    }
+
+    #[test]
+    fn an_appearance_this_build_does_not_know_follows_windows() {
+        let read = |json: &str| Settings::from_json(json).expect("read").0;
+        assert_eq!(read(r#"{"version": 2}"#).appearance, Appearance::System);
+        assert_eq!(
+            read(r#"{"version": 2, "appearance": "light"}"#).appearance,
+            Appearance::Light
+        );
+        assert_eq!(
+            read(r#"{"version": 2, "appearance": "dark"}"#).appearance,
+            Appearance::Dark
+        );
+        for unknown in [r#""sepia""#, "7", "null", r#"["dark"]"#] {
+            let settings = read(&format!(
+                r#"{{"version": 2, "master_volume": 40, "appearance": {unknown}}}"#
+            ));
+            assert_eq!(settings.appearance, Appearance::System, "{unknown}");
+            assert_eq!(settings.master_volume, 40.0, "{unknown}: the rest is kept");
+        }
+        let json = Settings {
+            appearance: Appearance::Light,
+            ..Settings::default()
+        }
+        .to_json();
+        assert!(json.contains(r#""appearance": "light""#), "{json}");
     }
 
     #[test]

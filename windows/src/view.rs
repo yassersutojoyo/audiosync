@@ -64,6 +64,8 @@ struct UiState {
     airplay_delay_draft: TypedDelay,
     /// View > Show Virtual Devices; off at launch, like the Mac's default.
     show_virtual: bool,
+    /// View > Appearance as chosen, which the theme preview doesn't change.
+    appearance: ui_model::Appearance,
     listed_virtual: ListedVirtual,
 }
 
@@ -515,9 +517,14 @@ pub struct App {
     models: Models,
     /// With a tray icon, closing the main window keeps the app running there.
     tray_available: Cell<bool>,
-    /// Dark (true) or light for every window instead of the Windows setting:
-    /// the theme preview, `None` normally.
-    theme_override: Cell<Option<bool>>,
+    /// The appearance every window shows: View > Appearance, or the theme
+    /// preview's.
+    appearance: Cell<ui_model::Appearance>,
+    /// False until the first Light or Dark: until then the windows follow
+    /// Windows by themselves, after it AudioSync sets their palette and
+    /// frame, for Match System too.
+    themed_by_hand: Cell<bool>,
+    menu_bar_theme: MenuBarTheme,
     /// Whether each window got its Windows 11 frame, as last logged.
     frames: RefCell<HashMap<&'static str, bool>>,
     /// Called after every refresh, e.g. to update the tray icon and tooltip.
@@ -535,6 +542,25 @@ pub struct App {
     /// backend's notices are about audio.
     login: RefCell<LaunchAtLogin>,
     login_timer: Timer,
+}
+
+/// The main window's native window and the menu bar theme last sent to it.
+/// muda answers that message by toggling the window's activation, which comes
+/// back as a focus that applies the frame again, so it is sent only when it
+/// changed.
+#[derive(Default)]
+struct MenuBarTheme(Cell<Option<(isize, bool)>>);
+
+impl MenuBarTheme {
+    /// Records `dark` for native window `id`; `true` when the message is due.
+    fn due(&self, id: isize, dark: bool) -> bool {
+        self.0.replace(Some((id, dark))) != Some((id, dark))
+    }
+
+    /// Makes the next `due` true, after Windows gave the menu bar its own theme.
+    fn forget(&self) {
+        self.0.set(None);
+    }
 }
 
 /// Runs `action` on the app if it still exists.
@@ -672,7 +698,9 @@ impl App {
             dialog_purpose: RefCell::new(DialogPurpose::Message),
             models,
             tray_available: Cell::new(false),
-            theme_override: Cell::new(None),
+            appearance: Cell::new(ui_model::Appearance::System),
+            themed_by_hand: Cell::new(false),
+            menu_bar_theme: MenuBarTheme::default(),
             frames: RefCell::default(),
             on_refresh: RefCell::new(None),
             notice_announcer: RefCell::default(),
@@ -801,10 +829,60 @@ impl App {
         crate::platform::bring_to_front(self.main.window());
     }
 
-    /// Shows every window light or dark, whatever Windows uses, to check both
-    /// appearances without changing the Windows setting (the theme preview).
-    pub fn preview_theme(&self, dark: bool) {
+    /// Shows every window in `appearance` at once: Match System as Windows
+    /// is set, following its changes, Light and Dark whatever Windows uses.
+    /// The theme preview uses it too, without saving.
+    pub fn apply_appearance(&self, appearance: ui_model::Appearance) {
+        use ui_model::Appearance;
+        self.appearance.set(appearance);
+        self.main.set_appearance(match appearance {
+            Appearance::System => crate::Appearance::System,
+            Appearance::Light => crate::Appearance::Light,
+            Appearance::Dark => crate::Appearance::Dark,
+        });
+        if appearance == Appearance::System && !self.themed_by_hand.get() {
+            return;
+        }
+        self.themed_by_hand.set(true);
+        self.follow_appearance();
+    }
+
+    /// View > Appearance.
+    fn choose_appearance(&self, choice: crate::Appearance) {
+        let appearance = match choice {
+            crate::Appearance::Light => ui_model::Appearance::Light,
+            crate::Appearance::Dark => ui_model::Appearance::Dark,
+            _ => ui_model::Appearance::System,
+        };
+        self.ui.borrow_mut().appearance = appearance;
+        self.apply_appearance(appearance);
+        self.remember_view();
+    }
+
+    /// Whether the windows show dark now.
+    fn shows_dark(&self) -> bool {
         use slint::language::ColorScheme;
+        use slint::private_unstable_api::re_exports::WindowInner;
+        match self.appearance.get() {
+            ui_model::Appearance::Light => false,
+            ui_model::Appearance::Dark => true,
+            // Slint keeps the Windows setting here, read from each new
+            // window and on every theme change; winit never reports the
+            // theme a window was given, only the one Windows uses.
+            ui_model::Appearance::System => {
+                WindowInner::from_pub(self.main.window())
+                    .context()
+                    .color_scheme(None)
+                    == ColorScheme::Dark
+            }
+        }
+    }
+
+    /// Gives every window's palette, title bar and the main window's menu
+    /// bar the appearance.
+    fn follow_appearance(&self) {
+        use slint::language::ColorScheme;
+        let dark = self.shows_dark();
         let scheme = if dark {
             ColorScheme::Dark
         } else {
@@ -823,18 +901,86 @@ impl App {
         self.about.global::<Palette>().set_color_scheme(scheme);
         self.guide.global::<Palette>().set_color_scheme(scheme);
         self.help.global::<Palette>().set_color_scheme(scheme);
-        self.theme_override.set(Some(dark));
+        for window in [
+            self.main.window(),
+            self.flyout.window(),
+            self.equalizer.window(),
+            self.group_dialog.window(),
+            self.pin_dialog.window(),
+            self.password_dialog.window(),
+            self.about.window(),
+            self.guide.window(),
+            self.help.window(),
+        ] {
+            self.theme_frame(window);
+            if std::ptr::eq(window, self.main.window()) {
+                self.theme_menu_bar();
+            } else {
+                crate::platform::repaint_frame(window, false, dark);
+            }
+        }
+    }
+
+    /// Sends the main window's menu bar the appearance, unless that native
+    /// window already has it (`menu_bar_theme`).
+    fn theme_menu_bar(&self) {
+        let window = self.main.window();
+        let Some(id) = crate::platform::native_id(window) else {
+            return;
+        };
+        let dark = self.shows_dark();
+        if self.menu_bar_theme.due(id, dark) {
+            crate::platform::repaint_frame(window, true, dark);
+        }
+    }
+
+    /// With Light or Dark, gives every window the appearance again after
+    /// Windows switches between light and dark, which may repaint a title bar
+    /// or the menu bar in the Windows theme. Match System hears that switch
+    /// from winit (`follow_titled_frame`).
+    fn follow_windows_theme(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        crate::platform::set_on_color_set_change(Rc::new(move || {
+            with_app(&weak, |app| {
+                if !app.themed_by_hand.get() || app.appearance.get() == ui_model::Appearance::System
+                {
+                    return;
+                }
+                app.log.log(|| {
+                    "Windows switched light and dark; the appearance applied again".to_owned()
+                });
+                app.menu_bar_theme.forget();
+                app.follow_appearance();
+            });
+        }));
+    }
+
+    /// Gives a native window's title bar the appearance, once AudioSync
+    /// sets it (`themed_by_hand`).
+    fn theme_frame(&self, window: &slint::Window) {
+        use slint::winit_030::WinitWindowAccessor;
+        use slint::winit_030::winit::window::Theme;
+        if !self.themed_by_hand.get() {
+            return;
+        }
+        let theme = match self.appearance.get() {
+            ui_model::Appearance::System => None,
+            ui_model::Appearance::Light => Some(Theme::Light),
+            ui_model::Appearance::Dark => Some(Theme::Dark),
+        };
+        window.with_winit_window(|window| window.set_theme(theme));
     }
 
     /// Gives a window that is showing its Windows 11 frame (`backdrop`), and
     /// logs whether DWM took it. `true` when it did.
     pub fn apply_frame(&self, window: &slint::Window, name: &'static str, frame: Frame) -> bool {
         self.use_brand_accent(window);
-        if let Some(dark) = self.theme_override.get() {
-            use slint::winit_030::WinitWindowAccessor;
-            use slint::winit_030::winit::window::Theme;
-            let theme = if dark { Theme::Dark } else { Theme::Light };
-            window.with_winit_window(|window| window.set_theme(Some(theme)));
+        self.theme_frame(window);
+        crate::platform::follow_color_set(window);
+        // Slint gives the main window's menu bar the Windows theme when it
+        // creates it.
+        if self.themed_by_hand.get() && std::ptr::eq(window, self.main.window()) {
+            self.theme_menu_bar();
         }
         // Before the event loop runs there is no native window yet; the
         // window's first focus (see `follow_frame`) tries again.
@@ -923,11 +1069,18 @@ impl App {
                     }
                     app.apply_frame(window(app), name, Frame::Titled);
                 }),
-                // Slint reads the Windows accent after this filter returns.
+                // Slint reads the Windows accent and theme after this filter
+                // returns, and gives the menu bar the Windows theme.
                 WindowEvent::ThemeChanged(_) => {
                     let weak = weak.clone();
                     Timer::single_shot(Duration::ZERO, move || {
-                        with_app(&weak, |app| app.use_brand_accent(window(app)));
+                        with_app(&weak, |app| {
+                            app.use_brand_accent(window(app));
+                            if app.themed_by_hand.get() {
+                                app.menu_bar_theme.forget();
+                                app.follow_appearance();
+                            }
+                        });
                     });
                 }
                 _ => {}
@@ -1270,6 +1423,7 @@ impl App {
 
     fn connect_main(self: &Rc<Self>) {
         self.follow_titled_frame(|app| app.main.window(), "main window", Titled::Main);
+        self.follow_windows_theme();
         let main = &self.main;
         let weak = Rc::downgrade(self);
 
@@ -1351,6 +1505,8 @@ impl App {
             with_app(&w, |app| app.show_virtual_devices(on))
         });
         let w = weak.clone();
+        main.on_appearance_chosen(move |choice| with_app(&w, |app| app.choose_appearance(choice)));
+        let w = weak.clone();
         main.on_notice_dismissed(move |id| with_app(&w, |app| app.dismiss_notice(id as u64)));
         let w = weak.clone();
         main.on_notices_dismissed_all(move || with_app(&w, App::dismiss_all_notices));
@@ -1391,6 +1547,15 @@ impl App {
         main.on_exit_requested(|| {
             let _ = slint::quit_event_loop();
         });
+        // Ctrl+Q quits from the windows without a menu bar too, as
+        // Command-Q does from any window on the Mac.
+        let quit = || {
+            let _ = slint::quit_event_loop();
+        };
+        self.equalizer.on_exit_requested(quit);
+        self.help.on_exit_requested(quit);
+        self.guide.on_exit_requested(quit);
+        self.about.on_exit_requested(quit);
         let w = weak.clone();
         main.on_about_requested(move || {
             with_app(&w, |app| {
@@ -1845,13 +2010,14 @@ impl App {
     }
 
     /// Hands the windows' own settings to the backend, which saves them with
-    /// the rest: View > Show Virtual Devices, and the main window's frame
-    /// (see [`ui_model::frame_to_keep`]).
+    /// the rest: View > Show Virtual Devices, View > Appearance, and the main
+    /// window's frame (see [`ui_model::frame_to_keep`]).
     fn remember_view(&self) {
         let mut backend = self.backend.borrow_mut();
         let saved = backend.view_settings();
         let settings = ViewSettings {
             show_virtual_devices: self.ui.borrow().show_virtual,
+            appearance: self.ui.borrow().appearance,
             window: ui_model::frame_to_keep(self.main_window_shows(), saved.window),
         };
         if settings != saved {
@@ -1860,12 +2026,14 @@ impl App {
     }
 
     /// Shows the windows with the settings saved last time: View > Show
-    /// Virtual Devices, and the main window's size and place, fitted to the
-    /// monitor it opens on (the one at its saved place, else the primary
-    /// one, where it opens centered), maximized when it was.
+    /// Virtual Devices, View > Appearance, and the main window's size and
+    /// place, fitted to the monitor it opens on (the one at its saved place,
+    /// else the primary one, where it opens centered), maximized when it was.
     fn restore_view(&self) {
         let saved = self.backend.borrow().view_settings();
         self.ui.borrow_mut().show_virtual = saved.show_virtual_devices;
+        self.ui.borrow_mut().appearance = saved.appearance;
+        self.apply_appearance(saved.appearance);
         let Some(saved_frame) = saved.window else {
             return;
         };
@@ -2643,6 +2811,20 @@ mod tests {
     use slint::platform::software_renderer::{MinimalSoftwareWindow, Rgb565Pixel};
     use slint::platform::{Key, PointerEventButton, WindowEvent};
 
+    #[test]
+    fn the_menu_bar_hears_a_theme_once_per_native_window() {
+        let theme = MenuBarTheme::default();
+        assert!(theme.due(7, true), "the first theme is sent");
+        // The focus muda's activation toggle brings back must not send it again.
+        assert!(!theme.due(7, true));
+        assert!(!theme.due(7, true));
+        assert!(theme.due(7, false), "a new appearance is sent");
+        assert!(theme.due(8, false), "a new native window gets it too");
+        assert!(!theme.due(8, false));
+        theme.forget();
+        assert!(theme.due(8, false), "after Windows repainted the menu bar");
+    }
+
     /// A platform without native windows, so a test can build the whole App
     /// and drive it through the windows' callbacks or keys.
     struct Headless;
@@ -2759,6 +2941,65 @@ mod tests {
             .invoke_notice_dismissed(launch_at_login::NOTICE_ID as i32);
         assert!(app.snapshot().notices.is_empty());
         assert_eq!(app.main.get_notices().row_count(), 0);
+    }
+
+    #[test]
+    fn view_appearance_turns_every_window_light_or_dark_and_is_kept() {
+        use slint::language::ColorScheme;
+        let app = app_over(MockBackend::new());
+        let dark = |app: &App| {
+            [
+                app.main.global::<Tokens>().get_dark(),
+                app.flyout.global::<Tokens>().get_dark(),
+                app.equalizer.global::<Tokens>().get_dark(),
+                app.help.global::<Tokens>().get_dark(),
+            ]
+        };
+        assert_eq!(app.main.get_appearance(), crate::Appearance::System);
+
+        app.main.invoke_appearance_chosen(crate::Appearance::Dark);
+        assert_eq!(app.main.get_appearance(), crate::Appearance::Dark);
+        assert_eq!(dark(&app), [true; 4]);
+        assert_eq!(
+            app.backend.borrow().view_settings().appearance,
+            ui_model::Appearance::Dark
+        );
+
+        app.main.invoke_appearance_chosen(crate::Appearance::Light);
+        assert_eq!(dark(&app), [false; 4]);
+        assert_eq!(
+            app.pin_dialog.global::<Palette>().get_color_scheme(),
+            ColorScheme::Light
+        );
+
+        // Headless, Slint knows no Windows theme, so Match System is light.
+        app.main.invoke_appearance_chosen(crate::Appearance::System);
+        assert_eq!(app.main.get_appearance(), crate::Appearance::System);
+        assert_eq!(dark(&app), [false; 4]);
+        assert_eq!(
+            app.backend.borrow().view_settings().appearance,
+            ui_model::Appearance::System
+        );
+    }
+
+    #[test]
+    fn a_saved_appearance_shows_at_launch_and_the_preview_is_not_saved() {
+        let mut backend = MockBackend::new();
+        backend.set_view_settings(ViewSettings {
+            appearance: ui_model::Appearance::Dark,
+            ..ViewSettings::default()
+        });
+        let app = app_over(backend);
+        assert_eq!(app.main.get_appearance(), crate::Appearance::Dark);
+        assert!(app.about.global::<Tokens>().get_dark());
+
+        app.apply_appearance(ui_model::Appearance::Light);
+        app.main.invoke_show_virtual_devices_toggled(true);
+        assert_eq!(
+            app.backend.borrow().view_settings().appearance,
+            ui_model::Appearance::Dark,
+            "the preview's appearance isn't saved with the next change"
+        );
     }
 
     #[test]
