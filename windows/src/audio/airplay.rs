@@ -628,6 +628,9 @@ pub struct AirPlaySpeakers {
     streaming: bool,
     master: f64,
     latency: Duration,
+    /// Added to every speaker's d_s while a Google Cast speaker plays later
+    /// than L (C77), in ms.
+    hold_back_ms: f64,
     /// The sender stopped after an internal error, or its discovery did;
     /// reported once, until a new sender replaces it.
     stopped: bool,
@@ -674,6 +677,7 @@ impl AirPlaySpeakers {
             streaming: false,
             master,
             latency,
+            hold_back_ms: 0.0,
             stopped: false,
             store_unsaved: false,
             store_change: None,
@@ -1268,6 +1272,62 @@ impl AirPlaySpeakers {
         self.entry(id).delay_ms = delay_ms;
         self.log
             .log(|| format!("AirPlay speaker {} delay: {delay_ms} ms", self.label(id)));
+        self.send_delay(id);
+    }
+
+    /// Holds every speaker back by `hold_back_ms` on top of its own d_s, live,
+    /// so they meet a Google Cast speaker whose offset is longer than L (C77).
+    pub fn set_hold_back(&mut self, hold_back_ms: f64) {
+        let hold_back_ms = if hold_back_ms.is_finite() {
+            hold_back_ms.max(0.0)
+        } else {
+            0.0
+        };
+        if hold_back_ms == self.hold_back_ms {
+            return;
+        }
+        self.hold_back_ms = hold_back_ms;
+        self.log.log(|| {
+            format!("AirPlay speakers held back {hold_back_ms:.0} ms for the Google Cast speaker")
+        });
+        let ids: Vec<String> = self.added.keys().cloned().collect();
+        for id in ids {
+            self.send_delay(&id);
+        }
+    }
+
+    /// How far ahead of the hold-back the speaker that falls furthest short
+    /// plays, in ms, because the sender caps d_s (P99); 0 while none does.
+    pub fn ahead_ms(&self) -> f64 {
+        self.added
+            .keys()
+            .map(|id| {
+                self.settings(id).delay_ms + self.hold_back_ms
+                    - self.sent_delay(id).as_secs_f64() * 1000.0
+            })
+            .fold(0.0, f64::max)
+    }
+
+    /// d_s plus the hold-back, as the sender plays it.
+    fn sent_delay(&self, id: &str) -> Duration {
+        speaker_delay(self.settings(id).delay_ms + self.hold_back_ms)
+    }
+
+    /// Gives the sender a speaker's delay, if the speaker is in it.
+    fn send_delay(&mut self, id: &str) {
+        let delay = self.sent_delay(id);
+        let short_ms =
+            self.settings(id).delay_ms + self.hold_back_ms - delay.as_secs_f64() * 1000.0;
+        if short_ms > 0.5 {
+            // The sender caps d_s (P99): past that the speaker stays early.
+            self.log.log(|| {
+                format!(
+                    "AirPlay speaker {} plays {short_ms:.0} ms early: its delay stops at {} ms",
+                    self.label(id),
+                    MAX_DELAY.as_millis()
+                )
+            });
+        }
         if let Some(added) = self.added.get(id) {
             self.link.set_delay(&added.key, delay);
         }
@@ -1295,7 +1355,7 @@ impl AirPlaySpeakers {
     fn options(&self, id: &str) -> SpeakerOptions {
         let settings = self.settings(id);
         let mut options = SpeakerOptions::new(airplay_volume(settings.volume, self.master));
-        options.delay = speaker_delay(settings.delay_ms);
+        options.delay = self.sent_delay(id);
         options.credentials = self.store.get(id).cloned();
         options.password = self.password(id);
         options
@@ -3032,6 +3092,38 @@ pub mod tests {
             ]
         );
         assert_eq!(airplay.speakers()[0].delay_ms, 3000.0);
+    }
+
+    #[test]
+    fn the_cast_hold_back_comes_on_top_of_each_speakers_own_delay() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        airplay.poll();
+        airplay.set_hold_back(1000.0);
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        assert!(fake.take_calls().iter().any(|call| matches!(
+            call,
+            Call::Add { delay, .. } if *delay == Duration::from_millis(1000)
+        )));
+        airplay.set_delay(&id, 200.0);
+        airplay.set_hold_back(1250.0);
+        airplay.set_hold_back(1250.0);
+        airplay.set_hold_back(5000.0);
+        airplay.set_hold_back(f64::NAN);
+        assert_eq!(
+            fake.take_calls(),
+            [
+                Call::Delay(id.clone(), Duration::from_millis(1200)),
+                Call::Delay(id.clone(), Duration::from_millis(1450)),
+                Call::Delay(id.clone(), Duration::from_millis(3000)),
+                Call::Delay(id.clone(), Duration::from_millis(200)),
+            ]
+        );
+        assert_eq!(airplay.speakers()[0].delay_ms, 200.0, "the user's own d_s");
     }
 
     #[test]

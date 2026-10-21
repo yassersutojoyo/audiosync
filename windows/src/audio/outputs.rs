@@ -380,7 +380,7 @@ impl OutputPolicy {
     }
 
     /// Sets the Cast speaker's measured offset, or `None` while none is
-    /// on. Returns whether the hold-backs change.
+    /// on. Returns whether the local outputs' hold-backs change.
     pub fn set_cast_offset(&mut self, offset: Option<Duration>) -> bool {
         let before = self.network_latency_ms();
         self.cast_offset = offset;
@@ -389,13 +389,34 @@ impl OutputPolicy {
 
     /// What local outputs wait for: L while an AirPlay speaker is chosen,
     /// the Cast speaker's offset while one is on, the longer of the two
-    /// when both are.
+    /// when both are; the shorter one is then held back to it too.
     fn network_latency_ms(&self) -> Option<f64> {
-        let cast = self.cast_offset.map(|offset| offset.as_secs_f64() * 1000.0);
-        match (self.airplay_latency_ms(), cast) {
+        match (self.airplay_latency_ms(), self.cast_offset_ms()) {
             (Some(airplay), Some(cast)) => Some(airplay.max(cast)),
             (airplay, cast) => airplay.or(cast),
         }
+    }
+
+    /// How much later than L the AirPlay speakers play, so they meet a Cast
+    /// speaker whose offset is longer (C77).
+    pub fn airplay_hold_back_ms(&self) -> f64 {
+        match (self.airplay_latency_ms(), self.cast_offset_ms()) {
+            (Some(airplay), Some(cast)) => (cast - airplay).max(0.0),
+            _ => 0.0,
+        }
+    }
+
+    /// How long the Cast feed waits, so a Cast speaker whose offset is
+    /// shorter than L plays at L (C77).
+    pub fn cast_hold_back_ms(&self) -> f64 {
+        match (self.airplay_latency_ms(), self.cast_offset_ms()) {
+            (Some(airplay), Some(cast)) => (airplay - cast).max(0.0),
+            _ => 0.0,
+        }
+    }
+
+    fn cast_offset_ms(&self) -> Option<f64> {
+        self.cast_offset.map(|offset| offset.as_secs_f64() * 1000.0)
     }
 
     /// Takes in the endpoints listed now: which outputs can take part, and
@@ -701,6 +722,7 @@ pub fn period_frames(default_period_hns: i64, rate: u32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use audiosync_core::reader::DRIFT_TOLERANCE_MS;
 
     fn endpoint(id: &str) -> Endpoint {
         Endpoint {
@@ -1294,6 +1316,35 @@ mod tests {
         assert!(policy.set_cast_offset(None));
         assert_eq!(policy.params("a").delay_frames, 7_200);
         assert_eq!(policy.params("b").delay_frames, 0);
+    }
+
+    #[test]
+    fn airplay_cast_and_local_outputs_play_at_one_latency() {
+        let all = ["builtin", "usb", "bluetooth"];
+        for (adjustment_ms, cast_ms) in [(0.0, 3000), (0.0, 1000), (250.0, 1900), (0.0, 1750)] {
+            let mut policy = local_delay_policy(sender(true, L), &all);
+            policy.set_airplay_adjustment_ms(adjustment_ms);
+            policy.set_cast_offset(Some(Duration::from_millis(cast_ms)));
+            // When each is heard: a local output's offset is its own lateness, negated.
+            let mut heard = vec![
+                1750.0 + adjustment_ms + policy.airplay_hold_back_ms(),
+                cast_ms as f64 + policy.cast_hold_back_ms(),
+            ];
+            heard.extend(all.iter().map(|id| {
+                let offset = if *id == "builtin" {
+                    0.0
+                } else {
+                    policy.settings(id).delay_ms
+                };
+                policy.hold_back_ms(id) - offset
+            }));
+            let spread = heard.iter().copied().fold(f64::MIN, f64::max)
+                - heard.iter().copied().fold(f64::MAX, f64::min);
+            assert!(
+                spread <= f64::from(DRIFT_TOLERANCE_MS),
+                "A {adjustment_ms} ms, Cast {cast_ms} ms: heard at {heard:?}"
+            );
+        }
     }
 
     fn mix(float32: bool, rate: u32, channels: u16, channel_mask: u32) -> MixFormat {

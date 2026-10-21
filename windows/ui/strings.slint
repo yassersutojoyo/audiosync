@@ -391,6 +391,13 @@ export global Strings {
         return @tr("AudioSync can't play to {}, so it's off.", speaker);
     }
 
+    // AirPlay speakers wait for a Google Cast speaker whose delay is longer
+    // than theirs, but at most 3 s, so a longer Cast delay leaves them ahead.
+    // `seconds` is a number with one decimal, such as "1.5".
+    public pure function notice-airplay-ahead(seconds: string, speaker: string) -> string {
+        return @tr("AirPlay speakers can wait at most 3 s for a Google Cast speaker, so they play about {} s ahead of {}. Lower its offset to keep them together.", seconds, speaker);
+    }
+
     // A Google Cast speaker can't play, so it is off.
     public pure function notice-cast(problem: CastProblem, speaker: string) -> string {
         if problem == CastProblem.busy {
@@ -606,6 +613,9 @@ export global Strings {
         }
         if kind == NoticeKind.cast-cant-play {
             return @tr("{} can't play", name);
+        }
+        if kind == NoticeKind.airplay-ahead-of-cast {
+            return @tr("AirPlay ahead of {}", name);
         }
         return @tr("double audio");
     }

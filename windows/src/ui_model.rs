@@ -432,6 +432,10 @@ pub enum NoticeMessage {
         speaker: String,
         problem: CastProblem,
     },
+    /// The AirPlay speakers can't wait long enough for the Google Cast
+    /// speaker that is on, so they play about `tenths` tenths of a second
+    /// ahead of it. Clears itself once they keep up again.
+    AirPlayAheadOfCast { speaker: String, tenths: u32 },
 }
 
 /// How a speaker or group row shows: playing only while streaming is on.
