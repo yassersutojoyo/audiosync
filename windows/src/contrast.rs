@@ -476,7 +476,9 @@ fn no_text_promises_airplay() {
                     .contains("notice-airplay-stopped: @tr(\"AirPlay stopped or couldn't start.")
                 || line.contains("notice-retry-label: @tr(\"Retry starting AirPlay\")")
                 || line.contains("return @tr(\"AirPlay stopped\");")
-                || line.contains("return @tr(\"AirPlay speakers can wait at most 3 s longer,")
+                || line.contains(
+                    "return @tr(\"AirPlay speakers can wait at most 3 s for a Google Cast speaker,"
+                )
                 || line.contains("return @tr(\"AirPlay ahead of {}\", name);")
                 || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
                 || line.contains(

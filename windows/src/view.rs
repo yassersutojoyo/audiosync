@@ -4136,8 +4136,8 @@ mod tests {
         };
         assert_eq!(
             notice_text(&strings, &ahead).as_str(),
-            "AirPlay speakers can wait at most 3 s longer, so they play about 1.5 s ahead of \
-             Kitchen. Lower the Cast delay to keep them together."
+            "AirPlay speakers can wait at most 3 s for a Google Cast speaker, so they play \
+             about 1.5 s ahead of Kitchen. Lower its offset to keep them together."
         );
         assert_eq!(
             notice_title(&strings, &ahead).as_str(),
