@@ -58,7 +58,7 @@ jobs:
           fi
           for arch in arm64 x86_64; do
             cc -arch "$arch" -std=c11 -Wall -Wextra -Werror -I core/include Tests/panic-probe.c "$probe_lib" \
-              -o "$RUNNER_TEMP/panic-probe-$arch"
+              -framework Security -framework CoreFoundation -o "$RUNNER_TEMP/panic-probe-$arch"
           done
           # Status 0 only: a panic that got past the guard aborts.
           "$RUNNER_TEMP/panic-probe-arm64"

@@ -30,7 +30,8 @@ cleanup() {
 trap cleanup EXIT
 
 # The core's C interface and the static library scripts/build_core.sh makes.
-CORE=(-I Sources/CAudioSyncCore -L core/target/universal-apple-darwin/release -laudiosync_core)
+CORE=(-I Sources/CAudioSyncCore -L core/target/universal-apple-darwin/release -laudiosync_core
+  -framework Security -framework CoreFoundation)
 # The engine's parts on the core, with what they need to compile.
 ENGINE_PARTS=(EngineParts.swift CoreEngine.swift OutputRenderer.swift OutputFades.swift Equalizer.swift Diagnostics.swift
   NativeAirPlayTap.swift CalibrationTap.swift)
