@@ -573,6 +573,11 @@ impl AscAirPlay {
                     let _ = self.identity.insert(&id, credentials);
                     return;
                 }
+                if event == SpeakerEvent::HomeKitRejected {
+                    // The PairingRequired error that follows reaches the host.
+                    let _ = self.identity.remove(&id);
+                    return;
+                }
                 if matches!(
                     event,
                     SpeakerEvent::State(_) | SpeakerEvent::Error(_) | SpeakerEvent::Latency(_)

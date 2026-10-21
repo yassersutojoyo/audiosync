@@ -270,6 +270,16 @@ impl IdentityStore {
         }
     }
 
+    /// Forgets the receiver's credentials and writes the file; when it can't
+    /// be written they are forgotten until the store is dropped all the same.
+    pub fn remove(&mut self, id: &str) -> io::Result<()> {
+        if self.identity.remove(id) {
+            self.save()
+        } else {
+            Ok(())
+        }
+    }
+
     fn save(&self) -> io::Result<()> {
         let Some(path) = &self.path else {
             return Ok(());
@@ -299,7 +309,7 @@ mod tests {
         let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target")
             .join("test-scratch")
-            .join("airplay2-identity");
+            .join("airplay2-identity-store");
         fs::create_dir_all(&folder).expect("a scratch folder");
         let path = folder.join(name);
         let _ = fs::remove_file(&path);

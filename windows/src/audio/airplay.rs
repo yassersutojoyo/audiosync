@@ -1841,8 +1841,21 @@ impl AirPlaySpeakers {
                 });
                 false
             }
-            SpeakerEvent::HomeKitRejected
-            | SpeakerEvent::Methods(_)
+            SpeakerEvent::HomeKitRejected => {
+                let saved = self.store.remove_homekit(id);
+                self.log.log(|| {
+                    let saved = match &saved {
+                        Ok(()) => String::new(),
+                        Err(error) => format!(" (the file couldn't be written: {error})"),
+                    };
+                    format!(
+                        "AirPlay speaker {}: turned down its AirPlay 2 credentials, forgotten{saved}",
+                        self.label(id)
+                    )
+                });
+                false
+            }
+            SpeakerEvent::Methods(_)
             | SpeakerEvent::AudioJack(_)
             | SpeakerEvent::VolumeReported(_) => false,
         }

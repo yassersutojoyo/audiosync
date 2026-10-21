@@ -362,6 +362,19 @@ impl PairingStore {
         self.save_airplay2()
     }
 
+    /// Forgets HomeKit credentials the speaker turned down (P154) and
+    /// writes the AirPlay 2 identity file; they are gone for this run even
+    /// when it can't be written.
+    pub fn remove_homekit(&mut self, id: &str) -> io::Result<()> {
+        let Some(file) = &mut self.airplay2 else {
+            return Ok(());
+        };
+        if !file.identity.remove(id) {
+            return Ok(());
+        }
+        self.save_airplay2()
+    }
+
     fn airplay2_path(&self) -> Option<PathBuf> {
         Some(self.path.as_deref()?.with_file_name(AIRPLAY2_FILE_NAME))
     }
