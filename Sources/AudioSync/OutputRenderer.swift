@@ -89,8 +89,12 @@ final class OutputRenderer: FadingOutput {
     private var target: RenderTarget?
     private var gain: Double = 1
     /// The device's and its output stream's latency plus the unit's own,
-    /// added to a fade's last output time (S185).
+    /// added to a fade's last output time (S185), a Bluetooth device's
+    /// within S231's window.
     private var latencyNs: UInt64 = 0
+    /// The latest Bluetooth latency report S231's window accepted, per
+    /// device UID, kept across outputs and reconnects; main thread.
+    private static var plausibleLatencyNs: [String: UInt64] = [:]
     private var aliveListener: (device: AudioObjectID, block: AudioObjectPropertyListenerBlock)?
     private var overloadListener: (device: AudioObjectID, block: AudioObjectPropertyListenerBlock)?
     /// The latest start's device is a Bluetooth one (Classic or LE).
@@ -144,7 +148,8 @@ final class OutputRenderer: FadingOutput {
             leastSlackMs: target?.renderer.leastSlackMs, floorDropMs: target?.renderer.floorDropMs ?? 0,
             shortageFrames: target?.renderer.shortageFrames ?? 0,
             overloads: target?.overloads.load(ordering: .relaxed) ?? 0,
-            timeSteps: target?.renderer.timeSteps ?? 0, bluetoothOutputs: bluetoothOutputs)
+            timeSteps: target?.renderer.timeSteps ?? 0, bluetoothOutputs: bluetoothOutputs,
+            rejectedLatencyNs: target?.renderer.rejectedLatencyNs, latencyNs: latencyNs)
         return "\(framesRendered.load(ordering: .relaxed)) frames rendered, \(counters), "
             + "slowed \(slowedFrames) frames, sped \(spedFrames) frames, shortfall \(shortfallFrames) frames, "
             + "late callbacks \(lateCallbacks) (most \(String(format: "%.1f", lateMaxMs)) ms), \(observed.text)"
@@ -197,7 +202,12 @@ final class OutputRenderer: FadingOutput {
         renderRate = started.rate
         reportedLoss = false
         stopNote = "running"
-        latencyNs = Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
+        let reportedNs = Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
+        let uid = Self.deviceString(device, kAudioDevicePropertyDeviceUID)
+        let lastPlausibleNs = uid.flatMap { Self.plausibleLatencyNs[$0] } ?? 0
+        latencyNs = target?.renderer.setReportedLatency(reportedNs, lastPlausibleNs: lastPlausibleNs) ?? reportedNs
+        let rejectedNs = target?.renderer.rejectedLatencyNs
+        if bluetooth, rejectedNs == nil, let uid { Self.plausibleLatencyNs[uid] = reportedNs }
         isBluetooth = bluetooth
         installDeviceAliveListener(device)
         installOverloadListener(device)
@@ -206,7 +216,8 @@ final class OutputRenderer: FadingOutput {
         let lead = extraLeadMs > 0 ? ", Bluetooth, extra lead \(String(format: "%.1f", extraLeadMs)) ms" : ""
         DebugTrace.log("[AudioSync] output unit started on device \(device): \(started.channels) channels at "
                 + "\(started.rate) Hz from \(captureRate) Hz, delay \(delayMs) ms, "
-                + "output latency \(latencyNs / 1000) µs\(lead)")
+                + "output latency \(latencyNs / 1000) µs\(lead)"
+                + OutputObservation.rejectionText(rejectedNs: rejectedNs, usedNs: latencyNs))
     }
 
     /// Stops the unit at once, without a fade; once this returns no render
@@ -468,7 +479,11 @@ final class OutputRenderer: FadingOutput {
     }
 
     private static func deviceName(_ device: AudioObjectID) -> String? {
-        var address = AudioObjectPropertyAddress(mSelector: kAudioObjectPropertyName,
+        deviceString(device, kAudioObjectPropertyName)
+    }
+
+    private static func deviceString(_ device: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
+        var address = AudioObjectPropertyAddress(mSelector: selector,
                                                  mScope: kAudioObjectPropertyScopeGlobal,
                                                  mElement: kAudioObjectPropertyElementMain)
         var name: Unmanaged<CFString>?
@@ -641,12 +656,25 @@ struct OutputObservation {
     var overloads: Int64
     var timeSteps: Int64
     var bluetoothOutputs: Int
+    /// The device's latency report when S231's window rejected it, and the
+    /// latency used instead, in ns.
+    var rejectedLatencyNs: UInt64? = nil
+    var latencyNs: UInt64 = 0
 
     var text: String {
         let slack = leastSlackMs.map { String(format: "%.1f ms", $0) } ?? "n/a"
         return "least slack \(slack), floor drop \(String(format: "%.1f", floorDropMs)) ms, "
             + "shortage \(shortageFrames) frames, IO overloads \(overloads), output-time steps \(timeSteps), "
             + "Bluetooth outputs \(bluetoothOutputs)"
+            + Self.rejectionText(rejectedNs: rejectedLatencyNs, usedNs: latencyNs)
+    }
+
+    /// A latency report S231's window rejected, as the debug log names it;
+    /// empty when none was.
+    static func rejectionText(rejectedNs: UInt64?, usedNs: UInt64) -> String {
+        guard let rejectedNs else { return "" }
+        return String(format: ", reported latency %.1f ms outside 50 to 1000 ms, used %.1f ms",
+                      Double(rejectedNs) / 1e6, Double(usedNs) / 1e6)
     }
 }
 

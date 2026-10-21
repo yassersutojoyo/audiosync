@@ -284,6 +284,19 @@ final class CoreRenderer {
     /// 0 for any other (S230).
     var extraLeadMs: Double { Double(asc_renderer_extra_lead_frames(handle)) * 1000 / Double(captureRate) }
 
+    /// Control thread, after `setBluetooth`: the output latency the device
+    /// reported, in ns; returns the one to use (S231). `lastPlausibleNs` is
+    /// the latest report the window accepted for the same output, 0 for none.
+    func setReportedLatency(_ reportedNs: UInt64, lastPlausibleNs: UInt64) -> UInt64 {
+        asc_renderer_set_reported_latency(handle, reportedNs, lastPlausibleNs)
+    }
+
+    /// The device's report when the window rejected it, in ns (S231).
+    var rejectedLatencyNs: UInt64? {
+        var rejected: UInt64 = 0
+        return asc_renderer_rejected_latency_ns(handle, &rejected) ? rejected : nil
+    }
+
     /// Any thread: fade out from the next callback, then exact zeros until
     /// the output stops (S185).
     func requestFadeOut() { asc_renderer_request_fade_out(handle) }
