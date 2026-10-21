@@ -27,6 +27,7 @@ use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::launch_at_login::{self, LaunchAtLogin};
+use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Transport};
 use crate::ui_model::{
     self, AppState, Backend, MainWindowShows, NoticeMessage, PinPrompt, SourceKind, SpeakerState,
     ViewSettings, WindowFrame,
@@ -542,6 +543,9 @@ pub struct App {
     /// backend's notices are about audio.
     login: RefCell<LaunchAtLogin>,
     login_timer: Timer,
+    /// The Now Playing card, and the source it was last given.
+    now_playing: RefCell<NowPlayingCard>,
+    now_playing_source: RefCell<Option<CardSource>>,
 }
 
 /// The main window's native window and the menu bar theme last sent to it.
@@ -712,6 +716,8 @@ impl App {
                 std::env::current_exe().ok(),
             )),
             login_timer: Timer::default(),
+            now_playing: RefCell::default(),
+            now_playing_source: RefCell::default(),
         });
         app.attach_models();
         app.connect_main();
@@ -739,6 +745,14 @@ impl App {
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn set_tray_available(&self, available: bool) {
         self.tray_available.set(available);
+    }
+
+    /// The media sessions the Now Playing card reads and drives; without
+    /// them the card never shows.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn set_media_controls(&self, controls: Box<dyn MediaControls>) {
+        self.now_playing.borrow_mut().set_controls(controls);
+        self.sync_now_playing();
     }
 
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -816,7 +830,56 @@ impl App {
         let changed = self.backend.borrow_mut().poll();
         if changed {
             self.refresh();
+        } else {
+            self.sync_now_playing();
         }
+    }
+
+    /// Reads the media sessions for the Now Playing card while the main
+    /// window shows, and shows what changed.
+    fn sync_now_playing(&self) {
+        let window = self.main.window();
+        let shows = window.is_visible() && !window.is_minimized();
+        let source = self.now_playing_source.borrow().clone();
+        if !self.now_playing.borrow_mut().sync(source, shows) {
+            return;
+        }
+        let card = self.now_playing.borrow();
+        let Some(track) = card.track() else {
+            // Slint leaves nothing focused when the focused button goes.
+            if self.main.get_now_playing_focused_button() >= 0 {
+                self.main.set_now_playing_focused_button(-1);
+                self.main.invoke_focus_source();
+            }
+            self.main.set_now_playing_shown(false);
+            return;
+        };
+        self.main.set_now_playing_title(track.title.as_str().into());
+        self.main
+            .set_now_playing_subtitle(track.subtitle().as_str().into());
+        self.main.set_now_playing_playing(track.playing);
+        let artwork = track.artwork.as_ref().map(|artwork| {
+            let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                &artwork.rgba,
+                artwork.side,
+                artwork.side,
+            );
+            slint::Image::from_rgba8_premultiplied(pixels)
+        });
+        self.main.set_now_playing_has_artwork(artwork.is_some());
+        self.main
+            .set_now_playing_artwork(artwork.unwrap_or_default());
+        self.main.set_now_playing_shown(true);
+    }
+
+    fn send_transport(&self, button: i32) {
+        let command = match button {
+            0 => Transport::Previous,
+            1 => Transport::PlayPause,
+            _ => Transport::Next,
+        };
+        self.log.log(|| format!("now playing: {command:?} pressed"));
+        self.now_playing.borrow_mut().send(command);
     }
 
     /// Shows the main window and brings it to the front.
@@ -1295,6 +1358,8 @@ impl App {
 
         self.show_equalizer_state(&state.equalizer);
         drop(ui);
+        *self.now_playing_source.borrow_mut() = CardSource::of(&state);
+        self.sync_now_playing();
         if let Some(callback) = self.on_refresh.borrow().as_ref() {
             callback(&state);
         }
@@ -1446,6 +1511,8 @@ impl App {
         });
         let w = weak.clone();
         main.on_equalizer_requested(move || with_app(&w, App::show_equalizer));
+        let w = weak.clone();
+        main.on_now_playing_transport(move |button| with_app(&w, |app| app.send_transport(button)));
         let w = weak.clone();
         main.on_speaker_toggled(move |id| with_app(&w, |app| app.toggle_speaker(&id)));
         let w = weak.clone();
@@ -2941,6 +3008,50 @@ mod tests {
             .invoke_notice_dismissed(launch_at_login::NOTICE_ID as i32);
         assert!(app.snapshot().notices.is_empty());
         assert_eq!(app.main.get_notices().row_count(), 0);
+    }
+
+    #[test]
+    fn the_now_playing_card_follows_the_media_session_and_its_buttons_drive_it() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        assert_eq!(fake.following(), Some(CardSource::AnyApp));
+        assert!(!app.main.get_now_playing_shown(), "no session yet");
+
+        fake.read(Some(track("Spotify.exe", "Song", "", true)));
+        app.poll();
+        assert!(app.main.get_now_playing_shown());
+        assert_eq!(app.main.get_now_playing_title(), "Song");
+        assert_eq!(app.main.get_now_playing_subtitle(), "Spotify");
+        assert!(app.main.get_now_playing_playing());
+        assert!(!app.main.get_now_playing_has_artwork());
+
+        app.main.invoke_now_playing_transport(0);
+        app.main.invoke_now_playing_transport(1);
+        app.main.invoke_now_playing_transport(2);
+        assert_eq!(
+            fake.sent(),
+            [Transport::Previous, Transport::PlayPause, Transport::Next]
+        );
+
+        fake.read(Some(track("Spotify.exe", "Song", "Band", false)));
+        app.poll();
+        assert!(!app.main.get_now_playing_playing());
+        assert_eq!(app.main.get_now_playing_subtitle(), "Band");
+
+        // The focus on a button goes to the source list as the card hides.
+        app.main.set_now_playing_focused_button(1);
+        fake.read(None);
+        app.poll();
+        assert!(!app.main.get_now_playing_shown());
+        assert_eq!(app.main.get_now_playing_focused_button(), -1);
+
+        app.main.hide().expect("the main window hides");
+        app.poll();
+        assert_eq!(fake.following(), None, "nothing is read while hidden");
     }
 
     #[test]

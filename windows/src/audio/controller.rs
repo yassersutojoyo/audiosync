@@ -75,10 +75,10 @@ use super::backend::{
     TIMED_OUT,
 };
 use super::capture::{
-    CaptureAttempt, CaptureTarget, LoopbackMode, SampleType, WHOLE_SYSTEM_NAME, decide_capture,
-    display_name, input_sources, running_app, source_list,
+    CaptureAttempt, CaptureTarget, LoopbackMode, SampleType, decide_capture, display_name,
+    input_sources, running_app, source_list,
 };
-use super::now_playing::{Follow, TrackInfo, TrackReader, TrackSource};
+use super::now_playing::{Follow, SharedLabels, TrackInfo, TrackReader, TrackSource};
 #[cfg(test)]
 use super::outputs::OutputParams;
 use super::outputs::{
@@ -468,6 +468,11 @@ impl<D: Driver> Controller<D> {
         self.track_info.set_reader(reader);
     }
 
+    /// What receivers show while no track counts, as the UI words it.
+    pub fn set_receiver_labels(&mut self, labels: SharedLabels) {
+        self.track_info.set_labels(labels);
+    }
+
     /// Starts a new AirPlay sender through `starter` when the user retries
     /// after the one running stopped.
     #[cfg(test)]
@@ -639,7 +644,7 @@ impl<D: Driver> Controller<D> {
         let source = match &id {
             SourceId::WholeSystem => TrackSource {
                 follow: Follow::AnyApp,
-                name: Some(WHOLE_SYSTEM_NAME.to_owned()),
+                name: None,
             },
             SourceId::App { root_pid } => {
                 let Ok(processes) = self.driver.processes() else {
@@ -2735,7 +2740,7 @@ mod tests {
     use crate::audio::backend::OutputKind;
     use crate::audio::capture::Activation;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
-    use crate::audio::now_playing::fake::{FakeReader, track};
+    use crate::audio::now_playing::fake::{FakeReader, shared_labels, track};
     use crate::audio::outputs::{EndpointProperties, EndpointReading};
     use crate::audio::routing::{DirectPath, DirectReason, HOLD_CHECKS};
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
@@ -5155,6 +5160,7 @@ mod tests {
         let (mut backend, fake, kitchen) = with_airplay();
         let reader = FakeReader::with_icon(b"icon");
         backend.set_track_reader(reader.reader());
+        backend.set_receiver_labels(shared_labels());
         backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
         backend.poll();
         assert_eq!(reader.following(), None, "nothing streams yet");
@@ -5212,6 +5218,7 @@ mod tests {
         backend.connect_input("mic", "USB Microphone", "USB");
         let reader = FakeReader::with_icon(b"icon");
         backend.set_track_reader(reader.reader());
+        backend.set_receiver_labels(shared_labels());
         backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
         backend
             .start(&SourceId::Input {
@@ -5225,7 +5232,7 @@ mod tests {
         let track_sent = sent.last().and_then(|sent| sent.track.as_ref());
         assert_eq!(
             track_sent.map(|track| (track.title.as_str(), track.artist.as_str())),
-            Some(("AudioSync", "USB Microphone")),
+            Some(("Title label", "USB Microphone")),
             "{sent:?}"
         );
     }
@@ -5236,6 +5243,7 @@ mod tests {
         backend.connect_input("mic", "USB Microphone", "USB");
         let reader = FakeReader::with_icon(b"icon");
         backend.set_track_reader(reader.reader());
+        backend.set_receiver_labels(shared_labels());
         backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
         backend
             .start(&SourceId::Input {
@@ -5250,7 +5258,7 @@ mod tests {
         let track_sent = sent.last().and_then(|sent| sent.track.as_ref());
         assert_eq!(
             track_sent.map(|track| track.artist.as_str()),
-            Some(crate::audio::now_playing::UNNAMED_SOURCE),
+            Some("Unnamed label"),
             "{sent:?}"
         );
 

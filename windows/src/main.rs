@@ -26,6 +26,7 @@ mod data_folder;
 mod debug_log;
 mod guide;
 mod launch_at_login;
+mod now_playing_card;
 mod os_version;
 #[cfg(any(windows, test))]
 mod placement;
@@ -211,14 +212,17 @@ impl From<slint::PlatformError> for StartError {
 /// AirPlay sender, through the adapter that keeps the UI's own state. Both
 /// log to `log`.
 #[cfg(windows)]
-fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
+fn backend(
+    log: &DebugLog,
+    labels: &audio::now_playing::SharedLabels,
+    track_reader: audio::wasapi::MediaSessionReader,
+) -> Result<Box<dyn ui_model::Backend>, StartError> {
     let mut audio = audio::wasapi::open().map_err(StartError::Audio)?;
     log.log(|| "audio: the WASAPI backend is open".to_owned());
     audio.set_debug_log(log.clone());
     start_airplay(&mut audio, log);
-    audio.set_track_reader(Box::new(audio::wasapi::MediaSessionReader::start(
-        log.clone(),
-    )));
+    audio.set_track_reader(Box::new(track_reader));
+    audio.set_receiver_labels(labels.clone());
     let settings_file = settings::SettingsFile::default_path().map_or_else(
         settings::SettingsFile::in_memory,
         settings::SettingsFile::at,
@@ -229,6 +233,17 @@ fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
         log.clone(),
         settings_file,
     )))
+}
+
+/// What AirPlay receivers show while no track counts, from the strings.
+#[cfg(windows)]
+fn receiver_labels(strings: &Strings<'_>) -> audio::now_playing::ReceiverLabels {
+    audio::now_playing::ReceiverLabels {
+        title: strings.get_receiver_untitled().into(),
+        album: strings.get_receiver_album().into(),
+        whole_system: strings.get_source_system().into(),
+        unnamed_source: strings.get_receiver_unnamed_source().into(),
+    }
 }
 
 /// Starts the AirPlay sender and its discovery through the audio backend,
@@ -323,7 +338,19 @@ fn run(
     log: &DebugLog,
     #[cfg(windows)] instance: Option<&single_instance::Instance>,
 ) -> Result<(), StartError> {
-    let app = view::App::new(backend(log)?, log.clone())?;
+    #[cfg(windows)]
+    let labels = audio::now_playing::SharedLabels::default();
+    #[cfg(windows)]
+    let (track_reader, card_reader) = audio::wasapi::read_media_sessions(log.clone());
+    #[cfg(windows)]
+    let backend = backend(log, &labels, track_reader)?;
+    #[cfg(not(windows))]
+    let backend = backend(log)?;
+    let app = view::App::new(backend, log.clone())?;
+    #[cfg(windows)]
+    labels.set(receiver_labels(&app.strings()));
+    #[cfg(windows)]
+    app.set_media_controls(Box::new(card_reader));
 
     #[cfg(windows)]
     if let Some(instance) = instance {
