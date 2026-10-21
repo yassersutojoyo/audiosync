@@ -276,6 +276,8 @@ struct Shared {
     /// Capture frames the converter was slowed down by in all (S206,
     /// S207).
     slowed_frames: AtomicU64,
+    /// The shortages S206's slow-down made up, in capture frames.
+    shortage_frames: AtomicU64,
     /// Capture frames the converter was sped up by in all (S207).
     sped_frames: AtomicU64,
     /// The largest lateness of a callback, in ns (S209).
@@ -346,6 +348,7 @@ impl RendererControl {
                 state: AtomicU8::new(state_code(FadeState::Closed)),
                 shortfall_frames: AtomicU64::new(0),
                 slowed_frames: AtomicU64::new(0),
+                shortage_frames: AtomicU64::new(0),
                 sped_frames: AtomicU64::new(0),
                 late_max_ns: AtomicU64::new(0),
                 late_callbacks: AtomicU64::new(0),
@@ -448,6 +451,11 @@ impl RendererControl {
     /// [`Renderer::slowed_frames`], from any thread (S206, S207).
     pub fn slowed_frames(&self) -> u64 {
         self.shared.slowed_frames.load(Ordering::Relaxed)
+    }
+
+    /// [`Renderer::shortage_frames`], from any thread (S206).
+    pub fn shortage_frames(&self) -> u64 {
+        self.shared.shortage_frames.load(Ordering::Relaxed)
     }
 
     /// [`Renderer::sped_frames`], from any thread (S207).
@@ -669,6 +677,14 @@ impl Renderer {
     /// conversion.
     pub fn slowed_frames(&self) -> u64 {
         self.shared.slowed_frames.load(Ordering::Relaxed)
+    }
+
+    /// The shortages S206's slow-down made up, in capture frames: what the
+    /// reader held less than a callback needed. Part of
+    /// [`Renderer::slowed_frames`], and 0 while the lead covers every
+    /// callback.
+    pub fn shortage_frames(&self) -> u64 {
+        self.shared.shortage_frames.load(Ordering::Relaxed)
     }
 
     /// Capture frames the converter was sped up by to follow the capture's
@@ -902,6 +918,9 @@ impl Renderer {
                 self.shared
                     .slowed_frames
                     .fetch_add(slowed as u64, Ordering::Relaxed);
+                self.shared
+                    .shortage_frames
+                    .fetch_add(short as u64, Ordering::Relaxed);
             }
             return;
         }
