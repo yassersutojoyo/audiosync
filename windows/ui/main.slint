@@ -294,7 +294,8 @@ component NowPlayingCard inherits Card {
                     color: Tokens.text;
                     wrap: word-wrap;
                     overflow: elide;
-                    max-height: 40px;
+                    // Two lines at most, as on the Mac.
+                    height: min(self.preferred-height, 2 * 19px);
                 }
 
                 if root.subtitle != "": Text {
