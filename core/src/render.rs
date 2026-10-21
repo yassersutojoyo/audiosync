@@ -1158,9 +1158,7 @@ impl Renderer {
             let own = usize::try_from(trim).unwrap_or(0);
             let slowed = short.max(own);
             if self.resampler.slow_down(slowed, frames - 1) {
-                let kept = (slowed - own) as u64;
-                let kept = kept - self.pay_anchor_fall(kept);
-                self.count_trim(slowed as f64, kept as f64);
+                self.count_slow_down(slowed as u64, (slowed - own) as u64);
                 self.shared
                     .slowed_frames
                     .fetch_add(slowed as u64, Ordering::Relaxed);
@@ -1338,15 +1336,21 @@ impl Renderer {
         } else {
             (paid_ns.saturating_mul(rate) / 1_000_000_000).min(frames)
         };
-        // What is paid is no longer owed by the reference being measured.
-        if let Tracking::Measuring {
-            sum, count, shift, ..
-        } = &mut self.tracking
-        {
+        // Jf rises by what is paid, so the fills from here on are taken
+        // against a shift that rose by as much.
+        if let Tracking::Measuring { shift, .. } = &mut self.tracking {
             *shift += paid as f64;
-            *sum -= paid as f64 * f64::from(*count);
         }
         paid
+    }
+
+    /// Counts an S206 slow-down of `slowed` capture frames, `kept` of them
+    /// for a shortage, in the tracking (S206, S207): what of `kept` pays
+    /// toward the anchor floor's fall lowers the anchor floor by as much as
+    /// it moves the fill, so only the rest moves the fill and the reference.
+    fn count_slow_down(&mut self, slowed: u64, kept: u64) {
+        let paid = self.pay_anchor_fall(kept);
+        self.count_trim((slowed - paid) as f64, (kept - paid) as f64);
     }
 
     /// The observer at the start of a callback of `frames` device frames
@@ -1908,6 +1912,73 @@ mod tests {
         assert!(r.warming, "four callbacks of 370 ms");
         r.form_floor(16_384);
         assert!(!r.warming);
+    }
+
+    /// A renderer whose anchor floor owes 10 ms of fall, measuring a
+    /// reference of three fills of 1000 frames taken against a Jf of -480.
+    fn owing_fall() -> Renderer {
+        let mut r = Stepped::new().renderer;
+        r.floor_formed = true;
+        r.earliest = Some([0, 0]);
+        r.callback_late_ns = 0;
+        r.anchor_floor = Some(10_000_000);
+        r.tracking = Tracking::Measuring {
+            sum: 3000.0,
+            count: 3,
+            frames: 3 * 441,
+            shift: -480.0,
+        };
+        r
+    }
+
+    /// The reference being measured, and the shift its next fill is taken
+    /// against.
+    fn measured(r: &Renderer) -> (f64, f64) {
+        let Tracking::Measuring {
+            sum, count, shift, ..
+        } = r.tracking
+        else {
+            panic!("{:?}", r.tracking);
+        };
+        (sum / f64::from(count), shift)
+    }
+
+    // covers: S206, S207, S209
+    #[test]
+    fn what_pays_toward_the_anchor_floors_fall_keeps_the_fill_the_trim_measures() {
+        // A dry read's 240 frames (5 ms) of silence pay in full. The fills
+        // taken before it never held the silence, so they stay; the next
+        // fill holds it and Jf rises by it, so its shift rises by as much.
+        let mut r = owing_fall();
+        assert_eq!(r.pay_anchor_fall(240), 240);
+        assert_eq!(r.anchor_floor, Some(5_000_000));
+        assert_eq!(measured(&r), (1000.0, -240.0));
+        // Owing 5 ms more, a further 10 ms pays 5 ms, to the floor.
+        assert_eq!(r.pay_anchor_fall(480), 240);
+        assert_eq!(r.anchor_floor, Some(0));
+        assert_eq!(r.pay_anchor_fall(240), 0);
+
+        // A slow-down of 64 frames, 48 of them kept for a shortage and
+        // paid: the fill moves by the 16 the trim asked for.
+        let mut r = owing_fall();
+        r.count_slow_down(64, 48);
+        assert_eq!(measured(&r), (1016.0, -432.0));
+        r.tracking = Tracking::Following {
+            reference: 1000.0,
+            average: 1000.0,
+        };
+        r.count_slow_down(64, 48);
+        let Tracking::Following { reference, average } = r.tracking else {
+            panic!("{:?}", r.tracking);
+        };
+        assert_eq!((reference, average), (1000.0, 1016.0));
+        // Owing nothing more, the kept part moves the reference too.
+        r.anchor_floor = Some(0);
+        r.count_slow_down(64, 48);
+        let Tracking::Following { reference, average } = r.tracking else {
+            panic!("{:?}", r.tracking);
+        };
+        assert_eq!((reference, average), (1048.0, 1080.0));
     }
 
     // covers: S209
