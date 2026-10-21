@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "GPL-3.0-or-later"
-description = "AudioSync's own Google Cast sender: discovery of _googlecast._tcp, the CASTV2 channel over TLS with its framing, heartbeat and receiver status, and the launch and teardown of the Default Media Receiver, as sans-I/O state machines driven on std threads and sockets."
+description = "AudioSync's own Google Cast sender: discovery of _googlecast._tcp, the CASTV2 channel over TLS with its framing, heartbeat and receiver status, the launch and teardown of the Default Media Receiver, LOAD and MEDIA_STATUS, device volume, recovery, and the live WAV stream server the device fetches from, as sans-I/O state machines driven on std threads and sockets."
 repository = "https://github.com/yassersutojoyo/audiosync"
 publish = false
 
