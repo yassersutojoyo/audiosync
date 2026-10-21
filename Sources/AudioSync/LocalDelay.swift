@@ -301,7 +301,7 @@ struct DelayFieldRings: Equatable {
     /// AppKit draws its own focus ring for the field. Never: turned off while
     /// the field was being edited, it stayed under the red outline (Mac check,
     /// 2026-10-21), so `focusRing` draws in its place.
-    var appKitRing: Bool { false }
+    static let appKitRing = false
 
     init(invalid: Bool, focused: Bool) {
         focusRing = focused && !invalid

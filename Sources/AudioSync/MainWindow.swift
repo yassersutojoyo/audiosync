@@ -828,13 +828,13 @@ private struct DelayValueButton: View {
 /// The one ring `DelayFieldRings` asks for, as a single shape: a change of
 /// state moves and recolors it, and never fades a second ring in beside it.
 /// The focus ring sits 3 pt outside the bezel like AppKit's; the red outline
-/// sits on the bezel, or 2 pt outside it while the field has the focus.
+/// sits on the bezel, or where the focus ring goes while the field has the focus.
 private struct DelayFieldRing: View {
     let rings: DelayFieldRings
 
     var body: some View {
-        let outset: CGFloat = rings.focusRing ? 3 : rings.redOutsideBezel ? 2 : 0
-        let width: CGFloat = rings.focusRing ? 3 : rings.redOutsideBezel ? 2 : 1.5
+        let outset: CGFloat = rings.focusRing || rings.redOutsideBezel ? 3 : 0
+        let width: CGFloat = rings.focusRing || rings.redOutsideBezel ? 3 : 1.5
         RoundedRectangle(cornerRadius: 6 + outset)
             .strokeBorder(rings.focusRing ? Color(nsColor: .keyboardFocusIndicatorColor) : Brand.errorText,
                           lineWidth: width)
@@ -877,8 +877,8 @@ private struct DelayTextField: NSViewRepresentable {
         let field = Field()
         field.isBezeled = true
         field.bezelStyle = .roundedBezel
-        // Off from the start; turned off mid-edit it stayed drawn (`DelayFieldRings.appKitRing`).
-        field.focusRingType = .none
+        // Set at creation only: turned off mid-edit, AppKit's ring stayed drawn.
+        field.focusRingType = DelayFieldRings.appKitRing ? .default : .none
         field.alignment = .center
         field.font = .monospacedDigitSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize,
                                                 weight: .regular)

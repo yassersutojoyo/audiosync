@@ -15,8 +15,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Fixed
 
 - On the Mac, a delay you've typed now applies as soon as you leave its field: when you click into another delay field, move on with Tab, or click any other control, such as a volume slider or the power switch. A step button adds to the value you typed.
-- On the Mac, a delay field no longer shows a character it can't take for a moment before removing it: the keystroke is blocked, and the field gets the red outline with a note on what it takes.
-- On the Mac, a delay field with a value it can't use no longer shows the red outline on top of the blue focus ring. It shows one thin red outline instead, which also marks the field you're typing in, and the blue ring comes back once the value is valid.
+- On the Mac, a delay field no longer shows a character it can't take for a moment before removing it: the keystroke is blocked, and the field gets the red outline with a note on what it takes. While the field has the focus, one red outline marks it in place of the blue focus ring.
 - On the Mac, a click on the empty space of an open delay panel closes it, like a click anywhere else on the speaker's row.
 - On the Mac, a Bluetooth speaker that reports a latency below 50 ms or above 1 second no longer cuts its fade-out short when you switch it off, or holds the stop for the full half second. AudioSync uses the last plausible latency it saw for that speaker instead, or 150 ms, and the debug log notes it. Your delays and the timing between speakers don't change.
 

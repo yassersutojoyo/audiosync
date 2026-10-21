@@ -2744,9 +2744,9 @@ do {
     let states = [false, true].flatMap { invalid in [false, true].map { (invalid, $0) } }
     for (invalid, focused) in states {
         let rings = DelayFieldRings(invalid: invalid, focused: focused)
-        let drawn = (rings.focusRing ? 1 : 0) + rings.redOutlines + (rings.appKitRing && focused ? 1 : 0)
+        let drawn = (rings.focusRing ? 1 : 0) + rings.redOutlines + (DelayFieldRings.appKitRing && focused ? 1 : 0)
         check(drawn <= 1, "delay rings: at most one ring (invalid \(invalid), focused \(focused))", "\(rings)")
-        check(!rings.appKitRing, "delay rings: AppKit's own ring stays off, so it can't linger after a toggle mid-edit",
+        check(!DelayFieldRings.appKitRing, "delay rings: AppKit's own ring stays off, so it can't linger after a toggle mid-edit",
               "invalid \(invalid), focused \(focused)")
     }
     let focusedInvalid = DelayFieldRings(invalid: true, focused: true)
