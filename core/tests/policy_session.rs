@@ -41,9 +41,9 @@ fn a_lost_source_stops_deselects_airplay_and_posts_a_source_notice() {
 
 // covers: S142
 #[test]
-fn the_source_app_quitting_stops_deselects_and_notices_without_an_alert() {
+fn the_source_app_quitting_stops_keeps_the_speakers_chosen_and_notices_without_an_alert() {
     let reaction = reaction(&Incident::SourceAppQuit);
-    assert!(reaction.stop_session && reaction.deselect_airplay);
+    assert!(reaction.stop_session && !reaction.deselect_airplay);
     assert_eq!(reaction.notice, Some(NoticeSubject::Source));
     assert!(!reaction.alert);
 }
@@ -271,7 +271,7 @@ fn every_error_state_has_its_reaction() {
         (
             Incident::SourceAppQuit,
             true,
-            true,
+            false,
             Some(NoticeSubject::Source),
         ),
         (
