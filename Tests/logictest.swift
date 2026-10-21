@@ -2739,6 +2739,29 @@ do {
           "delay value: the AirPlay delay row shows L; the reference and an unlisted row show none")
 }
 
+// MARK: Delay field rings — one ring at a time; red replaces the focus ring while invalid (DelayFieldRings)
+do {
+    let states = [false, true].flatMap { invalid in [false, true].map { (invalid, $0) } }
+    for (invalid, focused) in states {
+        let rings = DelayFieldRings(invalid: invalid, focused: focused)
+        let drawn = (rings.focusRing ? 1 : 0) + rings.redOutlines + (rings.appKitRing && focused ? 1 : 0)
+        check(drawn <= 1, "delay rings: at most one ring (invalid \(invalid), focused \(focused))", "\(rings)")
+        check(!rings.appKitRing, "delay rings: AppKit's own ring stays off, so it can't linger after a toggle mid-edit",
+              "invalid \(invalid), focused \(focused)")
+    }
+    let focusedInvalid = DelayFieldRings(invalid: true, focused: true)
+    check(!focusedInvalid.focusRing && focusedInvalid.redOutlines == 1 && focusedInvalid.redOutsideBezel,
+          "delay rings: invalid and focused → one red outline where the focus ring goes", "\(focusedInvalid)")
+    let focusedValid = DelayFieldRings(invalid: false, focused: true)
+    check(focusedValid.focusRing && focusedValid.redOutlines == 0, "delay rings: valid and focused → the focus ring",
+          "\(focusedValid)")
+    let unfocusedInvalid = DelayFieldRings(invalid: true, focused: false)
+    check(!unfocusedInvalid.focusRing && unfocusedInvalid.redOutlines == 1 && !unfocusedInvalid.redOutsideBezel,
+          "delay rings: invalid, focus elsewhere → a red outline on the bezel", "\(unfocusedInvalid)")
+    let idle = DelayFieldRings(invalid: false, focused: false)
+    check(!idle.focusRing && idle.redOutlines == 0, "delay rings: valid, focus elsewhere → no ring", "\(idle)")
+}
+
 // MARK: Delay field input — digits after one leading sign; out of range is marked (LocalDelay.fieldText)
 do {
     let t = UIStrings()

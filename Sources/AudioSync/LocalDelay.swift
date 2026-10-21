@@ -286,6 +286,27 @@ struct DelayFieldDraft: Equatable {
     mutating func drop() { isEditing = false }
 }
 
+/// The rings around a delay field, from whether its text is invalid (out of
+/// range, or a keystroke just blocked) and whether it has the keyboard focus.
+struct DelayFieldRings: Equatable {
+    /// A ring in the system's focus color.
+    let focusRing: Bool
+    /// Red outlines drawn around the field.
+    let redOutlines: Int
+    /// The red outline sits outside the bezel, where the focus ring goes,
+    /// rather than on it.
+    let redOutsideBezel: Bool
+    /// AppKit draws its own focus ring for the field.
+    let appKitRing: Bool
+
+    init(invalid: Bool, focused: Bool) {
+        focusRing = focused && !invalid
+        redOutlines = invalid ? (focused ? 2 : 1) : 0
+        redOutsideBezel = invalid && focused
+        appKitRing = !invalid
+    }
+}
+
 /// The delay panels that are open (S181). A click on a row's delay value or
 /// anywhere on its row (its open panel's blank space included) toggles that
 /// row's panel, and every other panel's typing applies first, those panels
