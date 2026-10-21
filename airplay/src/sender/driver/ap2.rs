@@ -51,13 +51,14 @@ impl Driver {
         }
     }
 
-    /// Starts an AirPlay 2 session, unless another speaker runs one
-    /// (P169): that one, and every AirPlay 1 session, go on untouched.
+    /// Starts an AirPlay 2 session, unless another speaker runs one or waits
+    /// to retry its own (P169): that one, and every AirPlay 1 session, go on
+    /// untouched.
     pub(super) fn start_ap2(&mut self, key: &DeviceKey, now: Instant) {
         let running = self
             .speakers
             .iter()
-            .any(|(other, speaker)| other != key && matches!(speaker.phase, Phase::Ap2(_)));
+            .any(|(other, speaker)| other != key && speaker.holds_ap2());
         if running {
             let error = SessionError::new(ErrorKind::Unsupported(
                 UnsupportedReason::OneAirPlay2Session,

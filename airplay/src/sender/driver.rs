@@ -150,6 +150,20 @@ struct Speaker {
     /// Refused only because another AirPlay 2 session ran (P169): it starts
     /// once that session ends for good.
     ap2_waiting: bool,
+    /// Its AirPlay 2 session failed and waits for its own retry, so it
+    /// keeps the one AirPlay 2 place (P169).
+    ap2_retry: bool,
+}
+
+impl Speaker {
+    /// Runs the AirPlay 2 session, or waits to retry it (P169).
+    fn holds_ap2(&self) -> bool {
+        match self.phase {
+            Phase::Ap2(_) => true,
+            Phase::Waiting(_) => self.ap2_retry,
+            _ => false,
+        }
+    }
 }
 
 pub(crate) struct Driver {
@@ -801,6 +815,7 @@ impl Driver {
         } else {
             speaker.backoff.on_failure(error.kind, now)
         };
+        speaker.ap2_retry = was_ap2 && retry_at.is_some();
         let next = match retry_at {
             _ if closing => Phase::Idle,
             Some(at) => Phase::Waiting(at),
@@ -857,12 +872,7 @@ impl Driver {
     /// The AirPlay 2 session ended for good: the first speaker refused only
     /// because it ran starts now (P169), through the usual restart.
     fn wake_ap2_waiter(&mut self, now: Instant) {
-        if self.stopping.is_some()
-            || self
-                .speakers
-                .values()
-                .any(|speaker| matches!(speaker.phase, Phase::Ap2(_)))
-        {
+        if self.stopping.is_some() || self.speakers.values().any(Speaker::holds_ap2) {
             return;
         }
         let Some((key, speaker)) = self.speakers.iter_mut().find(|(_, speaker)| {
@@ -1126,6 +1136,7 @@ impl Driver {
                     removing: false,
                     airplay1_outcome: None,
                     ap2_waiting: false,
+                    ap2_retry: false,
                 },
             );
             self.start_session(&key, now);
@@ -1154,10 +1165,16 @@ impl Driver {
             return;
         };
         speaker.removing = true;
+        let held = speaker.holds_ap2();
         match &mut speaker.phase {
             Phase::Active(active) => active.session.teardown(now),
             Phase::Ap2(active) => active.session.teardown(now),
-            Phase::Waiting(_) | Phase::Failed | Phase::Idle => self.stopped(key),
+            Phase::Waiting(_) | Phase::Failed | Phase::Idle => {
+                self.stopped(key);
+                if held {
+                    self.wake_ap2_waiter(now);
+                }
+            }
         }
     }
 
@@ -1191,6 +1208,7 @@ impl Driver {
     fn start_session(&mut self, key: &DeviceKey, now: Instant) {
         if let Some(speaker) = self.speakers.get_mut(key) {
             speaker.ap2_waiting = false;
+            speaker.ap2_retry = false;
         }
         if self.airplay2 {
             if let Some(device) = self.directory.device(key).cloned()
@@ -1605,6 +1623,7 @@ mod tests {
                 removing: false,
                 airplay1_outcome: None,
                 ap2_waiting: false,
+                ap2_retry: false,
             },
         );
 
