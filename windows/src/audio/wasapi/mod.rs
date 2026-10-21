@@ -12,6 +12,8 @@
 mod com;
 mod devices;
 mod endpoint;
+#[cfg(test)]
+mod latency_probe;
 mod loopback;
 mod media;
 mod processes;
