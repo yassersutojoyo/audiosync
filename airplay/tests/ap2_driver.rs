@@ -391,6 +391,10 @@ fn rejected_homekit_credentials_are_dropped_and_the_next_start_pairs_again() {
         events.of(&key)
     );
     assert_eq!(errors(&events, &key), vec![ErrorKind::PairingRequired]);
+    assert!(
+        events.of(&key).contains(&SpeakerEvent::HomeKitRejected),
+        "the host is told to delete its copy"
+    );
     sender.remove_speaker(&key);
     assert!(
         events

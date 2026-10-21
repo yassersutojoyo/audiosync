@@ -1841,7 +1841,8 @@ impl AirPlaySpeakers {
                 });
                 false
             }
-            SpeakerEvent::Methods(_)
+            SpeakerEvent::HomeKitRejected
+            | SpeakerEvent::Methods(_)
             | SpeakerEvent::AudioJack(_)
             | SpeakerEvent::VolumeReported(_) => false,
         }

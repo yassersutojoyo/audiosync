@@ -38,6 +38,9 @@ pub(super) struct Ap2Active {
     pub(super) events_io: Option<RtspIo>,
     /// The speaker in the stream once the stream is set up and flushed.
     pub(super) stream_id: Option<stream::SpeakerId>,
+    /// The session started with stored HomeKit credentials, so a
+    /// PairingRequired from it means the receiver no longer takes them (P154).
+    pub(super) verifying: bool,
 }
 
 impl Driver {
@@ -94,6 +97,7 @@ impl Driver {
             .homekit_credentials
             .clone()
             .or_else(|| self.homekit.get(key).cloned());
+        let verifying = config.credentials.is_some();
         config.password = speaker.options.password.clone();
         config.device_id = self.device_id;
         config.ptp = ptp;
@@ -114,10 +118,21 @@ impl Driver {
             io: None,
             events_io: None,
             stream_id: None,
+            verifying,
         }));
         self.sessions.insert(session_key, key.clone());
         self.sessions.insert(events_key, key.clone());
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Connecting));
+    }
+
+    /// Drops HomeKit credentials the receiver turned down, so the next start
+    /// pairs again (P154), and tells the host to delete its stored copy.
+    fn forget_homekit(&mut self, key: &DeviceKey) {
+        if let Some(speaker) = self.speakers.get_mut(key) {
+            speaker.options.homekit_credentials = None;
+        }
+        self.homekit.remove(key);
+        self.emit_speaker(key, SpeakerEvent::HomeKitRejected);
     }
 
     pub(super) fn next_ap2_output(&mut self, key: &DeviceKey) -> Option<Ap2Output> {
@@ -353,7 +368,13 @@ impl Driver {
                 self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Playing));
             }
             Ap2Event::Warning(warning) => self.emit_speaker(key, SpeakerEvent::Warning(warning)),
-            Ap2Event::Failed(error) => self.on_failed(key, error, now),
+            Ap2Event::Failed(error) => {
+                let verifying = self.ap2_active(key).is_some_and(|active| active.verifying);
+                if verifying && error.kind == ErrorKind::PairingRequired {
+                    self.forget_homekit(key);
+                }
+                self.on_failed(key, error, now);
+            }
             Ap2Event::Closed => self.on_closed(key, now),
         }
     }
