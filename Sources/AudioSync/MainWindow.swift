@@ -633,6 +633,9 @@ struct SpeakerRow: View {
                 }
                 .padding(.leading, 44)
                 .transition(.opacity)
+                CalibrationControl(model: model, id: speaker.id, name: speaker.name)
+                    .padding(.leading, 44)
+                    .transition(.opacity)
             }
         }
         .onChange(of: showSync) { _, open in
