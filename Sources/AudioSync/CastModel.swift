@@ -490,25 +490,33 @@ struct CastModel {
     }
 }
 
-/// AirPlay speakers meet a Cast device whose offset is longer than L by
-/// waiting the difference on top of L, as far as the sender's delay limit
-/// reaches; past it they play ahead of the device by the rest (C77, P99).
-enum AirPlayHoldBack {
-    /// The sender's largest delay per speaker, in ms.
-    static let limitMs = Double(ASC_AIRPLAY_MAX_DELAY_MS)
+/// With an AirPlay speaker and a Cast device both chosen, the one with the
+/// shorter latency waits for the other (C77). AirPlay speakers wait for a
+/// longer Cast offset as far as the sender's delay limit reaches, and play
+/// ahead of the device by the rest (P99); the Cast feed waits for a longer L.
+enum NetworkHoldBack {
+    /// The AirPlay sender's largest delay per speaker, in ms.
+    static let airPlayLimitMs = Double(ASC_AIRPLAY_MAX_DELAY_MS)
 
     /// How much later than L the AirPlay speakers should play: the Cast
-    /// offset's lead over L while both are chosen, else 0.
-    static func wantedMs(airPlay: Double?, cast: Double?) -> Double {
+    /// offset's lead over L, else 0. `airPlay` is L, nil while no AirPlay
+    /// speaker is chosen; `cast` the offset, nil while no device is.
+    static func airPlayMs(airPlay: Double?, cast: Double?) -> Double {
         guard let airPlay, let cast, airPlay.isFinite, cast.isFinite else { return 0 }
         return max(0, cast - airPlay)
     }
 
-    /// The part of `wantedMs` the sender plays.
-    static func appliedMs(_ wantedMs: Double) -> Double { min(max(0, wantedMs), limitMs) }
+    /// How long the Cast feed waits: L's lead over the Cast offset, else 0.
+    static func castMs(airPlay: Double?, cast: Double?) -> Double {
+        guard let airPlay, let cast, airPlay.isFinite, cast.isFinite else { return 0 }
+        return max(0, airPlay - cast)
+    }
+
+    /// The part of the AirPlay hold-back `wantedMs` the sender plays.
+    static func airPlayAppliedMs(_ wantedMs: Double) -> Double { min(max(0, wantedMs), airPlayLimitMs) }
 
     /// How far ahead of the Cast device the AirPlay speakers play.
-    static func aheadMs(_ wantedMs: Double) -> Double { max(0, wantedMs - limitMs) }
+    static func airPlayAheadMs(_ wantedMs: Double) -> Double { max(0, wantedMs - airPlayLimitMs) }
 }
 
 /// The notice that the AirPlay speakers play ahead of the Cast device that

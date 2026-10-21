@@ -3886,26 +3886,42 @@ do {
           "cast: the note under a speaker's name")
 }
 
-// MARK: AirPlay and Google Cast at one latency: the AirPlay hold-back, its cap and the notice (C77)
+// MARK: AirPlay, Google Cast and local outputs at one latency: the hold-backs, the AirPlay cap and the notice (C77)
 do {
     let t = UIStrings()
-    check(AirPlayHoldBack.limitMs == 3000, "cast+airplay: the hold-back stops at the sender's 3000 ms delay limit")
-    check(AirPlayHoldBack.wantedMs(airPlay: 1750, cast: 3000) == 1250
-            && AirPlayHoldBack.wantedMs(airPlay: 1750, cast: 1000) == 0
-            && AirPlayHoldBack.wantedMs(airPlay: nil, cast: 3000) == 0
-            && AirPlayHoldBack.wantedMs(airPlay: 1750, cast: nil) == 0
-            && AirPlayHoldBack.wantedMs(airPlay: 1750, cast: .nan) == 0,
-          "cast+airplay: AirPlay waits only for a Cast offset longer than L, and only while both are chosen")
-    let together = [(1750.0, 3000.0), (1750.0, 1000.0), (2000.0, 1900.0), (1750.0, 4750.0)].allSatisfy { pair in
-        let (l, cast) = pair
-        return l + AirPlayHoldBack.appliedMs(AirPlayHoldBack.wantedMs(airPlay: l, cast: cast))
-            == CastModel.networkWaitMs(airPlay: l, cast: cast)
+    // When each is heard after the capture: AirPlay at L plus its hold-back,
+    // Cast at its offset plus the feed's, a local output at its hold-back
+    // minus its offset (its own lateness, negated).
+    func heard(l: Double, cast: Double) -> (airPlay: Double, cast: Double, locals: [Double]) {
+        let wait = CastModel.networkWaitMs(airPlay: l, cast: cast) ?? 0
+        let offsets = ["builtin": 0.0, "usb": 40.0, "bluetooth": 180.0]
+        let holds = LocalDelay.holdBacks(takingPart: ["builtin", "usb", "bluetooth"], reference: "builtin",
+                                         offsets: ["usb": 40, "bluetooth": 180], airPlayChosen: true, latencyMs: wait)
+        return (l + NetworkHoldBack.airPlayAppliedMs(NetworkHoldBack.airPlayMs(airPlay: l, cast: cast)),
+                cast + NetworkHoldBack.castMs(airPlay: l, cast: cast),
+                offsets.keys.sorted().map { (holds[$0] ?? .nan) - offsets[$0]! })
     }
-    check(together, "cast+airplay: within the limit AirPlay plays when local outputs and the Cast speaker do")
-    let wanted = AirPlayHoldBack.wantedMs(airPlay: 1750, cast: 6250)
-    check(AirPlayHoldBack.appliedMs(wanted) == 3000 && AirPlayHoldBack.aheadMs(wanted) == 1500
-            && AirPlayHoldBack.aheadMs(1250) == 0 && AirPlayHoldBack.appliedMs(-5) == 0,
-          "cast+airplay: past the limit the hold-back is capped and AirPlay plays ahead by the rest")
+    // Cast later than L by 1.25 s and by the full 3 s limit, earlier by
+    // 0.75 s and by all of L, and equal.
+    let cases: [(l: Double, cast: Double)] = [(1750, 3000), (1750, 4750), (1750, 1000), (2000, 0), (1750, 1750)]
+    let spreads = cases.map { c -> Double in
+        let h = heard(l: c.l, cast: c.cast)
+        let all = [h.airPlay, h.cast] + h.locals
+        return (all.max() ?? 0) - (all.min() ?? 0)
+    }
+    check(spreads.allSatisfy { $0 < 0.5 }, "cast+airplay: AirPlay, Cast and local outputs are heard together either way",
+          "spreads \(spreads)")
+    check(NetworkHoldBack.airPlayMs(airPlay: nil, cast: 3000) == 0 && NetworkHoldBack.castMs(airPlay: nil, cast: 0) == 0
+            && NetworkHoldBack.airPlayMs(airPlay: 1750, cast: nil) == 0 && NetworkHoldBack.castMs(airPlay: 1750, cast: nil) == 0
+            && NetworkHoldBack.airPlayMs(airPlay: 1750, cast: .nan) == 0 && NetworkHoldBack.castMs(airPlay: .nan, cast: 0) == 0,
+          "cast+airplay: nothing waits unless both are chosen")
+    let past = heard(l: 1750, cast: 6250)
+    let wanted = NetworkHoldBack.airPlayMs(airPlay: 1750, cast: 6250)
+    check(past.airPlay == 1750 + NetworkHoldBack.airPlayLimitMs && NetworkHoldBack.airPlayLimitMs == 3000
+            && past.cast - past.airPlay == NetworkHoldBack.airPlayAheadMs(wanted)
+            && past.locals.allSatisfy { abs($0 - past.cast) < 0.5 },
+          "cast+airplay: past the sender's 3000 ms limit AirPlay plays ahead of the others by what the notice says",
+          "\(past)")
 
     let kitchen = "kitchen-1"
     var ahead = AirPlayAheadNotice()

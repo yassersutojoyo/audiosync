@@ -26,8 +26,12 @@ final class CastSender {
     private let onEvents: ([CastEvent]) -> Void
     private let queue = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.cast", qos: .userInitiated)
     private let memoryURL: URL?
+    /// The feed's hold-back last asked for (main queue).
+    private(set) var holdBackMs = 0.0
 
     // On the queue only.
+    /// The hold-back the sender gets, also when it is created later.
+    private var queuedHoldBackMs = 0.0
     private var handle: OpaquePointer?
     private var input: OpaquePointer?
     private var timer: DispatchSourceTimer?
@@ -52,6 +56,7 @@ final class CastSender {
                 return
             }
             self.handle = created
+            _ = asc_cast_set_hold_back(created, self.queuedHoldBackMs)
             if let taken = asc_cast_take_input(created) {
                 self.input = taken
                 CastTap.install(taken)
@@ -119,6 +124,21 @@ final class CastSender {
     }
 
     /// Stores the user's offset for `id` and writes the memory.
+    /// Holds the feed back by `ms`, live, so a device whose offset is
+    /// shorter than L plays at L; a change fades over 20 ms. Main queue.
+    /// False when it was set already.
+    @discardableResult
+    func setHoldBack(_ ms: Double) -> Bool {
+        guard ms != holdBackMs else { return false }
+        holdBackMs = ms
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.queuedHoldBackMs = ms
+            if let handle = self.handle { _ = asc_cast_set_hold_back(handle, ms) }
+        }
+        return true
+    }
+
     func setOffset(_ id: String, ms: Double) {
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }

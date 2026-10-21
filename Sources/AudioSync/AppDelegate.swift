@@ -71,7 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var castSender: CastSender?
     /// The Cast devices listed, the one that is on, and its session.
     var castModel = CastModel()
-    /// Whether the notice that AirPlay plays ahead of it is up (`syncAirPlayHoldBack`).
+    /// Whether the notice that AirPlay plays ahead of it is up (`syncNetworkHoldBacks`).
     var airPlayAheadNotice = AirPlayAheadNotice()
 
     // MARK: - Settings kept between launches (AppSettings.swift)

@@ -99,7 +99,7 @@ final class NativeAirPlay {
     }
 
     /// Holds every speaker back by `ms` on top of L, live; the sender caps
-    /// it at `AirPlayHoldBack.limitMs`. Main queue. False when it was set already.
+    /// it at `NetworkHoldBack.airPlayLimitMs`. Main queue. False when it was set already.
     @discardableResult
     func setHoldBack(_ ms: Double) -> Bool {
         guard ms != holdBackMs else { return false }
