@@ -838,14 +838,11 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | EC5 source: switching to an input device while streaming rebuilds the capture | S141, S163 |
 | EC5 source: switching while stopped only remembers the choice | S163 |
 | EC5 source: choosing the same source changes nothing | S163 |
-| EC6 app quit: the source app quitting ends the session | S142, S164 |
-| EC6 app quit: another app quitting changes nothing | S164 |
-| EC6 app quit: the whole-system source never ends on a quit | S164 |
-| EC6 app quit: an input source never ends on a quit | S164 |
-| EC6 app quit: an app without a bundle ID changes nothing | S164 |
 | EC6 app quit: the source app quitting while streaming stops the session | S142, S164 |
 | EC6 app quit: the source app quitting while stopped changes nothing, under either setting (S227 a) | S142, S227 |
 | EC6 app quit: another source, another app or an app without a bundle ID keeps streaming (S227 b) | S164, S227 |
+| EC6 app quit: the whole-system source never ends on a quit, under either setting (S164, S227 b) | S164, S227 |
+| EC6 app quit: an app without a bundle ID changes nothing, under either setting (S164) | S164 |
 | source quit: with the switch on, the source app quitting while streaming switches to the whole system (S227) | S227 |
 | source quit: the capture finding its app gone counts as that app quitting (S227 f) | S142, S227 |
 | source quit: a capture lost for another cause is no app quit (S21 still applies) | S21, S227 |
@@ -853,6 +850,7 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | source quit: a rebuild that fails for another cause is no app quit | S227 |
 | source quit: the same quit reported again (the capture, then macOS) acts once (S227 f) | S227 |
 | source quit: the setting reads stop unless it says system (S227) | S227 |
+| source quit: the notice names the app and All System Audio, also when the whole system couldn't start (S227) | S227 |
 | EC8 all off: streaming stops when the last speaker is switched off | S118, S144, S162 |
 | EC8 all off: one AirPlay speaker still on keeps streaming | S118, S162 |
 | EC8 all off: nothing to stop while stopped | S162 |

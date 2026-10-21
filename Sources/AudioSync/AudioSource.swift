@@ -29,14 +29,6 @@ enum AudioSource: Hashable, Sendable {
         guard case .app(let id) = self else { return nil }
         return id
     }
-
-    /// Whether the app that just quit (its bundle ID, if it had one) ends a
-    /// session capturing this source. Only an app source ends that way, and
-    /// only when the app that quit is that very app.
-    func endsWhenAppQuits(_ quitBundleID: String?) -> Bool {
-        guard let quitBundleID, let ownID = bundleID else { return false }
-        return ownID == quitBundleID
-    }
 }
 
 // MARK: - Stored form

@@ -116,9 +116,8 @@ extension AppDelegate {
             stopEngine()
             // Automatic: a failure gets a notice, not an alert, since nobody clicked (S21).
             startEngine(origin: .automatic)
-            if engine.isRunning {
-                postNotice(text.sourceSwitchedToSystem(name: name), subject: Notice.source)
-            }
+            // A failed start has its own "start" notice; this one still says which app quit.
+            postNotice(text.sourceSwitchedToSystem(name: name, started: engine.isRunning), subject: Notice.source)
             pushModel()
         }
     }
