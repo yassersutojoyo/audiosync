@@ -2585,6 +2585,7 @@ pub fn speaker_kind(kind: ui_model::SpeakerKind) -> SpeakerKind {
     use ui_model::SpeakerKind as K;
     match kind {
         K::AirPlay => SpeakerKind::Airplay,
+        K::AirPlay2 => SpeakerKind::Airplay2,
         K::Cast => SpeakerKind::Cast,
         K::BuiltIn => SpeakerKind::BuiltIn,
         K::Headphones => SpeakerKind::Headphones,
@@ -4100,6 +4101,21 @@ mod tests {
         ] {
             let label = app.strings().invoke_speaker_kind(speaker_kind(kind));
             assert_eq!(label.as_str(), "USB", "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn an_airplay_row_names_which_airplay() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        for (kind, label) in [
+            (ui_model::SpeakerKind::AirPlay, "AirPlay"),
+            (ui_model::SpeakerKind::AirPlay2, "AirPlay 2"),
+        ] {
+            assert_eq!(
+                strings.invoke_speaker_kind(speaker_kind(kind)).as_str(),
+                label
+            );
         }
     }
 

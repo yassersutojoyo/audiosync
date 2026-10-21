@@ -52,6 +52,8 @@ pub struct Source {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpeakerKind {
     AirPlay,
+    /// An AirPlay speaker AudioSync reaches over AirPlay 2.
+    AirPlay2,
     /// A Google Cast speaker.
     Cast,
     BuiltIn,

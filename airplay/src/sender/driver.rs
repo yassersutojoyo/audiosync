@@ -21,6 +21,7 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::ap2::PinPairing;
 use crate::audio::SAMPLE_RATE;
 use crate::discovery::{
     BrowseEvent, Browser, Device, DeviceKey, Directory, DirectoryEvent, ProtocolPath,
@@ -88,6 +89,7 @@ pub(crate) enum Command {
     },
     SubmitPin(DeviceKey, Secret),
     CancelPairing(DeviceKey),
+    ForgetHomeKit(DeviceKey),
     SetAirPlay2DeviceId([u8; 6]),
     Shutdown,
 }
@@ -125,10 +127,90 @@ enum Phase {
     Idle,
 }
 
+/// A pairing the host asked for: the legacy one of an Apple TV (P46), or a
+/// PIN pairing on the AirPlay 2 path while the switch is on (P61, P170).
+enum Job {
+    Legacy(Box<Pairing>),
+    HomeKit(Box<PinPairing>),
+}
+
+impl Job {
+    fn state(&self) -> PairingState {
+        match self {
+            Job::Legacy(pairing) => pairing.state(),
+            Job::HomeKit(pairing) => pairing.state(),
+        }
+    }
+
+    fn poll_output(&mut self) -> Option<pairing::Output> {
+        match self {
+            Job::Legacy(pairing) => pairing.poll_output(),
+            Job::HomeKit(pairing) => pairing.poll_output(),
+        }
+    }
+
+    fn poll_timeout(&self) -> Option<Instant> {
+        match self {
+            Job::Legacy(pairing) => pairing.poll_timeout(),
+            Job::HomeKit(pairing) => pairing.poll_timeout(),
+        }
+    }
+
+    fn handle_timeout(&mut self, now: Instant) {
+        match self {
+            Job::Legacy(pairing) => pairing.handle_timeout(now),
+            Job::HomeKit(pairing) => pairing.handle_timeout(now),
+        }
+    }
+
+    fn handle_connected(&mut self, now: Instant) {
+        match self {
+            Job::Legacy(pairing) => pairing.handle_connected(now),
+            Job::HomeKit(pairing) => pairing.handle_connected(now),
+        }
+    }
+
+    fn handle_connect_failed(&mut self, now: Instant) {
+        match self {
+            Job::Legacy(pairing) => pairing.handle_connect_failed(now),
+            Job::HomeKit(pairing) => pairing.handle_connect_failed(now),
+        }
+    }
+
+    fn handle_input(&mut self, bytes: &[u8], now: Instant) {
+        match self {
+            Job::Legacy(pairing) => pairing.handle_input(bytes, now),
+            Job::HomeKit(pairing) => pairing.handle_input(bytes, now),
+        }
+    }
+
+    fn handle_connection_closed(&mut self, now: Instant) {
+        match self {
+            Job::Legacy(pairing) => pairing.handle_connection_closed(now),
+            Job::HomeKit(pairing) => pairing.handle_connection_closed(now),
+        }
+    }
+
+    /// A PIN while none is awaited is ignored (Sender::submit_pin).
+    fn submit_pin(&mut self, pin: &str, now: Instant) {
+        let _ = match self {
+            Job::Legacy(pairing) => pairing.submit_pin(pin, &mut OsEntropy, now),
+            Job::HomeKit(pairing) => pairing.submit_pin(pin, now),
+        };
+    }
+
+    fn cancel(&mut self, now: Instant) {
+        match self {
+            Job::Legacy(pairing) => pairing.cancel(),
+            Job::HomeKit(pairing) => pairing.cancel(now),
+        }
+    }
+}
+
 /// A pairing in progress, on a connection of its own (P47).
 struct PairingRun {
     key: SessionKey,
-    pairing: Pairing,
+    pairing: Job,
     /// The connect attempt in progress, so a late result of an earlier one
     /// is dropped.
     attempt: u32,
@@ -572,10 +654,15 @@ impl Driver {
                     self.retired.extend(io.close());
                 }
             }
-            pairing::Output::Event(event) => self.emit(SenderEvent::Pairing {
-                key: key.clone(),
-                event,
-            }),
+            pairing::Output::Event(event) => {
+                if let PairingEvent::HomeKitPaired(credentials) = &event {
+                    self.keep_homekit(key, credentials.clone());
+                }
+                self.emit(SenderEvent::Pairing {
+                    key: key.clone(),
+                    event,
+                })
+            }
         }
     }
 
@@ -591,7 +678,8 @@ impl Driver {
 
     /// Starts a pairing with a device on a connection of its own (P47), with
     /// the speaker's password when the host gave one (P46); one already
-    /// running for it is dropped.
+    /// running for it is dropped. With the switch on, a device on the
+    /// AirPlay 2 path gets the PIN pairing of P61 instead (P153).
     fn start_pairing(&mut self, device: Device, password: Option<Secret>, now: Instant) {
         if self.stopping.is_some() {
             return;
@@ -615,13 +703,25 @@ impl Driver {
         };
         let session_key = SessionKey(self.next_session);
         self.next_session += 1;
-        let pairing = Pairing::new(
-            device.connect_socket_addrs(),
-            ids,
-            u64::from_be_bytes(client),
-            now,
-        )
-        .with_password(password);
+        let airplay1_outcome = self
+            .speakers
+            .get(&key)
+            .and_then(|speaker| speaker.airplay1_outcome);
+        let ap2 = self.airplay2
+            && device.choose_path(true, airplay1_outcome) == Ok(ProtocolPath::AirPlay2);
+        let pairing = if ap2 {
+            Job::HomeKit(Box::new(self.pin_pairing(&device, password, ids, now)))
+        } else {
+            Job::Legacy(Box::new(
+                Pairing::new(
+                    device.connect_socket_addrs(),
+                    ids,
+                    u64::from_be_bytes(client),
+                    now,
+                )
+                .with_password(password),
+            ))
+        };
         self.pairing_sessions.insert(session_key, key.clone());
         self.pairings.insert(
             key,
@@ -1100,15 +1200,15 @@ impl Driver {
             }
             Command::SubmitPin(key, pin) => {
                 if let Some(run) = self.pairings.get_mut(&key) {
-                    // A PIN while none is awaited is ignored (Sender::submit_pin).
-                    let _ = run.pairing.submit_pin(pin.expose(), &mut OsEntropy, now);
+                    run.pairing.submit_pin(pin.expose(), now);
                 }
             }
             Command::CancelPairing(key) => {
                 if let Some(run) = self.pairings.get_mut(&key) {
-                    run.pairing.cancel();
+                    run.pairing.cancel(now);
                 }
             }
+            Command::ForgetHomeKit(key) => self.forget_homekit(&key),
             Command::Shutdown => self.shutdown(now),
         }
     }
@@ -1455,7 +1555,7 @@ impl Driver {
         self.stopping = Some(now + TEARDOWN_TIMEOUT - SHUTDOWN_RESERVE);
         self.browser = None;
         for run in self.pairings.values_mut() {
-            run.pairing.cancel();
+            run.pairing.cancel(now);
         }
         let keys: Vec<DeviceKey> = self.speakers.keys().cloned().collect();
         for key in keys {

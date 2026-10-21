@@ -69,6 +69,10 @@ pub struct Ap2Config {
     /// The PTP service's clock, when it runs (P158). Without it a session
     /// never asks for PTP.
     pub ptp: Option<PtpPeer>,
+    /// The host asked for a PIN pairing (P61): the connection runs
+    /// `/pair-pin-start`, waits for [`Ap2Session::submit_pin`], then pair-setup
+    /// M1 to M6 and a pair-verify (P153), and ends there without a session.
+    pub pin_pairing: bool,
 }
 
 impl Ap2Config {
@@ -83,6 +87,7 @@ impl Ap2Config {
             device_id: [0; 6],
             timing: Timing::Ntp,
             ptp: None,
+            pin_pairing: false,
         }
     }
 }
@@ -97,6 +102,7 @@ impl fmt::Debug for Ap2Config {
             .field("credentials", &self.credentials.is_some())
             .field("password", &self.password.as_ref().map(|_| "<hidden>"))
             .field("timing", &self.timing)
+            .field("pin_pairing", &self.pin_pairing)
             .finish_non_exhaustive()
     }
 }
@@ -133,9 +139,18 @@ pub enum Ap2Event {
     Info(InfoAnswer),
     /// The receiver's `Server` header, when first seen or changed (P24).
     Server(String),
-    /// A password pairing gave new credentials, which the host keeps
+    /// A password or PIN pairing gave new credentials, which the host keeps
     /// (P152).
     Credentials(HomeKitCredentials),
+    /// `/pair-pin-start` was answered: the receiver shows a code, which the
+    /// host passes to [`Ap2Session::submit_pin`] (P61).
+    PinRequested,
+    /// The receiver turned the PIN down (P150, error 2); a Failed event
+    /// follows, and a new pairing shows a new code (P151).
+    WrongPin,
+    /// The PIN pairing's new credentials passed the pair-verify on the same
+    /// connection (P153), which then closes.
+    Verified,
     /// A session SETUP with this timing was answered 200; the host
     /// remembers PTP for the device (P157).
     TimingChosen(Timing),
@@ -491,6 +506,27 @@ impl Ap2Session {
         times.into_iter().min()
     }
 
+    /// The PIN the user read off the receiver, while a PIN pairing waits for
+    /// it: M1 goes out. Ignored at any other time.
+    pub fn submit_pin(&mut self, pin: &str, now: Instant) {
+        if !self.waiting_for_pin() {
+            return;
+        }
+        let Some(Pairing::Setup(setup)) = self.pairing.as_mut() else {
+            return;
+        };
+        if setup.submit_pin(pin).is_some() {
+            self.send(Kind::PairSetup, now, false);
+        }
+    }
+
+    /// Whether a PIN pairing waits for the host's PIN.
+    pub fn waiting_for_pin(&self) -> bool {
+        self.state == Ap2State::Pairing
+            && self.in_flight.is_none()
+            && matches!(self.pairing, Some(Pairing::Setup(_)))
+    }
+
     /// The RTSP connection is open and its UDP sockets answer: `GET /info`
     /// goes out in plain text (P41, P153).
     pub fn handle_connected(&mut self, connection: Connection, now: Instant) {
@@ -531,6 +567,13 @@ impl Ap2Session {
             Ap2State::Closed => {}
             Ap2State::TearingDown => self.finish(),
             Ap2State::Connecting => self.fail(ErrorKind::Unreachable, None, None, None),
+            // The receiver stopped showing its code (P136).
+            _ if self.waiting_for_pin() => self.fail(
+                ErrorKind::PairingCancelled,
+                Some(Method::Post),
+                None,
+                Some("connection closed while waiting for the PIN"),
+            ),
             _ if self
                 .in_flight
                 .as_ref()
@@ -1245,10 +1288,16 @@ impl Ap2Session {
             }
         }
         let flags = homekit::status_flags(info.status_flags, self.config.txt_flags);
-        let mode = homekit::choose_mode(flags, self.config.credentials.is_some());
-        // The host-driven PIN pairing of the AirPlay 2 path comes later; a
-        // session reports PairingRequired for it.
-        if let Err(kind) = homekit::check_mode(mode, false, self.config.password.is_some()) {
+        // A PIN pairing runs only when the host asks for one, and then
+        // whatever the flags say: a receiver that turned a transient pairing
+        // down with 470 sets no PIN flag (P61).
+        let mode = if self.config.pin_pairing {
+            Mode::Pin
+        } else {
+            homekit::choose_mode(flags, self.config.credentials.is_some())
+        };
+        let host_asked = self.config.pin_pairing;
+        if let Err(kind) = homekit::check_mode(mode, host_asked, self.config.password.is_some()) {
             return self.fail(kind, Some(Method::Post), None, None);
         }
         let mut entropy = Draw(self.entropy.as_mut());
@@ -1267,9 +1316,8 @@ impl Ap2Session {
                     .map(|identity| Pairing::Setup(PairSetup::password(password, identity)))
             }
             Mode::Transient => Ok(Pairing::Setup(PairSetup::transient())),
-            Mode::Pin => {
-                return self.fail(ErrorKind::PairingRequired, Some(Method::Post), None, None);
-            }
+            Mode::Pin => Identity::generate(&mut entropy)
+                .map(|identity| Pairing::Setup(PairSetup::pin(identity))),
         };
         let Ok(mut pairing) = pairing else {
             return self.fail(
@@ -1298,7 +1346,9 @@ impl Ap2Session {
             return;
         };
         let mut entropy = Draw(self.entropy.as_mut());
-        match setup.handle_response(response, &mut entropy) {
+        let step = setup.handle_response(response, &mut entropy);
+        let pin_rejected = setup.pin_rejected();
+        match step {
             SetupStep::Send(_) => self.send(Kind::PairSetup, now, false),
             SetupStep::Retry => self.reconnect(Restart::PairingRetry, now),
             SetupStep::Transient(secret) => self.start_framing(secret, now),
@@ -1319,8 +1369,14 @@ impl Ap2Session {
                     ),
                 }
             }
-            SetupStep::Failed(failure) => self.fail_with(failure.error),
-            SetupStep::PinRequested | SetupStep::Challenge => self.fail(
+            SetupStep::Failed(failure) => {
+                if pin_rejected {
+                    self.event(Ap2Event::WrongPin);
+                }
+                self.fail_with(failure.error)
+            }
+            SetupStep::PinRequested => self.event(Ap2Event::PinRequested),
+            SetupStep::Challenge => self.fail(
                 ErrorKind::ProtocolError,
                 Some(Method::Post),
                 Some(response.code),
@@ -1358,6 +1414,10 @@ impl Ap2Session {
             );
         }
         self.pairing = None;
+        if self.config.pin_pairing {
+            self.event(Ap2Event::Verified);
+            return self.finish();
+        }
         self.framing = Some(Framing::control(secret.expose()));
         self.shared = Some(secret);
         self.send(Kind::SessionSetup, now, false);

@@ -565,6 +565,13 @@ impl Sender {
         self.command(Command::CancelPairing(key.clone()));
     }
 
+    /// Forgets the AirPlay 2 credentials the sender keeps for a device,
+    /// after the user forgot its pairing: its next session pairs again. The
+    /// host hears nothing back; a session already playing goes on.
+    pub fn forget_homekit(&self, key: &DeviceKey) {
+        self.command(Command::ForgetHomeKit(key.clone()));
+    }
+
     /// Sets a speaker's delay d_s, 0 to 3000 ms (P99, P100).
     pub fn set_delay(&self, key: &DeviceKey, delay: Duration) {
         self.command(Command::SetDelay(key.clone(), delay));

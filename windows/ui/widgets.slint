@@ -87,7 +87,7 @@ export global Glyphs {
     }
 
     public pure function speaker(kind: SpeakerKind) -> string {
-        if kind == SpeakerKind.airplay || kind == SpeakerKind.cast {
+        if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 || kind == SpeakerKind.cast {
             return root.network;
         }
         // The device's form wins over its bus; the kind line still says USB.
