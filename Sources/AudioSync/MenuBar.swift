@@ -14,9 +14,10 @@ final class AppModel: ObservableObject {
         let tag: SpeakerTag
         var enabled: Bool
         var volume: Double          // slider position 0…100
-        /// A local speaker's offset relative to the reference (S175); nil
-        /// where the row has no delay field: AirPlay speakers, which wait for
-        /// nothing, and the reference itself (S181).
+        /// A local speaker's offset relative to the reference (S175), or a
+        /// Google Cast speaker's offset set by ear; nil where the row has no
+        /// delay field: AirPlay speakers, which wait for nothing, a Cast
+        /// group, and the reference itself (S181).
         var offsetMs: Double?
         var autoConnect = false
         /// From the AirPlay sender's discovery; always `.open` for local speakers.
