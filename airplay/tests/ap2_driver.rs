@@ -279,6 +279,62 @@ fn a_refused_airplay2_speaker_starts_once_the_session_ends() {
     sender.shutdown();
 }
 
+// covers: P169
+#[test]
+fn an_airplay2_session_waiting_for_its_retry_keeps_its_place_until_removed() {
+    let _serial = serial();
+    let mut busy = FakeAp2::new();
+    busy.status.insert("SETUP session".to_owned(), 453);
+    let first = Ap2Server::start(busy);
+    let second = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start();
+    let mut events = Events::default();
+
+    let a = airplay2_only(&first, 50);
+    let a_key = a.key.clone();
+    sender.add_speaker(a, options());
+    assert!(
+        events
+            .wait_state(&sender, &a_key, 1, LONG, |s| matches!(
+                s,
+                SpeakerState::Retrying { .. }
+            ))
+            .is_some(),
+        "{:?}",
+        events.of(&a_key)
+    );
+
+    // Between its retries the busy session still holds the slot.
+    let b = airplay2_only(&second, 51);
+    let b_key = b.key.clone();
+    sender.add_speaker(b, options());
+    assert!(
+        events
+            .wait_state(&sender, &b_key, 1, LONG, |s| *s == SpeakerState::Failed)
+            .is_some(),
+        "{:?}",
+        events.of(&b_key)
+    );
+    assert_eq!(
+        errors(&events, &b_key),
+        vec![ErrorKind::Unsupported(
+            UnsupportedReason::OneAirPlay2Session
+        )]
+    );
+
+    // The host drops the busy one: the refused one starts.
+    sender.remove_speaker(&a_key);
+    assert!(
+        events
+            .wait_state(&sender, &b_key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?}",
+        events.of(&b_key)
+    );
+    assert_eq!(second.fake().connections, 1);
+    sender.shutdown();
+}
+
 // covers: P5, P152
 #[test]
 fn homekit_credentials_and_the_device_id_persist_through_the_host() {
