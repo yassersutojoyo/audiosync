@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use audiosync_core::eq::{self, EqSettings};
 use audiosync_core::policy::device_volume::Hint;
+use audiosync_core::policy::source_quit::WhenSourceQuits;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
 mod password;
@@ -1277,6 +1278,15 @@ impl App {
         let w = weak.clone();
         main.on_source_selected(move |index| with_app(&w, |app| app.select_source(index)));
         let w = weak.clone();
+        main.on_switch_source_on_quit_toggled(move |on| {
+            let setting = if on {
+                WhenSourceQuits::SwitchToSystem
+            } else {
+                WhenSourceQuits::Stop
+            };
+            with_app(&w, |app| app.update(|b| b.set_when_source_quits(setting)))
+        });
+        let w = weak.clone();
         main.on_master_volume_changed(move |volume| {
             with_app(&w, |app| app.update(|b| b.set_master_volume(volume.into())))
         });
@@ -2177,6 +2187,7 @@ impl WindowState for MainWindow {
         self.set_status(status.clone());
         self.set_source_index(source_index);
         self.set_master_volume(state.master_volume as f32);
+        self.set_switch_source_on_quit(state.when_source_quits == WhenSourceQuits::SwitchToSystem);
     }
 }
 
@@ -2516,6 +2527,9 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::SourceQuit { source } => {
             strings.invoke_notice_source_quit(source.as_str().into())
         }
+        NoticeMessage::SourceSwitched { source } => {
+            strings.invoke_notice_source_switched(source.as_str().into())
+        }
         NoticeMessage::SourceNotRunning { source } => {
             strings.invoke_notice_source_not_running(source.as_str().into())
         }
@@ -2584,6 +2598,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
     let (kind, name) = match message {
         NoticeMessage::NoSpeaker => (NoticeKind::NoSpeaker, ""),
         NoticeMessage::SourceQuit { source } => (NoticeKind::SourceQuit, source.as_str()),
+        NoticeMessage::SourceSwitched { source } => (NoticeKind::SourceSwitched, source.as_str()),
         NoticeMessage::SourceNotRunning { source } => {
             (NoticeKind::SourceNotRunning, source.as_str())
         }

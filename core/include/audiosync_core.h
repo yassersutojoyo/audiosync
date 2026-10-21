@@ -150,6 +150,16 @@ extern "C" {
 #define ASC_DEVICE_VOLUME_MUTED 3         /* muted, at a volume that isn't low or isn't known */
 #define ASC_DEVICE_VOLUME_MUTED_AND_LOW 4 /* muted, and 25 % or less too */
 
+/* What asc_source_quit_decide answers. */
+#define ASC_SOURCE_QUIT_KEEP 0             /* nothing changes */
+#define ASC_SOURCE_QUIT_STOP 1             /* stop, post the "source" notice, drop a pending rebuild */
+#define ASC_SOURCE_QUIT_SWITCH_TO_SYSTEM 2 /* go on with whole-system audio, store it, post the notice */
+
+/* Whether streaming is on when an app quits (asc_source_quit_decide's streaming). */
+#define ASC_STREAMING_OFF 0        /* no session runs */
+#define ASC_STREAMING_RUNNING 1    /* a session runs */
+#define ASC_STREAMING_REBUILDING 2 /* a session is being rebuilt (a capture format change): counts as on */
+
 /* ---- Version and volume ------------------------------------------------- */
 
 /* The crate version, for example "0.1.0" (static string, never freed). */
@@ -763,6 +773,20 @@ bool asc_device_volume_decision_changed(bool has_previous, uint32_t previous, ui
  * "muted and low") as a static string; NULL for a value that is no decision.
  */
 const char *asc_device_volume_decision_name(uint32_t decision_code);
+
+/* ---- When the source app quits ------------------------------------------ */
+
+/*
+ * What a session does when an app quits (S227): ASC_SOURCE_QUIT_STOP or
+ * ASC_SOURCE_QUIT_SWITCH_TO_SYSTEM only when streaming is on and `quit_app`
+ * is the bundle ID of the app `source` captures, else ASC_SOURCE_QUIT_KEEP.
+ * `setting` is the stored setting ("system" switches; anything else, NULL
+ * included, stops) and `source` the stored source ("" or NULL the whole
+ * system, "input:<uid>" an input device, else an app's bundle ID). A string
+ * that isn't UTF-8 counts as NULL and an unknown `streaming` as
+ * ASC_STREAMING_OFF. Pure function for the control thread.
+ */
+uint32_t asc_source_quit_decide(const char *setting, const char *source, const char *quit_app, uint32_t streaming);
 
 /* ---- AirPlay sender (AudioSync's own, airplay/) ----------------------------- */
 

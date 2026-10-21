@@ -123,6 +123,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             store.save(appearance: appearance)
         }
     }
+    var whenSourceQuits: WhenSourceQuits {
+        didSet { if whenSourceQuits != oldValue { store.save(whenSourceQuits: whenSourceQuits) } }
+    }
 
     /// Where a speaker without a volume of its own starts (S71, S105).
     let defaultVolume = AppSettings.defaultVolume
@@ -207,6 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         autoConnect = saved.autoConnect
         showVirtualDevices = saved.showVirtualDevices
         appearance = saved.appearance
+        whenSourceQuits = saved.whenSourceQuits
         super.init()
     }
 
@@ -292,10 +296,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 // the new rate, with the speakers and the AirPlay selection
                 // as they are (S20, EC4).
                 if AppLifecycle.restartsAfterFormatChange(userStopped: userStopped) {
-                    startEngine(origin: .automatic)
+                    startEngine(origin: .automatic, rebuild: true)
                 }
             case .sourceLost(let error):
                 DebugTrace.log("[AudioSync] capture lost: \(error)")
+                if let quit = AppLifecycle.sourceQuit(.captureLost(error), source: audioSource,
+                                                      setting: whenSourceQuits) {
+                    sourceAppQuit(quit.bundleID, quit.action)
+                    return
+                }
                 // A notice, never a modal alert: nobody clicked anything (S21).
                 stopEngine()
                 postNotice(text.sourceStopped(error), subject: Notice.source)
@@ -366,7 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     // MARK: - System events
 
     /// Apps that start or quit change the source picker; the source app
-    /// quitting ends the session (EC6).
+    /// quitting ends the session or switches it to the whole system (EC6, S227).
     private func observeApps() {
         let center = NSWorkspace.shared.notificationCenter
         observers.append(center.addObserver(forName: NSWorkspace.didLaunchApplicationNotification,
@@ -380,15 +389,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         })
     }
 
-    /// The source app quit: stop, release the AirPlay speakers and say why,
-    /// in a notice only (S142). The speakers stay on and the source stays
-    /// that app, so streaming can start again once it runs.
     private func appQuit(bundleID: String?) {
-        if let bundleID,
-           AppLifecycle.endsSession(source: audioSource, quitBundleID: bundleID, streaming: engine.isRunning) {
-            DebugTrace.log("[AudioSync] source app quit: \(bundleID)")
-            stopEngine()
-            postNotice(text.sourceTerminated(name: SourceApps.name(for: bundleID)), subject: Notice.source)
+        if let quit = AppLifecycle.sourceQuit(.terminated(bundleID: bundleID, streaming: engine.isRunning),
+                                              source: audioSource, setting: whenSourceQuits) {
+            sourceAppQuit(quit.bundleID, quit.action)
         }
         pushSources()
     }
