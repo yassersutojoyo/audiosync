@@ -73,8 +73,8 @@ use audiosync_airplay::metadata::MetadataError;
 use audiosync_airplay::pairing::{Credentials, PairingEvent, PinError};
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
-    NowPlaying, ReceiverEvent, ReceiverInfo, Sender, SenderConfig, SenderEvent, SpeakerError,
-    SpeakerEvent, SpeakerOptions, SpeakerState,
+    AIRPLAY2_SWITCH_ENV, NowPlaying, ReceiverEvent, ReceiverInfo, Sender, SenderConfig,
+    SenderEvent, SpeakerError, SpeakerEvent, SpeakerOptions, SpeakerState, airplay2_switch,
 };
 use audiosync_airplay::stream::{MAX_DELAY, SpeakerCounters, StreamCounters};
 use audiosync_airplay::volume::{MIN_DB, Volume};
@@ -186,7 +186,13 @@ impl SenderLink {
     /// Starts the sender, whose stream and threads run from now on, and
     /// gives its audio input for the capture.
     pub fn start() -> io::Result<(SenderLink, InputWriter)> {
-        let (sender, input) = Sender::start(SenderConfig::default())?;
+        // The hidden AirPlay 2 switch (spec P2): an environment variable, so
+        // it flips without a rebuild and no control shows it.
+        let config = SenderConfig {
+            airplay2: airplay2_switch(std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref()),
+            ..SenderConfig::default()
+        };
+        let (sender, input) = Sender::start(config)?;
         Ok((SenderLink { sender }, input))
     }
 

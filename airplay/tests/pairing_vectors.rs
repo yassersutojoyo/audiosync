@@ -289,7 +289,7 @@ fn legacy_pairing_vector_is_reproduced() {
     assert_eq!(m1.to_vec(), hex(p145::M1), "M1");
     // M2 as RFC 2945 defines it (P52), derived.
     assert_eq!(
-        srp::server_proof(&values.public, &m1, &key).to_vec(),
+        srp::server_proof(&group, &values.public, &m1, &key).to_vec(),
         hex(p145::M2),
         "M2"
     );
@@ -426,6 +426,6 @@ fn m1_m2_and_k_hash_a_b_and_s_in_their_shortest_form() {
         m1
     );
 
-    let m2 = srp::server_proof(&a_padded, &m1, &key);
+    let m2 = srp::server_proof(&group, &a_padded, &m1, &key);
     assert_eq!(m2.to_vec(), sha1(&[&a_short, &m1, &key]), "M2");
 }

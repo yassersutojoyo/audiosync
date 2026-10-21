@@ -14,6 +14,11 @@ publish = false
 # curve crates. Only the features the pairing uses.
 aes = { version = "0.9.2", features = ["zeroize"] }
 aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }
+# HomeKit pairing on the AirPlay 2 path (P65, P66): ChaCha20-Poly1305
+# (RFC 8439) and HKDF-SHA-512 (RFC 5869) from RustCrypto, without the
+# allocation helpers or an OS random source.
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
+hkdf = { version = "0.13.0", default-features = false }
 crypto-bigint = { version = "0.7.5", default-features = false, features = ["zeroize"] }
 ctr = { version = "0.10.1", features = ["zeroize"] }
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["zeroize"] }
