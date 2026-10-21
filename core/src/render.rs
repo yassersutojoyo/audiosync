@@ -42,7 +42,9 @@
 //! than its earliest callbacks this one came, so a late callback anchors
 //! where an early one would. Drift is judged against the earliest
 //! callbacks as they stood when the reader anchored, so lateness that
-//! builds slower than their floor leaks up is never taken for drift.
+//! builds slower than their floor leaks up is never taken for drift; that
+//! anchor floor falls over seconds toward callbacks earlier still. The
+//! floor forms over [`FLOOR_FORM_MS`] of callbacks before any counts.
 //!
 //! The observer (S229): once an output has played [`OBSERVE_AFTER_MS`],
 //! the renderer keeps the least slack its reader had at the start of a
