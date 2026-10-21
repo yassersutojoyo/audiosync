@@ -995,9 +995,12 @@ export component MainWindow inherits Window {
                         }
                         // While AirPlay finds nothing, the note says what to
                         // check, after the hidden virtual outputs' note; the
-                        // Google Cast search's note comes last.
-                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + Strings.airplay-none-found : Strings.airplay-none-found) : root.connected.length > 0 ? "" : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
-                        property <string> cast-note: Strings.cast-list(root.cast-list);
+                        // Google Cast search's note comes last, or one sentence
+                        // when neither finds a speaker.
+                        property <bool> both-none: root.airplay-none-found && root.cast-list == CastList.none-found;
+                        property <string> none-found: self.both-none ? Strings.network-none-found : Strings.airplay-none-found;
+                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + self.none-found : self.none-found) : root.connected.length > 0 ? "" : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
+                        property <string> cast-note: self.both-none ? "" : Strings.cast-list(root.cast-list);
                         note: self.cast-note == "" ? self.list-note : self.list-note == "" || self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                         toggled(id) => {
                             root.speaker-toggled(id);

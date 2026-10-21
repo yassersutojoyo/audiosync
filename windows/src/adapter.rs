@@ -220,6 +220,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// Where the Cast speakers' offsets and formats are kept; `None` keeps
     /// them until AudioSync quits.
     cast_file: Option<PathBuf>,
+    /// What that file holds as last written or read.
+    cast_saved: Option<String>,
     /// The speaker keys marked auto-connect.
     auto_connect: BTreeSet<String>,
     groups: Vec<Group>,
@@ -319,6 +321,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             cast_names: BTreeMap::new(),
             cast_quiet_polls: 0,
             cast_file: None,
+            cast_saved: None,
             auto_connect: BTreeSet::new(),
             groups: Vec::new(),
             next_group: 1,
@@ -785,20 +788,27 @@ impl<A: AudioBackend> AudioAdapter<A> {
     )]
     pub fn set_cast_file(&mut self, path: Option<PathBuf>) {
         self.cast_file = path;
+        self.cast_saved = self.audio.cast_memory_json();
     }
 
-    /// Writes the Cast speakers' offsets and formats to their file. One that
-    /// can't be written gets the settings' notice: the change lasts until
-    /// AudioSync quits.
+    /// Writes the Cast speakers' offsets and formats to their file when they
+    /// changed since the last write. One that can't be written gets the
+    /// settings' notice: the change lasts until AudioSync quits.
     fn save_cast_memory(&mut self) {
         let (Some(path), Some(json)) = (self.cast_file.as_ref(), self.audio.cast_memory_json())
         else {
             return;
         };
-        if let Err(error) = data_folder::write_atomically(path, json.as_bytes()) {
-            self.log
-                .log(|| format!("Cast: the speakers' file couldn't be written: {error}"));
-            self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
+        if self.cast_saved.as_ref() == Some(&json) {
+            return;
+        }
+        match data_folder::write_atomically(path, json.as_bytes()) {
+            Ok(()) => self.cast_saved = Some(json),
+            Err(error) => {
+                self.log
+                    .log(|| format!("Cast: the speakers' file couldn't be written: {error}"));
+                self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
+            }
         }
     }
 
@@ -819,7 +829,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             format!("the user switched {} {state}", self.cast_name(id))
         });
         if on {
-            self.notices.clear(&[NoticeSubject::Cast]);
+            self.notices.clear(&[NoticeSubject::Cast(id.to_owned())]);
         }
         match self.audio.set_cast_enabled(id, on) {
             Err(problem) => self.cast_cant_play(id, problem),
@@ -833,7 +843,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn cast_cant_play(&mut self, id: &str, problem: CastProblem) {
         let speaker = self.cast_name(id);
         self.post(
-            NoticeSubject::Cast,
+            NoticeSubject::Cast(id.to_owned()),
             NoticeMessage::CastCantPlay {
                 speaker,
                 problem: ui_cast_problem(problem),
@@ -1572,8 +1582,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     self.cast_names.insert(speaker.id, speaker.name);
                 }
             }
-            BackendEvent::CastPlaying { .. } => {
-                self.notices.clear(&[NoticeSubject::Cast]);
+            BackendEvent::CastPlaying { id } => {
+                self.notices.clear(&[NoticeSubject::Cast(id)]);
             }
             BackendEvent::CastFailed { id, problem } => self.cast_cant_play(&id, problem),
             BackendEvent::CastMemoryChanged => self.save_cast_memory(),
@@ -2378,6 +2388,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
 
     fn save_settings(&mut self) {
         let _ = self.persist();
+        // Before the backend drops and the Cast host shuts down, so the last
+        // offset change is kept even when its event was never polled.
+        self.save_cast_memory();
     }
 
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
@@ -5809,6 +5822,51 @@ mod tests {
         assert!(!state.speaker(&cc(CAST_LIVING)).unwrap().enabled);
         assert!(state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
         assert!(state.running);
+    }
+
+    #[test]
+    fn quitting_keeps_a_cast_offset_set_since_the_last_poll() {
+        let (mut adapter, fake) = cast_adapter();
+        let file = test_dir("cast-memory-quit").join("cast-speakers.json");
+        adapter.set_cast_file(Some(file.clone()));
+        adapter.save_settings();
+        assert!(!file.exists(), "nothing changed, nothing is written");
+
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.save_settings();
+        let saved = std::fs::read_to_string(&file).expect("the file is written");
+        assert_eq!(DeviceMemory::from_json(&saved), fake.state().memory);
+        assert_eq!(
+            DeviceMemory::from_json(&saved).offset(&cast_device(CAST_KITCHEN)),
+            Some(std::time::Duration::from_millis(250))
+        );
+    }
+
+    #[test]
+    fn a_refused_cast_speakers_notice_stays_while_the_other_starts_playing() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: cast_device(CAST_KITCHEN),
+            event: SessionEvent::Playing,
+        });
+        adapter.poll();
+        assert_eq!(
+            adapter
+                .snapshot()
+                .speaker(&cc(CAST_KITCHEN))
+                .unwrap()
+                .cast
+                .unwrap()
+                .state,
+            CastState::Playing
+        );
+        assert_eq!(
+            messages(&adapter),
+            [cast_cant_play("Living Room", UiCastProblem::Busy)]
+        );
     }
 
     #[test]

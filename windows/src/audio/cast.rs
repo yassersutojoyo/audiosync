@@ -62,6 +62,8 @@ pub struct CastTap {
     inbox: Receiver<Option<AudioWriter>>,
     outbox: SyncSender<AudioWriter>,
     writer: Option<AudioWriter>,
+    /// A writer the full outbox couldn't take yet; kept, never freed here.
+    retired: Option<AudioWriter>,
 }
 
 impl CastTap {
@@ -75,14 +77,30 @@ impl CastTap {
         }
     }
 
+    /// Every old writer goes back to the UI thread to be freed there; while
+    /// the outbox is full the tap stops taking handoffs instead.
     fn take_handoffs(&mut self) {
-        while let Ok(next) = self.inbox.try_recv() {
-            if let Some(old) = std::mem::replace(&mut self.writer, next) {
-                // Full only while the UI thread doesn't drain: the writer is
-                // then freed here, once.
-                let _ = self.outbox.try_send(old);
+        loop {
+            if let Some(old) = self.retired.take()
+                && let Err(TrySendError::Full(old) | TrySendError::Disconnected(old)) =
+                    self.outbox.try_send(old)
+            {
+                self.retired = Some(old);
+                return;
             }
+            let Ok(next) = self.inbox.try_recv() else {
+                return;
+            };
+            self.retired = std::mem::replace(&mut self.writer, next);
         }
+    }
+
+    /// On the UI thread, with the tap in its slot: drops every writer it
+    /// holds or waits for, and takes `writer`.
+    fn replace_all(&mut self, writer: Option<AudioWriter>) {
+        while self.inbox.try_recv().is_ok() {}
+        self.retired = None;
+        self.writer = writer;
     }
 }
 
@@ -135,16 +153,23 @@ pub struct CastFeed {
     to_tap: SyncSender<Option<AudioWriter>>,
     from_tap: Receiver<AudioWriter>,
     slot: CastFeedSlot,
+    /// The newest writer (or none) the full handoff couldn't take yet.
+    waiting: Option<Option<AudioWriter>>,
 }
 
 impl CastFeed {
     pub fn new() -> CastFeed {
-        let (to_tap, inbox) = mpsc::sync_channel(HANDOFF);
-        let (outbox, from_tap) = mpsc::sync_channel(HANDOFF);
+        CastFeed::with_handoff(HANDOFF)
+    }
+
+    fn with_handoff(handoff: usize) -> CastFeed {
+        let (to_tap, inbox) = mpsc::sync_channel(handoff);
+        let (outbox, from_tap) = mpsc::sync_channel(handoff);
         let tap = CastTap {
             inbox,
             outbox,
             writer: None,
+            retired: None,
         };
         CastFeed {
             to_tap,
@@ -152,6 +177,7 @@ impl CastFeed {
             slot: CastFeedSlot {
                 tap: Arc::new(Mutex::new(Some(tap))),
             },
+            waiting: None,
         }
     }
 
@@ -160,27 +186,36 @@ impl CastFeed {
     }
 
     /// Gives the capture `writer` (or none) for the audio from now on.
-    /// Returns false when it couldn't: the handoff is full and the tap is
-    /// lent to a capture that doesn't push.
-    fn hand(&self, writer: Option<AudioWriter>) -> bool {
-        self.collect();
-        let Err(TrySendError::Full(writer)) = self.to_tap.try_send(writer) else {
+    /// Returns false when it has to wait for a later [`CastFeed::flush`]:
+    /// the handoff is full and the tap is lent to a capture that hasn't
+    /// pushed since.
+    fn hand(&mut self, writer: Option<AudioWriter>) -> bool {
+        self.waiting = Some(writer);
+        self.flush()
+    }
+
+    /// Frees the writers the capture gave back, and hands over the one
+    /// waiting; returns whether none waits anymore.
+    fn flush(&mut self) -> bool {
+        while self.from_tap.try_recv().is_ok() {}
+        let Some(writer) = self.waiting.take() else {
+            return true;
+        };
+        let Err(TrySendError::Full(writer) | TrySendError::Disconnected(writer)) =
+            self.to_tap.try_send(writer)
+        else {
             return true;
         };
         let mut slot = self.slot.tap.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(tap) = slot.as_mut() else {
+            drop(slot);
+            self.waiting = Some(writer);
             return false;
         };
-        tap.take_handoffs();
-        tap.writer = writer;
+        tap.replace_all(writer);
         drop(slot);
-        self.collect();
-        true
-    }
-
-    /// Frees the writers the capture gave back.
-    fn collect(&self) {
         while self.from_tap.try_recv().is_ok() {}
+        true
     }
 }
 
@@ -506,7 +541,7 @@ impl CastSpeakers {
             Ok(attempt) => {
                 if !self.feed.hand(Some(writer)) {
                     self.log
-                        .log(|| "Cast: the capture didn't take the new session's feed".to_owned());
+                        .log(|| "Cast: the capture's handoff is full; the new session's feed waits for the next poll".to_owned());
                 }
                 self.attempt = Some(Attempt {
                     id: attempt,
@@ -639,7 +674,7 @@ impl CastSpeakers {
         while let Some(event) = self.link.as_mut().and_then(|link| link.poll_event()) {
             self.handle(event);
         }
-        self.feed.collect();
+        self.feed.flush();
         self.sync();
         dedup_changed(std::mem::take(&mut self.pending))
     }
@@ -1158,6 +1193,42 @@ pub mod tests {
         assert_eq!(fake.state().readers[0].available(), 32);
         drop(lease);
         assert!(cast.lease().is_some());
+    }
+
+    #[test]
+    fn a_writer_the_full_handoff_refused_reaches_the_capture_after_the_next_poll() {
+        let mut feed = CastFeed::new();
+        let mut lease = feed.slot().lease().expect("the tap");
+        let mut readers = Vec::new();
+        for n in 0..=HANDOFF {
+            let (writer, reader) = audio_ring(64);
+            readers.push(reader);
+            assert_eq!(feed.hand(Some(writer)), n < HANDOFF, "handoff {n}");
+        }
+        lease.push(&[0.5; 8], 4);
+        assert_eq!(readers[HANDOFF - 1].available(), 4);
+        assert!(feed.flush(), "the newest writer goes over now");
+        lease.push(&[0.5; 8], 4);
+        assert_eq!(readers[HANDOFF].available(), 4);
+        assert_eq!(readers[HANDOFF - 1].available(), 4);
+    }
+
+    #[test]
+    fn old_writers_go_back_to_the_ui_thread_even_while_its_outbox_is_full() {
+        let feed = CastFeed::with_handoff(1);
+        let mut lease = feed.slot().lease().expect("the tap");
+        let (first, _) = audio_ring(64);
+        let (second, _) = audio_ring(64);
+        let (third, reader) = audio_ring(64);
+        for writer in [first, second, third] {
+            feed.to_tap.try_send(Some(writer)).unwrap();
+            lease.push(&[0.5; 2], 1);
+        }
+        assert_eq!(reader.available(), 1, "the newest writer plays");
+        assert_eq!(feed.from_tap.try_iter().count(), 1);
+        // The tap kept the second writer until the outbox had room.
+        lease.push(&[], 0);
+        assert_eq!(feed.from_tap.try_iter().count(), 1);
     }
 
     #[test]

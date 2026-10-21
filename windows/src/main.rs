@@ -502,14 +502,14 @@ mod tests {
     #[test]
     fn the_fade_cap_and_the_quit_waits_fit_in_5_s() {
         use audiosync_airplay::session::TEARDOWN_TIMEOUT;
+        use audiosync_cast::host::SHUTDOWN_MARGIN;
         use audiosync_core::policy::session::QUIT_BUDGET;
         use audiosync_core::render::STOP_FADE_CAP;
 
         let fade = STOP_FADE_CAP.as_secs_f64();
         assert_eq!(fade, 0.5);
         assert_eq!(QUIT_BUDGET, 5.0);
-        // `CastHost::shutdown` waits its quit budget plus a private 0.5 s.
-        let cast = audiosync_cast::client::QUIT_BUDGET.as_secs_f64() + 0.5;
+        let cast = (audiosync_cast::client::QUIT_BUDGET + SHUTDOWN_MARGIN).as_secs_f64();
         let airplay = fade + TEARDOWN_TIMEOUT.as_secs_f64();
         assert!(airplay.max(cast) + super::LOG_FLUSH_AT_EXIT.as_secs_f64() <= QUIT_BUDGET);
     }

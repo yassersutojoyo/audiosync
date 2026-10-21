@@ -1097,6 +1097,8 @@ export component SpeakerRow inherits Rectangle {
             }
         }
         menu := ContextMenuArea {
+            // An idle Cast speaker's menu would be empty.
+            enabled: !root.item.cast || root.cast-live;
             Menu {
                 // Auto-connect is for local and AirPlay speakers; a Cast
                 // speaker's menu holds the controls under its volume.
