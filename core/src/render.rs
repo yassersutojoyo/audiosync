@@ -525,6 +525,9 @@ pub struct Renderer {
     reader_delay: i64,
     /// The converter's fixed latency, in capture frames (S62).
     latency: i64,
+    /// The floor of the lateness when the reader last anchored, in ns
+    /// (S209); `None` until a callback has a floor.
+    anchor_floor: Option<i64>,
     /// The start lead is published: the host gave the period, or the
     /// first callback came. Not before, so a renderer whose hold-back the
     /// host hasn't set yet never moves the session lead (S208).
@@ -603,6 +606,7 @@ impl Renderer {
             hold_back: control.shared.delay.load(Ordering::Relaxed),
             reader_delay: control.reader.delay_frames(),
             latency,
+            anchor_floor: None,
             start_lead_fixed: false,
             awaiting_resync: false,
             correction_due: false,
@@ -742,9 +746,16 @@ impl Renderer {
         let late = late_ns as u128 * u128::from(self.capture_rate) / 1_000_000_000;
         self.reader
             .set_late_frames(i64::try_from(late).unwrap_or(i64::MAX));
+        let shift_ns = self.floor_shift_ns();
+        let shift = i128::from(shift_ns) * i128::from(self.capture_rate) / 1_000_000_000;
+        self.reader
+            .set_floor_shift_frames(shift.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64);
         // The capture's clock is judged at the time the callback would have
-        // read at had it come as early as the earliest ones.
-        let now = now.map(|now| now.saturating_sub(late_ns));
+        // read at had it come as early, against the floor of the reader's
+        // anchor, as the ones that came earliest then.
+        let judged_ns = i128::from(late_ns) + i128::from(shift_ns);
+        let now =
+            now.map(|now| (i128::from(now) - judged_ns).clamp(0, i128::from(u64::MAX)) as u64);
         if !self.start_lead_fixed {
             self.publish_start_lead(frames);
             self.start_lead_fixed = true;
@@ -984,6 +995,26 @@ impl Renderer {
         };
     }
 
+    /// The floor that this callback's lateness was measured from (S209):
+    /// none before a second timed callback.
+    fn late_floor(&self) -> Option<i64> {
+        self.earliest
+            .map(|[_, floor]| floor)
+            .filter(|&floor| floor != i64::MAX)
+    }
+
+    /// How far the lateness floor moved since the reader last anchored, in
+    /// ns (S209). The floor leaks up and drops with the callbacks, so
+    /// lateness that builds or fades slower than the leak moves the floor
+    /// instead of Jt; judged against the anchor's floor, it stays lateness.
+    fn floor_shift_ns(&mut self) -> i64 {
+        let Some(floor) = self.late_floor() else {
+            return 0;
+        };
+        let anchor = *self.anchor_floor.get_or_insert(floor);
+        floor.saturating_sub(anchor)
+    }
+
     /// Takes the control's requests at the start of a callback (S190).
     fn take_requests(&mut self) {
         if self.stop == Stop::None && self.shared.fade_out.load(Ordering::Acquire) {
@@ -1079,6 +1110,9 @@ impl Renderer {
             // Anchored, corrected, dry or rejected: the fill the renderer
             // kept is gone, and a new reference is measured (S207).
             self.tracking = RESTART;
+        }
+        if report.correction != Correction::None {
+            self.anchor_floor = self.late_floor();
         }
         if self.awaiting_resync
             && matches!(report.correction, Correction::Resync | Correction::Prime)
