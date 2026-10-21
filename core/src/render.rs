@@ -12,12 +12,13 @@
 //! callback the renderer gives its reader a lead, a floor of the effective
 //! delay. It counts the device's steady callback (the period the host gives,
 //! or else the largest of the last [`CALLBACK_WINDOW`] callbacks) or this
-//! callback when it is larger, and with rate conversion what that callback
-//! can ask the reader for plus the capture's block (at most
-//! [`LEAD_BLOCK_CAP_MS`]), since a converting output's callbacks never line
-//! up with the capture's blocks. Only the first read of a callback may
+//! callback when it is larger: what that callback can ask the reader for
+//! plus the capture's block (at most [`LEAD_BLOCK_CAP_MS`]), since its
+//! callbacks never line up with the capture's blocks. Every renderer
+//! converts, at the capture rate at ratio 1, which copies its frames
+//! between trims (S85). Only the first read of a callback may
 //! correct drift; its later reads are held and what they report as due is
-//! ignored. A converting renderer whose reader holds fewer frames than a
+//! ignored. A renderer whose reader holds fewer frames than a
 //! callback needs (its device clock runs fast and the lead's slack is used
 //! up) slows its converter over that callback by the shortage, up to
 //! 1 / [`SLOW_DOWN_SHARE`] of the callback's reads, instead of letting the
@@ -753,8 +754,9 @@ impl Renderer {
         if !control.reader.controls(&reader) {
             return Err(RenderError::ForeignControl);
         }
-        let resampler =
-            Resampler::new(capture_rate, device_rate).map_err(|_| RenderError::UnsupportedRate)?;
+        // At the capture rate too, so every output can be trimmed (S206, S207).
+        let resampler = Resampler::new_at_ratio_one(capture_rate, device_rate)
+            .map_err(|_| RenderError::UnsupportedRate)?;
         // A speed-up (S207) reads at most a 256th more, spread over the
         // callback, so a piece may ask for a frame or two above the bound.
         let bound = reader_frames_bound(RENDER_CHUNK, capture_rate, device_rate);
@@ -838,8 +840,7 @@ impl Renderer {
 
     /// Capture frames the converter was slowed down by, in all: to keep the
     /// reader off W (S206) and to follow the capture's clock (S207). Each
-    /// one plays the output one capture frame later. Stays 0 without
-    /// conversion.
+    /// one plays the output one capture frame later.
     pub fn slowed_frames(&self) -> u64 {
         self.shared.slowed_frames.load(Ordering::Relaxed)
     }
@@ -854,7 +855,7 @@ impl Renderer {
 
     /// Capture frames the converter was sped up by to follow the capture's
     /// clock (S207), in all. Each one plays the output one capture frame
-    /// earlier. Stays 0 without conversion or stamps.
+    /// earlier. Stays 0 without stamps.
     pub fn sped_frames(&self) -> u64 {
         self.shared.sped_frames.load(Ordering::Relaxed)
     }
@@ -998,9 +999,8 @@ impl Renderer {
     /// device frames (S206). The callback it counts is the device's steady
     /// one (its period when the host gave it, else the largest of the last
     /// [`CALLBACK_WINDOW`] callbacks, this one included) or this one when it
-    /// is larger. Without conversion Lr is that callback; with it, the most
-    /// that callback can ask the reader for plus the capture's block, at
-    /// most [`LEAD_BLOCK_CAP_MS`].
+    /// is larger. Lr is the most that callback can ask the reader for plus
+    /// the capture's block, at most [`LEAD_BLOCK_CAP_MS`].
     fn update_lead(&mut self, frames: usize) {
         self.callbacks[self.next_callback] = frames;
         self.next_callback = (self.next_callback + 1) % CALLBACK_WINDOW;
@@ -1010,12 +1010,9 @@ impl Renderer {
             self.callbacks.iter().copied().fold(0, usize::max)
         };
         let callback = steady.max(frames);
-        let lead = if self.resampler.is_passthrough() {
-            callback
-        } else {
-            let block = self.reader.ring().block_frames().min(self.block_cap);
-            reader_frames_bound(callback, self.capture_rate, self.device_rate).saturating_add(block)
-        };
+        let block = self.reader.ring().block_frames().min(self.block_cap);
+        let lead =
+            reader_frames_bound(callback, self.capture_rate, self.device_rate).saturating_add(block);
         self.reader
             .set_lead_frames(i64::try_from(lead).unwrap_or(i64::MAX));
     }
@@ -1061,7 +1058,7 @@ impl Renderer {
     /// Called after the control's requests are taken, so the first read's
     /// hold is known.
     fn keep_reader_off_w(&mut self, frames: usize, now: Option<u64>) {
-        if self.resampler.is_passthrough() || self.resampler.is_trimming() || frames < 2 {
+        if self.resampler.is_trimming() || frames < 2 {
             return;
         }
         let first = self
@@ -1266,22 +1263,17 @@ impl Renderer {
     }
 
     /// Publishes the start lead for a steady callback of `callback` device
-    /// frames (S208): that callback without conversion; with it, the most
-    /// that callback can ask the reader for, plus the cap on the capture's
-    /// block and the converter's latency. A Bluetooth output adds a capture
+    /// frames (S208): the most that callback can ask the reader for, plus
+    /// the cap on the capture's block and the converter's latency. A Bluetooth output adds a capture
     /// block (S230).
     fn publish_start_lead(&self, callback: usize) {
         let Some(slot) = self.shared.slot else {
             return;
         };
-        let lead = if self.resampler.is_passthrough() {
-            callback
-        } else {
-            reader_frames_bound(callback, self.capture_rate, self.device_rate)
-                .saturating_add(self.block_cap)
-                .saturating_add(self.latency as usize)
-        }
-        .saturating_add(self.shared.extra_lead_frames());
+        let lead = reader_frames_bound(callback, self.capture_rate, self.device_rate)
+            .saturating_add(self.block_cap)
+            .saturating_add(self.latency as usize)
+            .saturating_add(self.shared.extra_lead_frames());
         self.shared
             .leads()
             .set_lead(slot, i64::try_from(lead).unwrap_or(i64::MAX));
@@ -1374,16 +1366,11 @@ impl Renderer {
     }
 
     /// Where `report`'s silence and copies fall in a piece of `n` device
-    /// frames made from its `need` frames (S184): the same frames without
-    /// conversion, their converted positions with it.
+    /// frames made from its `need` frames (S184): their converted positions.
     fn layout(&self, report: &ReadReport, need: usize, n: usize) -> Layout {
         let lead = report.leading_silence().min(need);
         let copy_end = (lead + report.copied).min(need);
-        let (lead, copy_end) = if need == n && self.resampler.is_passthrough() {
-            (lead, copy_end)
-        } else {
-            (lead * n / need, copy_end * n / need)
-        };
+        let (lead, copy_end) = (lead * n / need, copy_end * n / need);
         Layout {
             lead: lead.min(n),
             copy_end: copy_end.clamp(lead.min(n), n),

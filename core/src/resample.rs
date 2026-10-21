@@ -7,7 +7,10 @@
 //! (Kaiser) interpolation of the input, with the cutoff at 0.97 of the lower
 //! of the two Nyquist frequencies, so downsampling does not alias and
 //! upsampling does not image. Weights are normalized to a DC gain of exactly
-//! one. Equal rates pass samples through unchanged.
+//! one. Equal rates pass samples through unchanged, except in a converter
+//! made with [`Resampler::new_at_ratio_one`]: a renderer's, which converts at
+//! ratio 1 so it can be trimmed, and copies its input exactly, delayed by the
+//! latency, in every call that starts with no trim under way.
 //!
 //! Frame counts keep pace with the input exactly: after `fed` input frames,
 //! `ceil(fed × out / in)` output frames have been produced (S85 asks for
@@ -71,6 +74,8 @@ pub struct Resampler {
     step_whole: usize,
     step_frac: u64,
     passthrough: bool,
+    /// Equal rates convert at ratio 1 instead of passing through.
+    ratio_one: bool,
     /// H: the filter reaches H input frames to each side of its center; an
     /// output uses the 2H history frames `pos - H + 1 ..= pos + H`.
     half: usize,
@@ -179,6 +184,26 @@ impl Resampler {
     /// [`Resampler::set_input_rate`] never allocates. Both rates must lie in
     /// 8000..=384000 Hz (S16).
     pub fn new(input_rate: u32, output_rate: u32) -> Result<Resampler, UnsupportedRate> {
+        Resampler::make(input_rate, output_rate, false)
+    }
+
+    /// [`Resampler::new`], except that equal rates convert at ratio 1, with
+    /// the converter's latency, so a renderer at the capture rate can be
+    /// slowed and sped up like any other (S85, S206, S207). A call that
+    /// starts with no trim under way copies its input bit for bit, delayed
+    /// by [`Resampler::latency_frames`]; only a call that trims filters.
+    pub fn new_at_ratio_one(
+        input_rate: u32,
+        output_rate: u32,
+    ) -> Result<Resampler, UnsupportedRate> {
+        Resampler::make(input_rate, output_rate, true)
+    }
+
+    fn make(
+        input_rate: u32,
+        output_rate: u32,
+        ratio_one: bool,
+    ) -> Result<Resampler, UnsupportedRate> {
         for rate in [input_rate, output_rate] {
             if !is_supported_rate(rate) {
                 return Err(UnsupportedRate(rate));
@@ -193,6 +218,7 @@ impl Resampler {
             step_whole: 1,
             step_frac: 0,
             passthrough: true,
+            ratio_one,
             half: 1,
             scale: 1.0,
             table: kernel_table(),
@@ -232,7 +258,7 @@ impl Resampler {
         self.den = u64::from(self.output_rate) / g;
         self.step_whole = (self.num / self.den) as usize;
         self.step_frac = self.num % self.den;
-        self.passthrough = input_rate == self.output_rate;
+        self.passthrough = input_rate == self.output_rate && !self.ratio_one;
         self.half = half_width(input_rate, self.output_rate);
         self.scale = kernel_scale(input_rate, self.output_rate);
         let taps = 2 * self.half;
@@ -273,7 +299,8 @@ impl Resampler {
         self.output_rate
     }
 
-    /// Whether the rates are equal and samples pass through unchanged (S85).
+    /// Whether the rates are equal and samples pass through unchanged, with
+    /// no latency and no trim (S85); never for [`Resampler::new_at_ratio_one`].
     pub fn is_passthrough(&self) -> bool {
         self.passthrough
     }
@@ -411,7 +438,8 @@ impl Resampler {
     ///
     /// Non-finite input samples are replaced by 0 and reset the history
     /// (S125); every output sample is finite, except that equal rates pass
-    /// samples through unchanged (S85). Never allocates; O(N × taps).
+    /// samples through unchanged (S85). Never allocates; O(N × taps), or a
+    /// copy at ratio 1 when the call starts with no trim under way.
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) -> (usize, usize) {
         let in_frames = input.len() / 2;
         let out_frames = output.len() / 2;
@@ -420,9 +448,19 @@ impl Resampler {
             output[..n * 2].copy_from_slice(&input[..n * 2]);
             return (n, n);
         }
+        // Decided once per call, so a trim's frames all come from the filter.
+        let copy = self.num == self.den && !self.is_trimming();
         let mut consumed = 0;
         let mut produced = 0;
         loop {
+            if copy {
+                // The kernel's center tap: frame `pos`, already finite.
+                let n = (out_frames - produced).min(self.held.saturating_sub(self.pos + self.half));
+                output[produced * 2..(produced + n) * 2]
+                    .copy_from_slice(&self.history[self.pos * 2..(self.pos + n) * 2]);
+                self.pos += n;
+                produced += n;
+            }
             while produced < out_frames && self.pos + self.half < self.held {
                 let (left, right) = self.next_frame();
                 output[produced * 2] = left;
@@ -707,6 +745,100 @@ mod tests {
         assert_eq!(out.len(), input.len());
         for (a, b) in input.iter().zip(&out) {
             assert_eq!(a.to_bits(), b.to_bits());
+        }
+    }
+
+    /// Finite samples of every kind: signed zeros, subnormals, the extremes
+    /// and noise, from a fixed seed.
+    fn awkward_samples(frames: usize) -> Vec<f32> {
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        (0..frames * 2)
+            .map(|i| match i % 7 {
+                0 => -0.0,
+                1 => 0.0,
+                2 => f32::from_bits(1 + i as u32 % 1000),
+                3 => if i % 2 == 0 { f32::MAX } else { f32::MIN },
+                _ => {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    (x >> 40) as f32 / (1u64 << 23) as f32 - 1.0
+                }
+            })
+            .collect()
+    }
+
+    // covers: S85
+    #[test]
+    fn at_ratio_one_without_a_trim_every_sample_is_the_input_21_frames_earlier_bit_for_bit() {
+        let mut r = Resampler::new_at_ratio_one(48_000, 48_000).unwrap();
+        assert!(!r.is_passthrough());
+        assert_eq!(r.latency_frames(), 21);
+        let input = awkward_samples(48_000);
+        let out = run(&mut r, &input, &[512, 1, 7, 4096, 333]);
+        assert_eq!(out.len(), input.len());
+        let differing = (0..48_000)
+            .filter(|&j| {
+                (0..2).any(|c| {
+                    let want = if j < 21 { 0.0f32 } else { input[(j - 21) * 2 + c] };
+                    out[j * 2 + c].to_bits() != want.to_bits()
+                })
+            })
+            .count();
+        assert_eq!(differing, 0);
+    }
+
+    // covers: S85, S125
+    #[test]
+    fn at_ratio_one_a_non_finite_sample_zeroes_what_was_still_to_play_and_the_rest_is_exact() {
+        let mut r = Resampler::new_at_ratio_one(48_000, 48_000).unwrap();
+        let mut input = awkward_samples(4096);
+        // In the fifth 512-frame block; the frames before it that were not
+        // yet played are the last 21 of the fourth.
+        input[2100 * 2] = f32::NAN;
+        input[3000 * 2 + 1] = f32::NEG_INFINITY;
+        let out = run(&mut r, &input, &[512]);
+        assert_eq!(r.non_finite_resets(), 2);
+        let zeroed = |i: usize| (2048 - 21..=2100).contains(&i) || (2560 - 21..=3000).contains(&i);
+        for j in 0..4096usize {
+            for c in 0..2 {
+                let want = match j.checked_sub(21) {
+                    Some(i) if !zeroed(i) => input[i * 2 + c],
+                    _ => 0.0,
+                };
+                assert_eq!(out[j * 2 + c].to_bits(), want.to_bits(), "frame {j}");
+            }
+        }
+    }
+
+    // covers: S85, S206, S207
+    #[test]
+    fn at_ratio_one_only_a_trimming_call_filters_and_the_copy_goes_on_at_the_new_delay() {
+        for (ahead, delay) in [(false, 22), (true, 20)] {
+            let mut r = Resampler::new_at_ratio_one(48_000, 48_000).unwrap();
+            let source: Vec<f32> = (0..4096 * 2).map(|i| ((i / 2) as f32 * 0.01).sin()).collect();
+            let mut at = 0;
+            let before = pull(&mut r, &source, &mut at, 512, 512);
+            let trimmed = if ahead {
+                r.speed_up(1, 511)
+            } else {
+                r.slow_down(1, 511)
+            };
+            assert!(trimmed);
+            let during = pull(&mut r, &source, &mut at, 512, 512);
+            assert!(!r.is_trimming());
+            let after = pull(&mut r, &source, &mut at, 1024, 512);
+            for j in 21..512 {
+                assert_eq!(before[j * 2].to_bits(), source[(j - 21) * 2].to_bits());
+            }
+            let exact = (0..512)
+                .filter(|&j| during[j * 2].to_bits() == source[(512 + j - 21) * 2].to_bits())
+                .count();
+            assert!(exact < 16, "ahead {ahead}: {exact} frames copied mid-trim");
+            for j in 0..1024 {
+                let i = 1024 + j - delay;
+                assert_eq!(after[j * 2].to_bits(), source[i * 2].to_bits(), "ahead {ahead}, frame {j}");
+            }
         }
     }
 
