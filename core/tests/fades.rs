@@ -24,7 +24,7 @@ const RATE: u32 = 48_000;
 const N: usize = 512;
 const F: usize = 960;
 const A: f32 = 0.5;
-const T: i64 = 1680;
+const T: i64 = 2400;
 /// S191 (a): a frame of a fade is A × g × w within this.
 const TOLERANCE: f64 = 1e-6;
 const NS: u64 = 1_000_000_000;
@@ -575,20 +575,20 @@ fn a_read_reports_its_leading_silence_and_its_copied_frames() {
     let report = reader.read_target(&mut dst, N);
     assert_eq!(report.correction, Correction::Prime);
     assert_eq!(split(&report), (0, N, 0));
-    // 300 frames more, then a writer stall: the reader runs ahead until it
-    // steps back by 1748 frames; those it already played are silence at the
-    // start of the next blocks (three whole ones, then 212 frames), then it
-    // copies the 300 it hadn't played.
-    writer.write(&block[..300 * 2], 300);
+    // 100 frames more, then a writer stall: the reader runs ahead until it
+    // steps back by 2460 frames; those it already played are silence at the
+    // start of the next blocks (four whole ones, then 412 frames), then it
+    // copies the 100 it hadn't played.
+    writer.write(&block[..100 * 2], 100);
     let mut reads = Vec::new();
-    for _ in 0..7 {
+    for _ in 0..9 {
         let report = reader.read_target(&mut dst, N);
         reads.push((report.correction, split(&report), report.masked));
     }
-    assert_eq!(reads[3], (Correction::StepBack, (N, 0, 0), N));
-    assert_eq!(reads[6], (Correction::None, (212, 300, 0), 212));
-    assert!(dst[..212 * 2].iter().all(|&sample| sample == 0.0));
-    assert!(dst[212 * 2..].iter().all(|&sample| sample == A));
+    assert_eq!(reads[4], (Correction::StepBack, (N, 0, 0), N));
+    assert_eq!(reads[8], (Correction::None, (412, 100, 0), 412));
+    assert!(dst[..412 * 2].iter().all(|&sample| sample == 0.0));
+    assert!(dst[412 * 2..].iter().all(|&sample| sample == A));
     // A reader at a short delay that reaches W: copies, then silence; a dry
     // read is silence after no copy at all.
     let mut near = Reader::new(Arc::clone(&ring), RATE);
@@ -813,12 +813,12 @@ fn a_held_drift_correction_is_made_after_the_fade_out_and_counted_then() {
     rig.play_until_open();
     rig.ticks(4);
     let from = rig.played.len();
-    // A burst: the capture delivers 2400 frames more than usual, so the
-    // reader is 2400 behind, beyond T.
-    rig.write(2400);
+    // A burst: the capture delivers 2600 frames more than usual, so the
+    // reader is 2600 behind, beyond T.
+    rig.write(2600);
     rig.tick();
     assert_eq!(rig.control.counters().drift_skips, 0, "held");
-    assert_eq!(rig.control.lag_frames(), 4096 + 2400 - N as i64);
+    assert_eq!(rig.control.lag_frames(), 4096 + 2600 - N as i64);
     rig.tick();
     assert_eq!(
         rig.control.counters().drift_skips,
@@ -831,7 +831,7 @@ fn a_held_drift_correction_is_made_after_the_fade_out_and_counted_then() {
         counters.drift_skips, 1,
         "made by the first read after the fade-out"
     );
-    assert_eq!(counters.drift_skip_frames, 2400);
+    assert_eq!(counters.drift_skip_frames, 2600);
     assert_eq!(rig.control.lag_frames(), 4096 - N as i64);
     rig.ticks(3);
     assert_fade(&rig.played[from..], f64::from(A), F, w_out, "fade-out");
@@ -851,7 +851,7 @@ fn after_a_fade_out_for_a_held_correction_frames_stay_zero_until_the_correcting_
     rig.play_until_open();
     rig.ticks(4);
     let from = rig.played.len();
-    rig.write(2400);
+    rig.write(2600);
     rig.ticks(6);
     // The frames copied after the fade-out's last one, in its block, stay
     // zero; the correcting read's first frame starts the fade-in.
@@ -892,7 +892,7 @@ fn after_a_fade_out_for_a_held_correction_frames_stay_zero_until_the_correcting_
 #[test]
 fn a_held_correction_stays_within_t_plus_2n_plus_the_fade() {
     let bound = T + 2 * N as i64 + F as i64;
-    assert_eq!(bound, 3664);
+    assert_eq!(bound, 4384);
     // A writer that runs fast, then slow: the error drifts out of the dead
     // band each way and is corrected after each fade-out.
     let delay = 4096i64;
@@ -916,7 +916,7 @@ fn a_held_correction_stays_within_t_plus_2n_plus_the_fade() {
 
     // A writer stall at a hold-back above T + 2N + F: the reader steps back
     // after each fade-out and never reaches W.
-    let delay = 4000;
+    let delay = 4800;
     let mut rig = Rig::new(delay, Signal::Constant);
     rig.play_until_open();
     rig.ticks(4);
@@ -972,9 +972,9 @@ fn holding_corrections_leaves_prime_resync_and_dry_reads_as_they_were() {
     let counters = held.control().counters();
     assert!(counters.primes == 1 && counters.resyncs == 2 && counters.starved_renders > 0);
 
-    // A burst puts both 1976 frames behind: the free reader skips forward at
+    // A burst puts both 2476 frames behind: the free reader skips forward at
     // once, the held one only reports it due and counts nothing.
-    writer.write(&vec![0.25f32; 3000 * 2], 3000);
+    writer.write(&vec![0.25f32; 3500 * 2], 3500);
     let x = held.read_target_held(&mut a, N);
     let y = free.read_target(&mut b, N);
     assert_eq!(
@@ -1051,7 +1051,7 @@ fn no_step_across_a_start_a_stop_or_a_delay_change_exceeds_the_ramps_slope() {
         rig.ticks(20);
         rig.control.set_delay_frames(1200);
         rig.ticks(20);
-        rig.write(2400);
+        rig.write(2600);
         rig.ticks(12);
         let counters = rig.control.counters();
         assert_eq!((counters.resyncs, counters.drift_skips), (2, 1));

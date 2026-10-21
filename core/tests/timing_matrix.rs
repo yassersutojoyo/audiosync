@@ -54,17 +54,24 @@ const SETTLED: f64 = 2.0;
 const PREFILL: f64 = 3.0;
 /// Host time 0 in ns, so the prefill is stamped too.
 const HOST_OFFSET: f64 = 10.0;
-/// Held back, for the strata: beyond the trim's reach (S207).
+/// Held back, for the strata: beyond a lead and the dead band.
 const HELD_MS: f64 = 100.0;
 /// With AirPlay chosen, every local output is held back this much or more.
 const AIRPLAY_MS: f64 = 1700.0;
 
-/// Main's failing cases per invariant on the pinned seed, I1 to I8. A count
+/// The failing cases per invariant on the pinned seed, I1 to I8. A count
 /// above its maximum fails, and so does one below it until the maximum is
 /// lowered to it, so the ratchet never goes slack and every CI system proves
 /// the same counts. Each step of the design sets them to its own measured
-/// counts and says why one rose.
-const RATCHET: [usize; 8] = [14, 34, 3, 31, 44, 32, 0, 2];
+/// counts and says why one rose. Main had 14, 34, 3, 31, 44, 32, 0, 2; the
+/// trim at any hold-back, behind its 15-frame dead zone, lowered I2, I4, I5
+/// and I6 to 14, 21, 3, 24, 29, 20, 0, 2, and raised none. The dead band T
+/// at 50 ms instead of 35 lowered I1, I2 and I3 and raised I4 by 3: in cases
+/// 13, 36 and 41 a 48 kHz output, which has no converter and so no trim
+/// until C2, on a clock 211 to 285 ppm off now drifts up to 50 ms before a
+/// correction, where at 35 ms one correction inside the run brought it back
+/// in line (case 21 adds the same, case 37 loses one).
+const RATCHET: [usize; 8] = [10, 9, 2, 27, 29, 20, 0, 2];
 
 /// I4: how far apart outputs may play beyond a capture block, in ms.
 const ALIGN_SLACK_MS: f64 = 2.0;
@@ -1036,16 +1043,18 @@ fn every_mac_case_of_the_capture_rate_output_that_sets_the_lead_runs_dry() {
 
 // Known-failure probe on main for S208, S209: it pins where main breaks them, so it is not coverage.
 #[test]
-fn every_mac_case_with_a_late_second_callback_corrects_drift() {
+fn every_mac_case_with_a_late_second_callback_corrects_drift_or_plays_early() {
     // The start re-anchor lands on the late second callback before the
-    // floor has formed. C3b flips this to "never".
+    // floor has formed, too close to W by its lateness: past T it is
+    // corrected (I2), inside T it plays that much early all run (I4). C3b
+    // flips this to "never".
     let cases =
         matrix().cases_where(|c| !c.is_stall() && c.k % 4 == 1 && c.platform == Platform::Mac);
     assert!(!cases.is_empty());
     for (case, outcome) in cases {
         assert!(
-            outcome.fails[1],
-            "case {} no longer fails I2:\n{}",
+            outcome.fails[1] || outcome.fails[3],
+            "case {} no longer fails I2 or I4:\n{}",
             case.k,
             outcome.lines.join("\n")
         );
