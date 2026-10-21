@@ -84,14 +84,10 @@ A Windows 11 version (x64 and ARM64) is in the works. It shares the Rust audio e
 
 ## License and credits
 
-Copyright (c) 2026 Yasser Sutojoyo Kusumo
+Copyright (c) 2026 Yasser Sutojoyo Kusumo. AudioSync is free software under the GPL-3.0-or-later, with no warranty; see [`LICENSE`](LICENSE). What it bundles from others, the Poppins font included, is listed with its license in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-AudioSync is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version (GPL-3.0-or-later). It comes with no warranty. The full text is in [`LICENSE`](LICENSE).
-
-What the app bundles from others keeps its own license; [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists everything.
-
-The wordmark typeface, [Poppins](https://github.com/itfoundry/Poppins) (SIL Open Font License 1.1), is bundled in the app.
-
-AudioSync is an independent project. It is not affiliated with, endorsed by, or based on code from Rogue Amoeba; Airfoil is a trademark of Rogue Amoeba Software, LLC, mentioned only to say what AudioSync is an alternative to. Apple, AirPlay and HomePod are trademarks of Apple Inc. The Bluetooth® word mark and logos are registered trademarks owned by Bluetooth SIG, Inc. AudioSync is not affiliated with or endorsed by Apple or Bluetooth SIG.
+Apple, AirPlay and HomePod are trademarks of Apple Inc., Airfoil of Rogue Amoeba Software, LLC, and the Bluetooth® word mark of Bluetooth SIG, Inc. AudioSync isn't affiliated with or endorsed by any of them.
 
 Building, contributing and security reports: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md), [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`SECURITY.md`](SECURITY.md).
+
+And of course, thank god for Anthropic and Claude.
