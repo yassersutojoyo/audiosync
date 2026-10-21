@@ -478,6 +478,8 @@ pub const START: [&str; 5] = ["OPTIONS", "ANNOUNCE", "SETUP", "RECORD", "SET_PAR
 
 pub mod atv;
 
+pub mod hap;
+
 pub mod rig;
 
 pub mod net;

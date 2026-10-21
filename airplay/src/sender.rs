@@ -69,8 +69,8 @@ use std::time::{Duration, Instant};
 
 use crate::clock::SenderClock;
 use crate::discovery::mdns::{DiscoveryError, MdnsBrowser};
-use crate::discovery::{Browser, Device, DeviceKey};
-use crate::error::{ErrorKind, SessionError, UserReason, Warning};
+use crate::discovery::{Browser, Device, DeviceKey, ProtocolPath};
+use crate::error::{ErrorKind, SessionError, UnsupportedReason, UserReason, Warning};
 use crate::input::InputWriter;
 use crate::metadata::{Metadata, MetadataError, TrackInfo};
 use crate::pairing::{self, Credentials, PairingEvent, PinError};
@@ -95,6 +95,19 @@ pub struct SenderConfig {
     /// The sender clock (P89): the host passes the clock its local outputs
     /// run on, or leaves it `None` for one that starts now.
     pub clock: Option<SenderClock>,
+    /// The hidden AirPlay 2 switch (P2), off by default until the real
+    /// receiver checks pass. A host sets it from [`AIRPLAY2_SWITCH_ENV`]
+    /// with [`airplay2_switch`]; while it is off nothing of the AirPlay 2
+    /// path runs (P170).
+    pub airplay2: bool,
+}
+
+/// The environment variable a host reads for [`SenderConfig::airplay2`].
+pub const AIRPLAY2_SWITCH_ENV: &str = "AUDIOSYNC_AIRPLAY2";
+
+/// The switch's value from the environment variable's: on only for `1`.
+pub fn airplay2_switch(value: Option<&str>) -> bool {
+    value == Some("1")
 }
 
 impl Default for SenderConfig {
@@ -103,6 +116,7 @@ impl Default for SenderConfig {
             latency_frames: DEFAULT_LATENCY_FRAMES,
             input_frames: DEFAULT_INPUT_FRAMES,
             clock: None,
+            airplay2: false,
         }
     }
 }
@@ -195,23 +209,31 @@ impl ReceiverInfo {
     }
 }
 
-/// The AirPlay 1 path with the AirPlay 2 path off (P2), then the start
-/// conditions known before connecting (P139). The legacy pairing of an
-/// Apple TV without credentials is no such condition: only a connection
-/// reports PairingRequired (P46), so the plan stays `Ok` for it.
+/// The protocol path (P2), then the start conditions known before
+/// connecting (P139). The legacy pairing of an Apple TV without
+/// credentials is no such condition: only a connection reports
+/// PairingRequired (P46), so the plan stays `Ok` for it.
 pub(crate) fn plan(device: &Device) -> Result<(), ErrorKind> {
-    match plan_with(device, false) {
+    match plan_with(device, false, false) {
         Err(ErrorKind::PairingRequired) => Ok(()),
         plan => plan,
     }
 }
 
-/// The same, for a speaker the host has (or hasn't) credentials for.
-pub(crate) fn plan_with(device: &Device, has_credentials: bool) -> Result<(), ErrorKind> {
-    device
-        .choose_path(false, None)
-        .map_err(ErrorKind::Unsupported)?;
-    device.airplay1_plan(has_credentials)
+/// The same, for a speaker the host has (or hasn't) credentials for, with
+/// the AirPlay 2 switch as the host set it.
+pub(crate) fn plan_with(
+    device: &Device,
+    has_credentials: bool,
+    airplay2: bool,
+) -> Result<(), ErrorKind> {
+    match device.choose_path(airplay2, None) {
+        Ok(ProtocolPath::AirPlay1) => device.airplay1_plan(has_credentials),
+        // The AirPlay 2 session isn't built yet, so the switch only lets
+        // that path be chosen; the speaker stays Unsupported until then.
+        Ok(ProtocolPath::AirPlay2) => Err(ErrorKind::Unsupported(UnsupportedReason::AirPlay2Only)),
+        Err(reason) => Err(ErrorKind::Unsupported(reason)),
+    }
 }
 
 /// A change discovery saw (P7, P18, P19).
@@ -349,7 +371,8 @@ impl Sender {
             inputs.clone(),
             events_out,
             latency_frames.clone(),
-        );
+        )
+        .with_airplay2(config.airplay2);
         let handle = thread::Builder::new()
             .name("airplay-driver".to_owned())
             .spawn(move || driver.run())?;
