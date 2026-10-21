@@ -71,6 +71,7 @@ use crate::clock::SenderClock;
 use crate::discovery::mdns::{DiscoveryError, MdnsBrowser};
 use crate::discovery::{Browser, Device, DeviceKey, ProtocolPath};
 use crate::error::{ErrorKind, SessionError, UnsupportedReason, UserReason, Warning};
+use crate::homekit::HomeKitCredentials;
 use crate::input::InputWriter;
 use crate::metadata::{Metadata, MetadataError, TrackInfo};
 use crate::pairing::{self, Credentials, PairingEvent, PinError};
@@ -136,6 +137,9 @@ pub struct SpeakerOptions {
     /// The credentials of an earlier pairing with this Apple TV (P54): each
     /// session verifies with them before ANNOUNCE (P55). Never logged.
     pub credentials: Option<Credentials>,
+    /// HomeKit credentials of an earlier pairing on the AirPlay 2 path
+    /// (P152): its sessions pair-verify with them (P61). Never logged.
+    pub homekit_credentials: Option<HomeKitCredentials>,
 }
 
 impl SpeakerOptions {
@@ -147,6 +151,7 @@ impl SpeakerOptions {
             password: None,
             pcm: false,
             credentials: None,
+            homekit_credentials: None,
         }
     }
 }
@@ -161,6 +166,10 @@ impl fmt::Debug for SpeakerOptions {
             .field(
                 "credentials",
                 &self.credentials.as_ref().map(Credentials::client_id),
+            )
+            .field(
+                "homekit_credentials",
+                &self.homekit_credentials.as_ref().map(|_| "<hidden>"),
             )
             .finish()
     }
@@ -229,8 +238,8 @@ pub(crate) fn plan_with(
 ) -> Result<(), ErrorKind> {
     match device.choose_path(airplay2, None) {
         Ok(ProtocolPath::AirPlay1) => device.airplay1_plan(has_credentials),
-        // The AirPlay 2 session isn't built yet, so the switch only lets
-        // that path be chosen; the speaker stays Unsupported until then.
+        // The driver starts an AirPlay 2 session before it asks for this
+        // plan, so only a host's view of the device lands here.
         Ok(ProtocolPath::AirPlay2) => Err(ErrorKind::Unsupported(UnsupportedReason::AirPlay2Only)),
         Err(reason) => Err(ErrorKind::Unsupported(reason)),
     }

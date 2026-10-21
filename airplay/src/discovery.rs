@@ -637,6 +637,20 @@ impl Device {
     }
 }
 
+impl Device {
+    /// The `_airplay._tcp` service's addresses in connect order with its SRV
+    /// port: where an AirPlay 2 session connects (P17, P41).
+    pub fn airplay_socket_addrs(&self) -> Vec<SocketAddr> {
+        let Some(endpoint) = self.airplay.as_ref() else {
+            return Vec::new();
+        };
+        connect_order(&endpoint.addresses)
+            .into_iter()
+            .map(|address| address.socket_addr(endpoint.port))
+            .collect()
+    }
+}
+
 /// The connect order of P17: IPv4, then IPv6 global, then IPv6 link-local
 /// with its scope. An IPv4 link-local address (169.254/16) is used only when
 /// there is no other address. Duplicates are dropped; each group keeps the
