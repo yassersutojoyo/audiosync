@@ -6,6 +6,7 @@
 //! calls into this crate a whole buffer at a time.
 
 pub mod airplay_pairings;
+pub mod calibrate;
 pub mod channels;
 pub mod clock;
 pub mod convert;
