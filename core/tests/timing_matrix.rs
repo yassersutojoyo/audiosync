@@ -874,11 +874,13 @@ fn simulate(case: &Case) -> Outcome {
                 let captured_at = value * 1e6 / f64::from(CAPTURE_RATE) - capture_origin;
                 o.delay_before_ms = (played_at - captured_at) * 1000.0;
             }
+        }
+        {
             if let Some(until) = o.observed_until
                 && o.d.first_late.is_some()
                 && frames > 0
-                && ((pull_at > until - 0.1 && pull_at < until + 0.6)
-                    || (o.trace.len() < 400 && (pull_at * 2.0).fract() < 0.02))
+                && ((pull_at > until - 0.05 && pull_at < until + 0.5)
+                    || (o.trace.len() < 400 && (pull_at * 2.0).fract() < 0.03))
             {
                 let value = f64::from(out[(frames - 1) * 2]);
                 let delay = if value != 0.0 {
