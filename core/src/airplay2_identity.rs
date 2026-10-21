@@ -353,6 +353,22 @@ mod tests {
     }
 
     #[test]
+    fn a_file_that_cant_be_read_is_never_written_over() {
+        // A folder in the file's place reads as an error other than NotFound,
+        // as a permission or disk error would.
+        let path = scratch("unreadable.dat");
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("a folder");
+        let (mut store, loaded) = IdentityStore::open(path.clone());
+        assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+        assert!(!store.writable);
+        assert!(store.insert("A1", credentials(2)).is_err());
+        assert_eq!(store.get("A1"), Some(&credentials(2)), "kept for this run");
+        assert!(path.is_dir());
+        let _ = fs::remove_dir_all(&path);
+    }
+
+    #[test]
     fn the_byte_form_is_checked_field_by_field() {
         let mut identity = Airplay2Identity::new([1, 2, 3, 4, 5, 6]);
         identity.insert("A1", credentials(3));
