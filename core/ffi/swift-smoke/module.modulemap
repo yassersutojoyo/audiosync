@@ -1,5 +1,8 @@
 module AudioSyncCore {
     header "../../include/audiosync_core.h"
     link "audiosync_core"
+    // The Google Cast sender's TLS (Secure Transport).
+    link framework "Security"
+    link framework "CoreFoundation"
     export *
 }

@@ -913,10 +913,10 @@ impl Death {
 }
 
 /// How many panics the hook noted in this process, on any thread.
-static PANICS: AtomicU64 = AtomicU64::new(0);
+pub(super) static PANICS: AtomicU64 = AtomicU64::new(0);
 
 /// Where the latest panic the hook noted happened, on any thread.
-static LATEST_PANIC: Mutex<Option<String>> = Mutex::new(None);
+pub(super) static LATEST_PANIC: Mutex<Option<String>> = Mutex::new(None);
 
 thread_local! {
     /// Where the latest panic on this thread happened, until a call here
@@ -950,7 +950,7 @@ fn panic_location(file: &str, line: u32) -> String {
 /// the failure's detail; it then runs the hook that was there before (the
 /// default one prints the panic to standard error). It notes the location
 /// only: a panic's message may hold anything (S205).
-fn note_panic_locations() {
+pub(super) fn note_panic_locations() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
         let previous = panic::take_hook();
@@ -973,7 +973,7 @@ fn note_panic_locations() {
 
 /// The location the hook noted for the latest panic on this thread, which a
 /// call here just caught; taken, so it is never reported twice.
-fn caught_panic_location() -> Option<String> {
+pub(super) fn caught_panic_location() -> Option<String> {
     PANIC_AT.try_with(Cell::take).ok().flatten()
 }
 

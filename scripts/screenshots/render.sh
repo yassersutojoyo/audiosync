@@ -69,6 +69,7 @@ scripts/build_core.sh
 echo "▶ building the renderer"
 swiftc -swift-version 5 "$BUILD/main.swift" "${srcs[@]}" \
   -I Sources/CAudioSyncCore -L core/target/universal-apple-darwin/release -laudiosync_core \
+  -framework Security -framework CoreFoundation \
   -o "$BUILD/render"
 
 "$BUILD/render" "$dest" brand/fonts/Poppins-Medium.ttf $review

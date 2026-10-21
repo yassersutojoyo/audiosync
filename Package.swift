@@ -22,6 +22,9 @@ let package = Package(
                 .linkedFramework("CoreAudio"),
                 .linkedFramework("AudioToolbox"),
                 .linkedFramework("CoreWLAN"),
+                // The core's Google Cast sender reaches TLS through Secure Transport.
+                .linkedFramework("Security"),
+                .linkedFramework("CoreFoundation"),
                 .linkedLibrary("audiosync_core"),
                 .unsafeFlags(["-L", coreLibraryDir])
             ]

@@ -3,8 +3,8 @@
 # calls it through include/audiosync_core.h: the version, the volume curve, the
 # presets, one equalizer pass, a ring with a delay reader (exact delays, no
 # frame played twice), the delay helpers, the local delay model, and the
-# AirPlay sender's handle without discovery. Nothing plays; no audio device or
-# network is touched.
+# AirPlay and Google Cast senders' handles without discovery. Nothing plays; no
+# audio device or network is touched.
 #
 # macOS only (needs swiftc from Xcode or the Command Line Tools).
 # Usage: core/ffi/smoke.sh

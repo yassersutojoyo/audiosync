@@ -9,8 +9,9 @@
  * interleaved stereo float32 frames (L, R) plus a frame count, never one
  * sample per call. The core owns no thread, device or file: the host
  * captures, plays and runs every thread, and calls in here.
- * The one exception is AudioSync's own AirPlay sender (asc_airplay_*), which
- * runs its own threads and network sockets.
+ * The exceptions are AudioSync's own AirPlay and Google Cast senders
+ * (asc_airplay_*, asc_cast_*), which run their own threads and network
+ * sockets.
  *
  * Real-time calls (marked "Real-time safe") never allocate, free, lock, wait,
  * log or make a system call, and never panic: bad arguments make them do
@@ -142,6 +143,68 @@ extern "C" {
 #define ASC_AIRPLAY_PAIRINGS_FAILED -1  /* NULL or dead handle, or NULL, empty or non-UTF-8 path */
 #define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* unreadable or not in the format: ignored, the next pairing replaces it */
 #define ASC_AIRPLAY_PAIRINGS_NEWER -3   /* a newer AudioSync wrote it: ignored and left as it is */
+
+/* The rate of every Cast stream; the Cast input resamples the capture to it. */
+#define ASC_CAST_RATE 48000
+
+/* What a Cast device change reports (AscCastDevice.event). */
+#define ASC_CAST_APPEARED 1 /* discovery found it, or the host added it by address */
+#define ASC_CAST_CHANGED 2  /* its records changed, or it went offline during a session */
+#define ASC_CAST_GONE 3     /* it left the list */
+
+/* What a Cast device is (AscCastDevice.flags), bit by bit. */
+#define ASC_CAST_FLAG_GROUP 1   /* a Cast group: listed, never driven */
+#define ASC_CAST_FLAG_OFFLINE 2 /* its records went away while a session with it runs */
+#define ASC_CAST_FLAG_MANUAL 4  /* added by address; no browse has found its id yet */
+
+/* Why asc_cast_start refused (its *refused). */
+#define ASC_CAST_REFUSED_NONE 0    /* it didn't */
+#define ASC_CAST_REFUSED_BUSY 1    /* another Cast device plays or starts: one at a time */
+#define ASC_CAST_REFUSED_UNKNOWN 2 /* the id is not a listed device */
+#define ASC_CAST_REFUSED_GROUP 3   /* the device is a Cast group */
+#define ASC_CAST_REFUSED_CLOSED 4  /* NULL or dead handle */
+#define ASC_CAST_REFUSED_INVALID 5 /* NULL or non-UTF-8 id */
+
+/* What a Cast event reports (AscCastEvent.kind). */
+#define ASC_CAST_EVENT_STARTED 1           /* the device plays the stream: .format */
+#define ASC_CAST_EVENT_ENDED 2             /* the attempt is over, its last event: .reason, and .error when it failed */
+#define ASC_CAST_EVENT_PLAYING 3           /* the device reports PLAYING */
+#define ASC_CAST_EVENT_CONNECT_FAILED 4    /* a connect attempt failed: .error, the next in .retry_ms */
+#define ASC_CAST_EVENT_RECOVERING 5        /* the channel failed and the sender reconnects */
+#define ASC_CAST_EVENT_RECOVERED 6         /* the session carries on: .relaunched */
+#define ASC_CAST_EVENT_RELOADED 7          /* the device saw the stream end; it was loaded again */
+#define ASC_CAST_EVENT_REBUFFERING 8       /* the receiver ran dry */
+#define ASC_CAST_EVENT_FORMAT_FALLBACK 9   /* the device refused WAV; .format is loaded instead */
+#define ASC_CAST_EVENT_VOLUME 10           /* the device's volume: .level, .muted, .volume_fixed, .step */
+#define ASC_CAST_EVENT_DIAGNOSTICS 11      /* once a second while playing: .drift_ms, .queued_ms, .resync_offered */
+#define ASC_CAST_EVENT_STREAM 12           /* the stream server's log line in .detail */
+#define ASC_CAST_EVENT_COMMAND_FAILED 13   /* a volume, artwork or Resync request failed: .error */
+#define ASC_CAST_EVENT_MEMORY_CHANGED 14   /* store asc_cast_memory_json */
+#define ASC_CAST_EVENT_DISCOVERY_STOPPED 15 /* discovery's mDNS daemon ended; its devices were reported gone */
+#define ASC_CAST_EVENT_FAILED 16           /* the sender stopped working (a bug); destroy it, create a new one; .detail where a panic was, or "" */
+
+/* How a Cast attempt ended (AscCastEvent.reason). */
+#define ASC_CAST_END_STOPPED 1     /* the sender's own teardown */
+#define ASC_CAST_END_TAKEN_OVER 2  /* someone else stopped or replaced the app or the stream */
+#define ASC_CAST_END_DESELECTED 3  /* stopped before it started */
+#define ASC_CAST_END_FAILED 4      /* a failure the session could not recover from: .error */
+
+/* Why something Cast failed (AscCastEvent.error). */
+#define ASC_CAST_ERROR_NONE 0
+#define ASC_CAST_ERROR_CONNECT 1      /* no TCP connection, a TLS failure, or no status in time */
+#define ASC_CAST_ERROR_LAUNCH 2       /* the Default Media Receiver did not launch */
+#define ASC_CAST_ERROR_MEDIA 3        /* the device refused or stopped the stream */
+#define ASC_CAST_ERROR_NO_FETCH 4     /* the device never fetched the stream: name a firewall as the likely cause */
+#define ASC_CAST_ERROR_STREAM 5       /* the stream server could not start */
+#define ASC_CAST_ERROR_NO_SESSION 6   /* no session runs */
+#define ASC_CAST_ERROR_VOLUME_FIXED 7 /* the device's volume is locked */
+#define ASC_CAST_ERROR_VOLUME 8       /* the device was not ready, or has no volume step */
+#define ASC_CAST_ERROR_ARTWORK 9      /* artwork that is not PNG or JPEG, or over 1280 by 720 */
+#define ASC_CAST_ERROR_GROUP 10       /* the device is a Cast group */
+
+/* A Cast stream's format (AscCastEvent.format). */
+#define ASC_CAST_FORMAT_WAV 1
+#define ASC_CAST_FORMAT_FLAC 2
 
 /* What an output device's own volume and mute mean for its row (AscDeviceVolumeDecision.decision). */
 #define ASC_DEVICE_VOLUME_UNKNOWN 0       /* neither part is known: no hint */
@@ -1177,6 +1240,262 @@ size_t asc_airplay_input_write(AscAirPlayInput *input, const float *samples, siz
  * address or pointer does nothing.
  */
 void asc_airplay_input_destroy(AscAirPlayInput **input);
+
+/* ---- Google Cast sender (AudioSync's own, cast/) --------------------------- */
+
+/*
+ * AudioSync's own Google Cast sender: discovery, one device's session at a
+ * time, its events, the device memory the host stores between runs, and
+ * the capture's audio through an input handle. Devices go by their id: 32
+ * hex digits from discovery, or "manual:<ip:port>" for one added by
+ * address. A Cast device is a measured-offset output: nothing ties its
+ * playback to a clock, so the host delays its other outputs by the offset
+ * stored here per device, and Resync is only ever a user action.
+ * Every asc_cast_* call on a sender handle runs on one control thread at a
+ * time, never an audio thread, and none waits on the network: the sender's
+ * worker thread makes every network call. asc_cast_destroy is the one call
+ * that waits. An input handle (AscCastInput) has its own rules, below.
+ *
+ * A bug in the sender never ends the host: a panic inside a call returns
+ * that call's failure value (NULL, false, 0 or -1) and makes the handle
+ * dead, as does a panic that ends its worker thread. A dead handle's calls
+ * do nothing, except that asc_cast_next_event reports ASC_CAST_EVENT_FAILED
+ * once; the host then destroys it and may create a new one. Its .detail is
+ * "panic at <file>:<line>", "latest panic at <file>:<line>" or "", as for
+ * the AirPlay sender.
+ */
+typedef struct AscCast AscCast;
+
+/*
+ * The capture's way into a Cast sender (asc_cast_take_input). Its write runs
+ * on one capture thread at a time, its rate and fade-out requests on any
+ * thread, and its destroy once no write can run. It may outlive its sender,
+ * whose audio then goes nowhere.
+ */
+typedef struct AscCastInput AscCastInput;
+
+/*
+ * One device change. The strings are NUL-terminated UTF-8 that the handle
+ * owns, valid until the next asc_cast_next_device call on it or its destroy.
+ * A gone device has only its id; its name and model are "", its flags 0.
+ */
+typedef struct AscCastDevice {
+    int32_t event;     /* ASC_CAST_APPEARED, _CHANGED or _GONE */
+    const char *id;    /* 32 hex digits, or "manual:<ip:port>" */
+    const char *name;  /* the name it announces, "" when none */
+    const char *model; /* its model, "" when none */
+    uint32_t flags;    /* ASC_CAST_FLAG_* bits */
+} AscCastDevice;
+
+/*
+ * One thing that happened to an attempt, or to the sender. The strings are
+ * NUL-terminated UTF-8 that the handle owns, valid until the next
+ * asc_cast_next_event call on it or its destroy. Fields a kind doesn't use
+ * are 0 or "", except retry_ms, which is then -1.
+ */
+typedef struct AscCastEvent {
+    int32_t kind;        /* ASC_CAST_EVENT_* */
+    uint64_t attempt;    /* what asc_cast_start returned for it; 0 for none */
+    const char *id;      /* the attempt's device id; "" for none */
+    int32_t reason;      /* an ended event's ASC_CAST_END_* */
+    int32_t error;       /* ASC_CAST_ERROR_* */
+    int32_t format;      /* ASC_CAST_FORMAT_* */
+    int64_t retry_ms;    /* ms until the next connect attempt */
+    double level;        /* the device's volume, 0 to 1 */
+    bool muted;
+    bool volume_fixed;   /* the device's volume can't be changed: show the control as unavailable */
+    double step;         /* the device's volume step; 0 when it reports none */
+    double drift_ms;     /* dropped audio plus rebuffering since the stream was loaded */
+    double queued_ms;    /* audio waiting in the sender's queue */
+    bool resync_offered; /* the drift is over 250 ms: the host may offer Resync */
+    bool relaunched;     /* the app had to be launched and loaded again */
+    const char *detail;  /* an error's text, a log line, a panic location; for a debug log */
+} AscCastEvent;
+
+/*
+ * Starts a Cast sender's worker thread with the device memory the host
+ * stored from asc_cast_memory_json; NULL, or text that doesn't read, starts
+ * empty, and damaged entries are skipped. Discovery waits for
+ * asc_cast_start_discovery. Returns NULL when the thread can't start.
+ */
+AscCast *asc_cast_create(const char *memory_json);
+
+/*
+ * Stops the sender and frees it: a running or starting session is torn down
+ * within 3 s, which this call waits for (about 3.5 s at most), so call it
+ * from the quit path, off the main thread. Takes the address of the host's
+ * pointer and sets that pointer to NULL; a NULL address or pointer does
+ * nothing. An input taken from it stays valid until its own destroy.
+ */
+void asc_cast_destroy(AscCast **cast);
+
+/*
+ * Starts browsing the local network for Cast devices over multicast DNS;
+ * they arrive through asc_cast_next_device. True when it runs already.
+ * Returns false when the handle is NULL or dead or multicast DNS can't start.
+ */
+bool asc_cast_start_discovery(AscCast *cast);
+
+/*
+ * Stops browsing: every device discovery found is reported gone, except one
+ * in a session, which stays listed as offline. Devices added by address stay.
+ */
+void asc_cast_stop_discovery(AscCast *cast);
+
+/*
+ * Adds a device by address, for a network where multicast DNS is blocked:
+ * "ip:port", "[ipv6]:port" or an address alone (port 8009). It is listed as
+ * "manual:<ip:port>" until a browse finds its id, then reported gone and
+ * listed again under that id. Returns false for a NULL or dead handle or an
+ * address that doesn't read.
+ */
+bool asc_cast_add_device(AscCast *cast, const char *address);
+
+/*
+ * Takes the next device change, if one is waiting, into *device and returns
+ * true. Returns false, leaving *device as it was, when none is waiting or
+ * either pointer is NULL. Never waits.
+ */
+bool asc_cast_next_device(AscCast *cast, AscCastDevice *device);
+
+/*
+ * Takes the next event, if one is waiting, into *event and returns true.
+ * Returns false, leaving *event as it was, when none is waiting or either
+ * pointer is NULL. Never waits. Every attempt's events carry its number,
+ * and every attempt ends with exactly one ASC_CAST_EVENT_ENDED. A dead
+ * sender reports ASC_CAST_EVENT_FAILED once, in place of whatever still
+ * waited, and nothing after it.
+ */
+bool asc_cast_next_event(AscCast *cast, AscCastEvent *event);
+
+/*
+ * Starts a session on the listed device `id` in the background and returns
+ * its attempt number (1 or more). The stream plays what the input writes
+ * from then on, with the metadata and artwork set last; the format that
+ * worked last on the device is tried first. Returns 0, starting nothing,
+ * for a NULL or dead handle, an id that isn't listed, a group, or while
+ * another Cast device plays or starts; *refused (when refused isn't NULL)
+ * gets the ASC_CAST_REFUSED_* code, ASC_CAST_REFUSED_NONE on success.
+ */
+uint64_t asc_cast_start(AscCast *cast, const char *id, int32_t *refused);
+
+/*
+ * Stops the session, or the attempt to start one: connect retries and the
+ * waits for the device end at once, and the teardown runs on the worker.
+ * Another device may start right away; this attempt's ended event follows.
+ */
+void asc_cast_stop(AscCast *cast);
+
+/*
+ * Sets the device's volume, 0 to 1, clamped. Show the level volume events
+ * report, and while the user drags a slider send at most one every 100 ms.
+ * Returns false, sending nothing, for a NULL or dead handle, a level that
+ * isn't finite, or when no session runs or starts; a locked volume comes as
+ * ASC_CAST_EVENT_COMMAND_FAILED with ASC_CAST_ERROR_VOLUME_FIXED.
+ */
+bool asc_cast_set_volume(AscCast *cast, double level);
+
+/*
+ * Mutes or unmutes the device, apart from its level. Returns false, sending
+ * nothing, for a NULL or dead handle or when no session runs or starts.
+ */
+bool asc_cast_set_muted(AscCast *cast, bool muted);
+
+/*
+ * Moves the device's volume one of its own steps up or down. Returns false,
+ * sending nothing, for a NULL or dead handle or when no session runs or
+ * starts.
+ */
+bool asc_cast_step_volume(AscCast *cast, bool up);
+
+/*
+ * Sets the track's title, artist and album (UTF-8) for the next time the
+ * stream is loaded: the next start, or a Resync; a playing stream is not
+ * reloaded for it. NULL or "" leaves a field out. Returns false, changing
+ * nothing, for a NULL or dead handle or a text that isn't UTF-8.
+ */
+bool asc_cast_set_metadata(AscCast *cast, const char *title, const char *artist, const char *album);
+
+/*
+ * Sets the track's artwork, a PNG or JPEG of at most 1280 by 720, for the
+ * next load of this and every later session; NULL or a length of 0 forgets
+ * it. A device or sender refusing the image comes as
+ * ASC_CAST_EVENT_COMMAND_FAILED with ASC_CAST_ERROR_ARTWORK. Returns false,
+ * changing nothing, for a NULL or dead handle, NULL bytes with a length, or
+ * more than 8 MiB.
+ */
+bool asc_cast_set_artwork(AscCast *cast, const uint8_t *bytes, size_t len);
+
+/*
+ * The user's Resync: the stream is loaded again on the same app, which brings
+ * the latency back toward where it started, at the cost of a gap. Never sent
+ * by the core on its own. Returns false, sending nothing, for a NULL or dead
+ * handle or when no session runs or starts.
+ */
+bool asc_cast_resync(AscCast *cast);
+
+/*
+ * Stores the user's measured offset for device `id` in ms, rounded to whole
+ * ms; the host delays its other outputs by it. The device needn't be listed.
+ * Store asc_cast_memory_json afterwards. Returns false for a NULL or dead
+ * handle, an id that doesn't read, or an offset outside 0 to 120 000 ms.
+ */
+bool asc_cast_set_offset(AscCast *cast, const char *id, double offset_ms);
+
+/*
+ * The offset stored for device `id` in ms; -1 when none is, and for a NULL
+ * or dead handle or an id that doesn't read.
+ */
+double asc_cast_offset_ms(AscCast *cast, const char *id);
+
+/*
+ * The device memory to store between runs, as JSON: per device, the format
+ * that last worked and the offset. NUL-terminated UTF-8 that the handle
+ * owns, valid until the next asc_cast_memory_json call on it or its destroy.
+ * NULL for a NULL or dead handle.
+ */
+const char *asc_cast_memory_json(AscCast *cast);
+
+/*
+ * The sender's audio input, for the capture thread: the first call hands it
+ * over, every later one returns NULL, as does a NULL or dead handle. It
+ * starts without a rate, so its writes are dropped until
+ * asc_cast_input_set_rate gives it one.
+ */
+AscCastInput *asc_cast_take_input(AscCast *cast);
+
+/*
+ * Any thread: the rate in Hz of the audio the capture writes from now on,
+ * rounded to whole hertz. The next write takes it in and starts the
+ * resampler afresh, with a 20 ms fade-in from silence, so call it at each
+ * capture start, even at an unchanged rate. Returns false, changing
+ * nothing, for a NULL handle or a rate outside 8000 to 384 000 Hz.
+ * Real-time safe.
+ */
+bool asc_cast_input_set_rate(AscCastInput *input, double rate);
+
+/*
+ * Any thread, at a capture stop: the input fades out over the next 20 ms of
+ * frames written and hands zeros after them, until the next
+ * asc_cast_input_set_rate fades it in again. Does nothing for a NULL handle.
+ * Real-time safe.
+ */
+void asc_cast_input_request_fade_out(AscCastInput *input);
+
+/*
+ * Capture thread: hands `frames` interleaved stereo frames at the rate last
+ * set to the running session, resampled to ASC_CAST_RATE. Returns the
+ * frames at that rate its ring took: 0 before a rate is set and while no
+ * session runs or starts; frames that don't fit are dropped. Real-time
+ * safe. Returns 0 once a write panicked.
+ */
+size_t asc_cast_input_write(AscCastInput *input, const float *samples, size_t frames);
+
+/*
+ * Frees an input handle. Takes the address of the host's pointer and sets
+ * that pointer to NULL; a NULL address or pointer does nothing.
+ */
+void asc_cast_input_destroy(AscCastInput **input);
 
 #ifdef __cplusplus
 }
