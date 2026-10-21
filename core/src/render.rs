@@ -152,8 +152,14 @@ pub const LATE_CAP_MS: u64 = 50;
 
 /// How fast the earliest lateness a renderer saw rises, in ns per second of
 /// device frames (S209). The floor never lies more than [`LATE_CAP_MS`]
-/// below the current callback, so early callbacks stop counting within 50 s.
+/// below the current callback, so early callbacks stop counting within 50 s,
+/// sooner by [`EARLIEST_WINDOW_MS`].
 pub const EARLIEST_LEAK_NS_PER_S: u64 = 1_000_000;
+
+/// A window of device frames, in ms (S209): when every callback in one lies
+/// more than [`LATE_COUNT_MS`] above the floor, the floor rises to the
+/// window's lowest, so a burst of early stamps stops counting within two.
+pub const EARLIEST_WINDOW_MS: u64 = 1_000;
 
 /// A callback later than this, in ms, counts as late in
 /// [`Renderer::late_callbacks`] (S209).
@@ -525,6 +531,10 @@ pub struct Renderer {
     /// The lowest and second lowest `now - output time` seen, in ns, with
     /// their leak (S209).
     earliest: Option<[i64; 2]>,
+    /// The lowest `now - output time` in the current [`EARLIEST_WINDOW_MS`]
+    /// window, and the device frames that window has had.
+    window_low: i64,
+    window_frames: u64,
 }
 
 impl fmt::Debug for Renderer {
@@ -592,6 +602,8 @@ impl Renderer {
             tracking: RESTART,
             track_frames: f64::from(device_rate) * f64::from(TRACK_MS) / 1000.0,
             earliest: None,
+            window_low: i64::MAX,
+            window_frames: 0,
         })
     }
 
@@ -817,7 +829,17 @@ impl Renderer {
                 [low, second.min(late)]
             }
         });
-        let floor = late.saturating_sub(cap);
+        let mut floor = late.saturating_sub(cap);
+        self.window_low = self.window_low.min(late);
+        self.window_frames += frames as u64;
+        if self.window_frames * 1000 >= EARLIEST_WINDOW_MS * u64::from(self.device_rate.max(1)) {
+            let count = (LATE_COUNT_MS * 1_000_000) as i64;
+            if self.window_low > second.max(floor).saturating_add(count) {
+                floor = self.window_low;
+            }
+            self.window_low = i64::MAX;
+            self.window_frames = 0;
+        }
         self.earliest = Some([low.max(floor), second.max(floor)]);
         // The floor is the second lowest, so one stray early callback, such
         // as a device's first, never counts.

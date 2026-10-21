@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use audiosync_core::fade::FadeState;
 use audiosync_core::reader::{Reader, ReaderCounters};
-use audiosync_core::render::{EARLIEST_LEAK_NS_PER_S, LATE_CAP_MS, Renderer, RendererControl};
+use audiosync_core::render::{EARLIEST_WINDOW_MS, LATE_CAP_MS, Renderer, RendererControl};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 
@@ -60,6 +60,8 @@ struct Output {
     delays: Vec<f64>,
     /// When each of those callbacks played, in s.
     played: Vec<f64>,
+    /// The late callbacks counted up to each of those callbacks.
+    counted: Vec<u64>,
 }
 
 impl Output {
@@ -96,6 +98,8 @@ struct Run {
     delays: Vec<Vec<f64>>,
     /// When each of those delays played, in s.
     played: Vec<Vec<f64>>,
+    /// The late callbacks counted up to each of those delays.
+    counted: Vec<Vec<u64>>,
 }
 
 /// The host clock in ns at time `at`, a second ahead so that the session's
@@ -145,6 +149,7 @@ fn run(setups: &[Setup], seconds: u128, timed: bool) -> Run {
                 seed: 0x9E37_79B9_7F4A_7C15 ^ (i as u64 + 1).rotate_left(29),
                 delays: Vec::new(),
                 played: Vec::new(),
+                counted: Vec::new(),
             };
             output.schedule();
             output
@@ -208,6 +213,7 @@ fn run(setups: &[Setup], seconds: u128, timed: bool) -> Run {
             let delay = played_at as f64 / SECOND as f64 - captured_at;
             output.delays.push(delay * 1000.0);
             output.played.push(played_at as f64 / SECOND as f64);
+            output.counted.push(output.control.late_callbacks());
         }
         output.pulls += 1;
         output.last_at = pull_at;
@@ -225,6 +231,7 @@ fn run(setups: &[Setup], seconds: u128, timed: bool) -> Run {
             .map(|o| (o.control.late_max_ns(), o.control.late_callbacks()))
             .collect(),
         played: outputs.iter().map(|o| o.played.clone()).collect(),
+        counted: outputs.iter().map(|o| o.counted.clone()).collect(),
         delays: outputs.into_iter().map(|output| output.delays).collect(),
     }
 }
@@ -386,12 +393,13 @@ fn one_stray_early_callback_never_moves_an_output() {
 
 // covers: S209
 #[test]
-fn two_early_callbacks_in_a_row_move_an_output_at_most_the_cap_until_the_floor_leaks_back() {
-    // Both early callbacks set the floor, so later on-time callbacks count
-    // as late by up to the cap until the floor has risen back to them.
+fn two_early_callbacks_in_a_row_stop_counting_after_two_windows() {
+    // Both early callbacks set the floor, so the callbacks after them read
+    // as late by the cap until a whole window of them lifts it back.
+    let recovered_s = (2 * EARLIEST_WINDOW_MS) as f64 / 1000.0 + 0.5;
     let block_ms = BLOCK as f64 * 1000.0 / f64::from(RATE);
     let cap_ms = LATE_CAP_MS as f64;
-    let recovered_s = (LATE_CAP_MS * 1_000_000 / EARLIEST_LEAK_NS_PER_S) as f64;
+    let cap_frames = (LATE_CAP_MS * u64::from(RATE) / 1000) + BLOCK as u64;
     let steady: Vec<Setup> = BLUETOOTH_PAIR
         .iter()
         .map(|&setup| Setup {
@@ -411,17 +419,25 @@ fn two_early_callbacks_in_a_row_move_an_output_at_most_the_cap_until_the_floor_l
         let without = run(&setups, 60, true);
         let seen = run(&two_early, 60, true);
         for (i, setup) in two_early.iter().enumerate() {
+            // The floor's rise leaves the reader's delay too long by what the
+            // early callbacks added, and one drift correction takes it back.
             let (early, end) = &seen.counters[i];
             assert_eq!(
                 (
                     end.starved_renders - early.starved_renders,
-                    end.drift_skips - early.drift_skips,
                     end.drift_silences - early.drift_silences,
                 ),
-                (0, 0, 0),
+                (0, 0),
                 "{setup:?}: {end:?}"
             );
-            assert!(seen.late[i].0 >= (LATE_CAP_MS - 1) * 1_000_000, "{setup:?}");
+            assert!(
+                end.drift_skips - early.drift_skips <= 1,
+                "{setup:?}: {end:?}"
+            );
+            assert!(
+                end.drift_skip_frames - early.drift_skip_frames <= cap_frames,
+                "{setup:?}: {end:?}"
+            );
             let tuned = &without.delays[i];
             let mut low = tuned.iter().copied().fold(f64::INFINITY, f64::min);
             let mut high = tuned.iter().copied().fold(f64::NEG_INFINITY, f64::max);
@@ -432,14 +448,18 @@ fn two_early_callbacks_in_a_row_move_an_output_at_most_the_cap_until_the_floor_l
                 "{setup:?}: {:.2} ms past its tuned delay",
                 most - high
             );
-            let after: Vec<f64> = delays
+            let from = seen.played[i]
                 .iter()
-                .zip(&seen.played[i])
-                .filter(|&(_, &at)| at >= recovered_s)
-                .map(|(&delay, _)| delay)
-                .collect();
+                .position(|&at| at >= recovered_s)
+                .unwrap();
+            let counted = &seen.counted[i];
+            let late_after = counted[counted.len() - 1] - counted[from];
+            if setup.late_ms == 0 {
+                assert_eq!(late_after, 0, "{setup:?}: late after {recovered_s} s");
+            }
+            let after = &delays[from..];
             assert!(after.len() > 500, "{setup:?}: {} delays", after.len());
-            for delay in after {
+            for &delay in after {
                 low = low.min(delay);
                 high = high.max(delay);
             }
