@@ -27,12 +27,11 @@ fn a_capture_format_change_restarts_the_session_automatically() {
 
 // covers: S21
 #[test]
-fn a_lost_source_stops_deselects_airplay_and_posts_a_source_notice() {
+fn a_lost_source_stops_keeps_the_speakers_chosen_and_posts_a_source_notice() {
     assert_eq!(
         reaction(&Incident::SourceLost),
         Reaction {
             stop_session: true,
-            deselect_airplay: true,
             notice: Some(NoticeSubject::Source),
             ..Reaction::default()
         }
@@ -186,7 +185,7 @@ fn switching_streaming_off_by_hand_holds_auto_connect() {
 
 // covers: S121
 #[test]
-fn a_failed_start_stops_everything_deselects_airplay_and_alerts_only_a_user() {
+fn a_failed_start_stops_everything_keeps_the_speakers_chosen_and_alerts_only_a_user() {
     for incident in [
         Incident::StartFailed {
             origin: StartOrigin::User,
@@ -196,13 +195,13 @@ fn a_failed_start_stops_everything_deselects_airplay_and_alerts_only_a_user() {
         },
     ] {
         let reaction = reaction(&incident);
-        assert!(reaction.stop_session && reaction.deselect_airplay && reaction.alert);
+        assert!(reaction.stop_session && !reaction.deselect_airplay && reaction.alert);
         assert_eq!(reaction.notice, Some(NoticeSubject::Start));
     }
     let automatic = reaction(&Incident::StartFailed {
         origin: StartOrigin::AutoConnect,
     });
-    assert!(automatic.stop_session && automatic.deselect_airplay && !automatic.alert);
+    assert!(automatic.stop_session && !automatic.deselect_airplay && !automatic.alert);
 }
 
 // covers: S122
@@ -246,13 +245,13 @@ fn every_error_state_has_its_reaction() {
         (
             Incident::MicrophoneDenied { origin: user },
             true,
-            true,
+            false,
             Some(NoticeSubject::Start),
         ),
         (
             Incident::StartFailed { origin: user },
             true,
-            true,
+            false,
             Some(NoticeSubject::Start),
         ),
         (
@@ -265,7 +264,7 @@ fn every_error_state_has_its_reaction() {
         (
             Incident::SourceLost,
             true,
-            true,
+            false,
             Some(NoticeSubject::Source),
         ),
         (
