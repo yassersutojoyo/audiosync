@@ -9,6 +9,7 @@
 
 use audiosync_core::eq::{self, EqSettings};
 use audiosync_core::policy::device_volume::Hint;
+use audiosync_core::policy::source_quit::WhenSourceQuits;
 #[cfg(any(not(windows), test))]
 use audiosync_core::volume;
 
@@ -32,10 +33,6 @@ pub enum SourceKind {
     /// One app's audio.
     App,
     /// An input device (line in, microphone).
-    #[cfg_attr(
-        all(windows, not(test)),
-        expect(dead_code, reason = "the Windows backend offers no input devices yet")
-    )]
     Input,
 }
 
@@ -57,6 +54,10 @@ pub enum SpeakerKind {
     Headphones,
     Bluetooth,
     Usb,
+    /// Shown with the headphones glyph and "USB" as its kind.
+    UsbHeadphones,
+    /// Shown with the speakers glyph and "USB" as its kind.
+    UsbSpeakers,
     Hdmi,
     DisplayPort,
     Virtual,
@@ -74,7 +75,8 @@ impl SpeakerKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Availability {
     Open,
-    /// It asks for a PIN, which the user types once when switching it on.
+    /// It asks for a PIN or a password, which the user types when switching
+    /// it on.
     NeedsCode,
     /// A pairing with it runs: the PIN prompt is open or about to open.
     #[cfg_attr(
@@ -89,8 +91,6 @@ pub enum Availability {
         expect(dead_code, reason = "only the Windows backend pairs")
     )]
     WaitingToPair,
-    /// It asks for a password, which AudioSync for Windows can't send yet.
-    PasswordNotYet,
     /// It needs a kind of pairing AudioSync for Windows can't do yet.
     #[cfg_attr(
         all(not(windows), not(test)),
@@ -127,8 +127,9 @@ pub enum AirPlayProblem {
     Busy,
     /// It turned the stream down; AudioSync tries again.
     Refused,
-    /// It asks for a password, which AudioSync for Windows can't send yet.
-    PasswordNotYet,
+    /// It asks for a password AudioSync doesn't have, or turned the one it
+    /// had down; switching it on asks for it.
+    NeedsPassword,
     /// An Apple TV that needs pairing with a PIN first; switching it on
     /// pairs it.
     NeedsPin,
@@ -216,6 +217,17 @@ pub struct PinPrompt {
     pub wrong_pin: bool,
 }
 
+/// The password prompt of an AirPlay speaker the user switched on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PasswordPrompt {
+    /// The speaker's ID.
+    pub speaker_id: String,
+    /// The speaker's name.
+    pub name: String,
+    /// The speaker turned the last password down.
+    pub wrong: bool,
+}
+
 impl Speaker {
     /// Whether the speaker lists show it. A virtual output (a loopback
     /// driver, a voice changer, a meeting app's device) is listed only while
@@ -259,11 +271,23 @@ pub enum NoticeMessage {
     NoSpeaker,
     /// The app being captured quit, so streaming stopped.
     SourceQuit { source: String },
+    /// The app being captured quit, so streaming went on with the whole
+    /// system (spec S227).
+    SourceSwitched { source: String },
     /// The chosen app isn't running, so streaming didn't start.
     SourceNotRunning { source: String },
     /// Capturing the chosen app would capture AudioSync's own sound too, so
     /// streaming didn't start.
     SourceRefused { source: String },
+    /// The chosen input device isn't connected, so streaming didn't start.
+    InputNotConnected { source: String },
+    /// The input device being captured was disconnected, so streaming
+    /// stopped.
+    InputDisconnected { source: String },
+    /// Windows' privacy settings block microphone access for desktop apps,
+    /// so the input device can't be captured. The notice opens those
+    /// settings.
+    MicrophoneBlocked { source: String },
     /// Capture couldn't start.
     CaptureFailed,
     /// Capture stopped working while streaming, so streaming stopped.
@@ -326,6 +350,13 @@ pub enum NoticeMessage {
         shared: Vec<String>,
         default_output: Option<String>,
     },
+    /// Windows refused the Run value, so Launch at Sign-In stays off.
+    LaunchAtLoginFailed,
+    /// Windows refused to remove the Run value, so Launch at Sign-In stays on.
+    LaunchAtLoginNotRemoved,
+    /// The Run value is written, but Task Manager or Settings has AudioSync
+    /// turned off as a startup app; it is turned on again there.
+    LaunchAtLoginOffInSettings,
 }
 
 /// How a speaker or group row shows: playing only while streaming is on.
@@ -379,6 +410,8 @@ pub struct AppState {
     pub notices: Vec<Notice>,
     /// The PIN prompt to show, while a pairing asks for a PIN.
     pub pin_prompt: Option<PinPrompt>,
+    /// The password prompt to show, while a speaker asks for its password.
+    pub password_prompt: Option<PasswordPrompt>,
     /// The name of the reference output, which the other outputs' offsets
     /// are relative to; `None` without one (spec S174, S181).
     pub reference_name: Option<String>,
@@ -388,6 +421,8 @@ pub struct AppState {
     /// AirPlay discovery runs but has found no speaker for a while: the
     /// speaker list says to check the network and Windows Firewall.
     pub airplay_none_found: bool,
+    /// What a session does when the app it captures quits (spec S227).
+    pub when_source_quits: WhenSourceQuits,
 }
 
 impl AppState {
@@ -488,6 +523,7 @@ pub trait Backend {
     fn dismiss_notice(&mut self, id: u64);
     fn dismiss_all_notices(&mut self);
     fn refresh_devices(&mut self);
+    fn set_when_source_quits(&mut self, setting: WhenSourceQuits);
 
     /// The fix under speaker `id`'s device-volume hint: raises its own
     /// volume in Windows to 75 % when low and unmutes it when muted
@@ -499,6 +535,12 @@ pub trait Backend {
 
     /// The user cancelled the pairing with speaker `id`; it stays off.
     fn cancel_pairing(&mut self, _id: &str) {}
+
+    /// The password the user typed for speaker `id`.
+    fn submit_password(&mut self, _id: &str, _password: &str) {}
+
+    /// The user cancelled the password prompt of speaker `id`; it is off.
+    fn cancel_password(&mut self, _id: &str) {}
 
     /// Forgets the pairing with speaker `id`: it asks for a PIN again next
     /// time.
@@ -711,7 +753,6 @@ impl MockBackend {
             ),
         ];
         speakers[3].availability = Availability::NeedsCode;
-        speakers[6].availability = Availability::PasswordNotYet;
         speakers[2].auto_connect = true;
         // The PC's speakers left at 13 % in Windows.
         speakers[0].device_volume = Some(Hint::Low { percent: 13 });
@@ -734,9 +775,11 @@ impl MockBackend {
             equalizer: EqSettings::default(),
             notices: Vec::new(),
             pin_prompt: None,
+            password_prompt: None,
             reference_name: Some("Speakers".into()),
             airplay_delay_ms: Some(1750.0),
             airplay_none_found: false,
+            when_source_quits: WhenSourceQuits::Stop,
         };
         MockBackend { state, next_id: 1 }
     }
@@ -762,6 +805,21 @@ impl MockBackend {
     #[cfg(test)]
     pub fn add_speaker(&mut self, speaker: Speaker) {
         self.state.speakers.push(speaker);
+    }
+
+    /// Has the speaker `id` ask for its password; `wrong`: it turned the
+    /// last one down.
+    #[cfg(test)]
+    pub fn ask_password(&mut self, id: &str, wrong: bool) {
+        let name = self
+            .speaker_mut(id)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        self.state.password_prompt = Some(PasswordPrompt {
+            speaker_id: id.into(),
+            name,
+            wrong,
+        });
     }
 
     /// AirPlay discovery has found nothing for a while: Connected Speakers
@@ -796,6 +854,10 @@ impl Backend for MockBackend {
         if self.state.sources.iter().any(|s| s.id == id) {
             self.state.source_id = id.into();
         }
+    }
+
+    fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
+        self.state.when_source_quits = setting;
     }
 
     fn set_master_volume(&mut self, position: f64) {
@@ -906,6 +968,17 @@ impl Backend for MockBackend {
         if let Some(speaker) = self.speaker_mut(id) {
             speaker.device_volume = None;
         }
+    }
+
+    fn submit_password(&mut self, id: &str, password: &str) {
+        if !password.is_empty() && self.state.password_prompt.take().is_some() {
+            self.set_speaker_enabled(id, true);
+        }
+    }
+
+    fn cancel_password(&mut self, id: &str) {
+        self.state.password_prompt = None;
+        self.set_speaker_enabled(id, false);
     }
 }
 

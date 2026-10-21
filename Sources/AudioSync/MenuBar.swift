@@ -21,11 +21,17 @@ final class AppModel: ObservableObject {
         var autoConnect = false
         /// From the AirPlay sender's discovery; always `.open` for local speakers.
         var availability: SpeakerAvailability = .open
+        /// The name macOS or AirPlay discovery reports; `name` is the user's
+        /// when they renamed the speaker (`SpeakerNames`).
+        var systemName = ""
 
         /// A speaker AudioSync streams to through AirPlay, not a local output.
         var isAirPlay: Bool { tag == .airplay }
         /// Stable key across both kinds, used by groups and auto-connect.
         var key: String { SpeakerKey.make(id: id, airplay: isAirPlay) }
+        var isRenamed: Bool { !systemName.isEmpty && name != systemName }
+        /// The system name when renamed, for VoiceOver labels.
+        var renamedFrom: String? { isRenamed ? systemName : nil }
     }
 
     struct Group: Identifiable, Equatable {
@@ -69,8 +75,11 @@ final class AppModel: ObservableObject {
         var renameGroup: (String) -> Void = { _ in }
         var newGroup: () -> Void = {}
         var setAutoConnect: (String, Bool) -> Void = { _, _ in }
+        /// Speaker key, system name, the name typed (`SpeakerNames.rename`).
+        var renameSpeaker: (String, String, String) -> Void = { _, _, _ in }
         var setLaunchAtLogin: (Bool) -> Void = { _ in }
         var setShowVirtualDevices: (Bool) -> Void = { _ in }
+        var setSwitchWhenSourceQuits: (Bool) -> Void = { _ in }
         var setAppearance: (AppAppearance) -> Void = { _ in }
         var transport: (NowPlayingMonitor.Command) -> Void = { _ in }
         var quit: () -> Void = {}
@@ -108,16 +117,42 @@ final class AppModel: ObservableObject {
     @Published var groups: [Group] = []
     @Published var launchAtLogin = false
     @Published var showVirtualDevices = false
+    @Published var switchWhenSourceQuits = false
     @Published var appearance = AppAppearance.system
     /// Rows whose sync controls are expanded. Lives here rather than in view
     /// @State: the Command Line Tools toolchain ships without SwiftUI's macro plugins.
     @Published private(set) var delayPanels = DelayPanels()
     private var drafts: [String: SyncDraft] = [:]
+    /// The row whose delay field lost the focus to the click being handled
+    /// now (`MainWindowController`): if that click closes the panel, the
+    /// row's delay value takes the focus, as when the field still had it.
+    var delayFocusLeftByClick: String?
     func draft(for id: String) -> SyncDraft {
         if let d = drafts[id] { return d }
         let d = SyncDraft()
         drafts[id] = d
         return d
+    }
+    /// The speaker whose name is being edited in its row, and the text typed
+    /// there. Like a delay field: Return or the focus leaving applies it,
+    /// Escape drops it.
+    @Published private(set) var rename = SpeakerRename()
+    var renaming: String? { rename.target?.id }
+    var renameText: String {
+        get { rename.text }
+        set { rename.text = newValue }
+    }
+    func startRename(_ speaker: Speaker) {
+        let target = SpeakerRename.Target(id: speaker.id, key: speaker.key, system: speaker.systemName)
+        apply(rename.start(target, name: speaker.name))
+    }
+    func commitRename(_ speaker: Speaker) { apply(rename.commit(id: speaker.id)) }
+    func dropRename() { rename.drop() }
+    /// The host listed `ids` as the speakers there are.
+    func speakersListed(_ ids: Set<String>) { apply(rename.listed(ids)) }
+    private func apply(_ finished: SpeakerRename.Apply?) {
+        guard let finished else { return }
+        actions.renameSpeaker(finished.key, finished.system, finished.typed)
     }
     /// Quit drops every typed delay not applied yet: it's never saved.
     func dropDelayDrafts() {
@@ -148,6 +183,14 @@ final class AppModel: ObservableObject {
         dropDelayDrafts()
         closeDelayPanels()
     }
+    /// The saved delay of the row with this ID (`DelayBadge`).
+    func savedDelay(of id: String) -> Double? {
+        DelayBadge.savedMs(of: id, airPlayID: AirPlayDelayRow.id, airPlayMs: airPlayDelayMs, rows: delayRows)
+    }
+    func savedDelayText(of id: String) -> String? {
+        DelayBadge.text(of: id, airPlayID: AirPlayDelayRow.id, airPlayMs: airPlayDelayMs, rows: delayRows, text: text)
+    }
+    private var delayRows: [(id: String, offsetMs: Double?)] { local.map { (id: $0.id, offsetMs: $0.offsetMs) } }
     /// Bumped every time the menu bar panel opens, so its rows start fresh
     /// (a row the pointer was over when the panel closed never got a hover exit).
     @Published var panelSession = 0
@@ -219,12 +262,40 @@ final class SyncDraft: ObservableObject {
     /// Bumped to have the panel's controls apply the typing now, the panel
     /// staying open (Command-S, a click on another row).
     @Published var applyRequests = 0
-    /// A keystroke the field can't take, shown until the next run of the
-    /// main loop (`SyncControls`).
-    @Published var rejected: String?
-    /// The field has the keyboard focus, which its row's delay value takes
-    /// back when a click outside closes the panel.
-    var fieldFocused = false
+    /// Bumped each time the panel applies a delay (typed or stepped): the
+    /// row's delay value tints on it, and not when its number changes for
+    /// another reason.
+    @Published var applied = 0
+    /// The field just blocked a keystroke or part of a paste: it shows the
+    /// error outline and says what it takes until the next keystroke it
+    /// keeps, or for a moment.
+    @Published private(set) var blocked = false
+    private var unblock: DispatchWorkItem?
+    /// The field has the keyboard focus: its error outline then also stands
+    /// in for the focus ring, and its row's delay value takes the focus back
+    /// when the panel closes under it.
+    @Published var fieldFocused = false
+
+    private var lastBlockNote = Date.distantPast
+
+    /// True when VoiceOver should say what the field takes: for each blocked
+    /// keystroke, but not more than once a second while keys repeat.
+    @discardableResult
+    func block() -> Bool {
+        blocked = true
+        unblock?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.blocked = false }
+        unblock = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: item)
+        guard Date().timeIntervalSince(lastBlockNote) >= 1 else { return false }
+        lastBlockNote = Date()
+        return true
+    }
+
+    func clearBlock() {
+        unblock?.cancel()
+        if blocked { blocked = false }
+    }
 }
 
 // MARK: - Status item and panel
@@ -595,7 +666,7 @@ struct MenuBarView: View {
             VStack(spacing: 0) {
                 ForEach(thisMac) { speaker in
                     CompactRow(name: speaker.name, symbol: speaker.tag.symbol, state: model.state(of: speaker),
-                               text: t, height: rowHeight,
+                               text: t, height: rowHeight, renamedFrom: speaker.renamedFrom,
                                deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
                         model.actions.setLocalEnabled(speaker.id, model.state(of: speaker).clickTurnsOn)
                     }
@@ -622,7 +693,7 @@ struct MenuBarView: View {
             }
             ForEach(layout.connected) { speaker in
                 CompactRow(name: speaker.name, symbol: speaker.tag.symbol, state: model.state(of: speaker),
-                           text: t, height: rowHeight, kind: speaker.tag,
+                           text: t, height: rowHeight, renamedFrom: speaker.renamedFrom, kind: speaker.tag,
                            availability: speaker.availability,
                            deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
                     let on = model.state(of: speaker).clickTurnsOn
@@ -645,6 +716,8 @@ private struct CompactRow: View {
     let height: CGFloat
     /// Read after the name by VoiceOver: a group's member count.
     var hint: String? = nil
+    /// A renamed speaker's system name, read by VoiceOver after its name.
+    var renamedFrom: String? = nil
     /// The kind of output, shown as a small icon after the name.
     var kind: SpeakerTag? = nil
     var availability: SpeakerAvailability = .open
@@ -678,7 +751,7 @@ private struct CompactRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hover.isHovered = $0 }
-        .accessibilityLabel(text.speakerLabel(name: name, tag: kind.map(text.speakerTag)))
+        .accessibilityLabel(text.speakerLabel(name: name, tag: kind.map(text.speakerTag), renamedFrom: renamedFrom))
         .accessibilityValue(text.value(state))
         .accessibilityHint(text.rowHint(state, note: hint ?? deviceVolume?.accessibilityNote
                                             ?? text.availability(availability)))

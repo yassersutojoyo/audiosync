@@ -119,4 +119,5 @@ pub const CONTRAST_PAIRS: &[(&str, &str)] = &[
     ("errorText", "background"),
     ("errorText", "surface"),
     ("errorText", "playingRow"),
+    ("surface", "tealText"),
 ];

@@ -35,9 +35,13 @@ struct AppSettings: Equatable {
         static let groups = "speakerGroups"
         /// Speaker keys (`SpeakerKey`) marked for auto-connect, as an array.
         static let autoConnect = "autoConnectSpeakers"
+        /// The names the user gave speakers, by speaker key (`SpeakerNames`).
+        static let speakerNames = "speakerNamesByKey"
         static let showVirtualDevices = "showVirtualOutputDevices"
         /// `AppAppearance.defaultsValue` (S155).
         static let appearance = "appearance"
+        /// `WhenSourceQuits.defaultsValue` (S227): "stop", or "system" to switch.
+        static let whenSourceQuits = "whenSourceQuits"
         /// `Equalizer.Settings` as JSON (S24, `StoredEqualizer`).
         static let equalizer = "equalizerSettings"
         /// One delay in ms for every local speaker, from before delays were
@@ -89,8 +93,10 @@ struct AppSettings: Equatable {
     var airplayVolumes: [String: Double] = [:]
     var groups: [SpeakerGroup] = []
     var autoConnect: Set<String> = []
+    var speakerNames = SpeakerNames()
     var showVirtualDevices = false
     var appearance = AppAppearance.system
+    var whenSourceQuits = WhenSourceQuits.stop
     /// D0 of the migration: what a local speaker without a delay of its own
     /// played with before the local delay model (S77, S179).
     var defaultDelayMs = AppSettings.standardDelayMs
@@ -108,6 +114,7 @@ struct AppSettings: Equatable {
         s.enabledAirPlay = ids(read(Keys.enabledAirPlay))
         s.enabledLocal = ids(read(Keys.enabledLocal))
         s.autoConnect = ids(read(Keys.autoConnect))
+        s.speakerNames = SpeakerNames(stored: read(Keys.speakerNames))
         s.master = read(Keys.master).flatMap(number).map(volume) ?? defaultMaster
         s.localVolumes = levels(read(Keys.localVolumes), volume)
         s.localDelays = levels(read(Keys.localDelays), delay)
@@ -120,6 +127,7 @@ struct AppSettings: Equatable {
         s.groups = decodeGroups(read(Keys.groups) as? Data)
         s.showVirtualDevices = read(Keys.showVirtualDevices) as? Bool ?? false
         s.appearance = AppAppearance(defaultsValue: read(Keys.appearance) as? String)
+        s.whenSourceQuits = WhenSourceQuits(defaultsValue: read(Keys.whenSourceQuits) as? String)
         return s
     }
 
@@ -218,9 +226,16 @@ struct SettingsStore {
         write(data, Keys.groups)
     }
 
+    /// Removed once no speaker has a name of the user's.
+    func save(speakerNames: SpeakerNames) {
+        write(speakerNames.custom.isEmpty ? nil : speakerNames.custom, Keys.speakerNames)
+    }
+
     func save(showVirtualDevices: Bool) { write(showVirtualDevices, Keys.showVirtualDevices) }
 
     func save(appearance: AppAppearance) { write(appearance.defaultsValue, Keys.appearance) }
+
+    func save(whenSourceQuits: WhenSourceQuits) { write(whenSourceQuits.defaultsValue, Keys.whenSourceQuits) }
 
     /// The AirPlay delay (S178).
     func save(airPlayDelay: AirPlayDelay) {

@@ -13,11 +13,14 @@ import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyp
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
 export { TrayFlyout } from "flyout.slint";
-export { GroupNameDialog, PinDialog } from "dialogs.slint";
+export { GroupNameDialog, PasswordDialog, PinDialog } from "dialogs.slint";
 export { GuideWindow } from "guide.slint";
+export { HelpWindow } from "help.slint";
 export { Strings } from "strings.slint";
 // The style's palette, for the theme preview (src/view.rs).
 export { Palette } from "std-widgets.slint";
+// The brand teal, for the standard controls' accent (src/view.rs).
+export { Tokens } from "tokens.slint";
 export { AirPlayProblem, Availability, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
 
 // A titled card of speaker rows, with a note when it has none.
@@ -25,7 +28,6 @@ component SpeakerSection inherits VerticalLayout {
     in property <string> title;
     in property <[SpeakerItem]> speakers;
     in property <string> note;
-    in property <bool> compact;
     callback toggled(string);
     callback volume-changed(string, float);
     callback sync-toggled(string);
@@ -65,7 +67,6 @@ component SpeakerSection inherits VerticalLayout {
 
             SpeakerRow {
                 item: speaker;
-                compact: root.compact;
                 init => {
                     if speaker.id == root.focus-id {
                         root.focus-id = "";
@@ -222,7 +223,7 @@ component EqualizerCard inherits Rectangle {
 
         Glyph {
             glyph: Glyphs.chevron-right;
-            font-size: 10px;
+            font-size: Tokens.font-size-caption;
             color: Tokens.secondary-text;
         }
     }
@@ -250,6 +251,9 @@ export component MainWindow inherits Window {
     in property <string> notice-announcement;
     // View > Show Virtual Devices: virtual outputs are listed even while off.
     in property <bool> show-virtual-devices;
+    in property <bool> switch-source-on-quit;
+    // File > Launch at Sign-In: what the Run key says, read again by Rust.
+    in property <bool> launch-at-login;
     // The AirPlay delay, shown while an AirPlay sender runs: what its field
     // shows (the applied value, or what is being typed).
     in property <bool> airplay-delay-shown;
@@ -264,6 +268,9 @@ export component MainWindow inherits Window {
     // The AirPlay delay field holds a number out of range: the range and
     // what Enter applies; empty otherwise.
     in property <string> airplay-delay-range-hint;
+    // A delay field, a speaker's or the AirPlay one, holds typing not yet
+    // applied: File > Apply Typed Delay is enabled only then.
+    in property <bool> delay-typing;
 
     callback power-toggled(bool);
     callback source-selected(int);
@@ -299,15 +306,21 @@ export component MainWindow inherits Window {
     callback new-group-requested();
     callback refresh-devices();
     callback show-virtual-devices-toggled(bool);
+    callback switch-source-on-quit-toggled(bool);
+    callback launch-at-login-toggled(bool);
     callback notice-dismissed(int);
     callback notices-dismissed-all();
     // Show How on a notice: open its guide.
     callback notice-guide-requested(int);
     // Retry on a notice: start AirPlay again.
     callback notice-retry-requested(int);
+    // Open Privacy Settings on a notice.
+    callback notice-privacy-requested(int);
     callback close-requested();
     callback exit-requested();
     callback about-requested();
+    // Help > AudioSync Guide: open the Guide.
+    callback help-requested();
 
     // Slint leaves nothing focused when a refresh removes the focused
     // control (a notice dismissed with the keyboard, a speaker unplugged):
@@ -335,14 +348,12 @@ export component MainWindow inherits Window {
 
     title: Strings.main-window-title;
     icon: @image-url("../res/audiosync-256.png");
-    // Wide enough for a speaker row's columns next to the left column, and
+    // Wide enough for a speaker row next to the left column, and
     // short enough for a 1366 x 768 screen at 150 % (both columns scroll).
     min-width: 860px;
     min-height: 440px;
     preferred-width: 980px;
     preferred-height: 680px;
-    // Below this width the volume sliders in the speaker rows are shorter.
-    property <bool> compact: root.width < 960px;
     background: Tokens.background;
     default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
@@ -364,6 +375,7 @@ export component MainWindow inherits Window {
             MenuItem {
                 title: Strings.menu-apply-delay;
                 shortcut: @keys(Control + S);
+                enabled: root.delay-typing;
                 activated => {
                     root.delay-apply-requested();
                 }
@@ -374,6 +386,26 @@ export component MainWindow inherits Window {
                 shortcut: @keys(Control + W);
                 activated => {
                     root.close-requested();
+                }
+            }
+
+            MenuSeparator { }
+
+            MenuItem {
+                title: Strings.switch-source-on-quit;
+                checkable: true;
+                checked: root.switch-source-on-quit;
+                activated => {
+                    root.switch-source-on-quit-toggled(!root.switch-source-on-quit);
+                }
+            }
+
+            MenuItem {
+                title: Strings.launch-at-login;
+                checkable: true;
+                checked: root.launch-at-login;
+                activated => {
+                    root.launch-at-login-toggled(!root.launch-at-login);
                 }
             }
 
@@ -441,6 +473,16 @@ export component MainWindow inherits Window {
 
         Menu {
             title: Strings.menu-help;
+
+            MenuItem {
+                title: Strings.help-title;
+                shortcut: @keys(F1);
+                activated => {
+                    root.help-requested();
+                }
+            }
+
+            MenuSeparator { }
 
             MenuItem {
                 title: Strings.menu-about;
@@ -533,6 +575,9 @@ export component MainWindow inherits Window {
             }
             retry-requested(id) => {
                 root.notice-retry-requested(id);
+            }
+            privacy-requested(id) => {
+                root.notice-privacy-requested(id);
             }
         }
 
@@ -627,7 +672,8 @@ export component MainWindow inherits Window {
                 speaker-list := VerticalLayout {
                     spacing: Tokens.spacing-section-gap;
                     padding-bottom: 4px;
-                    padding-right: 4px;
+                    // The Fluent scroll bar is 14 px wide and drawn over the content.
+                    padding-right: 14px;
                     // Rows keep their height when the list is shorter than the view.
                     alignment: start;
 
@@ -640,7 +686,6 @@ export component MainWindow inherits Window {
                         device-volume-fix(id) => {
                             root.device-volume-fix-requested(id);
                         }
-                        compact: root.compact;
                         focus-id <=> root.focus-speaker-id;
                         focus-part <=> root.focus-speaker-part;
                         focus-changed(id, part) => {
@@ -739,7 +784,6 @@ export component MainWindow inherits Window {
                         device-volume-fix(id) => {
                             root.device-volume-fix-requested(id);
                         }
-                        compact: root.compact;
                         focus-id <=> root.focus-speaker-id;
                         focus-part <=> root.focus-speaker-part;
                         focus-changed(id, part) => {

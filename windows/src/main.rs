@@ -25,6 +25,7 @@ mod contrast;
 mod data_folder;
 mod debug_log;
 mod guide;
+mod launch_at_login;
 mod os_version;
 #[cfg(any(windows, test))]
 mod placement;
@@ -59,6 +60,10 @@ const LOG_FLUSH_AT_EXIT: Duration = Duration::from_secs(1);
 /// guide at launch for a made-up notice (`guide::preview`).
 const PREVIEW_GUIDE_VAR: &str = "AUDIOSYNC_PREVIEW_GUIDE";
 
+/// With the debug log on, `1` here opens the AudioSync Guide at launch, to
+/// look at it without the menu.
+const PREVIEW_HELP_VAR: &str = "AUDIOSYNC_PREVIEW_HELP";
+
 /// With the debug log on, `light` or `dark` here shows every window in that
 /// appearance, whatever Windows uses (`view::App::preview_theme`).
 const PREVIEW_THEME_VAR: &str = "AUDIOSYNC_PREVIEW_THEME";
@@ -76,6 +81,23 @@ fn main() -> ExitCode {
     #[cfg(windows)]
     let (instance, waited_for) = match single_instance::acquire() {
         single_instance::Acquired::First(instance) => (instance, None),
+        single_instance::Acquired::Second
+            if !launch_at_login::hands_over_to_running_copy(
+                launch_at_login::started_in_background(std::env::args_os()),
+            ) =>
+        {
+            let log = DebugLog::appending_from_env();
+            log.log(|| {
+                format!(
+                    "process {}: AudioSync already runs in this session; started with {}, \
+                     so it leaves that copy as it is; exiting",
+                    std::process::id(),
+                    launch_at_login::BACKGROUND_FLAG
+                )
+            });
+            log.flush(LOG_FLUSH_AT_EXIT);
+            return ExitCode::SUCCESS;
+        }
         single_instance::Acquired::Second => {
             // A copy that is quitting doesn't answer; once it's gone, this
             // launch starts instead, as on the Mac.
@@ -193,6 +215,9 @@ fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
     log.log(|| "audio: the WASAPI backend is open".to_owned());
     audio.set_debug_log(log.clone());
     start_airplay(&mut audio, log);
+    audio.set_track_reader(Box::new(audio::wasapi::MediaSessionReader::start(
+        log.clone(),
+    )));
     let settings_file = settings::SettingsFile::default_path().map_or_else(
         settings::SettingsFile::in_memory,
         settings::SettingsFile::at,
@@ -342,8 +367,22 @@ fn run(
         });
         app.preview_theme(dark);
     }
-    app.show_main();
-    log.log(|| "main window: shown".to_owned());
+    #[cfg(windows)]
+    let tray_available = _tray.is_some();
+    #[cfg(not(windows))]
+    let tray_available = false;
+    let background = launch_at_login::started_in_background(std::env::args_os());
+    if launch_at_login::opens_main_window(background, tray_available) {
+        app.show_main();
+        log.log(|| "main window: shown".to_owned());
+    } else {
+        log.log(|| {
+            format!(
+                "main window: not shown ({} at sign-in; the tray icon opens it)",
+                launch_at_login::BACKGROUND_FLAG
+            )
+        });
+    }
     // To look at the double-audio guide without streaming: a made-up notice,
     // only while the debug log is on.
     if log.enabled()
@@ -354,6 +393,10 @@ fn run(
     {
         log.log(|| format!("guide: opened for a made-up notice ({PREVIEW_GUIDE_VAR})"));
         app.show_guide_for(&message);
+    }
+    if log.enabled() && std::env::var(PREVIEW_HELP_VAR).as_deref() == Ok("1") {
+        log.log(|| format!("AudioSync Guide: opened at launch ({PREVIEW_HELP_VAR})"));
+        app.show_help();
     }
     // To look at the PIN dialog without an Apple TV: a made-up pairing, only
     // while the debug log is on.

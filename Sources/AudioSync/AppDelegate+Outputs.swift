@@ -218,12 +218,12 @@ extension AppDelegate {
         retimeLocalOutputs()   // a joined, left or failed output can move the others' hold-back (S177)
 
         guard let report else { return }
-        if let names = report.alertNames {
-            let shown = names.map { text.deviceName($0) }.joined(separator: ", ")
+        if report.alertNames != nil {   // the failures' names, for a click of the user's
+            let shown = applied.failures.map { shownName(local: $0.uid, system: $0.deviceName) }.joined(separator: ", ")
             showAlert(text.outputCouldNotStart(names: shown), style: .warning)
         }
         for failure in report.notices {   // one notice per speaker, so each one clears by itself
-            postNotice(text.outputCouldNotStart(names: text.deviceName(failure.deviceName)),
+            postNotice(text.outputCouldNotStart(names: shownName(local: failure.uid, system: failure.deviceName)),
                        subject: SpeakerKey.make(id: failure.uid, airplay: false))
         }
         stopIfIdle()   // the failed speaker may have been the only output

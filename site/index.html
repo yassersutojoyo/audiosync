@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AudioSync: a free Airfoil alternative for Mac, multi-room AirPlay in sync</title>
-<meta name="description" content="Free, open-source Mac app that plays system, app or input audio on HomePods, AirPlay 2 speakers and your Mac's own outputs at the same time, lined up so nothing echoes.">
+<meta name="description" content="Free, open-source Mac app that plays system, app or input audio on AirPlay speakers and your Mac's own outputs at the same time, lined up so nothing echoes.">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f1f7f6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)">
@@ -21,7 +21,7 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="AudioSync">
 <meta property="og:title" content="AudioSync: a free Airfoil alternative for Mac">
-<meta property="og:description" content="Play your Mac's audio on HomePods, AirPlay speakers and local outputs at once, in sync instead of echoing. Free and open source.">
+<meta property="og:description" content="Play your Mac's audio on AirPlay speakers and local outputs at once, in sync instead of echoing. Free and open source.">
 <meta property="og:image" content="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/social-preview.png">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1280">
@@ -29,7 +29,7 @@
 <meta property="og:image:alt" content="The AudioSync logo and tagline beside the app's main window">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="AudioSync: a free Airfoil alternative for Mac">
-<meta name="twitter:description" content="Play your Mac's audio on HomePods, AirPlay speakers and local outputs at once, in sync instead of echoing. Free and open source.">
+<meta name="twitter:description" content="Play your Mac's audio on AirPlay speakers and local outputs at once, in sync instead of echoing. Free and open source.">
 <meta name="twitter:image" content="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/social-preview.png">
 <meta name="twitter:image:alt" content="The AudioSync logo and tagline beside the app's main window">
 
@@ -38,7 +38,7 @@
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "AudioSync",
-  "description": "A free, open-source Airfoil alternative for Mac that plays system, app or input audio on HomePods, AirPlay 2 speakers and local outputs at the same time, in sync.",
+  "description": "A free, open-source Airfoil alternative for Mac that plays system, app or input audio on AirPlay speakers and local outputs at the same time, in sync.",
   "operatingSystem": "macOS",
   "applicationCategory": "MultimediaApplication",
   "offers": {
@@ -324,7 +324,7 @@
     <div class="wrap">
       <p class="tag">Free and open source &middot; for macOS 15 and later</p>
       <h1>Every speaker in the house, <span>on the same beat.</span></h1>
-      <p class="lede">AudioSync plays your Mac's audio on HomePods, other AirPlay speakers and the Mac's own outputs all at once. It lines them up, so you hear one song instead of an echo. Think of it as a free Airfoil alternative that does less, on purpose.</p>
+      <p class="lede">AudioSync plays your Mac's audio on AirPlay speakers and the Mac's own outputs all at once. It lines them up, so you hear one song instead of an echo. Think of it as a free Airfoil alternative that does less, on purpose.</p>
       <div class="actions">
         <a class="btn btn-main" href="https://github.com/yassersutojoyo/audiosync/releases/latest">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/></svg>
@@ -363,7 +363,7 @@
         <div class="card">
           <p class="label">Plays to, all at once</p>
           <ul>
-            <li>HomePod, Apple TV and other AirPlay speakers</li>
+            <li>AirPlay speakers and Apple TVs</li>
             <li>Built-in speakers and the headphone jack</li>
             <li>HDMI or DisplayPort, USB and Bluetooth outputs</li>
           </ul>
@@ -466,8 +466,8 @@
       <div class="card reveal">
         <ul class="limits">
           <li><span><strong>There's a two-second lag.</strong> AirPlay adds a fixed delay of about 2 s, and nothing can shorten it. You won't notice with music, but it gets in the way of video and games.</span></li>
-          <li><span><strong>You set the delays.</strong> You pick a delay for every Mac output, and AudioSync remembers it per device.</span></li>
-          <li><span><strong>Not every speaker shows up yet.</strong> AudioSync now streams with its own AirPlay sender, which speaks the original AirPlay for now, so a speaker that only takes AirPlay 2 isn't listed.</span></li>
+          <li><span><strong>You set the delays.</strong> Every output except the Mac's own speakers gets a delay you pick (AirPlay speakers share one), and AudioSync remembers it per device.</span></li>
+          <li><span><strong>Not every speaker shows up yet.</strong> AudioSync now streams with its own AirPlay sender, which speaks the original AirPlay for now, so a speaker that only takes AirPlay 2 isn't listed. I haven't tried the new sender on a HomePod yet, so if yours doesn't show up or play, please open an issue on GitHub with the debug log.</span></li>
           <li><span><strong>Track info is limited.</strong> Now Playing only picks up Spotify and Apple Music.</span></li>
           <li><span><strong>It's an early alpha.</strong> Expect rough edges.</span></li>
         </ul>

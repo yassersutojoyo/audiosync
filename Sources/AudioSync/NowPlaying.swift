@@ -45,6 +45,10 @@ final class NowPlayingMonitor {
     /// errAEEventNotPermitted: the user hasn't allowed Automation for the target.
     static let notPermitted = -1743
 
+    /// errAENoSuchObject (a player open with no current track) and
+    /// errAETimeout (a player busy or quitting) both mean "no track this time".
+    static func meansNoTrack(_ code: Int?) -> Bool { code == -1728 || code == -1712 }
+
     /// Which player to follow (main thread): the source app itself if it is a
     /// supported player, "" for none, nil for whichever player is playing.
     var preferredBundleID: String?
@@ -90,7 +94,7 @@ final class NowPlayingMonitor {
         case .previous: verb = "previous track"
         }
         scripts.async { [weak self] in
-            _ = self?.run(target: bundleID, """
+            _ = self?.run(target: bundleID, command: true, """
                 with timeout of 2 seconds
                     if application id "\(bundleID)" is running then
                         tell application id "\(bundleID)" to \(verb)
@@ -218,11 +222,13 @@ final class NowPlayingMonitor {
 
     /// Runs `source`, which talks to the player `target`, and reports when
     /// macOS starts or stops refusing AudioSync's Apple Events to it.
-    private func run(target: String, _ source: String) -> NSAppleEventDescriptor? {
+    /// `command`: a button press, whose timeout is a real failure worth logging.
+    private func run(target: String, command: Bool = false, _ source: String) -> NSAppleEventDescriptor? {
         var error: NSDictionary?
         let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
-        if let error { DebugTrace.log("[AudioSync] AppleScript error: \(error)") }
-        let refused = (error?[NSAppleScript.errorNumber] as? Int) == Self.notPermitted
+        let code = error?[NSAppleScript.errorNumber] as? Int
+        if let error, command || !Self.meansNoTrack(code) { DebugTrace.log("[AudioSync] AppleScript error: \(error)") }
+        let refused = code == Self.notPermitted
         let changed = refused ? denied.insert(target).inserted
             : error == nil ? denied.remove(target) != nil : false
         if changed {

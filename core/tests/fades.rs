@@ -15,7 +15,7 @@ use audiosync_core::fade::{Fade, FadeState, InputFade, fade_frames, fade_in_gain
 use audiosync_core::ffi::asc_airplay_input_request_fade_out;
 use audiosync_core::reader::{Correction, Reader};
 use audiosync_core::render::{
-    Renderer, RendererControl, STOP_FADE_CAP, endpoint_faded, faded_by_time,
+    Renderer, RendererControl, STOP_FADE_CAP, fade_tail_frames, faded_by_time,
 };
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
@@ -1075,21 +1075,21 @@ fn no_step_across_a_start_a_stop_or_a_delay_change_exceeds_the_ramps_slope() {
     }
 }
 
-/// The Windows rule of S185, the endpoint's padding against the frames
+/// The Windows rule of S185, the endpoint's clock or padding against the frames
 /// written after the fade, belongs to the renderer too.
 // covers: S185
 #[test]
-fn an_endpoint_counts_as_faded_once_it_holds_only_zeros_for_its_latency() {
-    // 480 frames still queued, 10 ms of stream latency at 48 kHz.
-    assert!(
-        !endpoint_faded(400, 480, 480),
-        "the fade's end is still queued"
+fn an_endpoint_counts_as_faded_once_its_clock_passed_the_fade_or_by_padding_and_latency() {
+    // The clock 30 ms past a 10 ms buffer at 48 kHz: that is the tail.
+    assert_eq!(fade_tail_frames(480, Some(1_920), 0, RATE), 1_920);
+    // Never less than the buffer, never more than the buffer plus 100 ms.
+    assert_eq!(fade_tail_frames(480, Some(100), 0, RATE), 480);
+    assert_eq!(fade_tail_frames(480, Some(48_000), 0, RATE), 480 + 4_800);
+    assert_eq!(
+        fade_tail_frames(441, Some(u64::MAX), 0, 44_100),
+        441 + 4_410
     );
-    assert!(
-        !endpoint_faded(480, 480, 480),
-        "only zeros queued, latency not over"
-    );
-    assert!(!endpoint_faded(959, 480, 480));
-    assert!(endpoint_faded(960, 480, 480));
-    assert!(endpoint_faded(u64::MAX, u64::MAX, u64::MAX));
+    // No clock: 480 frames still queued, 10 ms of stream latency.
+    assert_eq!(fade_tail_frames(480, None, 480, RATE), 960);
+    assert_eq!(fade_tail_frames(u64::MAX, None, u64::MAX, RATE), u64::MAX);
 }

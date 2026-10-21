@@ -1,4 +1,5 @@
-//! Render endpoints: listing them, and noticing when they change.
+//! Render and capture endpoints: listing them, and noticing when they
+//! change.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,7 +12,7 @@ use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::{
     DEVICE_STATE, DEVICE_STATE_ACTIVE, EDataFlow, ERole, IMMDevice, IMMDeviceEnumerator,
     IMMNotificationClient, IMMNotificationClient_Impl, MMDeviceEnumerator,
-    PKEY_AudioEndpoint_FormFactor, PKEY_AudioEndpoint_JackSubType, eConsole, eRender,
+    PKEY_AudioEndpoint_FormFactor, PKEY_AudioEndpoint_JackSubType, eCapture, eConsole, eRender,
 };
 use windows::Win32::Media::KernelStreaming::KSNODETYPE_DISPLAYPORT_INTERFACE;
 use windows::Win32::System::Com::StructuredStorage::PropVariantClear;
@@ -52,8 +53,24 @@ pub(super) fn render_endpoints() -> Result<Listing, BackendError> {
     let default_id = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
         .ok()
         .and_then(|device| device_id(&device).ok());
-    // SAFETY: as above.
-    let devices = unsafe { enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE) }
+    let readings = active_endpoints(&enumerator, eRender)?;
+    Ok(list_endpoints(readings, default_id.as_deref()))
+}
+
+/// The active capture endpoints (input devices), as Windows describes them,
+/// for the source list (`crate::audio::capture::input_sources`).
+pub(super) fn capture_endpoints() -> Result<Vec<EndpointReading>, BackendError> {
+    let _apartment = Apartment::enter()?;
+    active_endpoints(&enumerator()?, eCapture)
+}
+
+/// What can be read about each active endpoint of `flow`, in Windows' order.
+fn active_endpoints(
+    enumerator: &IMMDeviceEnumerator,
+    flow: EDataFlow,
+) -> Result<Vec<EndpointReading>, BackendError> {
+    // SAFETY: a call on a live enumerator.
+    let devices = unsafe { enumerator.EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE) }
         .map_err(|error| system_error("IMMDeviceEnumerator::EnumAudioEndpoints", &error))?;
     // SAFETY: a call on the live collection.
     let count = unsafe { devices.GetCount() }
@@ -76,7 +93,7 @@ pub(super) fn render_endpoints() -> Result<Listing, BackendError> {
             }
         })
         .collect();
-    Ok(list_endpoints(readings, default_id.as_deref()))
+    Ok(readings)
 }
 
 /// The endpoint ID of `device`, or why it couldn't be read.
@@ -140,11 +157,11 @@ fn u32_property(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<u32> {
     }
 }
 
-/// Watches for render endpoints being added, removed, enabled, disabled,
-/// renamed or made the default. A thread of its own holds the registration,
-/// so the watcher can be used from any thread. Dropping it waits for that
-/// thread as a [`Worker`] does: unregistering can hang while Windows audio
-/// doesn't answer.
+/// Watches for render and capture endpoints being added, removed, enabled,
+/// disabled or renamed, and for a new default render endpoint. A thread of
+/// its own holds the registration, so the watcher can be used from any
+/// thread. Dropping it waits for that thread as a [`Worker`] does:
+/// unregistering can hang while Windows audio doesn't answer.
 pub(super) struct DeviceWatcher {
     changed: Arc<AtomicBool>,
     stop: Arc<Event>,
@@ -251,7 +268,7 @@ impl Drop for Registration {
     }
 }
 
-/// Raises a flag when render endpoints change. Windows calls it on its own
+/// Raises a flag when endpoints change. Windows calls it on its own
 /// threads and asks it not to wait or call back into the enumerator, so it
 /// only stores the flag. `#[implement]` objects are agile (they answer
 /// `IAgileObject` and use the free-threaded marshaler), so the calls reach it

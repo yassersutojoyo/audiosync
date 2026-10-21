@@ -26,6 +26,8 @@ export global Strings {
     out property <string> reconnecting: @tr("Reconnecting…");
     out property <string> status-off: @tr("Off");
     out property <string> connected-none: @tr("No connected speakers");
+    // The flyout's speaker list when it has no speaker and no group.
+    out property <string> no-speakers: @tr("No speakers found");
     // Connected Speakers when its only outputs are virtual ones, hidden.
     out property <string> connected-none-virtual-hidden: @tr("No connected speakers. Virtual devices are hidden; to list them, choose View > Show Virtual Devices.");
     // Under Connected Speakers once AirPlay discovery has run for 20 seconds
@@ -41,10 +43,19 @@ export global Strings {
     // The button on the notice that AirPlay stopped: starts it again.
     out property <string> notice-retry: @tr("Retry");
     out property <string> notice-retry-label: @tr("Retry starting AirPlay");
+    out property <string> notice-open-privacy: @tr("Open Privacy Settings");
+    out property <string> notice-open-privacy-label: @tr("Open the microphone privacy settings");
     out property <string> delay-field-label: @tr("Delay in milliseconds");
     // Under a delay field while it holds typing not yet applied; also the
     // field's Narrator description then.
     out property <string> delay-draft-hint: @tr("Press Enter to apply");
+    // A text field's right-click menu.
+    out property <string> edit-undo: @tr("Undo");
+    out property <string> edit-redo: @tr("Redo");
+    out property <string> edit-cut: @tr("Cut");
+    out property <string> edit-copy: @tr("Copy");
+    out property <string> edit-paste: @tr("Paste");
+    out property <string> edit-select-all: @tr("Select all");
     out property <string> source-label: @tr("Audio Source");
     out property <string> equalizer: @tr("Equalizer");
     out property <string> groups: @tr("Groups");
@@ -71,6 +82,12 @@ export global Strings {
     out property <string> notice-settings-not-saved: @tr("AudioSync couldn't save your settings, so changes you make now won't be kept after AudioSync quits.");
     // The file with the Apple TV pairings couldn't be written.
     out property <string> notice-pairings-not-saved: @tr("AudioSync couldn't save your Apple TV pairings, so pairings you add or forget now won't be kept after AudioSync quits.");
+    // Launch at Sign-In: Windows refused to add AudioSync to its startup
+    // apps, refused to remove it, or has it turned off in Task Manager or
+    // Settings (AudioSync then opens Settings > Apps > Startup).
+    out property <string> notice-launch-at-login-failed: @tr("Windows didn't let AudioSync add itself to the startup apps, so Launch at Sign-In stays off. To start AudioSync at sign-in anyway, put a shortcut to it in your Startup folder (press Windows+R and enter shell:startup), then add a space and --background at the end of the shortcut's Target so AudioSync starts in the tray.");
+    out property <string> notice-launch-at-login-not-removed: @tr("Windows didn't let AudioSync remove itself from the startup apps. To stop it launching at sign-in, turn AudioSync off in Settings > Apps > Startup.");
+    out property <string> notice-launch-at-login-off-in-settings: @tr("AudioSync is turned off in Windows' startup apps. Turn it on in Settings > Apps > Startup to finish turning on Launch at Sign-In.");
     // Windows lists no active sound output (none connected, or all turned
     // off) while a network speaker is on: apps have nowhere to play.
     out property <string> notice-no-sound-output: @tr("Windows has no working sound output, so apps have nowhere to play and AudioSync has nothing to send to your speakers. Connect or turn on an output in Sound settings.");
@@ -109,6 +126,25 @@ export global Strings {
         return @tr("{} shows a 4-digit PIN on the TV. Enter it to pair; after that, it connects without a PIN. Cancel turns the speaker off; turn it on again to retry.", speaker);
     }
 
+    // The password prompt of an AirPlay speaker protected by a password; the
+    // password is kept until AudioSync quits.
+    public pure function password-dialog-title(speaker: string) -> string {
+        return @tr("Pair with {}", speaker);
+    }
+
+    public pure function password-field-label(speaker: string) -> string {
+        return @tr("Password for {}", speaker);
+    }
+
+    out property <string> password-field-placeholder: @tr("Password");
+
+    public pure function password-message(speaker: string, wrong: bool) -> string {
+        if wrong {
+            return @tr("{} didn't accept that password. Enter the password set for it in the Home app or in the speaker's settings. Cancel turns the speaker off; turn it on again to retry.", speaker);
+        }
+        return @tr("{} is protected by a password. Enter the password set for it in the Home app or in the speaker's settings. Cancel turns the speaker off; turn it on again to retry.", speaker);
+    }
+
     // Groups
     out property <string> new-group: @tr("New Group from Active Speakers…");
     out property <string> new-group-title: @tr("New Speaker Group");
@@ -137,6 +173,13 @@ export global Strings {
     out property <string> menu-view: @tr("View");
     out property <string> menu-help: @tr("Help");
     out property <string> menu-about: @tr("About AudioSync");
+    // File > Launch at Sign-In and the tray menu's check item: AudioSync
+    // starts in the tray when the user signs in to Windows.
+    out property <string> launch-at-login: @tr("Launch at Sign-In");
+    // A check item in File: on, the captured app quitting moves streaming to
+    // the whole system; off, streaming stops. "Source app", since "the app"
+    // in AudioSync's own File menu can read as AudioSync itself.
+    out property <string> switch-source-on-quit: @tr("Switch to All System Audio When the Source App Quits");
 
     // Tray icon and its flyout (the macOS menu bar panel)
     out property <string> open-app: @tr("Open AudioSync");
@@ -202,6 +245,12 @@ export global Strings {
         return @tr("Notice: {}", title);
     }
 
+    // A notice and a delay field's range line that arrive together: Narrator
+    // says both, in turn.
+    public pure function announcements(first: string, second: string) -> string {
+        return @tr("{}. {}", first, second);
+    }
+
     // The link under the newest notice in the flyout to the window that lists the others.
     public pure function more-notices(count: int) -> string {
         return @tr("{n} more notice…" | "{n} more notices…" % count);
@@ -212,9 +261,30 @@ export global Strings {
         return @tr("{} quit, so streaming has stopped.", source);
     }
 
+    // The app being captured quit while streaming, and the setting switched
+    // the source to the whole system.
+    public pure function notice-source-switched(source: string) -> string {
+        return @tr("{} quit, so AudioSync switched to All System Audio.", source);
+    }
+
     // Streaming was turned on while the chosen app wasn't running.
     public pure function notice-source-not-running(source: string) -> string {
         return @tr("{} is not running. Open it first, or pick another source.", source);
+    }
+
+    // Streaming was turned on while the chosen input device was unplugged.
+    public pure function notice-input-not-connected(source: string) -> string {
+        return @tr("{} is not connected. Plug it in, or pick another source.", source);
+    }
+
+    // Windows' privacy settings block microphone access for desktop apps.
+    public pure function notice-microphone-blocked(source: string) -> string {
+        return @tr("Windows is blocking microphone access for desktop apps, so AudioSync can't capture {}. Open Privacy Settings and turn on microphone access for desktop apps.", source);
+    }
+
+    // The input device being captured was unplugged while streaming.
+    public pure function notice-input-disconnected(source: string) -> string {
+        return @tr("{} was disconnected, so streaming has stopped. Plug it in again, or pick another source.", source);
     }
 
     // The chosen app started AudioSync, or AudioSync started it, so capturing
@@ -271,8 +341,8 @@ export global Strings {
         if problem == AirPlayProblem.refused {
             return @tr("{} declined the stream. AudioSync tries again shortly.", speaker);
         }
-        if problem == AirPlayProblem.password-not-yet {
-            return @tr("{} asks for a password, which AudioSync for Windows can't send yet, so it's off.", speaker);
+        if problem == AirPlayProblem.needs-password {
+            return @tr("{} asks for a password, so it's off. Turn it on again to enter it.", speaker);
         }
         if problem == AirPlayProblem.needs-pin {
             return @tr("{} needs pairing with a PIN, so it's off. Turn it on again to pair.", speaker);
@@ -380,6 +450,28 @@ export global Strings {
         return "";
     }
 
+    // The Guide (Help > AudioSync Guide): how to use the Windows app, one
+    // heading and one text per section, paragraphs split by a blank line.
+    // Each claim follows what windows/src does; nothing the Mac app alone does.
+    out property <string> help-title: @tr("AudioSync Guide");
+    out property <string> help-intro: @tr("AudioSync plays your PC's sound on AirPlay speakers and on the outputs connected to this PC at the same time, and lines them up with a delay for each speaker.");
+    out property <string> help-start-title: @tr("First Steps");
+    out property <string> help-start: @tr("The main window holds every control. The AudioSync icon in the notification area opens AudioSync quick settings, with the Streaming switch, the source, the volume and the speakers. Closing the window keeps AudioSync running there, and streaming goes on. To quit, choose File > Exit.\n\nUnder Audio Source, pick what to play: All System Audio, or one app that plays sound.\n\nThe speakers are listed under This PC (the PC's own speakers or line out, and headphones on its jack), then your groups, then Connected Speakers: AirPlay speakers and every other output, such as USB, Bluetooth or HDMI, with its kind under its name.\n\nSelect a speaker's round button to turn it on; streaming starts with it. Select it again to turn it off. When you turn the Streaming switch off, your speakers stay chosen with an outlined button, and they play again when you turn streaming on or select any speaker.");
+    out property <string> help-sync-title: @tr("Sync");
+    out property <string> help-sync: @tr("The PC's own speakers are the reference and have no delay. Every other local speaker shows its delay relative to them. Without a reference, the speaker with the lowest value plays first and the others wait by the difference.\n\nTo change a delay, select the speaker's row or its value. The −100, −10, +10 and +100 buttons apply at once. You can also type a number, with + or − in front if you like, and apply it with Enter or Ctrl+S (File > Apply Typed Delay); the controls stay open. Selecting the row again, or clicking outside every speaker row, applies what you typed and closes the controls. Escape drops what you typed. A number out of range gets a red outline and a line that gives the range.\n\nHeard a speaker before the others? Raise its delay. Heard it late? Lower it, below 0 if needed.\n\nThe AirPlay Delay card under Connected Speakers sets how long the speakers on this PC wait for the AirPlay speakers. If the AirPlay speakers sound late, raise it; if they sound early, lower it. AudioSync keeps the AirPlay speakers in step with each other, so they have no delay of their own.\n\nTune with two speakers at first, then add the others one at a time. A track with sharp sounds, such as drums or speech, makes an offset easy to hear.");
+    out property <string> help-volume-title: @tr("Volume");
+    out property <string> help-volume: @tr("Each speaker has its own volume slider, and Master Volume sets the level of all of them at once, AirPlay speakers included.\n\nWhen a local speaker that is on is turned down low or muted in Windows, a line under its slider says so, with a button that fixes it. AudioSync changes the Windows volume only when you select that button.");
+    out property <string> help-bluetooth-title: @tr("Bluetooth");
+    out property <string> help-bluetooth: @tr("Bluetooth speakers and headphones add a lag of their own, so they often need a delay below 0. They also take a little longer to start playing.\n\nFor a headset, AudioSync lists its stereo output and leaves out its Hands-Free output, which carries call audio.");
+    out property <string> help-double-title: @tr("Hearing Sound Twice");
+    out property <string> help-double: @tr("Windows keeps playing the source on its own outputs while AudioSync plays its synced copies, so you may hear it twice. For one app, open the Volume mixer and send the app to an output you don't listen to. For All System Audio, make such an output the Windows default in Sound settings. Don't mute the app itself in the Volume mixer: AudioSync would capture silence.\n\nWhen AudioSync detects this, it shows a notice. Its Show How button opens the steps for your setup.");
+    out property <string> help-more-title: @tr("More Controls");
+    out property <string> help-more: @tr("To make a group, turn on the speakers you want, then choose Speakers > New Group from Active Speakers (Ctrl+N). Select the group to turn them all on or off at once. To rename or delete it, right-click it or use its … button.\n\nTo have a speaker turn on whenever it appears, right-click it or use its … button, and choose Auto-connect when available. At launch, AudioSync starts streaming only when such a speaker is there.\n\nThe equalizer shapes the sound on every speaker at once, with ten bands, a preamp and presets. Open it from its card or with View > Equalizer (Ctrl+E).\n\nVirtual outputs, such as loopback drivers, are hidden unless one is on. View > Show Virtual Devices lists them all. Speakers > Refresh Devices (F5) reads the sources and outputs again.\n\nAudioSync saves the source, each speaker's switch, delay and volume, your groups and the equalizer, and restores them the next time it starts.");
+    out property <string> help-airplay-title: @tr("AirPlay");
+    out property <string> help-airplay: @tr("AudioSync finds AirPlay speakers on your network by itself. If none show up, check that this PC is on the same network as your speakers and that the network is set to Private. If it has to stay Public, allow AudioSync on Public networks in Windows Firewall.\n\nAudioSync for Windows plays to AirPlay 1 receivers that need no password. A speaker that asks for a password, plays only AirPlay 2, or needs something else AudioSync for Windows can't do yet is listed with a note saying so, and stays off.\n\nAn Apple TV that asks for a PIN shows \"Asks for a code\". When you turn it on, the TV shows a PIN: type it in the dialog that opens. AudioSync keeps the pairing, so the PIN isn't asked again. Forget Pairing in the speaker's … menu removes it. Auto-connect never starts a pairing: it shows a notice instead.\n\nIf AudioSync's AirPlay sender stops or can't start, a notice says so, with a Retry button.");
+    out property <string> help-notices-title: @tr("Notices");
+    out property <string> help-notices: @tr("When something needs your attention, such as a speaker that was disconnected or an app that quit, a notice appears at the top of the main window, and the newest one in quick settings. Use its close button to dismiss it, or Dismiss All. Many notices also clear themselves once the cause is gone.");
+
     // A notice's dismiss button, for Narrator: it names the notice in a few
     // words (its title), so the next notice's button, which takes the focus
     // after a dismiss, says which notice it closes without reading it all
@@ -394,7 +486,7 @@ export global Strings {
         if kind == NoticeKind.no-speaker {
             return @tr("no speaker on");
         }
-        if kind == NoticeKind.source-quit {
+        if kind == NoticeKind.source-quit || kind == NoticeKind.source-switched {
             return @tr("{} quit", name);
         }
         if kind == NoticeKind.source-not-running {
@@ -402,6 +494,15 @@ export global Strings {
         }
         if kind == NoticeKind.source-refused {
             return @tr("can't capture {}", name);
+        }
+        if kind == NoticeKind.input-not-connected {
+            return @tr("{} not connected", name);
+        }
+        if kind == NoticeKind.input-disconnected {
+            return @tr("{} was disconnected, streaming stopped", name);
+        }
+        if kind == NoticeKind.microphone-blocked {
+            return @tr("microphone access blocked");
         }
         if kind == NoticeKind.capture-failed {
             return @tr("capture didn't start");
@@ -441,6 +542,15 @@ export global Strings {
         }
         if kind == NoticeKind.no-sound-output {
             return @tr("no sound output");
+        }
+        if kind == NoticeKind.launch-at-login-failed {
+            return @tr("launch at sign-in failed");
+        }
+        if kind == NoticeKind.launch-at-login-not-removed {
+            return @tr("launch at sign-in still on");
+        }
+        if kind == NoticeKind.launch-at-login-off-in-settings {
+            return @tr("startup app turned off");
         }
         return @tr("double audio");
     }
@@ -497,9 +607,6 @@ export global Strings {
         if a == Availability.waiting-to-pair {
             return @tr("Waiting to pair…");
         }
-        if a == Availability.password-not-yet {
-            return @tr("Password not supported yet");
-        }
         if a == Availability.pairing-not-yet {
             return @tr("Pairing not supported yet");
         }
@@ -525,7 +632,7 @@ export global Strings {
         if kind == SpeakerKind.bluetooth {
             return @tr("Bluetooth");
         }
-        if kind == SpeakerKind.usb {
+        if kind == SpeakerKind.usb || kind == SpeakerKind.usb-headphones || kind == SpeakerKind.usb-speakers {
             return @tr("USB");
         }
         if kind == SpeakerKind.hdmi {
@@ -658,7 +765,7 @@ export global Strings {
         if reference == "" {
             return root.sync-hint-no-reference;
         }
-        return @tr("Relative to {}. Heard this speaker first? Raise the value. Heard it late? Lower the value; a Bluetooth speaker often needs less than 0.", reference);
+        return @tr("Relative to {}. Heard this speaker first? Raise the value. Heard it late? Lower it.", reference);
     }
 
     // The label of a delay step button: "−100", "+10".

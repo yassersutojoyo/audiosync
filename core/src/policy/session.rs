@@ -370,9 +370,7 @@ pub fn source_pick(current: &AudioSource, picked: &AudioSource, streaming: bool)
 pub enum DropReason {
     /// The AirPlay sender can't reach it.
     Unreachable,
-    /// It wants a password, which AudioSync can't send it.
-    PasswordUnsupported,
-    /// It needs a code that hasn't been entered.
+    /// It needs a PIN or password that hasn't been entered.
     NeedsCode,
     /// It still needs a code after pairing: the code was rejected.
     CodeRejected,
@@ -456,7 +454,6 @@ pub struct Reaction {
 pub fn reaction(incident: &Incident) -> Reaction {
     let failed_start = |origin: StartOrigin| Reaction {
         stop_session: true,
-        deselect_airplay: true,
         notice: Some(NoticeSubject::Start),
         alert: origin == StartOrigin::User,
         ..Reaction::default()
@@ -479,9 +476,9 @@ pub fn reaction(incident: &Incident) -> Reaction {
             restart: Some(StartOrigin::FormatChange),
             ..Reaction::default()
         },
+        // The speakers stay chosen, so the next start plays to them again.
         Incident::SourceLost | Incident::SourceAppQuit => Reaction {
             stop_session: true,
-            deselect_airplay: true,
             notice: Some(NoticeSubject::Source),
             ..Reaction::default()
         },
