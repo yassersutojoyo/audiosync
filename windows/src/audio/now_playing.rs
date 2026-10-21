@@ -14,9 +14,9 @@
 //! - with the whole system as the source, the track of a session that
 //!   plays; with one app as the source, that app's session only, paused or
 //!   playing ([`pick`], [`decide`]);
-//! - with no such track, AudioSync's own labels, the source's name as the
-//!   artist, and its icon: never blank fields, since a TV may then show no
-//!   text at all;
+//! - with no such track, AudioSync's own labels ([`ReceiverLabels`], worded
+//!   in the UI's strings), the source's name as the artist, and its icon:
+//!   never blank fields, since a TV may then show no text at all;
 //! - a track without artwork waits up to [`ARTWORK_WAIT`] for it, then gets
 //!   the icon. The Mac waits for Spotify only; Windows can hand any
 //!   session's thumbnail a moment after its title;
@@ -29,6 +29,8 @@
 //! hangs holds up the reader's thread only, and a failed reading counts as
 //! no track.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -51,14 +53,33 @@ pub const ARTWORK_SIDE: u32 = 600;
 const SMALLEST_SIDE: u32 = 64;
 const JPEG_QUALITIES: [f32; 3] = [0.65, 0.5, 0.4];
 
-// These labels move to the strings file with the Now Playing card item.
-/// The title receivers show while no track counts.
-pub const UNTITLED_TITLE: &str = "AudioSync";
-/// The artist receivers show while no track counts and the source has no
-/// name to show.
-pub const UNNAMED_SOURCE: &str = "Live audio";
-/// The album receivers show while no track counts.
-pub const UNTITLED_ALBUM: &str = "From your PC";
+/// What receivers show while no track counts, worded by the UI
+/// (`receiver-*` and `source-system` in ui/strings.slint).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReceiverLabels {
+    pub title: String,
+    pub album: String,
+    /// The artist with the whole system as the source.
+    pub whole_system: String,
+    /// The artist when the source has no name to show.
+    pub unnamed_source: String,
+}
+
+/// The labels, handed to track info before the UI's strings exist and set
+/// once they do, before any receiver can play. Without them receivers get
+/// nothing.
+#[derive(Clone, Default)]
+pub struct SharedLabels(Rc<RefCell<Option<ReceiverLabels>>>);
+
+impl SharedLabels {
+    pub fn set(&self, labels: ReceiverLabels) {
+        *self.0.borrow_mut() = Some(labels);
+    }
+
+    fn get(&self) -> Option<ReceiverLabels> {
+        self.0.borrow().clone()
+    }
+}
 
 /// A media session as Windows lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,7 +184,8 @@ pub trait TrackReader {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrackSource {
     pub follow: Follow,
-    /// The source's name as the source list shows it, if there is one.
+    /// The source's name as the source list shows it, if there is one; the
+    /// whole system's comes from the labels.
     pub name: Option<String>,
 }
 
@@ -190,7 +212,7 @@ pub struct Shown {
 /// source: with the whole system as the source, what plays may be another
 /// app. A track's fields go out as its app gave them, blank artist or album
 /// included.
-pub fn decide(track: Option<&Track>, source: &TrackSource) -> Shown {
+pub fn decide(track: Option<&Track>, source: &TrackSource, labels: &ReceiverLabels) -> Shown {
     if let Some(track) = track
         && (track.session.playing || matches!(source.follow, Follow::App { .. }))
     {
@@ -212,12 +234,15 @@ pub fn decide(track: Option<&Track>, source: &TrackSource) -> Shown {
         .as_deref()
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .unwrap_or(UNNAMED_SOURCE);
+        .unwrap_or(match source.follow {
+            Follow::AnyApp => &labels.whole_system,
+            Follow::App { .. } => &labels.unnamed_source,
+        });
     Shown {
         fields: TrackFields {
-            title: UNTITLED_TITLE.to_owned(),
+            title: labels.title.clone(),
             artist: artist.to_owned(),
-            album: UNTITLED_ALBUM.to_owned(),
+            album: labels.album.clone(),
         },
         artwork: Artwork::Icon,
     }
@@ -280,6 +305,7 @@ pub struct TrackInfo {
     fields: Option<(TrackFields, Instant)>,
     /// What the sender was given last.
     sent: Option<NowPlaying>,
+    labels: SharedLabels,
     log: DebugLog,
 }
 
@@ -293,6 +319,11 @@ impl TrackInfo {
     /// Sends what happens to `log`.
     pub fn set_debug_log(&mut self, log: DebugLog) {
         self.log = log;
+    }
+
+    /// Words what receivers show while no track counts.
+    pub fn set_labels(&mut self, labels: SharedLabels) {
+        self.labels = labels;
     }
 
     /// At each backend poll: `source` is what is captured while AirPlay
@@ -319,6 +350,7 @@ impl TrackInfo {
             }
         }
         let source = source?;
+        let labels = self.labels.get()?;
         if let Some(reading) = reader.take_reading() {
             self.reading = Some(reading);
         }
@@ -330,7 +362,7 @@ impl TrackInfo {
             .reading
             .as_ref()
             .and_then(|reading| reading.track.as_ref());
-        let shown = decide(track, source);
+        let shown = decide(track, source, &labels);
         let fields_since = match &self.fields {
             Some((fields, since)) if *fields == shown.fields => *since,
             _ => {
@@ -386,7 +418,23 @@ pub mod fake {
     use std::rc::Rc;
     use std::sync::Arc;
 
-    use super::{Follow, MediaSession, Reading, Track, TrackReader};
+    use super::{Follow, MediaSession, Reading, ReceiverLabels, SharedLabels, Track, TrackReader};
+
+    /// Labels unlike the UI's, so a test sees they come from the strings.
+    pub fn labels() -> ReceiverLabels {
+        ReceiverLabels {
+            title: "Title label".to_owned(),
+            album: "Album label".to_owned(),
+            whole_system: "Whole system label".to_owned(),
+            unnamed_source: "Unnamed label".to_owned(),
+        }
+    }
+
+    pub fn shared_labels() -> SharedLabels {
+        let shared = SharedLabels::default();
+        shared.set(labels());
+        shared
+    }
 
     #[derive(Default)]
     struct FakeState {
@@ -463,7 +511,7 @@ pub mod fake {
 
 #[cfg(test)]
 mod tests {
-    use super::fake::{FakeReader, session, track};
+    use super::fake::{FakeReader, labels, session, shared_labels, track};
     use super::*;
 
     const ICON: &[u8] = b"icon jpeg";
@@ -472,7 +520,7 @@ mod tests {
     fn whole_system() -> TrackSource {
         TrackSource {
             follow: Follow::AnyApp,
-            name: Some("All System Audio".to_owned()),
+            name: None,
         }
     }
 
@@ -496,6 +544,7 @@ mod tests {
     fn track_info(reader: &FakeReader) -> TrackInfo {
         let mut info = TrackInfo::default();
         info.set_reader(reader.reader());
+        info.set_labels(shared_labels());
         info
     }
 
@@ -558,14 +607,14 @@ mod tests {
     #[test]
     fn a_paused_track_counts_only_when_its_app_is_the_source() {
         let paused = track("Spotify.exe", "Song", false, Some(COVER));
-        let shown = decide(Some(&paused), &whole_system());
+        let shown = decide(Some(&paused), &whole_system(), &labels());
         assert_eq!(
             Some(shown.fields),
-            fields(UNTITLED_TITLE, "All System Audio", UNTITLED_ALBUM)
+            fields("Title label", "Whole system label", "Album label")
         );
         assert_eq!(shown.artwork, Artwork::Icon);
 
-        let shown = decide(Some(&paused), &app("spotify.exe", "Spotify"));
+        let shown = decide(Some(&paused), &app("spotify.exe", "Spotify"), &labels());
         assert_eq!(
             Some(shown.fields),
             fields("Song", "Song artist", "Song album")
@@ -575,18 +624,21 @@ mod tests {
 
     #[test]
     fn with_no_track_the_source_name_stands_in_for_the_artist() {
-        let shown = decide(None, &app("player.exe", "Player"));
+        let shown = decide(None, &app("player.exe", "Player"), &labels());
         assert_eq!(
             Some(shown.fields),
-            fields(UNTITLED_TITLE, "Player", UNTITLED_ALBUM)
+            fields("Title label", "Player", "Album label")
         );
+        // An input device that isn't listed, as the controller gives it.
         let unnamed = TrackSource {
-            follow: Follow::AnyApp,
+            follow: Follow::App {
+                executable: String::new(),
+            },
             name: Some("  ".to_owned()),
         };
         assert_eq!(
-            Some(decide(None, &unnamed).fields),
-            fields(UNTITLED_TITLE, UNNAMED_SOURCE, UNTITLED_ALBUM)
+            Some(decide(None, &unnamed, &labels()).fields),
+            fields("Title label", "Unnamed label", "Album label")
         );
     }
 
@@ -656,7 +708,7 @@ mod tests {
             .expect("labels go out");
         assert_eq!(
             sent.track,
-            fields(UNTITLED_TITLE, "All System Audio", UNTITLED_ALBUM)
+            fields("Title label", "Whole system label", "Album label")
         );
         assert_eq!(sent.artwork.as_deref(), Some(ICON));
     }
@@ -674,7 +726,7 @@ mod tests {
             .expect("labels go out");
         assert_eq!(
             sent.track,
-            fields(UNTITLED_TITLE, "All System Audio", UNTITLED_ALBUM)
+            fields("Title label", "Whole system label", "Album label")
         );
     }
 
@@ -818,6 +870,25 @@ mod tests {
     fn no_reader_means_nothing_for_the_sender() {
         let mut info = TrackInfo::default();
         assert_eq!(info.sync(Some(&whole_system()), Instant::now()), None);
+    }
+
+    #[test]
+    fn the_labels_come_from_the_ui_and_nothing_goes_out_before_them() {
+        let reader = FakeReader::with_icon(b"icon");
+        let mut info = TrackInfo::default();
+        info.set_reader(reader.reader());
+        let shared = SharedLabels::default();
+        info.set_labels(shared.clone());
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        reader.read(None);
+        assert_eq!(info.sync(Some(&whole_system()), start), None);
+        shared.set(labels());
+        let sent = info.sync(Some(&whole_system()), start).expect("labels");
+        assert_eq!(
+            sent.track,
+            fields("Title label", "Whole system label", "Album label")
+        );
     }
 
     /// A fake JPEG encoder whose output grows with the pixel count and

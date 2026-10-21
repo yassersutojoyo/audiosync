@@ -64,6 +64,12 @@ export global Strings {
     out property <string> next-track: @tr("Next Track");
     out property <string> play: @tr("Play");
     out property <string> pause: @tr("Pause");
+    // What AirPlay receivers with a screen show while no track counts: the
+    // title, the artist when the source has no name, and the album
+    // (All System Audio's artist is source-system).
+    out property <string> receiver-untitled: "AudioSync";
+    out property <string> receiver-unnamed-source: @tr("Live audio");
+    out property <string> receiver-album: @tr("From your PC");
     out property <string> groups: @tr("Groups");
     out property <string> this-pc-section: @tr("This PC");
     out property <string> connected-section: @tr("Connected Speakers");
