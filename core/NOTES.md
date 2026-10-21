@@ -25,7 +25,7 @@ Implements S41 to S59 with the counters of S158 and the prime reset of S159. A r
 - **S40, S55**: when the post-copy check fails, the copied range is replaced by silence and the next read re-anchors at `W - De` as an overrun. F still moves past the rejected range, because those frames are gone.
 - **S158**: an overrun counts as a drift skip of e frames (e is always positive there). One extra counter, `rejected_copies`, counts post-copy rejections.
 - **S159**: `reset_prime` also clears a pending re-anchor, and keeps P, which only feeds `lagFrames` until the next prime. A read that takes both a prime reset and a resync counts only the prime.
-- **S50**: T is computed in integers as `(35 × Rc + 500) / 1000`, which rounds half up (44.1 kHz gives 1544).
+- **S50**: T is computed in integers as `(50 × Rc + 500) / 1000`, which rounds half up (44.1 kHz gives 2205; 22.05 kHz gives 1103).
 - **S3**: computed in f64 with `floor`. A non-finite delay returns `None` so the caller can ignore it; a negative delay counts as 0.
 
 ### Resampler (`resample.rs`)
