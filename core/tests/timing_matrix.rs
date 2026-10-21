@@ -22,7 +22,8 @@
 //! - I5: over the last quarter, each output's delay stays within 2 ms.
 //! - I6: an output without wander whose clock is at least 20 ppm off is
 //!   trimmed with its clock by 9/10 of what it gained, against it by at most
-//!   16 frames.
+//!   16 frames; a late-first output from 20 s after its callbacks came on
+//!   time, once it has moved by their lateness.
 //! - I7: with AirPlay chosen, the session lead stays 0 and no output
 //!   re-times.
 //! - I8 (stall cases only): a device that consumes nothing for 50 to 200 ms
@@ -71,6 +72,10 @@ const FIRST_LATE_BT_MS: f64 = 15.4;
 /// Late-first stratum: as late as a callback gets and still stays under
 /// LATE_CAP_MS and the dead band with a burst's margin.
 const FIRST_LATE_LARGE_MS: f64 = 45.0;
+/// Late-first: s after the callbacks came on time by which the anchor floor
+/// has fallen (ten ANCHOR_FALL_MS) and the trim, at up to about 3.9 ms a
+/// second, has carried the output the 45 ms.
+const FALLEN_AFTER: f64 = 20.0;
 
 /// I4: how far apart outputs may play beyond a capture block, in ms.
 const ALIGN_SLACK_MS: f64 = 2.0;
@@ -558,8 +563,12 @@ struct Output {
     /// came on time.
     least_shift_ms: f64,
     shift_after_ms: Option<f64>,
-    last_delay_ms: f64,
-    trace: Vec<String>,
+    /// Late-first: its delay at the last callback before they came on time.
+    delay_before_ms: f64,
+    /// I6 counts the trim from this time on, and the frames slowed and sped
+    /// up by then.
+    trim_judged_from: f64,
+    trim_from: Option<(u64, u64)>,
 }
 
 impl Output {
@@ -635,10 +644,18 @@ struct Outcome {
     slack_ms: Vec<Option<f64>>,
     dry_from_start: Vec<u64>,
     norms: Vec<f64>,
-    /// Per late-first output: the lowest Jf and Jf 2 s after it came on
-    /// time, in ms.
-    falls: Vec<Option<(f64, Option<f64>)>>,
-    traces: Vec<Vec<String>>,
+    /// Per late-first output, in ms: the lowest Jf, Jf 2 s after its
+    /// callbacks came on time, its delay before then and its mean delay over
+    /// the last quarter.
+    falls: Vec<Option<Fall>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Fall {
+    least_ms: f64,
+    after_ms: Option<f64>,
+    before_ms: f64,
+    end_ms: f64,
 }
 
 fn write_block(writer: &mut RingWriter, samples: &mut [f32], first: u64, at: f64) {
@@ -705,8 +722,13 @@ fn simulate(case: &Case) -> Outcome {
                 settled: None,
                 least_shift_ms: 0.0,
                 shift_after_ms: None,
-                last_delay_ms: f64::NAN,
-                trace: Vec::new(),
+                delay_before_ms: f64::NAN,
+                // Once the anchor floor has fallen and the trim has carried the
+                // output there, the trim follows the clock alone again.
+                trim_judged_from: d
+                    .first_late
+                    .map_or(SETTLED, |(_, until)| until + FALLEN_AFTER),
+                trim_from: None,
             };
             output.schedule();
             output
@@ -820,32 +842,19 @@ fn simulate(case: &Case) -> Outcome {
                 o.tail.add((played_at - captured_at) * 1000.0);
             }
         }
-        if frames > 0 {
+        if let Some((_, until)) = o.d.first_late
+            && frames > 0
+            && o.nominal(o.pulls) < until
+            && o.renderer.fade_state() == FadeState::Open
+        {
             let value = f64::from(out[(frames - 1) * 2]);
             if value != 0.0 {
                 let captured_at = value * 1e6 / f64::from(CAPTURE_RATE) - capture_origin;
-                o.last_delay_ms = (played_at - captured_at) * 1000.0;
+                o.delay_before_ms = (played_at - captured_at) * 1000.0;
             }
         }
-        const TRACE_AT: [f64; 18] = [
-            0.2, 0.4, 0.6, 0.8, 1.0, 1.3, 1.6, 2.0, 2.5, 3.0, 4.0, 6.0, 9.0, 13.0, 20.0, 40.0,
-            90.0, 170.0,
-        ];
-        if o.trace.len() < TRACE_AT.len() && pull_at >= TRACE_AT[o.trace.len()] {
-            let line = format!(
-                "    t {:.1} delay {:.2} jf {:.2} late {} lead {} lag {} slowed {} sped {} slack {:?} {:?}",
-                pull_at,
-                o.last_delay_ms,
-                o.renderer.floor_shift_frames() as f64 / 48.0,
-                o.renderer.lead_frames(),
-                o.renderer.lead_frames(),
-                o.control.lag_frames(),
-                o.control.slowed_frames(),
-                o.control.sped_frames(),
-                o.control.least_slack_ns().map(|n| n / 1000),
-                o.control.counters(),
-            );
-            o.trace.push(line);
+        if o.trim_from.is_none() && pull_at >= o.trim_judged_from {
+            o.trim_from = Some((o.control.slowed_frames(), o.control.sped_frames()));
         }
         o.pulls += 1;
         o.last_at = pull_at;
@@ -868,7 +877,14 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
     let mut dry_from_start = Vec::new();
     let falls = outputs
         .iter()
-        .map(|o| o.d.first_late.map(|_| (o.least_shift_ms, o.shift_after_ms)))
+        .map(|o| {
+            o.d.first_late.map(|_| Fall {
+                least_ms: o.least_shift_ms,
+                after_ms: o.shift_after_ms,
+                before_ms: o.delay_before_ms,
+                end_ms: o.tail.mean(),
+            })
+        })
         .collect();
     for (i, o) in outputs.iter().enumerate() {
         let end = o.control.counters();
@@ -877,6 +893,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         let corrections = end.drift_skips + end.drift_silences;
         let shortage = o.control.shortage_frames() - shortage_early;
         let (slowed, sped) = (o.control.slowed_frames(), o.control.sped_frames());
+        let (slowed_early, sped_early) = o.trim_from.unwrap_or((slowed, sped));
         let d = &o.d;
         let norm = o.tail.mean() - d.latency_ms - d.hold_back_frames() as f64 / 48.0;
         let spread = o.tail.high - o.tail.low;
@@ -890,7 +907,9 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
             own[2] = shortage > 0;
             own[4] = o.tail.count == 0 || spread > STEADY_MS;
             if d.wander_ms == 0.0 && d.ppm.abs() >= TRIM_JUDGED_PPM {
-                let gained = d.ppm.abs() * 1e-6 * case.seconds * f64::from(CAPTURE_RATE);
+                let judged_s = case.seconds - o.trim_judged_from;
+                let gained = d.ppm.abs() * 1e-6 * judged_s * f64::from(CAPTURE_RATE);
+                let (slowed, sped) = (slowed - slowed_early, sped - sped_early);
                 let (with, against) = if d.ppm > 0.0 {
                     (slowed, sped)
                 } else {
@@ -968,7 +987,6 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         dry_from_start,
         norms,
         falls,
-        traces: outputs.iter().map(|o| o.trace.clone()).collect(),
     }
 }
 
@@ -1205,10 +1223,15 @@ fn two_stray_early_stamps_move_no_output_by_more_than_2_ms() {
 // covers: S208, S209
 #[test]
 fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_output() {
-    // Its prime and its floor take the late callbacks as on time. Once they
-    // come on time the floor drops by their lateness and the anchor floor
-    // falls after it over ANCHOR_FALL_MS, so the output ends where it plays
-    // with those callbacks on time, and so does every other.
+    // Its prime and its floor take the late callbacks as on time, so it
+    // plays that much early. Once they come on time the floor drops by
+    // their lateness and the anchor floor falls after it over
+    // ANCHOR_FALL_MS: the output moves later by the lateness, to within
+    // 2 ms, and every other output plays where it does next to the output
+    // with those callbacks on time. That output primes at another capture
+    // block, so the late one is judged by its own delay. At hold-back 0 a
+    // lateness past the lead runs its reader dry once as they come on
+    // time; that silence used to count toward the move twice.
     let late: Vec<(&Case, &Outcome)> =
         matrix().cases_where(|c| c.devices.iter().any(|d| d.first_late.is_some()));
     for ms in [FIRST_LATE_BT_MS, FIRST_LATE_LARGE_MS] {
@@ -1229,32 +1252,29 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
     let mut failed = 0;
     for ((case, seen), on_time) in late.iter().zip(simulate_all(&on_time)) {
         let (ms, until) = case.devices[0].first_late.unwrap();
-        let (least, after) = seen.falls[0].unwrap();
-        let after = after.unwrap_or(f64::NEG_INFINITY);
-        let moved = seen
-            .norms
+        let fall = seen.falls[0].unwrap();
+        let after = fall.after_ms.unwrap_or(f64::NEG_INFINITY);
+        let own = fall.end_ms - fall.before_ms - ms;
+        let others = seen.norms[1..]
             .iter()
-            .zip(&on_time.norms)
-            .map(|(seen, on_time)| seen - on_time)
-            .max_by(|a, b| a.abs().total_cmp(&b.abs()))
-            .unwrap_or(0.0);
+            .zip(&on_time.norms[1..])
+            .map(|(seen, on_time)| (seen - on_time).abs())
+            .fold(0.0f64, f64::max);
         // One time constant leaves 1/e of the fall, so 2 s leave 0.4 of it at most.
-        let ok = least <= -0.8 * ms
+        let ok = fall.least_ms <= -0.8 * ms
             && after >= -0.4 * ms
-            && moved.abs() <= ALIGN_SLACK_MS
+            && own.abs() <= ALIGN_SLACK_MS
+            && others <= ALIGN_SLACK_MS
             && !seen.fails.iter().any(|&f| f);
         failed += usize::from(!ok);
         lines.push(format!(
-            "case {}: {ms} ms late for {until:.2} s, Jf down to {least:.2} ms, {after:.2} ms 2 s later, moved {moved:.2} ms{}",
+            "case {}: {ms} ms late for {until:.2} s, Jf down to {:.2} ms, {after:.2} ms 2 s later; moved {own:+.2} ms past its lateness, others up to {others:.2} ms{}",
             case.k,
+            fall.least_ms,
             if ok { "" } else { " FAILS" }
         ));
         if !ok {
             lines.extend(seen.lines.iter().cloned());
-            lines.push("  late o0:".to_string());
-            lines.extend(seen.traces[0].iter().cloned());
-            lines.push("  on time o0:".to_string());
-            lines.extend(on_time.traces[0].iter().cloned());
             lines.extend(on_time.lines.iter().cloned());
         }
     }
