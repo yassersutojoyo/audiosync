@@ -46,6 +46,8 @@ enum NativeSpeakerEvent: Equatable {
         case wrongPassword = "wrong password"
         case pairingRequired = "pairing required"
         case unsupported
+        case timingUnavailable = "timing unavailable"
+        case oneAirPlay2 = "one AirPlay 2 speaker at a time"
 
         /// The sender tries again by itself, so the speaker stays on (as in
         /// the Windows app); any other problem turns it off.
@@ -63,6 +65,8 @@ enum NativeSpeakerEvent: Equatable {
             case .passwordRequired, .wrongPassword: return .needsPassword
             case .pairingRequired: return .needsCode
             case .incompatible, .unsupported: return .cantPlay
+            case .timingUnavailable: return .timingUnavailable
+            case .oneAirPlay2: return .oneAirPlay2
             }
         }
     }
@@ -139,6 +143,10 @@ enum NativeTurnOff: Equatable {
     case unreachable
     /// This sender can't play to it.
     case cantPlay
+    /// It turned NTP timing down, and PTP timing isn't available.
+    case timingUnavailable
+    /// Another AirPlay 2 speaker plays, and only one can at a time.
+    case oneAirPlay2
     /// The user cancelled its PIN or password prompt.
     case cancelled
     /// Its pairing ended without credentials (not for a wrong PIN, which

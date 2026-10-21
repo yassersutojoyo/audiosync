@@ -97,6 +97,8 @@ extern "C" {
 #define ASC_AIRPLAY_REASON_METHODS 4       /* no ANNOUNCE, SETUP or RECORD */
 #define ASC_AIRPLAY_REASON_FORMAT 5        /* not 44 100 Hz, 16-bit stereo */
 #define ASC_AIRPLAY_REASON_AIRPLAY2_ONLY 6 /* only AirPlay 2 could serve it */
+#define ASC_AIRPLAY_REASON_TIMING 7        /* it refused NTP timing, and PTP can't take its place */
+#define ASC_AIRPLAY_REASON_ONE_AIRPLAY2 8  /* another AirPlay 2 speaker plays; one at a time */
 
 /* What discovery saw (AscAirPlayReceiver.flags), bit by bit. */
 #define ASC_AIRPLAY_FLAG_RAOP 1            /* announces _raop._tcp (AirPlay 1 audio) */

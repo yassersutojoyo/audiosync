@@ -125,6 +125,11 @@ pub const AIRPLAY_REASON_METHODS: i32 = 4;
 pub const AIRPLAY_REASON_FORMAT: i32 = 5;
 /// Only AirPlay 2 could serve it.
 pub const AIRPLAY_REASON_AIRPLAY2_ONLY: i32 = 6;
+/// It refused NTP timing, and PTP timing can't take its place (P157,
+/// P158).
+pub const AIRPLAY_REASON_TIMING: i32 = 7;
+/// Another AirPlay 2 speaker plays, and only one can at a time (P169).
+pub const AIRPLAY_REASON_ONE_AIRPLAY2: i32 = 8;
 
 /// What discovery saw ([`AscAirPlayReceiver::flags`]), bit by bit: it
 /// announces `_raop._tcp` (AirPlay 1 audio).
@@ -404,9 +409,8 @@ fn reason_code(reason: UnsupportedReason) -> i32 {
         UnsupportedReason::Methods => AIRPLAY_REASON_METHODS,
         UnsupportedReason::Format => AIRPLAY_REASON_FORMAT,
         UnsupportedReason::AirPlay2Only => AIRPLAY_REASON_AIRPLAY2_ONLY,
-        // Only the AirPlay 2 path, still behind its switch, gives these; the
-        // header has no codes for them yet.
-        UnsupportedReason::Timing | UnsupportedReason::OneAirPlay2Session => AIRPLAY_REASON_NONE,
+        UnsupportedReason::Timing => AIRPLAY_REASON_TIMING,
+        UnsupportedReason::OneAirPlay2Session => AIRPLAY_REASON_ONE_AIRPLAY2,
     }
 }
 
@@ -3041,6 +3045,16 @@ mod tests {
         .map(|reason| error_code(reason).0)
         .collect();
         assert_eq!(codes, (1..=9).collect::<Vec<i32>>());
+        assert_eq!(
+            error_code(UserReason::Unsupported(UnsupportedReason::Timing)),
+            (AIRPLAY_ERROR_UNSUPPORTED, AIRPLAY_REASON_TIMING)
+        );
+        assert_eq!(
+            error_code(UserReason::Unsupported(
+                UnsupportedReason::OneAirPlay2Session
+            )),
+            (AIRPLAY_ERROR_UNSUPPORTED, AIRPLAY_REASON_ONE_AIRPLAY2)
+        );
     }
 
     /// A browser whose first poll panics on the driver thread, as a bug in

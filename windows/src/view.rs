@@ -2606,6 +2606,8 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::PairingFailed => AirPlayProblem::PairingFailed,
         P::PairingNotYet => AirPlayProblem::PairingNotYet,
         P::AirPlay2NotYet => AirPlayProblem::Airplay2NotYet,
+        P::TimingUnavailable => AirPlayProblem::TimingUnavailable,
+        P::OneAirPlay2Speaker => AirPlayProblem::OneAirplay2Speaker,
         P::Unsupported => AirPlayProblem::Unsupported,
     }
 }

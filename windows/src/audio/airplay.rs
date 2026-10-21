@@ -480,6 +480,10 @@ pub fn problem(reason: UserReason) -> AirPlayProblem {
         // receiver that wants another kind of pairing.
         UserReason::PairingRequired => AirPlayProblem::PairingNotYet,
         UserReason::Unsupported(UnsupportedReason::AirPlay2Only) => AirPlayProblem::AirPlay2NotYet,
+        UserReason::Unsupported(UnsupportedReason::Timing) => AirPlayProblem::TimingUnavailable,
+        UserReason::Unsupported(UnsupportedReason::OneAirPlay2Session) => {
+            AirPlayProblem::OneAirPlay2Speaker
+        }
         UserReason::Unsupported(_) => AirPlayProblem::Unsupported,
     }
 }
@@ -1748,6 +1752,12 @@ impl AirPlaySpeakers {
                     && problem.retried()
                 {
                     added.state = SpeakerState::Retrying { at };
+                    events.push(BackendEvent::AirPlayTrouble {
+                        id: id.to_owned(),
+                        problem,
+                    });
+                } else if problem == AirPlayProblem::OneAirPlay2Speaker {
+                    // The sender starts it once the other session ends.
                     events.push(BackendEvent::AirPlayTrouble {
                         id: id.to_owned(),
                         problem,
@@ -3087,6 +3097,47 @@ pub mod tests {
             Err(AirPlayProblem::NeedsPassword),
             "it asks for a password from then on"
         );
+    }
+
+    #[test]
+    fn a_speaker_waiting_for_the_airplay2_slot_stays_on_and_one_without_ptp_is_off() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        airplay.poll();
+        fake.fail(
+            &kitchen,
+            ErrorKind::Unsupported(UnsupportedReason::OneAirPlay2Session),
+        );
+        assert_eq!(
+            airplay.poll(),
+            [
+                BackendEvent::AirPlayChanged,
+                BackendEvent::AirPlayTrouble {
+                    id: id.clone(),
+                    problem: AirPlayProblem::OneAirPlay2Speaker
+                }
+            ]
+        );
+        assert_eq!(airplay.enabled_ids(), std::slice::from_ref(&id));
+        fake.take_calls();
+        fake.fail(&kitchen, ErrorKind::Unsupported(UnsupportedReason::Timing));
+        assert_eq!(
+            airplay.poll(),
+            [
+                BackendEvent::AirPlayChanged,
+                BackendEvent::AirPlayFailed {
+                    id: id.clone(),
+                    problem: AirPlayProblem::TimingUnavailable
+                }
+            ]
+        );
+        assert!(airplay.enabled_ids().is_empty());
     }
 
     /// The password receiver Study, listed while streaming, with its

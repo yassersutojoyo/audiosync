@@ -929,6 +929,11 @@ mod tests {
                 "ASC_AIRPLAY_REASON_AIRPLAY2_ONLY",
                 AIRPLAY_REASON_AIRPLAY2_ONLY.to_string(),
             ),
+            ("ASC_AIRPLAY_REASON_TIMING", AIRPLAY_REASON_TIMING.to_string()),
+            (
+                "ASC_AIRPLAY_REASON_ONE_AIRPLAY2",
+                AIRPLAY_REASON_ONE_AIRPLAY2.to_string(),
+            ),
             ("ASC_AIRPLAY_FLAG_RAOP", AIRPLAY_FLAG_RAOP.to_string()),
             ("ASC_AIRPLAY_FLAG_AIRPLAY", AIRPLAY_FLAG_AIRPLAY.to_string()),
             (
