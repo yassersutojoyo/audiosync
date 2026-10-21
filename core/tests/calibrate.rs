@@ -133,6 +133,20 @@ fn the_offset_is_clamped_at_both_ends_of_the_range() {
     // isn't finite.
     assert_eq!(estimate(&reference, &later, RATE, -5000.0), Ok(-2000.0));
     assert_eq!(estimate(&reference, &later, RATE, f64::NAN), Ok(-300.0));
+    // A clamped offset is still accepted, and says so: the output stays off
+    // by what was cut away. Landing exactly on an end is no clamp.
+    let clamped = |chosen: &[f32], old: f64| {
+        let signal = calibrate::signal(RATE).expect("48 kHz");
+        calibrate::estimate(&signal, &reference, chosen, RATE, old)
+            .expect("accepted")
+            .clamped
+    };
+    assert!(clamped(&later, -1900.0));
+    assert!(clamped(&earlier, 19_990.0));
+    assert!(clamped(&later, -5000.0));
+    assert!(!clamped(&later, -1700.0));
+    assert!(!clamped(&earlier, 19_920.0));
+    assert!(!clamped(&later, 0.0));
 }
 
 // covers: S232

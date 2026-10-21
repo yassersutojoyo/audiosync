@@ -41,6 +41,7 @@ pub struct AscCalibration {
     pub difference_ms: f64,
     pub reference_ms: f64,
     pub chosen_ms: f64,
+    pub clamped: bool,
 }
 
 /// [`calibrate::signal_frames`] (S233): 0 for a rate outside 22 050 to
@@ -137,6 +138,7 @@ pub unsafe extern "C" fn asc_calibration_estimate(
             difference_ms: found.difference_ms,
             reference_ms: found.reference_ms,
             chosen_ms: found.chosen_ms,
+            clamped: found.clamped,
         },
         Err(refused) => AscCalibration {
             status: refusal_code(refused.reason),
@@ -220,8 +222,13 @@ mod tests {
                 difference_ms: 250.0,
                 reference_ms: 100.0,
                 chosen_ms: 350.0,
+                clamped: false,
             }
         );
+        let clamped = estimate(&signal, &reference, &chosen, -1900.0);
+        assert_eq!(clamped.status, CALIBRATION_ACCEPTED);
+        assert_eq!(clamped.offset_ms, -2000.0);
+        assert!(clamped.clamped);
         let silence = vec![0.0; chosen.len()];
         let refused = estimate(&signal, &reference, &silence, 30_000.0);
         assert_eq!(

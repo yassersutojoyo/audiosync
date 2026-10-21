@@ -28,8 +28,9 @@ pub const MAX_RATE: u32 = 384_000;
 /// A recording must hold the signal plus this much more, so the search has
 /// enough lags to judge a noise floor by (S234).
 pub const MIN_EXTRA_SECONDS: f64 = 0.1;
-/// The longest recording estimated, which bounds the FFT's memory to a few
-/// tens of MB (S234).
+/// The longest recording estimated: at this length the estimate peaks near
+/// 96 MB, two 2^21-point complex buffers, their twiddles and the
+/// correlation (S234).
 pub const MAX_RECORDING_FRAMES: usize = 1 << 21;
 /// A sample at or above this magnitude counts toward a clipped run (S234).
 pub const CLIP_LEVEL: f32 = 0.99;
@@ -99,6 +100,9 @@ pub struct Calibration {
     pub difference_ms: f64,
     pub reference_ms: f64,
     pub chosen_ms: f64,
+    /// The offset hit an end of S175's range, so the chosen output still
+    /// sounds off by the part cut away.
+    pub clamped: bool,
 }
 
 /// Number of frames of the test signal at `rate`, or `None` for a rate
@@ -199,8 +203,9 @@ pub fn measure(signal: &[f32], recording: &[f32], rate: u32) -> Result<Arrival, 
 
 /// The chosen output's new offset from one recording of the reference and
 /// one of the chosen output, each starting at the moment the signal entered
-/// that output's path (S232). `old_offset_ms` counts as S175's stored
-/// offset does: 0 when it isn't finite, else clamped.
+/// that output's path, before its hold-back, with the same gap to the play
+/// start in both (S232). `old_offset_ms` counts as S175's stored offset
+/// does: 0 when it isn't finite, else clamped.
 pub fn estimate(
     signal: &[f32],
     reference: &[f32],
@@ -220,13 +225,14 @@ pub fn estimate(
     if difference_ms.abs() > MAX_OFFSET_MS - MIN_OFFSET_MS {
         return Err(refused(Refusal::Implausible, None));
     }
+    let wanted = (old - difference_ms).round();
+    let offset_ms = wanted.clamp(MIN_OFFSET_MS, MAX_OFFSET_MS);
     Ok(Calibration {
-        offset_ms: (old - difference_ms)
-            .round()
-            .clamp(MIN_OFFSET_MS, MAX_OFFSET_MS),
+        offset_ms,
         difference_ms,
         reference_ms,
         chosen_ms,
+        clamped: offset_ms != wanted,
     })
 }
 

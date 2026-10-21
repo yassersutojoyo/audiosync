@@ -854,9 +854,15 @@ uint32_t asc_source_quit_decide(const char *setting, const char *source, const c
  * One local output measured against the reference with a microphone
  * (S232-S234): the host plays the test signal on the reference and records
  * it, then on the chosen output with the microphone where it was, and
- * passes both recordings, mono at the signal's rate, each starting at the
- * moment the signal entered that output's path. Both calls allocate and are
- * for the control thread; the estimate takes tens of ms.
+ * passes both recordings, mono at the signal's rate. Frame 0 of each is the
+ * moment the signal enters that output's path, before its hold-back, with
+ * the same gap from recording start to play start in both runs (a gap that
+ * differs goes into the result unseen). Each recording lasts the largest
+ * hold-back taking part (about 2 s with AirPlay, up to 20 s with large
+ * offsets) plus the output's latency plus the 0.75 s signal plus about
+ * 0.5 s. Record at 48 kHz: the 2^21-frame limit is about 44 s there but
+ * only 10.9 s at 192 kHz. Both calls allocate and are for the control
+ * thread; the estimate takes tens of ms and up to about 96 MB.
  */
 
 /* Frames of the test signal at `rate`; 0 for a rate outside 22 050...384 000. */
@@ -878,6 +884,7 @@ typedef struct AscCalibration {
     double difference_ms; /* how much later the chosen output was heard; refused: 0 */
     double reference_ms;  /* where the signal arrived in the reference's recording; refused: 0 */
     double chosen_ms;     /* where it arrived in the chosen output's recording; refused: 0 */
+    bool clamped;         /* accepted, but offset_ms hit an end of the range: the output stays off by the rest */
 } AscCalibration;
 
 /*
