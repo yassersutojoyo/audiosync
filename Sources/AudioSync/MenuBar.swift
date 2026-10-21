@@ -21,11 +21,15 @@ final class AppModel: ObservableObject {
         var autoConnect = false
         /// From the AirPlay sender's discovery; always `.open` for local speakers.
         var availability: SpeakerAvailability = .open
+        /// The name macOS or AirPlay discovery reports; `name` is the user's
+        /// when they renamed the speaker (`SpeakerNames`).
+        var systemName = ""
 
         /// A speaker AudioSync streams to through AirPlay, not a local output.
         var isAirPlay: Bool { tag == .airplay }
         /// Stable key across both kinds, used by groups and auto-connect.
         var key: String { SpeakerKey.make(id: id, airplay: isAirPlay) }
+        var isRenamed: Bool { !systemName.isEmpty && name != systemName }
     }
 
     struct Group: Identifiable, Equatable {
@@ -69,6 +73,8 @@ final class AppModel: ObservableObject {
         var renameGroup: (String) -> Void = { _ in }
         var newGroup: () -> Void = {}
         var setAutoConnect: (String, Bool) -> Void = { _, _ in }
+        /// Speaker key, system name, the name typed (`SpeakerNames.rename`).
+        var renameSpeaker: (String, String, String) -> Void = { _, _, _ in }
         var setLaunchAtLogin: (Bool) -> Void = { _ in }
         var setShowVirtualDevices: (Bool) -> Void = { _ in }
         var setAppearance: (AppAppearance) -> Void = { _ in }
@@ -123,6 +129,21 @@ final class AppModel: ObservableObject {
         drafts[id] = d
         return d
     }
+    /// The speaker whose name is being edited in its row, and the text typed
+    /// there. Like a delay field: Return or the focus leaving applies it,
+    /// Escape drops it.
+    @Published private(set) var renaming: String?
+    @Published var renameText = ""
+    func startRename(_ speaker: Speaker) {
+        renameText = speaker.name
+        renaming = speaker.id
+    }
+    func commitRename(_ speaker: Speaker) {
+        guard renaming == speaker.id else { return }
+        renaming = nil
+        actions.renameSpeaker(speaker.key, speaker.systemName, renameText)
+    }
+    func dropRename() { renaming = nil }
     /// Quit drops every typed delay not applied yet: it's never saved.
     func dropDelayDrafts() {
         for draft in drafts.values { draft.field.drop() }

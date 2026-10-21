@@ -35,6 +35,8 @@ struct AppSettings: Equatable {
         static let groups = "speakerGroups"
         /// Speaker keys (`SpeakerKey`) marked for auto-connect, as an array.
         static let autoConnect = "autoConnectSpeakers"
+        /// The names the user gave speakers, by speaker key (`SpeakerNames`).
+        static let speakerNames = "speakerNamesByKey"
         static let showVirtualDevices = "showVirtualOutputDevices"
         /// `AppAppearance.defaultsValue` (S155).
         static let appearance = "appearance"
@@ -89,6 +91,7 @@ struct AppSettings: Equatable {
     var airplayVolumes: [String: Double] = [:]
     var groups: [SpeakerGroup] = []
     var autoConnect: Set<String> = []
+    var speakerNames = SpeakerNames()
     var showVirtualDevices = false
     var appearance = AppAppearance.system
     /// D0 of the migration: what a local speaker without a delay of its own
@@ -108,6 +111,7 @@ struct AppSettings: Equatable {
         s.enabledAirPlay = ids(read(Keys.enabledAirPlay))
         s.enabledLocal = ids(read(Keys.enabledLocal))
         s.autoConnect = ids(read(Keys.autoConnect))
+        s.speakerNames = SpeakerNames(stored: read(Keys.speakerNames))
         s.master = read(Keys.master).flatMap(number).map(volume) ?? defaultMaster
         s.localVolumes = levels(read(Keys.localVolumes), volume)
         s.localDelays = levels(read(Keys.localDelays), delay)
@@ -216,6 +220,11 @@ struct SettingsStore {
     func save(groups: [SpeakerGroup]) {
         guard let data = try? JSONEncoder().encode(groups) else { return }
         write(data, Keys.groups)
+    }
+
+    /// Removed once no speaker has a name of the user's.
+    func save(speakerNames: SpeakerNames) {
+        write(speakerNames.custom.isEmpty ? nil : speakerNames.custom, Keys.speakerNames)
     }
 
     func save(showVirtualDevices: Bool) { write(showVirtualDevices, Keys.showVirtualDevices) }

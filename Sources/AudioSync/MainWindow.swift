@@ -36,7 +36,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         }
         window.setFrameAutosaveName(Self.frameName)
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            self?.endDelayTyping(before: event)
+            self?.endTyping(before: event)
             return event
         }
     }
@@ -46,14 +46,15 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     }
 
     /// A slider or a plain button doesn't take the keyboard focus, so a click
-    /// on one would leave a delay field holding its typing. The field gives
-    /// the focus up first, which applies the typing (`SyncControls`), before
-    /// the control acts on the click (`DelayPanels.clickEndsTyping`).
-    private func endDelayTyping(before event: NSEvent) {
+    /// on one would leave a delay field or a speaker's name field holding its
+    /// typing. The field gives the focus up first, which applies the typing
+    /// (`SyncControls`, `SpeakerRow`), before the control acts on the click
+    /// (`DelayPanels.clickEndsTyping`).
+    private func endTyping(before event: NSEvent) {
         guard event.window === window else { return }
         model.delayFocusLeftByClick = nil
-        guard let editor = window.firstResponder as? NSTextView,
-              let field = editor.delegate as? DelayTextField.Field else { return }
+        guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor else { return }
+        let field = editor.delegate as? DelayTextField.Field
         let point = event.locationInWindow
         var onField = false
         var hit = window.contentView?.superview?.hitTest(point)
@@ -64,9 +65,11 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         let step = DelayStepArea.Marker.all.allObjects.first {
             $0.window === window && $0.convert($0.bounds, to: nil).contains(point)
         }
-        guard DelayPanels.clickEndsTyping(typingIn: field.rowID, onField: onField, onStepOf: step?.rowID) else { return }
+        guard DelayPanels.clickEndsTyping(typingIn: field?.rowID ?? "", onField: onField, onStepOf: step?.rowID) else {
+            return
+        }
         // The row's delay value takes the focus back if this click closes the panel.
-        model.delayFocusLeftByClick = field.rowID
+        model.delayFocusLeftByClick = field?.rowID
         window.makeFirstResponder(nil)
     }
 
@@ -536,6 +539,8 @@ struct SpeakerRow: View {
     @FocusState private var deviceVolumeFixFocused: Bool
     /// The delay value, which takes the focus back when its panel closes.
     @FocusState private var delayFocused: Bool
+    /// The name field while the speaker is being renamed.
+    @FocusState private var nameFocused: Bool
 
     var body: some View {
         let t = model.text
@@ -545,16 +550,27 @@ struct SpeakerRow: View {
                     SpeakerBadge(symbol: speaker.tag.symbol, state: state, size: 32)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(t.speakerLabel(name: speaker.name, tag: tag))
+                .accessibilityLabel(t.speakerLabel(name: speaker.name, tag: tag,
+                                                   renamedFrom: speaker.isRenamed ? speaker.systemName : nil))
                 .accessibilityValue(t.value(state))
                 .accessibilityHint(t.rowHint(state, note: t.availability(speaker.availability)))
+                .accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker) }
                 .help(t.help(state))
 
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 6) {
-                        Text(speaker.name)
-                            .font(.body.weight(state == .playing ? .semibold : .regular))
-                            .lineLimit(1)
+                        if model.renaming == speaker.id {
+                            nameField(t)
+                        } else {
+                            Text(speaker.name)
+                                .font(.body.weight(state == .playing ? .semibold : .regular))
+                                .lineLimit(1)
+                                .help(t.speakerNameHelp(system: speaker.systemName, renamed: speaker.isRenamed))
+                                // A double-click renames; a single click works like the
+                                // rest of the row, once it can't be a double-click.
+                                .gesture(TapGesture(count: 2).onEnded { model.startRename(speaker) }
+                                    .exclusively(before: TapGesture().onEnded { rowTapped() }))
+                        }
                         if showTag {
                             SpeakerTypeIcon(kind: speaker.tag, state: state, text: t)
                         }
@@ -630,14 +646,41 @@ struct SpeakerRow: View {
         // without one (AirPlay, the reference) is outside every panel. The
         // delay value stays the keyboard's way in.
         .contentShape(Rectangle())
-        .onTapGesture {
-            if speaker.offsetMs != nil { model.toggleDelayPanel(speaker.id) } else { model.closeDelayPanels() }
-        }
-        .contextMenu { autoConnectToggle(t) }
+        .onTapGesture { rowTapped() }
+        .contextMenu { menuItems(t) }
+    }
+
+    private func rowTapped() {
+        if speaker.offsetMs != nil { model.toggleDelayPanel(speaker.id) } else { model.closeDelayPanels() }
+    }
+
+    /// The name, editable in place. Like a delay field, Return or the focus
+    /// leaving applies it and Escape drops it; an empty name brings back the
+    /// system name, which the field shows as its placeholder.
+    private func nameField(_ t: UIStrings) -> some View {
+        TextField(speaker.systemName, text: $model.renameText)
+            .textFieldStyle(.roundedBorder)
+            .frame(maxWidth: 220)
+            .accessibilityLabel(t.speakerNameField(system: speaker.systemName))
+            .focused($nameFocused)
+            .onSubmit { model.commitRename(speaker) }
+            .onExitCommand { model.dropRename() }
+            // A menu item starts the rename: the field takes the focus once
+            // the menu has closed.
+            .onAppear { DispatchQueue.main.async { nameFocused = true } }
+            .onChange(of: nameFocused) { _, focused in
+                if !focused { model.commitRename(speaker) }
+            }
+    }
+
+    @ViewBuilder
+    private func menuItems(_ t: UIStrings) -> some View {
+        Button(t.renameSpeaker) { model.startRename(speaker) }
+        autoConnectToggle(t)
     }
 
     private func optionsMenu(_ t: UIStrings) -> some View {
-        Menu { autoConnectToggle(t) } label: {
+        Menu { menuItems(t) } label: {
             Image(systemName: "ellipsis.circle")
         }
         .menuStyle(.borderlessButton)
