@@ -49,15 +49,15 @@ Download `AudioSync.dmg` from the [latest release](https://github.com/yassersuto
 
 I don't have a paid Apple developer account, so releases aren't notarized and macOS blocks the first launch. Open it once, dismiss the warning, then click Open Anyway in System Settings → Privacy & Security (or run `xattr -dr com.apple.quarantine /Applications/AudioSync.app`). Each release lists SHA-256 checksums. There's no auto-update: quit AudioSync and replace the app with the new one.
 
-On first use macOS asks for System Audio Recording (to capture audio) and Local Network (to find AirPlay speakers). Microphone is only needed for an input source, Automation only for Now Playing.
+On first use macOS asks for Screen & System Audio Recording (choose System Audio Recording Only) to capture audio, and Local Network to find AirPlay speakers. Microphone is only needed for an input source, Automation only for Now Playing.
 
-For HomePods, set Home app → Home Settings → Speakers & TV → Allow Speaker & TV Access to "Anyone on the Same Network", on a network you trust.
+For HomePods, set Home app → Home Settings → Speakers & TV → Allow Speaker & TV Access to "Anyone on the Same Network", on a network you trust, not "Everyone".
 
 To build it yourself you need the Xcode 16 command line tools and [rustup](https://rustup.rs), then `git clone https://github.com/yassersutojoyo/audiosync`, `cd audiosync` and `./setup.sh`. [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) has the details and how to uninstall.
 
 ## Using it
 
-Keep the macOS sound output on a local device, not a HomePod; AudioSync streams to AirPlay itself. Pick a source, then click a speaker's round icon to turn it on. The switch at the top turns all streaming on or off and remembers your speakers.
+Keep the macOS sound output on a local device, not a HomePod; AudioSync streams to AirPlay itself. The main window opens at start but not at login; click the Dock icon to bring it back. Pick a source, then click a speaker's round icon to turn it on. The switch at the top turns all streaming on or off and remembers your speakers.
 
 To line things up: if a local speaker plays before the built-in speakers, raise its delay; if after, lower it, below zero if needed (Bluetooth usually lands around −150 to −300 ms). With an AirPlay speaker on, raise the AirPlay delay if the Mac plays first, lower it if the HomePod does. Stop when you hear one clean sound. Music with clear drums helps, and so does adding speakers one at a time.
 
@@ -75,12 +75,12 @@ Right-click a speaker for auto-connect, or a group to rename it. The gear menu h
 - Everything runs about two seconds late because of the AirPlay buffer. Fine for music, not for video or games.
 - AirPlay goes out as AirPlay 1, which most AirPlay 2 speakers still take. A speaker that only does AirPlay 2 isn't listed yet.
 - I haven't tried the new AirPlay sender on a HomePod yet. If yours doesn't show up or play, please [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a debug log: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, make it happen again, and attach `/tmp/audiosync-debug.log`.
-- Several Bluetooth outputs at once may stutter, and that's the radio, not the sync. One Bluetooth radio serves every speaker in turns and shares 2.4 GHz with Wi-Fi. AudioSync keeps clock drift in check, but it can't fix the radio. What helps: 5 GHz Wi-Fi or a cable for the internet, fewer Bluetooth outputs, a dual-link USB transmitter, or AirPlay for the rest.
+- Several Bluetooth outputs at once may stutter. One Bluetooth radio serves every speaker in turns and shares 2.4 GHz with Wi-Fi. AudioSync keeps clock drift in check, but it can't fix the radio. What helps: 5 GHz Wi-Fi or a cable for the internet, fewer Bluetooth outputs, a dual-link USB transmitter, or AirPlay for the rest.
 - Now Playing only works with Spotify and Music; macOS doesn't let other apps read the system-wide Now Playing info.
 
 ## Windows
 
-A Windows 11 version (x64 and ARM64) is in the works. It shares the Rust audio engine with the Mac app and has its own AirPlay sender, so no Bonjour or Apple software is needed on the PC. It isn't released yet; CI builds it on every push, and [windows/README.md](windows/README.md#trying-the-preview-exe) says how to try a build. For now it only plays to AirPlay 1 receivers without a password, and I haven't tried its AirPlay side with a real speaker yet.
+A Windows 11 version (x64 and ARM64) is in the works. It shares the Rust audio engine with the Mac app and has its own AirPlay sender, so no Bonjour or Apple software is needed on the PC. It isn't released yet; CI builds it on every push, and [windows/README.md](windows/README.md#trying-the-preview-exe) says how to try a build. For now it only plays to AirPlay 1 receivers (a password prompts you when you turn one on), and I haven't tried its AirPlay side with a real speaker yet.
 
 ## License and credits
 
