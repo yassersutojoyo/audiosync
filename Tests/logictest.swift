@@ -2789,10 +2789,11 @@ do {
     check(B.requested(nil) == nil && B.requested("") == nil && B.requested("abc") == nil
               && B.requested("3000.5") == nil && B.requested("-2048") == nil,
           "BT IO buffer: unset, empty or not a whole number asks for nothing")
-    check(B.requested("2047") == nil && B.requested("4097") == nil,
-          "BT IO buffer: a value outside 2048 to 4096 asks for nothing")
-    check(B.requested("2048") == 2048 && B.requested(" 4096 ") == 4096 && B.requested("3072") == 3072,
-          "BT IO buffer: a whole number from 2048 to 4096 is the request")
+    check(B.requested("255") == nil && B.requested("4097") == nil && B.requested("0") == nil,
+          "BT IO buffer: a value outside 256 to 4096 asks for nothing")
+    check(B.requested("256") == 256 && B.requested("1024") == 1024 && B.requested(" 4096 ") == 4096
+              && B.requested("3072") == 3072,
+          "BT IO buffer: a whole number from 256 to 4096 is the request")
     check(B.frames(requested: nil, transport: bt, range: wide) == nil,
           "BT IO buffer: no request leaves a Bluetooth device untouched")
     check(B.frames(requested: 4096, transport: kAudioDeviceTransportTypeBuiltIn, range: wide) == nil
