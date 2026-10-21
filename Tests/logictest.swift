@@ -3591,6 +3591,28 @@ do {
               "calibration: a refusal (\(failure)) changes no offset and says why (S232)", "\(phase), \(offsets), \(message)")
     }
 
+    // Refusals the host makes before the estimate say why and that nothing changed.
+    let hostRefusals: [CalibrationFailure] = [.microphoneDenied, .noMicrophone, .sourceSilent, .interrupted,
+                                              .notPlaying, .noReference, .unsupportedRate]
+    for failure in hostRefusals {
+        let message = t.calibrationMessage(.failed(failure)) ?? ""
+        check(message.hasSuffix(" The delay wasn't changed.") && message.count > " The delay wasn't changed.".count + 10,
+              "calibration: a refusal (\(failure)) says why and that the delay wasn't changed", message)
+    }
+
+    // Both runs record with one input: a switch to another device, even at
+    // the same rate, would change the input latency between them (S232).
+    let builtIn = CalibrationMicrophoneID(device: 51, rate: 48_000)
+    check(CalibrationFlow.microphoneCheck(first: nil, now: builtIn, largestHoldBackMs: 2000) == nil
+            && CalibrationFlow.microphoneCheck(first: builtIn, now: builtIn, largestHoldBackMs: 2000) == nil
+            && CalibrationFlow.microphoneCheck(first: builtIn, now: CalibrationMicrophoneID(device: 77, rate: 48_000),
+                                               largestHoldBackMs: 2000) == .interrupted
+            && CalibrationFlow.microphoneCheck(first: builtIn, now: CalibrationMicrophoneID(device: 51, rate: 44_100),
+                                               largestHoldBackMs: 2000) == .interrupted
+            && CalibrationFlow.microphoneCheck(first: nil, now: CalibrationMicrophoneID(device: 51, rate: 192_000),
+                                               largestHoldBackMs: 20_000) == .tooLong(nil),
+          "calibration: the chosen speaker's run must record with the reference's microphone")
+
     let accepted = CalibrationFlow.finish(answer(ASC_CALIBRATION_ACCEPTED, offset: -37), commit: commit)
     let acceptedText = t.calibrationMessage(accepted) ?? ""
     check(accepted == .done(offsetMs: -37, clamped: false) && offsets == ["usb": -37]

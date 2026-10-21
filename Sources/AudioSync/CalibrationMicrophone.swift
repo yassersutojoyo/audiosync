@@ -21,7 +21,7 @@ final class CalibrationMicrophone {
 
     /// The device's nominal rate, whole Hz.
     let rate: UInt32
-    private let device: AudioObjectID
+    let device: AudioObjectID
     private let proc: AudioDeviceIOProcID
     private let sink: MicrophoneSink
     private var running = true

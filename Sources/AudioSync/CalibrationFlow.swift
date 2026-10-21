@@ -38,6 +38,12 @@ enum CalibrationFailure: Equatable {
     case implausible
 }
 
+/// The input device a run recorded with (an `AudioObjectID`) and its rate.
+struct CalibrationMicrophoneID: Equatable {
+    var device: UInt32
+    var rate: UInt32
+}
+
 /// Where one calibration stands.
 enum CalibrationPhase: Equatable {
     enum Step: Equatable {
@@ -142,6 +148,16 @@ enum CalibrationFlow {
     /// hold-back at a high rate is refused at once (S232).
     static func fits(largestHoldBackMs: Double, rate: UInt32) -> Bool {
         recordingFrames(largestHoldBackMs: largestHoldBackMs, rate: rate) <= maxRecordingFrames
+    }
+
+    /// Whether the input just opened for a run may record it: the chosen
+    /// output's run uses the same device at the same rate as the reference's,
+    /// since only an input latency that is the same in both cancels out
+    /// (S232), and the recording fits the estimate's limit at that rate.
+    static func microphoneCheck(first: CalibrationMicrophoneID?, now: CalibrationMicrophoneID,
+                                largestHoldBackMs: Double) -> CalibrationFailure? {
+        if let first, first != now { return .interrupted }
+        return fits(largestHoldBackMs: largestHoldBackMs, rate: now.rate) ? nil : .tooLong(nil)
     }
 
     /// How long a run that ends keeps the outputs as they are (only one

@@ -114,6 +114,8 @@ final class CalibrationRun {
     private var timer: DispatchSourceTimer?
     private var signal: UnsafeMutablePointer<Float>?
     private var recordings: [CalibrationRecording: (samples: [Float], rate: UInt32)] = [:]
+    /// The input the reference's run recorded with; the chosen run must use it too.
+    private var firstMicrophone: CalibrationMicrophoneID?
 
     // What the measurement depends on, as it was at the start (S232).
     private let session: Int
@@ -216,10 +218,13 @@ final class CalibrationRun {
         let capacity = CalibrationFlow.quietSeconds(largestHoldBackMs: largestHoldBackMs) + 0.75 + 0.5 + 4
         do {
             let mic = try CalibrationMicrophone(seconds: capacity)
-            guard CalibrationFlow.fits(largestHoldBackMs: largestHoldBackMs, rate: mic.rate) else {
+            let heard = CalibrationMicrophoneID(device: mic.device, rate: mic.rate)
+            if let failure = CalibrationFlow.microphoneCheck(first: firstMicrophone, now: heard,
+                                                             largestHoldBackMs: largestHoldBackMs) {
                 mic.stop()
-                return fail(.tooLong(nil))
+                return fail(failure)
             }
+            firstMicrophone = firstMicrophone ?? heard
             stage = .warming(which, mic, sinceNs: clock.nowNs())
             show(.running(.measuring(which)))
         } catch {
@@ -232,7 +237,6 @@ final class CalibrationRun {
         stage = .estimating
         restoreOutputs()
         show(.running(.estimating))
-        // Both runs at one rate: the default input may have changed in between.
         guard let first = recordings[.reference], let second = recordings[.chosen],
               first.rate == second.rate, let signal = CalibrationFlow.signal(rate: second.rate)
         else { return fail(.interrupted) }
@@ -287,9 +291,9 @@ final class CalibrationRun {
         }
         stage = .ended
         recordings = [:]
-        let sameSession = app.map { $0.engine.isRunning && $0.session == session } ?? false
-        let wait = CalibrationFlow.settleSeconds(signalSent: inFlight, sameSession: sameSession,
-                                                 largestHoldBackMs: largestHoldBackMs)
+        let wait = CalibrationFlow.settleSeconds(signalSent: inFlight, sameSession: sessionGoesOn,
+                                                 largestHoldBackMs: max(largestHoldBackMs,
+                                                                        app?.localHoldBacks.values.max() ?? 0))
         if inFlight { CalibrationTap.fadeOutSignal() }
         guard wait > 0 else {
             giveBack()
@@ -298,11 +302,23 @@ final class CalibrationRun {
         }
         show(phase, holdsOutputs: true)
         DebugTrace.log("[AudioSync] calibration: the cut-off sweep plays out for \(wait) s before the outputs return")
-        // Held strongly until then: the run still owns the solo gains and the tap.
-        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [self] in
+        let until = clock.nowNs() + seconds(wait)
+        // Strong on purpose: the run owns the solo gains and the tap until it gives them
+        // back, which cancels this timer. A new session gets them back at once.
+        let hold = DispatchSource.makeTimerSource(queue: .main)
+        hold.schedule(deadline: .now() + .milliseconds(50), repeating: .milliseconds(50))
+        hold.setEventHandler { [self] in
+            guard !sessionGoesOn || clock.nowNs() >= until else { return }
             giveBack()
             app?.calibrationOutputsReturned()
         }
+        timer = hold
+        hold.resume()
+    }
+
+    /// The session the sweep was sent in still runs.
+    private var sessionGoesOn: Bool {
+        app.map { $0.engine.isRunning && $0.session == session } ?? false
     }
 
     private func restoreOutputs() {
