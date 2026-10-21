@@ -61,6 +61,19 @@ const AIRPLAY_MS: f64 = 1700.0;
 /// measured counts and says why one rose.
 const RATCHET: [usize; 8] = [14, 34, 3, 31, 44, 32, 0, 2];
 
+/// I4: how far apart outputs may play beyond a capture block, in ms.
+const ALIGN_SLACK_MS: f64 = 2.0;
+/// I5: how far an output's delay may move over the last quarter, in ms.
+const STEADY_MS: f64 = 2.0;
+/// I6: outputs whose clock is this many ppm off or more are judged.
+const TRIM_JUDGED_PPM: f64 = 50.0;
+/// I6: the share of what the clock gained it is trimmed by, at least.
+const TRIM_WITH_SHARE: f64 = 0.9;
+/// I6: frames trimmed against the clock, at most.
+const TRIM_AGAINST_FRAMES: u64 = 16;
+/// I8: corrections a stall may cause on an output it stalls.
+const STALL_CORRECTIONS: u64 = 1;
+
 const NAMES: [&str; 8] = ["I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8"];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -770,15 +783,15 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
             own[0] = dry > 0;
             own[1] = corrections > 0;
             own[2] = shortage > 0;
-            own[4] = o.tail.count == 0 || spread > 2.0;
-            if d.wander_ms == 0.0 && d.ppm.abs() >= 50.0 {
+            own[4] = o.tail.count == 0 || spread > STEADY_MS;
+            if d.wander_ms == 0.0 && d.ppm.abs() >= TRIM_JUDGED_PPM {
                 let gained = d.ppm.abs() * 1e-6 * case.seconds * f64::from(CAPTURE_RATE);
                 let (with, against) = if d.ppm > 0.0 {
                     (slowed, sped)
                 } else {
                     (sped, slowed)
                 };
-                own[5] = (with as f64) < gained * 0.9 || against > 16;
+                own[5] = (with as f64) < gained * TRIM_WITH_SHARE || against > TRIM_AGAINST_FRAMES;
             }
             own[6] = case.airplay && (lead_moved || end.resyncs > 0);
             norms.push(norm);
@@ -786,7 +799,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
             for (s, pair) in stall_marks.windows(2).enumerate() {
                 let stalled = case.stalls[s].only.is_none_or(|only| only == i);
                 let (from, to) = (pair[0][i], pair[1][i]);
-                let allowed = u64::from(stalled);
+                let allowed = if stalled { STALL_CORRECTIONS } else { 0 };
                 own[7] |= to.corrections - from.corrections > allowed || to.dry > from.dry;
             }
         }
@@ -820,7 +833,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
     let low = norms.iter().copied().fold(f64::INFINITY, f64::min);
     let high = norms.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let block_ms = case.block as f64 * 1000.0 / f64::from(CAPTURE_RATE);
-    if norms.len() > 1 && high - low > block_ms + 2.0 {
+    if norms.len() > 1 && high - low > block_ms + ALIGN_SLACK_MS {
         fails[3] = true;
     }
     let failed: Vec<&str> = NAMES
