@@ -26,9 +26,9 @@
 //! Clock stamps (S207): when the host gives each callback the time it reads
 //! at ([`Renderer::render_at`]) and stamps the capture's blocks on the same
 //! clock, a converting renderer follows the capture's clock by those times,
-//! whatever its hold-back. It estimates where
-//! the capture is now from the newest stamp, takes the fill `Ŵ - P` at the
-//! start of every callback, keeps the average over the first
+//! whatever its hold-back. It estimates where the capture is now from the
+//! newest stamp, takes the fill `Ŵ - P` at the start of every callback,
+//! keeps the average over the first
 //! [`TRACK_MS`] (or [`TRACK_CALLBACKS`] callbacks, when longer) after the
 //! reader anchors as its reference, and trims its converter by a frame or
 //! so whenever a running average of the fill (the same time constant)
@@ -148,9 +148,12 @@ pub const TRACK_CALLBACKS: usize = 16;
 
 /// How far the running average of the fill may stray from the reference,
 /// in capture frames, before the converter is trimmed (S207). It filters
-/// the jitter of the host's wake-ups out of the error before it reaches the
-/// trim (Adriaensen, "Controlling adaptive resampling", LAC 2012): on the
-/// timing matrix, 4 frames let wakes 1 to 9 ms late trim back and forth.
+/// the hosts' wake jitter out of the error before the trim acts on it
+/// (Adriaensen, "Controlling adaptive resampling", LAC 2012): one wake in 33
+/// or 58 coming 9 ms late moves the average up to 12.5 frames, which the old
+/// 4 frames trimmed back and forth. A dead zone rather than a sign rule,
+/// because one late wake keeps the average off the same way for tens of
+/// callbacks, which a sign rule would let through.
 pub const TRIM_DEAD_ZONE_FRAMES: f64 = 15.0;
 
 /// A trim takes at most this share of a callback's reads, a 256th, and at

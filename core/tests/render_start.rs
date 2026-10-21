@@ -455,7 +455,6 @@ fn assert_follows_the_capture(clocks: Clocks, seconds: u64, jitter_ns: u64, othe
         trimmed <= drift + back + 16 + jitter_ns * u64::from(RATE) / 1_000_000_000,
         "{trimmed} frames trimmed: {clocks:?}"
     );
-    if jitter_ns > 0 { println!("JIT {jitter_ns} back {back} trimmed {trimmed} drift {drift}"); }
     let open = outcome.open_at.expect("the output faded in");
     let gaps = outcome.played[open..]
         .iter()
@@ -567,24 +566,24 @@ fn every_jittered_run(jitter_ns: u64, other_way: u64) {
 
 // covers: S207
 #[test]
-fn stamps_a_fifth_of_a_millisecond_off_barely_trim_the_other_way() {
+fn stamps_a_fifth_of_a_millisecond_off_never_trim_the_other_way() {
     // A host's wake-ups, and so its stamps, fall a little off the times of
     // the blocks and callbacks. A fifth of a millisecond either way moves
     // the fill by up to ten frames at a time; averaged over half a second,
-    // or 16 callbacks when those are large, that trims the converter the
-    // other way by a few frames a minute at most.
-    every_jittered_run(200_000, 8);
+    // or 16 callbacks when those are large, that stays inside the dead zone
+    // (with the 4-frame one before, up to 8 frames a minute went back).
+    every_jittered_run(200_000, 0);
 }
 
 // covers: S207
 #[test]
 fn stamps_a_millisecond_off_never_run_an_output_dry() {
     // A millisecond either way moves the fill by up to 48 frames at a time,
-    // past the dead zone both ways, so the converter is trimmed back and
-    // forth, a few hundred frames a minute in all at worst, a frame at a
-    // time and interpolated; still no read runs dry and no correction is
-    // made.
-    every_jittered_run(1_000_000, 500);
+    // and its average now and then past the dead zone, so the converter is
+    // trimmed the other way by some 30 frames a minute at worst (a few
+    // hundred with the 4-frame dead zone before), a frame at a time and
+    // interpolated; still no read runs dry and no correction is made.
+    every_jittered_run(1_000_000, 32);
 }
 
 // covers: S207
