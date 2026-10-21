@@ -4119,6 +4119,43 @@ mod tests {
     }
 
     #[test]
+    fn an_app_picked_while_the_last_session_fades_that_quits_before_its_start_gives_way_when_set() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        let id = id_of(&kitchen);
+        backend.set_airplay_enabled(&id, true).unwrap();
+        backend.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.driver().hold_fades(true);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            1,
+            "the start waits for the fade"
+        );
+        fake.take_calls();
+
+        backend.quit_app(PLAYER_PID);
+        backend.driver().hold_fades(false);
+        assert!(backend.poll().contains(&BackendEvent::SwitchedToSystem));
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert!(backend.driver().capture_running());
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::Remove(_))),
+            "the AirPlay speaker stays in the stream"
+        );
+        assert_eq!(backend.enabled_airplay(), [id]);
+    }
+
+    #[test]
     fn a_new_start_replaces_the_running_session() {
         let mut backend = backend();
         backend.start(&SourceId::WholeSystem).unwrap();

@@ -176,9 +176,10 @@ export global Strings {
     // File > Launch at Sign-In and the tray menu's check item: AudioSync
     // starts in the tray when the user signs in to Windows.
     out property <string> launch-at-login: @tr("Launch at Sign-In");
-    // A check item in File: on, an app source that quits gives way to the
-    // whole system; off, streaming stops.
-    out property <string> switch-source-on-quit: @tr("Switch to All System Audio When the App Quits");
+    // A check item in File: on, the captured app quitting moves streaming to
+    // the whole system; off, streaming stops. "Source app", since "the app"
+    // in AudioSync's own File menu can read as AudioSync itself.
+    out property <string> switch-source-on-quit: @tr("Switch to All System Audio When the Source App Quits");
 
     // Tray icon and its flyout (the macOS menu bar panel)
     out property <string> open-app: @tr("Open AudioSync");
