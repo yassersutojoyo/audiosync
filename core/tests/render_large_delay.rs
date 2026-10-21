@@ -3,8 +3,9 @@
 //! from 0 to 20 s or from 20 s to 10 s lands and plays on without the output
 //! being started again (S46, S48, S187). An increase of more than
 //! `RESTART_INCREASE_MS` sounds at once at the new delay, as an output
-//! started afresh there would (S226), instead of after that many seconds of
-//! silence (S47), which a listener takes for an output that stopped.
+//! started afresh there would (S187, S159), instead of after that many
+//! seconds of silence (S47), which a listener takes for an output that
+//! stopped.
 //!
 //! The capture writes 512-frame blocks at 48 kHz, stamped on a simulated
 //! clock; the device pulls 512-frame callbacks at its own rate, each with the
@@ -144,7 +145,12 @@ fn assert_sounds_by(run: &Run, from_ns: u64, expected_ns: u64, what: &str) -> u6
 /// and the lead.
 fn assert_lag(run: &Run, delay_ms: u64, what: &str) {
     let off = (run.lag - frames(delay_ms)).abs();
-    assert!(off < frames(50), "{what}: lag {} frames, {} off", run.lag, off);
+    assert!(
+        off < frames(50),
+        "{what}: lag {} frames, {} off",
+        run.lag,
+        off
+    );
 }
 
 fn assert_plays_on(run: &Run, from_ns: u64, to_ns: u64, what: &str) {
@@ -180,7 +186,7 @@ fn an_output_started_at_20_s_sounds_20_s_after_the_capture_and_plays_on() {
     }
 }
 
-// covers: S226
+// covers: S187, S159
 #[test]
 fn a_change_from_0_to_20_s_sounds_at_once_at_the_new_delay() {
     for device_rate in DEVICE_RATES {
@@ -198,7 +204,7 @@ fn a_change_from_0_to_20_s_sounds_at_once_at_the_new_delay() {
     }
 }
 
-// covers: S226
+// covers: S187, S159
 #[test]
 fn a_change_from_2_to_15_s_sounds_at_once_at_the_new_delay() {
     for device_rate in DEVICE_RATES {
@@ -216,7 +222,7 @@ fn a_change_from_2_to_15_s_sounds_at_once_at_the_new_delay() {
     }
 }
 
-// covers: S226, S45
+// covers: S187, S159, S45
 #[test]
 fn a_change_to_20_s_before_20_s_were_captured_sounds_once_they_were() {
     for device_rate in DEVICE_RATES {
