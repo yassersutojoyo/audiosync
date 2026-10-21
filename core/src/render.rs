@@ -691,6 +691,11 @@ pub struct Renderer {
     reader_delay: i64,
     /// The converter's fixed latency, in capture frames (S62).
     latency: i64,
+    /// That latency in device frames, rounded up: how long after a read's
+    /// first frame its sound leaves the converter (S184).
+    open_delay: usize,
+    /// Device frames a fade-in that has begun still keeps closed.
+    opening: usize,
     /// [`RESTART_INCREASE_MS`] in capture frames.
     restart_increase: i64,
     /// The floor of the lateness when the reader last anchored, in ns
@@ -784,6 +789,9 @@ impl Renderer {
             hold_back: control.shared.delay.load(Ordering::Relaxed),
             reader_delay: control.reader.delay_frames(),
             latency,
+            open_delay: (latency as u64 * u64::from(device_rate)).div_ceil(u64::from(capture_rate))
+                as usize,
+            opening: 0,
             restart_increase: i64::from(capture_rate) * i64::from(RESTART_INCREASE_MS) / 1000,
             anchor_floor: None,
             start_lead_fixed: false,
@@ -1393,13 +1401,20 @@ impl Renderer {
         }
         if copies && self.fade.is_closed() && !self.waiting() {
             self.fade.fade_in();
+            self.opening = self.open_delay;
         }
-        if copy_end > lead
+        // The read's first frame leaves the converter its latency later; the
+        // frames before it stay closed, so the fade-in starts on it.
+        let held = self.opening.min(copy_end.saturating_sub(lead));
+        piece[lead * channels..(lead + held) * channels].fill(0.0);
+        self.opening -= held;
+        let from = lead + held;
+        if copy_end > from
             && let Some(end) = self
                 .fade
-                .apply(&mut piece[lead * channels..copy_end * channels], channels)
+                .apply(&mut piece[from * channels..copy_end * channels], channels)
         {
-            self.fade_out_done(Some(at + lead + end));
+            self.fade_out_done(Some(at + from + end));
         }
         if n > copy_end {
             self.close_at(at + copy_end);
@@ -1416,6 +1431,7 @@ impl Renderer {
     /// Starts a fade-out; one that ends at once (nothing audible) ends after
     /// `last`, the callback frame before it (`None`: before the callback).
     fn begin_fade_out(&mut self, last: Option<usize>) {
+        self.opening = 0;
         self.fade.fade_out();
         if self.fade.is_closed() {
             self.fade_out_done(last);
@@ -1427,6 +1443,7 @@ impl Renderer {
     /// rendered (S184).
     fn close_at(&mut self, frame: usize) {
         let fading_out = self.fade.state() == FadeState::FadingOut;
+        self.opening = 0;
         self.fade.close();
         if fading_out {
             self.fade_out_done(Some(frame));

@@ -129,11 +129,11 @@ fn a_steady_output_keeps_a_positive_slack_and_counts_nothing() {
             ..STEADY
         });
         let slack = seen.least_slack_ns.expect("measured after the warm-up");
-        // An output at the capture rate gets one callback as its lead
-        // (S206): on the capture's clock it reads the newest block whole,
-        // with nothing to spare and nothing short.
+        // At the capture rate, on the capture's clock, the converter reads
+        // the newest block whole: what it holds to spare is the start
+        // lead's cap on the capture's block, 25 ms (S208).
         if device_rate == RATE {
-            assert_eq!(slack, 0, "{device_rate} Hz");
+            assert_eq!(slack, 25_000_000, "{device_rate} Hz");
         } else {
             assert!(slack > 0, "{device_rate} Hz: least slack {slack} ns");
         }

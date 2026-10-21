@@ -25,6 +25,9 @@ const N: usize = 512;
 const F: usize = 960;
 const A: f32 = 0.5;
 const T: i64 = 2400;
+/// The converter's latency at the capture rate (S85): a reader gets its
+/// delay less this, and a read's first frame sounds this much later.
+const LATENCY: usize = 21;
 /// S191 (a): a frame of a fade is A × g × w within this.
 const TOLERANCE: f64 = 1e-6;
 const NS: u64 = 1_000_000_000;
@@ -486,7 +489,8 @@ fn a_fade_reversed_midway_never_jumps() {
 #[test]
 fn the_fade_multiplies_after_the_gain_and_a_closed_output_is_exact_zeros_even_for_nan() {
     let mut rig = Rig::build(1000, Signal::Constant, RATE, 2, 0.5);
-    rig.ticks(2);
+    // The session lead raises the reader's delay to the start lead.
+    rig.ticks(4);
     let start = rig.first_sound_from(0);
     // A gain change during the fade-in ramps over one callback (S64); the
     // fade carries on unchanged.
@@ -610,20 +614,25 @@ fn audio_after_a_masked_range_or_a_dry_read_fades_in() {
     let mut rig = Rig::new(0, Signal::Constant);
     rig.play_until_open();
     rig.ticks(2);
-    for _ in 0..3 {
-        rig.render(N);
-    }
+    let held = usize::try_from(rig.control.lag_frames()).unwrap();
+    rig.render(held);
+    rig.render(N);
     let resume = rig.played.len();
     assert!(rig.played[resume - N..].iter().all(|&sample| sample == 0.0));
     rig.ticks(4);
+    assert!(rig.played[resume..resume + LATENCY].iter().all(|&sample| sample == 0.0));
     assert_fade(
-        &rig.played[resume..],
+        &rig.played[resume + LATENCY..],
         f64::from(A),
         F,
         w_in,
         "after a dry read",
     );
-    assert!(rig.played[resume + F..].iter().all(|&sample| sample == A));
+    assert!(
+        rig.played[resume + LATENCY + F..]
+            .iter()
+            .all(|&sample| sample == A)
+    );
 
     // A masked range: a reader that ran ahead during a stall steps back after
     // its fade-out, and the audio after the masked silence fades in.
@@ -696,18 +705,18 @@ fn a_delay_change_waits_for_the_fade_out_and_lands_exactly() {
     let mut rig = Rig::new(4800, Signal::Constant);
     rig.play_until_open();
     rig.ticks(4);
-    assert_eq!(rig.control.lag_frames(), 4800 - N as i64);
+    assert_eq!(rig.control.lag_frames(), 4800 - (LATENCY + N) as i64);
     let resyncs = rig.control.counters().resyncs;
     let from = rig.played.len();
     rig.control.set_delay_frames(2400);
     assert_eq!(rig.control.delay_frames(), 2400);
     rig.tick();
     // The reader plays at the old delay while the renderer fades out.
-    assert_eq!(rig.control.reader().delay_frames(), 4800);
-    assert_eq!(rig.control.lag_frames(), 4800 - N as i64);
+    assert_eq!(rig.control.reader().delay_frames(), 4800 - LATENCY as i64);
+    assert_eq!(rig.control.lag_frames(), 4800 - (LATENCY + N) as i64);
     rig.tick();
     // The fade-out's last frame is behind: the reader has the new delay.
-    assert_eq!(rig.control.reader().delay_frames(), 2400);
+    assert_eq!(rig.control.reader().delay_frames(), 2400 - LATENCY as i64);
     assert_fade(&rig.played[from..], f64::from(A), F, w_out, "fade-out");
     assert!(
         rig.played[from + F - 1..from + 2 * N]
@@ -718,18 +727,18 @@ fn a_delay_change_waits_for_the_fade_out_and_lands_exactly() {
     assert_eq!(rig.control.counters().resyncs, resyncs + 1);
     assert_eq!(
         rig.control.lag_frames(),
-        2400 - N as i64,
+        2400 - (LATENCY + N) as i64,
         "lands exactly on the new delay (S46)"
     );
     rig.ticks(4);
     assert_fade(
-        &rig.played[from + 2 * N..],
+        &rig.played[from + 2 * N + LATENCY..],
         f64::from(A),
         F,
         w_in,
         "fade-in",
     );
-    assert_eq!(rig.control.lag_frames(), 2400 - N as i64);
+    assert_eq!(rig.control.lag_frames(), 2400 - (LATENCY + N) as i64);
     assert!(largest_step(&rig.played) <= ramp_step(f64::from(A), F) + TOLERANCE);
 }
 
@@ -743,11 +752,16 @@ fn a_delay_increase_after_the_fade_out_still_inserts_exactly_the_difference() {
     rig.control.set_delay_frames(4800);
     rig.ticks(14);
     // The fade-out's last frame is from + F - 1; the rest of its block is
-    // closed; then the resync read masks exactly the difference.
+    // closed; then the resync read masks exactly the difference, after the
+    // frames the converter still held, which were read while closed.
     let start = rig.first_sound_from(from + F - 1);
-    assert_eq!(start - (from + 2 * N), 2400, "exactly Δ frames of silence");
+    assert_eq!(
+        start - (from + 2 * N),
+        LATENCY + 2400,
+        "exactly Δ frames of silence"
+    );
     assert_fade(&rig.played[start..], f64::from(A), F, w_in, "fade-in");
-    assert_eq!(rig.control.lag_frames(), 4800 - N as i64);
+    assert_eq!(rig.control.lag_frames(), 4800 - (LATENCY + N) as i64);
     let counters = rig.control.counters();
     assert_eq!(counters.resyncs, 1);
     assert_eq!((counters.drift_skips, counters.drift_silences), (0, 0));
@@ -766,29 +780,32 @@ fn a_newer_delay_change_during_the_fade_out_replaces_the_waiting_one() {
     rig.tick();
     // The fade-out wasn't restarted: it ended F frames after it began.
     assert_fade(&rig.played[from..], f64::from(A), F, w_out, "fade-out");
-    assert_eq!(rig.control.reader().delay_frames(), 3600);
+    assert_eq!(rig.control.reader().delay_frames(), 3600 - LATENCY as i64);
     rig.ticks(12);
     assert_eq!(
         rig.control.counters().resyncs,
         1,
         "one resync, at the newest delay"
     );
-    assert_eq!(rig.control.lag_frames(), 3600 - N as i64);
+    assert_eq!(rig.control.lag_frames(), 3600 - (LATENCY + N) as i64);
 }
 
 // covers: S184, S187, S191
 #[test]
 fn after_a_fade_out_for_a_delay_change_frames_stay_zero_until_the_resync_read() {
-    // At a delay of one block the reader is at W after every callback.
     let mut rig = Rig::new(0, Signal::Constant);
     rig.play_until_open();
     rig.ticks(4);
+    // The writer stalls. The reader plays on until it holds two callbacks,
+    // which the fade-out then takes to the last frame, leaving it at W.
+    let held = usize::try_from(rig.control.lag_frames()).unwrap();
+    rig.render(held - 2 * N);
     let from = rig.played.len();
     rig.control.set_delay_frames(1536);
-    rig.ticks(2);
+    rig.render(2 * N);
     assert_fade(&rig.played[from..], f64::from(A), F, w_out, "fade-out");
-    // The writer stalls: the reader is dry, so the change waits for it, and
-    // every frame stays zero meanwhile.
+    // The reader is dry, so the change waits for it, and every frame stays
+    // zero meanwhile.
     for _ in 0..4 {
         rig.render(N);
     }
@@ -818,7 +835,7 @@ fn a_held_drift_correction_is_made_after_the_fade_out_and_counted_then() {
     rig.write(2600);
     rig.tick();
     assert_eq!(rig.control.counters().drift_skips, 0, "held");
-    assert_eq!(rig.control.lag_frames(), 4096 + 2600 - N as i64);
+    assert_eq!(rig.control.lag_frames(), 4096 + 2600 - (LATENCY + N) as i64);
     rig.tick();
     assert_eq!(
         rig.control.counters().drift_skips,
@@ -832,11 +849,11 @@ fn a_held_drift_correction_is_made_after_the_fade_out_and_counted_then() {
         "made by the first read after the fade-out"
     );
     assert_eq!(counters.drift_skip_frames, 2600);
-    assert_eq!(rig.control.lag_frames(), 4096 - N as i64);
+    assert_eq!(rig.control.lag_frames(), 4096 - (LATENCY + N) as i64);
     rig.ticks(3);
     assert_fade(&rig.played[from..], f64::from(A), F, w_out, "fade-out");
     assert_fade(
-        &rig.played[from + 2 * N..],
+        &rig.played[from + 2 * N + LATENCY..],
         f64::from(A),
         F,
         w_in,
@@ -854,13 +871,14 @@ fn after_a_fade_out_for_a_held_correction_frames_stay_zero_until_the_correcting_
     rig.write(2600);
     rig.ticks(6);
     // The frames copied after the fade-out's last one, in its block, stay
-    // zero; the correcting read's first frame starts the fade-in.
+    // zero; the correcting read's first frame, out of the converter its
+    // latency later, starts the fade-in.
     assert!(
         rig.played[from + F - 1..from + 2 * N]
             .iter()
             .all(|&sample| sample == 0.0)
     );
-    assert_eq!(rig.first_sound_from(from + F - 1), from + 2 * N);
+    assert_eq!(rig.first_sound_from(from + F - 1), from + 2 * N + LATENCY);
     assert!(largest_step(&rig.played) <= ramp_step(f64::from(A), F) + TOLERANCE);
 
     // A step back in a stall: zero from the fade-out through the masked

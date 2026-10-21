@@ -237,13 +237,19 @@ fn a_speaker_clock_3_ppm_fast_loses_11_ms_of_lag_in_an_hour_without_a_correction
     // Corrected only once the drift leaves the dead band, after about 4.6 h.
     assert!(hour.drift_worst_ms < ms(tolerance_frames(RATE) as f64));
 
-    // Clock stamps (S207) leave an output at the capture rate as it was.
+    // With clock stamps (S207) the speakers' converter, at ratio 1, is
+    // trimmed with their clock instead: the lag holds, within the trim's
+    // dead zone, and the virtual output plays as it did.
     let stamped = run_hour(bench_outputs(Host::Renderer { stamped: true }, None));
-    assert_eq!(stamped.counters, hour.counters);
+    eprintln!("3 ppm, renderer with stamps: {stamped:?}");
+    assert_eq!(stamped.corrections, [0, 0], "{stamped:?}");
+    assert_eq!(stamped.counters[0], hour.counters[0]);
     assert_eq!(
-        (stamped.first_ms, stamped.last_ms),
-        (hour.first_ms, hour.last_ms)
+        (stamped.first_ms[0], stamped.last_ms[0]),
+        (hour.first_ms[0], hour.last_ms[0])
     );
+    let held = stamped.last_ms[1] - stamped.first_ms[1];
+    assert!(held.abs() < ms(16.0), "the speakers hold: {held} ms");
 }
 
 fn steps_and_skips(host: Host, stall: u64) -> [(u64, u64); 2] {
