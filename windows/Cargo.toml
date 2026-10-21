@@ -35,7 +35,7 @@ zeroize = "1.8.1"
 windows = { version = "0.62", features = [
     # The playing track for AirPlay receivers: Windows' media sessions, and
     # their artwork decoded, scaled and encoded as a JPEG
-    # (src/audio/wasapi/media.rs).
+    # (src/audio/wasapi/media.rs, media_sessions.rs).
     "Foundation",
     "Foundation_Collections",
     "Graphics_Imaging",
@@ -75,6 +75,10 @@ windows = { version = "0.62", features = [
 ] }
 # The code `#[implement]` generates for the COM callbacks names this crate.
 windows-core = "0.62"
+# WinRT's async operation types, which `windows` uses without re-exporting
+# (MIT OR Apache-2.0, already in the build through `windows`): the media
+# sessions reader names them to wait on an app for a bounded time.
+windows-future = "0.3.2"
 # The notification-area icon and its menu (MIT OR Apache-2.0).
 tray-icon = { version = "0.26.1", default-features = false }
 
