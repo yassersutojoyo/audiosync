@@ -1044,7 +1044,11 @@ struct SyncControls: View {
         }
         // Escape on a step; the field handles its own.
         .onExitCommand(perform: escape)
-        .onAppear { draft.field.show(ms, format: shown) }
+        .onAppear {
+            // A field removed while focused never hears that it lost the focus.
+            draft.fieldFocused = false
+            draft.field.show(ms, format: shown)
+        }
         .onChange(of: ms) { _, value in draft.field.show(value, format: shown) }
         // Command-S, or a click on another row's delay.
         .onChange(of: draft.applyRequests) { _, _ in commit("apply request") }
