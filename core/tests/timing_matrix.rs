@@ -31,7 +31,7 @@
 //!   none, and every output it doesn't stall gets none.
 //!
 //! In the late-first stratum the first output's callbacks come late for
-//! its first 0.4 to 1.6 s, so its floor forms on late callbacks, and then
+//! its first 0.6 to 1.8 s, so its floor forms on late callbacks, and then
 //! on time.
 //!
 //! A Bluetooth output adds a capture block to its start lead (S230); the
@@ -415,7 +415,7 @@ fn build(raw: &RawCase, k: usize, stall: bool) -> Case {
                 };
                 // Wander is lateness too; without it the floor's fall is the stratum's.
                 d.wander_ms = 0.0;
-                d.first_late = Some((ms, 0.4 + (o.seed % 1201) as f64 / 1000.0));
+                d.first_late = Some((ms, 0.6 + (o.seed % 1201) as f64 / 1000.0));
             }
             if airplay {
                 d.hold_back_ms += AIRPLAY_MS;
@@ -563,7 +563,9 @@ struct Output {
     /// came on time.
     least_shift_ms: f64,
     shift_after_ms: Option<f64>,
-    /// Late-first: its delay at the last callback before they came on time.
+    /// Late-first case: when the late callbacks come on time, and the
+    /// output's delay at its last callback before then.
+    observed_until: Option<f64>,
     delay_before_ms: f64,
     /// I6 counts the trim from this time on, and the frames slowed and sped
     /// up by then.
@@ -644,14 +646,15 @@ struct Outcome {
     slack_ms: Vec<Option<f64>>,
     dry_from_start: Vec<u64>,
     norms: Vec<f64>,
-    /// Per late-first output, in ms: the lowest Jf, Jf 2 s after its
-    /// callbacks came on time, its delay before then and its mean delay over
-    /// the last quarter.
+    /// Per output of a late-first case, in ms: the observer's floor drop,
+    /// the lowest Jf, Jf 2 s after the late callbacks came on time, its
+    /// delay before then and its mean delay over the last quarter.
     falls: Vec<Option<Fall>>,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct Fall {
+    drop_ms: f64,
     least_ms: f64,
     after_ms: Option<f64>,
     before_ms: f64,
@@ -722,6 +725,10 @@ fn simulate(case: &Case) -> Outcome {
                 settled: None,
                 least_shift_ms: 0.0,
                 shift_after_ms: None,
+                observed_until: case
+                    .devices
+                    .iter()
+                    .find_map(|d| d.first_late.map(|(_, until)| until)),
                 delay_before_ms: f64::NAN,
                 // Once the anchor floor has fallen and the trim has carried the
                 // output there, the trim follows the clock alone again.
@@ -842,9 +849,9 @@ fn simulate(case: &Case) -> Outcome {
                 o.tail.add((played_at - captured_at) * 1000.0);
             }
         }
-        if let Some((_, until)) = o.d.first_late
+        if let Some(until) = o.observed_until
             && frames > 0
-            && o.nominal(o.pulls) < until
+            && pull_at.max(o.nominal(o.pulls)) < until
             && o.renderer.fade_state() == FadeState::Open
         {
             let value = f64::from(out[(frames - 1) * 2]);
@@ -878,7 +885,8 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
     let falls = outputs
         .iter()
         .map(|o| {
-            o.d.first_late.map(|_| Fall {
+            o.observed_until.map(|_| Fall {
+                drop_ms: o.control.floor_drop_ns() as f64 / 1e6,
                 least_ms: o.least_shift_ms,
                 after_ms: o.shift_after_ms,
                 before_ms: o.delay_before_ms,
@@ -1226,12 +1234,14 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
     // Its prime and its floor take the late callbacks as on time, so it
     // plays that much early. Once they come on time the floor drops by
     // their lateness and the anchor floor falls after it over
-    // ANCHOR_FALL_MS: the output moves later by the lateness, to within
-    // 2 ms, and every other output plays where it does next to the output
-    // with those callbacks on time. That output primes at another capture
-    // block, so the late one is judged by its own delay. At hold-back 0 a
-    // lateness past the lead runs its reader dry once as they come on
-    // time; that silence used to count toward the move twice.
+    // ANCHOR_FALL_MS, so from then on the output moves later by the
+    // lateness and every other output by nothing, each to within 2 ms of
+    // its move in the twin whose callbacks were on time. Their delays
+    // aren't compared directly: an anchor lands on a capture block, and the
+    // twin's land at other times. At hold-back 0 a lateness past the lead
+    // runs the reader dry once as they come on time; that silence used to
+    // count toward the move twice, and the reference measured after it
+    // took in half of what the anchor floor still fell.
     let late: Vec<(&Case, &Outcome)> =
         matrix().cases_where(|c| c.devices.iter().any(|d| d.first_late.is_some()));
     for ms in [FIRST_LATE_BT_MS, FIRST_LATE_LARGE_MS] {
@@ -1244,7 +1254,7 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
         .iter()
         .map(|(case, _)| {
             let mut twin = (*case).clone();
-            twin.devices[0].first_late = None;
+            twin.devices[0].first_late = twin.devices[0].first_late.map(|(_, until)| (0.0, until));
             twin
         })
         .collect();
@@ -1254,22 +1264,32 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
         let (ms, until) = case.devices[0].first_late.unwrap();
         let fall = seen.falls[0].unwrap();
         let after = fall.after_ms.unwrap_or(f64::NEG_INFINITY);
-        let own = fall.end_ms - fall.before_ms - ms;
-        let others = seen.norms[1..]
+        let moves: Vec<f64> = seen
+            .falls
             .iter()
-            .zip(&on_time.norms[1..])
-            .map(|(seen, on_time)| (seen - on_time).abs())
-            .fold(0.0f64, f64::max);
+            .zip(&on_time.falls)
+            .enumerate()
+            .map(|(i, (seen, on_time))| {
+                let (seen, on_time) = (seen.unwrap(), on_time.unwrap());
+                let owed = if i == 0 { ms } else { 0.0 };
+                (seen.end_ms - seen.before_ms - owed) - (on_time.end_ms - on_time.before_ms)
+            })
+            .collect();
+        let own = moves[0];
+        let others = moves[1..]
+            .iter()
+            .fold(0.0f64, |most, by| most.max(by.abs()));
         // One time constant leaves 1/e of the fall, so 2 s leave 0.4 of it at most.
-        let ok = fall.least_ms <= -0.8 * ms
+        let ok = fall.drop_ms >= 0.8 * ms
             && after >= -0.4 * ms
             && own.abs() <= ALIGN_SLACK_MS
             && others <= ALIGN_SLACK_MS
             && !seen.fails.iter().any(|&f| f);
         failed += usize::from(!ok);
         lines.push(format!(
-            "case {}: {ms} ms late for {until:.2} s, Jf down to {:.2} ms, {after:.2} ms 2 s later; moved {own:+.2} ms past its lateness, others up to {others:.2} ms{}",
+            "case {}: {ms} ms late for {until:.2} s, floor down {:.2} ms, Jf down to {:.2} ms, {after:.2} ms 2 s later; moved {own:+.2} ms past its lateness, others up to {others:.2} ms{}",
             case.k,
+            fall.drop_ms,
             fall.least_ms,
             if ok { "" } else { " FAILS" }
         ));
