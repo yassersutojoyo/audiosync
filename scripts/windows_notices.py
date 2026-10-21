@@ -4,7 +4,8 @@
     python3 -I scripts/windows_notices.py <target triple> [--output <file>]
 
 The file covers everything compiled into audiosync.exe for that target:
-AudioSync's own code (the app, audiosync-core and audiosync-airplay, under the
+AudioSync's own code (the app, audiosync-core, audiosync-airplay and
+audiosync-cast, under the
 license their Cargo.toml declares), the Rust standard library, Slint (used
 under GPL-3.0-only), the fonts
 and icons the interface embeds, and every crate in the app's normal dependency
