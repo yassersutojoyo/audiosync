@@ -517,7 +517,7 @@ const HNS_PER_SECOND: u64 = 10_000_000;
 const GAP_JUMP_HNS: u64 = 50_000;
 
 /// With no packet for this long after the last frame's end, 25 ms (more than
-/// a late packet but inside the readers' 35 ms dead band, S50), the capture
+/// a late packet but inside the readers' 50 ms dead band, S50), the capture
 /// is in a gap.
 const IDLE_AFTER_HNS: u64 = 250_000;
 

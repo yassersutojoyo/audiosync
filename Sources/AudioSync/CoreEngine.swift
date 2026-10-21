@@ -82,7 +82,7 @@ final class CoreDelayReader {
     /// The next frame to read after the latest read (output thread writes it).
     private let nextFrame = Atomic<Int64>(0)
 
-    /// Nil outside 8 000…384 000 Hz. The drift tolerance starts at 35 ms at
+    /// Nil outside 8 000…384 000 Hz. The drift tolerance starts at 50 ms at
     /// `captureRate` and the delay at 0 until a target is set.
     init?(ring: CoreDelayRing, captureRate: Double) {
         guard let rate = CoreRate.hz(captureRate), let reader = asc_reader_create(ring.handle, rate)

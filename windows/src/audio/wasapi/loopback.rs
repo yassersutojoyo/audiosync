@@ -72,7 +72,7 @@ const ACTIVATION_TIMEOUT_MS: u32 = 5_000;
 /// stream still works and keeps the ring in real time, in ms. A process tree
 /// that plays nothing delivers nothing, so the loop writes silence for the
 /// time that passed ([`GapFill`]), often enough that no reader runs out of
-/// its 35 ms dead band (S50); and a stream that Windows invalidated (when
+/// its 50 ms dead band (S50); and a stream that Windows invalidated (when
 /// Windows audio restarts, say) may stop signalling without a word; only a
 /// call on the stream then tells.
 const WAIT_MS: u32 = 10;

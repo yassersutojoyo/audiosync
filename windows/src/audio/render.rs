@@ -180,6 +180,10 @@ mod tests {
         }
     }
 
+    /// The converter's latency at the session rate (S85): a fade-in starts on
+    /// the first frame that leaves it.
+    const LATENCY: usize = 21;
+
     /// A fade's frames at `rate` (S182): 20 ms.
     fn fade_len(rate: u32) -> usize {
         (rate as usize * 20 + 500) / 1000
@@ -236,14 +240,19 @@ mod tests {
         let mut s = primed(SESSION_RATE);
         let played = live(&mut s, 4_000, 480);
         let len = fade_len(SESSION_RATE);
-        for (i, &sample) in played[..len].iter().enumerate() {
+        assert!(played[..LATENCY].iter().all(|&sample| sample == 0.0));
+        for (i, &sample) in played[LATENCY..LATENCY + len].iter().enumerate() {
             let expected = 0.5 * fade_in(i, len);
             assert!(
                 (f64::from(sample) - expected).abs() <= 1e-6,
                 "frame {i}: {sample}, the fade says {expected}"
             );
         }
-        assert!(played[len - 1..].iter().all(|&sample| sample == 0.5));
+        assert!(
+            played[LATENCY + len - 1..]
+                .iter()
+                .all(|&sample| sample == 0.5)
+        );
 
         // At another device rate the fade counts that rate's frames.
         let mut s = primed(44_100);
@@ -293,7 +302,7 @@ mod tests {
         for _ in 0..20 {
             tick(&mut s);
         }
-        assert_eq!(s.control.lag_frames(), 4_800 - 480);
+        assert_eq!(s.control.lag_frames(), 4_800 - 480 - LATENCY as i64);
         s.control.set_delay_frames(2_400);
         let mut played = Vec::new();
         for _ in 0..6 {
@@ -303,11 +312,17 @@ mod tests {
             let out = 0.5 * fade_out(i, len);
             let back = 0.5 * fade_in(i, len);
             assert!((f64::from(played[i]) - out).abs() <= 1e-6, "out {i}");
-            assert!((f64::from(played[len + i]) - back).abs() <= 1e-6, "in {i}");
+            let at = len + LATENCY + i;
+            assert!((f64::from(played[at]) - back).abs() <= 1e-6, "in {i}");
         }
+        assert!(
+            played[len..len + LATENCY]
+                .iter()
+                .all(|&sample| sample == 0.0)
+        );
         assert_eq!(
             s.control.lag_frames(),
-            2_400 - 480,
+            2_400 - 480 - LATENCY as i64,
             "the change landed exactly after the fade-out"
         );
     }
@@ -430,16 +445,18 @@ mod tests {
         let mut s = setup(SESSION_RATE, 2, 4_000, 1.0);
         write_ramp(&mut s.writer, 0, 10_000);
         let mut out = vec![9.0; 480 * 2];
-        // Anchored at W - delay = 6000; the first 960 frames fade in.
+        // Anchored at W - delay = 6000; 960 frames fade in after the
+        // converter's latency.
         s.pipeline.render(&mut out);
         assert!(out[0].abs() < 1e-6, "the fade-in starts from silence");
+        for _ in 0..3 {
+            s.pipeline.render(&mut out);
+        }
+        assert_eq!(out[0], 7_440.0 / 1e6);
+        assert_eq!(out[1], -7_440.0 / 1e6);
+        assert_eq!(out[479 * 2], 7_919.0 / 1e6);
         s.pipeline.render(&mut out);
-        s.pipeline.render(&mut out);
-        assert_eq!(out[0], 6_960.0 / 1e6);
-        assert_eq!(out[1], -6_960.0 / 1e6);
-        assert_eq!(out[479 * 2], 7_439.0 / 1e6);
-        s.pipeline.render(&mut out);
-        assert_eq!(out[0], 7_440.0 / 1e6, "the next block follows on");
+        assert_eq!(out[0], 7_920.0 / 1e6, "the next block follows on");
         assert_eq!(s.pipeline.shortfall_frames(), 0);
     }
 
@@ -488,13 +505,12 @@ mod tests {
     #[test]
     fn samples_that_are_not_finite_reach_the_device_as_zero() {
         let mut s = setup(SESSION_RATE, 2, 4_000, 1.0);
+        // Not finite on the left up to frame 8000, finite from there.
         let samples: Vec<f32> = (0..10_000)
-            .flat_map(|i| {
-                if i % 2 == 0 {
-                    [f32::NAN, 0.5]
-                } else {
-                    [f32::INFINITY, 0.5]
-                }
+            .flat_map(|i| match i {
+                8_000.. => [0.5, 0.5],
+                _ if i % 2 == 0 => [f32::NAN, 0.5],
+                _ => [f32::INFINITY, 0.5],
             })
             .collect();
         s.writer.write(&samples, 10_000);
@@ -503,9 +519,15 @@ mod tests {
         assert!(out.iter().all(|sample| sample.is_finite()), "fading in");
         let mut out = vec![9.0; 128 * 2];
         s.pipeline.render(&mut out);
+        // The converter clears what it still had to play on both channels
+        // at each non-finite sample (S125).
+        assert!(out.iter().all(|&sample| sample == 0.0));
+        let mut out = vec![9.0; 1_024 * 2];
+        s.pipeline.render(&mut out);
         assert!(out.iter().all(|sample| sample.is_finite()));
-        assert_eq!(out[0], 0.0);
-        assert_eq!(out[1], 0.5);
+        let mut out = vec![9.0; 128 * 2];
+        s.pipeline.render(&mut out);
+        assert!(out.iter().all(|&sample| sample == 0.5), "finite again");
     }
 
     #[test]
