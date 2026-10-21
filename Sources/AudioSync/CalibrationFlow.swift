@@ -52,6 +52,8 @@ enum CalibrationPhase: Equatable {
     /// The new offset was filled in; `clamped` when the range cut it.
     case done(offsetMs: Double, clamped: Bool)
     case failed(CalibrationFailure)
+    /// The user cancelled it.
+    case cancelled
 
     var isRunning: Bool {
         if case .running = self { return true }
@@ -59,15 +61,49 @@ enum CalibrationPhase: Equatable {
     }
 }
 
+/// What a shown result depends on: once one of these changes it no longer
+/// describes the speaker and goes.
+struct CalibrationContext: Equatable {
+    var streaming: Bool
+    var reference: String?
+    var speakerOn: Bool
+}
+
 /// The calibration the window shows: the speaker it concerns and its phase.
 struct CalibrationStatus: Equatable {
     var uid: String?
     var phase: CalibrationPhase = .idle
+    /// The context `phase` was shown in.
+    var context: CalibrationContext?
+    /// A run still holds the outputs: running, or letting a cut-off sweep
+    /// play out after a cancel (`CalibrationFlow.settleSeconds`).
+    var holdsOutputs = false
 
     /// What `uid`'s row shows.
     func phase(of uid: String) -> CalibrationPhase { self.uid == uid ? phase : .idle }
 
     var isRunning: Bool { phase.isRunning }
+
+    /// The status after streaming, the reference or the speaker's switch may
+    /// have changed: an ended run's line goes once its context moved; a
+    /// running one stays, since the run checks for itself.
+    func following(_ now: CalibrationContext) -> CalibrationStatus {
+        guard !isRunning, uid != nil, phase != .idle, context != now else { return self }
+        var next = self
+        next.phase = .idle
+        next.context = nil
+        return next
+    }
+
+    /// The status after `uid`'s offset was set by hand or by a calibration:
+    /// an ended run's line about that speaker goes.
+    func offsetChanged(_ uid: String) -> CalibrationStatus {
+        guard !isRunning, self.uid == uid else { return self }
+        var next = self
+        next.phase = .idle
+        next.context = nil
+        return next
+    }
 }
 
 enum CalibrationFlow {
@@ -87,9 +123,35 @@ enum CalibrationFlow {
         return nil
     }
 
+    /// Why the button can't start a calibration now, from what the row
+    /// knows; nil when it may try (`blocker` checks the rest on the press).
+    static func unavailable(streaming: Bool, hasReference: Bool, speakerOn: Bool) -> CalibrationFailure? {
+        if !hasReference { return .noReference }
+        return streaming && speakerOn ? nil : .notPlaying
+    }
+
     /// Allowance for an output's own latency in a recording's length; a
     /// Bluetooth output stays under it.
     static let latencyAllowanceS = 0.5
+
+    /// The longest recording the estimate takes (S234).
+    static let maxRecordingFrames = 1 << 21
+
+    /// Whether a run's recording fits the estimate's limit at the
+    /// microphone's `rate`: checked before anything plays, so a long
+    /// hold-back at a high rate is refused at once (S232).
+    static func fits(largestHoldBackMs: Double, rate: UInt32) -> Bool {
+        recordingFrames(largestHoldBackMs: largestHoldBackMs, rate: rate) <= maxRecordingFrames
+    }
+
+    /// How long a run that ends keeps the outputs as they are (only one
+    /// heard, the music silent) before giving them back: the sweep already
+    /// in the delay buffer plays out through the hold-backs on that one
+    /// output, faded, instead of on every speaker at once. Nothing to wait
+    /// for when no sweep was sent, or the session it was sent in is gone.
+    static func settleSeconds(signalSent: Bool, sameSession: Bool, largestHoldBackMs: Double) -> Double {
+        signalSent && sameSession ? quietSeconds(largestHoldBackMs: largestHoldBackMs) : 0
+    }
 
     /// Frames each run keeps from the moment the signal enters the outputs'
     /// paths (S232): the largest hold-back taking part, the output's latency,

@@ -48,9 +48,35 @@ extension AppDelegate {
         calibrationRun?.cancel()
     }
 
-    func showCalibration(_ uid: String, _ phase: CalibrationPhase) {
-        let status = CalibrationStatus(uid: uid, phase: phase)
+    func showCalibration(_ uid: String, _ phase: CalibrationPhase, holdsOutputs: Bool = false) {
+        let status = CalibrationStatus(uid: uid, phase: phase, context: calibrationContext(uid),
+                                       holdsOutputs: holdsOutputs || phase.isRunning)
         if appModel.calibration != status { appModel.calibration = status }
+    }
+
+    /// A run that let a cut-off sweep play out gave the outputs back.
+    func calibrationOutputsReturned() {
+        guard appModel.calibration.holdsOutputs, !appModel.calibration.isRunning else { return }
+        appModel.calibration.holdsOutputs = false
+    }
+
+    func calibrationContext(_ uid: String) -> CalibrationContext {
+        CalibrationContext(streaming: engine.isRunning, reference: localReference,
+                           speakerOn: enabledLocal.contains(uid))
+    }
+
+    /// From `pushModel`: a calibration's line goes once streaming, the
+    /// reference or its speaker's switch changed.
+    func followCalibrationContext() {
+        guard let uid = appModel.calibration.uid else { return }
+        let next = appModel.calibration.following(calibrationContext(uid))
+        if next != appModel.calibration { appModel.calibration = next }
+    }
+
+    /// From `setLocalOffset`: the line about that speaker's last calibration goes.
+    func calibrationOffsetChanged(_ uid: String) {
+        let next = appModel.calibration.offsetChanged(uid)
+        if next != appModel.calibration { appModel.calibration = next }
     }
 }
 
@@ -73,6 +99,8 @@ final class CalibrationRun {
         case warming(CalibrationRecording, CalibrationMicrophone, sinceNs: UInt64)
         case playing(CalibrationRecording, CalibrationMicrophone, askedNs: UInt64)
         case recording(CalibrationRecording, CalibrationMicrophone, start: Int, frames: Int, deadlineNs: UInt64)
+        /// One run's recording is in; the next step starts at once.
+        case between
         case estimating
         /// Nothing held: the microphone it had is let go.
         case ended
@@ -81,6 +109,8 @@ final class CalibrationRun {
     private var stage = Stage.quiet(untilNs: 0)
     /// Set once the row shows how the run ended; nothing runs after it.
     private var ended = false
+    /// Set once the outputs and the tap are back as they were.
+    private var givenBack = false
     private var timer: DispatchSourceTimer?
     private var signal: UnsafeMutablePointer<Float>?
     private var recordings: [CalibrationRecording: (samples: [Float], rate: UInt32)] = [:]
@@ -103,7 +133,7 @@ final class CalibrationRun {
         largestHoldBackMs = app.localHoldBacks.values.max() ?? 0
     }
 
-    deinit { release() }
+    deinit { giveBack() }
 
     func start() {
         let rate = captureRate.rounded()
@@ -129,7 +159,7 @@ final class CalibrationRun {
     func cancel() {
         guard !ended else { return }
         DebugTrace.log("[AudioSync] calibration of \(chosen) cancelled")
-        end(.idle)
+        end(.cancelled)
     }
 
     private func tick() {
@@ -168,10 +198,11 @@ final class CalibrationRun {
             guard mic.framesRecorded >= start + frames || now >= deadline else { return }
             mic.stop()
             recordings[which] = (mic.recording(from: start, count: frames), mic.rate)
+            stage = .between
             DebugTrace.log("[AudioSync] calibration: \(which) recorded, \(recordings[which]?.samples.count ?? 0) "
                 + "frames at \(mic.rate) Hz from frame \(start)")
             if which == .reference { begin(.chosen) } else { estimate() }
-        case .estimating, .ended:
+        case .between, .estimating, .ended:
             break
         }
     }
@@ -185,6 +216,10 @@ final class CalibrationRun {
         let capacity = CalibrationFlow.quietSeconds(largestHoldBackMs: largestHoldBackMs) + 0.75 + 0.5 + 4
         do {
             let mic = try CalibrationMicrophone(seconds: capacity)
+            guard CalibrationFlow.fits(largestHoldBackMs: largestHoldBackMs, rate: mic.rate) else {
+                mic.stop()
+                return fail(.tooLong(nil))
+            }
             stage = .warming(which, mic, sinceNs: clock.nowNs())
             show(.running(.measuring(which)))
         } catch {
@@ -232,14 +267,42 @@ final class CalibrationRun {
         end(.failed(failure))
     }
 
-    /// Every output back at its gain and the music fading back in, then the
-    /// row shows `phase` and the run lets go of the app.
+    /// The row shows `phase` at once. A sweep cut off on its way (`.playing`,
+    /// `.recording`) fades out and plays out through the hold-backs on the
+    /// one output heard before every output gets its gain back and the music
+    /// fades in (`CalibrationFlow.settleSeconds`); otherwise that happens now.
     private func end(_ phase: CalibrationPhase) {
         ended = true
-        release()
+        timer?.cancel()
+        timer = nil
+        var inFlight = false
+        switch stage {
+        case .warming(_, let mic, _):
+            mic.stop()
+        case .playing(_, let mic, _), .recording(_, let mic, _, _, _):
+            mic.stop()
+            inFlight = true
+        default:
+            break
+        }
         stage = .ended
-        show(phase)
-        if let app, app.calibrationRun === self { app.calibrationRun = nil }
+        recordings = [:]
+        let sameSession = app.map { $0.engine.isRunning && $0.session == session } ?? false
+        let wait = CalibrationFlow.settleSeconds(signalSent: inFlight, sameSession: sameSession,
+                                                 largestHoldBackMs: largestHoldBackMs)
+        if inFlight { CalibrationTap.fadeOutSignal() }
+        guard wait > 0 else {
+            giveBack()
+            show(phase)
+            return
+        }
+        show(phase, holdsOutputs: true)
+        DebugTrace.log("[AudioSync] calibration: the cut-off sweep plays out for \(wait) s before the outputs return")
+        // Held strongly until then: the run still owns the solo gains and the tap.
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [self] in
+            giveBack()
+            app?.calibrationOutputsReturned()
+        }
     }
 
     private func restoreOutputs() {
@@ -248,15 +311,13 @@ final class CalibrationRun {
         app?.reapplyLocalGains()
     }
 
-    /// Stops the timer and the microphone and takes the signal out of the
-    /// capture path. Idempotent.
-    private func release() {
+    /// Every output back at its gain, the music fading back in and the
+    /// signal out of the capture path; the run lets go of the app. Idempotent.
+    private func giveBack() {
+        guard !givenBack else { return }
+        givenBack = true
         timer?.cancel()
         timer = nil
-        switch stage {
-        case .warming(_, let mic, _), .playing(_, let mic, _), .recording(_, let mic, _, _, _): mic.stop()
-        default: break
-        }
         restoreOutputs()
         CalibrationTap.disengage()
         if let signal {
@@ -265,10 +326,11 @@ final class CalibrationRun {
             self.signal = nil
         }
         recordings = [:]
+        if let app, app.calibrationRun === self { app.calibrationRun = nil }
     }
 
-    private func show(_ phase: CalibrationPhase) {
-        app?.showCalibration(chosen, phase)
+    private func show(_ phase: CalibrationPhase, holdsOutputs: Bool = false) {
+        app?.showCalibration(chosen, phase, holdsOutputs: holdsOutputs)
     }
 
     private func seconds(_ s: Double) -> UInt64 { UInt64(max(0, s) * 1e9) }

@@ -32,6 +32,11 @@ enum CalibrationTap {
     private static let position = Atomic<Int>(-1)
     /// Host ticks of the block that carried the signal's first frame; 0 before.
     private static let startTicks = Atomic<UInt64>(0)
+    /// The signal's level in frames of its fade-out; written by the capture
+    /// thread while it plays, by `play` before it does.
+    private static let signalLevel = Atomic<Int>(fadeFrames)
+    /// Set by `fadeOutSignal`.
+    private static let stopping = Atomic<Bool>(false)
     /// Capture-thread calls that may be reading the installed signal.
     private static let users = Atomic<Int>(0)
 
@@ -69,13 +74,16 @@ enum CalibrationTap {
         let samples = raw.assumingMemoryBound(to: Float.self)
         let count = max(0, min(frames, total - at))
         if at == 0 { startTicks.store(mach_absolute_time(), ordering: .sequentiallyConsistent) }
+        let fading = stopping.load(ordering: .sequentiallyConsistent)
+        var l = signalLevel.load(ordering: .relaxed)
         for i in 0..<count {
-            let s = samples[at + i]
+            if fading { if l > 0 { l -= 1 } }
+            let s = samples[at + i] * (Float(l) / Float(fadeFrames))
             block[2 * i] += s
             block[2 * i + 1] += s
         }
-        let next = at + count >= total ? -1 : at + count
-        // A cancel stored -1 meanwhile: it stands.
+        signalLevel.store(l, ordering: .relaxed)
+        let next = at + count >= total || l == 0 ? -1 : at + count
         _ = position.compareExchange(expected: at, desired: next, ordering: .sequentiallyConsistent)
     }
 
@@ -99,8 +107,17 @@ enum CalibrationTap {
     /// Plays the installed signal from the next block on.
     static func play() {
         startTicks.store(0, ordering: .sequentiallyConsistent)
+        stopping.store(false, ordering: .sequentiallyConsistent)
+        signalLevel.store(fadeFrames, ordering: .sequentiallyConsistent)
         position.store(0, ordering: .sequentiallyConsistent)
     }
+
+    /// A signal still being written fades out over `fadeFrames` and ends,
+    /// instead of stopping mid-waveform (S185).
+    static func fadeOutSignal() { stopping.store(true, ordering: .sequentiallyConsistent) }
+
+    /// The signal was asked for and its last frame isn't written yet.
+    static var isPlaying: Bool { position.load(ordering: .sequentiallyConsistent) >= 0 }
 
     /// Host ticks of the write that carried the signal's first frame, or nil
     /// while it hasn't been written.

@@ -81,14 +81,30 @@ capture_rt=$(awk '/^    final class CaptureSink/ { f = 1 } f { print } f && /^  
   awk '/^struct CaptureChannels/ { f = 1 } f { print } f && /^}$/ { exit }' "$SRC/CaptureSupport.swift"
   awk '/^enum CalibrationTap/ { f = 1 } f { print } f && /^}$/ { exit }' "$SRC/CalibrationTap.swift"
   awk '/^private final class MicrophoneSink/ { f = 1 } f { print } f && /^}$/ { exit }' \
+    "$SRC/CalibrationMicrophone.swift"
+  awk '/AudioDeviceCreateIOProcIDWithBlock/ { f = 1 } f { print } f && /^        }$/ { exit }' \
     "$SRC/CalibrationMicrophone.swift")
 capture_rt=$(grep -vE '^[[:space:]]*//' <<< "$capture_rt" || true)
+# What runs on the IO threads themselves, without the sinks' setup, must not
+# allocate either.
+io_only=$(awk '/^        func consume/ { f = 1 } f { print } f && /^        }$/ { exit }' "$SRC/ProcessTapCapture.swift"
+  awk '/^    func consume/ { f = 1 } f { print } f && /^    }$/ { exit }' "$SRC/CalibrationMicrophone.swift"
+  awk '/MARK: Capture thread/ { f = 1 } /MARK: Main thread/ { exit } f { print }' "$SRC/CalibrationTap.swift"
+  awk '/^struct CaptureChannels/ { f = 1 } f { print } f && /^}$/ { exit }' "$SRC/CaptureSupport.swift"
+  awk '/AudioDeviceCreateIOProcIDWithBlock/ { f = 1 } f { print } f && /^        }$/ { exit }' \
+    "$SRC/CalibrationMicrophone.swift")
+io_only=$(grep -vE '^[[:space:]]*//' <<< "$io_only" || true)
 if ! grep -q 'func copy' <<< "$capture_rt" || ! grep -q 'func addSignal' <<< "$capture_rt" \
-    || [ "$(grep -c 'func consume' <<< "$capture_rt")" -lt 2 ]; then
+    || [ "$(grep -c 'func consume' <<< "$capture_rt")" -lt 2 ] \
+    || ! grep -q 'sink.consume(input, at:' <<< "$capture_rt" \
+    || [ "$(grep -c 'func consume' <<< "$io_only")" -lt 2 ] || ! grep -q 'func addSignal' <<< "$io_only"; then
   echo "FAIL: the IOProcs' code (CaptureSink, CaptureChannels, CalibrationTap, MicrophoneSink) wasn't found"
   status=1
 elif grep -nE 'DebugTrace|print\(|NSLog|os_log|Logger|DispatchQueue|Lock|Mutex|pthread_|String\(|"' <<< "$capture_rt"; then
   echo "FAIL: the capture IOProc logs, locks, dispatches or builds strings"
+  status=1
+elif grep -nE 'Array\(|\.allocate\(|\[Float\]\(|\.append\(' <<< "$io_only"; then
+  echo "FAIL: an IOProc allocates"
   status=1
 else
   echo "PASSED"

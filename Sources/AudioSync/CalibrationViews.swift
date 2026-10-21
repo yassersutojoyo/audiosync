@@ -8,11 +8,17 @@ struct CalibrationControl: View {
     @ObservedObject var model: AppModel
     let id: String
     let name: String
+    /// The speaker's switch is on.
+    let speakerOn: Bool
 
     var body: some View {
         let t = model.text
         let phase = model.calibration.phase(of: id)
-        let elsewhere = model.calibration.isRunning && model.calibration.uid != id
+        let running = phase.isRunning
+        let unavailable = CalibrationFlow.unavailable(streaming: model.running, hasReference: model.hasLocalReference,
+                                                      speakerOn: speakerOn)
+        // Another speaker's run, or a cut-off sweep still playing out, holds the outputs.
+        let held = model.calibration.holdsOutputs && !running
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 if case .running(let step) = phase {
@@ -22,17 +28,17 @@ struct CalibrationControl: View {
                     Text(t.calibrationStep(step))
                         .font(.caption)
                         .foregroundStyle(Brand.secondaryText)
-                    Button(t.calibrationCancel) { model.actions.cancelCalibration() }
-                        .controlSize(.small)
-                        .accessibilityLabel(t.calibrationCancelLabel(of: name))
-                } else {
-                    Button(t.calibrateWithMicrophone) { model.actions.calibrate(id) }
-                        .controlSize(.small)
-                        .disabled(elsewhere)
-                        .help(t.calibrationHint)
-                        .accessibilityLabel(t.calibrateLabel(of: name))
-                        .accessibilityHint(t.calibrationHint)
                 }
+                // One button that turns into Cancel and back, so the keyboard
+                // focus stays on it while the run starts and ends.
+                Button(running ? t.calibrationCancel : t.calibrateWithMicrophone) {
+                    if running { model.actions.cancelCalibration() } else { model.actions.calibrate(id) }
+                }
+                .controlSize(.small)
+                .disabled(!running && (unavailable != nil || held))
+                .help(running ? "" : unavailable.map(t.calibrationUnavailable) ?? t.calibrationHint)
+                .accessibilityLabel(running ? t.calibrationCancelLabel(of: name) : t.calibrateLabel(of: name))
+                .accessibilityHint(running ? "" : unavailable.map(t.calibrationUnavailable) ?? t.calibrationHint)
             }
             if let message = t.calibrationMessage(phase) {
                 Text(message)

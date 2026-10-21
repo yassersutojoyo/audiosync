@@ -221,6 +221,7 @@ extension AppDelegate {
         publish(\.switchWhenSourceQuits, whenSourceQuits == .system)
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
+        followCalibrationContext()
         menuBar?.setRunning(engine.isRunning)
         syncTrackInfo()
         scheduleDueReconcile()

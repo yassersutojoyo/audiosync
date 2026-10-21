@@ -173,6 +173,13 @@ struct UIStrings {
     func calibrationCancelLabel(of name: String) -> String { "Cancel calibrating \(name)" }
     let openMicrophoneSettings = "Open Microphone Settings"
 
+    /// The calibrate button's tooltip and VoiceOver hint while it is off.
+    func calibrationUnavailable(_ reason: CalibrationFailure) -> String {
+        reason == .noReference
+            ? "Calibration measures against the Mac's built-in speakers, and they aren't listed."
+            : "Turn on streaming and this speaker to calibrate it."
+    }
+
     /// What a running calibration is doing.
     func calibrationStep(_ step: CalibrationPhase.Step) -> String {
         switch step {
@@ -196,6 +203,8 @@ struct UIStrings {
                 : "Delay set to \(offsetValue(ms: ms))."
         case .failed(let failure):
             return calibrationFailure(failure) + " The delay wasn't changed."
+        case .cancelled:
+            return "Calibration cancelled. The delay wasn't changed."
         }
     }
 
@@ -220,7 +229,8 @@ struct UIStrings {
         case .tooShort:
             return "The recording was too short. Try again."
         case .tooLong:
-            return "The delays are too long to measure in one recording. Lower the largest delay and try again."
+            return "The delays are too long to measure in one recording at the microphone's sample rate. "
+                + "Lower the largest delay, or set the microphone to 48 kHz in Audio MIDI Setup, and try again."
         case .clipped(let which):
             return "The microphone was overloaded while \(calibrationSubject(which)) played. "
                 + "Turn the volume down or move the microphone farther away, and try again."

@@ -67,6 +67,7 @@ extension AppDelegate {
     func setLocalOffset(_ uid: String, _ rawMs: Double) {
         guard let ms = LocalDelay.sanitizedOffset(rawMs) else { return }   // not finite: ignored
         localOffsetMs[uid] = ms
+        calibrationOffsetChanged(uid)
         retimeLocalOutputs()
         pushModel()
     }
