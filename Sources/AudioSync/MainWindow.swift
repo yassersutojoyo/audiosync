@@ -10,6 +10,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     /// Whether the window was on screen at the last check, so the callback
     /// only fires on a change.
     private var onScreen = false
+    private var clickMonitor: Any?
 
     init(model: AppModel) {
         self.model = model
@@ -34,6 +35,39 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             window.center()
         }
         window.setFrameAutosaveName(Self.frameName)
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            self?.endDelayTyping(before: event)
+            return event
+        }
+    }
+
+    deinit {
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+    }
+
+    /// A slider or a plain button doesn't take the keyboard focus, so a click
+    /// on one would leave a delay field holding its typing. The field gives
+    /// the focus up first, which applies the typing (`SyncControls`), before
+    /// the control acts on the click (`DelayPanels.clickEndsTyping`).
+    private func endDelayTyping(before event: NSEvent) {
+        guard event.window === window else { return }
+        model.delayFocusLeftByClick = nil
+        guard let editor = window.firstResponder as? NSTextView,
+              let field = editor.delegate as? DelayTextField.Field else { return }
+        let point = event.locationInWindow
+        var onField = false
+        var hit = window.contentView?.superview?.hitTest(point)
+        while let view = hit, !onField {
+            onField = view is NSTextField || view === editor
+            hit = view.superview
+        }
+        let step = DelayStepArea.Marker.all.allObjects.first {
+            $0.window === window && $0.convert($0.bounds, to: nil).contains(point)
+        }
+        guard DelayPanels.clickEndsTyping(typingIn: field.rowID, onField: onField, onStepOf: step?.rowID) else { return }
+        // The row's delay value takes the focus back if this click closes the panel.
+        model.delayFocusLeftByClick = field.rowID
+        window.makeFirstResponder(nil)
     }
 
     func show() {
@@ -575,8 +609,9 @@ struct SpeakerRow: View {
                              kind: .offset(hasReference: model.hasLocalReference), ms: ms,
                              label: t.delay(of: speaker.name), text: t, draft: model.draft(for: speaker.id),
                              escape: {
-                    delayFocused = true
+                    // Dropped first: the field losing the focus would apply it.
                     model.dropDelayTyping()
+                    delayFocused = true
                 }) {
                     model.actions.setLocalOffset(speaker.id, $0)
                 }
@@ -585,15 +620,18 @@ struct SpeakerRow: View {
             }
         }
         .onChange(of: showSync) { _, open in
-            if !open, model.draft(for: speaker.id).fieldFocused { delayFocused = true }
+            if !open, model.draft(for: speaker.id).fieldFocused || model.delayFocusLeftByClick == speaker.id {
+                delayFocused = true
+            }
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
         .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.row)
             .fill(state == .playing ? accent.opacity(0.08) : Color.clear))
-        // A click on the row's box, between its dividers, works like its
-        // delay value; a row without one (AirPlay, the reference) is outside
-        // every panel. The delay value stays the keyboard's way in.
+        // A click on the row's box, between its dividers and its open
+        // panel's blank space included, works like its delay value; a row
+        // without one (AirPlay, the reference) is outside every panel. The
+        // delay value stays the keyboard's way in.
         .contentShape(Rectangle())
         .onTapGesture {
             if speaker.offsetMs != nil { model.toggleDelayPanel(speaker.id) } else { model.closeDelayPanels() }
@@ -658,15 +696,18 @@ struct AirPlayDelayRow: View {
                 SyncControls(model: model, id: Self.id, kind: .airPlay, ms: model.airPlayDelayMs,
                              label: t.airPlayDelay, text: t,
                              draft: model.draft(for: Self.id), escape: {
-                    delayFocused = true
+                    // Dropped first: the field losing the focus would apply it.
                     model.dropDelayTyping()
+                    delayFocused = true
                 }) { model.actions.setAirPlayDelay($0) }
                     .padding(.leading, 44)
                     .transition(.opacity)
             }
         }
         .onChange(of: expanded) { _, open in
-            if !open, model.draft(for: Self.id).fieldFocused { delayFocused = true }
+            if !open, model.draft(for: Self.id).fieldFocused || model.delayFocusLeftByClick == Self.id {
+                delayFocused = true
+            }
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
@@ -751,6 +792,131 @@ private struct DraftUnderline: Shape {
     }
 }
 
+/// A delay field as an AppKit text field. SwiftUI's own field shows a
+/// keystroke before its binding can turn it down, so a blocked character
+/// flashed in and out; a formatter here blocks it before it shows. It also
+/// hides the focus ring while the panel's error outline stands in for it.
+private struct DelayTextField: NSViewRepresentable {
+    /// The row's key in `delayPanels`, for the main window's click monitor.
+    let rowID: String
+    let text: String
+    let placeholder: String
+    let label: String
+    let hint: String
+    let showsError: Bool
+    let typed: (String) -> Void
+    /// A keystroke, or part of a paste, the field turned down.
+    let blocked: () -> Void
+    let submit: () -> Void
+    let escape: () -> Void
+    let focusChanged: (Bool) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> Field {
+        let field = Field()
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+        field.alignment = .center
+        field.font = .monospacedDigitSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize,
+                                                weight: .regular)
+        field.cell?.wraps = false
+        field.cell?.isScrollable = true
+        field.cell?.usesSingleLineMode = true
+        field.formatter = InputFilter(owner: context.coordinator)
+        field.delegate = context.coordinator
+        field.owner = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ field: Field, context: Context) {
+        context.coordinator.parent = self
+        field.rowID = rowID
+        // Setting the field's own value while it is being edited would end the editing.
+        if let editor = field.currentEditor() {
+            if editor.string != text { editor.string = text }
+        } else if field.stringValue != text {
+            field.stringValue = text
+        }
+        field.placeholderString = placeholder
+        field.setAccessibilityLabel(label)
+        field.setAccessibilityHelp(hint)
+        let ring: NSFocusRingType = showsError ? .none : .default
+        if field.focusRingType != ring {
+            field.focusRingType = ring
+            field.noteFocusRingMaskChanged()
+            field.currentEditor()?.noteFocusRingMaskChanged()
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: DelayTextField?
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            parent?.typed(field.stringValue)
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.insertNewline(_:)):
+                parent?.submit()   // applies and keeps the panel open, to try the next value
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                parent?.escape()
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    final class Field: NSTextField {
+        weak var owner: Coordinator?
+        var rowID = ""
+
+        override func becomeFirstResponder() -> Bool {
+            let became = super.becomeFirstResponder()
+            if became { owner?.parent?.focusChanged(true) }
+            return became
+        }
+
+        override func textDidEndEditing(_ notification: Notification) {
+            super.textDidEndEditing(notification)
+            owner?.parent?.focusChanged(false)
+        }
+    }
+
+    /// Passes only edits that leave text a delay field can hold
+    /// (`LocalDelay.fieldAccepts`); a paste with anything else goes whole.
+    final class InputFilter: Formatter {
+        private weak var owner: Coordinator?
+
+        init(owner: Coordinator) {
+            self.owner = owner
+            super.init()
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func string(for obj: Any?) -> String? { obj as? String }
+
+        override func getObjectValue(_ obj: AutoreleasingUnsafeMutablePointer<AnyObject?>?, for string: String,
+                                     errorDescription error: AutoreleasingUnsafeMutablePointer<NSString?>?) -> Bool {
+            obj?.pointee = string as NSString
+            return true
+        }
+
+        override func isPartialStringValid(_ partialString: String,
+                                           newEditingString newString: AutoreleasingUnsafeMutablePointer<NSString?>?,
+                                           errorDescription error: AutoreleasingUnsafeMutablePointer<NSString?>?) -> Bool {
+            guard !LocalDelay.fieldAccepts(partialString) else { return true }
+            owner?.parent?.blocked()
+            return false
+        }
+    }
+}
+
 /// Drags the window from the header band. SwiftUI's background tap that
 /// closes the delay panels would otherwise take the header's clicks, so the
 /// band moves the window itself; `pressed` runs first, as for any click
@@ -784,11 +950,34 @@ private struct ScrollEdgeFade: View {
     }
 }
 
+/// A step button's area, which the main window's click monitor finds by
+/// position: a click there leaves the focus with the same panel's field, so
+/// the step builds on its typing and applies once.
+private struct DelayStepArea: NSViewRepresentable {
+    let rowID: String
+
+    func makeNSView(context: Context) -> Marker { Marker() }
+    func updateNSView(_ marker: Marker, context: Context) { marker.rowID = rowID }
+
+    final class Marker: NSView {
+        static let all = NSHashTable<Marker>.weakObjects()
+        var rowID = ""
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil { Self.all.add(self) } else { Self.all.remove(self) }
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
 /// A delay's controls: coarse/fine steppers that apply at once, plus a typed
-/// value in whole ms that applies on Return or Command-S, or as the panel
-/// closes (`DelayPanels`), so the outputs re-time once rather than at every
-/// keystroke. The field takes only digits after one leading sign; a number
-/// out of range gets a red outline and applies clamped (S181,
+/// value in whole ms that applies on Return or Command-S, as the focus leaves
+/// the field, or as the panel closes (`DelayPanels`), so the outputs re-time
+/// once rather than at every keystroke. The field blocks any keystroke but
+/// digits after one leading sign; a blocked keystroke or a number out of
+/// range gets a red outline, and the number applies clamped (S181,
 /// `DelayFieldDraft`).
 struct SyncControls: View {
     /// Which delay the controls edit.
@@ -800,7 +989,8 @@ struct SyncControls: View {
         case airPlay
     }
 
-    /// Not observed: read only by the debug trace of an apply.
+    /// Not observed: read for the saved delay as it is now, and by the debug
+    /// trace of an apply.
     let model: AppModel
     /// The row's key in `delayPanels` and the drafts.
     let id: String
@@ -814,33 +1004,53 @@ struct SyncControls: View {
     /// goes to the delay value.
     let escape: () -> Void
     let apply: (Double) -> Void
-    @FocusState private var fieldFocused: Bool
 
     var body: some View {
         // Typing not yet applied: a dashed underline under the field and a
-        // hint under the steps, so the cue isn't color alone. Out of range:
-        // a red outline, and the hint says the range and what applies.
+        // hint under the steps, so the cue isn't color alone. Out of range,
+        // or a keystroke just blocked: a red outline, and the hint says the
+        // range and what applies, or what the field takes.
         let pending = draft.field.isPending(saved: ms, format: shown)
         let outOfRange = draft.field.isOutOfRange(sanitize: clamped)
-        let cue = outOfRange ? rangeMessage : pending ? text.delayDraftHint : ""
+        let invalid = outOfRange || draft.blocked
+        let problem = outOfRange ? rangeMessage : text.delayFieldTakes
+        let cue = invalid ? problem : pending ? text.delayDraftHint : ""
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 4) {
                 step(-100)
                 step(-10)
-                TextField(text.delayFieldLabel, text: Binding(get: { draft.rejected ?? draft.field.text },
-                                                              set: { typeKeystroke($0) }))
-                .labelsHidden()
-                .textFieldStyle(.roundedBorder)
-                .multilineTextAlignment(.center)
-                .font(.callout.monospacedDigit())
+                DelayTextField(rowID: id, text: draft.field.text, placeholder: text.delayFieldLabel, label: label, hint: cue,
+                               showsError: invalid,
+                               typed: { typed in
+                                   draft.clearBlock()
+                                   draft.field.type(typed)
+                               },
+                               blocked: {
+                                   if draft.block() {
+                                       AccessibilityNotification.Announcement(text.delayFieldTakes).post()
+                                   }
+                               },
+                               submit: { commit("Return") },
+                               escape: escape,
+                               focusChanged: focusChanged)
                 .frame(width: 72)
+                // The outline animates in and out; while the field has the
+                // focus a second ring stands in for the focus ring, which
+                // would clash with it (`DelayTextField` hides that one).
                 .overlay {
-                    if outOfRange {
+                    ZStack {
                         RoundedRectangle(cornerRadius: 6)
                             .strokeBorder(Brand.errorText, lineWidth: 1.5)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(Brand.errorText, lineWidth: 2)
+                            .padding(-3)
+                            .opacity(draft.fieldFocused ? 1 : 0)
                     }
+                    .opacity(invalid ? 1 : 0)
+                    .animation(.easeOut(duration: 0.15), value: invalid)
+                    .animation(.easeOut(duration: 0.15), value: draft.fieldFocused)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                 }
                 // Below the focus ring, so the two don't overlap.
                 .overlay(alignment: .bottom) {
@@ -853,12 +1063,6 @@ struct SyncControls: View {
                             .accessibilityHidden(true)
                     }
                 }
-                .accessibilityLabel(label)
-                .accessibilityHint(cue)
-                .focused($fieldFocused)
-                // Applies and keeps the panel open, to try the next value.
-                .onSubmit { commit("Return") }
-                .onChange(of: fieldFocused) { _, focused in draft.fieldFocused = focused }
                 Text(text.millisecondsUnit).font(.callout).foregroundStyle(Brand.secondaryText)
                 step(10)
                 step(100)
@@ -866,8 +1070,8 @@ struct SyncControls: View {
             // VoiceOver hears this as the field's hint. Hidden, it keeps its
             // line, so the text below doesn't jump on the first keystroke or
             // when the value applies.
-            if outOfRange {
-                Label(rangeMessage, systemImage: "exclamationmark.circle")
+            if invalid {
+                Label(problem, systemImage: "exclamationmark.circle")
                     .font(.caption)
                     .foregroundStyle(Brand.errorText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -884,14 +1088,13 @@ struct SyncControls: View {
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        // A click on the panel's blank space stays inside it, so the row's
-        // tap doesn't close the panel.
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture {}
-        // Escape on the field or a step.
+        // Escape on a step; the field handles its own.
         .onExitCommand(perform: escape)
-        .onAppear { draft.field.show(ms, format: shown) }
+        .onAppear {
+            // A field removed while focused never hears that it lost the focus.
+            draft.fieldFocused = false
+            draft.field.show(ms, format: shown)
+        }
         .onChange(of: ms) { _, value in draft.field.show(value, format: shown) }
         // Command-S, or a click on another row's delay.
         .onChange(of: draft.applyRequests) { _, _ in commit("apply request") }
@@ -904,14 +1107,18 @@ struct SyncControls: View {
         .onDisappear { commit("panel closed") }
     }
 
-    /// A keystroke or a paste. The field goes on showing a character it
-    /// can't take until its text changes, so it shows the keystroke for a
-    /// moment and then what it keeps.
-    private func typeKeystroke(_ typed: String) {
-        draft.field.type(typed)
-        guard draft.field.text != typed else { return }
-        draft.rejected = typed
-        DispatchQueue.main.async { draft.rejected = nil }
+    /// The saved delay as the model holds it now: an apply as the focus
+    /// leaves the field can land between a click's press and its release,
+    /// before this view redraws with the new `ms`.
+    private var savedMs: Double { model.savedDelay(of: id) ?? ms }
+
+    private func focusChanged(_ focused: Bool) {
+        // Cleared before the apply on purpose: VoiceOver is reading whatever took
+        // the focus, and a "delay set" announcement would cut it off.
+        draft.fieldFocused = focused
+        if let value = draft.field.focusChanged(to: focused, saved: savedMs, sanitize: clamped, format: shown) {
+            applied(value, "focus left")
+        }
     }
 
     /// The range, and the value a commit applies instead of the typed one.
@@ -949,10 +1156,10 @@ struct SyncControls: View {
     /// both get here).
     private func commit(_ how: String) {
         let typed = draft.field.isEditing ? draft.field.text : nil
-        if let value = draft.field.commit(saved: ms, sanitize: clamped, format: shown) {
+        if let value = draft.field.commit(saved: savedMs, sanitize: clamped, format: shown) {
             applied(value, how)
         } else if let typed {
-            DebugTrace.log("[AudioSync] delay \(id) \(how): typed \"\(typed)\" applies nothing, saved \(shown(ms))")
+            DebugTrace.log("[AudioSync] delay \(id) \(how): typed \"\(typed)\" applies nothing, saved \(shown(savedMs))")
         }
     }
 
@@ -967,10 +1174,9 @@ struct SyncControls: View {
 
     private func step(_ delta: Int) -> some View {
         Button(text.delayStep(delta)) {
-            // A step applies at once and drops any typing, so the panel
-            // closing later doesn't apply the old typed text over it.
-            draft.field.discard(saved: ms, format: shown)
-            applied(ms + Double(delta), "step")
+            if let value = draft.field.step(Double(delta), saved: savedMs, sanitize: clamped, format: shown) {
+                applied(value, "step")
+            }
         }
             .accessibilityLabel(text.delayStepAccessibility(delta))
             .controlSize(.small)
@@ -978,5 +1184,6 @@ struct SyncControls: View {
             // Caption-size text needs the primary color: the window's teal tint
             // would put it below 4.5:1 contrast.
             .foregroundStyle(.primary)
+            .background(DelayStepArea(rowID: id).accessibilityHidden(true))
     }
 }

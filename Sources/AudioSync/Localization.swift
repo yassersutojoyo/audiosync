@@ -74,6 +74,9 @@ struct UIStrings {
     func delayOutOfRange(lowest: String, highest: String, applies: String) -> String {
         "The range is \(lowest) to \(highest) \(millisecondsUnit). Return applies \(applies)."
     }
+    /// Under a delay field, for a moment, after it blocked a keystroke it
+    /// can't take; VoiceOver announces it.
+    let delayFieldTakes = "Only digits, with + or − in front"
 
     func statusStreaming(speakers: Int) -> String {
         switch speakers {

@@ -115,6 +115,10 @@ final class AppModel: ObservableObject {
     /// @State: the Command Line Tools toolchain ships without SwiftUI's macro plugins.
     @Published private(set) var delayPanels = DelayPanels()
     private var drafts: [String: SyncDraft] = [:]
+    /// The row whose delay field lost the focus to the click being handled
+    /// now (`MainWindowController`): if that click closes the panel, the
+    /// row's delay value takes the focus, as when the field still had it.
+    var delayFocusLeftByClick: String?
     func draft(for id: String) -> SyncDraft {
         if let d = drafts[id] { return d }
         let d = SyncDraft()
@@ -233,12 +237,36 @@ final class SyncDraft: ObservableObject {
     /// row's delay value tints on it, and not when its number changes for
     /// another reason.
     @Published var applied = 0
-    /// A keystroke the field can't take, shown until the next run of the
-    /// main loop (`SyncControls`).
-    @Published var rejected: String?
-    /// The field has the keyboard focus, which its row's delay value takes
-    /// back when a click outside closes the panel.
-    var fieldFocused = false
+    /// The field just blocked a keystroke or part of a paste: it shows the
+    /// error outline and says what it takes until the next keystroke it
+    /// keeps, or for a moment.
+    @Published private(set) var blocked = false
+    private var unblock: DispatchWorkItem?
+    /// The field has the keyboard focus: its error outline then also stands
+    /// in for the focus ring, and its row's delay value takes the focus back
+    /// when the panel closes under it.
+    @Published var fieldFocused = false
+
+    private var lastBlockNote = Date.distantPast
+
+    /// True when VoiceOver should say what the field takes: for each blocked
+    /// keystroke, but not more than once a second while keys repeat.
+    @discardableResult
+    func block() -> Bool {
+        blocked = true
+        unblock?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.blocked = false }
+        unblock = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: item)
+        guard Date().timeIntervalSince(lastBlockNote) >= 1 else { return false }
+        lastBlockNote = Date()
+        return true
+    }
+
+    func clearBlock() {
+        unblock?.cancel()
+        if blocked { blocked = false }
+    }
 }
 
 // MARK: - Status item and panel

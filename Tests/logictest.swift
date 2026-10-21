@@ -2404,10 +2404,19 @@ do {
           "delay field: the AirPlay delay clamps to 20 000 ms on commit", "text: \(air.text)")
 
     air.type("12")
-    air.discard(saved: 1810, format: plain)   // a step button applied 1810 meanwhile
-    check(air.text == "1810" && !air.isEditing && air.commit(saved: 1810, sanitize: airPlay, format: plain) == nil,
-          "delay field: a step button drops the typed text, so a later focus loss applies nothing",
-          "text: \(air.text)")
+    let stepped = air.step(10, saved: 1800, sanitize: airPlay, format: plain)
+    check(stepped == 22 && air.text == "22" && !air.isEditing
+              && air.commit(saved: 22, sanitize: airPlay, format: plain) == nil,
+          "delay field: a step applies on top of the typed value once, so a later focus loss applies nothing more",
+          "stepped: \(String(describing: stepped)), text: \(air.text)")
+    air.type("")
+    let unread = air.step(-100, saved: 1810, sanitize: airPlay, format: plain)
+    let resting = air.step(100, saved: 1710, sanitize: airPlay, format: plain)
+    let floor = air.step(-100, saved: 0, sanitize: airPlay, format: plain)
+    check(unread == 1710 && resting == 1810 && floor == nil && air.text == "0",
+          "delay field: a step without readable typing applies on top of the saved value; at the range's end it applies nothing",
+          "unread: \(String(describing: unread)), resting: \(String(describing: resting)), text: \(air.text)")
+    air.show(1810, format: plain)
 
     air.show(1900, format: plain)
     check(air.text == "1900", "delay field: a new saved value shows when nothing is being typed")
@@ -2431,9 +2440,9 @@ do {
     cue.type("5")
     cue.discard(saved: 22, format: signed)   // Escape
     check(!cue.isPending(saved: 22, format: signed), "delay field cue: Escape clears the draft")
-    cue.type("5")
-    cue.discard(saved: 32, format: signed)   // a step button
-    check(!cue.isPending(saved: 32, format: signed), "delay field cue: a step clears the draft")
+    cue.type("22")
+    let step = cue.step(10, saved: 22, sanitize: offset, format: signed)
+    check(step == 32 && !cue.isPending(saved: 32, format: signed), "delay field cue: a step clears the draft")
     cue.type("40")
     check(cue.isPending(saved: 32, format: signed) && cue.isPending(saved: 50, format: signed),
           "delay field cue: a saved value changing under the typing keeps the draft")
@@ -2502,14 +2511,30 @@ do {
     for id in panels.open.sorted() { commitTyped(id) }   // Command-S
     check(delays == ["usb": 410, "dock": 77] && retimes == 3 && panels.open == ["usb", "dock"],
           "delay panels: Command-S applies every open panel's typing and leaves them open", "delays: \(delays)")
-    typed["dock"]?.type("-30")   // focus moved on to another control meanwhile
-    check(delays["dock"] == 77, "delay panels: leaving the field applies nothing")
+    // The focus leaves the field: Tab, a click in another field, or a click on
+    // a control that doesn't take the focus (a slider, a button), which ends
+    // the typing first.
+    func leave(_ id: String) {
+        if let v = typed[id]?.focusChanged(to: false, saved: delays[id] ?? 0, sanitize: offset, format: signed) {
+            delays[id] = v
+            retimes += 1
+        }
+    }
+    typed["dock"]?.type("-40")
+    let entering = typed["dock"]?.focusChanged(to: true, saved: 77, sanitize: offset, format: signed)
+    leave("dock")
+    leave("dock")
+    check(entering == nil && delays["dock"] == -40 && retimes == 4 && panels.open == ["usb", "dock"],
+          "delay panels: leaving the field for another control applies its typing once and leaves every panel open",
+          "delays: \(delays)")
+    typed["dock"]?.type("-30")
     change { $0.toggle("dock") }   // its delay value, or a click on its row's box
-    check(delays["dock"] == -30 && retimes == 4 && panels.open == ["usb"],
+    leave("dock")
+    check(delays["dock"] == -30 && retimes == 5 && panels.open == ["usb"],
           "delay panels: a click on a row's delay or box applies its typing and closes its panel",
           "delays: \(delays)")
     change { $0.toggle("dock") }
-    check(panels.open == ["usb", "dock"] && retimes == 4,
+    check(panels.open == ["usb", "dock"] && retimes == 5,
           "delay panels: a click on a closed row's box opens its panel and applies nothing")
 
     typed["usb"]?.type("380"); typed["dock"]?.type("55")
@@ -2546,8 +2571,39 @@ do {
     let before = retimes
     for id in typed.keys { typed[id]?.drop() }   // Escape
     clickOutside()
+    leave("usb"); leave("dock")   // the field loses the focus as its panel goes
     check(delays == ["usb": -250, "dock": 66] && retimes == before && panels.open.isEmpty,
-          "delay panels: Escape drops every typing and closes every panel", "delays: \(delays)")
+          "delay panels: Escape drops every typing and closes every panel; the focus leaving after it applies nothing",
+          "delays: \(delays)")
+
+    // A click while typing, as the main window's click monitor sees it, then
+    // the clicked control's own action.
+    func click(typingIn row: String, onField: Bool = false, onStepOf stepRow: String? = nil, delta: Double = 0) {
+        if DelayPanels.clickEndsTyping(typingIn: row, onField: onField, onStepOf: stepRow) { leave(row) }
+        if let stepRow, let v = typed[stepRow]?.step(delta, saved: delays[stepRow] ?? 0, sanitize: offset, format: signed) {
+            delays[stepRow] = v
+            retimes += 1
+        }
+    }
+    openBoth()
+    var start = retimes
+    typed["dock"]?.type("100")
+    click(typingIn: "dock", onStepOf: "dock", delta: 10)
+    check(delays["dock"] == 110 && retimes == start + 1 && typed["dock"]?.isEditing == false,
+          "delay panels: typing 100 and then a click on its own +10 applies 110, once",
+          "delays: \(delays), re-timings: \(retimes - start)")
+    start = retimes
+    typed["dock"]?.type("200")
+    click(typingIn: "dock", onStepOf: "usb", delta: 10)
+    check(delays == ["usb": -240, "dock": 200] && retimes == start + 2,
+          "delay panels: a click on another panel's step applies the typing first, then that step",
+          "delays: \(delays)")
+    start = retimes
+    typed["dock"]?.type("300")
+    click(typingIn: "dock", onField: true)
+    leave("dock")   // the other field takes the focus
+    check(delays["dock"] == 300 && retimes == start + 1,
+          "delay panels: a click into another field applies the typing once, as the focus moves", "delays: \(delays)")
 }
 
 // MARK: Delay value — a row's delay value follows every applied delay while its panel stays open (DelayBadge)
@@ -2609,6 +2665,11 @@ do {
                                   "12+": "12", "+-5": "+5", " 40": "40", "abc": "", "++": "+", "": ""]
     let wrong = kept.filter { LocalDelay.fieldText($0.key) != $0.value }.keys.sorted()
     check(wrong.isEmpty, "delay field input: only digits after one leading + or − can be typed", "\(wrong)")
+
+    let proposed = ["12", "+", "−250", "", "12a", "1+", "+-", " 4", "x"]
+    let blocked = proposed.filter { !LocalDelay.fieldAccepts($0) }
+    check(blocked == ["12a", "1+", "+-", " 4", "x"],
+          "delay field input: a keystroke the field can't take is blocked before it shows", "blocked: \(blocked)")
 
     var field = DelayFieldDraft()
     field.show(0, format: t.offsetNumber)

@@ -4,6 +4,12 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Fixed
+
+- On the Mac, a delay you've typed now applies as soon as you leave its field: when you click into another delay field, move on with Tab, or click any other control, such as a volume slider or the power switch. A step button adds to the value you typed.
+- On the Mac, a delay field no longer shows a character it can't take for a moment before removing it: the keystroke is blocked, and the field gets the red outline with a note on what it takes. While the field has the focus, the red outline replaces the blue focus ring instead of clashing with it.
+- On the Mac, a click on the empty space of an open delay panel closes it, like a click anywhere else on the speaker's row.
+
 ## [0.5.0] - 2026-10-21
 
 ### Added
