@@ -75,8 +75,8 @@ use audiosync_airplay::metadata::TrackInfo;
 use audiosync_airplay::pairing::{Credentials, PairingEvent};
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
-    NowPlaying, ReceiverEvent, ReceiverInfo, Sender, SenderConfig, SenderEvent, SpeakerError,
-    SpeakerEvent, SpeakerOptions, SpeakerState,
+    AIRPLAY2_SWITCH_ENV, NowPlaying, ReceiverEvent, ReceiverInfo, Sender, SenderConfig,
+    SenderEvent, SpeakerError, SpeakerEvent, SpeakerOptions, SpeakerState, airplay2_switch,
 };
 use audiosync_airplay::stream::SpeakerLatency;
 use audiosync_airplay::volume::{MIN_DB, Volume};
@@ -1145,7 +1145,13 @@ pub(crate) fn create_with(open_browser: OpenBrowser) -> *mut AscAirPlay {
     let panics_before = PANICS.load(Ordering::SeqCst);
     let created = panic::catch_unwind(|| {
         injected_panic();
-        match Sender::start(SenderConfig::default()) {
+        // The hidden AirPlay 2 switch (spec P2): an environment variable, so
+        // it flips without a rebuild and no control shows it.
+        let config = SenderConfig {
+            airplay2: airplay2_switch(std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref()),
+            ..SenderConfig::default()
+        };
+        match Sender::start(config) {
             Ok((sender, input)) => Box::into_raw(Box::new(AscAirPlay {
                 sender,
                 input: Some(input),

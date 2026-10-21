@@ -699,7 +699,8 @@ impl Pairing {
             &self.secrets.b_pub,
             &key[..],
         );
-        self.secrets.m2 = srp::server_proof(&values.public, &m1, &key[..]);
+        let m2 = srp::server_proof(&group, &values.public, &m1, &key[..]);
+        self.secrets.m2.copy_from_slice(&m2);
         self.secrets.a = a;
         self.secrets.key = key;
         let mut body = Dictionary::new();

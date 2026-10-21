@@ -2059,7 +2059,7 @@ fn pairing_values_from_the_receiver_survive_any_length() {
         }
         let key = srp::session_key(b_pub);
         let m1 = srp::client_proof(&group, b"0123456789ABCDEF", b_pub, b_pub, b_pub, &key);
-        let _ = srp::server_proof(b_pub, &m1, &key);
+        let _ = srp::server_proof(&group, b_pub, &m1, &key);
         let _ = group.pad(b_pub);
     }
 
