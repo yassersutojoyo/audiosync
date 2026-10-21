@@ -368,6 +368,11 @@ extension AppDelegate {
         setLaunchAtLogin(SMAppService.mainApp.status != .enabled)
     }
 
+    /// Takes effect at the next quit of the source app, never undoing a switch made (S227 d).
+    @objc func toggleSwitchWhenSourceQuits(_ sender: Any?) {
+        whenSourceQuits = whenSourceQuits == .system ? .stop : .system
+    }
+
     /// One of the Appearance submenu's items; each carries its choice's raw value.
     @objc func chooseAppearance(_ sender: Any?) {
         guard let raw = (sender as? NSMenuItem)?.representedObject as? String,
@@ -388,6 +393,8 @@ extension AppDelegate {
             menuItem.state = (menuItem.representedObject as? String) == appearance.rawValue ? .on : .off
         case #selector(toggleLaunchAtLogin(_:)):
             menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        case #selector(toggleSwitchWhenSourceQuits(_:)):
+            menuItem.state = whenSourceQuits == .system ? .on : .off
         default:
             break
         }

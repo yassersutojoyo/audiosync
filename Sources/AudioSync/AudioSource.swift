@@ -6,6 +6,7 @@
 // starts, and the picker reads the app list on the main thread.
 
 import AppKit
+import CAudioSyncCore
 import CoreAudio
 import Darwin
 
@@ -87,6 +88,58 @@ enum SourceSwitch {
     static func decide(from current: AudioSource, to chosen: AudioSource, streaming: Bool) -> Step {
         if chosen == current { return .none }
         return streaming ? .restart : .remember
+    }
+}
+
+// MARK: - When the source app quits
+
+/// What a session does when the app it captures quits (S227), kept as
+/// "stop" or "system"; anything else, nothing stored included, reads as stop.
+enum WhenSourceQuits: String {
+    case stop
+    case system
+
+    init(defaultsValue stored: String?) {
+        self = stored == Self.system.rawValue ? .system : .stop
+    }
+
+    var defaultsValue: String { rawValue }
+}
+
+/// The core's decision about an app quitting (S164, S227,
+/// `asc_source_quit_decide`).
+enum SourceQuit {
+    enum Streaming {
+        case off
+        case running
+        /// A session being rebuilt after a capture format change counts as on.
+        case rebuilding
+    }
+
+    enum Action: Equatable {
+        case keep
+        case stop
+        case switchToSystem
+    }
+
+    static func decide(setting: WhenSourceQuits, source: AudioSource, quitBundleID: String?,
+                       streaming: Streaming) -> Action {
+        let code: UInt32 = switch streaming {
+        case .off: UInt32(ASC_STREAMING_OFF)
+        case .running: UInt32(ASC_STREAMING_RUNNING)
+        case .rebuilding: UInt32(ASC_STREAMING_REBUILDING)
+        }
+        let answer: UInt32 = setting.defaultsValue.withCString { setting -> UInt32 in
+            source.defaultsValue.withCString { source -> UInt32 in
+                guard let quitBundleID else { return asc_source_quit_decide(setting, source, nil, code) }
+                return quitBundleID.withCString { asc_source_quit_decide(setting, source, $0, code) }
+            }
+        }
+        return switch answer {
+        case UInt32(ASC_SOURCE_QUIT_STOP): .stop
+        case UInt32(ASC_SOURCE_QUIT_SWITCH_TO_SYSTEM): .switchToSystem
+        default: .keep
+        }
     }
 }
 

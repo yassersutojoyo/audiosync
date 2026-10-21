@@ -7,7 +7,9 @@ extension AppDelegate {
 
     // MARK: - Streaming on and off
 
-    func startEngine(origin: StartOrigin) {
+    /// `rebuild`: the restart after a capture format change (S20), which a
+    /// source app that quit meanwhile turns into a stop or a switch (S227 e).
+    func startEngine(origin: StartOrigin, rebuild: Bool = false) {
         if origin == .user {
             userStopped = false
             autoStartFailed = false
@@ -41,6 +43,11 @@ extension AppDelegate {
             try engine.start(source: audioSource)
         } catch {
             DebugTrace.log("[AudioSync] engine start failed: \(error)")   // codes stay in the log
+            if rebuild, let quit = AppLifecycle.sourceQuit(.rebuildFailed(error), source: audioSource,
+                                                           setting: whenSourceQuits) {
+                sourceAppQuit(quit.bundleID, quit.action)
+                return
+            }
             failStart(text.streamingStartMessage(for: error), origin: origin)
             return
         }
@@ -86,6 +93,34 @@ extension AppDelegate {
     func clearNotices<S: Sequence>(_ subjects: S) where S.Element == String {
         var list = appModel.notices
         if list.clear(subjects) { appModel.notices = list }
+    }
+
+    /// The source app quit during a session (S142, S227). Stop: the AirPlay
+    /// speakers stay chosen and the source stays that app. Switch: the session
+    /// goes on with the whole system as a source change does (S141, S163),
+    /// with the AirPlay speakers kept selected and the new source stored (S12).
+    func sourceAppQuit(_ bundleID: String, _ action: SourceQuit.Action) {
+        DebugTrace.log("[AudioSync] source app quit: \(bundleID), \(action)")
+        let name = SourceApps.name(for: bundleID)
+        switch action {
+        case .keep:
+            return
+        case .stop:
+            stopEngine()
+            postNotice(text.sourceTerminated(name: name), subject: Notice.source)
+        case .switchToSystem:
+            audioSource = .system
+            updateNowPlayingTarget()
+            clearNotices([Notice.source, Notice.capture])   // about the app
+            autoStartFailed = false
+            stopEngine()
+            // Automatic: a failure gets a notice, not an alert, since nobody clicked (S21).
+            startEngine(origin: .automatic)
+            if engine.isRunning {
+                postNotice(text.sourceSwitchedToSystem(name: name), subject: Notice.source)
+            }
+            pushModel()
+        }
     }
 
     /// Streaming off: the session stops, and AudioSync's own sender's

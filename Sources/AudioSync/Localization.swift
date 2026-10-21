@@ -201,6 +201,12 @@ struct UIStrings {
         "\(name) quit, so streaming has stopped."
     }
 
+    /// The source app quit and the session went on with the whole system (S227).
+    func sourceSwitchedToSystem(name: String) -> String {
+        "\(name) quit, so AudioSync switched to \(sourceSystem)."
+    }
+    var switchToSystemWhenSourceQuits: String { "Switch to \(sourceSystem) When the Source App Quits" }
+
     /// An AirPlay speaker was switched off by AudioSync, not by the user.
     func airPlayTurnedOff(name: String, reason: AirPlayPairing.Reason) -> String {
         switch reason {
