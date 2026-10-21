@@ -128,6 +128,13 @@ delay field: give a speaker that sounds late, like a Bluetooth one, a
 negative delay (around −150 to −300 ms), and the others wait for it. Settings
 saved by an older version are converted once, so everything sounds as it did.
 
+Any mix of outputs stays in sync, and AudioSync evens out the small clock
+drift between them. What it can't fix is the Bluetooth radio: one radio
+serves all its speakers in turns and shares 2.4 GHz with Wi-Fi, so several
+Bluetooth speakers at once may stutter, with any app. Moving the PC's
+internet to 5 GHz or a cable, using fewer Bluetooth speakers, a USB
+transmitter with two links, or AirPlay for the rest all help.
+
 An Apple TV that asks for a code is paired the first time you switch it on:
 type the 4-digit code it shows, and AudioSync remembers the pairing; Forget
 Pairing in the speaker's menu undoes it.

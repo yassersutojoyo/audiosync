@@ -62,8 +62,8 @@ There's a Windows 11 version too, written in Rust with a [Slint](https://slint.d
 The part I'm proudest of: AirPlay on Windows goes out through AudioSync's own AirPlay sender, written from scratch in Rust and built right into the app. There's no separate AirPlay engine to bundle, install or keep running, and it finds speakers on its own, without Bonjour or other Apple software on the PC. Here's what it does today:
 
 - It captures everything the PC plays (except AudioSync itself), or just one app.
-- It plays to several of the PC's outputs at once, in sync: speakers, headphones, USB, HDMI and Bluetooth, each with its own delay relative to the built-in output, and its own volume under a master volume.
-- It plays to AirPlay speakers through that built-in sender, and the PC's outputs wait for them so everything stays in step. An Apple TV that asks for a code gets a PIN prompt and remembers the pairing.
+- It plays to several of the PC's outputs at once, in sync: speakers, headphones, USB, HDMI and Bluetooth ([a note on Bluetooth](#bluetooth-on-windows) below), each with its own delay relative to the built-in output, and its own volume under a master volume.
+- It plays to AirPlay speakers through that built-in sender, and the PC's outputs wait for them so everything stays in step. An Apple TV that asks for a code gets a PIN prompt and remembers the pairing, and a speaker with a password asks for it when you turn it on.
 - Groups, auto-connect, and the same ten-band equalizer with a preamp and presets.
 - The same hint as on the Mac when a speaker you turned on sits very low or muted in Windows, with the same one-click fix.
 - A tray icon with a flyout, like the Mac's menu bar panel. Closing the window keeps it running there.
@@ -82,7 +82,11 @@ The first preview, 0.6.0-preview.1, is on the [Releases page](https://github.com
 
 [windows/README.md](windows/README.md#trying-the-preview-exe) has more on the first launch, the tray icon and the debug log.
 
-To be upfront about the gaps: from Windows, AirPlay only plays to receivers that take AirPlay 1. Receivers that only do AirPlay 2, or that ask for a password, are listed with a note and stay off. I haven't tried the AirPlay part with a real speaker or Apple TV yet. Local playback has had a short first listen on my Windows 11 PC, a USB-C in-ear and a pair of wired speakers playing together; Bluetooth speakers are next on my list.
+To be upfront about the gaps: from Windows, AirPlay only plays to receivers that take AirPlay 1. Receivers that only do AirPlay 2 are listed with a note and stay off. I haven't tried the AirPlay part with a real speaker or Apple TV yet. Local playback has had a short first listen on my Windows 11 PC, a USB-C in-ear and a pair of wired speakers playing together; Bluetooth speakers are next on my list.
+
+### Bluetooth on Windows
+
+AudioSync keeps whatever mix you turn on in sync: wired, USB, HDMI, AirPlay and a Bluetooth speaker, or more than one Bluetooth speaker when the PC's radio keeps up. Two limits are easy to mix up here. Every output's clock runs a little fast or slow, and AudioSync evens that drift out on its own. The radio is different, and no app can fix it: one Bluetooth radio serves all its speakers in turns and shares the 2.4 GHz band with Wi-Fi, so two or more Bluetooth speakers at once may stutter or drop out. If that happens, put the PC's internet on 5 GHz Wi-Fi or a cable, use fewer Bluetooth speakers, try a USB Bluetooth transmitter that drives two speakers on separate links, or send the rest to AirPlay.
 
 ## Coming from Airfoil?
 
