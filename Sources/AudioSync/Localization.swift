@@ -152,6 +152,8 @@ struct UIStrings {
     /// An offset as its speaker's row shows it and VoiceOver reads it: "+150 ms".
     func offsetValue(ms: Double) -> String { "\(offsetNumber(ms)) \(millisecondsUnit)" }
     func delay(of name: String) -> String { "\(name) delay" }
+    /// VoiceOver, as a delay applies while its panel is open: "Desk delay set to +150 ms".
+    func delaySet(_ label: String, to value: String) -> String { "\(label) set to \(value)" }
     func delayStep(_ delta: Int) -> String { delta < 0 ? "−\(-delta)" : "+\(delta)" }
     func delayStepAccessibility(_ delta: Int) -> String {
         delta < 0 ? "Decrease delay by \(-delta) \(millisecondsUnit)"
