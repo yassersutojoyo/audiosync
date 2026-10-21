@@ -441,6 +441,66 @@ pub fn bring_to_front(window: &slint::Window) {
     });
 }
 
+/// The message muda 0.19 (the native menu bar of the pinned Slint 1.18.1)
+/// takes to draw a window's menu bar dark (0) or light (1) and repaint its
+/// frame. Slint sends it only when Windows changes theme, so View >
+/// Appearance sends it too, or the menu bar would keep the Windows theme.
+#[cfg(windows)]
+const MUDA_MENU_BAR_THEME: u32 = 201;
+
+/// Repaints a window's frame after its title bar turned light or dark, and
+/// with `menu_bar` sets the menu bar to `dark` as well.
+#[cfg(windows)]
+pub fn repaint_frame(window: &slint::Window, menu_bar: bool, dark: bool) {
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, PostMessageW, SendMessageW, WM_NCACTIVATE,
+    };
+
+    window.with_winit_window(|window| {
+        let Ok(handle) = window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
+        // SAFETY: `hwnd` is this thread's live window. The menu bar message
+        // goes only to the main window, whose menu bar muda subclassed; the
+        // frame is redrawn by toggling the active caption and back, which
+        // leaves the focus where it is.
+        unsafe {
+            if menu_bar {
+                SendMessageW(
+                    hwnd,
+                    MUDA_MENU_BAR_THEME,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(if dark { 0 } else { 1 })),
+                );
+                return;
+            }
+            let active = GetForegroundWindow() == hwnd;
+            let _ = PostMessageW(
+                Some(hwnd),
+                WM_NCACTIVATE,
+                WPARAM(usize::from(!active)),
+                LPARAM(0),
+            );
+            let _ = PostMessageW(
+                Some(hwnd),
+                WM_NCACTIVATE,
+                WPARAM(usize::from(active)),
+                LPARAM(0),
+            );
+        }
+    });
+}
+
+#[cfg(not(windows))]
+pub fn repaint_frame(_window: &slint::Window, _menu_bar: bool, _dark: bool) {}
+
 /// Whether the taskbar (and the notification area) uses the light theme, so
 /// the tray icon picks its dark-on-light variant. Dark when it can't be read,
 /// the Windows 11 default.

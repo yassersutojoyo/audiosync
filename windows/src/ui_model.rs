@@ -12,6 +12,8 @@ use audiosync_core::policy::device_volume::Hint;
 #[cfg(any(not(windows), test))]
 use audiosync_core::volume;
 
+pub use crate::settings::Appearance;
+
 /// The largest offset the sync controls accept, in milliseconds (the macOS
 /// app's limit too).
 pub const MAX_DELAY_MS: f64 = 20_000.0;
@@ -612,6 +614,8 @@ pub fn frame_to_keep(shows: MainWindowShows, saved: Option<WindowFrame>) -> Opti
 pub struct ViewSettings {
     /// View > Show Virtual Devices.
     pub show_virtual_devices: bool,
+    /// View > Appearance.
+    pub appearance: Appearance,
     /// The main window's place and size, once it has been shown.
     pub window: Option<WindowFrame>,
 }
@@ -663,6 +667,7 @@ pub fn delay_field_text(typed: &str) -> String {
 pub struct MockBackend {
     state: AppState,
     next_id: u64,
+    view: ViewSettings,
 }
 
 #[cfg(any(not(windows), test))]
@@ -773,7 +778,11 @@ impl MockBackend {
             airplay_delay_ms: Some(1750.0),
             airplay_none_found: false,
         };
-        MockBackend { state, next_id: 1 }
+        MockBackend {
+            state,
+            next_id: 1,
+            view: ViewSettings::default(),
+        }
     }
 
     /// Posts a notice about `subject`, replacing an older one about it.
@@ -836,6 +845,14 @@ impl MockBackend {
 impl Backend for MockBackend {
     fn snapshot(&self) -> AppState {
         self.state.clone()
+    }
+
+    fn view_settings(&self) -> ViewSettings {
+        self.view
+    }
+
+    fn set_view_settings(&mut self, settings: ViewSettings) {
+        self.view = settings;
     }
 
     fn set_running(&mut self, on: bool) {

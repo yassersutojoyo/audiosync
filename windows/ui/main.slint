@@ -7,7 +7,7 @@
 import { ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { GroupItem, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
+import { Appearance, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
 import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, NoticeStack, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
@@ -21,7 +21,7 @@ export { Strings } from "strings.slint";
 export { Palette } from "std-widgets.slint";
 // The brand teal, for the standard controls' accent (src/view.rs).
 export { Tokens } from "tokens.slint";
-export { AirPlayProblem, Availability, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
+export { AirPlayProblem, Appearance, Availability, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
 
 // A titled card of speaker rows, with a note when it has none.
 component SpeakerSection inherits VerticalLayout {
@@ -251,6 +251,7 @@ export component MainWindow inherits Window {
     in property <string> notice-announcement;
     // View > Show Virtual Devices: virtual outputs are listed even while off.
     in property <bool> show-virtual-devices;
+    in property <Appearance> appearance;
     // File > Launch at Sign-In: what the Run key says, read again by Rust.
     in property <bool> launch-at-login;
     // The AirPlay delay, shown while an AirPlay sender runs: what its field
@@ -305,6 +306,7 @@ export component MainWindow inherits Window {
     callback new-group-requested();
     callback refresh-devices();
     callback show-virtual-devices-toggled(bool);
+    callback appearance-chosen(Appearance);
     callback launch-at-login-toggled(bool);
     callback notice-dismissed(int);
     callback notices-dismissed-all();
@@ -402,6 +404,7 @@ export component MainWindow inherits Window {
 
             MenuItem {
                 title: Strings.menu-exit;
+                shortcut: @keys(Control + Q);
                 activated => {
                     root.exit-requested();
                 }
@@ -456,6 +459,39 @@ export component MainWindow inherits Window {
                 checked: root.show-virtual-devices;
                 activated => {
                     root.show-virtual-devices-toggled(!root.show-virtual-devices);
+                }
+            }
+
+            MenuSeparator { }
+
+            Menu {
+                title: Strings.appearance;
+
+                MenuItem {
+                    title: Strings.appearance-system;
+                    checkable: true;
+                    checked: root.appearance == Appearance.system;
+                    activated => {
+                        root.appearance-chosen(Appearance.system);
+                    }
+                }
+
+                MenuItem {
+                    title: Strings.appearance-light;
+                    checkable: true;
+                    checked: root.appearance == Appearance.light;
+                    activated => {
+                        root.appearance-chosen(Appearance.light);
+                    }
+                }
+
+                MenuItem {
+                    title: Strings.appearance-dark;
+                    checkable: true;
+                    checked: root.appearance == Appearance.dark;
+                    activated => {
+                        root.appearance-chosen(Appearance.dark);
+                    }
                 }
             }
         }

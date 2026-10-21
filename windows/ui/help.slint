@@ -77,7 +77,7 @@ export component HelpWindow inherits Window {
 
     keys := FocusScope {
         key-pressed(event) => {
-            if event.text == Key.Escape {
+            if event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == "w") {
                 root.close-requested();
                 return accept;
             }
