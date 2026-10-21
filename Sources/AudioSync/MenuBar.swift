@@ -113,6 +113,10 @@ final class AppModel: ObservableObject {
     /// @State: the Command Line Tools toolchain ships without SwiftUI's macro plugins.
     @Published private(set) var delayPanels = DelayPanels()
     private var drafts: [String: SyncDraft] = [:]
+    /// The row whose delay field lost the focus to the click being handled
+    /// now (`MainWindowController`): if that click closes the panel, the
+    /// row's delay value takes the focus, as when the field still had it.
+    var delayFocusLeftByClick: String?
     func draft(for id: String) -> SyncDraft {
         if let d = drafts[id] { return d }
         let d = SyncDraft()
@@ -241,12 +245,20 @@ final class SyncDraft: ObservableObject {
     /// when the panel closes under it.
     @Published var fieldFocused = false
 
-    func block() {
+    private var lastBlockNote = Date.distantPast
+
+    /// True when VoiceOver should say what the field takes: for each blocked
+    /// keystroke, but not more than once a second while keys repeat.
+    @discardableResult
+    func block() -> Bool {
         blocked = true
         unblock?.cancel()
         let item = DispatchWorkItem { [weak self] in self?.blocked = false }
         unblock = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: item)
+        guard Date().timeIntervalSince(lastBlockNote) >= 1 else { return false }
+        lastBlockNote = Date()
+        return true
     }
 
     func clearBlock() {

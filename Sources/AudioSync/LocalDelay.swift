@@ -309,6 +309,14 @@ struct DelayPanels: Equatable {
 
     mutating func closeAll() { open = [] }
 
+    /// A click while row `typingIn`'s field holds the focus ends its typing
+    /// first (applying it), unless it lands in a text field, which takes the
+    /// focus itself, or on a step of that same panel, which builds on the
+    /// typing and applies once (`DelayFieldDraft.step`).
+    static func clickEndsTyping(typingIn row: String, onField: Bool, onStepOf stepRow: String?) -> Bool {
+        !onField && stepRow != row
+    }
+
     /// The panel a click on the note under a speaker list toggles: the note
     /// belongs to the last row's box, so that row's panel, or nil (a click
     /// outside every row) when that row has no delay or the note is alone.

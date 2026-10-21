@@ -2580,6 +2580,35 @@ do {
     check(delays == ["usb": -250, "dock": 66] && retimes == before && panels.open.isEmpty,
           "delay panels: Escape drops every typing and closes every panel; the focus leaving after it applies nothing",
           "delays: \(delays)")
+
+    // A click while typing, as the main window's click monitor sees it, then
+    // the clicked control's own action.
+    func click(typingIn row: String, onField: Bool = false, onStepOf stepRow: String? = nil, delta: Double = 0) {
+        if DelayPanels.clickEndsTyping(typingIn: row, onField: onField, onStepOf: stepRow) { leave(row) }
+        if let stepRow, let v = typed[stepRow]?.step(delta, saved: delays[stepRow] ?? 0, sanitize: offset, format: signed) {
+            delays[stepRow] = v
+            retimes += 1
+        }
+    }
+    openBoth()
+    var start = retimes
+    typed["dock"]?.type("100")
+    click(typingIn: "dock", onStepOf: "dock", delta: 10)
+    check(delays["dock"] == 110 && retimes == start + 1 && typed["dock"]?.isEditing == false,
+          "delay panels: typing 100 and then a click on its own +10 applies 110, once",
+          "delays: \(delays), re-timings: \(retimes - start)")
+    start = retimes
+    typed["dock"]?.type("200")
+    click(typingIn: "dock", onStepOf: "usb", delta: 10)
+    check(delays == ["usb": -240, "dock": 200] && retimes == start + 2,
+          "delay panels: a click on another panel's step applies the typing first, then that step",
+          "delays: \(delays)")
+    start = retimes
+    typed["dock"]?.type("300")
+    click(typingIn: "dock", onField: true)
+    leave("dock")   // the other field takes the focus
+    check(delays["dock"] == 300 && retimes == start + 1,
+          "delay panels: a click into another field applies the typing once, as the focus moves", "delays: \(delays)")
 }
 
 // MARK: Delay value — a row's delay value follows every applied delay while its panel stays open (DelayBadge)

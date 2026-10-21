@@ -48,16 +48,25 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     /// A slider or a plain button doesn't take the keyboard focus, so a click
     /// on one would leave a delay field holding its typing. The field gives
     /// the focus up first, which applies the typing (`SyncControls`), before
-    /// the control acts on the click.
+    /// the control acts on the click (`DelayPanels.clickEndsTyping`).
     private func endDelayTyping(before event: NSEvent) {
-        guard event.window === window, let editor = window.firstResponder as? NSTextView,
-              editor.delegate is DelayTextField.Field else { return }
-        var hit = window.contentView?.superview?.hitTest(event.locationInWindow)
-        while let view = hit {
-            // A click inside the field, or in another field that takes the focus itself.
-            if view is NSTextField || view === editor { return }
+        guard event.window === window else { return }
+        model.delayFocusLeftByClick = nil
+        guard let editor = window.firstResponder as? NSTextView,
+              let field = editor.delegate as? DelayTextField.Field else { return }
+        let point = event.locationInWindow
+        var onField = false
+        var hit = window.contentView?.superview?.hitTest(point)
+        while let view = hit, !onField {
+            onField = view is NSTextField || view === editor
             hit = view.superview
         }
+        let step = DelayStepArea.Marker.all.allObjects.first {
+            $0.window === window && $0.convert($0.bounds, to: nil).contains(point)
+        }
+        guard DelayPanels.clickEndsTyping(typingIn: field.rowID, onField: onField, onStepOf: step?.rowID) else { return }
+        // The row's delay value takes the focus back if this click closes the panel.
+        model.delayFocusLeftByClick = field.rowID
         window.makeFirstResponder(nil)
     }
 
@@ -608,7 +617,9 @@ struct SpeakerRow: View {
             }
         }
         .onChange(of: showSync) { _, open in
-            if !open, model.draft(for: speaker.id).fieldFocused { delayFocused = true }
+            if !open, model.draft(for: speaker.id).fieldFocused || model.delayFocusLeftByClick == speaker.id {
+                delayFocused = true
+            }
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
@@ -691,7 +702,9 @@ struct AirPlayDelayRow: View {
             }
         }
         .onChange(of: expanded) { _, open in
-            if !open, model.draft(for: Self.id).fieldFocused { delayFocused = true }
+            if !open, model.draft(for: Self.id).fieldFocused || model.delayFocusLeftByClick == Self.id {
+                delayFocused = true
+            }
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
@@ -781,6 +794,8 @@ private struct DraftUnderline: Shape {
 /// flashed in and out; a formatter here blocks it before it shows. It also
 /// hides the focus ring while the panel's error outline stands in for it.
 private struct DelayTextField: NSViewRepresentable {
+    /// The row's key in `delayPanels`, for the main window's click monitor.
+    let rowID: String
     let text: String
     let placeholder: String
     let label: String
@@ -813,6 +828,7 @@ private struct DelayTextField: NSViewRepresentable {
 
     func updateNSView(_ field: Field, context: Context) {
         context.coordinator.parent = self
+        field.rowID = rowID
         // Setting the field's own value while it is being edited would end the editing.
         if let editor = field.currentEditor() {
             if editor.string != text { editor.string = text }
@@ -854,6 +870,7 @@ private struct DelayTextField: NSViewRepresentable {
 
     final class Field: NSTextField {
         weak var owner: Coordinator?
+        var rowID = ""
 
         override func becomeFirstResponder() -> Bool {
             let became = super.becomeFirstResponder()
@@ -930,6 +947,28 @@ private struct ScrollEdgeFade: View {
     }
 }
 
+/// A step button's area, which the main window's click monitor finds by
+/// position: a click there leaves the focus with the same panel's field, so
+/// the step builds on its typing and applies once.
+private struct DelayStepArea: NSViewRepresentable {
+    let rowID: String
+
+    func makeNSView(context: Context) -> Marker { Marker() }
+    func updateNSView(_ marker: Marker, context: Context) { marker.rowID = rowID }
+
+    final class Marker: NSView {
+        static let all = NSHashTable<Marker>.weakObjects()
+        var rowID = ""
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil { Self.all.add(self) } else { Self.all.remove(self) }
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
 /// A delay's controls: coarse/fine steppers that apply at once, plus a typed
 /// value in whole ms that applies on Return or Command-S, as the focus leaves
 /// the field, or as the panel closes (`DelayPanels`), so the outputs re-time
@@ -977,13 +1016,17 @@ struct SyncControls: View {
             HStack(spacing: 4) {
                 step(-100)
                 step(-10)
-                DelayTextField(text: draft.field.text, placeholder: text.delayFieldLabel, label: label, hint: cue,
+                DelayTextField(rowID: id, text: draft.field.text, placeholder: text.delayFieldLabel, label: label, hint: cue,
                                showsError: invalid,
                                typed: { typed in
                                    draft.clearBlock()
                                    draft.field.type(typed)
                                },
-                               blocked: { draft.block() },
+                               blocked: {
+                                   if draft.block() {
+                                       AccessibilityNotification.Announcement(text.delayFieldTakes).post()
+                                   }
+                               },
                                submit: { commit("Return") },
                                escape: escape,
                                focusChanged: focusChanged)
@@ -1057,9 +1100,6 @@ struct SyncControls: View {
         .onChange(of: outOfRange) { _, now in
             if now { AccessibilityNotification.Announcement(rangeMessage).post() }
         }
-        .onChange(of: draft.blocked) { _, now in
-            if now { AccessibilityNotification.Announcement(text.delayFieldTakes).post() }
-        }
         // A panel closing applies what was typed, unless Escape dropped it.
         .onDisappear { commit("panel closed") }
     }
@@ -1070,6 +1110,8 @@ struct SyncControls: View {
     private var savedMs: Double { model.savedDelay(of: id) ?? ms }
 
     private func focusChanged(_ focused: Bool) {
+        // Cleared before the apply on purpose: VoiceOver is reading whatever took
+        // the focus, and a "delay set" announcement would cut it off.
         draft.fieldFocused = focused
         if let value = draft.field.focusChanged(to: focused, saved: savedMs, sanitize: clamped, format: shown) {
             applied(value, "focus left")
@@ -1139,5 +1181,6 @@ struct SyncControls: View {
             // Caption-size text needs the primary color: the window's teal tint
             // would put it below 4.5:1 contrast.
             .foregroundStyle(.primary)
+            .background(DelayStepArea(rowID: id).accessibilityHidden(true))
     }
 }
