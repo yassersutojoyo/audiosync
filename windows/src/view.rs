@@ -524,11 +524,7 @@ pub struct App {
     /// Windows by themselves, after it AudioSync sets their palette and
     /// frame, for Match System too.
     themed_by_hand: Cell<bool>,
-    /// The main window's native window and the menu bar theme last sent to
-    /// it. muda answers that message by toggling the window's activation,
-    /// which comes back as a focus that applies the frame again, so it is sent
-    /// only when it changed.
-    menu_bar_theme: Cell<Option<(isize, bool)>>,
+    menu_bar_theme: MenuBarTheme,
     /// Whether each window got its Windows 11 frame, as last logged.
     frames: RefCell<HashMap<&'static str, bool>>,
     /// Called after every refresh, e.g. to update the tray icon and tooltip.
@@ -546,6 +542,25 @@ pub struct App {
     /// backend's notices are about audio.
     login: RefCell<LaunchAtLogin>,
     login_timer: Timer,
+}
+
+/// The main window's native window and the menu bar theme last sent to it.
+/// muda answers that message by toggling the window's activation, which comes
+/// back as a focus that applies the frame again, so it is sent only when it
+/// changed.
+#[derive(Default)]
+struct MenuBarTheme(Cell<Option<(isize, bool)>>);
+
+impl MenuBarTheme {
+    /// Records `dark` for native window `id`; `true` when the message is due.
+    fn due(&self, id: isize, dark: bool) -> bool {
+        self.0.replace(Some((id, dark))) != Some((id, dark))
+    }
+
+    /// Makes the next `due` true, after Windows gave the menu bar its own theme.
+    fn forget(&self) {
+        self.0.set(None);
+    }
 }
 
 /// Runs `action` on the app if it still exists.
@@ -685,7 +700,7 @@ impl App {
             tray_available: Cell::new(false),
             appearance: Cell::new(ui_model::Appearance::System),
             themed_by_hand: Cell::new(false),
-            menu_bar_theme: Cell::new(None),
+            menu_bar_theme: MenuBarTheme::default(),
             frames: RefCell::default(),
             on_refresh: RefCell::new(None),
             notice_announcer: RefCell::default(),
@@ -914,9 +929,30 @@ impl App {
             return;
         };
         let dark = self.shows_dark();
-        if self.menu_bar_theme.replace(Some((id, dark))) != Some((id, dark)) {
+        if self.menu_bar_theme.due(id, dark) {
             crate::platform::repaint_frame(window, true, dark);
         }
+    }
+
+    /// With Light or Dark, gives every window the appearance again after
+    /// Windows switches between light and dark, which may repaint a title bar
+    /// or the menu bar in the Windows theme. Match System hears that switch
+    /// from winit (`follow_titled_frame`).
+    fn follow_windows_theme(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        crate::platform::set_on_color_set_change(Rc::new(move || {
+            with_app(&weak, |app| {
+                if !app.themed_by_hand.get() || app.appearance.get() == ui_model::Appearance::System
+                {
+                    return;
+                }
+                app.log.log(|| {
+                    "Windows switched light and dark; the appearance applied again".to_owned()
+                });
+                app.menu_bar_theme.forget();
+                app.follow_appearance();
+            });
+        }));
     }
 
     /// Gives a native window's title bar the appearance, once AudioSync
@@ -940,6 +976,7 @@ impl App {
     pub fn apply_frame(&self, window: &slint::Window, name: &'static str, frame: Frame) -> bool {
         self.use_brand_accent(window);
         self.theme_frame(window);
+        crate::platform::follow_color_set(window);
         // Slint gives the main window's menu bar the Windows theme when it
         // creates it.
         if self.themed_by_hand.get() && std::ptr::eq(window, self.main.window()) {
@@ -1040,7 +1077,7 @@ impl App {
                         with_app(&weak, |app| {
                             app.use_brand_accent(window(app));
                             if app.themed_by_hand.get() {
-                                app.menu_bar_theme.set(None);
+                                app.menu_bar_theme.forget();
                                 app.follow_appearance();
                             }
                         });
@@ -1386,6 +1423,7 @@ impl App {
 
     fn connect_main(self: &Rc<Self>) {
         self.follow_titled_frame(|app| app.main.window(), "main window", Titled::Main);
+        self.follow_windows_theme();
         let main = &self.main;
         let weak = Rc::downgrade(self);
 
@@ -2772,6 +2810,20 @@ mod tests {
 
     use slint::platform::software_renderer::{MinimalSoftwareWindow, Rgb565Pixel};
     use slint::platform::{Key, PointerEventButton, WindowEvent};
+
+    #[test]
+    fn the_menu_bar_hears_a_theme_once_per_native_window() {
+        let theme = MenuBarTheme::default();
+        assert!(theme.due(7, true), "the first theme is sent");
+        // The focus muda's activation toggle brings back must not send it again.
+        assert!(!theme.due(7, true));
+        assert!(!theme.due(7, true));
+        assert!(theme.due(7, false), "a new appearance is sent");
+        assert!(theme.due(8, false), "a new native window gets it too");
+        assert!(!theme.due(8, false));
+        theme.forget();
+        assert!(theme.due(8, false), "after Windows repainted the menu bar");
+    }
 
     /// A platform without native windows, so a test can build the whole App
     /// and drive it through the windows' callbacks or keys.

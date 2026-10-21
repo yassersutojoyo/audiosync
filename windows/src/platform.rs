@@ -521,6 +521,100 @@ pub fn native_id(_window: &slint::Window) -> Option<isize> {
     None
 }
 
+/// Whether a WM_SETTINGCHANGE names `area` "ImmersiveColorSet", the one
+/// Windows sends when it switches between light and dark.
+pub fn names_color_set(area: &[u16]) -> bool {
+    area.iter().copied().eq("ImmersiveColorSet".encode_utf16())
+}
+
+/// Runs `changed` once, on the next turn of the event loop, after Windows
+/// switches between light and dark, as seen by any window `follow_color_set`
+/// watches. winit reports that switch only for a window that follows the
+/// Windows theme, and leaves one set to Light or Dark alone.
+pub fn set_on_color_set_change(changed: std::rc::Rc<dyn Fn()>) {
+    COLOR_SET_CHANGED.with(|slot| *slot.borrow_mut() = Some(changed));
+}
+
+thread_local! {
+    static COLOR_SET_CHANGED: std::cell::RefCell<Option<std::rc::Rc<dyn Fn()>>> =
+        const { std::cell::RefCell::new(None) };
+    // Windows broadcasts the change to every top-level window.
+    static COLOR_SET_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Watches `window` for the light and dark switch (`set_on_color_set_change`).
+/// `false` while the native window doesn't exist yet; repeating it is harmless.
+#[cfg(windows)]
+pub fn follow_color_set(window: &slint::Window) -> bool {
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Shell::SetWindowSubclass;
+
+    window
+        .with_winit_window(|window| {
+            let Ok(handle) = window.window_handle() else {
+                return false;
+            };
+            let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+                return false;
+            };
+            let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
+            // SAFETY: `hwnd` is this thread's live window, and the procedure
+            // only reads the string WM_SETTINGCHANGE points to.
+            unsafe { SetWindowSubclass(hwnd, Some(color_set_procedure), COLOR_SET_SUBCLASS, 0) }
+                .as_bool()
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+pub fn follow_color_set(_window: &slint::Window) -> bool {
+    false
+}
+
+#[cfg(windows)]
+const COLOR_SET_SUBCLASS: usize = 0x4153_4353;
+
+#[cfg(windows)]
+unsafe extern "system" fn color_set_procedure(
+    hwnd: windows::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+    _id: usize,
+    _data: usize,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass};
+    use windows::Win32::UI::WindowsAndMessaging::{WM_NCDESTROY, WM_SETTINGCHANGE};
+    use windows::core::PCWSTR;
+
+    if message == WM_NCDESTROY {
+        // SAFETY: removes this procedure from the window being destroyed, as
+        // the comctl32 subclass documentation asks.
+        let _ =
+            unsafe { RemoveWindowSubclass(hwnd, Some(color_set_procedure), COLOR_SET_SUBCLASS) };
+    }
+    // SAFETY: passes the message on unchanged, as a subclass must.
+    let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+    if message != WM_SETTINGCHANGE || lparam.0 == 0 {
+        return result;
+    }
+    // SAFETY: a WM_SETTINGCHANGE `lparam` that isn't null points to the
+    // NUL-terminated name of the setting area that changed.
+    let area = unsafe { PCWSTR(lparam.0 as *const u16).as_wide() };
+    if names_color_set(area) && !COLOR_SET_PENDING.replace(true) {
+        slint::Timer::single_shot(std::time::Duration::ZERO, || {
+            COLOR_SET_PENDING.set(false);
+            let changed = COLOR_SET_CHANGED.with(|slot| slot.borrow().clone());
+            if let Some(changed) = changed {
+                changed();
+            }
+        });
+    }
+    result
+}
+
 /// Whether the taskbar (and the notification area) uses the light theme, so
 /// the tray icon picks its dark-on-light variant. Dark when it can't be read,
 /// the Windows 11 default.
@@ -664,6 +758,16 @@ mod tests {
         assert_eq!(min_track_size((860.0, 440.0), 96, (0, 0)), (860, 440));
         // A fraction of a pixel rounds up, so the inner size never falls short.
         assert_eq!(min_track_size((101.0, 101.0), 120, (0, 0)), (127, 127));
+    }
+
+    #[test]
+    fn only_the_color_set_area_counts_as_a_theme_switch() {
+        let wide = |text: &str| text.encode_utf16().collect::<Vec<u16>>();
+        assert!(names_color_set(&wide("ImmersiveColorSet")));
+        assert!(!names_color_set(&wide("immersivecolorset")));
+        assert!(!names_color_set(&wide("ImmersiveColorSetX")));
+        assert!(!names_color_set(&wide("Environment")));
+        assert!(!names_color_set(&[]));
     }
 
     #[test]
