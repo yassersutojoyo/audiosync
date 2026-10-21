@@ -331,7 +331,7 @@ void asc_ring_writer_reset(AscRingWriter *writer);
 
 /*
  * Creates a reader of `ring` for a session captured at capture_rate (Hz). Its
- * delay starts at 0 (one block) and its drift tolerance at 35 ms; it anchors
+ * delay starts at 0 (one block) and its drift tolerance at 50 ms; it anchors
  * on its first read that finds more than its delay written, and reads silence
  * until then. Returns NULL outside 8000...384000 Hz.
  */

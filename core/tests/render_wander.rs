@@ -35,8 +35,8 @@ const WANDER_MS: f64 = 40.0;
 const WANDER_S: f64 = 100.0;
 /// One callback in this many comes later still, by 5 to 15.4 ms.
 const LATE_ONE_IN: u64 = 58;
-/// Held back by 100 ms, beyond the trim's reach (S207): drift is judged
-/// against the dead band.
+/// Held back by 100 ms, beyond a lead and the dead band: followed and
+/// trimmed as at hold-back 0 (S207).
 const HELD_BACK: i64 = 4_800;
 
 struct Output {
@@ -263,41 +263,29 @@ fn callbacks_that_drift_late_slowly_are_lateness_not_drift() {
 #[test]
 fn a_clock_that_really_drifts_is_still_corrected_under_the_same_callbacks() {
     // 300 ppm over 300 s is 90 ms: more than the dead band once, and in one
-    // direction only.
+    // direction only. At hold-back 0 and held back alike, the converter
+    // follows the clock (S207), one way, and the dead band never acts.
     let seconds = 300;
     let hold_backs = [0, HELD_BACK];
     for ppm in [300.0, -300.0] {
         let seen = run(&hold_backs, ppm, seconds);
         let gained = (ppm.abs() * 1e-6 * seconds as f64 * f64::from(RATE)) as u64;
-        // At hold-back 0 the converter follows the clock (S207), one way.
-        let (slowed, sped) = seen.trims[0];
-        let (with, against) = if ppm > 0.0 {
-            (slowed, sped)
-        } else {
-            (sped, slowed)
-        };
-        assert!(
-            with >= gained * 9 / 10 && against <= 16,
-            "{ppm} ppm at hold-back 0: slowed {slowed}, sped {sped}, gained {gained}"
-        );
-        assert_eq!(
-            settled_corrections(&seen.counters[0]),
-            (0, 0, 0),
-            "{ppm} ppm at hold-back 0: {:?}",
-            seen.counters[0].1
-        );
-        // Held back beyond the trim's reach, the dead band corrects it.
-        let (starved, skips, silences) = settled_corrections(&seen.counters[1]);
-        assert_eq!(starved, 0, "{ppm} ppm held back");
-        if ppm > 0.0 {
+        for (k, hold_back) in hold_backs.iter().enumerate() {
+            let (slowed, sped) = seen.trims[k];
+            let (with, against) = if ppm > 0.0 {
+                (slowed, sped)
+            } else {
+                (sped, slowed)
+            };
             assert!(
-                silences >= 1 && skips == 0,
-                "{ppm} ppm held back: {skips} skips, {silences} silences"
+                with >= gained * 9 / 10 && against <= 16,
+                "{ppm} ppm at hold-back {hold_back}: slowed {slowed}, sped {sped}, gained {gained}"
             );
-        } else {
-            assert!(
-                skips >= 1 && silences == 0,
-                "{ppm} ppm held back: {skips} skips, {silences} silences"
+            assert_eq!(
+                settled_corrections(&seen.counters[k]),
+                (0, 0, 0),
+                "{ppm} ppm at hold-back {hold_back}: {:?}",
+                seen.counters[k].1
             );
         }
     }
