@@ -104,7 +104,8 @@ fn event_framing_swaps_the_roles() {
     );
 }
 
-// covers: P41, P42, P43, P44, P104, P153, P168
+// covers: P41, P42, P43, P44, P104, P168
+// Part of P153: the order and framing after a transient pair-setup.
 #[test]
 fn ap2_session_runs_in_order() {
     let mut rig = transient();
@@ -322,7 +323,8 @@ fn info_answer_may_be_only_the_txt_record() {
     assert_eq!(rig.keys(), ["GET /info"]);
 }
 
-// covers: P149
+// Part of P149 and P153: transient and password pairing on the session
+// connection; the PIN pairing with `/pair-pin-start` comes later.
 #[test]
 fn pairing_goes_on_the_session_connection() {
     let rig = transient();

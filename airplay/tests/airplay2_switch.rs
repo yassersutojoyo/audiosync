@@ -186,6 +186,13 @@ fn ap2_switch_off_silent() {
     for socket in &ptp {
         socket.set_nonblocking(true).expect("nonblocking");
     }
+    if ptp.len() < PTP_PORTS.len() {
+        eprintln!(
+            "note: the PTP datagram check holds {} of {} ports; the host refused the rest",
+            ptp.len(),
+            PTP_PORTS.len()
+        );
+    }
 
     // A device with both services goes over AirPlay 1 with the same request
     // shapes whether the switch is on or off, and nothing AirPlay 2 leaves.
@@ -225,6 +232,46 @@ fn ap2_switch_off_silent() {
         .iter()
         .map(|(_, request)| request.clone())
         .collect();
+    assert_no_airplay2(&requests);
+
+    // One whose AirPlay 1 attempt ends Unsupported stays Unsupported.
+    let behavior = Behavior {
+        public: Some("OPTIONS, SETUP, RECORD, TEARDOWN".to_owned()),
+        ..Behavior::default()
+    };
+    let receiver = NetReceiver::start(behavior);
+    let (sender, _host) = start(false);
+    let mut events = Events::default();
+    let device = dual_device(&receiver, 35);
+    let key = device.key.clone();
+    sender.add_speaker(device, options());
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Failed)
+            .is_some(),
+        "{:?}",
+        events.of(&key)
+    );
+    let kinds: Vec<ErrorKind> = events
+        .of(&key)
+        .into_iter()
+        .filter_map(|event| match event {
+            SpeakerEvent::Error(error) => Some(error.error.kind),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![ErrorKind::Unsupported(UnsupportedReason::Methods)]
+    );
+    sender.shutdown();
+    let requests: Vec<Request> = receiver
+        .log()
+        .requests
+        .iter()
+        .map(|(_, request)| request.clone())
+        .collect();
+    assert_eq!(requests.len(), 1, "only the OPTIONS");
     assert_no_airplay2(&requests);
 
     // A device with only `_airplay._tcp` is Unsupported ("AirPlay 2 only")
@@ -276,6 +323,9 @@ fn ap2_switch_off_silent() {
         .copied()
         .filter(|&port| UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).is_ok())
         .collect();
+    if free.len() < PTP_PORTS.len() {
+        eprintln!("note: the PTP port bind check runs only for {free:?}; the host holds the rest");
+    }
     let (sender, _host) = start(false);
     let receiver = NetReceiver::start(Behavior::default());
     let mut events = Events::default();
