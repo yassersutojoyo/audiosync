@@ -1829,7 +1829,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
             auto_connect: self.auto_connect.contains(&id),
             id,
             name: speaker.name,
-            kind: SpeakerKind::AirPlay,
+            kind: if speaker.airplay2 {
+                SpeakerKind::AirPlay2
+            } else {
+                SpeakerKind::AirPlay
+            },
             enabled: speaker.enabled,
             volume: speaker.volume,
             delay_ms: None,
@@ -2615,7 +2619,9 @@ mod tests {
 
     use super::*;
     use crate::audio::airplay::StartedSender;
-    use crate::audio::airplay::tests::{APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, device, id_of};
+    use crate::audio::airplay::tests::{
+        APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, airplay2_tv, device, id_of,
+    };
     use crate::audio::capture::{CaptureTarget, LoopbackMode};
     use crate::audio::cast::tests::{
         FakeCast, KITCHEN as CAST_KITCHEN, LIVING as CAST_LIVING, id as cast_device,
@@ -4458,6 +4464,99 @@ mod tests {
         fake.pairing(&tv, PairingEvent::Stopped);
         adapter.poll();
         assert!(messages(&adapter).is_empty(), "no notice for a cancel");
+    }
+
+    /// An adapter whose sender has the AirPlay 2 switch `on`, with the
+    /// AirPlay 2 receiver Loft listed.
+    fn airplay2_adapter(on: bool) -> (AudioAdapter<MockBackend>, FakeAirPlay, Device) {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(on);
+        audio.set_airplay(fake.link(), None);
+        let loft = airplay2_tv(9, "Loft");
+        fake.appear(&loft);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.poll();
+        fake.take_calls();
+        (adapter, fake, loft)
+    }
+
+    #[test]
+    fn an_airplay2_speaker_asks_for_a_pin_and_plays_once_paired() {
+        use crate::audio::pairings::tests::homekit;
+
+        let (mut adapter, fake, loft) = airplay2_adapter(true);
+        let id = ap(&loft);
+        let row = adapter.snapshot().speaker(&id).unwrap().clone();
+        assert_eq!(row.kind, SpeakerKind::AirPlay2);
+        assert_eq!(row.availability, Availability::NeedsCode);
+        adapter.set_speaker_enabled(&id, true);
+        assert_eq!(fake.take_calls(), [Call::StartPairing(id_of(&loft))]);
+        fake.pairing(&loft, PairingEvent::PinRequested);
+        adapter.poll();
+        assert_eq!(
+            adapter.snapshot().pin_prompt.unwrap().phase,
+            PinPhase::Ready
+        );
+
+        // A wrong PIN: the prompt stays and a new pairing starts.
+        adapter.submit_pin(&id, "1111");
+        fake.take_calls();
+        fake.pairing(
+            &loft,
+            PairingEvent::Failed {
+                error: SessionError::new(ErrorKind::PairingFailed),
+                wrong_pin: true,
+            },
+        );
+        adapter.poll();
+        assert_eq!(fake.take_calls(), [Call::StartPairing(id_of(&loft))]);
+        assert!(adapter.snapshot().pin_prompt.unwrap().wrong_pin);
+        assert!(messages(&adapter).is_empty(), "no notice for a wrong PIN");
+
+        fake.pairing(&loft, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        assert_eq!(
+            fake.take_calls(),
+            [Call::SubmitPin(id_of(&loft), "4821".to_owned())]
+        );
+        fake.pairing(&loft, PairingEvent::HomeKitPaired(homekit(0x33)));
+        assert!(adapter.poll());
+        let state = adapter.snapshot();
+        assert_eq!(state.pin_prompt, None);
+        let row = state.speaker(&id).unwrap();
+        assert!(row.enabled && row.paired);
+        assert_eq!(row.availability, Availability::Open);
+        assert!(state.running, "paired and on: streaming starts");
+        assert!(
+            fake.take_calls().contains(&Call::HomeKit(id_of(&loft))),
+            "it joins with its AirPlay 2 credentials"
+        );
+    }
+
+    #[test]
+    fn an_airplay2_speaker_row_says_airplay_2_only_with_the_switch_on() {
+        let (adapter, _, loft) = airplay2_adapter(false);
+        let row = adapter.snapshot().speaker(&ap(&loft)).unwrap().clone();
+        assert_eq!(row.kind, SpeakerKind::AirPlay);
+        assert_eq!(row.availability, Availability::AirPlay2NotYet);
+
+        let (mut adapter, fake, loft) = airplay2_adapter(true);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert_eq!(
+            state.speaker(&ap(&loft)).unwrap().kind,
+            SpeakerKind::AirPlay2
+        );
+        // A receiver AirPlay 1 drives stays "AirPlay" with the switch on.
+        assert_eq!(
+            state.speaker(&ap(&kitchen)).unwrap().kind,
+            SpeakerKind::AirPlay
+        );
     }
 
     #[test]

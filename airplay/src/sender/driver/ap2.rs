@@ -126,13 +126,49 @@ impl Driver {
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Connecting));
     }
 
-    /// Drops HomeKit credentials the receiver turned down, so the next start
-    /// pairs again (P154), and tells the host to delete its stored copy.
-    fn forget_homekit(&mut self, key: &DeviceKey) {
+    /// The PIN pairing the host asked for with a device on the AirPlay 2
+    /// path (P61, P153), on a connection of its own.
+    pub(super) fn pin_pairing(
+        &self,
+        device: &Device,
+        password: Option<Secret>,
+        ids: SessionIds,
+        now: Instant,
+    ) -> PinPairing {
+        let mut config = Ap2Config::new(device.airplay_socket_addrs(), Volume::Muted);
+        config.txt_flags = device
+            .airplay_txt
+            .as_ref()
+            .and_then(|txt| txt.flags)
+            .map(|flags| u64::from(flags.0));
+        config.features = device.features();
+        config.password = password;
+        config.device_id = self.device_id;
+        PinPairing::new(config, ids, Box::new(OsEntropy), now)
+    }
+
+    /// Keeps the credentials a PIN pairing gave, so a session started before
+    /// the host hands them back verifies with them (P152).
+    pub(super) fn keep_homekit(&mut self, key: &DeviceKey, credentials: HomeKitCredentials) {
+        if let Some(speaker) = self.speakers.get_mut(key) {
+            speaker.options.homekit_credentials = Some(credentials.clone());
+        }
+        self.homekit.insert(key.clone(), credentials);
+    }
+
+    /// Drops the HomeKit credentials kept for a device, so its next session
+    /// pairs again.
+    pub(super) fn forget_homekit(&mut self, key: &DeviceKey) {
         if let Some(speaker) = self.speakers.get_mut(key) {
             speaker.options.homekit_credentials = None;
         }
         self.homekit.remove(key);
+    }
+
+    /// Drops HomeKit credentials the receiver turned down (P154), and tells
+    /// the host to delete its stored copy.
+    fn reject_homekit(&mut self, key: &DeviceKey) {
+        self.forget_homekit(key);
         self.emit_speaker(key, SpeakerEvent::HomeKitRejected);
     }
 
@@ -336,7 +372,11 @@ impl Driver {
 
     fn ap2_event(&mut self, key: &DeviceKey, event: Ap2Event, now: Instant) {
         match event {
-            Ap2Event::Info(_) => {}
+            // Only a PinPairing's session reports these.
+            Ap2Event::Info(_)
+            | Ap2Event::PinRequested
+            | Ap2Event::WrongPin
+            | Ap2Event::Verified => {}
             Ap2Event::Server(server) => self.emit_speaker(key, SpeakerEvent::Server(server)),
             Ap2Event::Credentials(credentials) => {
                 // Kept for the sender's lifetime, so later sessions verify
@@ -372,7 +412,7 @@ impl Driver {
             Ap2Event::Failed(error) => {
                 let verifying = self.ap2_active(key).is_some_and(|active| active.verifying);
                 if verifying && error.kind == ErrorKind::PairingRequired {
-                    self.forget_homekit(key);
+                    self.reject_homekit(key);
                 }
                 self.on_failed(key, error, now);
             }

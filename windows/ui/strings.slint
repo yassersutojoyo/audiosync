@@ -109,8 +109,8 @@ export global Strings {
     out property <string> notice-airplay-stopped: @tr("AirPlay stopped or couldn't start. Select Retry to try again. If it keeps happening, restart AudioSync.");
     // The settings file in the app's data folder couldn't be written.
     out property <string> notice-settings-not-saved: @tr("AudioSync couldn't save your settings, so changes you make now won't be kept after AudioSync quits.");
-    // The file with the Apple TV pairings couldn't be written.
-    out property <string> notice-pairings-not-saved: @tr("AudioSync couldn't save your Apple TV pairings, so pairings you add or forget now won't be kept after AudioSync quits.");
+    // The file with the AirPlay pairings couldn't be written.
+    out property <string> notice-pairings-not-saved: @tr("AudioSync couldn't save your AirPlay pairings, so pairings you add or forget now won't be kept after AudioSync quits.");
     // Launch at Sign-In: Windows refused to add AudioSync to its startup
     // apps, refused to remove it, or has it turned off in Task Manager or
     // Settings (AudioSync then opens Settings > Apps > Startup).
@@ -150,9 +150,9 @@ export global Strings {
             return @tr("Asking {} to show a PIN…", speaker);
         }
         if wrong-pin {
-            return @tr("That PIN didn't work. Enter the PIN {} shows on the TV now. Cancel turns the speaker off; turn it on again to retry.", speaker);
+            return @tr("That PIN didn't work. Enter the PIN {} shows now. Cancel turns the speaker off; turn it on again to retry.", speaker);
         }
-        return @tr("{} shows a 4-digit PIN on the TV. Enter it to pair; after that, it connects without a PIN. Cancel turns the speaker off; turn it on again to retry.", speaker);
+        return @tr("{} shows a 4-digit PIN on its screen. Enter it to pair; after that, it connects without a PIN. Cancel turns the speaker off; turn it on again to retry.", speaker);
     }
 
     // The password prompt of an AirPlay speaker protected by a password; the
@@ -334,10 +334,10 @@ export global Strings {
         return @tr("AudioSync couldn't read your saved settings when it started, so it's using the default settings. The old file was kept as {} in AudioSync's data folder (type %LOCALAPPDATA% in File Explorer's address bar, then open AudioSync).", file);
     }
 
-    // The same for the file with the Apple TV pairings: those Apple TVs ask
+    // The same for the file with the AirPlay pairings: those speakers ask
     // for a PIN again.
     public pure function notice-pairings-kept-aside(file: string) -> string {
-        return @tr("AudioSync couldn't read your Apple TV pairings when it started, so those Apple TVs ask for a PIN again. The old file was kept as {} in AudioSync's data folder (type %LOCALAPPDATA% in File Explorer's address bar, then open AudioSync).", file);
+        return @tr("AudioSync couldn't read your AirPlay pairings when it started, so AirPlay speakers you paired ask for a PIN again. The old file was kept as {} in AudioSync's data folder (type %LOCALAPPDATA% in File Explorer's address bar, then open AudioSync).", file);
     }
 
     // A speaker that couldn't start was turned off.
@@ -382,7 +382,7 @@ export global Strings {
             return @tr("{} needs pairing with a PIN, so it's off. Turn it on again to pair.", speaker);
         }
         if problem == AirPlayProblem.pairing-failed {
-            return @tr("{} couldn't be paired, so it's off. Make sure the TV is on, then turn {} on in AudioSync to try again.", speaker, speaker);
+            return @tr("{} couldn't be paired, so it's off. Make sure it's on, then turn {} on in AudioSync to try again.", speaker, speaker);
         }
         if problem == AirPlayProblem.pairing-not-yet {
             return @tr("{} needs a kind of pairing AudioSync for Windows can't do yet, so it's off.", speaker);
@@ -732,6 +732,9 @@ export global Strings {
     public pure function speaker-kind(kind: SpeakerKind) -> string {
         if kind == SpeakerKind.airplay {
             return @tr("AirPlay");
+        }
+        if kind == SpeakerKind.airplay2 {
+            return @tr("AirPlay 2");
         }
         if kind == SpeakerKind.cast {
             return @tr("Google Cast");
