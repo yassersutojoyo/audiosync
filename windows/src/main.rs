@@ -552,6 +552,12 @@ mod tests {
     const CTRL_W: &str = "event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == \"w\")";
     const CTRL_Q: &str = "if event.modifiers.control && event.text.to-lowercase() == \"q\" {\n                root.exit-requested();";
 
+    /// A checkout on Windows can have CRLF line endings; the snippets above
+    /// are written with LF.
+    fn lf(source: &str) -> String {
+        source.replace("\r\n", "\n")
+    }
+
     /// The windows without a menu bar: the equalizer, both Guides and About.
     fn windows_without_a_menu_bar() -> [(&'static str, &'static str, &'static str); 4] {
         [
@@ -584,6 +590,7 @@ mod tests {
     #[test]
     fn ctrl_w_closes_the_windows_without_a_menu_bar() {
         for (name, source, close) in windows_without_a_menu_bar() {
+            let source = lf(source);
             let keys = &source[source.find("keys := FocusScope {").expect("its keys")..];
             let first = &keys[..keys.find(close).expect("it closes")];
             assert!(
@@ -591,7 +598,7 @@ mod tests {
                 "the {name} closes on Escape and Ctrl+W"
             );
         }
-        let dialogs = include_str!("../ui/dialogs.slint");
+        let dialogs = lf(include_str!("../ui/dialogs.slint"));
         assert_eq!(
             dialogs.matches("if event.text == Key.Escape").count(),
             dialogs
@@ -609,6 +616,7 @@ mod tests {
     fn ctrl_q_exits_from_the_windows_without_a_menu_bar() {
         let view = include_str!("view.rs");
         for (name, source, _) in windows_without_a_menu_bar() {
+            let source = lf(source);
             let keys = &source[source.find("keys := FocusScope {").expect("its keys")..];
             assert!(keys.contains(CTRL_Q), "the {name} exits on Ctrl+Q");
         }
