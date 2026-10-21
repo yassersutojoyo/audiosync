@@ -28,6 +28,9 @@ struct NativeReceiver: Equatable {
     /// The sender reaches it over AirPlay 2, which only the AirPlay 2
     /// switch allows.
     var overAirPlay2 = false
+    /// A PIN pairing's credentials are kept for it (either path), which
+    /// Forget Pairing drops.
+    var paired = false
 
     /// How the speaker list shows it, if at all: one that can play is open;
     /// one that asks for a PIN or a password needs a code, which AudioSync

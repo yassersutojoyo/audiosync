@@ -350,6 +350,21 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// Forget Pairing on a native speaker's row: its credentials go, AirPlay 2
+    /// ones included, so it asks for a PIN again; a speaker that is on goes
+    /// off, as on Windows.
+    func forgetNativePairing(_ id: String) {
+        guard let receiver = NativeAirPlayID.receiver(id) else { return }
+        endNativeAttempt(id)
+        nativeAirPlay?.forgetPairing(receiver)
+        DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) pairing forgotten")
+        if enabledAirPlay.remove(id) != nil {
+            syncNativeSpeakers()
+            stopIfIdle()
+        }
+        pushModel()
+    }
+
     /// A native speaker's slider position (0 to 100), live.
     func setNativeAirPlayVolume(_ id: String, _ volume: Double) {
         airplayVolume[id] = max(0, min(100, volume))

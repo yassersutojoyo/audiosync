@@ -183,7 +183,8 @@ final class NativeAirPlay {
         }
     }
 
-    /// Forgets the stored pairing of `id`; it needs a PIN again.
+    /// Forgets the stored pairing of `id`, AirPlay 2 credentials included;
+    /// it needs a PIN again.
     func forgetPairing(_ id: String) {
         queue.async { [weak self] in
             guard let handle = self?.handle else { return }
@@ -379,7 +380,8 @@ final class NativeAirPlay {
         let receiver = NativeReceiver(id: id, name: text(raw.name), model: text(raw.model),
                                       availability: availability(raw.availability),
                                       reason: reason(raw.unsupported), hints: hints(raw.flags),
-                                      overAirPlay2: raw.flags & UInt32(ASC_AIRPLAY_FLAG_OVER_AIRPLAY2) != 0)
+                                      overAirPlay2: raw.flags & UInt32(ASC_AIRPLAY_FLAG_OVER_AIRPLAY2) != 0,
+                                      paired: raw.flags & UInt32(ASC_AIRPLAY_FLAG_PAIRED) != 0)
         return raw.event == ASC_AIRPLAY_APPEARED ? .appeared(receiver) : .changed(receiver)
     }
 
@@ -487,6 +489,7 @@ final class NativeAirPlay {
             (ASC_AIRPLAY_FLAG_BUSY, "busy"),
             (ASC_AIRPLAY_FLAG_AIRPLAY2, "airplay2"),
             (ASC_AIRPLAY_FLAG_OVER_AIRPLAY2, "over-airplay2"),
+            (ASC_AIRPLAY_FLAG_PAIRED, "paired"),
         ]
         return names.filter { flags & UInt32($0.0) != 0 }.map(\.1)
     }

@@ -395,6 +395,9 @@ struct UIStrings {
             + "Cancel turns the speaker off; turn it on again to retry."
     }
 
+    /// In an AirPlay speaker's menu while AudioSync keeps its PIN pairing.
+    let forgetPairing = "Forget Pairing"
+    let forgetPairingHelp = "Removes the pairing AudioSync keeps, so the speaker asks for a PIN the next time you turn it on"
     let pairPINOnlyPlaceholder = "PIN"
     let pairPasswordPlaceholder = "Password"
     func pairPINFieldLabel(name: String) -> String { "PIN for \(name)" }

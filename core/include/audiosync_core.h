@@ -111,6 +111,7 @@ extern "C" {
 #define ASC_AIRPLAY_FLAG_BUSY 64           /* its flags hint that another sender plays */
 #define ASC_AIRPLAY_FLAG_AIRPLAY2 128      /* it lists AirPlay 2 features */
 #define ASC_AIRPLAY_FLAG_OVER_AIRPLAY2 256 /* the AirPlay 2 switch is on and the sender reaches it over AirPlay 2 */
+#define ASC_AIRPLAY_FLAG_PAIRED 512        /* credentials are kept for it, which asc_airplay_forget_pairing drops */
 
 /* What a sender event reports (AscAirPlayEvent.kind). */
 #define ASC_AIRPLAY_EVENT_STATE 1    /* a speaker's state changed: .state */

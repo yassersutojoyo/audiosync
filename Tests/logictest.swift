@@ -1361,6 +1361,15 @@ do {
             && kinds.speakerTag(.cast, airPlay2: true) == "Google Cast"
             && kinds.speakerLabel(name: "Loft", tag: kinds.speakerTag(.airplay, airPlay2: true)) == "Loft, AirPlay 2",
           "native airplay: the kind's tooltip and VoiceOver label say AirPlay 2 for such a row, AirPlay for the rest")
+    paths.apply(.changed(NativeReceiver(id: "H8", name: "Loft", model: "", availability: .available, reason: nil,
+                                        hints: ["airplay", "airplay2", "over-airplay2", "paired"], overAirPlay2: true,
+                                        paired: true)))
+    check(paths.isPaired("H8") && !paths.isPaired("I9") && !paths.isPaired("J0"),
+          "native airplay: only a receiver AudioSync keeps a pairing for offers Forget Pairing")
+    check(kinds.nativePairPINMessage(name: "Loft").hasPrefix("Loft shows a 4-digit PIN on its screen. Enter it to pair; "
+                                                              + "after that, it connects without a PIN.")
+            && !kinds.nativePairWrongPINMessage(name: "Loft").contains("TV"),
+          "native airplay: the PIN prompt reads as on Windows, for an Apple TV and an AirPlay 2 receiver alike")
     check(model.apply(.timeline(latencyMs: 1750, restarted: false)) == .latencyChanged
             && model.apply(.timeline(latencyMs: 1750, restarted: true)) == nil && model.latencyMs == 1750,
           "native airplay: local outputs line up again only when L changes")

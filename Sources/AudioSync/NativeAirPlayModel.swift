@@ -282,6 +282,10 @@ struct NativeAirPlayModel {
     /// its row then names AirPlay 2 as its kind.
     func reachedOverAirPlay2(_ id: String) -> Bool { receivers[id]?.overAirPlay2 == true }
 
+    /// Whether credentials are kept for the listed receiver `id`: its row
+    /// offers Forget Pairing.
+    func isPaired(_ id: String) -> Bool { receivers[id]?.paired == true }
+
     /// The speaker list's rows, as app IDs: every receiver it shows
     /// (`NativeReceiver.access`), and any that still plays while its
     /// announcement lapsed; by name, then ID.

@@ -155,6 +155,9 @@ pub const AIRPLAY_FLAG_BUSY: u32 = 64;
 pub const AIRPLAY_FLAG_AIRPLAY2: u32 = 128;
 /// The AirPlay 2 switch is on and the sender reaches it over AirPlay 2.
 pub const AIRPLAY_FLAG_OVER_AIRPLAY2: u32 = 256;
+/// Credentials are kept for it (a PIN pairing's, either path), which
+/// [`asc_airplay_forget_pairing`] drops.
+pub const AIRPLAY_FLAG_PAIRED: u32 = 512;
 
 /// What a sender event reports ([`AscAirPlayEvent::kind`]): a speaker's
 /// state changed ([`AscAirPlayEvent::state`]).
@@ -816,15 +819,18 @@ impl AscAirPlay {
             ReceiverEvent::Appeared(info) | ReceiverEvent::Changed(info) => {
                 let id = receiver_id(&info.device.key);
                 let paired = self.store.contains(&id);
-                let (availability, flags) = if self.over_airplay2(&id, info) {
-                    let paired = self.identity.get(&id).is_some();
+                let homekit = self.identity.get(&id).is_some();
+                let (availability, mut flags) = if self.over_airplay2(&id, info) {
                     (
-                        airplay2_availability(info, paired),
+                        airplay2_availability(info, homekit),
                         flags(info) | AIRPLAY_FLAG_OVER_AIRPLAY2,
                     )
                 } else {
                     (availability(info, paired), flags(info))
                 };
+                if paired || homekit {
+                    flags |= AIRPLAY_FLAG_PAIRED;
+                }
                 (
                     if matches!(event, ReceiverEvent::Appeared(_)) {
                         AIRPLAY_APPEARED
@@ -3645,6 +3651,7 @@ mod tests {
             "it asks for pairing: a PIN"
         );
         assert_ne!(report.flags & AIRPLAY_FLAG_OVER_AIRPLAY2, 0);
+        assert_eq!(report.flags & AIRPLAY_FLAG_PAIRED, 0, "nothing kept yet");
 
         let mut blob = vec![1u8];
         blob.extend_from_slice(b"01234567-89AB-CDEF-0123-456789ABCDEF");
@@ -3656,6 +3663,11 @@ mod tests {
         assert_eq!(
             report.availability, AIRPLAY_AVAILABLE,
             "paired on AirPlay 2"
+        );
+        assert_ne!(
+            report.flags & AIRPLAY_FLAG_PAIRED,
+            0,
+            "Forget Pairing applies"
         );
 
         let kitchen = raop("02005E005306", "Kitchen", OPEN);

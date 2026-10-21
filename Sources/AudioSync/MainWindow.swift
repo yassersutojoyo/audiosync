@@ -703,6 +703,10 @@ struct SpeakerRow: View {
             }
         } else {
             autoConnectToggle(t)
+            if speaker.paired {
+                Button(t.forgetPairing) { model.actions.forgetAirPlayPairing(speaker.id) }
+                    .help(t.forgetPairingHelp)
+            }
         }
     }
 

@@ -967,6 +967,7 @@ mod tests {
                 "ASC_AIRPLAY_FLAG_OVER_AIRPLAY2",
                 AIRPLAY_FLAG_OVER_AIRPLAY2.to_string(),
             ),
+            ("ASC_AIRPLAY_FLAG_PAIRED", AIRPLAY_FLAG_PAIRED.to_string()),
             ("ASC_AIRPLAY_EVENT_STATE", AIRPLAY_EVENT_STATE.to_string()),
             ("ASC_AIRPLAY_EVENT_ERROR", AIRPLAY_EVENT_ERROR.to_string()),
             (

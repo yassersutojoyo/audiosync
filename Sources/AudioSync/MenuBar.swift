@@ -33,6 +33,8 @@ final class AppModel: ObservableObject {
         var airPlay2 = false
         /// An AirPlay 2 speaker waiting for the slot another one holds (P169).
         var waitingForAirPlay2 = false
+        /// An AirPlay speaker AudioSync keeps a PIN pairing for.
+        var paired = false
 
         /// A speaker AudioSync streams to through AirPlay, not a local output.
         var isAirPlay: Bool { tag == .airplay }
@@ -64,6 +66,7 @@ final class AppModel: ObservableObject {
         var setMaster: (Double) -> Void = { _ in }
         var setAirPlayEnabled: (String, Bool) -> Void = { _, _ in }
         var setAirPlayVolume: (String, Double) -> Void = { _, _ in }
+        var forgetAirPlayPairing: (String) -> Void = { _ in }
         var setLocalEnabled: (String, Bool) -> Void = { _, _ in }
         var setLocalVolume: (String, Double) -> Void = { _, _ in }
         var setLocalOffset: (String, Double) -> Void = { _, _ in }
