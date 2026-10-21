@@ -252,9 +252,14 @@ pub fn windowed_latency_ns(
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tracking {
     /// Measuring the reference since the tracking (re)started: the fills
-    /// taken so far, summed, their count, and the device frames of their
-    /// callbacks.
-    Measuring { sum: f64, count: u32, frames: u64 },
+    /// taken so far, summed, their count, the device frames of their
+    /// callbacks, and Jf at the first of them.
+    Measuring {
+        sum: f64,
+        count: u32,
+        frames: u64,
+        shift: f64,
+    },
     /// Following: the fill the renderer keeps, and the running average.
     Following { reference: f64, average: f64 },
 }
@@ -264,6 +269,7 @@ const RESTART: Tracking = Tracking::Measuring {
     sum: 0.0,
     count: 0,
     frames: 0,
+    shift: 0.0,
 };
 
 /// The most capture-rate frames the resampler can ask for to produce
@@ -938,6 +944,12 @@ impl Renderer {
         self.reader.lead_frames()
     }
 
+    /// Jf at the last callback, in capture frames (S209): below 0 while the
+    /// anchor floor still falls toward callbacks earlier than it.
+    pub fn floor_shift_frames(&self) -> i64 {
+        self.reader.floor_shift_frames()
+    }
+
     /// Fills `out`, interleaved with [`Renderer::channels`] channels.
     pub fn render(&mut self, out: &mut [f32]) {
         self.render_inner(out, None, None);
@@ -1146,7 +1158,7 @@ impl Renderer {
             let own = usize::try_from(trim).unwrap_or(0);
             let slowed = short.max(own);
             if self.resampler.slow_down(slowed, frames - 1) {
-                self.count_trim(slowed as f64, (slowed - own) as f64);
+                self.count_slow_down(slowed as u64, (slowed - own) as u64);
                 self.shared
                     .slowed_frames
                     .fetch_add(slowed as u64, Ordering::Relaxed);
@@ -1202,7 +1214,13 @@ impl Renderer {
                 sum,
                 count,
                 frames: span,
+                shift,
             } => {
+                // Against the anchor floor as it stood at the first fill, so a
+                // fall during the measuring isn't averaged into the reference.
+                let jf = self.reader.floor_shift_frames() as f64;
+                let shift = if count == 0 { jf } else { shift };
+                let fill = fill + jf - shift;
                 let (sum, count, span) = (sum + fill, count + 1, span + frames as u64);
                 self.tracking = if span as f64 >= track {
                     let reference = sum / f64::from(count);
@@ -1215,6 +1233,7 @@ impl Renderer {
                         sum,
                         count,
                         frames: span,
+                        shift,
                     }
                 };
                 0
@@ -1240,10 +1259,16 @@ impl Renderer {
     /// shortage, moves the reference too, so the output keeps that slack.
     fn count_trim(&mut self, by: f64, kept: f64) {
         self.tracking = match self.tracking {
-            Tracking::Measuring { sum, count, frames } => Tracking::Measuring {
+            Tracking::Measuring {
+                sum,
+                count,
+                frames,
+                shift,
+            } => Tracking::Measuring {
                 sum: sum + by * f64::from(count),
                 count,
                 frames,
+                shift,
             },
             Tracking::Following { reference, average } => Tracking::Following {
                 reference: reference + kept,
@@ -1286,6 +1311,46 @@ impl Renderer {
         }
         let anchor = *anchor;
         (floor.saturating_sub(anchor), anchored.saturating_sub(floor))
+    }
+
+    /// Lets `frames` capture frames by which the output already plays later,
+    /// a dry read's silence or a slow-down kept for a shortage, pay toward
+    /// what the anchor floor still has to fall, to the floor or this
+    /// callback's value when that is lower (S209), so the trim doesn't move
+    /// the output later by as much again. Returns the frames paid.
+    fn pay_anchor_fall(&mut self, frames: u64) -> u64 {
+        let rate = u64::from(self.capture_rate.max(1));
+        let low = self
+            .late_floor()
+            .map(|floor| floor.min(self.callback_late_ns));
+        let (Some(low), Some(anchor)) = (low, self.anchor_floor.as_mut()) else {
+            return 0;
+        };
+        let owed_ns = u64::try_from(anchor.saturating_sub(low)).unwrap_or(0);
+        let frames_ns = frames.saturating_mul(1_000_000_000) / rate;
+        let paid_ns = frames_ns.min(owed_ns);
+        *anchor = anchor.saturating_sub(i64::try_from(paid_ns).unwrap_or(i64::MAX));
+        // Uncapped, all of it is paid: the round trip through ns would lose a frame.
+        let paid = if paid_ns == frames_ns {
+            frames
+        } else {
+            (paid_ns.saturating_mul(rate) / 1_000_000_000).min(frames)
+        };
+        // Jf rises by what is paid, so the fills from here on are taken
+        // against a shift that rose by as much.
+        if let Tracking::Measuring { shift, .. } = &mut self.tracking {
+            *shift += paid as f64;
+        }
+        paid
+    }
+
+    /// Counts an S206 slow-down of `slowed` capture frames, `kept` of them
+    /// for a shortage, in the tracking (S206, S207): what of `kept` pays
+    /// toward the anchor floor's fall lowers the anchor floor by as much as
+    /// it moves the fill, so only the rest moves the fill and the reference.
+    fn count_slow_down(&mut self, slowed: u64, kept: u64) {
+        let paid = self.pay_anchor_fall(kept);
+        self.count_trim((slowed - paid) as f64, (kept - paid) as f64);
     }
 
     /// The observer at the start of a callback of `frames` device frames
@@ -1433,7 +1498,16 @@ impl Renderer {
             // it if it was still due.
             self.correction_due = false;
         }
-        if report.correction != Correction::None || report.starved > 0 || report.rejected {
+        let starved = report.starved as u64;
+        let paid = if starved > 0 {
+            self.pay_anchor_fall(starved)
+        } else {
+            0
+        };
+        // A silence paid in full toward the anchor floor's fall keeps the
+        // fill the trim follows, so the trim goes on following the rest of
+        // the fall instead of losing what fell before a new reference.
+        if report.correction != Correction::None || paid < starved || report.rejected {
             // Anchored, corrected, dry or rejected: the fill the renderer
             // kept is gone, and a new reference is measured (S207).
             self.tracking = RESTART;
@@ -1838,6 +1912,73 @@ mod tests {
         assert!(r.warming, "four callbacks of 370 ms");
         r.form_floor(16_384);
         assert!(!r.warming);
+    }
+
+    /// A renderer whose anchor floor owes 10 ms of fall, measuring a
+    /// reference of three fills of 1000 frames taken against a Jf of -480.
+    fn owing_fall() -> Renderer {
+        let mut r = Stepped::new().renderer;
+        r.floor_formed = true;
+        r.earliest = Some([0, 0]);
+        r.callback_late_ns = 0;
+        r.anchor_floor = Some(10_000_000);
+        r.tracking = Tracking::Measuring {
+            sum: 3000.0,
+            count: 3,
+            frames: 3 * 441,
+            shift: -480.0,
+        };
+        r
+    }
+
+    /// The reference being measured, and the shift its next fill is taken
+    /// against.
+    fn measured(r: &Renderer) -> (f64, f64) {
+        let Tracking::Measuring {
+            sum, count, shift, ..
+        } = r.tracking
+        else {
+            panic!("{:?}", r.tracking);
+        };
+        (sum / f64::from(count), shift)
+    }
+
+    // covers: S206, S207, S209
+    #[test]
+    fn what_pays_toward_the_anchor_floors_fall_keeps_the_fill_the_trim_measures() {
+        // A dry read's 240 frames (5 ms) of silence pay in full. The fills
+        // taken before it never held the silence, so they stay; the next
+        // fill holds it and Jf rises by it, so its shift rises by as much.
+        let mut r = owing_fall();
+        assert_eq!(r.pay_anchor_fall(240), 240);
+        assert_eq!(r.anchor_floor, Some(5_000_000));
+        assert_eq!(measured(&r), (1000.0, -240.0));
+        // Owing 5 ms more, a further 10 ms pays 5 ms, to the floor.
+        assert_eq!(r.pay_anchor_fall(480), 240);
+        assert_eq!(r.anchor_floor, Some(0));
+        assert_eq!(r.pay_anchor_fall(240), 0);
+
+        // A slow-down of 64 frames, 48 of them kept for a shortage and
+        // paid: the fill moves by the 16 the trim asked for.
+        let mut r = owing_fall();
+        r.count_slow_down(64, 48);
+        assert_eq!(measured(&r), (1016.0, -432.0));
+        r.tracking = Tracking::Following {
+            reference: 1000.0,
+            average: 1000.0,
+        };
+        r.count_slow_down(64, 48);
+        let Tracking::Following { reference, average } = r.tracking else {
+            panic!("{:?}", r.tracking);
+        };
+        assert_eq!((reference, average), (1000.0, 1016.0));
+        // Owing nothing more, the kept part moves the reference too.
+        r.anchor_floor = Some(0);
+        r.count_slow_down(64, 48);
+        let Tracking::Following { reference, average } = r.tracking else {
+            panic!("{:?}", r.tracking);
+        };
+        assert_eq!((reference, average), (1048.0, 1080.0));
     }
 
     // covers: S209
