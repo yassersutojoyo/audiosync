@@ -626,7 +626,7 @@ struct UIStrings {
           follows macOS; Light or Dark keeps AudioSync's windows that way.
         - When the source app quits, streaming stops. To keep playing all system
           audio instead, turn on 'Switch to All System Audio When the Source App
-          Quits' in the AudioSync menu.
+          Quits' in the gear menu or the AudioSync menu.
 
         Speaker Notes
         \(guideCodeNote)

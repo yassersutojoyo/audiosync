@@ -130,7 +130,7 @@ A few other things worth knowing:
 
 - Right-click a speaker (or use its ⋯ button) for auto-connect, and a group to rename or delete it.
 - The gear menu has New Group from Active Speakers, Refresh Devices, Show Virtual Devices (loopback drivers, meeting apps and other virtual outputs stay hidden until you turn this on or already use one), Appearance, Launch at Login and the AudioSync Guide.
-- When the app you're capturing quits, streaming stops. Turn on Switch to All System Audio When the Source App Quits in the AudioSync menu to keep playing everything else instead.
+- When the app you're capturing quits, streaming stops. Turn on Switch to All System Audio When the Source App Quits in the gear menu or the AudioSync menu to keep playing everything else instead.
 - Clicking any speaker while streaming is off starts streaming. Click a delay to nudge it by ±10/±100 ms or type a value (a leading − for a negative one).
 - Speakers that want a PIN or password (an Apple TV, or a receiver with Require Password on) are marked "Asks for a code". You get a prompt when you turn one on yourself. An Apple TV pairs once and then connects without a code; a password is asked for once each time AudioSync starts.
 - If AirPlay can't start, or stops after an error, Connected Speakers says so and offers a Retry button.
