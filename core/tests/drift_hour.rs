@@ -12,9 +12,9 @@
 //! Findings these runs pin:
 //!
 //! - An output at the capture rate has no clock tracking (the S207 trim only
-//!   runs on a converting renderer near its lead), so its lag follows its
-//!   clock: 3 ppm fast loses about 10.8 ms of lag in an hour, inside the
-//!   35 ms dead band, with no correction. Clock stamps change nothing.
+//!   runs on a converting renderer), so its lag follows its clock: 3 ppm
+//!   fast loses about 10.8 ms of lag in an hour, inside the 50 ms dead band,
+//!   with no correction. Clock stamps change nothing.
 //! - A producer that stalls past the dead band and then catches up costs
 //!   every output the same two corrections: a step back (owed silence)
 //!   during the stall and a skip forward once the burst lands. The reader on
@@ -234,7 +234,7 @@ fn a_speaker_clock_3_ppm_fast_loses_11_ms_of_lag_in_an_hour_without_a_correction
         "the speakers drift: {moved:?}"
     );
     assert!((hour.drift_last_ms - hour.drift_first_ms - 10.8).abs() < 0.5);
-    // Corrected only once the drift leaves the dead band, after about 3 h.
+    // Corrected only once the drift leaves the dead band, after about 4.6 h.
     assert!(hour.drift_worst_ms < ms(tolerance_frames(RATE) as f64));
 
     // Clock stamps (S207) leave an output at the capture rate as it was.
@@ -271,6 +271,7 @@ fn a_producer_stall_past_the_dead_band_costs_every_output_a_step_back_and_a_skip
         steps_and_skips(Host::Renderer { stamped: false }, 50),
         [(0, 0); 2]
     );
-    // A longer stall steps back again each time the reader runs T ahead.
-    assert_eq!(steps_and_skips(Host::Reader, 150), [(3, 1); 2]);
+    // A longer stall steps back again each time the reader runs T ahead:
+    // twice in 150 ms, short of a third time.
+    assert_eq!(steps_and_skips(Host::Reader, 150), [(2, 1); 2]);
 }

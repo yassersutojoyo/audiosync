@@ -566,62 +566,96 @@ fn every_jittered_run(jitter_ns: u64, other_way: u64) {
 
 // covers: S207
 #[test]
-fn stamps_a_fifth_of_a_millisecond_off_barely_trim_the_other_way() {
+fn stamps_a_fifth_of_a_millisecond_off_never_trim_the_other_way() {
     // A host's wake-ups, and so its stamps, fall a little off the times of
     // the blocks and callbacks. A fifth of a millisecond either way moves
     // the fill by up to ten frames at a time; averaged over half a second,
-    // or 16 callbacks when those are large, that trims the converter the
-    // other way by a few frames a minute at most.
-    every_jittered_run(200_000, 8);
+    // or 16 callbacks when those are large, that stays inside the dead zone
+    // (with the 4-frame one before, up to 8 frames a minute went back).
+    every_jittered_run(200_000, 0);
 }
 
 // covers: S207
 #[test]
 fn stamps_a_millisecond_off_never_run_an_output_dry() {
     // A millisecond either way moves the fill by up to 48 frames at a time,
-    // past the dead zone both ways, so the converter is trimmed back and
-    // forth, a few hundred frames a minute in all at worst, a frame at a
-    // time and interpolated; still no read runs dry and no correction is
-    // made.
-    every_jittered_run(1_000_000, 500);
+    // and its average now and then past the dead zone, so the converter is
+    // trimmed the other way by some 30 frames a minute at worst (a few
+    // hundred with the 4-frame dead zone before), a frame at a time and
+    // interpolated; still no read runs dry and no correction is made.
+    every_jittered_run(1_000_000, 32);
 }
 
 // covers: S207
 #[test]
 fn an_output_that_needs_no_trim_plays_the_same_with_stamps() {
     // Stamps change nothing for an output on a clock in step, whatever its
-    // hold-back, nor for one held back beyond the dead band and a lead,
-    // which a step back keeps off W as before (S52): over 60 seconds, those
-    // play the very same frames stamped or not, and are never trimmed.
+    // hold-back: over 60 seconds, it plays the very same frames stamped or
+    // not, and is never trimmed.
     for (device_rate, callback, block) in
         [(44_100, 441, 480), (44_100, 512, 512), (96_000, 512, 512)]
     {
-        for (delay, drifts) in [(0, &[0][..]), (1_200, &[0]), (4_800, &[-100, 0, 100])] {
-            for &drift_ppm in drifts {
-                for phase in [0.0, 0.5, 0.95] {
-                    let clocks = Clocks {
-                        device_rate,
-                        callback,
-                        block,
-                        delay,
-                        running: true,
-                        phase,
-                        drift_ppm,
-                        tail: 0,
-                    };
-                    let stamped = simulate(clocks, FEW_PHASES_SECONDS, true);
-                    let plain = simulate(clocks, FEW_PHASES_SECONDS, false);
-                    assert_eq!(
-                        (stamped.slowed, stamped.sped),
-                        (0, 0),
-                        "trimmed: {clocks:?}"
-                    );
-                    assert!(
-                        stamped.played == plain.played,
-                        "played otherwise: {clocks:?}"
-                    );
-                    assert_eq!(stamped.counters, plain.counters, "{clocks:?}");
-                }
+        for delay in [0, 1_200, 4_800] {
+            for phase in [0.0, 0.5, 0.95] {
+                let clocks = Clocks {
+                    device_rate,
+                    callback,
+                    block,
+                    delay,
+                    running: true,
+                    phase,
+                    drift_ppm: 0,
+                    tail: 0,
+                };
+                let stamped = simulate(clocks, FEW_PHASES_SECONDS, true);
+                let plain = simulate(clocks, FEW_PHASES_SECONDS, false);
+                assert_eq!(
+                    (stamped.slowed, stamped.sped),
+                    (0, 0),
+                    "trimmed: {clocks:?}"
+                );
+                assert!(
+                    stamped.played == plain.played,
+                    "played otherwise: {clocks:?}"
+                );
+                assert_eq!(stamped.counters, plain.counters, "{clocks:?}");
+            }
+        }
+    }
+}
+
+// covers: S53, S207
+#[test]
+fn an_output_held_back_beyond_the_dead_band_follows_the_capture_with_stamps() {
+    // Held back by 100 ms, beyond a lead and the dead band, an output on a
+    // clock 100 or 300 ppm off is tracked like one at hold-back 0 (S207):
+    // over 60 seconds no read runs dry, no drift correction is made, and
+    // its converter is trimmed one way only, by 9/10 of what the clock
+    // gained or more. Before, it drifted until a step back at T.
+    for (device_rate, callback, block) in
+        [(44_100, 441, 480), (44_100, 512, 512), (96_000, 512, 512)]
+    {
+        for phase in [0.0, 0.5, 0.95] {
+            for drift_ppm in FEW_PHASES_DRIFTS_PPM {
+                let clocks = Clocks {
+                    device_rate,
+                    callback,
+                    block,
+                    delay: 4_800,
+                    running: true,
+                    phase,
+                    drift_ppm,
+                    tail: 0,
+                };
+                assert_follows_the_capture(clocks, FEW_PHASES_SECONDS, 0, 0);
+                let outcome = simulate(clocks, FEW_PHASES_SECONDS, true);
+                let trimmed = outcome.slowed.max(outcome.sped);
+                let gained =
+                    u64::from(RATE) * FEW_PHASES_SECONDS * drift_ppm.unsigned_abs() / 1_000_000;
+                assert!(
+                    trimmed >= gained * 9 / 10,
+                    "{trimmed} of {gained} frames trimmed: {clocks:?}"
+                );
             }
         }
     }

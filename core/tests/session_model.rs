@@ -37,7 +37,7 @@ fn delays_ring_indices_and_lag_count_capture_rate_frames() {
     let delay = delay_ms_to_frames(1000.0, rc).unwrap();
     assert_eq!(delay, 44_100, "a delay is a count of Rc frames");
     let t = tolerance_frames(rc);
-    assert_eq!(t, 1544, "and so is the dead band");
+    assert_eq!(t, 2205, "and so is the dead band");
     // Every 10 ms: 441 frames captured at Rc, 480 frames played at 48 kHz.
     let captured = vec![0.25f32; 2 * 441];
     let mut wanted = vec![0.0f32; 2 * 4096];
