@@ -148,6 +148,14 @@ final class AppModel: ObservableObject {
         dropDelayDrafts()
         closeDelayPanels()
     }
+    /// The saved delay of the row with this ID (`DelayBadge`).
+    func savedDelay(of id: String) -> Double? {
+        DelayBadge.savedMs(of: id, airPlayID: AirPlayDelayRow.id, airPlayMs: airPlayDelayMs, rows: delayRows)
+    }
+    func savedDelayText(of id: String) -> String? {
+        DelayBadge.text(of: id, airPlayID: AirPlayDelayRow.id, airPlayMs: airPlayDelayMs, rows: delayRows, text: text)
+    }
+    private var delayRows: [(id: String, offsetMs: Double?)] { local.map { (id: $0.id, offsetMs: $0.offsetMs) } }
     /// Bumped every time the menu bar panel opens, so its rows start fresh
     /// (a row the pointer was over when the panel closed never got a hover exit).
     @Published var panelSession = 0
@@ -219,6 +227,10 @@ final class SyncDraft: ObservableObject {
     /// Bumped to have the panel's controls apply the typing now, the panel
     /// staying open (Command-S, a click on another row).
     @Published var applyRequests = 0
+    /// Bumped each time the panel applies a delay (typed or stepped): the
+    /// row's delay value tints on it, and not when its number changes for
+    /// another reason.
+    @Published var applied = 0
     /// A keystroke the field can't take, shown until the next run of the
     /// main loop (`SyncControls`).
     @Published var rejected: String?
