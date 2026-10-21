@@ -391,7 +391,7 @@ export global Strings {
             return @tr("{} plays only AirPlay 2, which AudioSync for Windows doesn't support yet, so it's off.", speaker);
         }
         if problem == AirPlayProblem.timing-unavailable {
-            return @tr("{} turned down AudioSync's timing, and PTP timing isn't available, so it's off. Another app may be using the PTP ports (319 and 320).", speaker);
+            return @tr("{} needs PTP timing, which isn't available, so it's off. Another app may be using ports 319 and 320.", speaker);
         }
         if problem == AirPlayProblem.one-airplay2-speaker {
             return @tr("AudioSync plays one AirPlay 2 speaker at a time, so {} waits. It starts once the other one stops.", speaker);

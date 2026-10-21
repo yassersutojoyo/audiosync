@@ -49,8 +49,9 @@ enum NativeSpeakerEvent: Equatable {
         case timingUnavailable = "timing unavailable"
         case oneAirPlay2 = "one AirPlay 2 speaker at a time"
 
-        /// The sender tries again by itself, so the speaker stays on (as in
-        /// the Windows app); any other problem turns it off.
+        /// The sender tries again by itself, so the speaker stays on; any
+        /// other problem turns it off, one waiting for the AirPlay 2 slot
+        /// too, which the Windows app keeps on.
         var retried: Bool {
             switch self {
             case .notResponding, .connectionLost, .busy, .refused: return true

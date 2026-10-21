@@ -458,10 +458,10 @@ fn keyboard_shortcuts_are_declared() {
 /// no speaker yet (alone, or with Google Cast's in one sentence), which
 /// shows only while it runs. The note and row state for a speaker waiting
 /// for the one AirPlay 2 slot show only behind the hidden AirPlay 2 switch.
-/// An empty Connected Speakers list otherwise says just that it's
-/// empty, or that its virtual outputs are hidden. Seven strings of the
-/// AudioSync Guide name AirPlay too, with the receivers the sender plays,
-/// the ones it can't yet, and the track info it sends.
+/// An empty Connected Speakers list otherwise says just that it's empty, or
+/// that its virtual outputs are hidden. Seven strings of the AudioSync Guide
+/// name AirPlay too, with the receivers the sender plays, the ones it can't
+/// yet, and the track info it sends.
 #[test]
 fn no_text_promises_airplay() {
     let strings = include_str!("../ui/strings.slint");

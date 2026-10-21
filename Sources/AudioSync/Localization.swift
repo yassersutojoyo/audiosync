@@ -350,8 +350,8 @@ struct UIStrings {
 
     /// The receiver turned NTP timing down, and PTP timing isn't available.
     func nativeAirPlayTimingUnavailable(name: String) -> String {
-        "\(name) turned down AudioSync's timing, and PTP timing isn't available, so it was turned off. "
-            + "Another app may be using the PTP ports (319 and 320)."
+        "\(name) needs PTP timing, which isn't available, so it's off. "
+            + "Another app may be using ports 319 and 320."
     }
 
     /// Another AirPlay 2 speaker plays, and only one can at a time.
