@@ -1360,8 +1360,8 @@ pub unsafe extern "C" fn asc_airplay_next_event(
 
 /// Adds the receiver discovery lists under `id` as a speaker, at slider
 /// position `volume` (0 to 100) times the master, held back by the
-/// hold-back set last ([`asc_airplay_set_hold_back`]): a session starts at once, and its state, errors and latency come as
-/// events. Its sessions use the password handed over for it
+/// hold-back set last ([`asc_airplay_set_hold_back`]): a session starts at
+/// once, and its state, errors and latency come as events. Its sessions use the password handed over for it
 /// ([`asc_airplay_set_password`]) and verify with the stored credentials,
 /// if any. Adding a speaker already added applies the volume, the password
 /// and the credentials and, if it failed or waits for a retry, starts a new

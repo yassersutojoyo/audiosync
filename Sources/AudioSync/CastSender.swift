@@ -123,7 +123,6 @@ final class CastSender {
         }
     }
 
-    /// Stores the user's offset for `id` and writes the memory.
     /// Holds the feed back by `ms`, live, so a device whose offset is
     /// shorter than L plays at L; a change fades over 20 ms. Main queue.
     /// False when it was set already.
@@ -139,6 +138,7 @@ final class CastSender {
         return true
     }
 
+    /// Stores the user's offset for `id` and writes the memory.
     func setOffset(_ id: String, ms: Double) {
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }
