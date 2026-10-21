@@ -41,6 +41,8 @@ export component HelpWindow inherits Window {
     in property <bool> show-how-shown;
     callback show-how-requested();
     callback close-requested();
+    // Ctrl+Q, File > Exit from this window.
+    callback exit-requested();
 
     title: Strings.help-title;
     icon: @image-url("../res/audiosync-256.png");
@@ -77,8 +79,12 @@ export component HelpWindow inherits Window {
 
     keys := FocusScope {
         key-pressed(event) => {
-            if event.text == Key.Escape {
+            if event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == "w") {
                 root.close-requested();
+                return accept;
+            }
+            if event.modifiers.control && event.text.to-lowercase() == "q" {
+                root.exit-requested();
                 return accept;
             }
             if event.text == Key.DownArrow {
