@@ -153,12 +153,8 @@ impl TimeAnnounce {
         bytes[2..4].copy_from_slice(&self.seq.to_be_bytes());
         bytes[4..8].copy_from_slice(&self.rtp_heard.to_be_bytes());
         bytes[8..16].copy_from_slice(&self.nanos.to_be_bytes());
-        bytes[16..20].copy_from_slice(
-            &self
-                .next_rtp
-                .wrapping_sub(TIME_ANNOUNCE_LEAD)
-                .to_be_bytes(),
-        );
+        bytes[16..20]
+            .copy_from_slice(&self.next_rtp.wrapping_sub(TIME_ANNOUNCE_LEAD).to_be_bytes());
         bytes[20..28].copy_from_slice(&self.clock_identity);
         bytes
     }

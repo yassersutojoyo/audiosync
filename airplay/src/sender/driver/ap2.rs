@@ -69,8 +69,7 @@ impl Driver {
         // The PTP ports are bound only for a receiver that may take PTP:
         // one that took it before or sets features bit 41 (P157, P158).
         let ptp_family = self.speakers.get(key).and_then(|speaker| {
-            let wants = self.ptp_timing.contains(key)
-                || speaker.device.features().has(FEATURE_PTP);
+            let wants = self.ptp_timing.contains(key) || speaker.device.features().has(FEATURE_PTP);
             let first = speaker.device.airplay_socket_addrs().first().copied();
             first.filter(|_| wants).map(|address| address.ip())
         });
@@ -264,8 +263,7 @@ impl Driver {
         let Phase::Ap2(active) = &mut speaker.phase else {
             return;
         };
-        let (Some(remote), Some(ports)) = (active.session.remote(), active.session.stream())
-        else {
+        let (Some(remote), Some(ports)) = (active.session.remote(), active.session.stream()) else {
             return;
         };
         let ids = active.session.ids();

@@ -26,11 +26,11 @@ use crate::session::{
 };
 use crate::volume::Volume;
 
+use super::audio::StreamKey;
 use super::bodies::{
     self, InfoAnswer, PEERS_CONTENT_TYPE, PLIST_CONTENT_TYPE, PROTOCOL_VERSION_HEADER, PtpPeer,
     STREAM_KEY_BYTES, SessionSetupBody, Timing,
 };
-use super::audio::StreamKey;
 use super::framing::Framing;
 
 /// How often `POST /feedback` goes out (P132).
