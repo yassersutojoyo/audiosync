@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use audiosync_core::reader::Reader;
-use audiosync_core::render::{Renderer, RendererControl};
+use audiosync_core::render::{RESTART_INCREASE_MS, Renderer, RendererControl};
 use audiosync_core::ring::{MIN_MARGIN_FRAMES, Ring};
 use audiosync_core::volume::SharedGain;
 
@@ -39,7 +39,8 @@ fn frames(ms: u64) -> i64 {
 #[derive(Clone, Copy, Debug)]
 struct Change {
     at_ns: u64,
-    delay_ms: u64,
+    /// The new hold-back, in capture frames.
+    delay: i64,
 }
 
 /// Where the output sounded: for every callback, its read time after the
@@ -70,14 +71,9 @@ impl Run {
 }
 
 /// Runs a capture from time 0 and an output that starts at `attach_ns` at
-/// `delay_ms`, on a device at `device_rate`, for `seconds`, with `changes`.
-fn simulate(
-    device_rate: u32,
-    attach_ns: u64,
-    delay_ms: u64,
-    changes: &[Change],
-    seconds: u64,
-) -> Run {
+/// a hold-back of `delay` capture frames, on a device at `device_rate`, for
+/// `seconds`, with `changes`.
+fn simulate(device_rate: u32, attach_ns: u64, delay: i64, changes: &[Change], seconds: u64) -> Run {
     let ring = Ring::new(192_000 * 24, MIN_MARGIN_FRAMES).unwrap();
     let mut writer = ring.writer().unwrap();
     let samples = vec![0.5f32; BLOCK * 2];
@@ -107,13 +103,13 @@ fn simulate(
         let (renderer, control) = output.get_or_insert_with(|| {
             let reader = Reader::new(Arc::clone(&ring), RATE);
             let control = RendererControl::new(&reader);
-            control.set_delay_frames(frames(delay_ms));
+            control.set_delay_frames(delay);
             let gain = Arc::new(SharedGain::new(1.0));
             let renderer = Renderer::new(reader, &control, gain, RATE, device_rate, 2).unwrap();
             (renderer, control)
         });
         while let Some(change) = pending.first().copied().filter(|c| c.at_ns <= pull_at) {
-            control.set_delay_frames(frames(change.delay_ms));
+            control.set_delay_frames(change.delay);
             pending.remove(0);
         }
         let now = START_NS + pull_at;
@@ -173,13 +169,13 @@ fn an_output_started_at_20_s_sounds_20_s_after_the_capture_and_plays_on() {
     for device_rate in DEVICE_RATES {
         for attach_s in [0, 5] {
             let what = format!("{device_rate} Hz, started {attach_s} s into the session");
-            let run = simulate(device_rate, attach_s * SECOND_NS, 20_000, &[], 30);
+            let run = simulate(device_rate, attach_s * SECOND_NS, frames(20_000), &[], 30);
             let first = assert_sounds_by(&run, 0, 20 * SECOND_NS, &what);
             assert_plays_on(&run, first + SLACK_NS, 30 * SECOND_NS, &what);
             assert_lag(&run, 20_000, &what);
         }
         let what = format!("{device_rate} Hz, started 25 s into the session");
-        let run = simulate(device_rate, 25 * SECOND_NS, 20_000, &[], 35);
+        let run = simulate(device_rate, 25 * SECOND_NS, frames(20_000), &[], 35);
         let first = assert_sounds_by(&run, 0, 25 * SECOND_NS, &what);
         assert_plays_on(&run, first + SLACK_NS, 35 * SECOND_NS, &what);
         assert_lag(&run, 20_000, &what);
@@ -193,9 +189,9 @@ fn a_change_from_0_to_20_s_sounds_at_once_at_the_new_delay() {
         let what = format!("{device_rate} Hz, 0 to 20 s at 25 s");
         let change = Change {
             at_ns: 25 * SECOND_NS,
-            delay_ms: 20_000,
+            delay: frames(20_000),
         };
-        let run = simulate(device_rate, 0, 0, &[change], 40);
+        let run = simulate(device_rate, 0, frames(0), &[change], 40);
         let first = assert_sounds_by(&run, 0, 0, &what);
         assert_plays_on(&run, first + SLACK_NS, 25 * SECOND_NS, &what);
         let again = assert_sounds_by(&run, 25 * SECOND_NS + 50_000_000, 25 * SECOND_NS, &what);
@@ -206,19 +202,43 @@ fn a_change_from_0_to_20_s_sounds_at_once_at_the_new_delay() {
 
 // covers: S187, S159
 #[test]
-fn a_change_from_2_to_15_s_sounds_at_once_at_the_new_delay() {
+fn a_change_from_2_to_15_or_20_s_sounds_at_once_at_the_new_delay() {
     for device_rate in DEVICE_RATES {
-        let what = format!("{device_rate} Hz, 2 to 15 s at 25 s");
-        let change = Change {
-            at_ns: 25 * SECOND_NS,
-            delay_ms: 15_000,
-        };
-        let run = simulate(device_rate, 0, 2_000, &[change], 40);
-        let first = assert_sounds_by(&run, 0, 2 * SECOND_NS, &what);
-        assert_plays_on(&run, first + SLACK_NS, 25 * SECOND_NS, &what);
-        let again = assert_sounds_by(&run, 25 * SECOND_NS + 50_000_000, 25 * SECOND_NS, &what);
-        assert_plays_on(&run, again + SLACK_NS, 40 * SECOND_NS, &what);
-        assert_lag(&run, 15_000, &what);
+        for to_ms in [15_000, 20_000] {
+            let what = format!("{device_rate} Hz, 2 to {to_ms} ms at 25 s");
+            let change = Change {
+                at_ns: 25 * SECOND_NS,
+                delay: frames(to_ms),
+            };
+            let run = simulate(device_rate, 0, frames(2_000), &[change], 40);
+            let first = assert_sounds_by(&run, 0, 2 * SECOND_NS, &what);
+            assert_plays_on(&run, first + SLACK_NS, 25 * SECOND_NS, &what);
+            let again = assert_sounds_by(&run, 25 * SECOND_NS + 50_000_000, 25 * SECOND_NS, &what);
+            assert_plays_on(&run, again + SLACK_NS, 40 * SECOND_NS, &what);
+            assert_lag(&run, to_ms, &what);
+        }
+    }
+}
+
+// covers: S47, S187, S159
+#[test]
+fn an_increase_of_exactly_5_s_inserts_its_silence_and_one_frame_more_restarts() {
+    // From a hold-back of 1 s, above the start lead, the session lead adds
+    // nothing, so the reader's delay grows by exactly the hold-back's change.
+    let restart = frames(u64::from(RESTART_INCREASE_MS));
+    for device_rate in DEVICE_RATES {
+        for (extra, restarts) in [(0, false), (1, true)] {
+            let what = format!("{device_rate} Hz, 1 s up by 5 s and {extra} frames at 25 s");
+            let change = Change {
+                at_ns: 25 * SECOND_NS,
+                delay: frames(1_000) + restart + extra,
+            };
+            let run = simulate(device_rate, 0, frames(1_000), &[change], 40);
+            let expected = if restarts { 25 } else { 30 } * SECOND_NS;
+            let again = assert_sounds_by(&run, 25 * SECOND_NS + 50_000_000, expected, &what);
+            assert_plays_on(&run, again + SLACK_NS, 40 * SECOND_NS, &what);
+            assert_lag(&run, 6_000, &what);
+        }
     }
 }
 
@@ -229,9 +249,9 @@ fn a_change_to_20_s_before_20_s_were_captured_sounds_once_they_were() {
         let what = format!("{device_rate} Hz, 0 to 20 s at 10 s");
         let change = Change {
             at_ns: 10 * SECOND_NS,
-            delay_ms: 20_000,
+            delay: frames(20_000),
         };
-        let run = simulate(device_rate, 0, 0, &[change], 35);
+        let run = simulate(device_rate, 0, frames(0), &[change], 35);
         let again = assert_sounds_by(&run, 10 * SECOND_NS + 50_000_000, 20 * SECOND_NS, &what);
         assert_plays_on(&run, again + SLACK_NS, 35 * SECOND_NS, &what);
         assert_lag(&run, 20_000, &what);
@@ -245,9 +265,9 @@ fn an_increase_of_2_s_still_inserts_its_silence() {
         let what = format!("{device_rate} Hz, 0 to 2 s at 25 s");
         let change = Change {
             at_ns: 25 * SECOND_NS,
-            delay_ms: 2_000,
+            delay: frames(2_000),
         };
-        let run = simulate(device_rate, 0, 0, &[change], 35);
+        let run = simulate(device_rate, 0, frames(0), &[change], 35);
         let again = assert_sounds_by(&run, 25 * SECOND_NS + 50_000_000, 27 * SECOND_NS, &what);
         assert_plays_on(&run, again + SLACK_NS, 35 * SECOND_NS, &what);
         assert_lag(&run, 2_000, &what);
@@ -261,9 +281,9 @@ fn a_change_from_20_s_to_10_s_lands_and_plays_on() {
         let what = format!("{device_rate} Hz, 20 s to 10 s at 30 s");
         let change = Change {
             at_ns: 30 * SECOND_NS,
-            delay_ms: 10_000,
+            delay: frames(10_000),
         };
-        let run = simulate(device_rate, 0, 20_000, &[change], 45);
+        let run = simulate(device_rate, 0, frames(20_000), &[change], 45);
         let first = assert_sounds_by(&run, 0, 20 * SECOND_NS, &what);
         assert_plays_on(&run, first + SLACK_NS, 30 * SECOND_NS, &what);
         let again = assert_sounds_by(&run, 30 * SECOND_NS, 30 * SECOND_NS, &what);
