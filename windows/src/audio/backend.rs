@@ -727,6 +727,13 @@ pub trait AudioBackend {
     /// (spec C77). A value that isn't finite is ignored.
     fn set_cast_offset(&mut self, _id: &str, _offset_ms: f64) {}
 
+    /// How far ahead of the Cast speaker that is on the AirPlay speakers
+    /// play, in ms, because their delay can't grow past the sender's limit
+    /// (spec C77, P99); 0 while they keep up.
+    fn airplay_ahead_ms(&self) -> f64 {
+        0.0
+    }
+
     /// The user's Resync: the playing Cast speaker loads the stream again,
     /// back at its starting latency, after a short gap (spec C79).
     fn resync_cast(&mut self, _id: &str) {}

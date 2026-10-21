@@ -1296,6 +1296,18 @@ impl AirPlaySpeakers {
         }
     }
 
+    /// How far ahead of the hold-back the speaker that falls furthest short
+    /// plays, in ms, because the sender caps d_s (P99); 0 while none does.
+    pub fn ahead_ms(&self) -> f64 {
+        self.added
+            .keys()
+            .map(|id| {
+                self.settings(id).delay_ms + self.hold_back_ms
+                    - self.sent_delay(id).as_secs_f64() * 1000.0
+            })
+            .fold(0.0, f64::max)
+    }
+
     /// d_s plus the hold-back, as the sender plays it.
     fn sent_delay(&self, id: &str) -> Duration {
         speaker_delay(self.settings(id).delay_ms + self.hold_back_ms)

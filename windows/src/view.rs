@@ -2852,6 +2852,10 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::CastCantPlay { speaker, problem } => {
             strings.invoke_notice_cast(cast_problem(*problem), speaker.as_str().into())
         }
+        NoticeMessage::AirPlayAheadOfCast { speaker, tenths } => {
+            let seconds = format!("{}.{}", tenths / 10, tenths % 10);
+            strings.invoke_notice_airplay_ahead(seconds.into(), speaker.as_str().into())
+        }
         NoticeMessage::AirPlayStopped => strings.get_notice_airplay_stopped(),
         NoticeMessage::SettingsNotSaved => strings.get_notice_settings_not_saved(),
         NoticeMessage::PairingsNotSaved => strings.get_notice_pairings_not_saved(),
@@ -2914,6 +2918,9 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
             (NoticeKind::AirplayCantPlay, speaker.as_str())
         }
         NoticeMessage::CastCantPlay { speaker, .. } => (NoticeKind::CastCantPlay, speaker.as_str()),
+        NoticeMessage::AirPlayAheadOfCast { speaker, .. } => {
+            (NoticeKind::AirplayAheadOfCast, speaker.as_str())
+        }
         NoticeMessage::AirPlayStopped => (NoticeKind::AirplayStopped, ""),
         NoticeMessage::SettingsNotSaved => (NoticeKind::SettingsNotSaved, ""),
         NoticeMessage::PairingsNotSaved => (NoticeKind::PairingsNotSaved, ""),
@@ -4123,6 +4130,19 @@ mod tests {
         };
         assert!(notice_text(&strings, &busy).starts_with("Only one Google Cast speaker"));
         assert_eq!(notice_title(&strings, &busy).as_str(), "Kitchen can't play");
+        let ahead = NoticeMessage::AirPlayAheadOfCast {
+            speaker: "Kitchen".to_owned(),
+            tenths: 15,
+        };
+        assert_eq!(
+            notice_text(&strings, &ahead).as_str(),
+            "AirPlay speakers can wait at most 3 s longer, so they play about 1.5 s ahead of \
+             Kitchen. Lower the Cast delay to keep them together."
+        );
+        assert_eq!(
+            notice_title(&strings, &ahead).as_str(),
+            "AirPlay ahead of Kitchen"
+        );
 
         speaker.cast = None;
         assert!(!speaker_item(&state, &speaker, true, false, None).cast);

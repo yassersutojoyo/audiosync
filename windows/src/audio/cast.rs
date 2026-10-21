@@ -65,6 +65,9 @@ const HANDOFF: usize = 8;
 /// The longest hold-back of the Cast feed, in frames: the ceiling of L.
 const MAX_HOLD_BACK_FRAMES: usize = MAX_HOLD_BACK_MS as usize * SESSION_RATE as usize / 1000;
 
+/// The smallest page size Windows maps memory in.
+const PAGE_BYTES: usize = 4096;
+
 /// Interleaved stereo frames held back by a delay that may change while it
 /// runs: a change fades out, moves the read point and fades in, so it
 /// never clicks.
@@ -81,8 +84,17 @@ struct DelayLine {
 impl DelayLine {
     /// Allocates; on the UI thread only.
     fn new(max_frames: usize) -> DelayLine {
+        let mut buffer = vec![0.0_f32; (max_frames + 1) * 2].into_boxed_slice();
+        // Zeroed memory is mapped on first touch: touch each page here so the
+        // capture thread never takes the page fault.
+        let last = buffer.len() - 1;
+        let stride = PAGE_BYTES / size_of::<f32>();
+        for index in (0..last).step_by(stride).chain([last]) {
+            // SAFETY: `index` is in bounds, so the pointer is valid and aligned.
+            unsafe { std::ptr::write_volatile(&raw mut buffer[index], 0.0) };
+        }
         DelayLine {
-            buffer: vec![0.0; (max_frames + 1) * 2].into_boxed_slice(),
+            buffer,
             write: 0,
             delay: None,
             fade: Fade::opened(SESSION_RATE),

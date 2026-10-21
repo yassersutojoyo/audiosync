@@ -2180,6 +2180,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn airplay_ahead_ms(&self) -> f64 {
+        self.airplay.as_ref().map_or(0.0, AirPlaySpeakers::ahead_ms)
+    }
+
     fn resync_cast(&mut self, id: &str) {
         if let Some(cast) = self.cast.as_mut() {
             cast.resync(id);

@@ -70,6 +70,7 @@ use audiosync_core::policy::session::{
 };
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::speakers::{NoticeSubject, Notices, SpeakerKey, renamed_group};
+use audiosync_core::reader::DRIFT_TOLERANCE_MS;
 
 use crate::audio::backend::{
     AirPlayAvailability, AirPlayInfo, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
@@ -264,6 +265,11 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The notice that Windows has no active output was posted for the
     /// current spell without one ([`AudioAdapter::check_sound_output`]).
     no_output_noticed: bool,
+    /// The Google Cast speaker whose notice says the AirPlay speakers play
+    /// ahead of it, and by how many tenths of a second
+    /// ([`AudioAdapter::check_airplay_ahead`]); a dismissed one comes back
+    /// only when that changes.
+    ahead_noticed: Option<(String, u32)>,
     /// The outputs waiting for a device another app holds
     /// ([`BackendEvent::OutputBusy`]), by endpoint ID: their rows say so
     /// rather than show them playing.
@@ -345,6 +351,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             settings_unsaved: false,
             outputs_known: false,
             no_output_noticed: false,
+            ahead_noticed: None,
             busy: BTreeSet::new(),
             reconnecting: BTreeSet::new(),
             view: ViewSettings::default(),
@@ -927,6 +934,41 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.airplay_listed();
         self.refresh_sources();
         self.check_sound_output();
+    }
+
+    /// Posts the notice that the AirPlay speakers play ahead of the Google
+    /// Cast speaker that is on, while the sender's delay limit keeps them
+    /// from waiting for it (C77, P99), and clears it once they keep up.
+    /// Returns whether the notices changed.
+    fn check_airplay_ahead(&mut self) -> bool {
+        let ahead_ms = self.audio.airplay_ahead_ms();
+        let cast = self
+            .audio
+            .cast_speakers()
+            .into_iter()
+            .find(|speaker| speaker.enabled)
+            .filter(|_| ahead_ms >= f64::from(DRIFT_TOLERANCE_MS));
+        let tenths = ((ahead_ms / 100.0).round() as u32).max(1);
+        let now = cast.as_ref().map(|cast| (cast.id.clone(), tenths));
+        if now == self.ahead_noticed {
+            return false;
+        }
+        if let Some((noticed, _)) = self.ahead_noticed.take() {
+            self.clear_if(NoticeSubject::Cast(noticed), |message| {
+                matches!(message, NoticeMessage::AirPlayAheadOfCast { .. })
+            });
+        }
+        if let Some(cast) = cast {
+            self.post(
+                NoticeSubject::Cast(cast.id),
+                NoticeMessage::AirPlayAheadOfCast {
+                    speaker: cast.name,
+                    tenths,
+                },
+            );
+        }
+        self.ahead_noticed = now;
+        true
     }
 
     /// Posts the notice that Windows has no active sound output while none
@@ -2366,6 +2408,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     fn poll(&mut self) -> bool {
         let mut changed = self.take_events();
         changed |= self.check_sound_output();
+        changed |= self.check_airplay_ahead();
         self.polls += 1;
         if self.polls >= SOURCE_POLLS {
             self.polls = 0;
@@ -5773,6 +5816,35 @@ mod tests {
         fake.announce(CAST_KITCHEN, "Kitchen", DEVICE_PORT);
         assert!(adapter.poll());
         assert_eq!(adapter.snapshot().cast_list, CastList::Quiet);
+    }
+
+    #[test]
+    fn airplay_speakers_at_the_sender_delay_limit_say_they_play_ahead_of_the_cast_speaker() {
+        let (mut adapter, _airplay, kitchen, _) = airplay_adapter();
+        let cast = FakeCast::default();
+        cast.announce(CAST_LIVING, "Living Room", DEVICE_PORT);
+        adapter.audio.set_cast(cast.link());
+        adapter.poll();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
+        adapter.set_speaker_delay(&cc(CAST_LIVING), 3000.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "1.25 s more is within reach");
+        // L is 1.75 s: 6.25 s asks 4.5 s of the AirPlay speakers, 3 s at most.
+        adapter.set_speaker_delay(&cc(CAST_LIVING), 6250.0);
+        adapter.poll();
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayAheadOfCast {
+                speaker: "Living Room".to_owned(),
+                tenths: 15,
+            }]
+        );
+        adapter.poll();
+        assert_eq!(messages(&adapter).len(), 1, "posted once");
+        adapter.set_speaker_delay(&cc(CAST_LIVING), 4000.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "cleared once they keep up");
     }
 
     #[test]
