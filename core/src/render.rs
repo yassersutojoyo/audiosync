@@ -125,7 +125,7 @@ pub const CALLBACK_WINDOW: usize = 8;
 /// The most of the capture's block a converting renderer's lead counts, in
 /// ms (S206): more than the capture's blocks (10 ms packets on Windows, 512
 /// or 1024 frames on the Mac), about the first silence a Windows loopback
-/// gap writes, and well inside the readers' 35 ms dead band, so silence
+/// gap writes, and well inside the readers' 50 ms dead band, so silence
 /// written at once after a stall never raises the lead by more than that.
 pub const LEAD_BLOCK_CAP_MS: u32 = 25;
 
