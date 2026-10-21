@@ -1317,16 +1317,18 @@ impl Renderer {
 
     /// Lets `frames` capture frames by which the output already plays later,
     /// a dry read's silence or a slow-down kept for a shortage, pay toward
-    /// what the anchor floor still has to fall to the floor (S209), so the
-    /// trim doesn't move the output later by as much again. Returns the
-    /// frames paid.
+    /// what the anchor floor still has to fall, to the floor or this
+    /// callback's value when that is lower (S209), so the trim doesn't move
+    /// the output later by as much again. Returns the frames paid.
     fn pay_anchor_fall(&mut self, frames: u64) -> u64 {
         let rate = u64::from(self.capture_rate.max(1));
-        let floor = self.late_floor();
-        let (Some(floor), Some(anchor)) = (floor, self.anchor_floor.as_mut()) else {
+        let low = self
+            .late_floor()
+            .map(|floor| floor.min(self.callback_late_ns));
+        let (Some(low), Some(anchor)) = (low, self.anchor_floor.as_mut()) else {
             return 0;
         };
-        let owed_ns = u64::try_from(anchor.saturating_sub(floor)).unwrap_or(0);
+        let owed_ns = u64::try_from(anchor.saturating_sub(low)).unwrap_or(0);
         let paid_ns = (frames.saturating_mul(1_000_000_000) / rate).min(owed_ns);
         *anchor = anchor.saturating_sub(i64::try_from(paid_ns).unwrap_or(i64::MAX));
         (paid_ns.saturating_mul(rate) / 1_000_000_000).min(frames)

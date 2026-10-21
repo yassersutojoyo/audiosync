@@ -16,7 +16,8 @@
 //! Invariants, from 2 s on unless said otherwise:
 //! - I1: no read runs dry.
 //! - I2: no drift skip or silence at any time, the start included.
-//! - I3: S206's slow-down makes up no shortage.
+//! - I3: S206's slow-down makes up no shortage. A late-first output's I1
+//!   and I3 count from 1 s after its callbacks came on time.
 //! - I4: over the last quarter, any two outputs' mean delays, less their
 //!   latencies and hold-backs, lie within a capture block plus 2 ms.
 //! - I5: over the last quarter, each output's delay stays within 2 ms.
@@ -30,9 +31,9 @@
 //!   and then plays on later gets at most one correction for it, runs dry
 //!   none, and every output it doesn't stall gets none.
 //!
-//! In the late-first stratum the first output's callbacks come late for
-//! its first 0.6 to 1.8 s, so its floor forms on late callbacks, and then
-//! on time.
+//! In the late-first stratum the first output's callbacks come 15.4 or
+//! 45 ms late for its first 0.6 to 1.8 s, so its prime and its floor take
+//! them as on time, and then on time.
 //!
 //! A Bluetooth output adds a capture block to its start lead (S230); the
 //! random mixes have none yet, see [`device`].
@@ -72,6 +73,10 @@ const FIRST_LATE_BT_MS: f64 = 15.4;
 /// Late-first stratum: as late as a callback gets and still stays under
 /// LATE_CAP_MS and the dead band with a burst's margin.
 const FIRST_LATE_LARGE_MS: f64 = 45.0;
+/// Late-first: s after the callbacks came on time by which the reader's
+/// start is over, a dry read and S206's slow-downs as they come on time
+/// included.
+const CAUGHT_UP: f64 = 1.0;
 /// Late-first: s after the callbacks came on time by which the anchor floor
 /// has fallen (ten ANCHOR_FALL_MS) and the trim, at up to about 3.9 ms a
 /// second, has carried the output the 45 ms.
@@ -558,6 +563,8 @@ struct Output {
     written: u64,
     played_shift: f64,
     tail: Tail,
+    /// I1 and I3 count from this time on, and its counters then.
+    settled_at: f64,
     settled: Option<(ReaderCounters, u64)>,
     /// Late-first: the lowest Jf in ms, and Jf 2 s after the callbacks
     /// came on time.
@@ -722,6 +729,10 @@ fn simulate(case: &Case) -> Outcome {
                 mac,
                 played_shift: 0.0,
                 tail: Tail::default(),
+                // A late start ends once its callbacks have come on time.
+                settled_at: d
+                    .first_late
+                    .map_or(SETTLED, |(_, until)| SETTLED.max(until + CAUGHT_UP)),
                 settled: None,
                 least_shift_ms: 0.0,
                 shift_after_ms: None,
@@ -767,10 +778,11 @@ fn simulate(case: &Case) -> Outcome {
         if now > case.seconds {
             break;
         }
-        if now >= SETTLED {
-            for o in outputs.iter_mut().filter(|o| o.settled.is_none()) {
-                o.settled = Some((o.control.counters(), o.control.shortage_frames()));
-            }
+        for o in outputs
+            .iter_mut()
+            .filter(|o| o.settled.is_none() && now >= o.settled_at)
+        {
+            o.settled = Some((o.control.counters(), o.control.shortage_frames()));
         }
         if stall_at <= now {
             stall_marks.push(
