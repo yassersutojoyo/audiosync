@@ -43,6 +43,8 @@ password digests; `getrandom` with `cfg-if` for random identifiers; for Apple
 TV pairing, RustCrypto's `sha1`, `sha2`, `aes`, `aes-gcm`, `ctr` and
 `crypto-bigint` with `aead`, `cipher`, `ghash`, `polyval`, `universal-hash`,
 `inout`, `cpufeatures`, `cpubits`, `cmov`, `ctutils` and `rand_core`;
+for HomeKit pairing, RustCrypto's `chacha20poly1305` and `hkdf` with
+`chacha20`, `poly1305` and `hmac`;
 `ed25519-dalek`, `x25519-dalek` and `curve25519-dalek` (BSD-3-Clause) with
 `ed25519`, `signature` and `subtle` (BSD-3-Clause); `zeroize`; and `plist`
 (MIT) for the pairing's property lists, with `quick-xml` (MIT), `time`,
@@ -97,8 +99,9 @@ digests, and `getrandom` with `cfg-if` for random session identifiers.
 For Apple TV pairing the sender also brings in RustCrypto's `sha1`, `sha2`,
 `aes`, `aes-gcm`, `ctr` and `crypto-bigint` with the crates they build on
 (`aead`, `cipher`, `ghash`, `polyval`, `universal-hash`, `inout`,
-`cpufeatures`, `cpubits`, `cmov`, `ctutils`, `rand_core`), all MIT OR
-Apache-2.0; `ed25519-dalek`, `x25519-dalek` and `curve25519-dalek`
+`cpufeatures`, `cpubits`, `cmov`, `ctutils`, `rand_core`), and for HomeKit
+pairing RustCrypto's `chacha20poly1305` and `hkdf` with `chacha20`,
+`poly1305` and `hmac`, all MIT OR Apache-2.0; `ed25519-dalek`, `x25519-dalek` and `curve25519-dalek`
 (BSD-3-Clause) with `ed25519` and `signature` (Apache-2.0 OR MIT) and
 `subtle` (BSD-3-Clause); `zeroize` (Apache-2.0 OR MIT); and `plist` (MIT) for
 the pairing's property lists, with `quick-xml` (MIT) and `time`,
