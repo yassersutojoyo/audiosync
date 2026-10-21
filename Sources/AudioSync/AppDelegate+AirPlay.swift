@@ -17,6 +17,7 @@ extension AppDelegate {
         guard !macAsleep else { return }
         localNetworkProbe.recheckIfDenied()
         reconcileNativeAirPlay()
+        reconcileCast()
     }
 
     // MARK: - PIN or password prompt

@@ -34,16 +34,17 @@ struct EngineParts {
     }
 
     /// Control thread, while capture is stopped (each tap build): the
-    /// capture rate the equalizer and AudioSync's own AirPlay sender (when
-    /// it runs) convert from.
+    /// capture rate the equalizer and AudioSync's own AirPlay and Cast
+    /// senders (when they run) convert from.
     func prepare(captureRate: Double) {
         equalizer.setSampleRate(captureRate)
         NativeAirPlayTap.prepare(captureRate: captureRate)
+        CastTap.prepare(captureRate: captureRate)
     }
 
     /// Capture thread: one captured block, equalized once in place, then into
-    /// the ring and AudioSync's own AirPlay sender when it runs
-    /// (`NativeAirPlayTap`), the same samples for both (S7). During a
+    /// the ring and AudioSync's own AirPlay and Cast senders when they
+    /// run (`NativeAirPlayTap`, `CastTap`), the same samples for all (S7). During a
     /// microphone calibration (`CalibrationTap`) the music fades to silence
     /// for both and the test signal goes into the ring only. Real-time safe.
     @inline(__always)
@@ -52,12 +53,14 @@ struct EngineParts {
         if CalibrationTap.isActive {
             CalibrationTap.fadeMusic(block, frames: frames)
             NativeAirPlayTap.write(block, frames: frames)
+            CastTap.write(block, frames: frames)
             CalibrationTap.addSignal(block, frames: frames)
             ring.write(interleaved: block, frames: frames)
             return
         }
         ring.write(interleaved: block, frames: frames)
         NativeAirPlayTap.write(block, frames: frames)
+        CastTap.write(block, frames: frames)
     }
 
     /// A local output reading this session's ring, captured at `captureRate`

@@ -74,6 +74,11 @@ extension AppDelegate {
         a.calibrate = { [weak self] uid in self?.startCalibration(uid) }
         a.cancelCalibration = { [weak self] in self?.cancelCalibration() }
         a.setAirPlayDelay = { [weak self] ms in self?.setAirPlayDelay(ms) }
+        a.setCastEnabled = { [weak self] id, on in self?.setCastEnabled(id, on) }
+        a.setCastVolume = { [weak self] id, position in self?.setCastVolume(id, position) }
+        a.setCastMuted = { [weak self] id, muted in self?.setCastMuted(id, muted) }
+        a.resyncCast = { [weak self] id in self?.resyncCast(id) }
+        a.setCastOffset = { [weak self] id, ms in self?.setCastOffset(id, ms) }
         a.openMainWindow = { [weak self] in self?.showMainWindow() }
         a.openGuide = { [weak self] in self?.openGuideWindow() }
         a.openEqualizer = { [weak self] in self?.openEqualizerWindow() }
@@ -204,7 +209,9 @@ extension AppDelegate {
         publish(\.master, masterVolume)
         publish(\.airplay, airplaySnapshot())
         publish(\.local, localSnapshot())
-        appModel.speakersListed(Set(appModel.airplay.map(\.id) + appModel.local.map(\.id)))
+        publish(\.cast, castSnapshot())
+        publish(\.castList, castModel.listState(now: Date()))
+        appModel.speakersListed(Set(appModel.airplay.map(\.id) + appModel.local.map(\.id) + appModel.cast.map(\.id)))
         publish(\.hasLocalReference, localReference != nil)
         publish(\.airPlayDelayMs, airPlayLatencyMs.rounded())
         // When the sender stopped after an internal error, the AirPlay

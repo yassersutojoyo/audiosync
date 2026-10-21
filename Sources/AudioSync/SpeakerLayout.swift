@@ -5,7 +5,8 @@ import CoreAudio
 enum SpeakerTag: Equatable {
     /// `airplay`: a speaker AudioSync streams to through its engine.
     /// `systemAirPlay`: macOS's own AirPlay output device, a different path.
-    case airplay, systemAirPlay, builtIn, bluetooth, usb, hdmi, displayPort, thunderbolt
+    /// `cast`: a Google Cast speaker, through the core's Cast sender.
+    case airplay, systemAirPlay, cast, builtIn, bluetooth, usb, hdmi, displayPort, thunderbolt
     case firewire, pci, avb, virtual, aggregate, other
 
     /// From a Core Audio device's `kAudioDevicePropertyTransportType`.
@@ -38,6 +39,7 @@ enum SpeakerTag: Equatable {
     var typeSymbol: String {
         switch self {
         case .airplay, .systemAirPlay: return "airplay.audio"
+        case .cast: return "dot.radiowaves.right"
         case .bluetooth: return "wave.3.right"
         case .usb: return "cable.connector"
         case .thunderbolt, .firewire: return "cable.connector.horizontal"

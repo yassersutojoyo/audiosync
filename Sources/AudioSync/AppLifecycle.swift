@@ -144,8 +144,9 @@ final class SignalQuit: @unchecked Sendable {
     }
 
     /// How long a signal waits for the quit steps at most: the fades' cap of
-    /// 500 ms (S186) plus about 2 s for the AirPlay sender's teardown, with room.
-    static let limit: TimeInterval = 3
+    /// 500 ms (S186) plus about 2 s for the AirPlay sender's teardown, and the
+    /// Cast sender's teardown of about 3.5 s running beside them, with room.
+    static let limit: TimeInterval = 4
 
     private let queue: DispatchQueue
     private let limit: TimeInterval

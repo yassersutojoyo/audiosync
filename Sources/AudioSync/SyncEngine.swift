@@ -148,6 +148,7 @@ final class StreamEngine {
         DebugTrace.log("[AudioSync] session stopping: \(leaving.count) output(s) and the AirPlay inputs fade out")
         retirement.stopSession(leaving.map { $0.renderer }, fadeInputs: {
             NativeAirPlayTap.requestFadeOut()
+            CastTap.requestFadeOut()
         }, inputsFaded: inputs.faded, inputsFallbackNs: inputs.fallbackNs, stopCapture: {
             capture.halt()
         }, then: {

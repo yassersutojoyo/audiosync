@@ -24,9 +24,13 @@ final class AppModel: ObservableObject {
         /// The name macOS or AirPlay discovery reports; `name` is the user's
         /// when they renamed the speaker (`SpeakerNames`).
         var systemName = ""
+        /// A Google Cast speaker's session and its device's own volume state;
+        /// nil for every other speaker.
+        var cast: CastRow? = nil
 
         /// A speaker AudioSync streams to through AirPlay, not a local output.
         var isAirPlay: Bool { tag == .airplay }
+        var isCast: Bool { tag == .cast }
         /// Stable key across both kinds, used by groups and auto-connect.
         var key: String { SpeakerKey.make(id: id, airplay: isAirPlay) }
         var isRenamed: Bool { !systemName.isEmpty && name != systemName }
@@ -58,6 +62,13 @@ final class AppModel: ObservableObject {
         var setLocalVolume: (String, Double) -> Void = { _, _ in }
         var setLocalOffset: (String, Double) -> Void = { _, _ in }
         var setAirPlayDelay: (Double) -> Void = { _ in }
+        var setCastEnabled: (String, Bool) -> Void = { _, _ in }
+        /// The device's own volume, slider position 0 to 100.
+        var setCastVolume: (String, Double) -> Void = { _, _ in }
+        var setCastMuted: (String, Bool) -> Void = { _, _ in }
+        var resyncCast: (String) -> Void = { _ in }
+        /// The offset the user set by ear, 0 to 20 000 ms.
+        var setCastOffset: (String, Double) -> Void = { _, _ in }
         var openMainWindow: () -> Void = {}
         var openGuide: () -> Void = {}
         var refreshDevices: () -> Void = {}
@@ -97,6 +108,10 @@ final class AppModel: ObservableObject {
     @Published var master: Double = 100
     @Published var airplay: [Speaker] = []
     @Published var local: [Speaker] = []
+    /// Google Cast speakers, by name.
+    @Published var cast: [Speaker] = []
+    /// What the list says about Google Cast while it lists none.
+    @Published var castList = CastListState.quiet
     /// The Mac's built-in speakers are listed, so local offsets are relative
     /// to them (S173, S181).
     @Published var hasLocalReference = true
@@ -193,9 +208,13 @@ final class AppModel: ObservableObject {
         DelayBadge.savedMs(of: id, airPlayID: AirPlayDelayRow.id, airPlayMs: airPlayDelayMs, rows: delayRows)
     }
     func savedDelayText(of id: String) -> String? {
-        DelayBadge.text(of: id, airPlayID: AirPlayDelayRow.id, airPlayMs: airPlayDelayMs, rows: delayRows, text: text)
+        // A Cast offset is a wait, never below 0, so it has no sign.
+        if let castMs = cast.first(where: { $0.id == id })?.offsetMs { return text.delayValue(ms: castMs) }
+        return DelayBadge.text(of: id, airPlayID: AirPlayDelayRow.id, airPlayMs: airPlayDelayMs, rows: delayRows, text: text)
     }
-    private var delayRows: [(id: String, offsetMs: Double?)] { local.map { (id: $0.id, offsetMs: $0.offsetMs) } }
+    private var delayRows: [(id: String, offsetMs: Double?)] {
+        (local + cast).map { (id: $0.id, offsetMs: $0.offsetMs) }
+    }
     /// Bumped every time the menu bar panel opens, so its rows start fresh
     /// (a row the pointer was over when the panel closed never got a hover exit).
     @Published var panelSession = 0
@@ -214,7 +233,25 @@ final class AppModel: ObservableObject {
     /// The device volume hint `speaker`'s row shows: none on an AirPlay row
     /// or a row switched off (S198).
     func deviceVolume(of speaker: Speaker) -> DeviceVolumeHint? {
-        DeviceVolumes.hint(for: speaker.id, airPlay: speaker.isAirPlay, enabled: speaker.enabled, in: deviceVolumes)
+        DeviceVolumes.hint(for: speaker.id, airPlay: speaker.isAirPlay || speaker.isCast, enabled: speaker.enabled,
+                           in: deviceVolumes)
+    }
+
+    /// A click on a speaker's switch, whatever kind it is.
+    func setEnabled(_ speaker: Speaker, _ on: Bool) {
+        switch speaker.tag {
+        case .airplay: actions.setAirPlayEnabled(speaker.id, on)
+        case .cast: actions.setCastEnabled(speaker.id, on)
+        default: actions.setLocalEnabled(speaker.id, on)
+        }
+    }
+
+    func setVolume(_ speaker: Speaker, _ position: Double) {
+        switch speaker.tag {
+        case .airplay: actions.setAirPlayVolume(speaker.id, position)
+        case .cast: actions.setCastVolume(speaker.id, position)
+        default: actions.setLocalVolume(speaker.id, position)
+        }
     }
 
     /// A group is on when all its present members are.
@@ -223,7 +260,7 @@ final class AppModel: ObservableObject {
     }
 
     /// Speakers switched on right now, AirPlay and local.
-    var activeSpeakers: Int { airplay.filter(\.enabled).count + local.filter(\.enabled).count }
+    var activeSpeakers: Int { (airplay + local + cast).filter(\.enabled).count }
 
     var statusText: String { running ? text.statusStreaming(speakers: activeSpeakers) : text.statusOff }
 
@@ -234,10 +271,17 @@ final class AppModel: ObservableObject {
     /// The speaker lists both views show: the Mac's own outputs, then every
     /// other speaker (AirPlay and local) by name.
     var layout: (thisMac: [Speaker], connected: [Speaker]) {
-        SpeakerLayout.split(local: local, airplay: shownAirPlay, tag: \.tag, name: \.name)
+        SpeakerLayout.split(local: local, airplay: shownAirPlay + cast, tag: \.tag, name: \.name)
     }
 
-    var airPlayEmptyText: String { text.airPlayNoneFound }
+    /// What Connected Speakers says about the network speakers it doesn't
+    /// list: no AirPlay speaker found, and how the Google Cast search goes;
+    /// nil when there is nothing to say.
+    var networkNote: String? {
+        text.networkSpeakersNote(airPlayNone: shownAirPlay.isEmpty && airPlayProblem == nil, cast: castList)
+    }
+    /// Connected Speakers with no speaker at all.
+    var networkEmptyText: String { networkNote ?? text.airPlayNoneFound }
 
     /// Why AirPlay can't work right now, shown in place of its speakers; nil
     /// while the sender runs or is starting.
@@ -251,6 +295,7 @@ extension SpeakerTag {
     var symbol: String {
         switch self {
         case .airplay: return "homepod.fill"
+        case .cast: return "hifispeaker.fill"
         case .builtIn: return "laptopcomputer"
         case .bluetooth: return "headphones"
         case .hdmi, .displayPort: return "display"
@@ -632,7 +677,7 @@ struct MenuBarView: View {
         if count == 0 && model.airPlayProblem != nil {
             EmptyView()   // the problem below says why
         } else if count == 0 {
-            Text(model.layout.thisMac.isEmpty ? t.noSpeakers : t.airPlayNoneFound)
+            Text(model.layout.thisMac.isEmpty ? t.noSpeakers : model.networkEmptyText)
                 .font(.caption)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -698,15 +743,11 @@ struct MenuBarView: View {
             }
             ForEach(layout.connected) { speaker in
                 CompactRow(name: speaker.name, symbol: speaker.tag.symbol, state: model.state(of: speaker),
-                           text: t, height: rowHeight, renamedFrom: speaker.renamedFrom, kind: speaker.tag,
+                           text: t, height: rowHeight, hint: speaker.cast.flatMap(t.castNote),
+                           renamedFrom: speaker.renamedFrom, kind: speaker.tag,
                            availability: speaker.availability,
                            deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
-                    let on = model.state(of: speaker).clickTurnsOn
-                    if speaker.isAirPlay {
-                        model.actions.setAirPlayEnabled(speaker.id, on)
-                    } else {
-                        model.actions.setLocalEnabled(speaker.id, on)
-                    }
+                    model.setEnabled(speaker, model.state(of: speaker).clickTurnsOn)
                 }
             }
         }
@@ -719,7 +760,8 @@ private struct CompactRow: View {
     let state: SpeakerState
     let text: UIStrings
     let height: CGFloat
-    /// Read after the name by VoiceOver: a group's member count.
+    /// Read after the name by VoiceOver: a group's member count, or what a
+    /// Google Cast speaker is doing.
     var hint: String? = nil
     /// A renamed speaker's system name, read by VoiceOver after its name.
     var renamedFrom: String? = nil
