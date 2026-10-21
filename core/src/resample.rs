@@ -349,8 +349,9 @@ impl Resampler {
     /// frames), evenly, so those output frames need `frames` fewer input
     /// frames, and every later one is `frames` input frames later (S206).
     /// The frames in between are interpolated at their exact positions.
-    /// Returns whether it took the request: rates that are equal, a trim
-    /// still under way, no frames or steps, or as many frames as the steps
+    /// Returns whether it took the request: a converter that passes
+    /// samples through ([`Resampler::new`] at equal rates), a trim still
+    /// under way, no frames or steps, or as many frames as the steps
     /// cover or more (a step would have to stand still or go back) change
     /// nothing.
     pub fn slow_down(&mut self, frames: usize, steps: usize) -> bool {
@@ -361,8 +362,8 @@ impl Resampler {
     /// over its next `steps` steps, evenly, so those output frames need
     /// `frames` more input frames, and every later one is `frames` input
     /// frames earlier (S207). The frames in between are interpolated at
-    /// their exact positions. Returns whether it took the request: rates
-    /// that are equal, a trim still under way, no frames or steps, or as
+    /// their exact positions. Returns whether it took the request: a
+    /// converter that passes samples through, a trim still under way, no frames or steps, or as
     /// many frames as the steps cover or more (a step would have to double)
     /// change nothing.
     pub fn speed_up(&mut self, frames: usize, steps: usize) -> bool {

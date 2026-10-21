@@ -1045,7 +1045,7 @@ fn simulate_all(cases: &[Case]) -> Vec<Outcome> {
 
 // covers: S85, S206
 #[test]
-fn the_capture_rate_output_that_sets_the_lead_runs_dry_only_after_a_late_start() {
+fn the_capture_rate_output_that_sets_the_lead_runs_dry_only_through_its_wander() {
     // Finding 2 on main: without conversion there was no trim and the lead
     // was one callback, so every Mac case of this stratum ran dry on its
     // fast clock. The ratio-1 converter fixed that. What still runs dry is
@@ -1064,13 +1064,9 @@ fn the_capture_rate_output_that_sets_the_lead_runs_dry_only_after_a_late_start()
     for (case, outcome) in cases.iter().zip(simulate_all(&cases)) {
         assert!(
             !outcome.fails[0],
-            "case {} runs dry without its wander:
-{}",
+            "case {} runs dry without its wander:\n{}",
             case.k,
-            outcome.lines.join(
-                "
-"
-            )
+            outcome.lines.join("\n")
         );
     }
 }
@@ -1107,21 +1103,11 @@ fn a_late_second_callback_still_corrects_drift_or_plays_early_in_a_mac_case() {
             case.k, early_ms
         ));
     }
-    println!(
-        "{}",
-        lines.join(
-            "
-"
-        )
-    );
+    println!("{}", lines.join("\n"));
     assert!(
-        shown > 0,
-        "no case shows it any more:
-{}",
-        lines.join(
-            "
-"
-        )
+        shown >= 2,
+        "fewer than the 2 cases measured show it:\n{}",
+        lines.join("\n")
     );
 }
 
@@ -1140,13 +1126,9 @@ fn every_windows_case_holds_every_invariant() {
     for (case, outcome) in cases {
         assert!(
             !outcome.fails.iter().any(|&f| f),
-            "case {}:
-{}",
+            "case {}:\n{}",
             case.k,
-            outcome.lines.join(
-                "
-"
-            )
+            outcome.lines.join("\n")
         );
     }
 }
@@ -1242,18 +1224,7 @@ fn a_bluetooth_output_that_sets_the_lead_gains_a_block_of_slack_and_the_others_f
         let mut bluetooth = wired.clone();
         bluetooth.devices[0].bluetooth = true;
         let (before, after) = (simulate(&wired), simulate(&bluetooth));
-        let report = format!(
-            "{}
-{}",
-            before.lines.join(
-                "
-"
-            ),
-            after.lines.join(
-                "
-"
-            )
-        );
+        let report = format!("{}\n{}", before.lines.join("\n"), after.lines.join("\n"));
         println!("{report}");
         for outcome in [&before, &after] {
             assert!(!outcome.fails.iter().any(|&f| f), "{report}");

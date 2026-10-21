@@ -104,7 +104,8 @@ fn per_block(c: &mut Criterion) {
 /// reads, converts and maps onto a stereo device buffer at `device_rate`.
 /// `ratio_one` makes the converters the renderer's (S85), otherwise equal
 /// rates pass through; `trimming` keeps a one-frame trim under way in every
-/// callback, alternately behind and ahead so the course stays put.
+/// callback, each new trim going the other way from the last one any
+/// output started (so outputs 0 and 2 mostly speed up, 1 and 3 slow down).
 fn four_outputs(c: &mut Criterion, name: &str, device_rate: u32, ratio_one: bool, trimming: bool) {
     let mut group = c.benchmark_group("per_512_frame_block");
     group.throughput(Throughput::Elements(N as u64));
