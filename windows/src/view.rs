@@ -1476,6 +1476,15 @@ impl App {
         main.on_exit_requested(|| {
             let _ = slint::quit_event_loop();
         });
+        // Ctrl+Q quits from the windows without a menu bar too, as
+        // Command-Q does from any window on the Mac.
+        let quit = || {
+            let _ = slint::quit_event_loop();
+        };
+        self.equalizer.on_exit_requested(quit);
+        self.help.on_exit_requested(quit);
+        self.guide.on_exit_requested(quit);
+        self.about.on_exit_requested(quit);
         let w = weak.clone();
         main.on_about_requested(move || {
             with_app(&w, |app| {
