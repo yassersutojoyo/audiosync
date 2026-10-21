@@ -35,20 +35,19 @@ pub(super) const ICON_PNG: &[u8] = include_bytes!("../../../res/audiosync-256.pn
 /// The JPEG encoder's quality option.
 const IMAGE_QUALITY: &str = "ImageQuality";
 
-/// A session as track info sees it, and its media properties.
+/// A session as track info sees it, from its media properties.
 pub(super) fn describe(
     session: &Session,
-) -> windows::core::Result<(MediaSession, MediaProperties)> {
-    let properties = session.TryGetMediaPropertiesAsync()?.join()?;
+    properties: &MediaProperties,
+) -> windows::core::Result<MediaSession> {
     let playing = session.GetPlaybackInfo()?.PlaybackStatus()? == PlaybackStatus::Playing;
-    let described = MediaSession {
+    Ok(MediaSession {
         app_id: session.SourceAppUserModelId()?.to_string(),
         title: properties.Title()?.to_string(),
         artist: properties.Artist()?.to_string(),
         album: properties.AlbumTitle()?.to_string(),
         playing,
-    };
-    Ok((described, properties))
+    })
 }
 
 /// AudioSync's icon fitted as receiver artwork; `None`, logged, when it

@@ -5,16 +5,18 @@
 //!
 //! The thread sleeps while neither follows a source, then reads every
 //! [`POLL_INTERVAL`]: it lists the sessions once, picks the one that counts
-//! for each reader ([`pick`]) and reads a picked session's thumbnail once,
-//! giving the app [`APP_WAIT`] to hand it over. Artwork is made from those
-//! bytes once per track ([`media`]). A card button goes to the session that
+//! for each reader ([`pick`]) and reads a picked session's thumbnail once.
+//! Every wait on an app is bounded by [`APP_WAIT`], and a thumbnail that
+//! missed it isn't asked for again for [`MISS_RETRY`]. The receivers'
+//! reading goes out before any work only the card needs. Artwork is made
+//! from the thumbnail's bytes once per track ([`media`]). A card button goes to the session that
 //! counts when the thread takes it, and the sessions are read again
 //! [`AFTER_COMMAND`] later, so the card shows the new state without waiting
 //! for the next poll. Nothing else waits on the thread: the readers meet it
 //! only under a lock held for a copy. Errors are logged once until reading
 //! works again, and count as no track.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::future::{Future, IntoFuture};
 use std::pin::pin;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -31,7 +33,7 @@ use windows::Storage::Streams::{
     Buffer, DataReader, IRandomAccessStreamWithContentType, InputStreamOptions,
 };
 use windows::Win32::Foundation::{E_FAIL, ERROR_TIMEOUT};
-use windows::core::Interface;
+use windows::core::{Interface, RuntimeType};
 use windows_future::{IAsyncInfo, IAsyncOperation};
 
 use super::com::Apartment;
@@ -46,9 +48,14 @@ use crate::now_playing_card::{ArtworkCache, CardSource, CardTrack, MediaControls
 /// most apps to have changed their state.
 const AFTER_COMMAND: Duration = Duration::from_millis(400);
 
-/// How long one reading waits on apps for a thumbnail, and a button on the
-/// app to take it. Past it the track shows without its artwork.
+/// How long a listing waits on apps for their sessions' properties, a
+/// reading for a thumbnail, and a button for the app to take it. Past it the
+/// session is left out of that listing, or its track shows without artwork.
 const APP_WAIT: Duration = Duration::from_secs(1);
+
+/// How long a track's thumbnail that couldn't be read in time isn't asked
+/// for again.
+const MISS_RETRY: Duration = Duration::from_secs(30);
 
 /// The largest thumbnail read; an app's is a few hundred kilobytes at most.
 const THUMBNAIL_LIMIT: u64 = 16 << 20;
@@ -223,18 +230,24 @@ fn run<L: SessionList>(shared: &Shared, make: impl FnOnce() -> L, poll: Duration
                 reader.send(card, *command, log);
             }
         }
-        let (track_reading, card_reading) = reader.read(track.as_ref(), card.as_ref(), log);
-        let mut state = shared.lock();
-        if let Some(track) = track_reading
-            && state.track_generation == track_generation
-        {
-            state.track_reading = Some(Reading { track });
+        let mut listing = reader.listing(log);
+        // The receivers' reading goes out first, so a thumbnail only the
+        // card needs never holds it back.
+        if let Some(follow) = &track {
+            let track = reader.track(&mut listing, follow, log);
+            let mut state = shared.lock();
+            if state.track_generation == track_generation {
+                state.track_reading = Some(Reading { track });
+            }
         }
-        if let Some(card) = card_reading
-            && state.card_generation == card_generation
-        {
-            state.card_reading = Some(card);
+        if let Some(follow) = &card {
+            let card = reader.card(&mut listing, follow, log);
+            let mut state = shared.lock();
+            if state.card_generation == card_generation {
+                state.card_reading = Some(card);
+            }
         }
+        let state = shared.lock();
         let wait = if card.is_some() && !commands.is_empty() {
             AFTER_COMMAND
         } else {
@@ -303,15 +316,17 @@ impl SessionList for WindowsSessions {
             }
         };
         let list = manager.GetSessions()?;
-        let mut found = Vec::new();
-        for index in 0..list.Size()? {
-            if let Ok(session) = list.GetAt(index)
-                && let Ok((described, properties)) = media::describe(&session)
-            {
-                found.push((described, (session, properties)));
-            }
-        }
-        Ok(found)
+        let sessions: Vec<Session> = (0..list.Size()?)
+            .filter_map(|index| list.GetAt(index).ok())
+            .collect();
+        Ok(describe_each(
+            sessions,
+            |session| session.TryGetMediaPropertiesAsync(),
+            |session, properties| {
+                let described = media::describe(&session, &properties)?;
+                Ok((described, (session, properties)))
+            },
+        ))
     }
 
     fn thumbnail(
@@ -349,9 +364,10 @@ struct Reader<L> {
     jpegs: HashMap<String, Option<Arc<[u8]>>>,
     /// Card artwork by track.
     tiles: ArtworkCache,
-    /// Tracks whose thumbnail couldn't be read, so that is logged once. A
-    /// thumbnail missing or unread is asked again at the next reading.
-    unread: HashSet<String>,
+    /// When each track's thumbnail last failed to be read in time. It is
+    /// not asked again for [`MISS_RETRY`], so an app that hangs costs the
+    /// thread one wait per track, not one per poll.
+    misses: HashMap<String, Instant>,
     /// The last listing failed, and said so.
     failing: bool,
     /// The last tracks read, for the log.
@@ -359,8 +375,23 @@ struct Reader<L> {
     last_card: Option<MediaSession>,
 }
 
-/// Thumbnails read during one reading, by session index.
-type Thumbnails = Vec<(usize, Option<Vec<u8>>)>;
+/// One listing of the sessions, which both readers' readings come from.
+struct Listing<S> {
+    listed: Vec<(MediaSession, S)>,
+    /// Thumbnails read for this listing, by session index.
+    thumbnails: Vec<(usize, Option<Vec<u8>>)>,
+}
+
+impl<S> Listing<S> {
+    fn pick(&self, follow: &Follow) -> Option<usize> {
+        let described: Vec<MediaSession> = self
+            .listed
+            .iter()
+            .map(|(session, _)| session.clone())
+            .collect();
+        pick(&described, follow)
+    }
+}
 
 impl<L: SessionList> Reader<L> {
     fn new(sessions: L) -> Reader<L> {
@@ -368,92 +399,76 @@ impl<L: SessionList> Reader<L> {
             sessions,
             jpegs: HashMap::new(),
             tiles: ArtworkCache::default(),
-            unread: HashSet::new(),
+            misses: HashMap::new(),
             failing: false,
             last_track: None,
             last_card: None,
         }
     }
 
-    /// One reading for each reader that follows a source: the track that
-    /// counts, or `None` when no session does.
-    fn read(
+    /// The sessions listed now; none when listing fails.
+    fn listing(&mut self, log: &DebugLog) -> Listing<L::Session> {
+        Listing {
+            listed: self.listed(log),
+            thumbnails: Vec::new(),
+        }
+    }
+
+    /// The receivers' track for `follow`, or `None` when no session counts.
+    fn track(
         &mut self,
-        track: Option<&Follow>,
-        card: Option<&Follow>,
+        listing: &mut Listing<L::Session>,
+        follow: &Follow,
         log: &DebugLog,
-    ) -> (Option<Option<Track>>, Option<Option<CardTrack>>) {
-        let listed = self.listed(log);
-        let described: Vec<MediaSession> =
-            listed.iter().map(|(session, _)| session.clone()).collect();
-        let track_index = track.map(|follow| pick(&described, follow));
-        let card_index = card.map(|follow| pick(&described, follow));
-        if let Some(index) = track_index {
-            self.log_track(index.map(|index| &described[index]), log);
-        }
-        if let Some(index) = card_index {
-            self.log_card(index.map(|index| &described[index]), log);
-        }
-        let deadline = Instant::now() + APP_WAIT;
-        let mut thumbnails = Thumbnails::new();
-        let mut track_reading = None;
-        if let Some(index) = track_index {
-            let track = match index {
-                Some(index) => {
-                    let (session, entry) = &listed[index];
-                    let key = track_key(session);
-                    let artwork = match self.jpegs.get(&key) {
-                        Some(made) => made.clone(),
-                        None => self
-                            .thumbnail(&mut thumbnails, index, &key, session, entry, deadline, log)
-                            .and_then(|image| self.jpeg(key, session, &image, log)),
-                    };
-                    Some(Track {
-                        session: session.clone(),
-                        artwork,
-                    })
+    ) -> Option<Track> {
+        let index = listing.pick(follow);
+        self.log_track(index.map(|index| &listing.listed[index].0), log);
+        let index = index?;
+        let session = listing.listed[index].0.clone();
+        let key = track_key(&session);
+        let artwork = match self.jpegs.get(&key) {
+            Some(made) => made.clone(),
+            None => self
+                .thumbnail(listing, index, &key, log)
+                .and_then(|image| self.jpeg(key, &session, &image, log)),
+        };
+        Some(Track { session, artwork })
+    }
+
+    /// The card's track for `follow`, or `None` when no session counts.
+    fn card(
+        &mut self,
+        listing: &mut Listing<L::Session>,
+        follow: &Follow,
+        log: &DebugLog,
+    ) -> Option<CardTrack> {
+        let index = listing.pick(follow);
+        self.log_card(index.map(|index| &listing.listed[index].0), log);
+        let index = index?;
+        let session = listing.listed[index].0.clone();
+        let key = track_key(&session);
+        let artwork = match self.tiles.get(&key) {
+            Some(made) => made,
+            None => self.thumbnail(listing, index, &key, log).and_then(|image| {
+                let (tile, error) = self.tiles.keep(&key, media::card_artwork(&image));
+                if let Some(error) = error {
+                    log.log(|| {
+                        format!(
+                            "now playing card: the artwork of \"{}\" couldn't be decoded: {error}",
+                            session.title
+                        )
+                    });
                 }
-                None => None,
-            };
-            track_reading = Some(track);
-        }
-        let mut card_reading = None;
-        if let Some(index) = card_index {
-            let card = match index {
-                Some(index) => {
-                    let (session, entry) = &listed[index];
-                    let key = track_key(session);
-                    let artwork = match self.tiles.get(&key) {
-                        Some(made) => made,
-                        None => self
-                            .thumbnail(&mut thumbnails, index, &key, session, entry, deadline, log)
-                            .and_then(|image| {
-                                let (tile, error) =
-                                    self.tiles.keep(&key, media::card_artwork(&image));
-                                if let Some(error) = error {
-                                    log.log(|| {
-                                        format!(
-                                            "now playing card: the artwork of \"{}\" couldn't be decoded: {error}",
-                                            session.title
-                                        )
-                                    });
-                                }
-                                tile
-                            }),
-                    };
-                    Some(CardTrack {
-                        app_id: session.app_id.clone(),
-                        title: session.title.clone(),
-                        artist: session.artist.clone(),
-                        playing: session.playing,
-                        artwork,
-                    })
-                }
-                None => None,
-            };
-            card_reading = Some(card);
-        }
-        (track_reading, card_reading)
+                tile
+            }),
+        };
+        Some(CardTrack {
+            app_id: session.app_id,
+            title: session.title,
+            artist: session.artist,
+            playing: session.playing,
+            artwork,
+        })
     }
 
     /// Sends `command` to the session that counts for `follow` now.
@@ -532,36 +547,43 @@ impl<L: SessionList> Reader<L> {
         });
     }
 
-    /// The session's thumbnail, read at most once per reading and within
-    /// `deadline`; `None` while it has none or it couldn't be read.
-    #[allow(clippy::too_many_arguments)]
+    /// The thumbnail of the listing's session at `index`, read at most once
+    /// per listing and within [`APP_WAIT`]; `None` while it has none, or
+    /// while a failed read waits out [`MISS_RETRY`]. A session without a
+    /// thumbnail may get one a moment later, so that is asked again.
     fn thumbnail(
         &mut self,
-        thumbnails: &mut Thumbnails,
+        listing: &mut Listing<L::Session>,
         index: usize,
         key: &str,
-        session: &MediaSession,
-        entry: &L::Session,
-        deadline: Instant,
         log: &DebugLog,
     ) -> Option<Vec<u8>> {
-        if let Some((_, image)) = thumbnails.iter().find(|(read, _)| *read == index) {
+        if let Some((_, image)) = listing.thumbnails.iter().find(|(read, _)| *read == index) {
             return image.clone();
         }
+        if self
+            .misses
+            .get(key)
+            .is_some_and(|missed| missed.elapsed() < MISS_RETRY)
+        {
+            return None;
+        }
+        let (session, entry) = &listing.listed[index];
+        let deadline = Instant::now() + APP_WAIT;
         let read = self.sessions.thumbnail(entry).and_then(|open| match open {
             Some(open) => read_thumbnail(open, deadline),
             None => Ok(None),
         });
         let image = match read {
             Ok(image) => {
-                self.unread.remove(key);
+                self.misses.remove(key);
                 image
             }
             Err(error) => {
-                if self.unread.len() >= ARTWORK_CACHE {
-                    self.unread.clear();
+                if self.misses.len() >= ARTWORK_CACHE && !self.misses.contains_key(key) {
+                    self.misses.clear();
                 }
-                if self.unread.insert(key.to_owned()) {
+                if self.misses.insert(key.to_owned(), Instant::now()).is_none() {
                     log.log(|| {
                         format!(
                             "now playing: the artwork of \"{}\" couldn't be read: {error}",
@@ -572,7 +594,7 @@ impl<L: SessionList> Reader<L> {
                 None
             }
         };
-        thumbnails.push((index, image.clone()));
+        listing.thumbnails.push((index, image.clone()));
         image
     }
 
@@ -611,6 +633,35 @@ impl<L: SessionList> Reader<L> {
         self.jpegs.insert(key, artwork.clone());
         artwork
     }
+}
+
+/// Each session described from its properties. They are asked for all at
+/// once and waited for together for at most [`APP_WAIT`]; a session whose
+/// app doesn't answer in time, or answers with an error, is left out.
+fn describe_each<S, P, T>(
+    sessions: Vec<S>,
+    properties: impl Fn(&S) -> windows::core::Result<IAsyncOperation<P>>,
+    describe: impl Fn(S, P) -> windows::core::Result<T>,
+) -> Vec<T>
+where
+    P: RuntimeType + 'static,
+{
+    let asked: Vec<(S, IAsyncOperation<P>)> = sessions
+        .into_iter()
+        .filter_map(|session| {
+            let operation = properties(&session).ok()?;
+            Some((session, operation))
+        })
+        .collect();
+    let deadline = Instant::now() + APP_WAIT;
+    asked
+        .into_iter()
+        .filter_map(|(session, operation)| {
+            within(operation, deadline)
+                .and_then(|answer| describe(session, answer))
+                .ok()
+        })
+        .collect()
 }
 
 fn track_key(session: &MediaSession) -> String {
@@ -691,6 +742,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use windows::Storage::Streams::RandomAccessStreamReference;
+    use windows::core::HSTRING;
 
     use super::*;
 
@@ -821,27 +873,32 @@ mod tests {
         (fake, counts, OpensOnDrop(gate))
     }
 
+    /// One poll for both readers, as the thread makes it.
+    fn poll(reader: &mut Reader<Fake>) -> (Option<Track>, Option<CardTrack>) {
+        let log = DebugLog::default();
+        let mut listing = reader.listing(&log);
+        let track = reader.track(&mut listing, &Follow::AnyApp, &log);
+        let card = reader.card(&mut listing, &Follow::AnyApp, &log);
+        (track, card)
+    }
+
     #[test]
     fn one_listing_and_one_thumbnail_serve_both_readers() {
         let _apartment = Apartment::enter().unwrap();
         let (fake, counts, _gate) = fake(Thumbnail::Image);
         let mut reader = Reader::new(fake);
-        let log = DebugLog::default();
-        let any = Follow::AnyApp;
-        let (track, card) = reader.read(Some(&any), Some(&any), &log);
+        let (track, card) = poll(&mut reader);
         assert_eq!(counts.lists(), 1, "one listing serves both readers");
         assert_eq!(counts.thumbnails(), 1, "one thumbnail read serves both");
-        let track = track.flatten().expect("the receivers get the track");
+        let track = track.expect("the receivers get the track");
         assert_eq!(track.session, playing());
         assert!(track.artwork.is_some());
-        let card = card.flatten().expect("the card gets the track");
+        let card = card.expect("the card gets the track");
         assert_eq!((card.title.as_str(), card.playing), ("Song", true));
         assert!(card.artwork.is_some());
-        let _ = reader.read(Some(&any), Some(&any), &log);
+        let _ = poll(&mut reader);
         assert_eq!(counts.lists(), 2);
         assert_eq!(counts.thumbnails(), 1, "artwork is made once per track");
-        let (track, card) = reader.read(Some(&any), None, &log);
-        assert!(track.flatten().is_some() && card.is_none());
     }
 
     #[test]
@@ -849,19 +906,55 @@ mod tests {
         let _apartment = Apartment::enter().unwrap();
         let (fake, counts, _gate) = fake(Thumbnail::Hung);
         let mut reader = Reader::new(fake);
-        let log = DebugLog::default();
-        let any = Follow::AnyApp;
         let started = Instant::now();
-        let (track, card) = reader.read(Some(&any), Some(&any), &log);
+        let (track, card) = poll(&mut reader);
         let took = started.elapsed();
         assert!(took >= APP_WAIT && took < APP_WAIT * 2, "took {took:?}");
         assert_eq!(counts.thumbnails(), 1, "one wait covers both readers");
-        let track = track.flatten().expect("the track still shows");
+        let track = track.expect("the track still shows");
         assert_eq!((track.session, track.artwork), (playing(), None));
-        let card = card.flatten().expect("the card still shows");
+        let card = card.expect("the card still shows");
         assert_eq!((card.title.as_str(), card.artwork), ("Song", None));
-        let _ = reader.read(Some(&any), None, &log);
-        assert_eq!(counts.thumbnails(), 2, "the thumbnail is asked again");
+    }
+
+    #[test]
+    fn a_hung_thumbnail_is_tried_once_per_track_not_once_per_poll() {
+        let _apartment = Apartment::enter().unwrap();
+        let (fake, counts, _gate) = fake(Thumbnail::Hung);
+        let mut reader = Reader::new(fake);
+        let _ = poll(&mut reader);
+        let started = Instant::now();
+        for _ in 0..3 {
+            let (track, _) = poll(&mut reader);
+            assert!(track.is_some_and(|track| track.artwork.is_none()));
+        }
+        assert!(started.elapsed() < APP_WAIT, "later polls don't wait");
+        assert_eq!(counts.thumbnails(), 1);
+    }
+
+    #[test]
+    fn a_session_whose_properties_hang_is_left_out_in_time() {
+        let _apartment = Apartment::enter().unwrap();
+        let gate = Arc::new(Gate::default());
+        let _open = OpensOnDrop(gate.clone());
+        let started = Instant::now();
+        let described = describe_each(
+            vec![0, 1, 2],
+            |&session| {
+                let gate = gate.clone();
+                Ok(IAsyncOperation::spawn(move || {
+                    if session == 1 {
+                        gate.wait();
+                    }
+                    Ok(HSTRING::from(format!("session {session}")))
+                }))
+            },
+            |session, name: HSTRING| Ok((session, name.to_string())),
+        );
+        let took = started.elapsed();
+        assert!(took >= APP_WAIT && took < APP_WAIT * 2, "took {took:?}");
+        let names = |session: i32| (session, format!("session {session}"));
+        assert_eq!(described, vec![names(0), names(2)]);
     }
 
     #[test]
