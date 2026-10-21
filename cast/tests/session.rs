@@ -217,12 +217,20 @@ fn launch_only_ever_starts_the_default_media_receiver() {
     assert_eq!(launches.len(), 1);
     assert_eq!(launches[0].0, PLATFORM);
     assert_eq!(launches[0].2["appId"], DEFAULT_MEDIA_RECEIVER);
-    assert!(device.wait_for("CONNECT", Duration::from_secs(1)));
-    let to_app = device
-        .received()
-        .into_iter()
-        .find(|(destination, _, _)| destination == "transport-1")
-        .expect("a message to the app");
+    // The sender has written the app's CONNECT; the fake device may not
+    // have read it yet.
+    let until = Instant::now() + Duration::from_secs(2);
+    let to_app = loop {
+        let found = device
+            .received()
+            .into_iter()
+            .find(|(destination, _, _)| destination == "transport-1");
+        match found {
+            Some(message) => break message,
+            None if Instant::now() < until => std::thread::sleep(Duration::from_millis(10)),
+            None => panic!("no message to the app"),
+        }
+    };
     assert_eq!(
         to_app.2,
         json!({"type": "CONNECT"}),
@@ -397,7 +405,7 @@ fn stop_tears_down_in_order_over_the_wire() {
     let started = Instant::now();
     assert_eq!(client.stop(Duration::from_secs(2)), EndReason::Stopped);
     assert!(started.elapsed() < Duration::from_secs(2));
-    assert!(device.wait_for("CLOSE", Duration::from_secs(1)));
+    assert!(device.wait_for_count("CLOSE", 2, Duration::from_secs(2)));
     let tail: Vec<(String, String)> = device
         .received()
         .into_iter()

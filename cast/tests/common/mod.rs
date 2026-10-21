@@ -173,9 +173,14 @@ impl FakeDevice {
 
     /// Waits until the sender sent a message of `kind`, up to `limit`.
     pub fn wait_for(&self, kind: &str, limit: Duration) -> bool {
+        self.wait_for_count(kind, 1, limit)
+    }
+
+    /// Waits until the device has read `count` messages of `kind`.
+    pub fn wait_for_count(&self, kind: &str, count: usize, limit: Duration) -> bool {
         let until = Instant::now() + limit;
         while Instant::now() < until {
-            if self.types().iter().any(|t| t == kind) {
+            if self.types().iter().filter(|t| *t == kind).count() >= count {
                 return true;
             }
             thread::sleep(Duration::from_millis(10));
