@@ -4637,6 +4637,27 @@ mod tests {
     }
 
     #[test]
+    fn a_speaker_waiting_for_the_airplay2_slot_says_so_not_reconnecting() {
+        use audiosync_airplay::error::UnsupportedReason;
+
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.fail(
+            &kitchen,
+            ErrorKind::Unsupported(UnsupportedReason::OneAirPlay2Session),
+        );
+        adapter.poll();
+        let state = state_of(&adapter, &ap(&kitchen));
+        assert!(
+            matches!(state, SpeakerState::Waiting(waiting) if waiting != ui_model::Waiting::Reconnecting),
+            "{state:?}"
+        );
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+    }
+
+    #[test]
     fn a_sender_that_stops_running_leaves_a_notice() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
         adapter.set_speaker_enabled(&ap(&kitchen), true);
