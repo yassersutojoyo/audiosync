@@ -65,7 +65,7 @@ Decision: a plain C ABI (`extern "C"` with `#[unsafe(no_mangle)]`) declared by t
 Why:
 
 - Real time. Audio crosses the boundary a whole buffer at a time, as a pointer plus a frame count, and is processed in place: no copy and no allocation. UniFFI passes buffers through its own serialized `RustBuffer`, which allocates and copies on every call, so it can't sit on a Core Audio callback.
-- No runtime or build dependency. UniFFI needs its crate, generated bindings and a build step; cbindgen needs a tool in CI. The surface was 16 functions at first and is 105 now.
+- No runtime or build dependency. UniFFI needs its crate, generated bindings and a build step; cbindgen needs a tool in CI. The surface was 16 functions at first and is 108 now.
 - Swift imports a C header directly through a module map, and a Windows host can use the same header or link the `rlib`.
 - The header can't drift silently: a unit test in `src/ffi.rs` parses the header and the Rust definitions, maps the types, and fails when any prototype, struct, handle, callback type or `#define` differs. CI runs it with the other tests, so "the header is current" is checked without a generator.
 
@@ -174,7 +174,7 @@ This part extends the C interface so a host can run its whole audio engine on th
 - The counting allocator in `src/ffi.rs` proves that every real-time call of the C interface neither allocates nor frees: the ring write, both reads, the reader's control calls and counters, the resampler (its process, request sizing, reset and latency), the gain stage, and the renderer's renders with its control calls. It does so on one thread, and on four threads at once (capture, two outputs and a control thread), each counted on its own.
 - `tests/realtime.rs` scans the sources for locks, sleeps, logging and file access: the audio-path modules, which also have to forbid unsafe code, and the production part of `ffi.rs`, `ffi/ring.rs` and `ffi/render.rs`, which hold the crate's unsafe code and so skip only that check. A lock or a log line added to a C call is caught even when it doesn't allocate.
 - `ffi/smoke.sh` checks from Swift: a ring with a reader at 4096, 8192 and 2048 frames of delay (silent and not anchored until more than 4096 frames are written, then every block starts exactly the delay behind the writer, a longer delay inserts exactly its extra frames of silence, a shorter one skips ahead on the next block, no frame plays twice), the delay helpers, the local delay model and the AirPlay sender's handle.
-- `scripts/build_core.sh` still prelinks the library and exports exactly the header's functions: 105 global symbols on each architecture (106 in the CI probe build, `AUDIOSYNC_CORE_PROBE=1`, which adds `asc_airplay_panic_probe`).
+- `scripts/build_core.sh` still prelinks the library and exports exactly the header's functions: 108 global symbols on each architecture (109 in the CI probe build, `AUDIOSYNC_CORE_PROBE=1`, which adds `asc_airplay_panic_probe`).
 - The AirPlay input's write and rate request are in the allocation proof; `tests/realtime.rs` doesn't scan `ffi/airplay.rs`, whose control calls talk to the sender's threads.
 - Panic tests run in `cargo test` builds only. The C interface's panics come from `injected_panic`, which exists only under `cfg(test)`; no test runs a panic through the shipped, prelinked Mac library, so that the release profile really unwinds there and the app shows a failed sender instead of crashing is a check on the Mac.
 
