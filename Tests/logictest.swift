@@ -1778,6 +1778,13 @@ do {
           "artwork: an NSImage (a player's artwork, AudioSync's icon) is encoded too")
 }
 
+// MARK: Track info — a player with no track is not an error
+check(NowPlayingMonitor.meansNoTrack(-1728) && NowPlayingMonitor.meansNoTrack(-1712),
+      "AppleScript: no current track (-1728) and a timeout (-1712) read as no track, not logged")
+check(!NowPlayingMonitor.meansNoTrack(-1743) && !NowPlayingMonitor.meansNoTrack(nil)
+      && !NowPlayingMonitor.meansNoTrack(-2753),
+      "AppleScript: Automation refused (-1743) and other errors are still logged")
+
 // MARK: Track info — what AirPlay receivers with a screen show
 do {
     typealias Track = NowPlayingMonitor.Track
