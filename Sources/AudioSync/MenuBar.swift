@@ -21,11 +21,17 @@ final class AppModel: ObservableObject {
         var autoConnect = false
         /// From the AirPlay sender's discovery; always `.open` for local speakers.
         var availability: SpeakerAvailability = .open
+        /// The name macOS or AirPlay discovery reports; `name` is the user's
+        /// when they renamed the speaker (`SpeakerNames`).
+        var systemName = ""
 
         /// A speaker AudioSync streams to through AirPlay, not a local output.
         var isAirPlay: Bool { tag == .airplay }
         /// Stable key across both kinds, used by groups and auto-connect.
         var key: String { SpeakerKey.make(id: id, airplay: isAirPlay) }
+        var isRenamed: Bool { !systemName.isEmpty && name != systemName }
+        /// The system name when renamed, for VoiceOver labels.
+        var renamedFrom: String? { isRenamed ? systemName : nil }
     }
 
     struct Group: Identifiable, Equatable {
@@ -69,6 +75,8 @@ final class AppModel: ObservableObject {
         var renameGroup: (String) -> Void = { _ in }
         var newGroup: () -> Void = {}
         var setAutoConnect: (String, Bool) -> Void = { _, _ in }
+        /// Speaker key, system name, the name typed (`SpeakerNames.rename`).
+        var renameSpeaker: (String, String, String) -> Void = { _, _, _ in }
         var setLaunchAtLogin: (Bool) -> Void = { _ in }
         var setShowVirtualDevices: (Bool) -> Void = { _ in }
         var setSwitchWhenSourceQuits: (Bool) -> Void = { _ in }
@@ -124,6 +132,27 @@ final class AppModel: ObservableObject {
         let d = SyncDraft()
         drafts[id] = d
         return d
+    }
+    /// The speaker whose name is being edited in its row, and the text typed
+    /// there. Like a delay field: Return or the focus leaving applies it,
+    /// Escape drops it.
+    @Published private(set) var rename = SpeakerRename()
+    var renaming: String? { rename.target?.id }
+    var renameText: String {
+        get { rename.text }
+        set { rename.text = newValue }
+    }
+    func startRename(_ speaker: Speaker) {
+        let target = SpeakerRename.Target(id: speaker.id, key: speaker.key, system: speaker.systemName)
+        apply(rename.start(target, name: speaker.name))
+    }
+    func commitRename(_ speaker: Speaker) { apply(rename.commit(id: speaker.id)) }
+    func dropRename() { rename.drop() }
+    /// The host listed `ids` as the speakers there are.
+    func speakersListed(_ ids: Set<String>) { apply(rename.listed(ids)) }
+    private func apply(_ finished: SpeakerRename.Apply?) {
+        guard let finished else { return }
+        actions.renameSpeaker(finished.key, finished.system, finished.typed)
     }
     /// Quit drops every typed delay not applied yet: it's never saved.
     func dropDelayDrafts() {
@@ -637,7 +666,7 @@ struct MenuBarView: View {
             VStack(spacing: 0) {
                 ForEach(thisMac) { speaker in
                     CompactRow(name: speaker.name, symbol: speaker.tag.symbol, state: model.state(of: speaker),
-                               text: t, height: rowHeight,
+                               text: t, height: rowHeight, renamedFrom: speaker.renamedFrom,
                                deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
                         model.actions.setLocalEnabled(speaker.id, model.state(of: speaker).clickTurnsOn)
                     }
@@ -664,7 +693,7 @@ struct MenuBarView: View {
             }
             ForEach(layout.connected) { speaker in
                 CompactRow(name: speaker.name, symbol: speaker.tag.symbol, state: model.state(of: speaker),
-                           text: t, height: rowHeight, kind: speaker.tag,
+                           text: t, height: rowHeight, renamedFrom: speaker.renamedFrom, kind: speaker.tag,
                            availability: speaker.availability,
                            deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
                     let on = model.state(of: speaker).clickTurnsOn
@@ -687,6 +716,8 @@ private struct CompactRow: View {
     let height: CGFloat
     /// Read after the name by VoiceOver: a group's member count.
     var hint: String? = nil
+    /// A renamed speaker's system name, read by VoiceOver after its name.
+    var renamedFrom: String? = nil
     /// The kind of output, shown as a small icon after the name.
     var kind: SpeakerTag? = nil
     var availability: SpeakerAvailability = .open
@@ -720,7 +751,7 @@ private struct CompactRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hover.isHovered = $0 }
-        .accessibilityLabel(text.speakerLabel(name: name, tag: kind.map(text.speakerTag)))
+        .accessibilityLabel(text.speakerLabel(name: name, tag: kind.map(text.speakerTag), renamedFrom: renamedFrom))
         .accessibilityValue(text.value(state))
         .accessibilityHint(text.rowHint(state, note: hint ?? deviceVolume?.accessibilityNote
                                             ?? text.availability(availability)))

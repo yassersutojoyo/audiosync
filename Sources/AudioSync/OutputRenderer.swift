@@ -259,6 +259,8 @@ final class OutputRenderer: FadingOutput {
         status = Self.setProperty(unit, kAudioOutputUnitProperty_CurrentDevice, scope: kAudioUnitScope_Global,
                                   to: device)
         guard status == noErr else { throw StartFailure.deviceNotBound(status) }
+        // Before the lead below reads the device's buffer size.
+        Self.applyBluetoothIOBuffer(unit, device: device)
 
         guard CoreRate.hz(captureRate) != nil else {
             throw StartFailure.formatRefused(OSStatus(kAudioUnitErr_FormatNotSupported))
@@ -386,6 +388,69 @@ final class OutputRenderer: FadingOutput {
         return nanoseconds(frames: buffer &+ safety, rate: deviceNominalRate(device) ?? rate)
     }
 
+    // MARK: - Bluetooth IO buffer (diagnostic switch)
+
+    /// With `AUDIOSYNC_BT_IO_FRAMES` set, gives a Bluetooth device the IO
+    /// buffer `BluetoothIOBuffer.frames` picks, before the unit initializes;
+    /// any other device, or no switch, is left exactly as it is.
+    private static func applyBluetoothIOBuffer(_ unit: AudioUnit, device: AudioObjectID) {
+        guard let raw = ProcessInfo.processInfo.environment[BluetoothIOBuffer.environmentKey] else { return }
+        let transport = uint32(device, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal) ?? 0
+        guard BluetoothIOBuffer.isBluetooth(transport: transport) else { return }
+        let name = deviceName(device) ?? "?"
+        let range = bufferFrameSizeRange(device)
+        let rangeText = range.map { "\($0.minimum)-\($0.maximum)" } ?? "unknown"
+        let before = uint32(device, kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal)
+        guard let frames = BluetoothIOBuffer.frames(requested: BluetoothIOBuffer.requested(raw),
+                                                    transport: transport, range: range) else {
+            DebugTrace.log("[AudioSync] BT IO buffer: \(BluetoothIOBuffer.environmentKey)=\(raw) ignored "
+                + "(not a whole number from 2048 to 4096); device \(device) \"\(name)\" left at "
+                + "\(before.map(String.init(describing:)) ?? "?") frames")
+            return
+        }
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyBufferFrameSize,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var value = frames
+        let setStatus = AudioObjectSetPropertyData(device, &address, 0, nil, UInt32(MemoryLayout<UInt32>.size), &value)
+        // A device buffer above the unit's slice limit would fail every render.
+        var slice: UInt32 = 0
+        var sliceSize = UInt32(MemoryLayout<UInt32>.size)
+        var sliceStatus = AudioUnitGetProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global,
+                                               0, &slice, &sliceSize)
+        if sliceStatus == noErr, slice < frames {
+            sliceStatus = setProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice, scope: kAudioUnitScope_Global,
+                                      to: frames)
+            if sliceStatus == noErr { slice = frames }
+        }
+        let after = uint32(device, kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal)
+        DebugTrace.log("[AudioSync] BT IO buffer: device \(device) \"\(name)\", transport \(transport), "
+            + "requested \(raw), range \(rangeText), set \(frames) (status \(setStatus)), "
+            + "before \(before.map(String.init(describing:)) ?? "?"), "
+            + "read back \(after.map(String.init(describing:)) ?? "?"), "
+            + "unit slice \(slice) (status \(sliceStatus))")
+    }
+
+    private static func bufferFrameSizeRange(_ device: AudioObjectID) -> (minimum: Double, maximum: Double)? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyBufferFrameSizeRange,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var range = AudioValueRange()
+        var size = UInt32(MemoryLayout<AudioValueRange>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &range) == noErr else { return nil }
+        return (range.mMinimum, range.mMaximum)
+    }
+
+    private static func deviceName(_ device: AudioObjectID) -> String? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioObjectPropertyName,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var name: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &name) == noErr else { return nil }
+        return name.map { $0.takeRetainedValue() as String }
+    }
+
     private static func deviceNominalRate(_ device: AudioObjectID) -> Double? {
         var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
                                                  mScope: kAudioObjectPropertyScopeGlobal,
@@ -471,6 +536,38 @@ final class OutputRenderer: FadingOutput {
         }
         timer.resume()
         debugTimer = timer
+    }
+}
+
+/// The developer-only `AUDIOSYNC_BT_IO_FRAMES` switch: a larger IO buffer
+/// for Bluetooth outputs, to tell at a sitting whether the buffer size plays
+/// a part when two or more of them chop. Unset, nothing changes.
+enum BluetoothIOBuffer {
+    static let environmentKey = "AUDIOSYNC_BT_IO_FRAMES"
+    static let allowed: ClosedRange<UInt32> = 2048...4096
+
+    static func isBluetooth(transport: UInt32) -> Bool {
+        transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
+    }
+
+    /// The size asked for: a whole number in `allowed`; anything else is nil.
+    static func requested(_ raw: String?) -> UInt32? {
+        guard let raw, let value = UInt32(raw.trimmingCharacters(in: .whitespaces)),
+              allowed.contains(value) else { return nil }
+        return value
+    }
+
+    /// The IO buffer to give a device, or nil to leave it untouched: only a
+    /// Bluetooth device with a request, clamped to the device's
+    /// `kAudioDevicePropertyBufferFrameSizeRange` when it reports a usable one.
+    static func frames(requested: UInt32?, transport: UInt32,
+                       range: (minimum: Double, maximum: Double)?) -> UInt32? {
+        guard let requested, isBluetooth(transport: transport) else { return nil }
+        guard let range, range.minimum.isFinite, range.maximum.isFinite else { return requested }
+        let low = max(1, range.minimum.rounded(.up))
+        let high = min(range.maximum.rounded(.down), Double(UInt32.max))
+        guard low <= high else { return requested }
+        return UInt32(min(max(Double(requested), low), high))
     }
 }
 

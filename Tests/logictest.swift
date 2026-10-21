@@ -2149,7 +2149,7 @@ do {
         (Keys.retiredEngineChoice, "engineImpl"), (Keys.retiredAirPlayChoice, "airplayImpl"),
         (Keys.localOffsets, "localOffsetMsByUID"),
         (Keys.airPlayDelay, "airPlayDelayMs"), (Keys.nativeAirPlayAdjustment, "nativeAirPlayAdjustmentMs"),
-        (Keys.localDelaysMigrated, "localDelayModelMigrated"),
+        (Keys.localDelaysMigrated, "localDelayModelMigrated"), (Keys.speakerNames, "speakerNamesByKey"),
     ]
     let renamed = pinned.filter { $0.0 != $0.1 }.map(\.1)
     check(renamed.isEmpty, "settings: every UserDefaults key keeps the name existing installs use",
@@ -2353,6 +2353,87 @@ do {
             && LocalDelay.shownOffset(tv, reference: r, offsets: offsets) == 0
             && LocalDelay.shownOffset(r, reference: nil, offsets: [r: 120]) == 120,
           "speaker row: the reference has no delay field")
+}
+
+// MARK: Speaker names — a name the user gives a speaker, by speaker key (SpeakerNames)
+do {
+    final class Stored { var values: [String: Any] = [:] }
+    let stored = Stored()
+    let store = SettingsStore(read: { stored.values[$0] }, write: { value, key in stored.values[key] = value })
+    let usb = SpeakerKey.make(id: "usb-uid", airplay: false)
+    let homePod = SpeakerKey.make(id: "hp-1", airplay: true)
+
+    var names = store.load().speakerNames
+    check(names.shown(key: usb, system: "USB Audio") == "USB Audio" && names.renamed(key: usb) == nil,
+          "speaker names: a speaker shows its system name until renamed")
+
+    let changed = names.rename(key: usb, to: "  Desk\nspeaker  ", system: "USB Audio")
+    names.rename(key: homePod, to: "Kitchen", system: "HomePod")
+    check(changed && names.shown(key: usb, system: "USB Audio") == "Desk speaker"
+              && names.shown(key: homePod, system: "HomePod") == "Kitchen",
+          "speaker names: a rename shows, trimmed and on one line", "usb: \(names.shown(key: usb, system: "USB Audio"))")
+
+    store.save(speakerNames: names)
+    let stored1 = stored.values[AppSettings.Keys.speakerNames] as? [String: String]
+    let reloaded = store.load().speakerNames
+    check(AppSettings.Keys.speakerNames == "speakerNamesByKey" && stored1 == [usb: "Desk speaker", homePod: "Kitchen"]
+              && reloaded == names,
+          "speaker names: names are kept by speaker key under speakerNamesByKey and read back after a relaunch",
+          "stored: \(String(describing: stored1))")
+
+    let cleared = names.rename(key: usb, to: "   ", system: "USB Audio")
+    let same = names.rename(key: homePod, to: "HomePod", system: "HomePod")
+    check(cleared && same && names.shown(key: usb, system: "USB Audio") == "USB Audio"
+              && names.shown(key: homePod, system: "HomePod 2") == "HomePod 2" && names.custom.isEmpty,
+          "speaker names: an empty name, or the system name typed again, brings back the system name")
+    store.save(speakerNames: names)
+    check(stored.values[AppSettings.Keys.speakerNames] == nil && store.load().speakerNames.custom.isEmpty,
+          "speaker names: with no name left the key is removed")
+
+    let unchanged = names.rename(key: usb, to: "", system: "USB Audio")
+    let long = names.rename(key: usb, to: String(repeating: "x", count: 80), system: "USB Audio")
+    check(!unchanged && long && names.renamed(key: usb)?.count == SpeakerNames.maxLength,
+          "speaker names: clearing an unrenamed speaker changes nothing; a long name is cut to 60 characters")
+
+    stored.values[AppSettings.Keys.speakerNames] = ["a": 5, "b": "  ", "c": "Den"] as [String: Any]
+    check(store.load().speakerNames.custom == ["c": "Den"],
+          "speaker names: a stored entry that isn't a name is skipped")
+
+    let deskTarget = SpeakerRename.Target(id: "usb-uid", key: usb, system: "USB Audio")
+    let kitchenTarget = SpeakerRename.Target(id: "hp-1", key: homePod, system: "HomePod")
+    var rename = SpeakerRename()
+    let opened = rename.start(deskTarget, name: "USB Audio")
+    rename.text = "Desk"
+    let again = rename.start(deskTarget, name: "USB Audio")
+    check(opened == nil && again == nil && rename.text == "Desk" && rename.target == deskTarget,
+          "speaker rename: starting a rename shows the name; starting it again keeps the typing")
+
+    let handed = rename.start(kitchenTarget, name: "HomePod")
+    check(handed == SpeakerRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
+              && rename.target == kitchenTarget && rename.text == "HomePod",
+          "speaker rename: renaming another speaker applies the open rename first",
+          "handed: \(String(describing: handed))")
+
+    rename.text = "Kitchen"
+    let otherCommit = rename.commit(id: "usb-uid")
+    let commit = rename.commit(id: "hp-1")
+    check(otherCommit == nil && commit == SpeakerRename.Apply(key: homePod, system: "HomePod", typed: "Kitchen")
+              && rename.target == nil,
+          "speaker rename: Return applies the speaker's own rename once, never another's")
+
+    _ = rename.start(deskTarget, name: "USB Audio")
+    rename.drop()
+    check(rename.target == nil && rename.commit(id: "usb-uid") == nil,
+          "speaker rename: Escape drops the typing, and the focus leaving after it applies nothing")
+
+    _ = rename.start(deskTarget, name: "USB Audio")
+    rename.text = "Desk"
+    let stillListed = rename.listed(["usb-uid", "hp-1"])
+    let gone = rename.listed(["hp-1"])
+    let back = rename.listed(["usb-uid", "hp-1"])
+    check(stillListed == nil && gone == SpeakerRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
+              && back == nil && rename.target == nil,
+          "speaker rename: a speaker gone mid-rename applies its typing, and its rename doesn't open again when it returns")
 }
 
 // MARK: Delay field — typed text applies on Return or focus loss, once (DelayFieldDraft)
@@ -2698,6 +2779,38 @@ do {
     check(t.delayOutOfRange(lowest: "−2000", highest: "+20000", applies: "−2000")
               == "The range is −2000 to +20000 ms. Return applies −2000.",
           "delay field input: the out-of-range hint names the range and the value Return applies")
+}
+
+// MARK: Bluetooth IO buffer switch: AUDIOSYNC_BT_IO_FRAMES, Bluetooth outputs only (BluetoothIOBuffer)
+do {
+    typealias B = BluetoothIOBuffer
+    let bt = kAudioDeviceTransportTypeBluetooth, le = kAudioDeviceTransportTypeBluetoothLE
+    let wide: (minimum: Double, maximum: Double)? = (15, 8192)
+    check(B.requested(nil) == nil && B.requested("") == nil && B.requested("abc") == nil
+              && B.requested("3000.5") == nil && B.requested("-2048") == nil,
+          "BT IO buffer: unset, empty or not a whole number asks for nothing")
+    check(B.requested("2047") == nil && B.requested("4097") == nil,
+          "BT IO buffer: a value outside 2048 to 4096 asks for nothing")
+    check(B.requested("2048") == 2048 && B.requested(" 4096 ") == 4096 && B.requested("3072") == 3072,
+          "BT IO buffer: a whole number from 2048 to 4096 is the request")
+    check(B.frames(requested: nil, transport: bt, range: wide) == nil,
+          "BT IO buffer: no request leaves a Bluetooth device untouched")
+    check(B.frames(requested: 4096, transport: kAudioDeviceTransportTypeBuiltIn, range: wide) == nil
+              && B.frames(requested: 4096, transport: kAudioDeviceTransportTypeUSB, range: wide) == nil
+              && B.frames(requested: 4096, transport: kAudioDeviceTransportTypeAirPlay, range: wide) == nil
+              && B.frames(requested: 4096, transport: 0, range: wide) == nil,
+          "BT IO buffer: a device that isn't Bluetooth is never touched")
+    check(B.frames(requested: 4096, transport: bt, range: wide) == 4096
+              && B.frames(requested: 2048, transport: le, range: wide) == 2048,
+          "BT IO buffer: Bluetooth Classic and LE devices get the request inside their range")
+    check(B.frames(requested: 4096, transport: bt, range: (15, 2048)) == 2048
+              && B.frames(requested: 2048, transport: bt, range: (3000.2, 8192)) == 3001,
+          "BT IO buffer: the request is clamped to the device's range")
+    check(B.frames(requested: 3072, transport: bt, range: nil) == 3072
+              && B.frames(requested: 3072, transport: bt, range: (8192, 15)) == 3072
+              && B.frames(requested: 3072, transport: bt, range: (Double.nan, 8192)) == 3072
+              && B.frames(requested: 3072, transport: bt, range: (1e12, 1e13)) == 3072,
+          "BT IO buffer: an unknown or unusable range leaves the request as it is")
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
