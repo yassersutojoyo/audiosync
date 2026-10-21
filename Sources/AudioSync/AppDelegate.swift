@@ -153,7 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var promptWithdrawal = PromptWithdrawal()
     /// Watches a waiting withdrawn prompt for the moment it is key again.
     var codePromptKeyObserver: NSObjectProtocol?
-    var sentTrackInfo: SentTrackInfo?
+    var trackInfoFeed = TrackInfoFeed()
 
     // MARK: - Local speakers (`+Outputs`)
 

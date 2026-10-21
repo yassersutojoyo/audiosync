@@ -1972,6 +1972,88 @@ do {
     check(nothing(u), "sent track info: after the wait, the icon isn't sent again")
 }
 
+// MARK: When track info goes to the app's own sender (TrackInfoFeed, the AppDelegate wiring)
+do {
+    let cover = NSImage(size: NSSize(width: 1, height: 1)), icon = NSImage(size: NSSize(width: 1, height: 1))
+    let song = TrackMetadata.Fields(title: "Song", artist: "Band", album: "Record")
+    let next = TrackMetadata.Fields(title: "Next", artist: "Band", album: "Record")
+    let start = Date(timeIntervalSinceReferenceDate: 0)
+    var looked = 0
+    func playing(_ fields: TrackMetadata.Fields, _ artwork: ReceiverInfo.Artwork = .track)
+        -> () -> (info: ReceiverInfo, artwork: NSImage?) {
+        { looked += 1; return (ReceiverInfo(fields: fields, artwork: artwork), artwork == .track ? cover : nil) }
+    }
+    func look(_ feed: inout TrackInfoFeed, _ fields: TrackMetadata.Fields, at now: Date, sending: Bool = true,
+              pollingSince: Date? = nil, hasReading: Bool = true,
+              artwork: ReceiverInfo.Artwork = .track) -> TrackInfoFeed.Step {
+        feed.send(sending: sending, now: now, pollingSince: pollingSince, hasReading: hasReading, icon: icon,
+                  shows: playing(fields, artwork))
+    }
+    func nothing(_ s: TrackInfoFeed.Step) -> Bool { s.fields == nil && s.picture == nil && s.recheckAt == nil }
+
+    // No receiver shows track info: nothing goes out, nothing is read.
+    var feed = TrackInfoFeed()
+    check(!feed.modelUpdated(sending: false) && feed.sent == nil,
+          "track info feed: a model update without an AirPlay speaker sends nothing")
+    check(nothing(look(&feed, song, at: start, sending: false)) && looked == 0 && feed.sent == nil,
+          "track info feed: a track change without an AirPlay speaker sends nothing and reads nothing")
+    check(!feed.senderStarted(sending: false) && feed.sent == nil,
+          "track info feed: a sender that starts without an AirPlay speaker gets nothing")
+
+    // Sending starts with a model update; later updates leave it to track changes.
+    check(feed.modelUpdated(sending: true), "track info feed: the model update that starts sending sends everything")
+    var step = look(&feed, song, at: start)
+    check(step.fields == song && step.picture === cover, "track info feed: the first look sends the track and its artwork")
+    check(!feed.modelUpdated(sending: true), "track info feed: another model update while sending sends nothing")
+    check(nothing(look(&feed, song, at: start + 1)), "track info feed: the same track again gives the sender nothing")
+    step = look(&feed, next, at: start + 2)
+    check(step.fields == next, "track info feed: a track change sends the new track")
+
+    // A new sender (a pipe that starts) gets everything again, unchanged or not.
+    check(feed.senderStarted(sending: true), "track info feed: a new sender asks for a send")
+    step = look(&feed, next, at: start + 3)
+    check(step.fields == next && step.picture === cover,
+          "track info feed: a new sender gets the unchanged track and its artwork again")
+
+    // Sending stops: what was given is forgotten, so the next start sends it all.
+    check(!feed.modelUpdated(sending: false) && feed.sent == nil,
+          "track info feed: sending stops: what was given is forgotten")
+    check(feed.modelUpdated(sending: true), "track info feed: sending again sends everything again")
+    check(look(&feed, next, at: start + 4).fields == next, "track info feed: the track goes out again after a stop")
+
+    // Right after polling starts, the track is from before: hold it back, look
+    // again once when the reading wait ends, and only then read what plays.
+    var fresh = TrackInfoFeed()
+    looked = 0
+    let readingEnds = start + ReceiverInfo.readingWait
+    step = look(&fresh, song, at: start + 0.1, pollingSince: start, hasReading: false)
+    check(step.fields == nil && step.recheckAt == readingEnds && looked == 0,
+          "track info feed: before the first reading, nothing goes out and a look is scheduled at the wait's end")
+    step = look(&fresh, song, at: start + 0.2, pollingSince: start, hasReading: false)
+    check(nothing(step) && looked == 0, "track info feed: the wait's end is scheduled once per date")
+    fresh.recheckFired(at: start + 99)
+    check(fresh.sent?.recheckAt == readingEnds, "track info feed: a stale look leaves the scheduled one alone")
+    fresh.recheckFired(at: readingEnds)
+    check(fresh.sent?.recheckAt == nil, "track info feed: the scheduled look clears its date as it runs")
+    step = look(&fresh, song, at: readingEnds, pollingSince: start, hasReading: false)
+    check(step.fields == song && looked == 1, "track info feed: at the wait's end the track goes out without a reading")
+    step = look(&fresh, next, at: readingEnds + 1.1, pollingSince: readingEnds + 1, hasReading: true)
+    check(step.fields == next, "track info feed: a reading ends the wait at once")
+
+    // Artwork on its way: the track goes out alone, and one look is scheduled.
+    var spotify = TrackInfoFeed()
+    let artworkEnds = start + 10 + ReceiverInfo.artworkWait
+    step = look(&spotify, song, at: start + 10, artwork: .wait)
+    check(step.fields == song && step.picture == nil && step.recheckAt == artworkEnds,
+          "track info feed: artwork on its way: the track goes alone and a look is scheduled at the wait's end")
+    check(nothing(look(&spotify, song, at: start + 11, artwork: .wait)),
+          "track info feed: a look during the artwork wait schedules nothing new")
+    spotify.recheckFired(at: artworkEnds)
+    step = look(&spotify, song, at: artworkEnds, artwork: .wait)
+    check(step.fields == nil && step.picture === icon && step.recheckAt == nil,
+          "track info feed: the scheduled look at the wait's end sends AudioSync's icon")
+}
+
 // MARK: Windows and the view model (WindowRules.swift)
 do {
     let screen = CGRect(x: 0, y: 0, width: 1440, height: 875)
