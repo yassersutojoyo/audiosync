@@ -9,6 +9,7 @@
 
 use audiosync_core::eq::{self, EqSettings};
 use audiosync_core::policy::device_volume::Hint;
+use audiosync_core::policy::source_quit::WhenSourceQuits;
 #[cfg(any(not(windows), test))]
 use audiosync_core::volume;
 
@@ -270,6 +271,9 @@ pub enum NoticeMessage {
     NoSpeaker,
     /// The app being captured quit, so streaming stopped.
     SourceQuit { source: String },
+    /// The app being captured quit, so streaming went on with the whole
+    /// system (spec S227).
+    SourceSwitched { source: String },
     /// The chosen app isn't running, so streaming didn't start.
     SourceNotRunning { source: String },
     /// Capturing the chosen app would capture AudioSync's own sound too, so
@@ -417,6 +421,8 @@ pub struct AppState {
     /// AirPlay discovery runs but has found no speaker for a while: the
     /// speaker list says to check the network and Windows Firewall.
     pub airplay_none_found: bool,
+    /// What a session does when the app it captures quits (spec S227).
+    pub when_source_quits: WhenSourceQuits,
 }
 
 impl AppState {
@@ -517,6 +523,7 @@ pub trait Backend {
     fn dismiss_notice(&mut self, id: u64);
     fn dismiss_all_notices(&mut self);
     fn refresh_devices(&mut self);
+    fn set_when_source_quits(&mut self, setting: WhenSourceQuits);
 
     /// The fix under speaker `id`'s device-volume hint: raises its own
     /// volume in Windows to 75 % when low and unmutes it when muted
@@ -772,6 +779,7 @@ impl MockBackend {
             reference_name: Some("Speakers".into()),
             airplay_delay_ms: Some(1750.0),
             airplay_none_found: false,
+            when_source_quits: WhenSourceQuits::Stop,
         };
         MockBackend { state, next_id: 1 }
     }
@@ -846,6 +854,10 @@ impl Backend for MockBackend {
         if self.state.sources.iter().any(|s| s.id == id) {
             self.state.source_id = id.into();
         }
+    }
+
+    fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
+        self.state.when_source_quits = setting;
     }
 
     fn set_master_volume(&mut self, position: f64) {

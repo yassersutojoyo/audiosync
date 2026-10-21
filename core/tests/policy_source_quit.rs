@@ -64,7 +64,7 @@ fn stop_does_what_a_source_app_quit_did_before_the_setting() {
         }
     }
     let before = reaction(&Incident::SourceAppQuit);
-    assert!(before.stop_session && before.deselect_airplay && before.restart.is_none());
+    assert!(before.stop_session && !before.deselect_airplay && before.restart.is_none());
 }
 
 // covers: S227

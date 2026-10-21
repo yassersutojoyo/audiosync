@@ -56,6 +56,10 @@ use std::time::{Duration, Instant};
 
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
 use audiosync_core::policy::delay::native_airplay_latency_ms;
+use audiosync_core::policy::source::AudioSource;
+use audiosync_core::policy::source_quit::{
+    SourceQuitAction, SourceQuitWatch, Streaming, WhenSourceQuits,
+};
 use audiosync_core::reader::{Reader, ReaderCounters};
 use audiosync_core::render::{RendererControl, STOP_FADE_CAP};
 use audiosync_core::ring::{Ring, RingWriter};
@@ -411,6 +415,9 @@ pub struct Controller<D: Driver> {
     track_info: TrackInfo,
     /// The source track info last followed, as it looks to track info.
     track_source: Option<(SourceId, TrackSource)>,
+    /// Whether a quit of the captured app stops the session or moves it to
+    /// the whole system (spec S227).
+    quit_watch: SourceQuitWatch,
 }
 
 impl<D: Driver> Controller<D> {
@@ -442,6 +449,7 @@ impl<D: Driver> Controller<D> {
             next_start: None,
             restart_wait: None,
             restart_tries_left: 0,
+            quit_watch: SourceQuitWatch::default(),
             device_volumes: device_volume::Followed::default(),
             busy: BTreeMap::new(),
             unplayable: BTreeSet::new(),
@@ -1400,7 +1408,7 @@ impl<D: Driver> Controller<D> {
             return;
         };
         let restart = self.restart_wait.take().is_some();
-        match self.start_session(&source) {
+        match self.start_rebuilt(&source) {
             Ok(()) => {
                 if restart {
                     self.log.log(|| "the capture runs again".to_owned());
@@ -1428,6 +1436,65 @@ impl<D: Driver> Controller<D> {
                         format!("the start failed: {error}")
                     }
                 });
+                self.airplay_streaming(false);
+                self.release_busy();
+                self.pending.push(BackendEvent::Stopped {
+                    reason: StopReason::CaptureFailed(error),
+                });
+            }
+        }
+    }
+
+    /// Starts the session that waited for the last one to fade, or a capture
+    /// lost a moment ago. Its app quitting meanwhile counts as a quit while
+    /// streaming (spec S227 e): set to switch, the whole system starts instead.
+    fn start_rebuilt(&mut self, source: &SourceId) -> Result<(), BackendError> {
+        match self.start_session(source) {
+            Err(BackendError::SourceGone)
+                if self.decide_quit(source, Streaming::Rebuilding)
+                    == SourceQuitAction::SwitchToSystem =>
+            {
+                self.log.log(|| {
+                    "the captured app quit before its capture started: capturing the whole \
+                     system instead, as set"
+                        .to_owned()
+                });
+                self.start_session(&SourceId::WholeSystem)?;
+                self.pending.push(BackendEvent::SwitchedToSystem);
+                Ok(())
+            }
+            result => result,
+        }
+    }
+
+    /// What the setting makes of the quit of `source`'s app (spec S227). The
+    /// capture itself reports that its app ended, so the source's own
+    /// process ID names the app that quit.
+    fn decide_quit(&mut self, source: &SourceId, streaming: Streaming) -> SourceQuitAction {
+        let SourceId::App { root_pid } = source else {
+            return SourceQuitAction::Keep;
+        };
+        let app = root_pid.to_string();
+        let source = AudioSource::App {
+            bundle_id: app.clone(),
+        };
+        self.quit_watch.app_exited(&source, Some(&app), streaming)
+    }
+
+    /// Ends the session whose app quit and goes on with the whole system, as
+    /// a change of source does: the outputs fade over and the AirPlay
+    /// speakers stay in the stream (spec S186, S227).
+    fn switch_to_system(&mut self) {
+        self.log
+            .log(|| "the captured app quit: capturing the whole system instead, as set".to_owned());
+        self.end_session();
+        let started = self.begin_session(&SourceId::WholeSystem);
+        self.follow_device_volumes();
+        match started {
+            Ok(()) => self.pending.push(BackendEvent::SwitchedToSystem),
+            Err(error) => {
+                self.log
+                    .log(|| format!("the whole system couldn't be captured: {error}"));
                 self.airplay_streaming(false);
                 self.release_busy();
                 self.pending.push(BackendEvent::Stopped {
@@ -1688,6 +1755,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn start(&mut self, source: &SourceId) -> Result<(), BackendError> {
+        self.quit_watch.source_picked();
         self.end_session();
         self.log
             .log(|| format!("starting: capturing {}", describe_source(source)));
@@ -1986,6 +2054,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
+        self.quit_watch.set_setting(setting);
+    }
+
     fn retry_airplay(&mut self) {
         if self
             .airplay
@@ -2063,6 +2135,20 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 CaptureState::SourceQuit => Some(StopReason::SourceQuit),
                 CaptureState::Failed(error) => Some(StopReason::CaptureFailed(error)),
             },
+        };
+        let quit_source = match stop_reason {
+            Some(StopReason::SourceQuit) => self.session.as_ref().map(|s| s.source.clone()),
+            _ => None,
+        };
+        let stop_reason = match quit_source {
+            Some(source)
+                if self.decide_quit(&source, Streaming::Running)
+                    == SourceQuitAction::SwitchToSystem =>
+            {
+                self.switch_to_system();
+                None
+            }
+            _ => stop_reason,
         };
         if lost {
             self.restart_capture();
@@ -2565,6 +2651,9 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
             format!("output {} no longer waits for its device", label(names, id))
         }
         BackendEvent::Stopped { reason } => format!("stopped: {}", describe_stop(reason)),
+        BackendEvent::SwitchedToSystem => {
+            "the captured app quit: the whole system is the source now".to_owned()
+        }
         BackendEvent::HeardTwice { paths } if paths.is_empty() => {
             "the source is heard only through AudioSync again".to_owned()
         }
@@ -3973,6 +4062,60 @@ mod tests {
         );
         poll_quietly(&mut backend, RESTART_DELAY_POLLS + 1);
         assert_eq!(backend.driver().captures_started().len(), 1);
+    }
+
+    #[test]
+    fn an_app_that_quits_gives_way_to_the_whole_system_when_set_and_airplay_plays_on() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        let id = id_of(&kitchen);
+        backend.set_airplay_enabled(&id, true).unwrap();
+        backend.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        fake.take_calls();
+
+        backend.quit_app(PLAYER_PID);
+        assert_eq!(backend.poll(), [BackendEvent::SwitchedToSystem]);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert!(backend.driver().capture_running());
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::Remove(_))),
+            "the AirPlay speaker stays in the stream"
+        );
+        assert_eq!(backend.enabled_airplay(), [id]);
+
+        // The app starting again changes nothing (S227 c).
+        backend.add_app(PLAYER_PID + 1, "player.exe");
+        poll_quietly(&mut backend, 2);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+    }
+
+    #[test]
+    fn an_app_that_quit_while_its_capture_waits_to_start_again_gives_way_when_set() {
+        let mut backend = backend();
+        backend.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        backend.quit_app(PLAYER_PID);
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS - 1);
+        assert_eq!(backend.poll(), [BackendEvent::SwitchedToSystem]);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+        assert_eq!(backend.driver().captures_started().len(), 2, "one rebuild");
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
     #[test]
