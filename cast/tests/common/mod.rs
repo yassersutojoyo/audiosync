@@ -138,6 +138,8 @@ pub enum Command {
     /// Close the current TCP connection without a TLS close, then accept
     /// the next one.
     DropConnection,
+    /// Forget the running apps without telling anyone.
+    ClearApps,
     Disconnect,
 }
 
@@ -480,17 +482,14 @@ impl Device {
 
 /// GETs `url` as the device would, records what came back and calls
 /// `on_first_audio` once the headers and the first chunk arrived.
-fn fetch(
-    url: &str,
-    fetches: &Mutex<Vec<Fetch>>,
-    stop: &AtomicBool,
-    on_first_audio: impl FnOnce(),
-) {
+fn fetch(url: &str, fetches: &Mutex<Vec<Fetch>>, stop: &AtomicBool, on_first_audio: impl FnOnce()) {
     let Some((address, path)) = http::split_url(url) else {
         return;
     };
-    let Ok(mut stream) = http::request(address, &format!("GET {path} HTTP/1.1\r\nHost: device\r\n\r\n"))
-    else {
+    let Ok(mut stream) = http::request(
+        address,
+        &format!("GET {path} HTTP/1.1\r\nHost: device\r\n\r\n"),
+    ) else {
         return;
     };
     let index = {
@@ -570,6 +569,7 @@ fn serve(
                     let status = device.status(0);
                     write(&mut stream, &status);
                 }
+                Ok(Command::ClearApps) => device.apps.clear(),
                 Ok(Command::DropConnection) => {
                     let _ = stream.sock.shutdown(std::net::Shutdown::Both);
                     return false;

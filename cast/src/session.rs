@@ -582,7 +582,10 @@ impl CastSession {
     fn recover(&mut self, reason: EndReason, reload: bool) {
         self.report(SessionEvent::Recovering(reason));
         self.playing = false;
-        // The first attempt of the C80 loop is the reconnect at once.
+        // One connection per device at a time; the first attempt of the
+        // C80 loop is the reconnect at once.
+        self.client.disconnect();
+        while self.client.poll_event().is_some() {}
         let mut failures = Vec::new();
         let result = connect_retrying(&self.addresses, &self.selected, |error, wait| {
             failures.push((error, wait));

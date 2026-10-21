@@ -358,6 +358,13 @@ impl CastClient {
         self.stop_in_place(budget)
     }
 
+    /// Drops the connection without a teardown, before a reconnect (C81).
+    pub fn disconnect(&mut self) {
+        let _ = self.stream.shutdown();
+        let _ = self.stream.get_ref().shutdown(std::net::Shutdown::Both);
+        self.channel.end(EndReason::ClosedByDevice);
+    }
+
     /// [`CastClient::stop`] for an owner that keeps the client.
     pub fn stop_in_place(&mut self, budget: Duration) -> EndReason {
         let until = Instant::now() + budget;

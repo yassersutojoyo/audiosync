@@ -52,7 +52,10 @@ fn the_host_write_neither_allocates_nor_blocks_with_a_stalled_reader() {
     }
     let elapsed = start.elapsed();
     assert_eq!(allocations(), before, "the write path allocated");
-    assert!(elapsed < Duration::from_millis(200), "writes took {elapsed:?}");
+    assert!(
+        elapsed < Duration::from_millis(200),
+        "writes took {elapsed:?}"
+    );
     assert_eq!(taken, 4800, "the ring takes what fits");
     assert_eq!(reader.available(), 4800);
     assert_eq!(reader.overflow(), 100 * 480 - 4800, "the rest is counted");
@@ -66,7 +69,9 @@ fn frames_come_out_in_order_as_little_endian_samples() {
     let mut out = Vec::new();
     assert_eq!(reader.read_into(&mut out, 16), 5);
     let samples: Vec<i16> = out
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
         .collect();
     assert_eq!(samples, [1, -1, 2, -2, 3, -3, 32767, -32767, 0, 32767]);

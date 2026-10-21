@@ -44,8 +44,11 @@ fn feed(writer: AudioWriter, value: i16, stop: Arc<AtomicBool>) -> thread::JoinH
 
 fn get(server: &StreamServer, method: &str, extra: &str) -> TcpStream {
     let (address, path) = http::split_url(&server.url()).expect("url");
-    http::request(address, &format!("{method} {path} HTTP/1.1\r\nHost: x\r\n{extra}\r\n"))
-        .expect("connects")
+    http::request(
+        address,
+        &format!("{method} {path} HTTP/1.1\r\nHost: x\r\n{extra}\r\n"),
+    )
+    .expect("connects")
 }
 
 fn events(server: &StreamServer) -> Vec<ServerEvent> {
@@ -59,7 +62,11 @@ fn the_url_is_the_local_address_an_ephemeral_port_and_a_fresh_random_token() {
     let (second, _w2) = server(vec![LOCAL]);
     let url = first.url();
     let (address, path) = http::split_url(&url).expect("an IP literal and a path");
-    assert_eq!(address.ip(), LOCAL, "the channel's local address, no host name");
+    assert_eq!(
+        address.ip(),
+        LOCAL,
+        "the channel's local address, no host name"
+    );
     assert_eq!(first.address().ip(), LOCAL, "listening on that one address");
     assert_ne!(address.port(), 0);
     assert_eq!(first.token().len(), 32, "128 bits as hex");
@@ -113,12 +120,10 @@ fn a_request_from_an_address_that_is_not_the_device_gets_403() {
     let mut stream = get(&server, "GET", "");
     let (head, _) = http::read_response(&mut stream, Duration::ZERO);
     assert_eq!(http::status(&head), 403);
-    assert!(
-        events(&server).contains(&ServerEvent::Refused {
-            from: LOCAL,
-            status: 403
-        })
-    );
+    assert!(events(&server).contains(&ServerEvent::Refused {
+        from: LOCAL,
+        status: 403
+    }));
     server.stop();
 }
 
@@ -134,12 +139,19 @@ fn a_get_is_a_chunked_200_with_the_headers_and_range_is_ignored() {
     assert!(head.starts_with("HTTP/1.1 200"));
     assert_eq!(http::header(&head, "Content-Type"), Some("audio/wav"));
     assert_eq!(http::header(&head, "Cache-Control"), Some("no-store"));
-    assert_eq!(http::header(&head, "Access-Control-Allow-Origin"), Some("*"));
+    assert_eq!(
+        http::header(&head, "Access-Control-Allow-Origin"),
+        Some("*")
+    );
     assert_eq!(http::header(&head, "Transfer-Encoding"), Some("chunked"));
     assert_eq!(http::header(&head, "Content-Length"), None);
     let chunks = http::chunks(&body);
     assert!(chunks.len() >= 3, "the header chunk and audio");
-    assert_eq!(&chunks[0][..4], b"RIFF", "a response starts with the header");
+    assert_eq!(
+        &chunks[0][..4],
+        b"RIFF",
+        "a response starts with the header"
+    );
 
     let mut head_request = get(&server, "HEAD", "");
     let (head, body) = http::read_response(&mut head_request, Duration::from_millis(200));
@@ -174,7 +186,9 @@ fn a_second_get_ends_the_first_and_a_reset_by_the_device_is_no_error() {
     assert!(tail.ends_with("0\r\n\r\n") || rest.is_empty());
     let until = Instant::now() + Duration::from_secs(2);
     let mut seen = Vec::new();
-    while Instant::now() < until && !seen.contains(&ServerEvent::ResponseEnded(ResponseEnd::Replaced)) {
+    while Instant::now() < until
+        && !seen.contains(&ServerEvent::ResponseEnded(ResponseEnd::Replaced))
+    {
         seen.extend(events(&server));
         thread::sleep(Duration::from_millis(20));
     }
@@ -239,14 +253,20 @@ fn audio_leaves_in_20_ms_blocks_at_real_time_starting_at_the_newest() {
     let chunks = http::chunks(&body);
     let audio = &chunks[1..];
     assert!(!audio.is_empty());
-    assert!(audio.iter().all(|chunk| chunk.len() == 960 * 4), "20 ms blocks of 48 kHz stereo");
+    assert!(
+        audio.iter().all(|chunk| chunk.len() == 960 * 4),
+        "20 ms blocks of 48 kHz stereo"
+    );
     let frames: usize = audio.iter().map(|chunk| chunk.len() / 4).sum();
     let allowed = (elapsed.as_secs_f64() * 48_000.0) as usize + 960;
-    assert!(frames <= allowed, "{frames} frames in {elapsed:?}: faster than real time");
+    assert!(
+        frames <= allowed,
+        "{frames} frames in {elapsed:?}: faster than real time"
+    );
     assert!(
         audio
             .iter()
-            .flat_map(|chunk| chunk.chunks_exact(2))
+            .flat_map(|chunk| chunk.as_chunks::<2>().0.iter())
             .all(|pair| i16::from_le_bytes([pair[0], pair[1]]) == 5),
         "the backlog written before the GET was sent"
     );
@@ -261,7 +281,11 @@ fn audio_leaves_in_20_ms_blocks_at_real_time_starting_at_the_newest() {
     }
     assert_eq!(queue.frames(), 96_000);
     assert_eq!(queue.dropped(), 50 * 960);
-    assert_eq!(queue.pop().expect("a block")[0], 50, "the oldest went first");
+    assert_eq!(
+        queue.pop().expect("a block")[0],
+        50,
+        "the oldest went first"
+    );
 }
 
 #[test]
@@ -276,7 +300,7 @@ fn the_stream_server_writes_the_samples_as_given() {
     assert!(
         chunks[1..]
             .iter()
-            .flat_map(|chunk| chunk.chunks_exact(2))
+            .flat_map(|chunk| chunk.as_chunks::<2>().0.iter())
             .all(|pair| i16::from_le_bytes([pair[0], pair[1]]) == -12_345)
     );
     stop.store(true, Ordering::SeqCst);

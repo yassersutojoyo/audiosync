@@ -63,11 +63,7 @@ fn running(start: Instant, volume: Value) -> Channel {
     channel.launch(start).expect("ready");
     channel.handle(
         start,
-        status(
-            101,
-            vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")],
-            volume,
-        ),
+        status(101, vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")], volume),
     );
     sent(&mut channel);
     events(&mut channel);
@@ -86,7 +82,9 @@ fn request(metadata: Metadata) -> LoadRequest {
 /// 7 and then played.
 fn playing(start: Instant) -> Channel {
     let mut channel = running(start, volume());
-    channel.load(start, &request(Metadata::default())).expect("loads");
+    channel
+        .load(start, &request(Metadata::default()))
+        .expect("loads");
     sent(&mut channel);
     channel.handle(start, media_status("t-1", 102, 7, "BUFFERING", None));
     channel.handle(start, media_status("t-1", 0, 7, "PLAYING", None));
@@ -120,7 +118,13 @@ fn load_carries_the_url_in_content_id_live_with_music_metadata_and_nothing_else(
     keys.sort_unstable();
     assert_eq!(
         keys,
-        ["contentId", "contentType", "duration", "metadata", "streamType"],
+        [
+            "contentId",
+            "contentType",
+            "duration",
+            "metadata",
+            "streamType"
+        ],
         "no contentUrl, no tracks, no DRM or custom data"
     );
     assert_eq!(media["contentId"], URL);
@@ -132,10 +136,7 @@ fn load_carries_the_url_in_content_id_live_with_music_metadata_and_nothing_else(
         json!({"metadataType": 3, "title": "Track", "images": [{"url": "http://192.0.2.10:45123/art.png"}]}),
         "unknown and blank fields are left out"
     );
-    assert_eq!(
-        Metadata::default().to_json(),
-        json!({"metadataType": 3})
-    );
+    assert_eq!(Metadata::default().to_json(), json!({"metadataType": 3}));
 
     let mut long = request(Metadata::default());
     long.url = format!("http://192.0.2.10:1/{}", "a".repeat(1024));
@@ -149,7 +150,9 @@ fn one_load_at_a_time_its_media_session_and_rebuffers_are_tracked() {
     let start = Instant::now();
     let mut channel = running(start, volume());
     let mut wire = Vec::new();
-    channel.load(start, &request(Metadata::default())).expect("loads");
+    channel
+        .load(start, &request(Metadata::default()))
+        .expect("loads");
     wire.extend(sent(&mut channel));
     assert_eq!(
         channel.load(start, &request(Metadata::default())),
@@ -181,7 +184,10 @@ fn one_load_at_a_time_its_media_session_and_rebuffers_are_tracked() {
     channel.handle(later, media_status("t-1", 0, 7, "PLAYING", None));
     assert!(events(&mut channel).contains(&Event::Resumed));
     // A status from another endpoint is not the app's.
-    channel.handle(later, media_status("t-9", 0, 8, "IDLE", Some("INTERRUPTED")));
+    channel.handle(
+        later,
+        media_status("t-9", 0, 8, "IDLE", Some("INTERRUPTED")),
+    );
     assert!(!channel.is_ended());
     alive(&mut channel, later + LOAD_TIMEOUT);
     channel.tick(later + LOAD_TIMEOUT);
@@ -197,7 +203,11 @@ fn one_load_at_a_time_its_media_session_and_rebuffers_are_tracked() {
         wire.last().expect("media STOP").2,
         json!({"type": "STOP", "mediaSessionId": 7, "requestId": 103})
     );
-    assert_eq!(channel.media_session_id(), None, "STOP ends the media session");
+    assert_eq!(
+        channel.media_session_id(),
+        None,
+        "STOP ends the media session"
+    );
     for (_, namespace, payload) in &wire {
         let kind = payload["type"].as_str().unwrap_or("");
         assert!(!["PAUSE", "PLAY", "SEEK"].contains(&kind));
@@ -209,15 +219,22 @@ fn one_load_at_a_time_its_media_session_and_rebuffers_are_tracked() {
 fn no_reply_or_no_playing_in_20_s_fails_the_load() {
     let start = Instant::now();
     let mut channel = running(start, volume());
-    channel.load(start, &request(Metadata::default())).expect("loads");
+    channel
+        .load(start, &request(Metadata::default()))
+        .expect("loads");
     alive(&mut channel, start + Duration::from_secs(10));
     channel.tick(start + LOAD_TIMEOUT - Duration::from_millis(1));
     assert!(events(&mut channel).is_empty());
     channel.tick(start + LOAD_TIMEOUT);
-    assert_eq!(events(&mut channel), [Event::LoadFailed(MediaError::Timeout)]);
+    assert_eq!(
+        events(&mut channel),
+        [Event::LoadFailed(MediaError::Timeout)]
+    );
 
     let mut channel = running(start, volume());
-    channel.load(start, &request(Metadata::default())).expect("loads");
+    channel
+        .load(start, &request(Metadata::default()))
+        .expect("loads");
     let replied = start + Duration::from_secs(5);
     channel.handle(replied, media_status("t-1", 102, 3, "BUFFERING", None));
     events(&mut channel);
@@ -225,8 +242,15 @@ fn no_reply_or_no_playing_in_20_s_fails_the_load() {
     channel.tick(replied + LOAD_TIMEOUT - Duration::from_millis(1));
     assert!(events(&mut channel).is_empty(), "20 s count from the reply");
     channel.tick(replied + LOAD_TIMEOUT);
-    assert_eq!(events(&mut channel), [Event::LoadFailed(MediaError::Timeout)]);
-    assert!(channel.load(replied + LOAD_TIMEOUT, &request(Metadata::default())).is_ok());
+    assert_eq!(
+        events(&mut channel),
+        [Event::LoadFailed(MediaError::Timeout)]
+    );
+    assert!(
+        channel
+            .load(replied + LOAD_TIMEOUT, &request(Metadata::default()))
+            .is_ok()
+    );
 }
 
 // covers: C83
@@ -263,7 +287,9 @@ fn each_media_error_reply_ends_the_load_with_its_own_reason() {
     let mut texts = Vec::new();
     for (mut reply, error) in cases {
         let mut channel = running(start, volume());
-        channel.load(start, &request(Metadata::default())).expect("loads");
+        channel
+            .load(start, &request(Metadata::default()))
+            .expect("loads");
         reply["requestId"] = json!(102);
         channel.handle(start, json_message("t-1", SENDER, NS_MEDIA, reply));
         assert_eq!(events(&mut channel), [Event::LoadFailed(error.clone())]);
@@ -280,13 +306,13 @@ fn each_media_error_reply_ends_the_load_with_its_own_reason() {
 fn idle_before_playing_fails_the_load() {
     let start = Instant::now();
     let mut channel = running(start, volume());
-    channel.load(start, &request(Metadata::default())).expect("loads");
+    channel
+        .load(start, &request(Metadata::default()))
+        .expect("loads");
     channel.handle(start, media_status("t-1", 102, 4, "BUFFERING", None));
     events(&mut channel);
     channel.handle(start, media_status("t-1", 0, 4, "IDLE", Some("ERROR")));
-    assert!(
-        events(&mut channel).contains(&Event::LoadFailed(MediaError::Idle(IdleReason::Error)))
-    );
+    assert!(events(&mut channel).contains(&Event::LoadFailed(MediaError::Idle(IdleReason::Error))));
 }
 
 #[test]
@@ -313,9 +339,11 @@ fn idle_while_playing_says_why_and_a_replacement_ends_the_channel() {
     }
     let mut channel = playing(start);
     channel.handle(start, media_status("t-1", 0, 7, "IDLE", Some("ERROR")));
-    assert!(events(&mut channel).contains(&Event::PlaybackEnded(PlaybackEnd::Error(Some(
-        IdleReason::Error
-    )))));
+    assert!(
+        events(&mut channel).contains(&Event::PlaybackEnded(PlaybackEnd::Error(Some(
+            IdleReason::Error
+        ))))
+    );
     assert!(!channel.is_ended());
     let mut channel = playing(start);
     channel.handle(start, media_status("t-1", 0, 7, "IDLE", Some("FINISHED")));
@@ -341,7 +369,10 @@ fn set_volume_goes_to_the_platform_clamped_and_mute_on_its_own() {
     assert_eq!(out[0].2["volume"], json!({"level": 1.0}));
     assert_eq!(out[1].2["volume"], json!({"level": 0.0}));
     assert_eq!(out[2].2["volume"], json!({"muted": true}));
-    assert!(out.iter().all(|(_, _, payload)| payload["requestId"].as_u64() > Some(0)));
+    assert!(
+        out.iter()
+            .all(|(_, _, payload)| payload["requestId"].as_u64() > Some(0))
+    );
     assert_eq!(
         channel.set_volume(later + VOLUME_INTERVAL, f64::NAN),
         Err(VolumeError::Invalid)
@@ -366,7 +397,10 @@ fn steps_move_by_the_step_interval_from_the_reported_level() {
     let level = channel.step_volume(start, true).expect("step");
     assert!((level - 0.6).abs() < 1e-9);
     let level = channel.step_volume(start, true).expect("step");
-    assert!((level - 0.7).abs() < 1e-9, "a quick second step builds on the first");
+    assert!(
+        (level - 0.7).abs() < 1e-9,
+        "a quick second step builds on the first"
+    );
     channel.tick(start + VOLUME_INTERVAL);
     assert_eq!(sent(&mut channel).len(), 2);
     channel.handle(
@@ -392,8 +426,12 @@ fn a_drag_sends_at_most_one_level_per_100_ms_and_status_changes_are_not_echoed()
     let start = Instant::now();
     let mut channel = running(start, volume());
     channel.set_volume(start, 0.1).expect("sent");
-    channel.set_volume(start + Duration::from_millis(10), 0.2).expect("queued");
-    channel.set_volume(start + Duration::from_millis(20), 0.3).expect("queued");
+    channel
+        .set_volume(start + Duration::from_millis(10), 0.2)
+        .expect("queued");
+    channel
+        .set_volume(start + Duration::from_millis(20), 0.3)
+        .expect("queued");
     assert_eq!(sent(&mut channel).len(), 1);
     assert_eq!(channel.next_deadline(), start + VOLUME_INTERVAL);
     channel.tick(start + Duration::from_millis(99));
@@ -413,10 +451,12 @@ fn a_drag_sends_at_most_one_level_per_100_ms_and_status_changes_are_not_echoed()
     );
     channel.tick(start + Duration::from_secs(1));
     assert!(sent(&mut channel).is_empty(), "nothing sent back");
-    let reported = events(&mut channel).into_iter().find_map(|event| match event {
-        Event::Status(status) => Some(status.volume),
-        _ => None,
-    });
+    let reported = events(&mut channel)
+        .into_iter()
+        .find_map(|event| match event {
+            Event::Status(status) => Some(status.volume),
+            _ => None,
+        });
     let reported = reported.expect("the status reaches the host");
     assert_eq!(reported.level, 0.9);
     assert!(reported.muted);

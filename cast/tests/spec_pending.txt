@@ -3,68 +3,21 @@
 # tests/spec_coverage.rs fails if a clause listed here gains a `// covers:`
 # test, so this list only shrinks. "Partly done" names what already exists.
 
-# Scope rules that need the media path or the host.
-C1 Audio only: media stage (no LOAD exists yet).
+# Scope rules that need the host.
 C2 One Cast device per stream: host stage.
-C5 No encrypted or DRM media: media stage.
-C7 A Cast failure never stops other outputs: host stage.
-C8 Real-time audio handoff into a preallocated ring: stream server stage.
-C9 Random or counter identifiers, no host data on the wire: stream URL stage (partly done: random request ids, no SNI, no host names in messages).
+C7 A Cast failure never stops other outputs: host stage (partly done: every session failure is a typed value returned to the host, and nothing in the sender touches other outputs).
 
 # Connection.
 C20 TLS 1.2 with ECDHE-RSA AES-GCM and CBC suites: the platform TLS stacks offer them, but native-tls can't pin a server suite in a test; G4 records what devices accept (partly done: TLS 1.2 minimum, a TLS 1.2-only server connects, handshake errors carry the TLS stack's reason).
-C22 Nothing secret on the channel beyond the stream URL: stream URL stage.
 
-# Media.
-C45 Media namespace to the app's transportId: media stage.
-C46 LOAD fields: media stage.
-C47 contentId, no contentUrl: media stage.
-C48 streamType LIVE: media stage.
-C49 One LOAD at a time, 20 s to PLAYING: media stage.
-C50 mediaSessionId: media stage.
-C51 MEDIA_STATUS states and rebuffer counting: media stage.
-C52 No PAUSE, PLAY or SEEK: media stage.
-C53 Music metadata: media stage.
-C54 No reload for metadata: media stage.
+# Formats.
+C63 WAV and FLAC formats: FLAC encoder stage (partly done: live WAV with largest-value sizes at 44 100 and 48 000 Hz).
+C84 WAV to FLAC fallback: FLAC encoder stage (partly done: LOAD_FAILED and IDLE with ERROR before PLAYING end the attempt with their reason).
 
-# Stream server.
-C55 Stream URL on the channel's local address: stream server stage (partly done: the client reports the connection's local address).
-C56 Listener on that address, ephemeral port, firewall message: stream server stage.
-C57 Random path token: stream server stage.
-C58 Source address check: stream server stage.
-C59 Response headers and chunked body: stream server stage.
-C60 Range ignored: stream server stage.
-C61 Live edge per GET, one response at a time: stream server stage.
-C62 Supported codecs and containers: stream server stage.
-C63 WAV and FLAC formats: stream server stage.
-C64 20 ms blocks, real-time pacing, 2 s queue: stream server stage.
-
-# Volume.
-C65 SET_VOLUME: volume stage (partly done: the status carries level, muted, controlType and stepInterval).
-C66 No media VOLUME: volume stage.
-C67 Clamping: volume stage.
-C68 controlType fixed: volume stage.
-C69 stepInterval steps: volume stage.
-C70 External changes and drag rate limit: volume stage.
-C71 No sample scaling: volume stage.
-
-# Timing.
-C72 What the sender controls: timing stage.
-C73 No shared clock: timing stage.
-C74 Latency of seconds: timing stage.
-C75 Growing latency: timing stage.
-C76 Google group delay unreachable: timing stage.
-C77 Measured-offset output: timing stage.
-C78 Per-second diagnostics: timing stage.
-C79 Drift counting and Resync: timing stage.
-
-# Errors and teardown.
-C80 Connect failure retries: host stage (partly done: typed connect errors with their cause, and the 1 s to 30 s backoff).
-C81 Reconnect and resume: recovery stage.
-C82 CLOSE from the app or the platform: recovery stage (partly done: a CLOSE from the app checks the status and reconnects the virtual connection once; a CLOSE from the platform ends the channel instead of reconnecting).
-C83 Error replies and their reasons: media stage (partly done: LAUNCH_ERROR and its reason).
-C84 WAV to FLAC fallback: media stage.
-C85 No fetch in 10 s: stream server stage.
-C86 IDLE reasons while playing: media stage.
-C87 Teardown order: media and stream server stages (partly done: receiver STOP for the sender's own session, CLOSE to the app and the platform, TLS closed, 2 s per step).
-C88 Teardown at quit within 3 s: host stage (partly done: the client's stop takes a time budget).
+# Timing: what the host does with the sender's numbers, and hardware.
+C72 What the sender controls: host stage and G7 (partly done: WAV without encoder delay, the 2 s queue and its counters).
+C73 No shared clock: host stage (the host never claims sample-accurate sync).
+C74 Latency of seconds: hardware, G7.
+C75 Growing latency: hardware, G7 (partly done: drops and rebuffers are counted, C79).
+C76 Google group delay unreachable: host stage (nothing to send).
+C77 Measured-offset output: host stage (per-speaker delay and the stored offset per device).
