@@ -252,9 +252,14 @@ pub fn windowed_latency_ns(
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tracking {
     /// Measuring the reference since the tracking (re)started: the fills
-    /// taken so far, summed, their count, and the device frames of their
-    /// callbacks.
-    Measuring { sum: f64, count: u32, frames: u64 },
+    /// taken so far, summed, their count, the device frames of their
+    /// callbacks, and Jf at the first of them.
+    Measuring {
+        sum: f64,
+        count: u32,
+        frames: u64,
+        shift: f64,
+    },
     /// Following: the fill the renderer keeps, and the running average.
     Following { reference: f64, average: f64 },
 }
@@ -264,6 +269,7 @@ const RESTART: Tracking = Tracking::Measuring {
     sum: 0.0,
     count: 0,
     frames: 0,
+    shift: 0.0,
 };
 
 /// The most capture-rate frames the resampler can ask for to produce
@@ -1210,7 +1216,13 @@ impl Renderer {
                 sum,
                 count,
                 frames: span,
+                shift,
             } => {
+                // Against the anchor floor as it stood at the first fill, so a
+                // fall during the measuring isn't averaged into the reference.
+                let jf = self.reader.floor_shift_frames() as f64;
+                let shift = if count == 0 { jf } else { shift };
+                let fill = fill + jf - shift;
                 let (sum, count, span) = (sum + fill, count + 1, span + frames as u64);
                 self.tracking = if span as f64 >= track {
                     let reference = sum / f64::from(count);
@@ -1223,6 +1235,7 @@ impl Renderer {
                         sum,
                         count,
                         frames: span,
+                        shift,
                     }
                 };
                 0
@@ -1248,10 +1261,16 @@ impl Renderer {
     /// shortage, moves the reference too, so the output keeps that slack.
     fn count_trim(&mut self, by: f64, kept: f64) {
         self.tracking = match self.tracking {
-            Tracking::Measuring { sum, count, frames } => Tracking::Measuring {
+            Tracking::Measuring {
+                sum,
+                count,
+                frames,
+                shift,
+            } => Tracking::Measuring {
                 sum: sum + by * f64::from(count),
                 count,
                 frames,
+                shift,
             },
             Tracking::Following { reference, average } => Tracking::Following {
                 reference: reference + kept,
