@@ -1331,7 +1331,16 @@ impl Renderer {
         let owed_ns = u64::try_from(anchor.saturating_sub(low)).unwrap_or(0);
         let paid_ns = (frames.saturating_mul(1_000_000_000) / rate).min(owed_ns);
         *anchor = anchor.saturating_sub(i64::try_from(paid_ns).unwrap_or(i64::MAX));
-        (paid_ns.saturating_mul(rate) / 1_000_000_000).min(frames)
+        let paid = (paid_ns.saturating_mul(rate) / 1_000_000_000).min(frames);
+        // What is paid is no longer owed by the reference being measured.
+        if let Tracking::Measuring {
+            sum, count, shift, ..
+        } = &mut self.tracking
+        {
+            *shift += paid as f64;
+            *sum -= paid as f64 * f64::from(*count);
+        }
+        paid
     }
 
     /// The observer at the start of a callback of `frames` device frames
