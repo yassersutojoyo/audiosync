@@ -146,6 +146,9 @@ extern "C" {
 #define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* unreadable or not in the format: ignored, the next pairing replaces it */
 #define ASC_AIRPLAY_PAIRINGS_NEWER -3   /* a newer AudioSync wrote it: ignored and left as it is */
 
+/* The largest hold-back asc_airplay_set_hold_back applies, in ms: the sender's limit on a speaker's delay. */
+#define ASC_AIRPLAY_MAX_DELAY_MS 3000
+
 /* The rate of every Cast stream; the Cast input resamples the capture to it. */
 #define ASC_CAST_RATE 48000
 
@@ -1086,8 +1089,9 @@ bool asc_airplay_next_event(AscAirPlay *airplay, AscAirPlayEvent *event);
 
 /*
  * Adds the receiver discovery lists under `id` as a speaker, at slider
- * position `volume` (0 to 100) times the master, with no delay of its own: a
- * session starts at once, and its state, errors and latency come as events.
+ * position `volume` (0 to 100) times the master, held back by the hold-back
+ * set last (asc_airplay_set_hold_back): a session starts at once, and its
+ * state, errors and latency come as events.
  * It uses the password handed over for `id` and the stored credentials, if
  * any. Adding one already added applies the volume, the password and the
  * credentials and, if it failed or waits for
@@ -1118,6 +1122,16 @@ bool asc_airplay_set_volume(AscAirPlay *airplay, const char *id, double volume);
  * over -30 to 0 dB, and muted at 0.
  */
 void asc_airplay_set_master(AscAirPlay *airplay, double master);
+
+/*
+ * Holds every speaker back by hold_back_ms on top of L, live, and every
+ * speaker added later, so they meet an output that plays later than L, such
+ * as a Google Cast speaker with a longer offset. The sender caps a speaker's
+ * delay at ASC_AIRPLAY_MAX_DELAY_MS; past it the speakers play early by the
+ * rest. A value below 0 or not finite counts as 0. Returns the hold-back
+ * applied, in ms; 0 for a NULL or dead handle.
+ */
+double asc_airplay_set_hold_back(AscAirPlay *airplay, double hold_back_ms);
 
 /*
  * The base latency L in milliseconds: a local output lines up with the
@@ -1462,6 +1476,16 @@ bool asc_cast_set_offset(AscCast *cast, const char *id, double offset_ms);
  * or dead handle or an id that doesn't read.
  */
 double asc_cast_offset_ms(AscCast *cast, const char *id);
+
+/*
+ * Holds the audio the input hands the session back by hold_back_ms, live,
+ * so a device whose offset is shorter than L plays at L. It stops at
+ * 20 000 ms; a value below 0 or not finite counts as 0. A change fades out
+ * and in over 20 ms; a capture start (asc_cast_input_set_rate) begins with
+ * silence for the hold-back, never with the end of the last capture.
+ * Returns the hold-back applied, in ms; 0 for a NULL or dead handle.
+ */
+double asc_cast_set_hold_back(AscCast *cast, double hold_back_ms);
 
 /*
  * The device memory to store between runs, as JSON: per device, the format

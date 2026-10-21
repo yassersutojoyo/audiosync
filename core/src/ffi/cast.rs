@@ -31,7 +31,7 @@ use std::ffi::{CStr, CString, c_char};
 use std::net::{IpAddr, SocketAddr};
 use std::panic::{self, AssertUnwindSafe};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
@@ -51,7 +51,9 @@ use audiosync_cast::stream::StreamError;
 
 use super::airplay::{LATEST_PANIC, PANICS, caught_panic_location, note_panic_locations};
 use super::{host_slice, stereo_samples};
+use crate::delay_line::DelayLine;
 use crate::fade::InputFade;
+use crate::policy::delay::MAX_HOLD_BACK_MS;
 use crate::resample::Resampler;
 use crate::ring::is_supported_rate;
 
@@ -166,6 +168,9 @@ pub const CAST_FORMAT_FLAC: i32 = 2;
 const RING_FRAMES: usize = CAST_RATE as usize;
 /// Output frames the input resamples into per step; bounds its buffer.
 const INPUT_CHUNK_FRAMES: usize = 4096;
+/// The longest hold-back of the feed, in frames at [`CAST_RATE`]: the
+/// ceiling of L.
+const MAX_HOLD_BACK_FRAMES: usize = MAX_HOLD_BACK_MS as usize * CAST_RATE as usize / 1000;
 /// The largest artwork [`asc_cast_set_artwork`] keeps.
 const MAX_ARTWORK_BYTES: usize = 8 << 20;
 /// The largest offset [`asc_cast_set_offset`] stores: C74 reports latencies
@@ -326,6 +331,9 @@ struct Shared {
     dead: AtomicBool,
     /// Where the first panic a call caught happened (`<file>:<line>`).
     at: OnceLock<String>,
+    /// How many frames the input holds its audio back
+    /// ([`asc_cast_set_hold_back`]).
+    hold_back: AtomicUsize,
 }
 
 /// A writer from `Box::into_raw` that [`Shared::attach`] swapped out.
@@ -347,6 +355,7 @@ impl Shared {
             retired: Mutex::new(Vec::new()),
             dead: AtomicBool::new(false),
             at: OnceLock::new(),
+            hold_back: AtomicUsize::new(0),
         }
     }
 
@@ -1388,6 +1397,33 @@ pub unsafe extern "C" fn asc_cast_set_artwork(
     }
 }
 
+/// Holds the audio the input hands the session back by `hold_back_ms`,
+/// live, so a device whose offset is shorter than L plays at L (C77). It
+/// stops at 20 000 ms; a value below 0 or not finite counts as 0. A change
+/// fades out and in over 20 ms; a capture start (a rate request) begins
+/// with silence for the hold-back, never with the end of the last capture.
+/// Returns the hold-back applied, in ms; 0 for a null or dead handle.
+///
+/// # Safety
+///
+/// `cast` is null or a live handle, called under the threading contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_cast_set_hold_back(cast: *mut AscCast, hold_back_ms: f64) -> f64 {
+    let ms = if hold_back_ms.is_finite() {
+        hold_back_ms.clamp(0.0, MAX_HOLD_BACK_MS)
+    } else {
+        0.0
+    };
+    let frames = (ms * f64::from(CAST_RATE) / 1000.0).round() as usize;
+    // SAFETY: as the caller's.
+    unsafe {
+        live(cast, 0.0, |cast| {
+            cast.shared.hold_back.store(frames, Ordering::Relaxed);
+            frames as f64 * 1000.0 / f64::from(CAST_RATE)
+        })
+    }
+}
+
 /// The user's Resync (C79): a new `LOAD` on the same app, which brings the
 /// latency back toward its start at the cost of a gap. Never sent on the
 /// core's own. False, sending nothing, for a null or dead handle or when no
@@ -1484,6 +1520,8 @@ struct Feed {
     resampler: Resampler,
     resampled: Box<[f32]>,
     fade: InputFade,
+    /// Holds the resampled audio back by [`Shared::hold_back`].
+    delay: DelayLine,
     /// The last rate request taken in (see [`AscCastInput::requested`]).
     applied: u64,
     ready: bool,
@@ -1498,6 +1536,7 @@ impl Feed {
             self.ready = self.resampler.set_input_rate(requested as u32).is_ok();
             if self.ready {
                 self.fade.restart(requested as u32);
+                self.delay.reset();
             }
         }
         if !self.ready {
@@ -1505,9 +1544,12 @@ impl Feed {
         }
         if closing {
             self.fade.fade_out();
+            self.delay.close();
         }
         let mut taken = 0;
-        let (resampler, resampled) = (&mut self.resampler, &mut self.resampled);
+        let target = shared.hold_back.load(Ordering::Relaxed);
+        let (resampler, resampled, delay) =
+            (&mut self.resampler, &mut self.resampled, &mut self.delay);
         self.fade.process(block, |piece| {
             let frames = piece.len() / 2;
             let mut consumed = 0;
@@ -1517,7 +1559,9 @@ impl Feed {
                 let (used, produced) =
                     resampler.process(&piece[consumed * 2..frames * 2], resampled);
                 if produced > 0 {
-                    taken += shared.write(&resampled[..produced * 2]);
+                    delay.process(&resampled[..produced * 2], target, |held| {
+                        taken += shared.write(held);
+                    });
                 }
                 consumed += used;
                 if used == 0 && produced == 0 {
@@ -1565,6 +1609,7 @@ pub unsafe extern "C" fn asc_cast_take_input(cast: *mut AscCast) -> *mut AscCast
                     resampler,
                     resampled: vec![0.0; INPUT_CHUNK_FRAMES * 2].into_boxed_slice(),
                     fade: InputFade::new(CAST_RATE, INPUT_CHUNK_FRAMES),
+                    delay: DelayLine::new(MAX_HOLD_BACK_FRAMES, CAST_RATE),
                     applied: 0,
                     ready: false,
                 },
@@ -2251,6 +2296,57 @@ mod tests {
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_cast_input_destroy(&mut input) };
         assert!(input.is_null());
+    }
+
+    // CAST_SPEC: C77
+    #[test]
+    fn the_hold_back_delays_the_feed_and_a_capture_start_begins_with_silence() {
+        // SAFETY: a null handle is allowed.
+        let null = unsafe { asc_cast_set_hold_back(ptr::null_mut(), 5.0) };
+        assert_eq!(null, 0.0);
+        let handle = create();
+        // SAFETY: a live handle, used by this thread only.
+        unsafe {
+            assert_eq!(asc_cast_set_hold_back(handle, 30_000.0), 20_000.0);
+            assert_eq!(asc_cast_set_hold_back(handle, f64::NAN), 0.0);
+            assert_eq!(asc_cast_set_hold_back(handle, -1.0), 0.0);
+        }
+        // SAFETY: as above.
+        let mut input = unsafe { asc_cast_take_input(handle) };
+        assert!(!input.is_null());
+        let block = vec![0.25f32; 480 * 2];
+        // The first frame the ring gets that isn't silent, after a capture
+        // start with the feed held back by `hold_back_ms`.
+        let first_sound = |hold_back_ms: f64| {
+            let (writer, mut reader) = audio_ring(RING_FRAMES);
+            inside(handle).shared.attach(Some(writer));
+            // SAFETY: a live handle and input, used by this thread only;
+            // `block` holds 480 stereo frames.
+            unsafe {
+                asc_cast_set_hold_back(handle, hold_back_ms);
+                assert!(asc_cast_input_set_rate(input, 48_000.0));
+                for _ in 0..10 {
+                    asc_cast_input_write(input, block.as_ptr(), 480);
+                }
+            }
+            let mut bytes = Vec::new();
+            reader.read_into(&mut bytes, 4800);
+            bytes
+                .chunks_exact(4)
+                .position(|frame| frame.iter().any(|byte| *byte != 0))
+                .expect("sound within 100 ms")
+        };
+        let at_once = first_sound(0.0);
+        assert_eq!(first_sound(50.0), at_once + 2400, "50 ms later");
+        assert_eq!(
+            first_sound(50.0),
+            at_once + 2400,
+            "a capture start never replays the end of the last one"
+        );
+        inside(handle).shared.attach(None);
+        destroy(handle);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_cast_input_destroy(&mut input) };
     }
 
     fn is_panic_location(detail: &str, file: &str) -> bool {

@@ -3888,6 +3888,77 @@ do {
           "cast: the note under a speaker's name")
 }
 
+// MARK: AirPlay, Google Cast and local outputs at one latency: the hold-backs, the AirPlay cap and the notice (C77)
+do {
+    let t = UIStrings()
+    // When each is heard after the capture: AirPlay at L plus its hold-back,
+    // Cast at its offset plus the feed's, a local output at its hold-back
+    // minus its offset (its own lateness, negated).
+    func heard(l: Double, cast: Double) -> (airPlay: Double, cast: Double, locals: [Double]) {
+        let wait = CastModel.networkWaitMs(airPlay: l, cast: cast) ?? 0
+        let offsets = ["builtin": 0.0, "usb": 40.0, "bluetooth": 180.0]
+        let holds = LocalDelay.holdBacks(takingPart: ["builtin", "usb", "bluetooth"], reference: "builtin",
+                                         offsets: ["usb": 40, "bluetooth": 180], airPlayChosen: true, latencyMs: wait)
+        return (l + NetworkHoldBack.airPlayAppliedMs(NetworkHoldBack.airPlayMs(airPlay: l, cast: cast)),
+                cast + NetworkHoldBack.castMs(airPlay: l, cast: cast),
+                offsets.keys.sorted().map { (holds[$0] ?? .nan) - offsets[$0]! })
+    }
+    // Cast later than L by 1.25 s and by the full 3 s limit, earlier by
+    // 0.75 s and by all of L, and equal.
+    let cases: [(l: Double, cast: Double)] = [(1750, 3000), (1750, 4750), (1750, 1000), (2000, 0), (1750, 1750)]
+    let spreads = cases.map { c -> Double in
+        let h = heard(l: c.l, cast: c.cast)
+        let all = [h.airPlay, h.cast] + h.locals
+        return (all.max() ?? 0) - (all.min() ?? 0)
+    }
+    check(spreads.allSatisfy { $0 < 0.5 }, "cast+airplay: AirPlay, Cast and local outputs are heard together either way",
+          "spreads \(spreads)")
+    check(NetworkHoldBack.airPlayMs(airPlay: nil, cast: 3000) == 0 && NetworkHoldBack.castMs(airPlay: nil, cast: 0) == 0
+            && NetworkHoldBack.airPlayMs(airPlay: 1750, cast: nil) == 0 && NetworkHoldBack.castMs(airPlay: 1750, cast: nil) == 0
+            && NetworkHoldBack.airPlayMs(airPlay: 1750, cast: .nan) == 0 && NetworkHoldBack.castMs(airPlay: .nan, cast: 0) == 0,
+          "cast+airplay: nothing waits unless both are chosen")
+    let past = heard(l: 1750, cast: 6250)
+    let wanted = NetworkHoldBack.airPlayMs(airPlay: 1750, cast: 6250)
+    check(past.airPlay == 1750 + NetworkHoldBack.airPlayLimitMs && NetworkHoldBack.airPlayLimitMs == 3000
+            && past.cast - past.airPlay == NetworkHoldBack.airPlayAheadMs(wanted)
+            && past.locals.allSatisfy { abs($0 - past.cast) < 0.5 },
+          "cast+airplay: past the sender's 3000 ms limit AirPlay plays ahead of the others by what the notice says",
+          "\(past)")
+
+    let kitchen = "kitchen-1"
+    var ahead = AirPlayAheadNotice()
+    check(ahead.update(device: kitchen, aheadMs: 0) == nil && ahead.update(device: kitchen, aheadMs: 49) == nil,
+          "cast+airplay: no notice while AirPlay keeps up within the tolerance")
+    check(ahead.update(device: kitchen, aheadMs: 1500)
+            == AirPlayAheadNotice.Step(clear: nil, post: AirPlayAheadNotice.Shown(device: kitchen, tenths: 15)),
+          "cast+airplay: the notice is posted with how far ahead AirPlay plays")
+    check(ahead.update(device: kitchen, aheadMs: 1520) == nil, "cast+airplay: posted once while the amount stays the same")
+    var notices = NoticeList()
+    notices.post(t.airPlayAheadOfCast(tenths: 15, speaker: "Kitchen"), subject: Notice.airPlayAhead(kitchen))
+    notices.clear([Notice.airPlayAhead(kitchen)])
+    check(ahead.update(device: kitchen, aheadMs: 1480) == nil && notices.isEmpty,
+          "cast+airplay: a dismissed notice stays away while the amount is the same")
+    check(ahead.update(device: kitchen, aheadMs: 1600)
+            == AirPlayAheadNotice.Step(clear: kitchen, post: AirPlayAheadNotice.Shown(device: kitchen, tenths: 16)),
+          "cast+airplay: a dismissed notice comes back when the amount changes")
+    check(ahead.update(device: kitchen, aheadMs: 20) == AirPlayAheadNotice.Step(clear: kitchen, post: nil)
+            && ahead.shown == nil,
+          "cast+airplay: the notice clears once AirPlay keeps up")
+    check(ahead.update(device: kitchen, aheadMs: 60)?.post?.tenths == 1
+            && ahead.update(device: nil, aheadMs: 60) == AirPlayAheadNotice.Step(clear: kitchen, post: nil),
+          "cast+airplay: a small lead reads as 0.1 s, and the notice clears when the Cast speaker goes off")
+    let text = t.airPlayAheadOfCast(tenths: 15, speaker: "Kitchen")
+    check(text == "AirPlay speakers can wait at most 3 s for a Google Cast speaker, so they play about 1.5 s ahead of "
+            + "Kitchen. Lower its offset to keep them together." && !text.contains("\u{2014}")
+            && t.airPlayAheadOfCast(tenths: 20, speaker: "Den").contains("about 2.0 s ahead of Den"),
+          "cast+airplay: the notice says how far ahead, with no em dash")
+    var castOnes = NoticeList()
+    castOnes.post(t.castProblem(.busy, name: "Kitchen"), subject: Notice.cast(kitchen))
+    castOnes.post(text, subject: Notice.airPlayAhead(kitchen))
+    check(castOnes.count == 2 && Notice.castSubjects(in: castOnes) == [Notice.cast(kitchen)],
+          "cast+airplay: the notice never replaces a problem with the Cast speaker")
+}
+
 // MARK: Google Cast device memory: saved atomically, read back by a new sender
 do {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-cast-\(UUID().uuidString)")

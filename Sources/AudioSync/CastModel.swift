@@ -490,6 +490,69 @@ struct CastModel {
     }
 }
 
+/// With an AirPlay speaker and a Cast device both chosen, the one with the
+/// shorter latency waits for the other (C77). AirPlay speakers wait for a
+/// longer Cast offset as far as the sender's delay limit reaches, and play
+/// ahead of the device by the rest (P99); the Cast feed waits for a longer L.
+enum NetworkHoldBack {
+    /// The AirPlay sender's largest delay per speaker, in ms.
+    static let airPlayLimitMs = Double(ASC_AIRPLAY_MAX_DELAY_MS)
+
+    /// How much later than L the AirPlay speakers should play: the Cast
+    /// offset's lead over L, else 0. `airPlay` is L, nil while no AirPlay
+    /// speaker is chosen; `cast` the offset, nil while no device is.
+    static func airPlayMs(airPlay: Double?, cast: Double?) -> Double {
+        guard let airPlay, let cast, airPlay.isFinite, cast.isFinite else { return 0 }
+        return max(0, cast - airPlay)
+    }
+
+    /// How long the Cast feed waits: L's lead over the Cast offset, else 0.
+    static func castMs(airPlay: Double?, cast: Double?) -> Double {
+        guard let airPlay, let cast, airPlay.isFinite, cast.isFinite else { return 0 }
+        return max(0, airPlay - cast)
+    }
+
+    /// The part of the AirPlay hold-back `wantedMs` the sender plays.
+    static func airPlayAppliedMs(_ wantedMs: Double) -> Double { min(max(0, wantedMs), airPlayLimitMs) }
+
+    /// How far ahead of the Cast device the AirPlay speakers play.
+    static func airPlayAheadMs(_ wantedMs: Double) -> Double { max(0, wantedMs - airPlayLimitMs) }
+}
+
+/// The notice that the AirPlay speakers play ahead of the Cast device that
+/// is on: posted while the delay limit leaves them 50 ms or more ahead,
+/// cleared once they keep up. A dismissed one comes back only when the
+/// device or the amount, in tenths of a second, changes.
+struct AirPlayAheadNotice: Equatable {
+    /// Less than this ahead is within the sync tolerance.
+    static let thresholdMs = 50.0
+
+    struct Shown: Equatable {
+        var device: String
+        var tenths: Int
+    }
+
+    /// What to do with the notices: drop the one about `clear`, post `post`.
+    struct Step: Equatable {
+        var clear: String?
+        var post: Shown?
+    }
+
+    private(set) var shown: Shown?
+
+    /// `device`: the Cast device that is on, if any. Nil when nothing changes.
+    mutating func update(device: String?, aheadMs: Double) -> Step? {
+        var now: Shown?
+        if let device, aheadMs.isFinite, aheadMs >= Self.thresholdMs {
+            now = Shown(device: device, tenths: max(1, Int((aheadMs / 100).rounded())))
+        }
+        guard now != shown else { return nil }
+        let step = Step(clear: shown?.device, post: now)
+        shown = now
+        return step
+    }
+}
+
 /// The device memory between runs: the core's JSON (per device, the format
 /// that last worked and the offset), in AudioSync's Application Support
 /// folder. It holds no secrets, so unlike the pairings it stays in backups.
