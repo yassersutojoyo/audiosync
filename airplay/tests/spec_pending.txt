@@ -42,4 +42,3 @@ P166 Time announce packets: AirPlay 2 stage.
 P167 PTP traffic start and stop: AirPlay 2 stage.
 P168 No buffered audio: AirPlay 2 stage.
 P169 One AirPlay 2 session at a time: AirPlay 2 stage.
-P170 Nothing AirPlay 2 leaves the sender while the switch is off: AirPlay 2 stage.
