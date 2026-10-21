@@ -27,7 +27,12 @@ const RING_BACKLOG: Duration = Duration::from_millis(100);
 /// when the host's input stops (C52).
 const UNDERRUN: Duration = Duration::from_millis(100);
 const ACCEPT_POLL: Duration = Duration::from_millis(20);
+/// The whole request head must arrive within this, however it trickles.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+/// Connections served at once: the stream, its replacement (C61), artwork.
+const MAX_CONNECTIONS: usize = 4;
+/// How long a stop waits for the connection threads (C87).
+const STOP_GRACE: Duration = Duration::from_millis(500);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_REQUEST: usize = 8 * 1024;
 /// Server events kept for a host that doesn't poll.
@@ -388,11 +393,20 @@ impl StreamServer {
             let _ = pump.join();
         }
         let connections = std::mem::take(&mut *lock(&self.shared.connections));
-        for (stream, thread) in connections {
-            // A response blocked on a device that stopped reading returns
-            // once its socket is shut.
+        for (stream, _) in &connections {
             let _ = stream.shutdown(std::net::Shutdown::Both);
-            let _ = thread.join();
+        }
+        // A send blocked on a device that stopped reading may not return
+        // when its socket is shut (WinSock); it ends within its write
+        // timeout on its own, and the teardown does not wait for it.
+        let until = Instant::now() + STOP_GRACE;
+        for (_, thread) in connections {
+            while !thread.is_finished() && Instant::now() < until {
+                thread::sleep(Duration::from_millis(5));
+            }
+            if thread.is_finished() {
+                let _ = thread.join();
+            }
         }
     }
 }
@@ -409,13 +423,38 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
     while !shared.stopped.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, peer)) => {
+                // Accepted sockets inherit the listener's non-blocking mode
+                // on WinSock and BSD.
+                let _ = stream.set_nonblocking(false);
+                if !shared.allowed.contains(&peer.ip()) {
+                    shared.report(ServerEvent::Refused {
+                        from: peer.ip(),
+                        status: 403,
+                    });
+                    refuse(stream);
+                    continue;
+                }
+                let mut connections = lock(&shared.connections);
+                connections.retain(|(_, thread)| !thread.is_finished());
+                if connections.len() >= MAX_CONNECTIONS {
+                    continue;
+                }
+                drop(connections);
                 let Ok(handle) = stream.try_clone() else {
                     continue;
                 };
                 let connection = Arc::clone(&shared);
                 let spawned = thread::Builder::new()
                     .name("cast-http-conn".to_owned())
-                    .spawn(move || serve(stream, peer, connection));
+                    .spawn(move || {
+                        let closer = stream.try_clone();
+                        serve(stream, peer, connection);
+                        // The clone kept for the teardown would hold the
+                        // connection open after the response is done.
+                        if let Ok(closer) = closer {
+                            let _ = closer.shutdown(std::net::Shutdown::Both);
+                        }
+                    });
                 if let Ok(thread) = spawned {
                     let mut connections = lock(&shared.connections);
                     connections.retain(|(_, thread)| !thread.is_finished());
@@ -440,7 +479,24 @@ struct Request {
     range: bool,
 }
 
+/// 403 from the accept thread, without a thread of its own: what already
+/// arrived is read so the close is not a reset, and nothing is waited for.
+fn refuse(mut stream: TcpStream) {
+    if stream.set_nonblocking(true).is_ok() {
+        let mut buffer = [0u8; 1024];
+        for _ in 0..8 {
+            if !matches!(stream.read(&mut buffer), Ok(count) if count > 0) {
+                break;
+            }
+        }
+    }
+    let _ =
+        stream.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+}
+
 fn read_request(stream: &mut TcpStream) -> Option<Request> {
+    let deadline = Instant::now() + REQUEST_TIMEOUT;
     let mut data = Vec::new();
     let mut buffer = [0u8; 1024];
     let end = loop {
@@ -448,6 +504,10 @@ fn read_request(stream: &mut TcpStream) -> Option<Request> {
             break end;
         }
         if data.len() > MAX_REQUEST {
+            return None;
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
             return None;
         }
         match stream.read(&mut buffer) {
@@ -481,7 +541,7 @@ fn simple_response(stream: &mut TcpStream, status: &str, extra: &str) {
 }
 
 fn serve(mut stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>) {
-    let _ = stream.set_read_timeout(Some(REQUEST_TIMEOUT));
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
     let _ = stream.set_nodelay(true);
     let from = peer.ip();
@@ -622,6 +682,7 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
     let block_frames = format.block_frames();
     let backlog_frames = format.rate() as usize * RING_BACKLOG.as_millis() as usize / 1000;
     let underrun_blocks = (UNDERRUN.as_millis() / BLOCK.as_millis()) as u64;
+    let queue_blocks = (QUEUE_LIMIT.as_millis() / BLOCK.as_millis()) as u64;
     let mut start = Instant::now();
     let mut emitted: u64 = 0;
     while !shared.stopped.load(Ordering::SeqCst) {
@@ -640,7 +701,15 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
             thread::sleep(BLOCK);
             continue;
         }
-        let due = (start.elapsed().as_millis() / BLOCK.as_millis()) as u64;
+        let mut due = (start.elapsed().as_millis() / BLOCK.as_millis()) as u64;
+        if due - emitted > queue_blocks {
+            // After a stall longer than the queue (a sleeping computer), the
+            // missed time is gone; silence for all of it would only be
+            // dropped again.
+            start = Instant::now();
+            emitted = 0;
+            due = 0;
+        }
         let mut blocks = Vec::new();
         while emitted < due {
             if reader.available() >= block_frames {

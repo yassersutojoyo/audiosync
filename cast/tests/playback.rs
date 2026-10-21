@@ -226,12 +226,15 @@ fn playback_ends_are_handled_by_their_reason() {
     let seen = run_until(&mut session, Duration::from_secs(10), |event| {
         matches!(event, SessionEvent::Ended(_))
     });
-    assert!(matches!(
-        seen.last(),
-        Some(SessionEvent::Ended(SessionEnd::Failed(
-            SessionError::Media(MediaError::Idle(IdleReason::Finished))
-        )))
-    ));
+    assert!(
+        seen.iter().any(|event| matches!(
+            event,
+            SessionEvent::Ended(SessionEnd::Failed(SessionError::Media(MediaError::Idle(
+                IdleReason::Finished
+            ))))
+        )),
+        "{seen:?}"
+    );
     assert_eq!(count(&device, NS_MEDIA, "LOAD"), 2, "only once");
     device.join();
 
@@ -265,10 +268,11 @@ fn playback_ends_are_handled_by_their_reason() {
     let seen = run_until(&mut session, Duration::from_secs(10), |event| {
         matches!(event, SessionEvent::Ended(_))
     });
-    assert!(matches!(
-        seen.last(),
-        Some(SessionEvent::Ended(SessionEnd::Failed(_)))
-    ));
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Ended(SessionEnd::Failed(_)))),
+        "{seen:?}"
+    );
     device.join();
 
     // INTERRUPTED: someone else took over; no reload, no relaunch.
@@ -284,10 +288,11 @@ fn playback_ends_are_handled_by_their_reason() {
     let seen = run_until(&mut session, Duration::from_secs(10), |event| {
         matches!(event, SessionEvent::Ended(_))
     });
-    assert!(matches!(
-        seen.last(),
-        Some(SessionEvent::Ended(SessionEnd::TakenOver))
-    ));
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Ended(SessionEnd::TakenOver))),
+        "{seen:?}"
+    );
     thread::sleep(Duration::from_millis(200));
     assert_eq!(count(&device, NS_MEDIA, "LOAD"), 1);
     assert_eq!(count(&device, NS_RECEIVER, "LAUNCH"), 1);
@@ -313,10 +318,11 @@ fn a_dead_channel_reconnects_and_reuses_or_relaunches_the_app() {
         seen.iter()
             .any(|event| matches!(event, SessionEvent::Recovering(_)))
     );
-    assert!(matches!(
-        seen.last(),
-        Some(SessionEvent::Recovered { relaunched: false })
-    ));
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Recovered { relaunched: false })),
+        "{seen:?}"
+    );
     assert_eq!(device.connection_count(), 2);
     // Two receiver GET_STATUS, one per connect, and the media one.
     assert!(device.wait_for_count("GET_STATUS", 3, Duration::from_secs(2)));

@@ -586,13 +586,11 @@ impl CastSession {
         // C80 loop is the reconnect at once.
         self.client.disconnect();
         while self.client.poll_event().is_some() {}
-        let mut failures = Vec::new();
-        let result = connect_retrying(&self.addresses, &self.selected, |error, wait| {
-            failures.push((error, wait));
-        });
-        for (error, retry_in) in failures {
+        let addresses = self.addresses.clone();
+        let selected = Arc::clone(&self.selected);
+        let result = connect_retrying(&addresses, &selected, |error, retry_in| {
             self.report(SessionEvent::ConnectFailed { error, retry_in });
-        }
+        });
         self.client = match result {
             Ok(client) => client,
             Err(None) => return self.end(SessionEnd::Deselected),
@@ -606,6 +604,7 @@ impl CastSession {
         };
         let result = if resumed && !reload {
             self.playing = true;
+            self.next_diagnostics = Instant::now() + DIAGNOSTICS_INTERVAL;
             Ok(false)
         } else if resumed {
             self.load_until_playing()
