@@ -121,7 +121,7 @@ enum NativeSpeakerEvent: Equatable {
         case .failed(let detail):
             line = "the sender stopped after an internal error" + (detail.isEmpty ? "" : " (\(detail))")
         case .pinNeeded(let id):
-            line = "\(label(id)): pairing, the Apple TV shows a PIN"
+            line = "\(label(id)): pairing, it shows a PIN"
         case .passwordNeeded(let id, let wrong):
             line = "\(label(id)): pairing needs the password" + (wrong ? " (the one given was turned down)" : "")
         case .pairingFailed(let id, let wrongPin, let problem, let detail):

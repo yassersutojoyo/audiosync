@@ -381,16 +381,17 @@ struct UIStrings {
             + "Cancel turns the speaker off; turn it on again to retry."
     }
 
-    /// AudioSync's own AirPlay sender pairs an Apple TV with the PIN it shows.
+    /// AudioSync's own AirPlay sender pairs a receiver with the PIN it shows:
+    /// an Apple TV, or a receiver reached over AirPlay 2.
     func nativePairPINMessage(name: String) -> String {
-        "\(name) shows a PIN on the TV. Enter it to pair; after that, it connects without a PIN. "
+        "\(name) shows a 4-digit PIN on its screen. Enter it to pair; after that, it connects without a PIN. "
             + "Cancel turns the speaker off; turn it on again to retry."
     }
 
-    /// The native PIN prompt again, after a PIN that didn't work (an Apple
-    /// TV then shows a new one).
+    /// The native PIN prompt again, after a PIN that didn't work (the
+    /// receiver then shows a new one).
     func nativePairWrongPINMessage(name: String) -> String {
-        "That PIN didn't work. Enter the PIN \(name) shows on the TV now. "
+        "That PIN didn't work. Enter the PIN \(name) shows now. "
             + "Cancel turns the speaker off; turn it on again to retry."
     }
 
