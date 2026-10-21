@@ -148,7 +148,7 @@ some devices need instead of WAV, with `crc`, `crc-catalog`, `heapless`,
 `hash32`, `stable_deref_trait`, `md-5`, `digest`, `block-buffer`,
 `crypto-common`, `generic-array` (MIT), `byteorder` (Unlicense OR MIT),
 `num-traits`, `rustversion`, `seq-macro`, `version_check` and, at build time,
-`built` (MIT); and on `mdns-sd`, `getrandom`, `sha2` and `serde_json` with the
+`built` (MIT) and `autocfg` (Apache-2.0 OR MIT, through `num-traits`); and on `mdns-sd`, `getrandom`, `sha2` and `serde_json` with the
 crates they build on, listed above. The others are under MIT OR Apache-2.0. Its
 tests also use `claxon` (Apache-2.0) to decode that FLAC stream, and `rcgen`,
 `rustls` (Apache-2.0 OR ISC OR

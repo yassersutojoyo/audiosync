@@ -14,18 +14,22 @@
 //!    and the reading end of an [`audio_ring`](crate::audio::audio_ring);
 //!    the capture keeps writing into the other end. A second device is
 //!    refused while one runs (C2).
-//! 3. Each UI tick, drain [`CastHost::poll_event`]. Every attempt ends with
-//!    exactly one [`HostEvent::Ended`]; [`HostEvent::MemoryChanged`] says
-//!    when to store [`CastHost::memory`] again.
+//! 3. Each UI tick, drain [`CastHost::poll_event`]. Every event of an
+//!    attempt carries the [`AttemptId`] that `start` returned, and every
+//!    attempt ends with exactly one [`HostEvent::Ended`];
+//!    [`HostEvent::MemoryChanged`] says when to store [`CastHost::memory`].
 //! 4. [`CastHost::stop`] when the user stops or deselects the device; the
-//!    connect retries and the wait for `PLAYING` stop with it.
+//!    connect retries and the waits for the launch and `PLAYING` stop with
+//!    it.
 //! 5. [`CastHost::shutdown`] when the app quits (C88).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
+use std::sync::mpsc::{
+    self, Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError, TrySendError,
+};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -41,6 +45,8 @@ use crate::session::{CastSession, SessionConfig, SessionEnd, SessionError, Sessi
 /// How long the worker drives a session between two looks at the command
 /// queue.
 const TICK: Duration = Duration::from_millis(50);
+/// Events waiting for a host that doesn't poll.
+pub const MAX_HOST_EVENTS: usize = 256;
 /// What [`CastHost::shutdown`] waits beyond the teardown budget of C88.
 const SHUTDOWN_MARGIN: Duration = Duration::from_millis(500);
 
@@ -184,34 +190,65 @@ impl fmt::Display for CommandError {
     }
 }
 
+/// One call of [`CastHost::start`]; every event of that attempt carries it,
+/// so an old attempt's events never pass for a newer one on the same
+/// device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AttemptId(pub u64);
+
 /// What the worker reports to the host.
 #[derive(Debug)]
 pub enum HostEvent {
     /// Everything the session reports while it starts and runs: connect
     /// retries, the format fallback, `Playing`, diagnostics, volume.
     Session {
+        attempt: AttemptId,
         device: DeviceId,
         event: SessionEvent,
     },
     /// The device plays the stream in `format`.
     Started {
+        attempt: AttemptId,
         device: DeviceId,
         format: StreamFormat,
     },
-    /// The attempt or session is over; the last event of each one.
-    Ended { device: DeviceId, end: SessionEnd },
-    /// A volume, metadata, artwork or Resync request failed.
+    /// The attempt is over; exactly one per attempt, its last event.
+    Ended {
+        attempt: AttemptId,
+        device: DeviceId,
+        end: SessionEnd,
+    },
+    /// A volume, metadata, artwork or Resync request failed; `attempt` is
+    /// `None` when no session ran.
     CommandFailed {
-        device: Option<DeviceId>,
+        attempt: Option<AttemptId>,
         error: CommandError,
     },
     /// [`CastHost::memory`] changed and should be stored.
     MemoryChanged,
 }
 
+impl HostEvent {
+    /// Events that may be dropped when the host falls behind: a newer one
+    /// of the same kind follows.
+    fn is_routine(&self) -> bool {
+        match self {
+            HostEvent::Session { event, .. } => matches!(
+                event,
+                SessionEvent::Diagnostics(_)
+                    | SessionEvent::Stream(_)
+                    | SessionEvent::Volume(_)
+                    | SessionEvent::Rebuffering
+            ),
+            HostEvent::CommandFailed { .. } => true,
+            _ => false,
+        }
+    }
+}
+
 enum Command {
     Start {
-        generation: u64,
+        attempt: AttemptId,
         target: CastTarget,
         format: StreamFormat,
         metadata: Metadata,
@@ -229,7 +266,7 @@ enum Command {
 }
 
 struct Active {
-    generation: u64,
+    attempt: AttemptId,
     device: DeviceId,
     selected: Arc<AtomicBool>,
 }
@@ -237,6 +274,9 @@ struct Active {
 struct Shared {
     active: Mutex<Option<Active>>,
     memory: Mutex<DeviceMemory>,
+    /// Set before the quit command is sent: teardowns from then on keep to
+    /// C88's budget.
+    quitting: Arc<AtomicBool>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -244,10 +284,10 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Shared {
-    /// Frees the slot when it still belongs to `generation`.
-    fn release(&self, generation: u64) {
+    /// Frees the slot when it still belongs to `attempt`.
+    fn release(&self, attempt: AttemptId) {
         let mut active = lock(&self.active);
-        if active.as_ref().map(|a| a.generation) == Some(generation) {
+        if active.as_ref().map(|a| a.attempt) == Some(attempt) {
             *active = None;
         }
     }
@@ -258,7 +298,7 @@ pub struct CastHost {
     commands: Sender<Command>,
     events: Receiver<HostEvent>,
     shared: Arc<Shared>,
-    next_generation: u64,
+    next_attempt: u64,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -275,10 +315,11 @@ impl CastHost {
     /// [`CastHost::memory`] last time, or the default.
     pub fn new(memory: DeviceMemory) -> std::io::Result<CastHost> {
         let (commands, inbox) = mpsc::channel();
-        let (outbox, events) = mpsc::channel();
+        let (outbox, events) = mpsc::sync_channel(MAX_HOST_EVENTS);
         let shared = Arc::new(Shared {
             active: Mutex::new(None),
             memory: Mutex::new(memory),
+            quitting: Arc::new(AtomicBool::new(false)),
         });
         let worker = {
             let shared = Arc::clone(&shared);
@@ -290,7 +331,7 @@ impl CastHost {
             commands,
             events,
             shared,
-            next_generation: 0,
+            next_attempt: 0,
             worker: Some(worker),
         })
     }
@@ -304,11 +345,14 @@ impl CastHost {
         rate: u32,
         metadata: Metadata,
         reader: AudioReader,
-    ) -> Result<(), StartRefused> {
+    ) -> Result<AttemptId, StartRefused> {
+        if self.worker.is_none() {
+            return Err(StartRefused::Closed);
+        }
         let codec = lock(&self.shared.memory).format(&target.id);
         let format = StreamFormat::new(codec, rate).ok_or(StartRefused::Rate(rate))?;
         let selected = Arc::new(AtomicBool::new(true));
-        let generation = self.next_generation;
+        let attempt = AttemptId(self.next_attempt);
         {
             let mut active = lock(&self.shared.active);
             if let Some(active) = active.as_ref() {
@@ -317,14 +361,14 @@ impl CastHost {
                 });
             }
             *active = Some(Active {
-                generation,
+                attempt,
                 device: target.id,
                 selected: Arc::clone(&selected),
             });
         }
-        self.next_generation += 1;
+        self.next_attempt += 1;
         let command = Command::Start {
-            generation,
+            attempt,
             target,
             format,
             metadata,
@@ -332,10 +376,10 @@ impl CastHost {
             selected,
         };
         if self.commands.send(command).is_err() {
-            self.shared.release(generation);
+            self.shared.release(attempt);
             return Err(StartRefused::Closed);
         }
-        Ok(())
+        Ok(attempt)
     }
 
     /// The device of the session that runs or starts, if any.
@@ -344,14 +388,19 @@ impl CastHost {
     }
 
     /// Stops the session (C87), or the attempt to start one: connect
-    /// retries (C80) and the wait for `PLAYING` end at once. The slot is
-    /// free for another device right away; the worker tears this session
-    /// down before it starts the next one.
+    /// retries (C80) and the waits for the launch, the `LOAD` reply and
+    /// `PLAYING` end at once. The slot is free for another device right
+    /// away; the worker tears this session down before it starts the next
+    /// one.
     pub fn stop(&self) {
+        self.deselect();
+        let _ = self.commands.send(Command::Stop);
+    }
+
+    fn deselect(&self) {
         if let Some(active) = lock(&self.shared.active).take() {
             active.selected.store(false, Ordering::SeqCst);
         }
-        let _ = self.commands.send(Command::Stop);
     }
 
     /// The device level, 0.0 to 1.0 (C65, C67, C70).
@@ -373,8 +422,8 @@ impl CastHost {
         let _ = self.commands.send(Command::SetMetadata(metadata));
     }
 
-    /// Serves PNG or JPEG artwork (C53) and puts its URL in the metadata of
-    /// the next `LOAD`.
+    /// Serves PNG or JPEG artwork (C53) for the metadata of the next
+    /// `LOAD`.
     pub fn set_artwork(&self, bytes: Vec<u8>) {
         let _ = self.commands.send(Command::SetArtwork(bytes));
     }
@@ -394,15 +443,20 @@ impl CastHost {
         lock(&self.shared.memory).set_offset(device, offset);
     }
 
+    /// The next event. At most [`MAX_HOST_EVENTS`] wait; beyond that,
+    /// routine ones (diagnostics, volume, stream log, failed commands) are
+    /// dropped, never `Started`, `Ended` or `MemoryChanged`.
     pub fn poll_event(&self) -> Option<HostEvent> {
         self.events.try_recv().ok()
     }
 
-    /// The app quits: the teardown of C88, within its 3 s and a margin;
-    /// whatever is left after that is dropped. The one call that waits, at
-    /// most that long, so call it from the app's quit path only.
-    pub fn shutdown(mut self) -> bool {
-        self.stop_worker();
+    /// The app quits: the teardown of C88 within its 3 s and a margin,
+    /// whatever runs or starts; what is left after that is dropped. The one
+    /// call that waits, at most that long, so call it from the app's quit
+    /// path only. Returns whether the worker finished in time. The last
+    /// events, an `Ended` among them, can still be polled afterwards.
+    pub fn shutdown(&mut self) -> bool {
+        self.quit();
         let Some(worker) = self.worker.take() else {
             return true;
         };
@@ -417,10 +471,9 @@ impl CastHost {
         finished
     }
 
-    fn stop_worker(&self) {
-        if let Some(active) = lock(&self.shared.active).take() {
-            active.selected.store(false, Ordering::SeqCst);
-        }
+    fn quit(&self) {
+        self.shared.quitting.store(true, Ordering::SeqCst);
+        self.deselect();
         let _ = self.commands.send(Command::Quit);
     }
 }
@@ -429,40 +482,83 @@ impl Drop for CastHost {
     /// Asks the worker to quit and does not wait for it.
     fn drop(&mut self) {
         if self.worker.is_some() {
-            self.stop_worker();
+            self.quit();
         }
     }
 }
 
 struct Running {
-    generation: u64,
+    attempt: AttemptId,
     device: DeviceId,
     session: CastSession,
 }
 
 struct Worker {
     inbox: Receiver<Command>,
-    outbox: Sender<HostEvent>,
+    outbox: SyncSender<HostEvent>,
+    /// Events that must not be dropped, waiting for room in the outbox.
+    held: VecDeque<HostEvent>,
     shared: Arc<Shared>,
     running: Option<Running>,
 }
 
 impl Worker {
-    fn new(inbox: Receiver<Command>, outbox: Sender<HostEvent>, shared: Arc<Shared>) -> Worker {
+    fn new(inbox: Receiver<Command>, outbox: SyncSender<HostEvent>, shared: Arc<Shared>) -> Worker {
         Worker {
             inbox,
             outbox,
+            held: VecDeque::new(),
             shared,
             running: None,
         }
     }
 
-    fn emit(&self, event: HostEvent) {
-        let _ = self.outbox.send(event);
+    fn emit(&mut self, event: HostEvent) {
+        self.flush();
+        if event.is_routine() {
+            // Held events go first; a routine one behind them is stale by
+            // the time there is room.
+            if self.held.is_empty() {
+                let _ = self.outbox.try_send(event);
+            }
+            return;
+        }
+        if self.held.len() >= MAX_HOST_EVENTS {
+            let oldest_session = self
+                .held
+                .iter()
+                .position(|held| matches!(held, HostEvent::Session { .. }));
+            if let Some(index) = oldest_session {
+                self.held.remove(index);
+            }
+        }
+        self.held.push_back(event);
+        self.flush();
+    }
+
+    fn flush(&mut self) {
+        while let Some(event) = self.held.pop_front() {
+            match self.outbox.try_send(event) {
+                Ok(()) => {}
+                Err(TrySendError::Full(event)) => {
+                    self.held.push_front(event);
+                    return;
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    self.held.clear();
+                    return;
+                }
+            }
+        }
+    }
+
+    fn quitting(&self) -> bool {
+        self.shared.quitting.load(Ordering::SeqCst)
     }
 
     fn run(mut self) {
         loop {
+            self.flush();
             let command = if self.running.is_some() {
                 match self.inbox.try_recv() {
                     Ok(command) => Some(command),
@@ -470,7 +566,12 @@ impl Worker {
                     Err(TryRecvError::Disconnected) => Some(Command::Quit),
                 }
             } else {
-                match self.inbox.recv_timeout(Duration::from_secs(1)) {
+                let wait = if self.held.is_empty() {
+                    Duration::from_secs(1)
+                } else {
+                    TICK
+                };
+                match self.inbox.recv_timeout(wait) {
                     Ok(command) => Some(command),
                     Err(RecvTimeoutError::Timeout) => continue,
                     Err(RecvTimeoutError::Disconnected) => Some(Command::Quit),
@@ -478,10 +579,8 @@ impl Worker {
             };
             match command {
                 Some(Command::Quit) => {
-                    if let Some(running) = self.running.take() {
-                        running.session.quit();
-                        self.ended(running.generation, running.device, SessionEnd::Stopped);
-                    }
+                    self.stop_running();
+                    self.flush();
                     return;
                 }
                 Some(command) => {
@@ -494,22 +593,30 @@ impl Worker {
         }
     }
 
+    /// Tears the running session down: C87, or within C88's budget once
+    /// the host quits.
+    fn stop_running(&mut self) {
+        if let Some(running) = self.running.take() {
+            if self.quitting() {
+                running.session.quit();
+            } else {
+                running.session.stop();
+            }
+            self.ended(running.attempt, running.device, SessionEnd::Stopped);
+        }
+    }
+
     fn handle(&mut self, command: Command) {
         match command {
             Command::Start {
-                generation,
+                attempt,
                 target,
                 format,
                 metadata,
                 reader,
                 selected,
-            } => self.start(generation, target, format, metadata, reader, selected),
-            Command::Stop => {
-                if let Some(running) = self.running.take() {
-                    running.session.stop();
-                    self.ended(running.generation, running.device, SessionEnd::Stopped);
-                }
-            }
+            } => self.start(attempt, target, format, metadata, reader, selected),
+            Command::Stop => self.stop_running(),
             Command::SetVolume(level) => {
                 self.with_session(|session| session.set_volume(level).map_err(CommandError::Volume))
             }
@@ -542,14 +649,14 @@ impl Worker {
     fn with_session(&mut self, action: impl FnOnce(&mut CastSession) -> Result<(), CommandError>) {
         let Some(running) = self.running.as_mut() else {
             return self.emit(HostEvent::CommandFailed {
-                device: None,
+                attempt: None,
                 error: CommandError::NoSession,
             });
         };
-        let device = running.device;
+        let attempt = running.attempt;
         if let Err(error) = action(&mut running.session) {
             self.emit(HostEvent::CommandFailed {
-                device: Some(device),
+                attempt: Some(attempt),
                 error,
             });
         }
@@ -558,7 +665,7 @@ impl Worker {
 
     fn start(
         &mut self,
-        generation: u64,
+        attempt: AttemptId,
         target: CastTarget,
         format: StreamFormat,
         metadata: Metadata,
@@ -567,19 +674,36 @@ impl Worker {
     ) {
         let device = target.id;
         if !selected.load(Ordering::SeqCst) {
-            return self.ended(generation, device, SessionEnd::Deselected);
+            return self.ended(attempt, device, SessionEnd::Deselected);
         }
         let config = SessionConfig {
             addresses: target.addresses,
             format,
             metadata,
         };
+        // Connect retries go out live, while the start still runs; one that
+        // finds the outbox full, or held events not yet sent, is dropped
+        // rather than block the worker or overtake them.
         let outbox = self.outbox.clone();
-        let result =
-            CastSession::start(config, reader, Arc::clone(&selected), |error, retry_in| {
+        let in_order = self.held.is_empty();
+        let quitting = Arc::clone(&self.shared.quitting);
+        let result = CastSession::start_with(
+            config,
+            reader,
+            Arc::clone(&selected),
+            quitting,
+            |error, retry_in| {
+                if !in_order {
+                    return;
+                }
                 let event = SessionEvent::ConnectFailed { error, retry_in };
-                let _ = outbox.send(HostEvent::Session { device, event });
-            });
+                let _ = outbox.try_send(HostEvent::Session {
+                    attempt,
+                    device,
+                    event,
+                });
+            },
+        );
         match result {
             Ok(mut session) => {
                 let format = session.format();
@@ -587,20 +711,28 @@ impl Worker {
                     self.emit(HostEvent::MemoryChanged);
                 }
                 while let Some(event) = session.poll_event() {
-                    self.emit(HostEvent::Session { device, event });
+                    self.emit(HostEvent::Session {
+                        attempt,
+                        device,
+                        event,
+                    });
                 }
-                self.emit(HostEvent::Started { device, format });
+                self.emit(HostEvent::Started {
+                    attempt,
+                    device,
+                    format,
+                });
                 self.running = Some(Running {
-                    generation,
+                    attempt,
                     device,
                     session,
                 });
                 if !selected.load(Ordering::SeqCst) {
-                    self.handle(Command::Stop);
+                    self.stop_running();
                 }
             }
             Err(_) if !selected.load(Ordering::SeqCst) => {
-                self.ended(generation, device, SessionEnd::Deselected);
+                self.ended(attempt, device, SessionEnd::Deselected);
             }
             Err(error) => {
                 // A remembered FLAC the device now refuses is forgotten, so
@@ -617,7 +749,7 @@ impl Worker {
                 {
                     self.emit(HostEvent::MemoryChanged);
                 }
-                self.ended(generation, device, SessionEnd::Failed(error));
+                self.ended(attempt, device, SessionEnd::Failed(error));
             }
         }
     }
@@ -639,22 +771,27 @@ impl Worker {
             match event {
                 SessionEvent::Ended(session_end) => end = Some(session_end),
                 event => self.emit(HostEvent::Session {
+                    attempt: running.attempt,
                     device: running.device,
                     event,
                 }),
             }
         }
         match end {
-            Some(end) => self.ended(running.generation, running.device, end),
+            Some(end) => self.ended(running.attempt, running.device, end),
             None if running.session.is_ended() => {
-                self.ended(running.generation, running.device, SessionEnd::Stopped);
+                self.ended(running.attempt, running.device, SessionEnd::Stopped);
             }
             None => self.running = Some(running),
         }
     }
 
-    fn ended(&self, generation: u64, device: DeviceId, end: SessionEnd) {
-        self.shared.release(generation);
-        self.emit(HostEvent::Ended { device, end });
+    fn ended(&mut self, attempt: AttemptId, device: DeviceId, end: SessionEnd) {
+        self.shared.release(attempt);
+        self.emit(HostEvent::Ended {
+            attempt,
+            device,
+            end,
+        });
     }
 }

@@ -231,6 +231,17 @@ pub struct CastSession {
     next_diagnostics: Instant,
     error_recovered: bool,
     finished_reloaded: bool,
+    /// Set by the host once it quits: every teardown from then on keeps to
+    /// [`QUIT_BUDGET`] (C88).
+    quitting: Arc<AtomicBool>,
+}
+
+fn teardown_budget(quitting: &AtomicBool) -> Duration {
+    if quitting.load(Ordering::SeqCst) {
+        QUIT_BUDGET
+    } else {
+        STOP_BUDGET
+    }
 }
 
 impl fmt::Debug for CastSession {
@@ -252,6 +263,19 @@ impl CastSession {
         selected: Arc<AtomicBool>,
         on_failure: impl FnMut(ConnectError, Duration),
     ) -> Result<CastSession, SessionError> {
+        let quitting = Arc::new(AtomicBool::new(false));
+        CastSession::start_with(config, reader, selected, quitting, on_failure)
+    }
+
+    /// [`CastSession::start`] with the host's quit flag: once it is set,
+    /// teardowns keep to [`QUIT_BUDGET`].
+    pub fn start_with(
+        config: SessionConfig,
+        reader: AudioReader,
+        selected: Arc<AtomicBool>,
+        quitting: Arc<AtomicBool>,
+        on_failure: impl FnMut(ConnectError, Duration),
+    ) -> Result<CastSession, SessionError> {
         let mut client = match connect_retrying(&config.addresses, &selected, on_failure) {
             Ok(client) => client,
             Err(error) => {
@@ -260,10 +284,11 @@ impl CastSession {
                 ));
             }
         };
+        client.set_selected(Arc::clone(&selected));
         let app = match client.launch() {
             Ok(app) => app,
             Err(error) => {
-                client.stop(STOP_BUDGET);
+                client.stop(teardown_budget(&quitting));
                 return Err(error.into());
             }
         };
@@ -278,7 +303,7 @@ impl CastSession {
         let server = match StreamServer::start(stream_config, reader) {
             Ok(server) => server,
             Err(error) => {
-                client.stop(STOP_BUDGET);
+                client.stop(teardown_budget(&quitting));
                 return Err(error.into());
             }
         };
@@ -310,9 +335,10 @@ impl CastSession {
             next_diagnostics: Instant::now(),
             error_recovered: false,
             finished_reloaded: false,
+            quitting,
         };
         if let Err(error) = session.load_with_fallback() {
-            session.teardown(STOP_BUDGET);
+            session.teardown(teardown_budget(&session.quitting));
             return Err(error.into());
         }
         Ok(session)
@@ -451,7 +477,8 @@ impl CastSession {
 
     /// The user stopped the stream (C87).
     pub fn stop(self) -> EndReason {
-        self.finish(STOP_BUDGET)
+        let budget = teardown_budget(&self.quitting);
+        self.finish(budget)
     }
 
     /// The host quits: the teardown of C87 within 3 s in total, then
@@ -492,7 +519,7 @@ impl CastSession {
         if self.ended {
             return;
         }
-        self.teardown(STOP_BUDGET);
+        self.teardown(teardown_budget(&self.quitting));
         self.report(SessionEvent::Ended(end));
     }
 
@@ -640,7 +667,10 @@ impl CastSession {
             self.report(SessionEvent::ConnectFailed { error, retry_in });
         });
         self.client = match result {
-            Ok(client) => client,
+            Ok(mut client) => {
+                client.set_selected(Arc::clone(&self.selected));
+                client
+            }
             Err(None) => return self.end(SessionEnd::Deselected),
             Err(Some(error)) => return self.end(SessionEnd::Failed(error.into())),
         };

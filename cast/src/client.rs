@@ -5,6 +5,8 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use native_tls::{HandshakeError, Protocol, TlsConnector, TlsStream};
@@ -116,6 +118,9 @@ pub struct CastClient {
     buffer: Vec<u8>,
     /// Kept apart from the queue, which the host may have drained.
     ended: Option<EndReason>,
+    /// Cleared when the user deselects the device; the launch and load
+    /// waits give up with it (C80).
+    selected: Option<Arc<AtomicBool>>,
 }
 
 impl fmt::Debug for CastClient {
@@ -198,6 +203,7 @@ impl CastClient {
             fingerprint,
             buffer: vec![0; 16 * 1024],
             ended: None,
+            selected: None,
         };
         loop {
             client.step(READ_SLICE);
@@ -237,6 +243,18 @@ impl CastClient {
         self.channel.is_ended()
     }
 
+    /// Makes [`CastClient::launch`] and [`CastClient::load`] end with
+    /// [`EndReason::Stopped`] as soon as `selected` is cleared.
+    pub fn set_selected(&mut self, selected: Arc<AtomicBool>) {
+        self.selected = Some(selected);
+    }
+
+    fn deselected(&self) -> bool {
+        self.selected
+            .as_ref()
+            .is_some_and(|selected| !selected.load(Ordering::SeqCst))
+    }
+
     /// Starts or reuses the Default Media Receiver and waits for it (C40 to
     /// C42).
     /// The result is taken out of the event queue; results of earlier
@@ -257,6 +275,9 @@ impl CastClient {
             }
             if let Some(reason) = self.end_reason() {
                 return Err(LaunchError::Ended(reason));
+            }
+            if self.deselected() {
+                return Err(LaunchError::Ended(EndReason::Stopped));
             }
             self.step(READ_SLICE);
         }
@@ -280,6 +301,9 @@ impl CastClient {
             }
             if let Some(reason) = self.end_reason() {
                 return Err(MediaError::Ended(reason));
+            }
+            if self.deselected() {
+                return Err(MediaError::Ended(EndReason::Stopped));
             }
             self.step(READ_SLICE);
         }

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, audio_ring};
 use audiosync_cast::discovery::DeviceId;
 use audiosync_cast::host::{
-    CastHost, CastTarget, DeviceMemory, HostEvent, OUTPUT_SYNC, OutputSync, StartRefused,
+    AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, OUTPUT_SYNC, OutputSync, StartRefused,
 };
 use audiosync_cast::media::Metadata;
 use audiosync_cast::message::NS_MEDIA;
@@ -183,13 +183,14 @@ fn a_failing_cast_session_never_blocks_the_host_or_its_audio() {
     for _ in 0..20 {
         writer.write_i16(&[1; 960]);
     }
+    // The launch wait gives up at the stop, long before its own timeout.
     host.stop();
-    let events = wait_for(&host, Duration::from_secs(30), ended(A));
+    let events = wait_for(&host, Duration::from_secs(3), ended(A));
     assert!(
         matches!(
             events.last(),
             Some(HostEvent::Ended {
-                end: SessionEnd::Deselected | SessionEnd::Failed(_),
+                end: SessionEnd::Deselected,
                 ..
             })
         ),
@@ -381,7 +382,7 @@ fn device_memory_keeps_formats_and_offsets_and_skips_damaged_entries() {
     assert_eq!(memory.offset(&B), None);
     assert_eq!(DeviceMemory::from_json("not json"), DeviceMemory::default());
 
-    let host = CastHost::new(memory).expect("worker");
+    let mut host = CastHost::new(memory).expect("worker");
     host.set_offset(B, Duration::from_millis(40));
     assert_eq!(host.memory().offset(&B), Some(Duration::from_millis(40)));
     assert!(host.shutdown());
@@ -401,4 +402,71 @@ fn a_rate_the_spec_does_not_allow_is_refused_at_once() {
     );
     assert_eq!(host.playing(), None);
     assert!(host.shutdown());
+}
+
+/// Every attempt's `Ended`, by attempt, from the events seen.
+fn ends(events: &[HostEvent]) -> Vec<AttemptId> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            HostEvent::Ended { attempt, .. } => Some(*attempt),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn every_attempt_ends_exactly_once_even_when_stopped_or_shut_down_while_starting() {
+    let silent = FakeDevice::start(Behavior {
+        on_launch: OnLaunch::Ignore,
+        ..Behavior::default()
+    });
+    let working = FakeDevice::start(Behavior::default());
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    let mut events = Vec::new();
+
+    // Stopped during the launch, then the same device again at once.
+    let (_feed, reader) = ring();
+    let first = host
+        .start(target(A, &silent), 48_000, Metadata::default(), reader)
+        .expect("starts");
+    assert!(silent.wait_for("LAUNCH", Duration::from_secs(10)));
+    host.stop();
+    let (_feed, reader) = ring();
+    let second = host
+        .start(target(A, &working), 48_000, Metadata::default(), reader)
+        .expect("the slot is free after the stop");
+    assert_ne!(first, second);
+    events.extend(wait_for(&host, Duration::from_secs(10), started(A)));
+    assert!(matches!(
+        events.last(),
+        Some(HostEvent::Started { attempt, .. }) if *attempt == second
+    ));
+    assert_eq!(ends(&events), [first], "the old attempt's end is its own");
+    host.stop();
+    events.extend(wait_for(&host, Duration::from_secs(10), ended(A)));
+
+    // Shut down during the launch: the teardown keeps to C88's 3 s.
+    let (_feed, reader) = ring();
+    let third = host
+        .start(target(B, &silent), 48_000, Metadata::default(), reader)
+        .expect("starts");
+    assert!(silent.wait_for_count("LAUNCH", 2, Duration::from_secs(10)));
+    let quitting = Instant::now();
+    assert!(host.shutdown(), "the worker finished in time");
+    assert!(quitting.elapsed() < Duration::from_millis(3_500));
+    events.extend(std::iter::from_fn(|| host.poll_event()));
+    assert_eq!(ends(&events), [first, second, third]);
+    for event in &events {
+        if let HostEvent::Session { attempt, .. } | HostEvent::Started { attempt, .. } = event {
+            assert!([first, second, third].contains(attempt));
+        }
+    }
+    let (_writer, reader) = audio_ring(4_800);
+    assert_eq!(
+        host.start(target(A, &working), 48_000, Metadata::default(), reader),
+        Err(StartRefused::Closed)
+    );
+    silent.join();
+    working.join();
 }
