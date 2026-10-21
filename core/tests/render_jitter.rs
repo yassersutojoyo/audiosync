@@ -45,6 +45,9 @@ struct Setup {
     first_early_ms: u64,
     /// How many of the first callbacks are that early.
     early_callbacks: u128,
+    /// From when and for how long, in ms, callbacks come late by between
+    /// the two other values in ms instead.
+    burst: Option<(u128, u128, u64, u64)>,
 }
 
 struct Output {
@@ -75,7 +78,14 @@ impl Output {
     }
 
     fn schedule(&mut self) {
-        let late = if self.setup.late_ms == 0 {
+        let nominal = self.nominal(self.pulls);
+        let burst = self.setup.burst.filter(|&(from, ms, _, _)| {
+            (from * SECOND / 1000..(from + ms) * SECOND / 1000).contains(&nominal)
+        });
+        let (least_ms, late_ms) = burst.map_or((0, self.setup.late_ms), |(_, _, least, most)| {
+            (least, most - least)
+        });
+        let late = if late_ms == 0 {
             0
         } else {
             let mut x = self.seed;
@@ -83,9 +93,10 @@ impl Output {
             x ^= x >> 7;
             x ^= x << 17;
             self.seed = x;
-            u128::from(x) % (u128::from(self.setup.late_ms) * SECOND / 1000 + 1)
+            u128::from(x) % (u128::from(late_ms) * SECOND / 1000 + 1)
         };
-        self.next_at = (self.nominal(self.pulls) + late).max(self.last_at);
+        let late = late + u128::from(least_ms) * SECOND / 1000;
+        self.next_at = (nominal + late).max(self.last_at);
     }
 }
 
@@ -94,6 +105,8 @@ struct Run {
     counters: Vec<(ReaderCounters, ReaderCounters)>,
     /// Each output's largest lateness in ns and its late callbacks.
     late: Vec<(u64, u64)>,
+    /// Each output's floor lifts.
+    lifts: Vec<u64>,
     /// Each output's settled delays, in ms.
     delays: Vec<Vec<f64>>,
     /// When each of those delays played, in s.
@@ -230,6 +243,7 @@ fn run(setups: &[Setup], seconds: u128, timed: bool) -> Run {
             .iter()
             .map(|o| (o.control.late_max_ns(), o.control.late_callbacks()))
             .collect(),
+        lifts: outputs.iter().map(|o| o.control.floor_lifts()).collect(),
         played: outputs.iter().map(|o| o.played.clone()).collect(),
         counted: outputs.iter().map(|o| o.counted.clone()).collect(),
         delays: outputs.into_iter().map(|output| output.delays).collect(),
@@ -247,6 +261,7 @@ const BLUETOOTH_PAIR: [Setup; 4] = [
         phase: 0.3,
         first_early_ms: 0,
         early_callbacks: 1,
+        burst: None,
     },
     Setup {
         device_rate: 44_100,
@@ -255,6 +270,7 @@ const BLUETOOTH_PAIR: [Setup; 4] = [
         phase: 0.55,
         first_early_ms: 0,
         early_callbacks: 1,
+        burst: None,
     },
     Setup {
         device_rate: 48_000,
@@ -263,6 +279,7 @@ const BLUETOOTH_PAIR: [Setup; 4] = [
         phase: 0.8,
         first_early_ms: 0,
         early_callbacks: 1,
+        burst: None,
     },
     Setup {
         device_rate: 48_000,
@@ -271,6 +288,7 @@ const BLUETOOTH_PAIR: [Setup; 4] = [
         phase: 0.1,
         first_early_ms: 0,
         early_callbacks: 1,
+        burst: None,
     },
 ];
 
@@ -297,6 +315,7 @@ fn late_bluetooth_callbacks_never_run_an_output_dry_or_correct_drift_once_settle
         // moves.
         assert!(end.resyncs <= retimes + 1, "{setup:?}: {end:?}");
     }
+    assert_eq!(seen.lifts, [0; 4]);
     for (setup, &(most, count)) in BLUETOOTH_PAIR.iter().zip(&seen.late) {
         if setup.late_ms == 0 {
             assert_eq!((most, count), (0, 0), "{setup:?}");
@@ -318,6 +337,7 @@ fn every_anchor_of_a_late_output_lands_on_the_same_delay() {
     // anchors adds nothing to that.
     let block_ms = BLOCK as f64 * 1000.0 / f64::from(RATE);
     let seen = run(&BLUETOOTH_PAIR, 60, true);
+    assert_eq!(seen.lifts, [0; 4]);
     for (setup, delays) in BLUETOOTH_PAIR.iter().zip(&seen.delays) {
         assert!(delays.len() > 2_000, "{setup:?}: {} delays", delays.len());
         let low = delays.iter().copied().fold(f64::INFINITY, f64::min);
@@ -342,6 +362,7 @@ fn outputs_on_time_play_the_same_with_output_times_as_without() {
     let timed = run(&steady, 20, true);
     let untimed = run(&steady, 20, false);
     assert_eq!(timed.delays, untimed.delays);
+    assert_eq!(timed.lifts, [0; 4]);
     for (setup, (_, end)) in steady.iter().zip(&timed.counters) {
         assert_eq!(
             (end.starved_renders, end.drift_skips, end.drift_silences),
@@ -367,6 +388,7 @@ fn one_stray_early_callback_never_moves_an_output() {
     };
     let late = stray(&BLUETOOTH_PAIR);
     let seen = run(&late, 60, true);
+    assert_eq!(seen.lifts, [0; 4]);
     for (setup, (early, end)) in late.iter().zip(&seen.counters) {
         assert_eq!(
             (
@@ -393,10 +415,14 @@ fn one_stray_early_callback_never_moves_an_output() {
 
 // covers: S209
 #[test]
-fn two_early_callbacks_in_a_row_stop_counting_after_two_windows() {
+fn two_early_callbacks_in_a_row_stop_counting_after_three_windows() {
     // Both early callbacks set the floor, so the callbacks after them read
-    // as late by the cap until a whole window of them lifts it back.
-    let recovered_s = (2 * EARLIEST_WINDOW_MS) as f64 / 1000.0 + 0.5;
+    // as late by the cap until two whole windows of them lift it back. An
+    // output that anchored before that keeps its delay until it anchors
+    // again or a drift correction moves it.
+    let recovered_s = (3 * EARLIEST_WINDOW_MS) as f64 / 1000.0 + 0.5;
+    let retime_s = RETIME_MS as f64 / 1000.0;
+    let anchored_s = (recovered_s / retime_s).ceil() * retime_s + 0.5;
     let block_ms = BLOCK as f64 * 1000.0 / f64::from(RATE);
     let cap_ms = LATE_CAP_MS as f64;
     let cap_frames = (LATE_CAP_MS * u64::from(RATE) / 1000) + BLOCK as u64;
@@ -418,9 +444,12 @@ fn two_early_callbacks_in_a_row_stop_counting_after_two_windows() {
             .collect();
         let without = run(&setups, 60, true);
         let seen = run(&two_early, 60, true);
+        assert_eq!(without.lifts, [0; 4]);
+        assert_eq!(seen.lifts, [1; 4]);
         for (i, setup) in two_early.iter().enumerate() {
-            // The floor's rise leaves the reader's delay too long by what the
-            // early callbacks added, and one drift correction takes it back.
+            // A reader anchored before the lift keeps a delay too long by what
+            // the early callbacks added; at most one drift correction takes
+            // it back, depending on where its anchors fall.
             let (early, end) = &seen.counters[i];
             assert_eq!(
                 (
@@ -457,7 +486,11 @@ fn two_early_callbacks_in_a_row_stop_counting_after_two_windows() {
             if setup.late_ms == 0 {
                 assert_eq!(late_after, 0, "{setup:?}: late after {recovered_s} s");
             }
-            let after = &delays[from..];
+            let anchored = seen.played[i]
+                .iter()
+                .position(|&at| at >= anchored_s)
+                .unwrap();
+            let after = &delays[anchored..];
             assert!(after.len() > 500, "{setup:?}: {} delays", after.len());
             for &delay in after {
                 low = low.min(delay);
@@ -465,8 +498,48 @@ fn two_early_callbacks_in_a_row_stop_counting_after_two_windows() {
             }
             assert!(
                 high - low <= block_ms + 2.0,
-                "{setup:?}: from {recovered_s} s on, delays from {low:.2} to {high:.2} ms"
+                "{setup:?}: from {anchored_s} s on, delays from {low:.2} to {high:.2} ms"
             );
         }
     }
+}
+
+// covers: S209
+#[test]
+fn a_second_and_a_half_of_late_callbacks_never_lifts_the_floor() {
+    // A radio busy for 1.5 s: every callback comes 8 to 50 ms late, then
+    // they come as before. Reading them against a lifted floor would
+    // understate how late they came.
+    for setups in [BLUETOOTH_PAIR.to_vec(), on_time()] {
+        let busy: Vec<Setup> = setups
+            .iter()
+            .map(|&setup| Setup {
+                burst: Some((11_000, 1_500, 8, 50)),
+                ..setup
+            })
+            .collect();
+        let seen = run(&busy, 30, true);
+        assert_eq!(seen.lifts, [0; 4]);
+        for (setup, (early, end)) in busy.iter().zip(&seen.counters) {
+            assert_eq!(
+                (
+                    end.starved_renders - early.starved_renders,
+                    end.drift_skips,
+                    end.drift_silences,
+                ),
+                (0, 0, 0),
+                "{setup:?}: {end:?}"
+            );
+        }
+    }
+}
+
+fn on_time() -> Vec<Setup> {
+    BLUETOOTH_PAIR
+        .iter()
+        .map(|&setup| Setup {
+            late_ms: 0,
+            ..setup
+        })
+        .collect()
 }

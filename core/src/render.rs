@@ -153,12 +153,13 @@ pub const LATE_CAP_MS: u64 = 50;
 /// How fast the earliest lateness a renderer saw rises, in ns per second of
 /// device frames (S209). The floor never lies more than [`LATE_CAP_MS`]
 /// below the current callback, so early callbacks stop counting within 50 s,
-/// sooner by [`EARLIEST_WINDOW_MS`].
+/// or two [`EARLIEST_WINDOW_MS`] windows when both lie wholly above them.
 pub const EARLIEST_LEAK_NS_PER_S: u64 = 1_000_000;
 
-/// A window of device frames, in ms (S209): when every callback in one lies
-/// more than [`LATE_COUNT_MS`] above the floor, the floor rises to the
-/// window's lowest, so a burst of early stamps stops counting within two.
+/// A window of device frames, in ms (S209): when every callback in two
+/// windows in a row lies more than [`LATE_COUNT_MS`] above the floor, the
+/// floor rises to the lower of their lowest, so a burst of early stamps
+/// stops counting within three windows.
 pub const EARLIEST_WINDOW_MS: u64 = 1_000;
 
 /// A callback later than this, in ms, counts as late in
@@ -264,6 +265,8 @@ struct Shared {
     late_max_ns: AtomicU64,
     /// Callbacks later than [`LATE_COUNT_MS`] (S209).
     late_callbacks: AtomicU64,
+    /// Times the floor of the earliest callbacks was lifted (S209).
+    floor_lifts: AtomicU64,
     /// The ring whose session lead counts this renderer, and its slot
     /// there, `None` when every slot was taken (S208).
     ring: Arc<Ring>,
@@ -331,6 +334,7 @@ impl RendererControl {
                 sped_frames: AtomicU64::new(0),
                 late_max_ns: AtomicU64::new(0),
                 late_callbacks: AtomicU64::new(0),
+                floor_lifts: AtomicU64::new(0),
                 ring,
                 slot,
             }),
@@ -447,6 +451,11 @@ impl RendererControl {
         self.shared.late_callbacks.load(Ordering::Relaxed)
     }
 
+    /// [`Renderer::floor_lifts`], from any thread (S209).
+    pub fn floor_lifts(&self) -> u64 {
+        self.shared.floor_lifts.load(Ordering::Relaxed)
+    }
+
     /// [`Renderer::shortfall_frames`], from any thread.
     pub fn shortfall_frames(&self) -> u64 {
         self.shared.shortfall_frames.load(Ordering::Relaxed)
@@ -535,6 +544,9 @@ pub struct Renderer {
     /// window, and the device frames that window has had.
     window_low: i64,
     window_frames: u64,
+    /// The previous window's lowest when it lay wholly above the floor,
+    /// else `i64::MAX`.
+    above_low: i64,
 }
 
 impl fmt::Debug for Renderer {
@@ -604,6 +616,7 @@ impl Renderer {
             earliest: None,
             window_low: i64::MAX,
             window_frames: 0,
+            above_low: i64::MAX,
         })
     }
 
@@ -669,6 +682,11 @@ impl Renderer {
     /// earliest ones (S209). Stays 0 without output times.
     pub fn late_callbacks(&self) -> u64 {
         self.shared.late_callbacks.load(Ordering::Relaxed)
+    }
+
+    /// The times a run of windows above the floor lifted it (S209).
+    pub fn floor_lifts(&self) -> u64 {
+        self.shared.floor_lifts.load(Ordering::Relaxed)
     }
 
     /// Sets the device's period, in device frames: the callback it asks for
@@ -834,8 +852,14 @@ impl Renderer {
         self.window_frames += frames as u64;
         if self.window_frames * 1000 >= EARLIEST_WINDOW_MS * u64::from(self.device_rate.max(1)) {
             let count = (LATE_COUNT_MS * 1_000_000) as i64;
-            if self.window_low > second.max(floor).saturating_add(count) {
-                floor = self.window_low;
+            if self.window_low <= second.max(floor).saturating_add(count) {
+                self.above_low = i64::MAX;
+            } else if self.above_low == i64::MAX {
+                self.above_low = self.window_low;
+            } else {
+                floor = self.above_low.min(self.window_low);
+                self.above_low = i64::MAX;
+                self.shared.floor_lifts.fetch_add(1, Ordering::Relaxed);
             }
             self.window_low = i64::MAX;
             self.window_frames = 0;
