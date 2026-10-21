@@ -3542,6 +3542,43 @@ mod tests {
         assert_eq!(again.get("02005E005350"), Some(&credentials));
     }
 
+    #[test]
+    fn homekit_credentials_a_receiver_rejects_leave_the_identity_file() {
+        let folder = scratch("airplay2-identity-rejected");
+        let path = folder.join("identity.dat");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        // SAFETY: a live handle, used by this thread only; the path is a
+        // NUL-terminated string.
+        unsafe {
+            assert_eq!(
+                asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()),
+                0
+            );
+        }
+        let mut blob = vec![1u8];
+        blob.extend_from_slice(b"01234567-89AB-CDEF-0123-456789ABCDEF");
+        blob.extend_from_slice(&[9; 64]);
+        blob.extend_from_slice(b"receiver");
+        let credentials = HomeKitCredentials::from_bytes(&blob).expect("a credential blob");
+        let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x51]));
+        inside(handle).take_in(SenderEvent::Speaker {
+            key: key.clone(),
+            event: SpeakerEvent::HomeKitPaired(credentials),
+        });
+        inside(handle).take_in(SenderEvent::Speaker {
+            key,
+            event: SpeakerEvent::HomeKitRejected,
+        });
+        assert_eq!(inside(handle).identity.get("02005E005351"), None);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+        let (again, loaded) = IdentityStore::open(path);
+        assert_eq!(loaded, Loaded::Receivers(0));
+        assert_eq!(again.get("02005E005351"), None);
+    }
+
     fn pairing_events(events: &[Event]) -> Vec<(i32, String, i32)> {
         events
             .iter()

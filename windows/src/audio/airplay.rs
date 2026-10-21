@@ -2391,6 +2391,32 @@ pub mod tests {
     }
 
     #[test]
+    fn homekit_credentials_a_receiver_rejects_are_deleted_from_the_file() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{homekit, sealer};
+
+        let path = crate::debug_log::test_dir("airplay2-homekit-rejected").join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        store.open_airplay2();
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        store.insert_homekit(&id, homekit(0x5A)).expect("saved");
+        let fake = FakeAirPlay::new();
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.push(SenderEvent::Speaker {
+            key: tv.key.clone(),
+            event: SpeakerEvent::HomeKitRejected,
+        });
+        airplay.poll();
+        assert_eq!(airplay.store.homekit(&id), None);
+        drop(airplay);
+
+        let (mut store, _) = PairingStore::open(path, sealer());
+        store.open_airplay2();
+        assert_eq!(store.homekit(&id), None, "gone from the file too");
+    }
+
+    #[test]
     fn a_pairing_the_store_cant_write_is_reported_once_until_a_write_works() {
         use crate::audio::pairings::FILE_NAME;
         use crate::audio::pairings::tests::{credentials, sealer};

@@ -683,7 +683,7 @@ pub mod tests {
         assert!(!store.contains("02005E005302"));
     }
 
-    fn homekit(fill: u8) -> HomeKitCredentials {
+    pub fn homekit(fill: u8) -> HomeKitCredentials {
         let mut blob = vec![1u8];
         blob.extend_from_slice(b"01234567-89AB-CDEF-0123-456789ABCDEF");
         blob.extend_from_slice(&[fill; 64]);
