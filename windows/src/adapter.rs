@@ -65,6 +65,7 @@ use audiosync_core::policy::session::{
     AutoStartGate, DropReason, Incident, SpeakerEvent, StartOrigin, StreamingAction, may_start,
     reaction, source_switch, streaming_after,
 };
+use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::speakers::{NoticeSubject, Notices, SpeakerKey, renamed_group};
 
 use crate::audio::backend::{
@@ -254,6 +255,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     reconnecting: BTreeSet<String>,
     /// The windows' own settings.
     view: ViewSettings,
+    /// What a session does when the app it captures quits (spec S227).
+    when_source_quits: WhenSourceQuits,
 }
 
 impl<A: AudioBackend> AudioAdapter<A> {
@@ -322,6 +325,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             busy: BTreeSet::new(),
             reconnecting: BTreeSet::new(),
             view: ViewSettings::default(),
+            when_source_quits: WhenSourceQuits::Stop,
         };
         adapter.restore(saved);
         // Settings ignored at launch: the user is told now why the defaults
@@ -343,6 +347,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// speakers do once the first listing finds them.
     fn restore(&mut self, saved: Settings) {
         self.audio.set_master_volume(saved.master_volume);
+        self.when_source_quits = WhenSourceQuits::from_stored(Some(&saved.when_source_quits));
+        self.audio.set_when_source_quits(self.when_source_quits);
         if !self.delays_to_migrate {
             self.audio
                 .set_airplay_adjustment(saved.airplay_adjustment_ms);
@@ -508,6 +514,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             show_virtual_devices: self.view.show_virtual_devices,
             window: self.view.window,
             airplay_adjustment_ms: self.audio.airplay_adjustment(),
+            when_source_quits: self.when_source_quits.stored().to_owned(),
         }
         .clamped()
     }
@@ -1384,6 +1391,19 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.post(NoticeSubject::Source, message);
                 self.refresh_sources();
             }
+            // The quit app's choice gives way to the whole system, as a
+            // source the user picked would (S141, S227).
+            BackendEvent::SwitchedToSystem => {
+                let source = self.chosen_name();
+                self.heard_twice_dismissed.remove(&self.chosen.key());
+                self.chosen = Chosen::WholeSystem;
+                self.notices.clear(&[NoticeSubject::Capture]);
+                self.post(
+                    NoticeSubject::Source,
+                    NoticeMessage::SourceSwitched { source },
+                );
+                self.refresh_sources();
+            }
             BackendEvent::HeardTwice { paths } => self.heard_twice_changed(paths),
             BackendEvent::AirPlayChanged => self.airplay_listed(),
             BackendEvent::AirPlayPlaying { id } => {
@@ -1734,6 +1754,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                     name: prompt.name,
                     wrong: prompt.wrong,
                 }),
+            when_source_quits: self.when_source_quits,
         }
     }
 
@@ -2146,6 +2167,18 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
 
     fn save_settings(&mut self) {
         let _ = self.persist();
+    }
+
+    fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
+        self.log.log(|| {
+            format!(
+                "when the source app quits: {} (was {})",
+                setting.stored(),
+                self.when_source_quits.stored()
+            )
+        });
+        self.when_source_quits = setting;
+        self.audio.set_when_source_quits(setting);
     }
 }
 
@@ -2768,6 +2801,65 @@ mod tests {
         };
         assert_eq!(messages(&adapter), [not_running]);
         assert_eq!(captures(&adapter).len(), 1, "nothing started");
+    }
+
+    #[test]
+    fn an_app_that_quits_gives_way_to_the_whole_system_when_the_setting_says_so() {
+        let mut adapter = adapter();
+        adapter.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
+
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.poll();
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(state.running, "streaming goes on");
+        assert_eq!(
+            captures(&adapter),
+            [
+                (LoopbackMode::IncludeTree, PLAYER_PID),
+                (LoopbackMode::ExcludeTree, MOCK_OWN_PID),
+            ]
+        );
+        assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
+        let switched = NoticeMessage::SourceSwitched {
+            source: "Player".into(),
+        };
+        assert_eq!(messages(&adapter), [switched]);
+        assert_eq!(state.source_id, "system");
+        let saved = adapter.current_settings();
+        assert_eq!(saved.source, SavedSource::System, "the switch is kept");
+        assert_eq!(saved.when_source_quits, "system");
+
+        // The app starting again changes nothing (S227 c).
+        adapter.audio_mut().add_app(2100, "player.exe");
+        adapter.poll();
+        assert_eq!(adapter.snapshot().source_id, "system");
+        assert_eq!(captures(&adapter).len(), 2);
+    }
+
+    #[test]
+    fn the_setting_for_a_quitting_app_is_saved_and_restored() {
+        let mut adapter = adapter();
+        assert_eq!(
+            adapter.snapshot().when_source_quits,
+            WhenSourceQuits::Stop,
+            "stop by default"
+        );
+        adapter.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
+        let saved = adapter.current_settings();
+        let mut restored = AudioAdapter::new(
+            MockBackend::empty(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        restored.restore(saved);
+        assert_eq!(
+            restored.snapshot().when_source_quits,
+            WhenSourceQuits::SwitchToSystem
+        );
     }
 
     #[test]

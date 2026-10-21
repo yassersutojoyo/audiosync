@@ -94,6 +94,10 @@ extension AppDelegate {
         a.setAutoConnect = { [weak self] key, on in self?.setAutoConnect(key, on) }
         a.setLaunchAtLogin = { [weak self] on in self?.setLaunchAtLogin(on) }
         a.setShowVirtualDevices = { [weak self] on in self?.setShowVirtualDevices(on) }
+        a.setSwitchWhenSourceQuits = { [weak self] on in
+            self?.whenSourceQuits = on ? .system : .stop
+            self?.pushModel()
+        }
         a.setAppearance = { [weak self] choice in self?.setAppearance(choice) }
         a.transport = { [weak self] command in self?.nowPlaying.send(command) }
         a.quit = { NSApp.terminate(nil) }
@@ -190,6 +194,7 @@ extension AppDelegate {
         publish(\.groups, groupSnapshot())
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)
+        publish(\.switchWhenSourceQuits, whenSourceQuits == .system)
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
         menuBar?.setRunning(engine.isRunning)
@@ -368,6 +373,12 @@ extension AppDelegate {
         setLaunchAtLogin(SMAppService.mainApp.status != .enabled)
     }
 
+    /// Takes effect at the next quit of the source app, never undoing a switch made (S227 d).
+    @objc func toggleSwitchWhenSourceQuits(_ sender: Any?) {
+        whenSourceQuits = whenSourceQuits == .system ? .stop : .system
+        pushModel()
+    }
+
     /// One of the Appearance submenu's items; each carries its choice's raw value.
     @objc func chooseAppearance(_ sender: Any?) {
         guard let raw = (sender as? NSMenuItem)?.representedObject as? String,
@@ -388,6 +399,8 @@ extension AppDelegate {
             menuItem.state = (menuItem.representedObject as? String) == appearance.rawValue ? .on : .off
         case #selector(toggleLaunchAtLogin(_:)):
             menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        case #selector(toggleSwitchWhenSourceQuits(_:)):
+            menuItem.state = whenSourceQuits == .system ? .on : .off
         default:
             break
         }

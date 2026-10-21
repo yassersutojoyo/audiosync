@@ -11,6 +11,7 @@ use std::fmt;
 
 use audiosync_core::eq::EqSettings;
 use audiosync_core::policy::device_volume::DeviceVolume;
+use audiosync_core::policy::source_quit::WhenSourceQuits;
 
 use super::routing::DirectPath;
 
@@ -282,6 +283,10 @@ pub enum BackendEvent {
         /// Why it stopped.
         reason: StopReason,
     },
+    /// The app being captured quit and the setting says to go on: the
+    /// session now captures the whole system, every output still on and
+    /// every AirPlay speaker still in the stream (spec S227).
+    SwitchedToSystem,
     /// Whether the source is heard twice: straight from Windows, undelayed,
     /// as well as through AudioSync's delayed copies. Checked every few
     /// seconds while streaming and reported when the answer changes.
@@ -612,6 +617,9 @@ pub trait AudioBackend {
     /// sender lists them. A new sender that can't start reports
     /// `AirPlayStopped` again.
     fn retry_airplay(&mut self);
+
+    /// What a session does when the app it captures quits (spec S227).
+    fn set_when_source_quits(&mut self, setting: WhenSourceQuits);
 
     /// Handles device changes, lost outputs, the end of capture and what the
     /// AirPlay sender reports, and returns what the UI should know. Call it
