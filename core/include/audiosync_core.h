@@ -1462,6 +1462,16 @@ bool asc_cast_set_offset(AscCast *cast, const char *id, double offset_ms);
 double asc_cast_offset_ms(AscCast *cast, const char *id);
 
 /*
+ * Holds the audio the input hands the session back by hold_back_ms, live,
+ * so a device whose offset is shorter than L plays at L. It stops at
+ * 20 000 ms; a value below 0 or not finite counts as 0. A change fades out
+ * and in over 20 ms; a capture start (asc_cast_input_set_rate) begins with
+ * silence for the hold-back, never with the end of the last capture.
+ * Returns the hold-back applied, in ms; 0 for a NULL or dead handle.
+ */
+double asc_cast_set_hold_back(AscCast *cast, double hold_back_ms);
+
+/*
  * The device memory to store between runs, as JSON: per device, the format
  * that last worked and the offset. NUL-terminated UTF-8 that the handle
  * owns, valid until the next asc_cast_memory_json call on it or its destroy.

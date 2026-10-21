@@ -10,6 +10,7 @@ pub mod calibrate;
 pub mod channels;
 pub mod clock;
 pub mod convert;
+pub mod delay_line;
 pub mod eq;
 pub mod fade;
 pub mod ffi;
