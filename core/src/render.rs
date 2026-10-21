@@ -558,6 +558,9 @@ pub struct Renderer {
     clock_trim: bool,
     /// [`CLOCK_TRIM_FRAMES`] in the converter's steps.
     clock_trim_steps: usize,
+    /// The trim under way, if any, is a clock trim beyond S207's reach,
+    /// which ends when the reader anchors again (S226).
+    far_trim: bool,
     /// The lowest and second lowest `now - output time` seen, in ns, with
     /// their leak (S209).
     earliest: Option<[i64; 2]>,
@@ -635,6 +638,7 @@ impl Renderer {
             track_frames: f64::from(device_rate) * f64::from(TRACK_MS) / 1000.0,
             clock_trim,
             clock_trim_steps: usize::try_from(clock_trim_steps).unwrap_or(usize::MAX),
+            far_trim: false,
             earliest: None,
         })
     }
@@ -884,6 +888,12 @@ impl Renderer {
     /// Called after the control's requests are taken, so the first read's
     /// hold is known.
     fn keep_reader_off_w(&mut self, frames: usize, now: Option<u64>) {
+        if self.far_trim && self.tracking == RESTART {
+            // The reader anchored again, maybe near W now: the rest of a
+            // clock trim's second must not keep S206 off it (S226).
+            self.resampler.end_trim();
+            self.far_trim = false;
+        }
         if self.resampler.is_passthrough() || self.resampler.is_trimming() || frames < 2 {
             return;
         }
@@ -904,6 +914,7 @@ impl Renderer {
             let own = usize::try_from(trim).unwrap_or(0);
             let slowed = short.max(own);
             if self.resampler.slow_down(slowed, frames - 1) {
+                self.far_trim = false;
                 self.count_trim(slowed as f64, (slowed - own) as f64);
                 self.shared
                     .slowed_frames
@@ -918,11 +929,13 @@ impl Renderer {
             frames - 1
         };
         if trim > 0 && self.resampler.slow_down(by, steps) {
+            self.far_trim = far;
             self.count_trim(by as f64, 0.0);
             self.shared
                 .slowed_frames
                 .fetch_add(by as u64, Ordering::Relaxed);
         } else if trim < 0 && self.resampler.speed_up(by, steps) {
+            self.far_trim = far;
             self.count_trim(-(by as f64), 0.0);
             self.shared
                 .sped_frames
@@ -1305,10 +1318,15 @@ mod tests {
 
     impl Stepped {
         fn new() -> Stepped {
+            Stepped::with_clock_trim(false)
+        }
+
+        fn with_clock_trim(on: bool) -> Stepped {
             let ring = Ring::for_rate(48_000).unwrap();
             let writer = ring.writer().unwrap();
             let reader = Reader::new(ring, 48_000);
             let control = RendererControl::new(&reader);
+            control.set_clock_trim(on);
             let gain = Arc::new(SharedGain::new(1.0));
             let renderer = Renderer::new(reader, &control, gain, 48_000, 44_100, 2).unwrap();
             Stepped {
@@ -1368,5 +1386,30 @@ mod tests {
         s.writer.write_at(&s.block.clone(), 480, s.now + 10_000_000);
         s.renderer.render(&mut s.out);
         assert_eq!(s.renderer.tracking, kept);
+    }
+
+    // covers: S206, S226
+    #[test]
+    fn a_clock_trim_under_way_ends_when_the_reader_anchors_again() {
+        let mut s = Stepped::with_clock_trim(true);
+        // Held back by 100 ms, beyond S207's reach.
+        s.control.set_delay_frames(4800);
+        s.step(60);
+        assert!(matches!(s.renderer.tracking, Tracking::Following { .. }));
+        // Callbacks 1 ms later from now on: the fill rises by 48 frames, and
+        // a speed-up of a frame starts, spread over about a second.
+        for _ in 0..20 {
+            s.now += 10_000_000;
+            s.writer.write_at(&s.block.clone(), 480, s.now);
+            s.renderer.render_at(&mut s.out, s.now + 2_000_000);
+        }
+        assert!(s.renderer.resampler.is_trimming());
+        assert_eq!(s.renderer.sped_frames(), 1);
+        // Back near W: the reader anchors again after the fade-out, and the
+        // trim ends with it, so S206's slow-down can act at once.
+        s.control.set_delay_frames(0);
+        s.step(5);
+        assert_eq!(s.control.counters().resyncs, 1);
+        assert!(!s.renderer.resampler.is_trimming());
     }
 }

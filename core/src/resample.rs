@@ -376,6 +376,16 @@ impl Resampler {
         true
     }
 
+    /// Ends a trim under way where it stands (S226): the center keeps the
+    /// whole units it has moved, and the fraction of one in between, under
+    /// one input frame, is dropped.
+    pub fn end_trim(&mut self) {
+        self.trim_units = 0;
+        self.trim_steps = 0;
+        self.trim_done = 0;
+        self.trim_ahead = false;
+    }
+
     /// Whether a slow-down or a speed-up is under way (S206, S207).
     pub fn is_trimming(&self) -> bool {
         self.trim_done < self.trim_steps
