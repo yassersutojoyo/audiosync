@@ -570,6 +570,7 @@ impl<D: Driver> Controller<D> {
         });
         self.airplay = Some(airplay);
         self.feed = feed;
+        self.hold_back_network();
         if self.session.is_some() {
             self.airplay_streaming(true);
         }
@@ -596,12 +597,27 @@ impl<D: Driver> Controller<D> {
         self.sync_cast_rule();
     }
 
+    /// Holds AirPlay or Google Cast back, live, so that with both on they
+    /// play at the longer of L and the Cast offset, as local outputs do (C77).
+    fn hold_back_network(&mut self) {
+        let airplay = self.policy.airplay_hold_back_ms();
+        let cast = self.policy.cast_hold_back_ms();
+        if let Some(speakers) = self.airplay.as_mut() {
+            speakers.set_hold_back(airplay);
+        }
+        if let Some(speakers) = self.cast.as_mut() {
+            speakers.set_hold_back(cast);
+        }
+    }
+
     /// Re-times the other outputs, live, when a Google Cast speaker is
     /// switched on or off or its offset changes: they wait the larger of L
     /// and that offset.
     fn sync_cast_rule(&mut self) {
         let anchor = self.cast.as_ref().and_then(CastSpeakers::anchor);
-        if !self.policy.set_cast_offset(anchor) {
+        let changed = self.policy.set_cast_offset(anchor);
+        self.hold_back_network();
+        if !changed {
             return;
         }
         self.log.log(|| match anchor {
@@ -624,7 +640,9 @@ impl<D: Driver> Controller<D> {
             chosen: airplay.chosen(),
             latency: airplay.latency(),
         };
-        if !self.policy.set_airplay(rule) {
+        let changed = self.policy.set_airplay(rule);
+        self.hold_back_network();
+        if !changed {
             return;
         }
         self.log.log(|| match rule {
@@ -2111,6 +2129,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 self.log
                     .log(|| format!("AirPlay delay adjustment: {after} ms"));
             }
+            self.hold_back_network();
             self.retime();
         }
     }
@@ -5173,6 +5192,30 @@ mod tests {
             .set_airplay_enabled(&id_of(&kitchen), false)
             .unwrap();
         assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+    }
+
+    #[test]
+    fn airplay_speakers_wait_for_a_cast_speaker_whose_offset_is_longer_than_l() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
+        let id = id_of(&kitchen);
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_airplay_enabled(&id, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        fake.take_calls();
+        backend.set_cast_offset(KITCHEN, 3000.0);
+        assert_eq!(held(&backend), [Some(3000), Some(3150), Some(2750)]);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Delay(id.clone(), Duration::from_millis(1250))]
+        );
+        backend.set_cast_offset(KITCHEN, 1000.0);
+        assert_eq!(held(&backend), [Some(1750), Some(1900), Some(1500)]);
+        assert_eq!(fake.take_calls(), [Call::Delay(id, Duration::ZERO)]);
     }
 
     #[test]

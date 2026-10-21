@@ -380,7 +380,7 @@ impl OutputPolicy {
     }
 
     /// Sets the Cast speaker's measured offset, or `None` while none is
-    /// on. Returns whether the hold-backs change.
+    /// on. Returns whether the local outputs' hold-backs change.
     pub fn set_cast_offset(&mut self, offset: Option<Duration>) -> bool {
         let before = self.network_latency_ms();
         self.cast_offset = offset;
@@ -389,10 +389,9 @@ impl OutputPolicy {
 
     /// What local outputs wait for: L while an AirPlay speaker is chosen,
     /// the Cast speaker's offset while one is on, the longer of the two
-    /// when both are.
+    /// when both are; the shorter one is then held back to it too.
     fn network_latency_ms(&self) -> Option<f64> {
-        let cast = self.cast_offset.map(|offset| offset.as_secs_f64() * 1000.0);
-        match (self.airplay_latency_ms(), cast) {
+        match (self.airplay_latency_ms(), self.cast_offset_ms()) {
             (Some(airplay), Some(cast)) => Some(airplay.max(cast)),
             (airplay, cast) => airplay.or(cast),
         }
@@ -401,13 +400,23 @@ impl OutputPolicy {
     /// How much later than L the AirPlay speakers play, so they meet a Cast
     /// speaker whose offset is longer (C77).
     pub fn airplay_hold_back_ms(&self) -> f64 {
-        0.0
+        match (self.airplay_latency_ms(), self.cast_offset_ms()) {
+            (Some(airplay), Some(cast)) => (cast - airplay).max(0.0),
+            _ => 0.0,
+        }
     }
 
     /// How long the Cast feed waits, so a Cast speaker whose offset is
     /// shorter than L plays at L (C77).
     pub fn cast_hold_back_ms(&self) -> f64 {
-        0.0
+        match (self.airplay_latency_ms(), self.cast_offset_ms()) {
+            (Some(airplay), Some(cast)) => (airplay - cast).max(0.0),
+            _ => 0.0,
+        }
+    }
+
+    fn cast_offset_ms(&self) -> Option<f64> {
+        self.cast_offset.map(|offset| offset.as_secs_f64() * 1000.0)
     }
 
     /// Takes in the endpoints listed now: which outputs can take part, and
