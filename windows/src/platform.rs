@@ -600,10 +600,11 @@ unsafe extern "system" fn color_set_procedure(
     if message != WM_SETTINGCHANGE || lparam.0 == 0 {
         return result;
     }
+    let area = PCWSTR(lparam.0 as *const u16);
     // SAFETY: a WM_SETTINGCHANGE `lparam` that isn't null points to the
     // NUL-terminated name of the setting area that changed.
-    let area = unsafe { PCWSTR(lparam.0 as *const u16).as_wide() };
-    if names_color_set(area) && !COLOR_SET_PENDING.replace(true) {
+    let color_set = names_color_set(unsafe { area.as_wide() });
+    if color_set && !COLOR_SET_PENDING.replace(true) {
         slint::Timer::single_shot(std::time::Duration::ZERO, || {
             COLOR_SET_PENDING.set(false);
             let changed = COLOR_SET_CHANGED.with(|slot| slot.borrow().clone());
