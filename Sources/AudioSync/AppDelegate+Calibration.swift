@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import CAudioSyncCore
 
 // Microphone calibration of one local speaker against the reference (S232 to
 // S234): the decisions live in CalibrationFlow.swift, the signal's way into
