@@ -54,17 +54,19 @@ const SETTLED: f64 = 2.0;
 const PREFILL: f64 = 3.0;
 /// Host time 0 in ns, so the prefill is stamped too.
 const HOST_OFFSET: f64 = 10.0;
-/// Held back, for the strata: beyond the trim's reach (S207).
+/// Held back, for the strata: beyond a lead and the dead band.
 const HELD_MS: f64 = 100.0;
 /// With AirPlay chosen, every local output is held back this much or more.
 const AIRPLAY_MS: f64 = 1700.0;
 
-/// Main's failing cases per invariant on the pinned seed, I1 to I8. A count
+/// The failing cases per invariant on the pinned seed, I1 to I8. A count
 /// above its maximum fails, and so does one below it until the maximum is
 /// lowered to it, so the ratchet never goes slack and every CI system proves
 /// the same counts. Each step of the design sets them to its own measured
-/// counts and says why one rose.
-const RATCHET: [usize; 8] = [14, 34, 3, 31, 44, 32, 0, 2];
+/// counts and says why one rose. Main had 14, 34, 3, 31, 44, 32, 0, 2; the
+/// trim at any hold-back, behind its 15-frame dead zone, lowered I2, I4, I5
+/// and I6, and raised none.
+const RATCHET: [usize; 8] = [14, 21, 3, 24, 29, 20, 0, 2];
 
 /// I4: how far apart outputs may play beyond a capture block, in ms.
 const ALIGN_SLACK_MS: f64 = 2.0;

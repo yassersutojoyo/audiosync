@@ -455,6 +455,7 @@ fn assert_follows_the_capture(clocks: Clocks, seconds: u64, jitter_ns: u64, othe
         trimmed <= drift + back + 16 + jitter_ns * u64::from(RATE) / 1_000_000_000,
         "{trimmed} frames trimmed: {clocks:?}"
     );
+    if jitter_ns > 0 { println!("JIT {jitter_ns} back {back} trimmed {trimmed} drift {drift}"); }
     let open = outcome.open_at.expect("the output faded in");
     let gaps = outcome.played[open..]
         .iter()
@@ -590,38 +591,72 @@ fn stamps_a_millisecond_off_never_run_an_output_dry() {
 #[test]
 fn an_output_that_needs_no_trim_plays_the_same_with_stamps() {
     // Stamps change nothing for an output on a clock in step, whatever its
-    // hold-back, nor for one held back beyond the dead band and a lead,
-    // which a step back keeps off W as before (S52): over 60 seconds, those
-    // play the very same frames stamped or not, and are never trimmed.
+    // hold-back: over 60 seconds, it plays the very same frames stamped or
+    // not, and is never trimmed.
     for (device_rate, callback, block) in
         [(44_100, 441, 480), (44_100, 512, 512), (96_000, 512, 512)]
     {
-        for (delay, drifts) in [(0, &[0][..]), (1_200, &[0]), (4_800, &[-100, 0, 100])] {
-            for &drift_ppm in drifts {
-                for phase in [0.0, 0.5, 0.95] {
-                    let clocks = Clocks {
-                        device_rate,
-                        callback,
-                        block,
-                        delay,
-                        running: true,
-                        phase,
-                        drift_ppm,
-                        tail: 0,
-                    };
-                    let stamped = simulate(clocks, FEW_PHASES_SECONDS, true);
-                    let plain = simulate(clocks, FEW_PHASES_SECONDS, false);
-                    assert_eq!(
-                        (stamped.slowed, stamped.sped),
-                        (0, 0),
-                        "trimmed: {clocks:?}"
-                    );
-                    assert!(
-                        stamped.played == plain.played,
-                        "played otherwise: {clocks:?}"
-                    );
-                    assert_eq!(stamped.counters, plain.counters, "{clocks:?}");
-                }
+        for delay in [0, 1_200, 4_800] {
+            for phase in [0.0, 0.5, 0.95] {
+                let clocks = Clocks {
+                    device_rate,
+                    callback,
+                    block,
+                    delay,
+                    running: true,
+                    phase,
+                    drift_ppm: 0,
+                    tail: 0,
+                };
+                let stamped = simulate(clocks, FEW_PHASES_SECONDS, true);
+                let plain = simulate(clocks, FEW_PHASES_SECONDS, false);
+                assert_eq!(
+                    (stamped.slowed, stamped.sped),
+                    (0, 0),
+                    "trimmed: {clocks:?}"
+                );
+                assert!(
+                    stamped.played == plain.played,
+                    "played otherwise: {clocks:?}"
+                );
+                assert_eq!(stamped.counters, plain.counters, "{clocks:?}");
+            }
+        }
+    }
+}
+
+// covers: S53, S207
+#[test]
+fn an_output_held_back_beyond_the_dead_band_follows_the_capture_with_stamps() {
+    // Held back by 100 ms, beyond a lead and the dead band, an output on a
+    // clock 100 or 300 ppm off is tracked like one at hold-back 0 (S207):
+    // over 60 seconds no read runs dry, no drift correction is made, and
+    // its converter is trimmed one way only, by 9/10 of what the clock
+    // gained or more. Before, it drifted until a step back at T.
+    for (device_rate, callback, block) in
+        [(44_100, 441, 480), (44_100, 512, 512), (96_000, 512, 512)]
+    {
+        for phase in [0.0, 0.5, 0.95] {
+            for drift_ppm in FEW_PHASES_DRIFTS_PPM {
+                let clocks = Clocks {
+                    device_rate,
+                    callback,
+                    block,
+                    delay: 4_800,
+                    running: true,
+                    phase,
+                    drift_ppm,
+                    tail: 0,
+                };
+                assert_follows_the_capture(clocks, FEW_PHASES_SECONDS, 0, 0);
+                let outcome = simulate(clocks, FEW_PHASES_SECONDS, true);
+                let trimmed = outcome.slowed.max(outcome.sped);
+                let gained =
+                    u64::from(RATE) * FEW_PHASES_SECONDS * drift_ppm.unsigned_abs() / 1_000_000;
+                assert!(
+                    trimmed >= gained * 9 / 10,
+                    "{trimmed} of {gained} frames trimmed: {clocks:?}"
+                );
             }
         }
     }

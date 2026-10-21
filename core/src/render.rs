@@ -25,8 +25,8 @@
 //!
 //! Clock stamps (S207): when the host gives each callback the time it reads
 //! at ([`Renderer::render_at`]) and stamps the capture's blocks on the same
-//! clock, a converting renderer whose reader plays within the dead band of
-//! its lead follows the capture's clock by those times. It estimates where
+//! clock, a converting renderer follows the capture's clock by those times,
+//! whatever its hold-back. It estimates where
 //! the capture is now from the newest stamp, takes the fill `Ŵ - P` at the
 //! start of every callback, keeps the average over the first
 //! [`TRACK_MS`] (or [`TRACK_CALLBACKS`] callbacks, when longer) after the
@@ -147,8 +147,11 @@ pub const TRACK_MS: u32 = 500;
 pub const TRACK_CALLBACKS: usize = 16;
 
 /// How far the running average of the fill may stray from the reference,
-/// in capture frames, before the converter is trimmed (S207).
-pub const TRIM_DEAD_ZONE_FRAMES: f64 = 4.0;
+/// in capture frames, before the converter is trimmed (S207). It filters
+/// the jitter of the host's wake-ups out of the error before it reaches the
+/// trim (Adriaensen, "Controlling adaptive resampling", LAC 2012): on the
+/// timing matrix, 4 frames let wakes 1 to 9 ms late trim back and forth.
+pub const TRIM_DEAD_ZONE_FRAMES: f64 = 15.0;
 
 /// A trim takes at most this share of a callback's reads, a 256th, and at
 /// least one frame (S207).
@@ -1103,9 +1106,8 @@ impl Renderer {
     /// device frames that reads at `now`, needs `need` capture frames and
     /// goes on as `next` says (S207). Returns the trim it asks for, in
     /// capture frames: positive to slow the converter, negative to speed it
-    /// up, 0 for none. Restarts the tracking when the output is out of the
-    /// trim's reach or the newest stamp is stale; a callback without a
-    /// usable stamp changes nothing.
+    /// up, 0 for none. Restarts the tracking when the newest stamp is
+    /// stale; a callback without a usable stamp changes nothing.
     fn follow(&mut self, now: u64, frames: usize, need: usize, next: &NextRead) -> i64 {
         let ring = self.reader.ring();
         let Some(stamp) = ring.stamp() else {
@@ -1117,9 +1119,7 @@ impl Renderer {
             .saturating_mul(1_000_000_000)
             / rate;
         let stale_ns = (STALE_STAMP_MS * 1_000_000).max(blocks_ns);
-        let reach = self.reader.lead_frames().saturating_add(next.tolerance);
-        let delay = next.delay.saturating_sub(self.reader.late_frames());
-        if now.saturating_sub(stamp.time_ns) > stale_ns || delay > reach {
+        if now.saturating_sub(stamp.time_ns) > stale_ns {
             self.tracking = RESTART;
             return 0;
         }
@@ -1565,9 +1565,106 @@ mod tests {
         }
     }
 
+    /// What a [`jittered`] run trimmed: frames slowed and sped up, the most
+    /// the running average of the fill strayed from the reference, and the
+    /// reader's counters.
+    struct Jittered {
+        slowed: u64,
+        sped: u64,
+        most_off: f64,
+        counters: ReaderCounters,
+    }
+
+    /// Runs [`Stepped`] at hold-back `delay` for `seconds`, its device's
+    /// clock `ppm` fast, every `every`-th callback waking `late_ns` late and
+    /// reading the frames an on-time one would.
+    fn jittered(ppm: f64, every: usize, late_ns: u64, delay: i64, seconds: u64) -> Jittered {
+        let mut s = Stepped::new();
+        s.control.set_delay_frames(delay);
+        let period_ns = 10_000_000.0 / (1.0 + ppm * 1e-6);
+        let end_ns = seconds * 1_000_000_000;
+        let mut block_ns = 10_000_000;
+        let mut most_off = 0.0f64;
+        for call in 0.. {
+            let due_ns = 11_000_000 + (call as f64 * period_ns) as u64;
+            if due_ns >= end_ns {
+                break;
+            }
+            let late = if call % every == every - 1 {
+                late_ns
+            } else {
+                0
+            };
+            let now = due_ns + late;
+            while block_ns <= now {
+                s.writer.write_at(&s.block, 480, block_ns);
+                block_ns += 10_000_000;
+            }
+            s.renderer.render_at(&mut s.out, now);
+            if let Tracking::Following { reference, average } = s.renderer.tracking {
+                most_off = most_off.max((average - reference).abs());
+            }
+        }
+        Jittered {
+            slowed: s.renderer.slowed_frames(),
+            sped: s.renderer.sped_frames(),
+            most_off,
+            counters: s.control.counters(),
+        }
+    }
+
     // covers: S207
     #[test]
-    fn the_tracking_restarts_when_the_capture_stalls_or_the_output_leaves_its_reach() {
+    fn wake_jitter_inside_the_dead_zone_trims_nothing_and_drift_still_trims() {
+        // One wake in 33 or in 58 comes 9 ms late, the worst of the timing
+        // matrix's Windows profile, and its fill jumps by 432 frames. The
+        // running average strays past the old dead zone of 4 frames, which
+        // trimmed back and forth, but stays inside this one: nothing is
+        // trimmed. Under the same wakes, a clock 300 ppm off is still
+        // trimmed with it, by 9/10 of what it gained or more and never
+        // against it, at hold-back 0 and held back by 100 ms alike, with no
+        // correction (S207).
+        for every in [33, 58] {
+            let calm = jittered(0.0, every, 9_000_000, 0, 60);
+            assert!(
+                calm.most_off > 4.0 && calm.most_off <= TRIM_DEAD_ZONE_FRAMES,
+                "one wake in {every}: strayed {}",
+                calm.most_off
+            );
+            assert_eq!((calm.slowed, calm.sped), (0, 0), "one wake in {every}");
+            for ppm in [300.0f64, -300.0] {
+                let gained = (ppm.abs() * 1e-6 * 60.0 * 48_000.0) as u64;
+                for delay in [0, 4800] {
+                    let run = jittered(ppm, every, 9_000_000, delay, 60);
+                    let (with, against) = if ppm > 0.0 {
+                        (run.slowed, run.sped)
+                    } else {
+                        (run.sped, run.slowed)
+                    };
+                    let c = run.counters;
+                    let context = format!("{ppm} ppm, hold-back {delay}, one wake in {every}");
+                    assert!(
+                        with >= gained * 9 / 10 && against == 0,
+                        "{context}: {with} with, {against} against, {gained} gained"
+                    );
+                    assert_eq!(
+                        (
+                            c.drift_skips,
+                            c.drift_silences,
+                            c.resyncs,
+                            c.starved_renders
+                        ),
+                        (0, 0, 0, 0),
+                        "{context}"
+                    );
+                }
+            }
+        }
+    }
+
+    // covers: S207
+    #[test]
+    fn the_tracking_restarts_when_the_capture_stalls_and_goes_on_at_any_hold_back() {
         let mut s = Stepped::new();
         // Half a second after the reader anchors, the reference is kept.
         s.step(30);
@@ -1584,12 +1681,16 @@ mod tests {
         assert_eq!(s.renderer.tracking, RESTART);
         s.step(60);
         assert!(matches!(s.renderer.tracking, Tracking::Following { .. }));
-        // Held back by 100 ms, beyond its lead and the dead band: no trim
-        // reaches it, and the tracking stays restarted.
+        // Held back by 100 ms, beyond its lead and the dead band: the delay
+        // change re-anchors it, and it is tracked again from there. On a
+        // clock in step nothing is trimmed.
         s.control.set_delay_frames(4800);
         s.step(100);
         assert_eq!(s.control.counters().resyncs, 1);
-        assert_eq!(s.renderer.tracking, RESTART);
+        let Tracking::Following { reference, .. } = s.renderer.tracking else {
+            panic!("not following: {:?}", s.renderer.tracking);
+        };
+        assert!(reference > 4800.0, "{reference}");
         assert_eq!(
             (s.renderer.slowed_frames(), s.renderer.sped_frames()),
             (0, 0)
