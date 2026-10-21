@@ -80,10 +80,14 @@ extension AppDelegate {
         case .turnedOff(let id, let problem):
             DebugTrace.log("[AudioSync] Cast: \(castLabel(id)) is off")
             if let problem { postNotice(text.castProblem(problem, name: castName(id)), subject: Notice.cast(id)) }
-        case .senderFailed:
+        case .senderFailed(let wasOn):
             DebugTrace.log("[AudioSync] Cast: the sender stopped after an internal error")
+            let name = wasOn.map(castName)
             castSender?.discard()
             castSender = nil
+            // Its speakers left the list, so what was said about them no longer holds.
+            clearNotices(Notice.castSubjects(in: appModel.notices))
+            if let name { postNotice(text.castSenderStopped(speaker: name), subject: Notice.castSender) }
         }
     }
 

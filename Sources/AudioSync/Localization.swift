@@ -674,9 +674,16 @@ struct UIStrings {
         switch state {
         case .quiet: return nil
         case .searching: return "Looking for Google Cast speakers…"
-        case .noneFound: return "No Google Cast speakers found on this network"
+        case .noneFound:
+            return "No Google Cast speakers found on this network. Make sure this Mac is on the same network as "
+                + "your speakers, and that AudioSync is allowed in System Settings → Privacy & Security → Local Network."
         case .failed: return "AudioSync can't look for Google Cast speakers right now. Restart AudioSync to try again."
         }
+    }
+
+    /// The notice when the Cast sender stopped working with `speaker` on.
+    func castSenderStopped(speaker: String) -> String {
+        "Google Cast stopped working in AudioSync, so \(speaker) is off. Restart AudioSync to use Google Cast speakers again."
     }
 
     /// The notice when a Cast speaker can't play, or stopped, and is off.

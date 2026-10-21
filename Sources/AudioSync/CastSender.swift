@@ -140,7 +140,8 @@ final class CastSender {
         return done
     }
 
-    /// The same teardown for a sender that stopped working: a new one may start meanwhile.
+    /// The same teardown for a sender that stopped working. No new sender
+    /// starts after it until AudioSync starts again.
     func discard() {
         _ = beginShutdown()
     }

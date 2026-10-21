@@ -3514,9 +3514,12 @@ do {
     check(SignalQuit.step(signal: SIGINT, quitBegun: true) == .exitNow(status: 130)
             && SignalQuit.step(signal: SIGTERM, quitBegun: true) == .exitNow(status: 143),
           "quit: an exit signal while the quit steps run exits at once with its own status (S111)")
-    check(SignalQuit.limit == 4,
-          "quit: a signal waits at most 4 s for the quit steps, past the 500 ms fade cap and the senders' teardowns (S111, S186)",
-          "\(SignalQuit.limit) s")
+    // The Cast teardown's deadline counts from the start of the quit steps,
+    // beside the fades and the AirPlay teardown, so it alone must fit.
+    let fadeCap = Double(ASC_STOP_FADE_CAP_MS) / 1000
+    check(CastSender.shutdownWait < SignalQuit.limit && fadeCap < CastSender.shutdownWait,
+          "quit: the Cast teardown's wait fits under a signal's limit and outlasts the fades (S111, S186)",
+          "wait \(CastSender.shutdownWait) s, fades \(fadeCap) s, limit \(SignalQuit.limit) s")
 
     // The order: the exit waits for the quit steps, then carries the signal's status.
     let ordered = SignalQuitProbe()
@@ -3799,7 +3802,7 @@ do {
           "cast: each way a session ends maps to its notice, or none")
 
     var failed = m
-    check(failed.apply(.failed(detail: "")) == .senderFailed && failed.enabled == nil && failed.rows.isEmpty
+    check(failed.apply(.failed(detail: "")) == .senderFailed(wasOn: kitchen) && failed.enabled == nil && failed.rows.isEmpty
             && failed.listState(now: Date()) == .failed,
           "cast: a sender that stopped working empties the list and says so")
 
@@ -3856,6 +3859,17 @@ do {
     check(notices.count == 2 && notices.newest?.text.contains("Kitchen") == true
             && notices.items.last?.text.contains("Den") == true,
           "cast: one notice per speaker, the newest replacing the older one")
+    var senderGone = notices
+    senderGone.post("Source quit", subject: Notice.source)
+    let castSubjects = Notice.castSubjects(in: senderGone)
+    let cleared = senderGone.clear(castSubjects)
+    check(Set(castSubjects) == [Notice.cast(den), Notice.cast(kitchen)]
+            && cleared && senderGone.items.map(\.subject) == [Notice.source],
+          "cast: a sender that stopped clears every speaker's notice, and only those")
+    check(t.castSenderStopped(speaker: "Kitchen").contains("Kitchen"), "cast: the sender's notice names the speaker that went off")
+    var idleFailure = CastModel()
+    check(idleFailure.apply(.failed(detail: "")) == .senderFailed(wasOn: nil), "cast: no speaker named when none was on")
+    check(t.castList(.noneFound)?.contains("Local Network") == true, "cast: none found points to Local Network access")
     let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost, .group]
     check(problems.allSatisfy { let text = t.castProblem($0, name: "Den"); return text.contains("Den") && !text.contains("\u{2014}") },
           "cast: every notice names the speaker, with no em dash")

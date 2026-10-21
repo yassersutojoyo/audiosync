@@ -608,8 +608,7 @@ struct SpeakerRow: View {
                             .disabled(!volumeAdjustable)
                             .accessibilityLabel(t.volume(of: speaker.name))
                             .accessibilityValue(t.volumeValue(speaker.volume))
-                            .accessibilityHint(speaker.cast?.volumeFixed == true ? t.castVolumeFixed : "")
-                            .help(speaker.cast?.volumeFixed == true ? t.castVolumeFixed : "")
+                            .hintAndHelp(speaker.cast?.volumeFixed == true ? t.castVolumeFixed : nil)
                             .focused($volumeFocused)
                         Text(t.volumeValue(speaker.volume))
                             .font(.caption.monospacedDigit())
@@ -759,6 +758,14 @@ struct SpeakerRow: View {
     }
 
     private func toggle(_ on: Bool) { model.setEnabled(speaker, on) }
+}
+
+private extension View {
+    /// `text` as the VoiceOver hint and the tooltip; neither when nil.
+    @ViewBuilder
+    func hintAndHelp(_ text: String?) -> some View {
+        if let text { accessibilityHint(text).help(text) } else { self }
+    }
 }
 
 /// The AirPlay delay (S178, S181): one row under the AirPlay speakers, with

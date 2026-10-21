@@ -261,7 +261,8 @@ enum CastOutcome: Equatable {
     /// The device went off on its own; a notice says why when `problem` is set.
     case turnedOff(String, problem: CastProblem?)
     case memoryChanged
-    case senderFailed
+    /// The sender stopped working; `wasOn`: the speaker that was on, now off.
+    case senderFailed(wasOn: String?)
 }
 
 struct CastModel {
@@ -393,12 +394,13 @@ struct CastModel {
             devices = devices.filter { $0.key == attempt?.device }
             return .changed
         case .failed:
+            let wasOn = enabled
             discovery = .failed
             devices = [:]
             attempt = nil
             starting = nil
             enabled = nil
-            return .senderFailed
+            return .senderFailed(wasOn: wasOn)
         default: break
         }
         guard let current = attempt, event.attempt == current.number else { return nil }

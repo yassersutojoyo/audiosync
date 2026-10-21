@@ -480,6 +480,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // Its destroy waits up to about 3.5 s for a session's teardown, so it
         // runs beside the fades and the AirPlay sender's teardown.
         let castTeardown = castSender?.beginShutdown()
+        let castDeadline = DispatchTime.now() + CastSender.shutdownWait
         castSender = nil
         appModel.dropDelayDrafts()
         safetyNetTimer?.invalidate()
@@ -492,7 +493,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         nowPlaying.stopWatching()
         localNetworkProbe.stopBrowsing()
         deviceVolumes.stopFollowing()   // removes the listeners, writes nothing (S192, S195)
-        if castTeardown?.wait(timeout: .now() + CastSender.shutdownWait) == .timedOut {
+        if castTeardown?.wait(timeout: castDeadline) == .timedOut {
             DebugTrace.log("[AudioSync] Cast: the sender's teardown didn't finish in time")
         }
     }
