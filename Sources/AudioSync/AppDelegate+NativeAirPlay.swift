@@ -182,7 +182,10 @@ extension AppDelegate {
     private func showNextNativePrompt() {
         guard !codePromptBusy, let native = nativeAirPlay, let prompt = native.model.nextPrompt() else { return }
         let id = NativeAirPlayID.app(prompt.id)
-        let name = airplayNames[id] ?? native.model.names[prompt.id] ?? prompt.id
+        // Not listed yet, the speaker still goes by the user's name if it has one.
+        let name = airplayNames[id] == nil
+            ? speakerNames.renamed(key: SpeakerKey.make(id: id, airplay: true)) ?? native.model.names[prompt.id] ?? prompt.id
+            : shownName(airPlay: id)
         let message: String
         switch (prompt.password, prompt.wrong) {
         case (true, false): message = text.pairPasswordMessage(name: name)
@@ -367,7 +370,7 @@ extension AppDelegate {
     }
 
     private func nativeTurnOffText(_ id: String, _ reason: NativeTurnOff) -> String {
-        let name = airplayNames[id].map(text.deviceName) ?? text.unknownDevice
+        let name = shownName(airPlay: id)
         switch reason {
         case .needsCode, .needsPassword: return text.airPlayTurnedOff(name: name, reason: .needsCode)
         case .unreachable: return text.airPlayTurnedOff(name: name, reason: .unreachable)

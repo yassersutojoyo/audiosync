@@ -42,6 +42,7 @@ use audiosync_core::eq::{BAND_COUNT, EqSettings};
 use audiosync_core::policy::delay::{
     MAX_DELAY_MS, MAX_OFFSET_MS, MIN_OFFSET_MS, sanitize_airplay_adjustment_ms,
 };
+use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::speakers::SpeakerKey;
 use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, sanitize_position};
 use serde::{Deserialize, Serialize};
@@ -292,6 +293,9 @@ pub struct Settings {
     /// AirPlay speakers are taken to sound L = L_s + A after a frame reaches
     /// the sender (spec S178).
     pub airplay_adjustment_ms: f64,
+    /// What a session does when the app it captures quits, as the core
+    /// stores it: `stop` or `system` (spec S227).
+    pub when_source_quits: String,
 }
 
 impl Default for Settings {
@@ -310,6 +314,7 @@ impl Default for Settings {
             appearance: Appearance::System,
             window: None,
             airplay_adjustment_ms: 0.0,
+            when_source_quits: WhenSourceQuits::Stop.stored().to_owned(),
         }
     }
 }
@@ -441,6 +446,9 @@ impl Settings {
             window: self.window.and_then(clamp_window),
             airplay_adjustment_ms: sanitize_airplay_adjustment_ms(self.airplay_adjustment_ms)
                 .unwrap_or(0.0),
+            when_source_quits: WhenSourceQuits::from_stored(Some(&self.when_source_quits))
+                .stored()
+                .to_owned(),
         }
     }
 

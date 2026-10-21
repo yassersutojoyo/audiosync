@@ -1,7 +1,7 @@
 {
   "name": "AudioSync",
   "short_name": "AudioSync",
-  "description": "Play your Mac's audio on HomePods, AirPlay speakers and local outputs at the same time, in sync.",
+  "description": "Play your Mac's audio on AirPlay speakers and local outputs at the same time, in sync.",
   "id": "/",
   "start_url": "/",
   "scope": "/",

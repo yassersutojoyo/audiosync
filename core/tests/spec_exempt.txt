@@ -88,3 +88,4 @@ S222 Mac host only: the window's model of the native AirPlay sender's receivers,
 S223 Mac host only: pairing and password prompts for the native AirPlay sender; its logic suite checks it.
 S224 Mac host only: the folder of the native AirPlay sender's stored pairings; its logic suite checks it.
 S225 Test harness only: the soak run's memory rule; the soak rules suite checks it.
+S228 Mac host only: the names the user gives speakers and the inline rename; its logic suite checks it.

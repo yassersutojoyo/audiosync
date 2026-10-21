@@ -89,9 +89,16 @@ final class OutputRenderer: FadingOutput {
     private var target: RenderTarget?
     private var gain: Double = 1
     /// The device's and its output stream's latency plus the unit's own,
-    /// added to a fade's last output time (S185).
+    /// added to a fade's last output time (S185), a Bluetooth device's
+    /// within S231's window.
     private var latencyNs: UInt64 = 0
+    /// The latest Bluetooth latency report S231's window accepted, per
+    /// device UID, kept across outputs and reconnects; main thread.
+    private static var plausibleLatencyNs: [String: UInt64] = [:]
     private var aliveListener: (device: AudioObjectID, block: AudioObjectPropertyListenerBlock)?
+    private var overloadListener: (device: AudioObjectID, block: AudioObjectPropertyListenerBlock)?
+    /// The latest start's device is a Bluetooth one (Classic or LE).
+    private(set) var isBluetooth = false
     /// Bumped by every start and stop, so a listener call queued for an
     /// earlier start does nothing.
     private var generation: UInt64 = 0
@@ -134,6 +141,20 @@ final class OutputRenderer: FadingOutput {
     var lateMaxMs: Double { target?.renderer.lateMaxMs ?? 0 }
     var lateCallbacks: Int64 { target?.renderer.lateCallbacks ?? 0 }
 
+    /// The latest start's counters and the observer's values (S229), for the
+    /// debug log; main thread.
+    func statusText(bluetoothOutputs: Int) -> String {
+        let observed = OutputObservation(
+            leastSlackMs: target?.renderer.leastSlackMs, floorDropMs: target?.renderer.floorDropMs ?? 0,
+            shortageFrames: target?.renderer.shortageFrames ?? 0,
+            overloads: target?.overloads.load(ordering: .relaxed) ?? 0,
+            timeSteps: target?.renderer.timeSteps ?? 0, bluetoothOutputs: bluetoothOutputs,
+            rejectedLatencyNs: target?.renderer.rejectedLatencyNs, latencyNs: latencyNs)
+        return "\(framesRendered.load(ordering: .relaxed)) frames rendered, \(counters), "
+            + "slowed \(slowedFrames) frames, sped \(spedFrames) frames, shortfall \(shortfallFrames) frames, "
+            + "late callbacks \(lateCallbacks) (most \(String(format: "%.1f", lateMaxMs)) ms), \(observed.text)"
+    }
+
     /// Where the fade was at the end of the latest callback.
     var fadeState: CoreRenderer.FadeState { target?.renderer.fadeState ?? .closed }
 
@@ -161,10 +182,13 @@ final class OutputRenderer: FadingOutput {
     func start(on device: AudioObjectID, captureRate: Double, delayMs: Double) throws {
         halt()
         let fresh = try Self.makeUnit()
+        let bluetooth = BluetoothIOBuffer.isBluetooth(
+            transport: Self.uint32(device, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal) ?? 0)
         let started: (channels: Int, rate: Double)
         var initialized = false
         do {
-            started = try configure(fresh, device: device, captureRate: captureRate, delayMs: delayMs)
+            started = try configure(fresh, device: device, captureRate: captureRate, delayMs: delayMs,
+                                    bluetooth: bluetooth)
             let initStatus = AudioUnitInitialize(fresh)
             guard initStatus == noErr else { throw StartFailure.unitNotInitialized(initStatus) }
             initialized = true
@@ -178,12 +202,22 @@ final class OutputRenderer: FadingOutput {
         renderRate = started.rate
         reportedLoss = false
         stopNote = "running"
-        latencyNs = Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
+        let reportedNs = Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
+        let uid = Self.deviceString(device, kAudioDevicePropertyDeviceUID)
+        let lastPlausibleNs = uid.flatMap { Self.plausibleLatencyNs[$0] } ?? 0
+        latencyNs = target?.renderer.setReportedLatency(reportedNs, lastPlausibleNs: lastPlausibleNs) ?? reportedNs
+        let rejectedNs = target?.renderer.rejectedLatencyNs
+        if bluetooth, rejectedNs == nil, let uid { Self.plausibleLatencyNs[uid] = reportedNs }
+        isBluetooth = bluetooth
         installDeviceAliveListener(device)
+        installOverloadListener(device)
         startDebugReport()
+        let extraLeadMs = target?.renderer.extraLeadMs ?? 0
+        let lead = extraLeadMs > 0 ? ", Bluetooth, extra lead \(String(format: "%.1f", extraLeadMs)) ms" : ""
         DebugTrace.log("[AudioSync] output unit started on device \(device): \(started.channels) channels at "
                 + "\(started.rate) Hz from \(captureRate) Hz, delay \(delayMs) ms, "
-                + "output latency \(latencyNs / 1000) µs")
+                + "output latency \(latencyNs / 1000) µs\(lead)"
+                + OutputObservation.rejectionText(rejectedNs: rejectedNs, usedNs: latencyNs))
     }
 
     /// Stops the unit at once, without a fade; once this returns no render
@@ -191,6 +225,7 @@ final class OutputRenderer: FadingOutput {
     func halt() {
         generation &+= 1
         uninstallDeviceAliveListener()
+        uninstallOverloadListener()
         debugTimer?.cancel()
         debugTimer = nil
         guard let live = halUnit else { return }
@@ -251,7 +286,7 @@ final class OutputRenderer: FadingOutput {
     /// renderer for it at `delayMs` and installs the callback. Returns the
     /// channel count and the rate.
     private func configure(_ unit: AudioUnit, device: AudioObjectID, captureRate: Double,
-                           delayMs: Double) throws -> (channels: Int, rate: Double) {
+                           delayMs: Double, bluetooth: Bool) throws -> (channels: Int, rate: Double) {
         var status = Self.setProperty(unit, kAudioOutputUnitProperty_EnableIO, scope: kAudioUnitScope_Output,
                                       to: UInt32(1))
         guard status == noErr else { throw StartFailure.outputNotEnabled(status) }
@@ -259,6 +294,8 @@ final class OutputRenderer: FadingOutput {
         status = Self.setProperty(unit, kAudioOutputUnitProperty_CurrentDevice, scope: kAudioUnitScope_Global,
                                   to: device)
         guard status == noErr else { throw StartFailure.deviceNotBound(status) }
+        // Before the lead below reads the device's buffer size.
+        Self.applyBluetoothIOBuffer(unit, device: device)
 
         guard CoreRate.hz(captureRate) != nil else {
             throw StartFailure.formatRefused(OSStatus(kAudioUnitErr_FormatNotSupported))
@@ -288,6 +325,8 @@ final class OutputRenderer: FadingOutput {
                                           channels: channels, gain: gain) else {
             throw StartFailure.coreUnavailable
         }
+        // Before the first callback, which publishes the start lead (S208).
+        renderer.setBluetooth(bluetooth)
         // Closed until its first audio, so the reader takes the delay at once
         // and primes on it (S45, S187).
         renderer.setDelay(ms: delayMs)
@@ -386,6 +425,73 @@ final class OutputRenderer: FadingOutput {
         return nanoseconds(frames: buffer &+ safety, rate: deviceNominalRate(device) ?? rate)
     }
 
+    // MARK: - Bluetooth IO buffer (diagnostic switch)
+
+    /// With `AUDIOSYNC_BT_IO_FRAMES` set, gives a Bluetooth device the IO
+    /// buffer `BluetoothIOBuffer.frames` picks, before the unit initializes;
+    /// any other device, or no switch, is left exactly as it is.
+    private static func applyBluetoothIOBuffer(_ unit: AudioUnit, device: AudioObjectID) {
+        guard let raw = ProcessInfo.processInfo.environment[BluetoothIOBuffer.environmentKey] else { return }
+        let transport = uint32(device, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal) ?? 0
+        guard BluetoothIOBuffer.isBluetooth(transport: transport) else { return }
+        let name = deviceName(device) ?? "?"
+        let range = bufferFrameSizeRange(device)
+        let rangeText = range.map { "\($0.minimum)-\($0.maximum)" } ?? "unknown"
+        let before = uint32(device, kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal)
+        guard let frames = BluetoothIOBuffer.frames(requested: BluetoothIOBuffer.requested(raw),
+                                                    transport: transport, range: range) else {
+            DebugTrace.log("[AudioSync] BT IO buffer: \(BluetoothIOBuffer.environmentKey)=\(raw) ignored "
+                + "(not a whole number from 256 to 4096); device \(device) \"\(name)\" left at "
+                + "\(before.map(String.init(describing:)) ?? "?") frames")
+            return
+        }
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyBufferFrameSize,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var value = frames
+        let setStatus = AudioObjectSetPropertyData(device, &address, 0, nil, UInt32(MemoryLayout<UInt32>.size), &value)
+        // A device buffer above the unit's slice limit would fail every render.
+        var slice: UInt32 = 0
+        var sliceSize = UInt32(MemoryLayout<UInt32>.size)
+        var sliceStatus = AudioUnitGetProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global,
+                                               0, &slice, &sliceSize)
+        if sliceStatus == noErr, slice < frames {
+            sliceStatus = setProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice, scope: kAudioUnitScope_Global,
+                                      to: frames)
+            if sliceStatus == noErr { slice = frames }
+        }
+        let after = uint32(device, kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal)
+        DebugTrace.log("[AudioSync] BT IO buffer: device \(device) \"\(name)\", transport \(transport), "
+            + "requested \(raw), range \(rangeText), set \(frames) (status \(setStatus)), "
+            + "before \(before.map(String.init(describing:)) ?? "?"), "
+            + "read back \(after.map(String.init(describing:)) ?? "?"), "
+            + "unit slice \(slice) (status \(sliceStatus))")
+    }
+
+    private static func bufferFrameSizeRange(_ device: AudioObjectID) -> (minimum: Double, maximum: Double)? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyBufferFrameSizeRange,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var range = AudioValueRange()
+        var size = UInt32(MemoryLayout<AudioValueRange>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &range) == noErr else { return nil }
+        return (range.mMinimum, range.mMaximum)
+    }
+
+    private static func deviceName(_ device: AudioObjectID) -> String? {
+        deviceString(device, kAudioObjectPropertyName)
+    }
+
+    private static func deviceString(_ device: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
+        var address = AudioObjectPropertyAddress(mSelector: selector,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var name: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &name) == noErr else { return nil }
+        return name.map { $0.takeRetainedValue() as String }
+    }
+
     private static func deviceNominalRate(_ device: AudioObjectID) -> Double? {
         var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
                                                  mScope: kAudioObjectPropertyScopeGlobal,
@@ -442,6 +548,40 @@ final class OutputRenderer: FadingOutput {
         AudioObjectRemovePropertyListenerBlock(listener.device, &address, DispatchQueue.main, listener.block)
     }
 
+    // MARK: - IO overloads (S229)
+
+    private static var overloadAddress: AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: kAudioDeviceProcessorOverload,
+                                   mScope: kAudioObjectPropertyScopeGlobal,
+                                   mElement: kAudioObjectPropertyElementMain)
+    }
+
+    private static let overloadQueue = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.overloads",
+                                                     qos: .utility)
+
+    /// Counts the IO cycles of `device` that ran past their deadline into
+    /// the running start's target, which the listener holds until `halt`.
+    private func installOverloadListener(_ device: AudioObjectID) {
+        guard let target else { return }
+        let block: AudioObjectPropertyListenerBlock = { _, _ in
+            _ = target.overloads.wrappingAdd(1, ordering: .relaxed)
+        }
+        var address = Self.overloadAddress
+        let status = AudioObjectAddPropertyListenerBlock(device, &address, Self.overloadQueue, block)
+        guard status == noErr else {
+            DebugTrace.log("[AudioSync] output device \(device): its IO overloads can't be counted (status \(status))")
+            return
+        }
+        overloadListener = (device, block)
+    }
+
+    private func uninstallOverloadListener() {
+        guard let listener = overloadListener else { return }
+        overloadListener = nil
+        var address = Self.overloadAddress
+        AudioObjectRemovePropertyListenerBlock(listener.device, &address, Self.overloadQueue, listener.block)
+    }
+
     // MARK: - Debug log
 
     /// While the debug log is on: one line for each second in which this
@@ -474,6 +614,84 @@ final class OutputRenderer: FadingOutput {
     }
 }
 
+/// The developer-only `AUDIOSYNC_BT_IO_FRAMES` switch: another IO buffer size
+/// for Bluetooth outputs, smaller or larger, to tell at a sitting whether the
+/// buffer size plays a part when two or more of them chop. Unset, nothing changes.
+enum BluetoothIOBuffer {
+    static let environmentKey = "AUDIOSYNC_BT_IO_FRAMES"
+    static let allowed: ClosedRange<UInt32> = 256...4096
+
+    static func isBluetooth(transport: UInt32) -> Bool {
+        transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
+    }
+
+    /// The size asked for: a whole number in `allowed`; anything else is nil.
+    static func requested(_ raw: String?) -> UInt32? {
+        guard let raw, let value = UInt32(raw.trimmingCharacters(in: .whitespaces)),
+              allowed.contains(value) else { return nil }
+        return value
+    }
+
+    /// The IO buffer to give a device, or nil to leave it untouched: only a
+    /// Bluetooth device with a request, clamped to the device's
+    /// `kAudioDevicePropertyBufferFrameSizeRange` when it reports a usable one.
+    static func frames(requested: UInt32?, transport: UInt32,
+                       range: (minimum: Double, maximum: Double)?) -> UInt32? {
+        guard let requested, isBluetooth(transport: transport) else { return nil }
+        guard let range, range.minimum.isFinite, range.maximum.isFinite else { return requested }
+        let low = max(1, range.minimum.rounded(.up))
+        let high = min(range.maximum.rounded(.down), Double(UInt32.max))
+        guard low <= high else { return requested }
+        return UInt32(min(max(Double(requested), low), high))
+    }
+}
+
+/// One output's observer values (S229) and the Bluetooth outputs playing, as
+/// the debug log shows them.
+struct OutputObservation {
+    /// nil until the core's warm-up has passed.
+    var leastSlackMs: Double?
+    var floorDropMs: Double
+    var shortageFrames: Int64
+    var overloads: Int64
+    var timeSteps: Int64
+    var bluetoothOutputs: Int
+    /// The device's latency report when S231's window rejected it, and the
+    /// latency used instead, in ns.
+    var rejectedLatencyNs: UInt64? = nil
+    var latencyNs: UInt64 = 0
+
+    var text: String {
+        let slack = leastSlackMs.map { String(format: "%.1f ms", $0) } ?? "n/a"
+        return "least slack \(slack), floor drop \(String(format: "%.1f", floorDropMs)) ms, "
+            + "shortage \(shortageFrames) frames, IO overloads \(overloads), output-time steps \(timeSteps), "
+            + "Bluetooth outputs \(bluetoothOutputs)"
+            + Self.rejectionText(rejectedNs: rejectedLatencyNs, usedNs: latencyNs)
+    }
+
+    /// A latency report S231's window rejected, as the debug log names it;
+    /// empty when none was.
+    static func rejectionText(rejectedNs: UInt64?, usedNs: UInt64) -> String {
+        guard let rejectedNs else { return "" }
+        return String(format: ", reported latency %.1f ms outside 50 to 1000 ms, used %.1f ms",
+                      Double(rejectedNs) / 1e6, Double(usedNs) / 1e6)
+    }
+}
+
+/// The Mac's Wi-Fi link as the debug log shows it once per session (S229):
+/// band, channel and signal strength, never the network's name or address.
+enum WiFiNote {
+    /// `band` is CoreWLAN's `CWChannelBand` raw value; a channel of 0 or a
+    /// band it doesn't name reads as unknown, and an RSSI of 0 as not given.
+    static func text(poweredOn: Bool, band: Int?, channel: Int?, rssi: Int?) -> String {
+        guard poweredOn else { return "Wi-Fi off" }
+        let bands = [1: "2.4 GHz", 2: "5 GHz", 3: "6 GHz"]
+        guard let channel, channel > 0, let name = band.flatMap({ bands[$0] }) else { return "Wi-Fi n/a" }
+        let signal = rssi.flatMap { $0 == 0 ? nil : "\($0) dBm" } ?? "n/a"
+        return "Wi-Fi \(name), channel \(channel), RSSI \(signal)"
+    }
+}
+
 /// What one start's render callback reads, fixed for that start. The unit's
 /// callback context: `OutputRenderer` keeps it until its next start, after
 /// that start's unit is gone, so the IO thread borrows it without a retain.
@@ -484,6 +702,8 @@ private final class RenderTarget {
     let channels: Int
     /// The timebase, read on the main thread.
     let clock = HostClock.shared
+    /// The device's IO overloads since this start (S229).
+    let overloads = Atomic<Int64>(0)
     /// For a time stamp without a host time: how far ahead of now the
     /// callback's buffer is output.
     let leadNs: UInt64
