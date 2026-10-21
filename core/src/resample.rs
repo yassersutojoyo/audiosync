@@ -71,6 +71,8 @@ pub struct Resampler {
     step_whole: usize,
     step_frac: u64,
     passthrough: bool,
+    /// Equal rates are converted too, at a ratio of one (S226).
+    convert_equal: bool,
     /// H: the filter reaches H input frames to each side of its center; an
     /// output uses the 2H history frames `pos - H + 1 ..= pos + H`.
     half: usize,
@@ -193,6 +195,7 @@ impl Resampler {
             step_whole: 1,
             step_frac: 0,
             passthrough: true,
+            convert_equal: false,
             half: 1,
             scale: 1.0,
             table: kernel_table(),
@@ -225,6 +228,15 @@ impl Resampler {
         Ok(())
     }
 
+    /// Converts equal rates too, at a ratio of one, so the converter can be
+    /// trimmed at every rate (S226), or passes them through again. Resets
+    /// the phase and history like [`Resampler::set_input_rate`]; never
+    /// allocates.
+    pub fn set_convert_equal_rates(&mut self, on: bool) {
+        self.convert_equal = on;
+        self.configure(self.input_rate);
+    }
+
     fn configure(&mut self, input_rate: u32) {
         let g = gcd(u64::from(input_rate), u64::from(self.output_rate));
         self.input_rate = input_rate;
@@ -232,7 +244,7 @@ impl Resampler {
         self.den = u64::from(self.output_rate) / g;
         self.step_whole = (self.num / self.den) as usize;
         self.step_frac = self.num % self.den;
-        self.passthrough = input_rate == self.output_rate;
+        self.passthrough = input_rate == self.output_rate && !self.convert_equal;
         self.half = half_width(input_rate, self.output_rate);
         self.scale = kernel_scale(input_rate, self.output_rate);
         let taps = 2 * self.half;
@@ -452,6 +464,13 @@ impl Resampler {
         // During a trim the center may lie between two of the bank's
         // phases; its weights then come from the kernel table.
         let between = self.trim_fraction();
+        if self.num == self.den && self.frac == 0 && between == 0.0 {
+            // At a ratio of one, a center on a frame is that frame.
+            let at = self.pos * 2;
+            let frame = (self.history[at], self.history[at + 1]);
+            self.advance();
+            return frame;
+        }
         let weights: &[f32] = if use_bank && between == 0.0 {
             let start = self.frac as usize * taps;
             &self.bank[start..start + taps]
@@ -471,6 +490,16 @@ impl Resampler {
             left += w * f[0];
             right += w * f[1];
         }
+        self.advance();
+        // Finite input cannot produce a non-finite sum unless it is huge;
+        // keep the output finite regardless (S125).
+        let finite = |x: f32| if x.is_finite() { x } else { 0.0 };
+        (finite(left), finite(right))
+    }
+
+    /// Moves the center one step on, by the trim's share of it during a
+    /// trim.
+    fn advance(&mut self) {
         if self.is_trimming() {
             // This step's share of the trim; `trim` keeps it below a whole
             // step, so the center never stands still or goes back.
@@ -493,10 +522,6 @@ impl Resampler {
                 self.pos += 1;
             }
         }
-        // Finite input cannot produce a non-finite sum unless it is huge;
-        // keep the output finite regardless (S125).
-        let finite = |x: f32| if x.is_finite() { x } else { 0.0 };
-        (finite(left), finite(right))
     }
 
     /// Drops history frames no future output needs.
@@ -1044,6 +1069,46 @@ mod tests {
                 .unwrap()
                 .input_frames_for(512)
         );
+    }
+
+    // covers: S226
+    #[test]
+    fn equal_rates_converted_play_each_frame_unchanged_until_a_trim_moves_them() {
+        let mut r = Resampler::new(48_000, 48_000).unwrap();
+        assert!(r.is_passthrough());
+        r.set_convert_equal_rates(true);
+        assert!(!r.is_passthrough());
+        let latency = r.latency_frames();
+        assert!(latency > 0);
+        let input: Vec<f32> = (0..6000).flat_map(|i| [i as f32, -(i as f32)]).collect();
+        let mut out = vec![0.0f32; 1000 * 2];
+        assert_eq!(r.input_frames_for(1000), 1000);
+        r.process(&input[..2000], &mut out);
+        // Delayed by the latency, bit for bit.
+        for (j, frame) in out.chunks_exact(2).enumerate().skip(latency) {
+            let k = (j - latency) as f32;
+            assert_eq!(frame, [k, -k]);
+        }
+        // One frame later, spread over 2000 steps, interpolated on the way.
+        assert!(r.slow_down(1, 2000));
+        let mut fed = 1000;
+        let mut produced = 1000;
+        while produced < 4000 {
+            let need = r.input_frames_for(1000);
+            let (_, n) = r.process(&input[fed * 2..(fed + need) * 2], &mut out);
+            fed += need;
+            for (j, frame) in out[..n * 2].chunks_exact(2).enumerate() {
+                let step = (produced + j - 1000) as f64;
+                let lag = (step / 2000.0).min(1.0);
+                let expected = (produced + j - latency) as f64 - lag;
+                assert!((f64::from(frame[0]) - expected).abs() < 0.01, "{j}");
+            }
+            produced += n;
+        }
+        assert!(!r.is_trimming());
+        assert_eq!(fed, produced - 1);
+        r.set_convert_equal_rates(false);
+        assert!(r.is_passthrough());
     }
 
     // covers: S85

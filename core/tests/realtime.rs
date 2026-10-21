@@ -315,6 +315,40 @@ fn following_the_capture_clock_allocates_nothing() {
     );
 }
 
+// covers: S126, S226
+#[test]
+fn the_clock_trim_at_a_long_delay_allocates_nothing() {
+    // Setup may allocate: an output at the capture rate held back 0.5 s,
+    // made with the clock trim on.
+    let ring = Ring::for_rate(48_000).unwrap();
+    let mut writer = ring.writer().unwrap();
+    let reader = Reader::new(Arc::clone(&ring), 48_000);
+    let control = RendererControl::new(&reader);
+    control.set_delay_frames(24_000);
+    control.set_clock_trim(true);
+    let gain = Arc::new(SharedGain::new(0.8));
+    let mut renderer = Renderer::new(reader, &control, gain, 48_000, 48_000, 2).unwrap();
+    let block = noisy_block(480, 13);
+    let mut out = vec![0.0f32; 480 * 2];
+    // The capture writes 480 frames every 10 ms; the device asks for 480
+    // every 10 ms on its own clock, 0.2 % fast, so the converter is
+    // trimmed a frame at a time throughout.
+    let (mut write_ns, mut pull_ns) = (10_000_000u64, 600_000_000u64);
+    let count = allocations_in(|| {
+        while write_ns <= 8_000_000_000 {
+            if write_ns <= pull_ns {
+                writer.write_at(&block, 480, write_ns);
+                write_ns += 10_000_000;
+            } else {
+                renderer.render_at(&mut out, pull_ns);
+                pull_ns += 9_980_000;
+            }
+        }
+    });
+    assert_eq!(count, 0, "the clock trim allocated or freed memory");
+    assert!(control.slowed_frames() > 0, "never trimmed");
+}
+
 /// The source of a module without its unit tests, with `\n` line ends
 /// whatever the checkout uses (a Windows checkout may have `\r\n`). Panics
 /// if the module has a test module this split doesn't find, so the scan never

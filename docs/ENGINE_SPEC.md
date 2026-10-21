@@ -178,6 +178,7 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
   - *What it supersedes, while on.* S207's limit of the trim to an output near W, and S207's restart when the output moves out of that reach. The dead band (S50) and the corrections at T (S51, S52) stay, as the backstop for stalls (S53), bursts and clocks more than 20 ppm off, which drift by the difference until they are corrected at T. Without stamps (S207), or with a stamp too old, nothing is trimmed further back and the dead band works as before. With the setting off, nothing in this clause applies.
   - *Real time.* The trim runs in the callback, allocates nothing, takes no lock and makes no system call (S126); the setting is a relaxed atomic in the control.
   - *Limits.* The trim follows the stamps: a stamp error that changes slowly (a capture that stamps a block when it publishes it, at a phase that slides against the callbacks') moves the output by as much, and the jitter of real stamps (S207) passes into the running average, so a trim may go one way and back where exact stamps would need none; each such trim is still a frame at 20 ppm. The earliest output at the capture rate starts later by the lead of a converting output, about 25 ms more than its callback, and frames during a trim cost the converter's interpolation.
+  - In the core's hour of the bench (an output at the capture rate held back 2 s, 512-frame callbacks against 512-frame blocks at 48 kHz written every 2 ms, stamps at the exact times), a clock 3 ppm fast or slow keeps the output's delay within 0.6 frames of where it settled, with the converter trimmed one way only, by the 518 frames the clock gained or lost, and no drift correction; with the trim off the delay moves by 518.4 frames, 10.8 ms, uncorrected.
 
 ### Fades at stream boundaries
 
@@ -1301,6 +1302,18 @@ The checks for S206 and S207 (`core/tests/render_start.rs`). The capture writes 
 | a_packet_written_in_pieces_is_one_block_for_the_outputs_lead (`windows/src/audio/capture.rs`) | S206 |
 | each_packet_and_gap_fill_is_stamped_as_its_block_closes (`windows/src/audio/capture.rs`) | S207 |
 | a_period_in_frames_is_rounded_up (`windows/src/audio/outputs.rs`) | S206 |
+
+### clock trim: core (`cargo test` in `core/`)
+
+The checks for S226 (`core/tests/clock_trim.rs`): the bench's hour, fast-forwarded, with the ring holding a ramp, so the frame each callback plays first gives the output's delay to a fraction of a frame.
+
+| Test | Clauses |
+|---|---|
+| a_clock_3_ppm_fast_keeps_its_delay_within_a_frame_for_an_hour_with_the_clock_trim | S207, S226 |
+| a_clock_3_ppm_slow_keeps_its_delay_within_a_frame_for_an_hour_with_the_clock_trim | S207, S226 |
+| with_the_clock_trim_off_a_clock_3_ppm_fast_still_drifts_through_the_dead_band | S50, S226 |
+| the_clock_trim_at_a_long_delay_allocates_nothing (`core/tests/realtime.rs`) | S126, S226 |
+| equal_rates_converted_play_each_frame_unchanged_until_a_trim_moves_them (`core/src/resample.rs`) | S226 |
 
 ### device volume: core (`cargo test` in `core/`)
 

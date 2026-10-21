@@ -36,6 +36,13 @@
 //! device's clock runs fast, sped up when it runs slow,
 //! at most 1 / [`TRIM_SHARE`] of a callback's reads at a time.
 //!
+//! Clock trim (S226): a renderer made while its control's clock trim is on
+//! converts at every rate and keeps following the capture's clock beyond
+//! S207's reach, by one frame at a time spread over
+//! [`CLOCK_TRIM_FRAMES`] capture frames (20 ppm), whenever the running
+//! average strays more than [`CLOCK_TRIM_DEAD_ZONE_FRAMES`] from the
+//! reference. Off by default.
+//!
 //! Late callbacks (S209): given each callback's output time and the time
 //! it reads at, the renderer moves its reader's delay by how much later
 //! than its earliest callbacks this one came, so a late callback anchors
@@ -134,6 +141,15 @@ pub const TRACK_CALLBACKS: usize = 16;
 /// How far the running average of the fill may stray from the reference,
 /// in capture frames, before the converter is trimmed (S207).
 pub const TRIM_DEAD_ZONE_FRAMES: f64 = 4.0;
+
+/// Beyond S207's reach, how far the running average of the fill may stray
+/// from the reference, in capture frames, before the clock trim acts
+/// (S226).
+pub const CLOCK_TRIM_DEAD_ZONE_FRAMES: f64 = 0.5;
+
+/// Beyond S207's reach, the clock trim moves the converter by one capture
+/// frame over this many, 20 ppm (S226).
+pub const CLOCK_TRIM_FRAMES: u64 = 50_000;
 
 /// A trim takes at most this share of a callback's reads, a 256th, and at
 /// least one frame (S207).
@@ -258,6 +274,9 @@ struct Shared {
     late_max_ns: AtomicU64,
     /// Callbacks later than [`LATE_COUNT_MS`] (S209).
     late_callbacks: AtomicU64,
+    /// The clock trim is asked for, read once when the renderer is made
+    /// (S226).
+    clock_trim: AtomicBool,
     /// The ring whose session lead counts this renderer, and its slot
     /// there, `None` when every slot was taken (S208).
     ring: Arc<Ring>,
@@ -325,11 +344,24 @@ impl RendererControl {
                 sped_frames: AtomicU64::new(0),
                 late_max_ns: AtomicU64::new(0),
                 late_callbacks: AtomicU64::new(0),
+                clock_trim: AtomicBool::new(false),
                 ring,
                 slot,
             }),
             reader,
         }
+    }
+
+    /// Turns the clock trim on or off for a renderer made after this call
+    /// (S226): with it on, the renderer converts at every rate and follows
+    /// the capture's clock by the stamps at every delay. Off by default.
+    pub fn set_clock_trim(&self, on: bool) {
+        self.shared.clock_trim.store(on, Ordering::Relaxed);
+    }
+
+    /// Whether the clock trim is asked for (S226).
+    pub fn clock_trim(&self) -> bool {
+        self.shared.clock_trim.load(Ordering::Relaxed)
     }
 
     /// The reader's own control.
@@ -522,6 +554,10 @@ pub struct Renderer {
     tracking: Tracking,
     /// [`TRACK_MS`] in device frames.
     track_frames: f64,
+    /// The clock trim was on when the renderer was made (S226).
+    clock_trim: bool,
+    /// [`CLOCK_TRIM_FRAMES`] in the converter's steps.
+    clock_trim_steps: usize,
     /// The lowest and second lowest `now - output time` seen, in ns, with
     /// their leak (S209).
     earliest: Option<[i64; 2]>,
@@ -556,8 +592,14 @@ impl Renderer {
         if !control.reader.controls(&reader) {
             return Err(RenderError::ForeignControl);
         }
-        let resampler =
+        let mut resampler =
             Resampler::new(capture_rate, device_rate).map_err(|_| RenderError::UnsupportedRate)?;
+        let clock_trim = control.clock_trim();
+        if clock_trim {
+            resampler.set_convert_equal_rates(true);
+        }
+        let clock_trim_steps =
+            (CLOCK_TRIM_FRAMES * u64::from(device_rate)).div_ceil(u64::from(capture_rate));
         // A speed-up (S207) reads at most a 256th more, spread over the
         // callback, so a piece may ask for a frame or two above the bound.
         let bound = reader_frames_bound(RENDER_CHUNK, capture_rate, device_rate);
@@ -591,6 +633,8 @@ impl Renderer {
             frames_after_fade: None,
             tracking: RESTART,
             track_frames: f64::from(device_rate) * f64::from(TRACK_MS) / 1000.0,
+            clock_trim,
+            clock_trim_steps: usize::try_from(clock_trim_steps).unwrap_or(usize::MAX),
             earliest: None,
         })
     }
@@ -852,7 +896,7 @@ impl Renderer {
             return;
         };
         let need = self.resampler.input_frames_for(frames);
-        let trim = now.map_or(0, |now| self.follow(now, frames, need, &next));
+        let (trim, far) = now.map_or((0, false), |now| self.follow(now, frames, need, &next));
         let short = need.saturating_sub(usize::try_from(next.readable).unwrap_or(0));
         if short > 0 && short <= need / SLOW_DOWN_SHARE {
             // S206's slow-down wins over a trim the other way; a larger
@@ -868,12 +912,17 @@ impl Renderer {
             return;
         }
         let by = trim.unsigned_abs() as usize;
-        if trim > 0 && self.resampler.slow_down(by, frames - 1) {
+        let steps = if far {
+            self.clock_trim_steps
+        } else {
+            frames - 1
+        };
+        if trim > 0 && self.resampler.slow_down(by, steps) {
             self.count_trim(by as f64, 0.0);
             self.shared
                 .slowed_frames
                 .fetch_add(by as u64, Ordering::Relaxed);
-        } else if trim < 0 && self.resampler.speed_up(by, frames - 1) {
+        } else if trim < 0 && self.resampler.speed_up(by, steps) {
             self.count_trim(-(by as f64), 0.0);
             self.shared
                 .sped_frames
@@ -885,13 +934,15 @@ impl Renderer {
     /// device frames that reads at `now`, needs `need` capture frames and
     /// goes on as `next` says (S207). Returns the trim it asks for, in
     /// capture frames: positive to slow the converter, negative to speed it
-    /// up, 0 for none. Restarts the tracking when the output is out of the
-    /// trim's reach or the newest stamp is stale; a callback without a
-    /// usable stamp changes nothing.
-    fn follow(&mut self, now: u64, frames: usize, need: usize, next: &NextRead) -> i64 {
+    /// up, 0 for none; and whether the output is beyond S207's reach, where
+    /// only the clock trim follows it, a frame over [`CLOCK_TRIM_FRAMES`]
+    /// (S226). Restarts the tracking when the output is out of the trim's
+    /// reach or the newest stamp is stale; a callback without a usable
+    /// stamp changes nothing.
+    fn follow(&mut self, now: u64, frames: usize, need: usize, next: &NextRead) -> (i64, bool) {
         let ring = self.reader.ring();
         let Some(stamp) = ring.stamp() else {
-            return 0;
+            return (0, false);
         };
         let rate = u64::from(self.capture_rate.max(1));
         let blocks_ns = STALE_STAMP_BLOCKS
@@ -901,9 +952,10 @@ impl Renderer {
         let stale_ns = (STALE_STAMP_MS * 1_000_000).max(blocks_ns);
         let reach = self.reader.lead_frames().saturating_add(next.tolerance);
         let delay = next.delay.saturating_sub(self.reader.late_frames());
-        if now.saturating_sub(stamp.time_ns) > stale_ns || delay > reach {
+        let far = delay > reach;
+        if now.saturating_sub(stamp.time_ns) > stale_ns || (far && !self.clock_trim) {
             self.tracking = RESTART;
-            return 0;
+            return (0, far);
         }
         // Ŵ - P: the W of the stamp, plus the capture frames of the time
         // since it, less P.
@@ -931,19 +983,28 @@ impl Renderer {
                         frames: span,
                     }
                 };
-                0
+                (0, far)
             }
             Tracking::Following { reference, average } => {
                 let alpha = 1.0 - (-(frames as f64) / track).exp();
                 let average = average + alpha * (fill - average);
                 self.tracking = Tracking::Following { reference, average };
                 let off = average - reference;
-                if off.abs() <= TRIM_DEAD_ZONE_FRAMES {
-                    return 0;
+                let dead_zone = if far {
+                    CLOCK_TRIM_DEAD_ZONE_FRAMES
+                } else {
+                    TRIM_DEAD_ZONE_FRAMES
+                };
+                if off.abs() <= dead_zone {
+                    return (0, far);
                 }
-                let most = (need / TRIM_SHARE).max(1) as f64;
-                let by = (off.abs() - TRIM_DEAD_ZONE_FRAMES).ceil().min(most) as i64;
-                if off < 0.0 { by } else { -by }
+                let by = if far {
+                    1
+                } else {
+                    let most = (need / TRIM_SHARE).max(1) as f64;
+                    (off.abs() - TRIM_DEAD_ZONE_FRAMES).ceil().min(most) as i64
+                };
+                (if off < 0.0 { by } else { -by }, far)
             }
         }
     }
