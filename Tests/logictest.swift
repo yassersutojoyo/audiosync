@@ -1312,6 +1312,18 @@ do {
     check(model.apply(.state(id: "A1", .playing, retryMs: nil)) == nil
             && model.apply(.error(id: "A1", .notResponding, retryMs: nil, detail: "")) == nil,
           "native airplay: events of a removed speaker are passed over")
+
+    // P169: a second AirPlay 2 speaker waits for the one slot, switched on,
+    // and the sender starts it once the other one stops.
+    model.apply(.appeared(receiver("G7", "Loft", .available)))
+    model.added("G7")
+    let refused = model.apply(.error(id: "G7", .oneAirPlay2, retryMs: nil, detail: "one AirPlay 2 speaker at a time"))
+    check(refused != .turnOff("native:G7", .oneAirPlay2) && model.apply(.state(id: "G7", .failed, retryMs: nil)) == nil
+            && model.plan(streaming: true, enabled: ["native:G7"]).isEmpty,
+          "P169 native airplay: a speaker refused the AirPlay 2 slot stays on and in the sender", "\(String(describing: refused))")
+    check(UIStrings().nativeAirPlayOneAirPlay2(name: "Loft")
+            == "AudioSync plays one AirPlay 2 speaker at a time, so Loft waits. It starts once the other one stops.",
+          "P169 native airplay: the waiting notice reads as on Windows")
     check(model.apply(.timeline(latencyMs: 1750, restarted: false)) == .latencyChanged
             && model.apply(.timeline(latencyMs: 1750, restarted: true)) == nil && model.latencyMs == 1750,
           "native airplay: local outputs line up again only when L changes")
