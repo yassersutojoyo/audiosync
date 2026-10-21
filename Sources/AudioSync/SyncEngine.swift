@@ -80,6 +80,10 @@ final class StreamEngine {
     /// Frames captured in this session so far; 0 while stopped (S17).
     var framesCaptured: Int64 { parts?.ring.framesWritten ?? 0 }
 
+    /// The rate the running capture delivers at, which the ring's frames are
+    /// clocked at (S16).
+    var captureRate: Double { capture.sampleRate }
+
     /// The UIDs of the outputs that have a renderer, sorted; outputs fading
     /// out on their way out aren't among them.
     var activeOutputUIDs: [String] { renderers.keys.sorted() }

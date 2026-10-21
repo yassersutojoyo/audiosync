@@ -6,13 +6,3 @@
 # AirPlay 2 (behind its flag until the real-receiver checks of G17).
 P149 HomeKit pairing request lines and headers: AirPlay 2 stage. Partly done: transient and password pair-setup and pair-verify on the session connection, with their headers and the 401 resend; the host-driven PIN pairing with `/pair-pin-start` comes later.
 P153 Connection order and start of framing: AirPlay 2 stage. Partly done: the order and the start of framing after a transient pair-setup, a password pair-setup and a pair-verify; the PIN pairing's `/pair-pin-start` comes with the host-driven PIN flow.
-P155 Sealed realtime audio packets: AirPlay 2 stage.
-P156 Stream key and nonce counter: AirPlay 2 stage.
-P158 PTP service ports and role: AirPlay 2 stage.
-P159 PTP message header and clock identity: AirPlay 2 stage.
-P160 PTP Announce: AirPlay 2 stage.
-P161 PTP Sync and Follow_Up: AirPlay 2 stage.
-P162 PTP Delay_Resp and ignored messages: AirPlay 2 stage.
-P163 PTP time from the sender clock: AirPlay 2 stage.
-P166 Time announce packets: AirPlay 2 stage.
-P167 PTP traffic start and stop: AirPlay 2 stage.

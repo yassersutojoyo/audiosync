@@ -75,6 +75,7 @@ use crate::homekit::HomeKitCredentials;
 use crate::input::InputWriter;
 use crate::metadata::{Metadata, MetadataError, TrackInfo};
 use crate::pairing::{self, Credentials, PairingEvent, PinError};
+pub use crate::ptp::PtpPorts;
 use crate::rate::NOMINAL_RATE;
 use crate::rtsp::JackStatus;
 use crate::secret::Secret;
@@ -104,6 +105,11 @@ pub struct SenderConfig {
     /// The AirPlay 2 device ID (P5, P43): a random value the host made once
     /// and stored. `None` gives a random one for this sender's lifetime.
     pub airplay2_device_id: Option<[u8; 6]>,
+    /// The ports the PTP service binds, 319 and 320 (P158); a test picks
+    /// others so it doesn't need the real ones.
+    pub ptp_ports: PtpPorts,
+    /// The receiver's PTP ports it sends to, 319 and 320 (P158).
+    pub ptp_receiver_ports: PtpPorts,
 }
 
 /// The environment variable a host reads for [`SenderConfig::airplay2`].
@@ -122,6 +128,8 @@ impl Default for SenderConfig {
             clock: None,
             airplay2: false,
             airplay2_device_id: None,
+            ptp_ports: PtpPorts::default(),
+            ptp_receiver_ports: PtpPorts::default(),
         }
     }
 }
@@ -385,7 +393,8 @@ impl Sender {
             events_out,
             latency_frames.clone(),
         )
-        .with_airplay2(config.airplay2, config.airplay2_device_id);
+        .with_airplay2(config.airplay2, config.airplay2_device_id)
+        .with_ptp_ports(config.ptp_ports, config.ptp_receiver_ports);
         let handle = thread::Builder::new()
             .name("airplay-driver".to_owned())
             .spawn(move || driver.run())?;

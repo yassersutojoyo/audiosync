@@ -86,6 +86,9 @@ final class AppModel: ObservableObject {
         var retryAirPlay: () -> Void = {}
         /// The device volume fix the user clicked under a local output (S197).
         var fixDeviceVolume: (String) -> Void = { _ in }
+        /// Calibrate this local speaker with the microphone (S232), and cancel it.
+        var calibrate: (String) -> Void = { _ in }
+        var cancelCalibration: () -> Void = {}
     }
 
     @Published var running = false
@@ -114,6 +117,8 @@ final class AppModel: ObservableObject {
     /// The device volume hints of the switched-on local outputs, by device
     /// UID: only outputs whose macOS volume is low or muted (S196).
     @Published var deviceVolumes: [String: DeviceVolumeHint] = [:]
+    /// The microphone calibration under way or the last one's result (S232).
+    @Published var calibration = CalibrationStatus()
     @Published var groups: [Group] = []
     @Published var launchAtLogin = false
     @Published var showVirtualDevices = false
