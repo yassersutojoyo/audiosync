@@ -213,3 +213,67 @@ fn airplay1_refusal_moves_to_airplay2() {
         .contains(&"FLUSH".to_owned())));
     sender.shutdown();
 }
+
+// covers: P169
+#[test]
+fn a_refused_airplay2_speaker_starts_once_the_session_ends() {
+    let _serial = serial();
+    let first = Ap2Server::start(FakeAp2::new());
+    let second = Ap2Server::start(FakeAp2::new());
+    let third = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start();
+    let mut events = Events::default();
+
+    let a = airplay2_only(&first, 45);
+    let a_key = a.key.clone();
+    sender.add_speaker(a, options());
+    assert!(
+        events
+            .wait_state(&sender, &a_key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?}",
+        events.of(&a_key)
+    );
+
+    // Two more are refused while the first plays; the host drops one.
+    let b = airplay2_only(&second, 46);
+    let b_key = b.key.clone();
+    sender.add_speaker(b, options());
+    let c = airplay2_only(&third, 47);
+    let c_key = c.key.clone();
+    sender.add_speaker(c, options());
+    for key in [&b_key, &c_key] {
+        assert!(
+            events
+                .wait_state(&sender, key, 1, LONG, |s| *s == SpeakerState::Failed)
+                .is_some(),
+            "{:?}",
+            events.of(key)
+        );
+    }
+    sender.remove_speaker(&c_key);
+    assert!(
+        events
+            .wait_state(&sender, &c_key, 1, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
+
+    // The first session ends: the one still wanted takes its place.
+    sender.remove_speaker(&a_key);
+    assert!(
+        events
+            .wait_state(&sender, &b_key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?}",
+        events.of(&b_key)
+    );
+    assert_eq!(
+        errors(&events, &b_key),
+        vec![ErrorKind::Unsupported(
+            UnsupportedReason::OneAirPlay2Session
+        )]
+    );
+    assert_eq!(second.fake().connections, 1);
+    assert_eq!(third.fake().connections, 0);
+    sender.shutdown();
+}

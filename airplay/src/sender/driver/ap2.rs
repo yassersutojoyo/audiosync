@@ -59,7 +59,11 @@ impl Driver {
             let error = SessionError::new(ErrorKind::Unsupported(
                 UnsupportedReason::OneAirPlay2Session,
             ));
-            return self.refuse(key, error, now);
+            self.refuse(key, error, now);
+            if let Some(speaker) = self.speakers.get_mut(key) {
+                speaker.ap2_waiting = true;
+            }
+            return;
         }
         let Ok(ids) = SessionIds::generate(&mut OsEntropy) else {
             let mut error = SessionError::new(ErrorKind::Unreachable);
