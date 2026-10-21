@@ -276,6 +276,14 @@ final class CoreRenderer {
     /// The newest delay asked for, in capture-rate frames.
     var delayFrames: Int64 { asc_renderer_delay_frames(handle) }
 
+    /// Control thread, before the output starts: whether its device is
+    /// Bluetooth, which adds a capture block to its start lead (S230).
+    func setBluetooth(_ bluetooth: Bool) { asc_renderer_set_bluetooth(handle, bluetooth) }
+
+    /// Any thread: what the start lead adds for a Bluetooth device, in ms;
+    /// 0 for any other (S230).
+    var extraLeadMs: Double { Double(asc_renderer_extra_lead_frames(handle)) * 1000 / Double(captureRate) }
+
     /// Any thread: fade out from the next callback, then exact zeros until
     /// the output stops (S185).
     func requestFadeOut() { asc_renderer_request_fade_out(handle) }

@@ -177,10 +177,13 @@ final class OutputRenderer: FadingOutput {
     func start(on device: AudioObjectID, captureRate: Double, delayMs: Double) throws {
         halt()
         let fresh = try Self.makeUnit()
+        let bluetooth = BluetoothIOBuffer.isBluetooth(
+            transport: Self.uint32(device, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal) ?? 0)
         let started: (channels: Int, rate: Double)
         var initialized = false
         do {
-            started = try configure(fresh, device: device, captureRate: captureRate, delayMs: delayMs)
+            started = try configure(fresh, device: device, captureRate: captureRate, delayMs: delayMs,
+                                    bluetooth: bluetooth)
             let initStatus = AudioUnitInitialize(fresh)
             guard initStatus == noErr else { throw StartFailure.unitNotInitialized(initStatus) }
             initialized = true
@@ -195,14 +198,15 @@ final class OutputRenderer: FadingOutput {
         reportedLoss = false
         stopNote = "running"
         latencyNs = Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
-        isBluetooth = BluetoothIOBuffer.isBluetooth(
-            transport: Self.uint32(device, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal) ?? 0)
+        isBluetooth = bluetooth
         installDeviceAliveListener(device)
         installOverloadListener(device)
         startDebugReport()
+        let extraLeadMs = target?.renderer.extraLeadMs ?? 0
+        let lead = extraLeadMs > 0 ? ", Bluetooth, extra lead \(String(format: "%.1f", extraLeadMs)) ms" : ""
         DebugTrace.log("[AudioSync] output unit started on device \(device): \(started.channels) channels at "
                 + "\(started.rate) Hz from \(captureRate) Hz, delay \(delayMs) ms, "
-                + "output latency \(latencyNs / 1000) µs")
+                + "output latency \(latencyNs / 1000) µs\(lead)")
     }
 
     /// Stops the unit at once, without a fade; once this returns no render
@@ -271,7 +275,7 @@ final class OutputRenderer: FadingOutput {
     /// renderer for it at `delayMs` and installs the callback. Returns the
     /// channel count and the rate.
     private func configure(_ unit: AudioUnit, device: AudioObjectID, captureRate: Double,
-                           delayMs: Double) throws -> (channels: Int, rate: Double) {
+                           delayMs: Double, bluetooth: Bool) throws -> (channels: Int, rate: Double) {
         var status = Self.setProperty(unit, kAudioOutputUnitProperty_EnableIO, scope: kAudioUnitScope_Output,
                                       to: UInt32(1))
         guard status == noErr else { throw StartFailure.outputNotEnabled(status) }
@@ -310,6 +314,8 @@ final class OutputRenderer: FadingOutput {
                                           channels: channels, gain: gain) else {
             throw StartFailure.coreUnavailable
         }
+        // Before the first callback, which publishes the start lead (S208).
+        renderer.setBluetooth(bluetooth)
         // Closed until its first audio, so the reader takes the delay at once
         // and primes on it (S45, S187).
         renderer.setDelay(ms: delayMs)
