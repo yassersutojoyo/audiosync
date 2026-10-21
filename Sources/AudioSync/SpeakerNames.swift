@@ -49,3 +49,55 @@ struct SpeakerNames: Equatable {
         return String(trimmed.prefix(maxLength)).trimmingCharacters(in: .whitespaces)
     }
 }
+
+/// The rename typed in a speaker's row, one speaker at a time. Every way out
+/// of it but Escape hands back what to apply (`SpeakerNames.rename`), so no
+/// typing is lost.
+struct SpeakerRename: Equatable {
+    struct Target: Equatable {
+        let id, key, system: String
+    }
+
+    /// What a finished rename applies: the typing, for the speaker's key.
+    struct Apply: Equatable {
+        let key, system, typed: String
+    }
+
+    private(set) var target: Target?
+    var text = ""
+
+    /// Starts renaming `next`, showing `name`. A rename open on another
+    /// speaker ends first and is handed back; the same speaker again keeps
+    /// its typing.
+    mutating func start(_ next: Target, name: String) -> Apply? {
+        guard target?.id != next.id else { return nil }
+        let open = finish()
+        target = next
+        text = name
+        return open
+    }
+
+    /// Return or the focus leaving: the speaker `id`'s rename ends and is
+    /// handed back, nil when `id` isn't the one being renamed.
+    mutating func commit(id: String) -> Apply? {
+        guard target?.id == id else { return nil }
+        return finish()
+    }
+
+    /// Escape: the typing is dropped.
+    mutating func drop() { target = nil }
+
+    /// The listed speakers changed. A speaker that left its list mid-rename
+    /// (unplugged, gone from the network) ends its rename, handed back; it
+    /// doesn't open again when the speaker returns.
+    mutating func listed(_ ids: Set<String>) -> Apply? {
+        guard let target, !ids.contains(target.id) else { return nil }
+        return finish()
+    }
+
+    private mutating func finish() -> Apply? {
+        guard let target else { return nil }
+        self.target = nil
+        return Apply(key: target.key, system: target.system, typed: text)
+    }
+}

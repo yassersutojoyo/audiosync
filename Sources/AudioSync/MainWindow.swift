@@ -554,7 +554,7 @@ struct SpeakerRow: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(t.speakerLabel(name: speaker.name, tag: tag,
-                                                   renamedFrom: speaker.isRenamed ? speaker.systemName : nil))
+                                                   renamedFrom: speaker.renamedFrom))
                 .accessibilityValue(t.value(state))
                 .accessibilityHint(t.rowHint(state, note: t.availability(speaker.availability)))
                 .accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker) }

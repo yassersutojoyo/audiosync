@@ -6,7 +6,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Added
 
-- On the Mac, you can rename a speaker: double-click its name, or choose "Rename…" from the speaker's … menu. The name stays after a restart and shows in the menu bar panel and in notices too. Clear it to go back to the name the device reports, which the speaker's tooltip always shows.
+- On the Mac, you can rename a speaker: double-click its name, or choose "Rename…" from the speaker's … menu. The name stays after a restart and shows in the menu bar panel and in notices too. Clear it to go back to the device's own name, which the speaker's tooltip keeps showing while it's renamed.
 
 ### Fixed
 

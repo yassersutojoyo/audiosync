@@ -202,6 +202,7 @@ extension AppDelegate {
         publish(\.master, masterVolume)
         publish(\.airplay, airplaySnapshot())
         publish(\.local, localSnapshot())
+        appModel.speakersListed(Set(appModel.airplay.map(\.id) + appModel.local.map(\.id)))
         publish(\.hasLocalReference, localReference != nil)
         publish(\.airPlayDelayMs, airPlayLatencyMs.rounded())
         // When the sender stopped after an internal error, the AirPlay

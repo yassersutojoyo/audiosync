@@ -2398,6 +2398,42 @@ do {
     stored.values[AppSettings.Keys.speakerNames] = ["a": 5, "b": "  ", "c": "Den"] as [String: Any]
     check(store.load().speakerNames.custom == ["c": "Den"],
           "speaker names: a stored entry that isn't a name is skipped")
+
+    let deskTarget = SpeakerRename.Target(id: "usb-uid", key: usb, system: "USB Audio")
+    let kitchenTarget = SpeakerRename.Target(id: "hp-1", key: homePod, system: "HomePod")
+    var rename = SpeakerRename()
+    let opened = rename.start(deskTarget, name: "USB Audio")
+    rename.text = "Desk"
+    let again = rename.start(deskTarget, name: "USB Audio")
+    check(opened == nil && again == nil && rename.text == "Desk" && rename.target == deskTarget,
+          "speaker rename: starting a rename shows the name; starting it again keeps the typing")
+
+    let handed = rename.start(kitchenTarget, name: "HomePod")
+    check(handed == SpeakerRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
+              && rename.target == kitchenTarget && rename.text == "HomePod",
+          "speaker rename: renaming another speaker applies the open rename first",
+          "handed: \(String(describing: handed))")
+
+    rename.text = "Kitchen"
+    let otherCommit = rename.commit(id: "usb-uid")
+    let commit = rename.commit(id: "hp-1")
+    check(otherCommit == nil && commit == SpeakerRename.Apply(key: homePod, system: "HomePod", typed: "Kitchen")
+              && rename.target == nil,
+          "speaker rename: Return applies the speaker's own rename once, never another's")
+
+    _ = rename.start(deskTarget, name: "USB Audio")
+    rename.drop()
+    check(rename.target == nil && rename.commit(id: "usb-uid") == nil,
+          "speaker rename: Escape drops the typing, and the focus leaving after it applies nothing")
+
+    _ = rename.start(deskTarget, name: "USB Audio")
+    rename.text = "Desk"
+    let stillListed = rename.listed(["usb-uid", "hp-1"])
+    let gone = rename.listed(["hp-1"])
+    let back = rename.listed(["usb-uid", "hp-1"])
+    check(stillListed == nil && gone == SpeakerRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
+              && back == nil && rename.target == nil,
+          "speaker rename: a speaker gone mid-rename applies its typing, and its rename doesn't open again when it returns")
 }
 
 // MARK: Delay field — typed text applies on Return or focus loss, once (DelayFieldDraft)
