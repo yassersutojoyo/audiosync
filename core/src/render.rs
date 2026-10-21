@@ -39,7 +39,9 @@
 //! Late callbacks (S209): given each callback's output time and the time
 //! it reads at, the renderer moves its reader's delay by how much later
 //! than its earliest callbacks this one came, so a late callback anchors
-//! and judges drift where an early one would.
+//! where an early one would. Drift is judged against the earliest
+//! callbacks as they stood when the reader anchored, so lateness that
+//! builds slower than their floor leaks up is never taken for drift.
 //!
 //! Exact differences (S208): each renderer publishes its start lead and
 //! hold-back in its ring's [`SessionLeads`], and gives its reader its
@@ -751,8 +753,8 @@ impl Renderer {
         self.reader
             .set_floor_shift_frames(shift.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64);
         // The capture's clock is judged at the time the callback would have
-        // read at had it come as early, against the floor of the reader's
-        // anchor, as the ones that came earliest then.
+        // read at had it come as early as the earliest ones did when the
+        // reader anchored.
         let judged_ns = i128::from(late_ns) + i128::from(shift_ns);
         let now =
             now.map(|now| (i128::from(now) - judged_ns).clamp(0, i128::from(u64::MAX)) as u64);

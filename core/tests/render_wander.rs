@@ -40,7 +40,6 @@ const LATE_ONE_IN: u64 = 58;
 const HELD_BACK: i64 = 4_800;
 
 struct Output {
-    hold_back: i64,
     /// How much faster than nominal the device's clock runs, in ppm.
     ppm: f64,
     renderer: Renderer,
@@ -135,7 +134,6 @@ fn run(hold_backs: &[i64], ppm: f64, seconds: u128) -> Run {
             control.set_delay_frames(hold_back);
             let renderer = Renderer::new(reader, &control, Arc::clone(&gain), RATE, DEVICE_RATE, 2);
             let mut output = Output {
-                hold_back,
                 ppm,
                 renderer: renderer.unwrap(),
                 control,
