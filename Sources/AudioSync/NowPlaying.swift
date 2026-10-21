@@ -94,7 +94,7 @@ final class NowPlayingMonitor {
         case .previous: verb = "previous track"
         }
         scripts.async { [weak self] in
-            _ = self?.run(target: bundleID, """
+            _ = self?.run(target: bundleID, command: true, """
                 with timeout of 2 seconds
                     if application id "\(bundleID)" is running then
                         tell application id "\(bundleID)" to \(verb)
@@ -222,11 +222,12 @@ final class NowPlayingMonitor {
 
     /// Runs `source`, which talks to the player `target`, and reports when
     /// macOS starts or stops refusing AudioSync's Apple Events to it.
-    private func run(target: String, _ source: String) -> NSAppleEventDescriptor? {
+    /// `command`: a button press, whose timeout is a real failure worth logging.
+    private func run(target: String, command: Bool = false, _ source: String) -> NSAppleEventDescriptor? {
         var error: NSDictionary?
         let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
         let code = error?[NSAppleScript.errorNumber] as? Int
-        if let error, !Self.meansNoTrack(code) { DebugTrace.log("[AudioSync] AppleScript error: \(error)") }
+        if let error, command || !Self.meansNoTrack(code) { DebugTrace.log("[AudioSync] AppleScript error: \(error)") }
         let refused = code == Self.notPermitted
         let changed = refused ? denied.insert(target).inserted
             : error == nil ? denied.remove(target) != nil : false
