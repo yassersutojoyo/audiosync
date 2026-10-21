@@ -181,6 +181,11 @@ pub const FLOOR_FORM_MS: u32 = 300;
 /// with large callbacks still has a second lowest that is not its first.
 pub const FLOOR_FORM_CALLBACKS: u32 = 5;
 
+/// The time constant, in ms of device frames, with which the anchor floor
+/// falls toward a callback that came earlier than it (S209): a lasting move
+/// earlier is followed within a few seconds, a stray stamp or two hardly.
+pub const ANCHOR_FALL_MS: u32 = 2000;
+
 /// How fast the earliest lateness a renderer saw rises, in ns per second of
 /// device frames (S209). The floor never lies more than [`LATE_CAP_MS`]
 /// below the current callback, so early callbacks stop counting within 50 s.
@@ -707,8 +712,9 @@ pub struct Renderer {
     opening: usize,
     /// [`RESTART_INCREASE_MS`] in capture frames.
     restart_increase: i64,
-    /// The lowest the lateness floor has been since the reader last
-    /// anchored, in ns (S209); `None` until the floor has formed.
+    /// The floor at the reader's latest anchor, fallen since toward the
+    /// callbacks that came earlier, in ns (S209); `None` until the floor has
+    /// formed.
     anchor_floor: Option<i64>,
     /// The floor as it stood at that anchor, for the observer (S229).
     anchored_floor: Option<i64>,
@@ -722,6 +728,8 @@ pub struct Renderer {
     /// This callback is timed and its floor has not formed: it counts no
     /// lateness, judges no drift and makes no start re-anchor (S208, S209).
     warming: bool,
+    /// The latest timed callback's `now - output time`, in ns (S209).
+    callback_late_ns: i64,
     /// The start lead is published: the host gave the period, or the
     /// first callback came. Not before, so a renderer whose hold-back the
     /// host hasn't set yet never moves the session lead (S208).
@@ -821,6 +829,7 @@ impl Renderer {
             floor_form_frames: u64::from(device_rate) * u64::from(FLOOR_FORM_MS) / 1000,
             floor_formed: false,
             warming: false,
+            callback_late_ns: 0,
             start_lead_fixed: false,
             awaiting_resync: false,
             correction_due: false,
@@ -979,7 +988,7 @@ impl Renderer {
         let late = late_ns as u128 * u128::from(self.capture_rate) / 1_000_000_000;
         self.reader
             .set_late_frames(i64::try_from(late).unwrap_or(i64::MAX));
-        let (shift_ns, drop_ns) = self.floor_shift_ns();
+        let (shift_ns, drop_ns) = self.floor_shift_ns(frames);
         let shift = i128::from(shift_ns) * i128::from(self.capture_rate) / 1_000_000_000;
         self.reader
             .set_floor_shift_frames(shift.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64);
@@ -1065,6 +1074,7 @@ impl Renderer {
     fn lateness(&mut self, time: u64, now: u64, frames: usize) -> u64 {
         let late = (i128::from(now) - i128::from(time))
             .clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+        self.callback_late_ns = late;
         let leak = (frames as u64).saturating_mul(EARLIEST_LEAK_NS_PER_S)
             / u64::from(self.device_rate.max(1));
         let leak = i64::try_from(leak).unwrap_or(i64::MAX);
@@ -1252,26 +1262,33 @@ impl Renderer {
     }
 
     /// How far the lateness floor lies above the anchor floor, and how far
-    /// the anchor floor fell below the floor at the reader's latest anchor,
-    /// in ns (S209, S229). The floor leaks up and drops with the callbacks,
+    /// it lies below the floor at the reader's latest anchor, in ns (S209,
+    /// S229). The floor leaks up and drops with the callbacks,
     /// so lateness that builds or fades slower than the leak moves the
     /// floor instead of Jt; judged against the anchor floor, it stays
-    /// lateness. A floor below the anchor floor means the anchor was that
-    /// much too close to W, so the anchor floor follows it down.
-    fn floor_shift_ns(&mut self) -> (i64, i64) {
+    /// lateness. A callback of `frames` device frames earlier than the
+    /// anchor floor means the anchor was too close to W, so the anchor floor
+    /// falls toward it by [`ANCHOR_FALL_MS`]; it never rises until the next
+    /// anchor.
+    fn floor_shift_ns(&mut self, frames: usize) -> (i64, i64) {
         let Some(floor) = self.late_floor() else {
             return (0, 0);
         };
         let anchored = *self.anchored_floor.get_or_insert(floor);
         let anchor = self.anchor_floor.get_or_insert(floor);
-        *anchor = (*anchor).min(floor);
+        let below = self.callback_late_ns.saturating_sub(*anchor);
+        if below < 0 {
+            let span = frames as f64 / f64::from(self.device_rate.max(1));
+            let share = 1.0 - (-span * 1000.0 / f64::from(ANCHOR_FALL_MS)).exp();
+            *anchor = anchor.saturating_add((below as f64 * share) as i64);
+        }
         let anchor = *anchor;
-        (floor.saturating_sub(anchor), anchored.saturating_sub(anchor))
+        (floor.saturating_sub(anchor), anchored.saturating_sub(floor))
     }
 
     /// The observer at the start of a callback of `frames` device frames
-    /// output at `time`, whose anchor floor lies `drop_ns` below the floor
-    /// at the anchor (S229). Once the output has played [`OBSERVE_AFTER_MS`],
+    /// output at `time`, whose lateness floor lies `drop_ns` below the
+    /// floor at the reader's latest anchor (S229). Once the output has played [`OBSERVE_AFTER_MS`],
     /// it counts a step in the output times, keeps the largest drop and,
     /// while the output plays and no stop is under way, the reader's least
     /// slack over the callback's need. It publishes only a new extreme.
@@ -1773,5 +1790,87 @@ mod tests {
         s.writer.write_at(&s.block.clone(), 480, s.now + 10_000_000);
         s.renderer.render(&mut s.out);
         assert_eq!(s.renderer.tracking, kept);
+    }
+
+    /// 10 ms on [`Stepped`]'s clock with output times: a block, then a
+    /// callback `late_ns` after its on-time point whose frames play 20 ms
+    /// after that point.
+    fn timed_step(s: &mut Stepped, late_ns: u64) {
+        s.now += 10_000_000;
+        s.writer.write_at(&s.block, 480, s.now);
+        let due = s.now + 1_000_000;
+        s.renderer
+            .render_timed_at(&mut s.out, due + 20_000_000, due + late_ns);
+    }
+
+    // covers: S208, S209
+    #[test]
+    fn the_floor_forms_over_300_ms_of_callbacks_and_nothing_counts_as_late_before() {
+        let mut s = Stepped::new();
+        timed_step(&mut s, 0);
+        timed_step(&mut s, 30_000_000);
+        for _ in 2..29 {
+            timed_step(&mut s, 0);
+        }
+        assert!(s.renderer.warming, "290 ms of callbacks");
+        assert_eq!(s.renderer.late_max_ns(), 0);
+        assert_eq!(s.renderer.late_floor(), None);
+        timed_step(&mut s, 0);
+        assert!(!s.renderer.warming, "300 ms of callbacks");
+        assert!(s.renderer.late_floor().is_some());
+        timed_step(&mut s, 20_000_000);
+        let late = s.renderer.late_max_ns();
+        assert!(late.abs_diff(20_000_000) < 100_000, "{late} ns");
+        let counters = s.control.counters();
+        assert_eq!(
+            (counters.drift_skips, counters.drift_silences),
+            (0, 0),
+            "{counters:?}"
+        );
+
+        // A device with large callbacks waits for five of them.
+        let mut r = Stepped::new().renderer;
+        for _ in 0..4 {
+            r.form_floor(16_384);
+        }
+        assert!(r.warming, "four callbacks of 370 ms");
+        r.form_floor(16_384);
+        assert!(!r.warming);
+    }
+
+    // covers: S209
+    #[test]
+    fn the_anchor_floor_falls_toward_earlier_callbacks_and_never_rises() {
+        let mut s = Stepped::new();
+        for _ in 0..200 {
+            timed_step(&mut s, 10_000_000);
+        }
+        let anchored = s.renderer.anchor_floor.unwrap();
+        // Two stray callbacks 50 ms early hardly move it.
+        timed_step(&mut s, 0);
+        timed_step(&mut s, 0);
+        for _ in 0..5 {
+            timed_step(&mut s, 10_000_000);
+        }
+        let strayed = anchored - s.renderer.anchor_floor.unwrap();
+        assert!(strayed < 1_000_000, "moved {strayed} ns by two strays");
+        // A lasting move 10 ms earlier is followed within seconds.
+        for _ in 0..1000 {
+            timed_step(&mut s, 0);
+        }
+        let fell = anchored - s.renderer.anchor_floor.unwrap();
+        assert!(fell.abs_diff(10_000_000) < 100_000, "fell {fell} ns");
+        // Callbacks that come late again leave it where it is.
+        let low = s.renderer.anchor_floor;
+        for _ in 0..500 {
+            timed_step(&mut s, 10_000_000);
+        }
+        assert_eq!(s.renderer.anchor_floor, low);
+        let counters = s.control.counters();
+        assert_eq!(
+            (counters.drift_skips, counters.drift_silences, counters.starved_renders),
+            (0, 0, 0),
+            "{counters:?}"
+        );
     }
 }
