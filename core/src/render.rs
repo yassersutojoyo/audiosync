@@ -1329,9 +1329,15 @@ impl Renderer {
             return 0;
         };
         let owed_ns = u64::try_from(anchor.saturating_sub(low)).unwrap_or(0);
-        let paid_ns = (frames.saturating_mul(1_000_000_000) / rate).min(owed_ns);
+        let frames_ns = frames.saturating_mul(1_000_000_000) / rate;
+        let paid_ns = frames_ns.min(owed_ns);
         *anchor = anchor.saturating_sub(i64::try_from(paid_ns).unwrap_or(i64::MAX));
-        let paid = (paid_ns.saturating_mul(rate) / 1_000_000_000).min(frames);
+        // Uncapped, all of it is paid: the round trip through ns would lose a frame.
+        let paid = if paid_ns == frames_ns {
+            frames
+        } else {
+            (paid_ns.saturating_mul(rate) / 1_000_000_000).min(frames)
+        };
         // What is paid is no longer owed by the reference being measured.
         if let Tracking::Measuring {
             sum, count, shift, ..
@@ -1488,13 +1494,19 @@ impl Renderer {
             // it if it was still due.
             self.correction_due = false;
         }
-        if report.correction != Correction::None || report.starved > 0 || report.rejected {
+        let starved = report.starved as u64;
+        let paid = if starved > 0 {
+            self.pay_anchor_fall(starved)
+        } else {
+            0
+        };
+        // A silence paid in full toward the anchor floor's fall keeps the
+        // fill the trim follows, so the trim goes on following the rest of
+        // the fall instead of losing what fell before a new reference.
+        if report.correction != Correction::None || paid < starved || report.rejected {
             // Anchored, corrected, dry or rejected: the fill the renderer
             // kept is gone, and a new reference is measured (S207).
             self.tracking = RESTART;
-        }
-        if report.starved > 0 {
-            self.pay_anchor_fall(report.starved as u64);
         }
         if report.correction != Correction::None {
             self.anchor_floor = self.late_floor();
