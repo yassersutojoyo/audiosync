@@ -22,6 +22,9 @@ struct Notice: Identifiable, Equatable {
     /// A Google Cast speaker, by its device ID.
     static func cast(_ device: String) -> String { CastID.app(device) }
     static let castSender = "cast-sender"   // the Google Cast sender stopped working
+    /// The AirPlay speakers play ahead of this Google Cast speaker; apart
+    /// from `cast(_:)`, so it never replaces or clears a problem with it.
+    static func airPlayAhead(_ device: String) -> String { "airplay-ahead:" + device }
     /// The subjects in `list` about a Google Cast speaker.
     static func castSubjects(in list: NoticeList) -> [String] {
         list.items.map(\.subject).filter { $0.hasPrefix(CastID.prefix) }

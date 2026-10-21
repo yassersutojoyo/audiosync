@@ -490,6 +490,61 @@ struct CastModel {
     }
 }
 
+/// AirPlay speakers meet a Cast device whose offset is longer than L by
+/// waiting the difference on top of L, as far as the sender's delay limit
+/// reaches; past it they play ahead of the device by the rest (C77, P99).
+enum AirPlayHoldBack {
+    /// The sender's largest delay per speaker, in ms.
+    static let limitMs = Double(ASC_AIRPLAY_MAX_DELAY_MS)
+
+    /// How much later than L the AirPlay speakers should play: the Cast
+    /// offset's lead over L while both are chosen, else 0.
+    static func wantedMs(airPlay: Double?, cast: Double?) -> Double {
+        guard let airPlay, let cast, airPlay.isFinite, cast.isFinite else { return 0 }
+        return max(0, cast - airPlay)
+    }
+
+    /// The part of `wantedMs` the sender plays.
+    static func appliedMs(_ wantedMs: Double) -> Double { min(max(0, wantedMs), limitMs) }
+
+    /// How far ahead of the Cast device the AirPlay speakers play.
+    static func aheadMs(_ wantedMs: Double) -> Double { max(0, wantedMs - limitMs) }
+}
+
+/// The notice that the AirPlay speakers play ahead of the Cast device that
+/// is on: posted while the delay limit leaves them 50 ms or more ahead,
+/// cleared once they keep up. A dismissed one comes back only when the
+/// device or the amount, in tenths of a second, changes.
+struct AirPlayAheadNotice: Equatable {
+    /// Less than this ahead is within the sync tolerance.
+    static let thresholdMs = 50.0
+
+    struct Shown: Equatable {
+        var device: String
+        var tenths: Int
+    }
+
+    /// What to do with the notices: drop the one about `clear`, post `post`.
+    struct Step: Equatable {
+        var clear: String?
+        var post: Shown?
+    }
+
+    private(set) var shown: Shown?
+
+    /// `device`: the Cast device that is on, if any. Nil when nothing changes.
+    mutating func update(device: String?, aheadMs: Double) -> Step? {
+        var now: Shown?
+        if let device, aheadMs.isFinite, aheadMs >= Self.thresholdMs {
+            now = Shown(device: device, tenths: max(1, Int((aheadMs / 100).rounded())))
+        }
+        guard now != shown else { return nil }
+        let step = Step(clear: shown?.device, post: now)
+        shown = now
+        return step
+    }
+}
+
 /// The device memory between runs: the core's JSON (per device, the format
 /// that last worked and the offset), in AudioSync's Application Support
 /// folder. It holds no secrets, so unlike the pairings it stays in backups.

@@ -37,6 +37,10 @@ final class NativeAirPlay {
     private var timer: DispatchSourceTimer?
     /// What the receivers that show it get as playing (queue only).
     private var nowPlaying = NativeNowPlaying()
+    /// The hold-back last asked for (main queue), and the one the sender
+    /// gets, also when it is created later (queue only).
+    private(set) var holdBackMs = 0.0
+    private var queuedHoldBackMs = 0.0
 
     /// `onChange` gets each discovery change, `onEvent` each speaker or
     /// timeline event with what the model made of it, on the main queue.
@@ -92,6 +96,20 @@ final class NativeAirPlay {
             guard let handle = self?.handle else { return }
             _ = asc_airplay_set_volume(handle, id, volume)
         }
+    }
+
+    /// Holds every speaker back by `ms` on top of L, live; the sender caps
+    /// it at `AirPlayHoldBack.limitMs`. Main queue. False when it was set already.
+    @discardableResult
+    func setHoldBack(_ ms: Double) -> Bool {
+        guard ms != holdBackMs else { return false }
+        holdBackMs = ms
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.queuedHoldBackMs = ms
+            if let handle = self.handle { _ = asc_airplay_set_hold_back(handle, ms) }
+        }
+        return true
     }
 
     /// The master position (0 to 100), live, for every speaker.
@@ -260,6 +278,7 @@ final class NativeAirPlay {
             }
         }
         asc_airplay_set_master(created, master)
+        _ = asc_airplay_set_hold_back(created, queuedHoldBackMs)
         if let taken = asc_airplay_take_input(created) {
             input = taken
             NativeAirPlayTap.install(taken)

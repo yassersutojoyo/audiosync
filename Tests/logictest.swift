@@ -3886,6 +3886,61 @@ do {
           "cast: the note under a speaker's name")
 }
 
+// MARK: AirPlay and Google Cast at one latency: the AirPlay hold-back, its cap and the notice (C77)
+do {
+    let t = UIStrings()
+    check(AirPlayHoldBack.limitMs == 3000, "cast+airplay: the hold-back stops at the sender's 3000 ms delay limit")
+    check(AirPlayHoldBack.wantedMs(airPlay: 1750, cast: 3000) == 1250
+            && AirPlayHoldBack.wantedMs(airPlay: 1750, cast: 1000) == 0
+            && AirPlayHoldBack.wantedMs(airPlay: nil, cast: 3000) == 0
+            && AirPlayHoldBack.wantedMs(airPlay: 1750, cast: nil) == 0
+            && AirPlayHoldBack.wantedMs(airPlay: 1750, cast: .nan) == 0,
+          "cast+airplay: AirPlay waits only for a Cast offset longer than L, and only while both are chosen")
+    let together = [(1750.0, 3000.0), (1750.0, 1000.0), (2000.0, 1900.0), (1750.0, 4750.0)].allSatisfy { pair in
+        let (l, cast) = pair
+        return l + AirPlayHoldBack.appliedMs(AirPlayHoldBack.wantedMs(airPlay: l, cast: cast))
+            == CastModel.networkWaitMs(airPlay: l, cast: cast)
+    }
+    check(together, "cast+airplay: within the limit AirPlay plays when local outputs and the Cast speaker do")
+    let wanted = AirPlayHoldBack.wantedMs(airPlay: 1750, cast: 6250)
+    check(AirPlayHoldBack.appliedMs(wanted) == 3000 && AirPlayHoldBack.aheadMs(wanted) == 1500
+            && AirPlayHoldBack.aheadMs(1250) == 0 && AirPlayHoldBack.appliedMs(-5) == 0,
+          "cast+airplay: past the limit the hold-back is capped and AirPlay plays ahead by the rest")
+
+    let kitchen = "kitchen-1"
+    var ahead = AirPlayAheadNotice()
+    check(ahead.update(device: kitchen, aheadMs: 0) == nil && ahead.update(device: kitchen, aheadMs: 49) == nil,
+          "cast+airplay: no notice while AirPlay keeps up within the tolerance")
+    check(ahead.update(device: kitchen, aheadMs: 1500)
+            == AirPlayAheadNotice.Step(clear: nil, post: AirPlayAheadNotice.Shown(device: kitchen, tenths: 15)),
+          "cast+airplay: the notice is posted with how far ahead AirPlay plays")
+    check(ahead.update(device: kitchen, aheadMs: 1520) == nil, "cast+airplay: posted once while the amount stays the same")
+    var notices = NoticeList()
+    notices.post(t.airPlayAheadOfCast(tenths: 15, speaker: "Kitchen"), subject: Notice.airPlayAhead(kitchen))
+    notices.clear([Notice.airPlayAhead(kitchen)])
+    check(ahead.update(device: kitchen, aheadMs: 1480) == nil && notices.isEmpty,
+          "cast+airplay: a dismissed notice stays away while the amount is the same")
+    check(ahead.update(device: kitchen, aheadMs: 1600)
+            == AirPlayAheadNotice.Step(clear: kitchen, post: AirPlayAheadNotice.Shown(device: kitchen, tenths: 16)),
+          "cast+airplay: a dismissed notice comes back when the amount changes")
+    check(ahead.update(device: kitchen, aheadMs: 20) == AirPlayAheadNotice.Step(clear: kitchen, post: nil)
+            && ahead.shown == nil,
+          "cast+airplay: the notice clears once AirPlay keeps up")
+    check(ahead.update(device: kitchen, aheadMs: 60)?.post?.tenths == 1
+            && ahead.update(device: nil, aheadMs: 60) == AirPlayAheadNotice.Step(clear: kitchen, post: nil),
+          "cast+airplay: a small lead reads as 0.1 s, and the notice clears when the Cast speaker goes off")
+    let text = t.airPlayAheadOfCast(tenths: 15, speaker: "Kitchen")
+    check(text == "AirPlay speakers can wait at most 3 s for a Google Cast speaker, so they play about 1.5 s ahead of "
+            + "Kitchen. Lower its offset to keep them together." && !text.contains("\u{2014}")
+            && t.airPlayAheadOfCast(tenths: 20, speaker: "Den").contains("about 2.0 s ahead of Den"),
+          "cast+airplay: the notice says how far ahead, with no em dash")
+    var castOnes = NoticeList()
+    castOnes.post(t.castProblem(.busy, name: "Kitchen"), subject: Notice.cast(kitchen))
+    castOnes.post(text, subject: Notice.airPlayAhead(kitchen))
+    check(castOnes.count == 2 && Notice.castSubjects(in: castOnes) == [Notice.cast(kitchen)],
+          "cast+airplay: the notice never replaces a problem with the Cast speaker")
+}
+
 // MARK: Google Cast device memory: saved atomically, read back by a new sender
 do {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-cast-\(UUID().uuidString)")
