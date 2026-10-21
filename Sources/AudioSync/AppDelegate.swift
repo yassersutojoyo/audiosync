@@ -113,6 +113,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var autoConnect: Set<String> {
         didSet { if autoConnect != oldValue { store.save(ids: autoConnect, forKey: Keys.autoConnect) } }
     }
+    var speakerNames: SpeakerNames {
+        didSet { if speakerNames != oldValue { store.save(speakerNames: speakerNames) } }
+    }
     var showVirtualDevices: Bool {
         didSet { if showVirtualDevices != oldValue { store.save(showVirtualDevices: showVirtualDevices) } }
     }
@@ -208,6 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         airplayVolume = saved.airplayVolumes
         groups = saved.groups
         autoConnect = saved.autoConnect
+        speakerNames = saved.speakerNames
         showVirtualDevices = saved.showVirtualDevices
         appearance = saved.appearance
         whenSourceQuits = saved.whenSourceQuits

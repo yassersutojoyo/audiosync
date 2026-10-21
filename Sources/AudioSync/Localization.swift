@@ -401,6 +401,12 @@ struct UIStrings {
         guard let tag else { return name }
         return "\(name), \(tag)"
     }
+    /// The same, followed for a renamed speaker by the name it reports.
+    func speakerLabel(name: String, tag: String?, renamedFrom system: String?) -> String {
+        let label = speakerLabel(name: name, tag: tag)
+        guard let system else { return label }
+        return "\(label), \(renamedSpeaker(system: system))"
+    }
 
     // The output device volume hint (DeviceVolume.swift, S198 to S200),
     // worded like the Windows app's with macOS in place of Windows.
@@ -468,6 +474,17 @@ struct UIStrings {
     let renameGroupTitle = "Rename Group"
     func renameGroupMessage(_ name: String) -> String { "Enter a new name for “\(name)”." }
     let rename = "Rename"
+    /// In a speaker's ⋯ menu and right-click menu: edits its name in the row.
+    let renameSpeaker = "Rename…"
+    /// The name field's VoiceOver label; the field's placeholder is the
+    /// system name, which an empty field brings back.
+    func speakerNameField(system: String) -> String { "Name for \(system)" }
+    /// The tooltip on a speaker's name.
+    func speakerNameHelp(system: String, renamed: Bool) -> String {
+        renamed ? "Device name: \(system). Double-click to rename." : "Double-click to rename."
+    }
+    /// What VoiceOver adds after a renamed speaker's label.
+    func renamedSpeaker(system: String) -> String { "device name \(system)" }
     /// A new group's name when none was typed.
     func numberedGroup(_ n: Int) -> String { "Group \(n)" }
     let create = "Create"
@@ -615,6 +632,9 @@ struct UIStrings {
         - Auto-connect: right-click a speaker, or use its ⋯ button, and turn on
           'Auto-connect when available'. AudioSync then turns it on whenever it
           appears.
+        - Rename: double-click a speaker's name, or choose 'Rename…' from its
+          ⋯ button, type a name and press Return. Leave it empty to go back to
+          the device's own name, which its tooltip keeps showing.
         - Equalizer: click 'Equalizer' in the window for 10 bands, a preamp and
           presets. It shapes the sound on every speaker at once.
         - Now Playing: while Spotify or Music is open with a track, the window

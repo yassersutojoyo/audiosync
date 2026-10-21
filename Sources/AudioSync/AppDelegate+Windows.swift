@@ -92,6 +92,7 @@ extension AppDelegate {
         a.renameGroup = { [weak self] id in self?.promptRenameGroup(id) }
         a.newGroup = { [weak self] in self?.promptNewGroup() }
         a.setAutoConnect = { [weak self] key, on in self?.setAutoConnect(key, on) }
+        a.renameSpeaker = { [weak self] key, system, typed in self?.renameSpeaker(key, system: system, to: typed) }
         a.setLaunchAtLogin = { [weak self] on in self?.setLaunchAtLogin(on) }
         a.setShowVirtualDevices = { [weak self] on in self?.setShowVirtualDevices(on) }
         a.setSwitchWhenSourceQuits = { [weak self] on in
@@ -155,6 +156,26 @@ extension AppDelegate {
         pushModel()
     }
 
+    private func renameSpeaker(_ key: String, system: String, to typed: String) {
+        guard speakerNames.rename(key: key, to: typed, system: system) else { return }
+        pushModel()   // saved by `speakerNames`' didSet
+    }
+
+    /// An AirPlay speaker's name as the windows and notices show it: the
+    /// user's, else the one discovery reports.
+    func shownName(airPlay id: String) -> String {
+        speakerNames.shown(key: SpeakerKey.make(id: id, airplay: true), system: systemName(airPlay: id))
+    }
+
+    /// A local speaker's name as the windows and notices show it.
+    func shownName(local uid: String, system: String) -> String {
+        speakerNames.shown(key: SpeakerKey.make(id: uid, airplay: false), system: text.deviceName(system))
+    }
+
+    private func systemName(airPlay id: String) -> String {
+        airplayNames[id].map(text.deviceName) ?? text.unknownDevice
+    }
+
     private func setShowVirtualDevices(_ on: Bool) {
         guard on != showVirtualDevices else { return }
         showVirtualDevices = on
@@ -181,6 +202,7 @@ extension AppDelegate {
         publish(\.master, masterVolume)
         publish(\.airplay, airplaySnapshot())
         publish(\.local, localSnapshot())
+        appModel.speakersListed(Set(appModel.airplay.map(\.id) + appModel.local.map(\.id)))
         publish(\.hasLocalReference, localReference != nil)
         publish(\.airPlayDelayMs, airPlayLatencyMs.rounded())
         // When the sender stopped after an internal error, the AirPlay
@@ -240,13 +262,14 @@ extension AppDelegate {
     private func airplaySnapshot() -> [AppModel.Speaker] {
         airplayOrder.map { id in
             AppModel.Speaker(id: id,
-                             name: airplayNames[id].map(text.deviceName) ?? text.unknownDevice,
+                             name: shownName(airPlay: id),
                              tag: .airplay,
                              enabled: enabledAirPlay.contains(id),
                              volume: airplayVolume[id] ?? defaultVolume,
                              offsetMs: nil,
                              autoConnect: autoConnect.contains(SpeakerKey.make(id: id, airplay: true)),
-                             availability: airplayAccess[id].map(SpeakerAvailability.init) ?? .open)
+                             availability: airplayAccess[id].map(SpeakerAvailability.init) ?? .open,
+                             systemName: systemName(airPlay: id))
         }
     }
 
@@ -254,13 +277,14 @@ extension AppDelegate {
         localOrder.compactMap { uid in
             guard let device = localDevices[uid] else { return nil }
             return AppModel.Speaker(id: uid,
-                                    name: text.deviceName(device.name),
+                                    name: shownName(local: uid, system: device.name),
                                     tag: SpeakerTag(transport: device.transport),
                                     enabled: enabledLocal.contains(uid),
                                     volume: localVolume[uid] ?? defaultVolume,
                                     offsetMs: LocalDelay.shownOffset(uid, reference: localReference,
                                                                      offsets: localOffsetMs),
-                                    autoConnect: autoConnect.contains(SpeakerKey.make(id: uid, airplay: false)))
+                                    autoConnect: autoConnect.contains(SpeakerKey.make(id: uid, airplay: false)),
+                                    systemName: text.deviceName(device.name))
         }
     }
 
