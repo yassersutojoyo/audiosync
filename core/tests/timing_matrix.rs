@@ -5,11 +5,14 @@
 //! in stamped blocks, so a played sample tells which capture frame it is and
 //! the device's clock tells when it sounds.
 //!
-//! Main fails most cases, so the matrix runs as a ratchet: per invariant,
-//! the failing cases on the pinned seed may not exceed [`RATCHET`]. A
-//! sensitivity check proves it still sees the late second callback's open
-//! finding on the Mac. The 512-case property run is ignored until the
-//! matrix passes.
+//! Every case of the pinned seed holds every invariant. Until it did, the
+//! matrix ran as a ratchet on the failing cases per invariant, I1 to I8:
+//! main failed 14, 34, 3, 31, 44, 32, 0 and 2 of them, the trim at any
+//! hold-back left 14, 21, 3, 24, 29, 20, 0, 2, the ratio-1 converter
+//! 1, 2, 2, 13, 0, 0, 0, 0, and the anchor floor that falls toward
+//! earlier callbacks, formed over 300 ms before any callback counts as
+//! late, none. The 512-case property run takes minutes, so it is
+//! ignored.
 //!
 //! Invariants, from 2 s on unless said otherwise:
 //! - I1: no read runs dry.
@@ -59,28 +62,6 @@ const HOST_OFFSET: f64 = 10.0;
 const HELD_MS: f64 = 100.0;
 /// With AirPlay chosen, every local output is held back this much or more.
 const AIRPLAY_MS: f64 = 1700.0;
-
-/// The failing cases per invariant on the pinned seed, I1 to I8. A count
-/// above its maximum fails, and so does one below it until the maximum is
-/// lowered to it, so the ratchet never goes slack and every CI system proves
-/// the same counts. Each step of the design sets them to its own measured
-/// counts and says why one rose. Main had 14, 34, 3, 31, 44, 32, 0, 2; the
-/// trim at any hold-back, behind its 15-frame dead zone, lowered I2, I4, I5
-/// and I6 to 14, 21, 3, 24, 29, 20, 0, 2, and raised none. The dead band T
-/// at 50 ms instead of 35 lowered I1, I2 and I3 and raised I4 by 3: in cases
-/// 13, 36 and 41 a 48 kHz output, which has no converter and so no trim
-/// until C2, on a clock 211 to 285 ppm off now drifts up to 50 ms before a
-/// correction, where at 35 ms one correction inside the run brought it back
-/// in line (case 21 adds the same, case 37 loses one). The ratio-1
-/// converter, which trims every 48 kHz output and gives it the converting
-/// lead, lowered I1, I2, I4, I5, I6 and I8 to 1, 2, 2, 13, 0, 0, 0, 0 and
-/// raised none. What fails is Mac only: an output that anchored in a late
-/// stretch of its wander or a late second callback and plays early all run
-/// (I4; I1 in case 32, I2 in cases 6 and 17), and two 44.1 kHz outputs at
-/// hold-back 0 whose slow-down still makes up a shortage (I3, cases 18 and
-/// 38). Each of them passes with its wander and late second callback taken
-/// out, which leaves them to the anchor floor's steps (C3, C3b).
-const RATCHET: [usize; 8] = [1, 2, 2, 13, 0, 0, 0, 0];
 
 /// I4: how far apart outputs may play beyond a capture block, in ms.
 const ALIGN_SLACK_MS: f64 = 2.0;
@@ -1003,30 +984,26 @@ fn matrix() -> &'static Matrix {
     })
 }
 
-// Known-failure probe on main for S50, S206, S207, S208, S209: it pins where main breaks them, so it is not coverage.
+// covers: S50, S206, S207, S208, S209
 #[test]
-fn the_matrix_fails_exactly_the_ratchets_cases_per_invariant() {
+fn every_case_of_the_matrix_holds_every_invariant() {
     let matrix = matrix();
     let counts = matrix.counts();
     let table: Vec<String> = NAMES
         .iter()
-        .zip(counts.iter().zip(RATCHET))
-        .map(|(name, (count, most))| format!("{name} {count}/{most}"))
+        .zip(counts)
+        .map(|(name, count)| format!("{name} {count}"))
         .collect();
     println!(
-        "{} cases in {:.1} s ({:.1} s on one core); failing per invariant (now/max): {}\n{}",
+        "{} cases in {:.1} s ({:.1} s on one core); failing per invariant: {}",
         matrix.cases.len(),
         matrix.seconds,
         matrix.one_core_seconds,
-        table.join(", "),
-        matrix.report()
+        table.join(", ")
     );
     assert!(
-        counts
-            .iter()
-            .zip(RATCHET)
-            .all(|(&count, most)| count == most),
-        "failing cases differ from the ratchet (above: a regression; below: lower RATCHET): {}\n{}",
+        counts.iter().all(|&count| count == 0),
+        "failing cases per invariant: {}\n{}",
         table.join(", "),
         matrix.report()
     );
@@ -1043,44 +1020,40 @@ fn simulate_all(cases: &[Case]) -> Vec<Outcome> {
     })
 }
 
-// covers: S85, S206
+// covers: S85, S206, S209
 #[test]
-fn the_capture_rate_output_that_sets_the_lead_runs_dry_only_through_its_wander() {
+fn the_capture_rate_output_that_sets_the_lead_never_runs_dry_through_its_wander() {
     // Finding 2 on main: without conversion there was no trim and the lead
     // was one callback, so every Mac case of this stratum ran dry on its
-    // fast clock. The ratio-1 converter fixed that. What still runs dry is
-    // an output that anchored in a late stretch of its lateness wander and
-    // plays early all run (C3): taking the wander out leaves no dry read.
-    let cases: Vec<Case> = matrix()
-        .cases_where(|c| !c.is_stall() && c.k % 8 == 0 && c.platform == Platform::Mac)
-        .into_iter()
-        .map(|(case, _)| {
-            let mut calm = case.clone();
-            calm.devices[0].wander_ms = 0.0;
-            calm
-        })
-        .collect();
-    assert!(!cases.is_empty());
-    for (case, outcome) in cases.iter().zip(simulate_all(&cases)) {
+    // fast clock. The ratio-1 converter fixed the clock; an output that
+    // anchored in a late stretch of its lateness wander still ran dry until
+    // the anchor floor fell toward the wander's earlier callbacks.
+    let cases =
+        matrix().cases_where(|c| !c.is_stall() && c.k % 8 == 0 && c.platform == Platform::Mac);
+    assert!(
+        cases
+            .iter()
+            .any(|(case, _)| case.devices[0].wander_ms > 0.0)
+    );
+    for (case, outcome) in cases {
         assert!(
             !outcome.fails[0],
-            "case {} runs dry without its wander:\n{}",
+            "case {} runs dry:\n{}",
             case.k,
             outcome.lines.join("\n")
         );
     }
 }
 
-// Known-failure probe on main for S208, S209: it pins where main breaks them, so it is not coverage.
+// covers: S208, S209
 #[test]
-fn a_late_second_callback_still_corrects_drift_or_plays_early_in_a_mac_case() {
-    // The start re-anchor can land on the late second callback before the
-    // floor has formed, too close to W by its lateness: past T it is
-    // corrected (I2), inside T it plays that much early all run. Each case
-    // runs again with that callback on time to show what it alone does. On
-    // main every such case failed I2 or I4; with the ratio-1 converter most
-    // no longer show it (2 of 6 on the pinned seed: a drift skip and 4.7 ms
-    // early in case 17, 10 ms early in case 21). C3b flips this to "none".
+fn a_late_second_callback_neither_corrects_drift_nor_plays_early_in_a_mac_case() {
+    // The start re-anchor used to land on the late second callback before
+    // the floor had formed, too close to W by its lateness: past T it was
+    // corrected (I2), inside T it played that much early all run (on main
+    // every such case; with the ratio-1 converter cases 17 and 21). With the
+    // re-anchor held until the floor has formed, each case plays as its twin
+    // with that callback on time.
     let late: Vec<(&Case, &Outcome)> =
         matrix().cases_where(|c| !c.is_stall() && c.k % 4 == 1 && c.platform == Platform::Mac);
     assert!(!late.is_empty());
@@ -1104,11 +1077,43 @@ fn a_late_second_callback_still_corrects_drift_or_plays_early_in_a_mac_case() {
         ));
     }
     println!("{}", lines.join("\n"));
-    assert!(
-        shown >= 2,
-        "fewer than the 2 cases measured show it:\n{}",
-        lines.join("\n")
-    );
+    assert_eq!(shown, 0, "\n{}", lines.join("\n"));
+}
+
+// covers: S209
+#[test]
+fn two_stray_early_stamps_move_no_output_by_more_than_2_ms() {
+    // The anchor floor falls toward a callback earlier than it by a share of
+    // that callback's span over 2 s, so two stray stamps of 20 to 80 ms
+    // hardly move it, where following the floor at once moved such outputs
+    // by up to 57 ms until the next anchor.
+    let strayed: Vec<(&Case, &Outcome)> = matrix().cases_where(|c| {
+        !c.is_stall() && c.platform == Platform::Mac && c.devices.iter().any(|d| d.strays.is_some())
+    });
+    assert!(!strayed.is_empty());
+    let calm: Vec<Case> = strayed
+        .iter()
+        .map(|(case, _)| {
+            let mut twin = (*case).clone();
+            for d in &mut twin.devices {
+                d.strays = None;
+            }
+            twin
+        })
+        .collect();
+    let mut lines = Vec::new();
+    let mut moved = 0;
+    for ((case, seen), calm) in strayed.iter().zip(simulate_all(&calm)) {
+        for (i, d) in case.devices.iter().enumerate() {
+            if d.strays.is_some() {
+                let later_ms = seen.norms[i] - calm.norms[i];
+                moved += usize::from(later_ms.abs() > ALIGN_SLACK_MS);
+                lines.push(format!("case {} o{i}: {later_ms:.2} ms later", case.k));
+            }
+        }
+    }
+    println!("{}", lines.join("\n"));
+    assert_eq!(moved, 0, "\n{}", lines.join("\n"));
 }
 
 // covers: S85, S206, S207, S208
@@ -1143,7 +1148,7 @@ proptest! {
 
     // covers: S50, S206, S207, S208, S209
     #[test]
-    #[ignore = "open until the design's step 5: main fails most cases (see the ratchet)"]
+    #[ignore = "512 cases of up to 180 s take minutes"]
     fn every_output_of_every_mix_holds_every_invariant(raw in raw_case()) {
         let case = build(&raw, raw.k, raw.stall);
         let outcome = simulate(&case);
