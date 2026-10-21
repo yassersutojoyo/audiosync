@@ -289,3 +289,23 @@ struct DelayPanels: Equatable {
         return last.id
     }
 }
+
+/// A row's delay value (S181), looked up by the row's ID in the latest model
+/// values: a copy of the row taken when the list was built can lag behind a
+/// delay applied while the row's panel stays open.
+enum DelayBadge {
+    /// The saved delay: L for the AirPlay delay row, the offset for a local
+    /// speaker; nil for a row without a delay field or one no longer listed.
+    static func savedMs(of id: String, airPlayID: String, airPlayMs: Double,
+                        rows: [(id: String, offsetMs: Double?)]) -> Double? {
+        if id == airPlayID { return airPlayMs }
+        return rows.first { $0.id == id }.flatMap { $0.offsetMs }
+    }
+
+    /// The saved delay as the row shows it and VoiceOver reads it.
+    static func text(of id: String, airPlayID: String, airPlayMs: Double,
+                     rows: [(id: String, offsetMs: Double?)], text: UIStrings) -> String? {
+        guard let ms = savedMs(of: id, airPlayID: airPlayID, airPlayMs: airPlayMs, rows: rows) else { return nil }
+        return id == airPlayID ? text.delayValue(ms: ms) : text.offsetValue(ms: ms)
+    }
+}

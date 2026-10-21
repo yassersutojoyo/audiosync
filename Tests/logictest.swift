@@ -1771,6 +1771,13 @@ do {
           "artwork: an NSImage (a player's artwork, AudioSync's icon) is encoded too")
 }
 
+// MARK: Track info — a player with no track is not an error
+check(NowPlayingMonitor.meansNoTrack(-1728) && NowPlayingMonitor.meansNoTrack(-1712),
+      "AppleScript: no current track (-1728) and a timeout (-1712) read as no track, not logged")
+check(!NowPlayingMonitor.meansNoTrack(-1743) && !NowPlayingMonitor.meansNoTrack(nil)
+      && !NowPlayingMonitor.meansNoTrack(-2753),
+      "AppleScript: Automation refused (-1743) and other errors are still logged")
+
 // MARK: Track info — what AirPlay receivers with a screen show
 do {
     typealias Track = NowPlayingMonitor.Track
@@ -2541,6 +2548,58 @@ do {
     clickOutside()
     check(delays == ["usb": -250, "dock": 66] && retimes == before && panels.open.isEmpty,
           "delay panels: Escape drops every typing and closes every panel", "delays: \(delays)")
+}
+
+// MARK: Delay value — a row's delay value follows every applied delay while its panel stays open (DelayBadge)
+do {
+    let t = UIStrings()
+    let offset = LocalDelay.sanitizedOffset
+    let signed = t.offsetNumber
+    let air = "airplay-delay"
+    // The model values as pushModel leaves them after each apply.
+    var offsets: [String: Double] = ["usb": 400, "dock": 10]
+    var airPlayMs = 1800.0
+    func shown(_ id: String) -> String? {
+        DelayBadge.text(of: id, airPlayID: air, airPlayMs: airPlayMs,
+                        rows: [(id: "builtin", offsetMs: nil), (id: "usb", offsetMs: offsets["usb"]),
+                               (id: "dock", offsetMs: offsets["dock"])],
+                        text: t)
+    }
+    var fields = ["usb": DelayFieldDraft(), "dock": DelayFieldDraft()]
+    func commit(_ ids: Set<String>) {
+        for id in ids.sorted() {
+            if let v = fields[id]?.commit(saved: offsets[id] ?? 0, sanitize: offset, format: signed) { offsets[id] = v }
+        }
+    }
+    var panels = DelayPanels()
+    panels.toggle("usb")
+    panels.toggle("dock")
+    check(shown("usb") == "+400 ms", "delay value: a row shows its saved offset", "shown: \(shown("usb") ?? "nil")")
+
+    var seen: [String] = []
+    fields["usb"]?.type("450")
+    commit(["usb"])   // Return
+    seen.append(shown("usb") ?? "nil")
+    fields["usb"]?.type("-120")
+    commit(panels.open)   // Command-S
+    seen.append(shown("usb") ?? "nil")
+    fields["usb"]?.type("75")
+    commit(panels.toggle("dock"))   // a click on the other row
+    seen.append(shown("usb") ?? "nil")
+    check(seen == ["+450 ms", "−120 ms", "+75 ms"] && panels.isOpen("usb"),
+          "delay value: Return, Command-S and a click on another row each show the applied offset while its panel stays open",
+          "seen: \(seen)")
+
+    fields["usb"]?.type("30")
+    let closing = panels.open
+    panels.closeAll()   // a click on the window's background
+    commit(closing)
+    check(shown("usb") == "+30 ms", "delay value: a click outside the rows shows the applied offset",
+          "shown: \(shown("usb") ?? "nil")")
+
+    airPlayMs = 2100
+    check(shown(air) == "2100 ms" && shown("builtin") == nil && shown("gone") == nil,
+          "delay value: the AirPlay delay row shows L; the reference and an unlisted row show none")
 }
 
 // MARK: Delay field input — digits after one leading sign; out of range is marked (LocalDelay.fieldText)
