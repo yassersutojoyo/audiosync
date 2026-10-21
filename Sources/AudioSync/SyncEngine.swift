@@ -292,6 +292,7 @@ final class StreamEngine {
                 + "\(renderer.framesRendered.load(ordering: .relaxed)) frames rendered, \(renderer.counters), "
                 + "slowed \(renderer.slowedFrames) frames, sped \(renderer.spedFrames) frames, "
                 + "shortfall \(renderer.shortfallFrames) frames, "
-                + "late callbacks \(renderer.lateCallbacks) (most \(String(format: "%.1f", renderer.lateMaxMs)) ms)")
+                + "late callbacks \(renderer.lateCallbacks) (most \(String(format: "%.1f", renderer.lateMaxMs)) ms), "
+                + "floor lifts \(renderer.floorLifts)")
     }
 }

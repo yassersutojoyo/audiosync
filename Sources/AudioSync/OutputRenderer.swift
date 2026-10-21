@@ -133,6 +133,7 @@ final class OutputRenderer: FadingOutput {
     /// How late callbacks came against the earliest ones (S209).
     var lateMaxMs: Double { target?.renderer.lateMaxMs ?? 0 }
     var lateCallbacks: Int64 { target?.renderer.lateCallbacks ?? 0 }
+    var floorLifts: Int64 { target?.renderer.floorLifts ?? 0 }
 
     /// Where the fade was at the end of the latest callback.
     var fadeState: CoreRenderer.FadeState { target?.renderer.fadeState ?? .closed }

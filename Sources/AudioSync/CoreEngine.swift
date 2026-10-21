@@ -323,6 +323,10 @@ final class CoreRenderer {
     var lateMaxMs: Double { Double(asc_renderer_late_max_ns(handle)) / 1_000_000 }
     var lateCallbacks: Int64 { Int64(clamping: asc_renderer_late_callbacks(handle)) }
 
+    /// Any thread: the times a run of windows above the lateness floor lifted
+    /// it (S209).
+    var floorLifts: Int64 { Int64(clamping: asc_renderer_floor_lifts(handle)) }
+
     /// Any thread: the device frames the converter couldn't produce and that
     /// played as silence, in all; 0 unless the core's read sizing is wrong.
     var shortfallFrames: Int64 { Int64(clamping: asc_renderer_shortfall_frames(handle)) }

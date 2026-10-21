@@ -584,6 +584,10 @@ uint64_t asc_renderer_late_max_ns(const AscRenderer *renderer);
    the renderer's earliest ones (S209); 0 for a NULL handle. */
 uint64_t asc_renderer_late_callbacks(const AscRenderer *renderer);
 
+/* Any thread: the times a run of windows above the lateness floor lifted it
+   (S209); 0 for a NULL handle. */
+uint64_t asc_renderer_floor_lifts(const AscRenderer *renderer);
+
 /* Any thread: the device frames the converter couldn't produce and that were
    played as silence, in all (0 unless the read sizing is wrong); 0 for a NULL
    handle. */
