@@ -139,6 +139,8 @@ extension AppDelegate {
                 postNotice(text.nativeAirPlayOneAirPlay2(name: shownName(airPlay: id)),
                            subject: SpeakerKey.make(id: id, airplay: true),
                            title: text.nativeAirPlayWaitingTitle(name: shownName(airPlay: id)))
+            } else {
+                clearNotices([SpeakerKey.make(id: id, airplay: true)])
             }
             pushModel()   // the row says it waits, or no longer
         }
@@ -261,6 +263,8 @@ extension AppDelegate {
         DebugTrace.log("[AudioSync] native AirPlay: the sender stopped after an internal error; Retry starts a new one")
         nativeAirPlay = nil
         nativeStarts.senderFailed()
+        // Nothing starts a waiting speaker once its sender is gone.
+        clearNotices(native.model.waiting.map { SpeakerKey.make(id: NativeAirPlayID.app($0), airplay: true) })
         native.discard()
         if codePromptBusy { closeCodePrompt() }   // its prompt went with it
         airplayOrder = []

@@ -614,6 +614,7 @@ impl AscAirPlay {
                 if event == SpeakerEvent::HomeKitRejected {
                     // The PairingRequired error that follows reaches the host.
                     let _ = self.identity.remove(&id);
+                    self.homekit_keys.remove(&id);
                     return;
                 }
                 if matches!(

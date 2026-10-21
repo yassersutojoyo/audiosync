@@ -917,8 +917,10 @@ struct UIStrings {
               notice instead.
             """
         return asks + """
-             An Apple TV pairs once, with the PIN it
-              shows; a password is asked for once each time AudioSync starts. If a
+             An Apple TV, or a speaker reached over AirPlay 2,
+              pairs once, with the PIN it shows; Forget Pairing in the speaker's
+              menu removes that pairing. A password is asked for once each time
+              AudioSync starts. If a
               code doesn't work, AudioSync asks again; if you cancel, the speaker
               turns off. Turn it on again to retry.
             """
