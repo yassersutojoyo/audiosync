@@ -2639,7 +2639,7 @@ do {
           "delay field input: the out-of-range hint names the range and the value Return applies")
 }
 
-// MARK: Bluetooth IO buffer switch — AUDIOSYNC_BT_IO_FRAMES, Bluetooth outputs only (BluetoothIOBuffer)
+// MARK: Bluetooth IO buffer switch: AUDIOSYNC_BT_IO_FRAMES, Bluetooth outputs only (BluetoothIOBuffer)
 do {
     typealias B = BluetoothIOBuffer
     let bt = kAudioDeviceTransportTypeBluetooth, le = kAudioDeviceTransportTypeBluetoothLE

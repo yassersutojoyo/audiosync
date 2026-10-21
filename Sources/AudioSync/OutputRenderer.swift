@@ -539,9 +539,6 @@ final class OutputRenderer: FadingOutput {
     }
 }
 
-/// What one start's render callback reads, fixed for that start. The unit's
-/// callback context: `OutputRenderer` keeps it until its next start, after
-/// that start's unit is gone, so the IO thread borrows it without a retain.
 /// The developer-only `AUDIOSYNC_BT_IO_FRAMES` switch: a larger IO buffer
 /// for Bluetooth outputs, to tell at a sitting whether the buffer size plays
 /// a part when two or more of them chop. Unset, nothing changes.
@@ -574,6 +571,9 @@ enum BluetoothIOBuffer {
     }
 }
 
+/// What one start's render callback reads, fixed for that start. The unit's
+/// callback context: `OutputRenderer` keeps it until its next start, after
+/// that start's unit is gone, so the IO thread borrows it without a retain.
 private final class RenderTarget {
     /// For `framesRendered`; it outlives the unit, whose `halt` comes first.
     unowned(unsafe) let owner: OutputRenderer
