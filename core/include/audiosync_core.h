@@ -542,6 +542,14 @@ void asc_renderer_set_delay_frames(AscRenderer *renderer, int64_t frames);
 /* Any thread: the newest delay asked for, in capture-rate frames. */
 int64_t asc_renderer_delay_frames(const AscRenderer *renderer);
 
+/* Control thread, before the renderer's first callback: whether its device is
+   Bluetooth, which adds a capture block to its start lead (S230). */
+void asc_renderer_set_bluetooth(AscRenderer *renderer, bool bluetooth);
+
+/* Any thread: what the start lead adds for a Bluetooth device, in capture
+   frames (S230); 0 for any other device or a NULL handle. */
+int64_t asc_renderer_extra_lead_frames(const AscRenderer *renderer);
+
 /*
  * Any thread, before the output stops: fade out over 20 ms of device frames
  * from the next callback, then render exact zeros until the output stops.

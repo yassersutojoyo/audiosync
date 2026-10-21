@@ -188,6 +188,12 @@ pub const OBSERVE_AFTER_MS: u32 = TRACK_MS;
 /// a step in the device's output times (S229), in ns.
 pub const OUTPUT_TIME_STEP_NS: u64 = 1_000_000;
 
+/// What a Bluetooth output adds to its start lead, in capture frames
+/// (S230): one capture block, the 512 frames the Mac's capture writes per IO
+/// cycle by default (a Windows packet holds 480), so a callback that comes
+/// a block early against the capture's writes still finds its frames.
+pub const BLUETOOTH_LEAD_FRAMES: usize = 512;
+
 /// Where a renderer that follows the capture's clock stands (S207).
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tracking {
@@ -309,6 +315,8 @@ struct Shared {
     floor_drop_ns: AtomicU64,
     /// The observer's steps in the device's output times (S229).
     time_steps: AtomicU64,
+    /// The host said the device is Bluetooth (S230).
+    bluetooth: AtomicBool,
     /// The ring whose session lead counts this renderer, and its slot
     /// there, `None` when every slot was taken (S208).
     ring: Arc<Ring>,
@@ -318,6 +326,15 @@ struct Shared {
 impl Shared {
     fn leads(&self) -> &SessionLeads {
         self.ring.session_leads()
+    }
+
+    /// What a Bluetooth device adds to the start lead (S230).
+    fn extra_lead_frames(&self) -> usize {
+        if self.bluetooth.load(Ordering::Acquire) {
+            BLUETOOTH_LEAD_FRAMES
+        } else {
+            0
+        }
     }
 }
 
@@ -380,6 +397,7 @@ impl RendererControl {
                 least_slack_ns: AtomicI64::new(i64::MAX),
                 floor_drop_ns: AtomicU64::new(0),
                 time_steps: AtomicU64::new(0),
+                bluetooth: AtomicBool::new(false),
                 ring,
                 slot,
             }),
@@ -527,6 +545,20 @@ impl RendererControl {
     /// (S229); 0 without output times.
     pub fn time_steps(&self) -> u64 {
         self.shared.time_steps.load(Ordering::Relaxed)
+    }
+
+    /// Tells the renderer whether its device is Bluetooth, which adds
+    /// [`BLUETOOTH_LEAD_FRAMES`] to its start lead (S230). Call it before the
+    /// output's first callback and before [`Renderer::set_period_frames`]:
+    /// the start lead is published once.
+    pub fn set_bluetooth(&self, bluetooth: bool) {
+        self.shared.bluetooth.store(bluetooth, Ordering::Release);
+    }
+
+    /// What the start lead adds for a Bluetooth device, in capture frames:
+    /// [`BLUETOOTH_LEAD_FRAMES`], or 0 for any other (S230).
+    pub fn extra_lead_frames(&self) -> i64 {
+        self.shared.extra_lead_frames() as i64
     }
 }
 
@@ -1171,7 +1203,8 @@ impl Renderer {
     /// Publishes the start lead for a steady callback of `callback` device
     /// frames (S208): that callback without conversion; with it, the most
     /// that callback can ask the reader for, plus the cap on the capture's
-    /// block and the converter's latency.
+    /// block and the converter's latency. A Bluetooth output adds a capture
+    /// block (S230).
     fn publish_start_lead(&self, callback: usize) {
         let Some(slot) = self.shared.slot else {
             return;
@@ -1182,7 +1215,8 @@ impl Renderer {
             reader_frames_bound(callback, self.capture_rate, self.device_rate)
                 .saturating_add(self.block_cap)
                 .saturating_add(self.latency as usize)
-        };
+        }
+        .saturating_add(self.shared.extra_lead_frames());
         self.shared
             .leads()
             .set_lead(slot, i64::try_from(lead).unwrap_or(i64::MAX));
