@@ -332,6 +332,9 @@ impl Driver {
                     if let (Some(run), Some(remote)) = (&mut self.ptp, remote) {
                         run.service.start(remote.ip(), now);
                     }
+                } else {
+                    // P158: the service runs only while the session uses PTP.
+                    self.close_ptp();
                 }
             }
             Ap2Event::Ready(_) => {
