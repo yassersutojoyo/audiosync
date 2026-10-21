@@ -455,7 +455,7 @@ fn availability(info: &ReceiverInfo, paired: bool) -> (i32, i32) {
         Err(_) => (AIRPLAY_UNSUPPORTED, AIRPLAY_REASON_NONE),
         Ok(()) if verdict.legacy_pairing && !paired => (AIRPLAY_NEEDS_PIN, AIRPLAY_REASON_NONE),
         Ok(()) if verdict.needs_password => (AIRPLAY_NEEDS_PASSWORD, AIRPLAY_REASON_NONE),
-        Ok(()) if verdict.needs_pairing && !verdict.legacy_pairing => {
+        Ok(()) if verdict.needs_pairing && !verdict.legacy_pairing && !paired => {
             (AIRPLAY_NEEDS_PAIRING, AIRPLAY_REASON_NONE)
         }
         Ok(()) => (AIRPLAY_AVAILABLE, AIRPLAY_REASON_NONE),
@@ -772,13 +772,37 @@ impl AscAirPlay {
         }
     }
 
+    /// Whether the receiver `id` is paired, on AirPlay 1 or AirPlay 2.
+    fn paired(&self, id: &str) -> bool {
+        self.store.contains(id) || self.identity.get(id).is_some()
+    }
+
+    /// Forgets the receiver's AirPlay 2 credentials, here and in the
+    /// sender, so its next session pairs again. Returns whether it had any.
+    fn forget_homekit(&mut self, id: &str) -> bool {
+        if self.identity.get(id).is_none() {
+            return false;
+        }
+        // Forgotten for this handle even when the file can't be written.
+        let _ = self.identity.remove(id);
+        let key = self
+            .listed
+            .get(id)
+            .map(|info| info.device.key.clone())
+            .or_else(|| self.added.get(id).map(|added| added.key.clone()));
+        if let Some(key) = key {
+            self.sender.forget_homekit(&key);
+        }
+        true
+    }
+
     /// Keeps the strings of a receiver change and describes it with
     /// pointers to them.
     fn report(&mut self, event: ReceiverEvent) -> AscAirPlayReceiver {
         let (code, id, name, model, (availability, unsupported), flags) = match &event {
             ReceiverEvent::Appeared(info) | ReceiverEvent::Changed(info) => {
                 let id = receiver_id(&info.device.key);
-                let paired = self.store.contains(&id);
+                let paired = self.paired(&id);
                 (
                     if matches!(event, ReceiverEvent::Appeared(_)) {
                         AIRPLAY_APPEARED
@@ -1894,9 +1918,10 @@ pub unsafe extern "C" fn asc_airplay_set_password(
     }
 }
 
-/// Forgets the stored credentials of the receiver `id` and writes the
-/// pairings file (removed once nothing is paired); the receiver is reported
-/// again as needing a PIN when listed. A session running with them goes on
+/// Forgets the stored credentials of the receiver `id`, AirPlay 1 and
+/// AirPlay 2, and writes their files (the pairings file is removed once
+/// nothing is paired); the receiver is reported again as needing a PIN when
+/// listed. A session running with them goes on
 /// until it ends. Returns whether it was paired; false too for a null or
 /// dead handle or a null `id`.
 ///
@@ -1918,7 +1943,8 @@ pub unsafe extern "C" fn asc_airplay_forget_pairing(
     unsafe {
         live(airplay, false, |airplay| {
             airplay.pump();
-            if !airplay.store.contains(id) {
+            let homekit = airplay.forget_homekit(id);
+            if !airplay.store.contains(id) && !homekit {
                 return false;
             }
             // Forgotten for this handle even when the file can't be written.
