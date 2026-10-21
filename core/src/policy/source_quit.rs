@@ -1,9 +1,9 @@
-//! What a running session does when the app it captures quits (S226): stop,
+//! What a running session does when the app it captures quits (S227): stop,
 //! as S142 always did, or go on with whole-system audio.
 
 use super::source::AudioSource;
 
-/// The user's setting for a source app quitting (S226).
+/// The user's setting for a source app quitting (S227).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WhenSourceQuits {
     /// Stop the session (S142).
@@ -45,7 +45,7 @@ pub enum Streaming {
     Rebuilding,
 }
 
-/// What the host does about an event (S226).
+/// What the host does about an event (S227).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceQuitAction {
     /// Nothing changes.

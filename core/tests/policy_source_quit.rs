@@ -1,4 +1,4 @@
-//! What a running session does when the app it captures quits (S226).
+//! What a running session does when the app it captures quits (S227).
 
 use audiosync_core::policy::session::{Incident, reaction};
 use audiosync_core::policy::source::AudioSource;
@@ -22,7 +22,7 @@ fn input() -> AudioSource {
 
 const SETTINGS: [WhenSourceQuits; 2] = [WhenSourceQuits::Stop, WhenSourceQuits::SwitchToSystem];
 
-// covers: S226
+// covers: S227
 #[test]
 fn the_setting_reads_stop_unless_it_says_system() {
     assert_eq!(WhenSourceQuits::default(), WhenSourceQuits::Stop);
@@ -42,7 +42,7 @@ fn the_setting_reads_stop_unless_it_says_system() {
     }
 }
 
-// covers: S142, S164, S226
+// covers: S142, S164, S227
 #[test]
 fn stop_does_what_a_source_app_quit_did_before_the_setting() {
     let source = app(PLAYER);
@@ -67,7 +67,7 @@ fn stop_does_what_a_source_app_quit_did_before_the_setting() {
     assert!(before.stop_session && before.deselect_airplay && before.restart.is_none());
 }
 
-// covers: S226
+// covers: S227
 #[test]
 fn switch_moves_a_running_session_to_whole_system_audio() {
     let mut watch = SourceQuitWatch::new(WhenSourceQuits::SwitchToSystem);
@@ -78,7 +78,7 @@ fn switch_moves_a_running_session_to_whole_system_audio() {
     assert_eq!(watch.switched_from(), Some(PLAYER));
 }
 
-// covers: S142, S226
+// covers: S142, S227
 #[test]
 fn a_quit_while_no_session_runs_changes_nothing() {
     for setting in SETTINGS {
@@ -92,7 +92,7 @@ fn a_quit_while_no_session_runs_changes_nothing() {
     }
 }
 
-// covers: S164, S226
+// covers: S164, S227
 #[test]
 fn a_whole_system_or_input_source_never_stops_or_switches_on_a_quit() {
     for setting in SETTINGS {
@@ -110,7 +110,7 @@ fn a_whole_system_or_input_source_never_stops_or_switches_on_a_quit() {
     }
 }
 
-// covers: S164, S226
+// covers: S164, S227
 #[test]
 fn another_app_or_one_without_an_id_quitting_changes_nothing() {
     for setting in SETTINGS {
@@ -125,7 +125,7 @@ fn another_app_or_one_without_an_id_quitting_changes_nothing() {
     }
 }
 
-// covers: S226
+// covers: S227
 #[test]
 fn the_app_starting_again_after_a_switch_keeps_whole_system_audio() {
     let mut watch = SourceQuitWatch::new(WhenSourceQuits::SwitchToSystem);
@@ -139,7 +139,7 @@ fn the_app_starting_again_after_a_switch_keeps_whole_system_audio() {
     );
 }
 
-// covers: S226
+// covers: S227
 #[test]
 fn a_setting_changed_mid_play_decides_only_the_next_quit() {
     let mut watch = SourceQuitWatch::default();
@@ -164,7 +164,7 @@ fn a_setting_changed_mid_play_decides_only_the_next_quit() {
     );
 }
 
-// covers: S226
+// covers: S227
 #[test]
 fn a_quit_during_a_rebuild_stops_it_or_rebuilds_with_whole_system_audio() {
     let mut stop = SourceQuitWatch::new(WhenSourceQuits::Stop);
@@ -180,7 +180,7 @@ fn a_quit_during_a_rebuild_stops_it_or_rebuilds_with_whole_system_audio() {
     assert_eq!(switch.switched_from(), Some(PLAYER));
 }
 
-// covers: S226
+// covers: S227
 #[test]
 fn the_same_quit_reported_twice_acts_once() {
     let mut stop = SourceQuitWatch::new(WhenSourceQuits::Stop);
@@ -204,7 +204,7 @@ fn the_same_quit_reported_twice_acts_once() {
     assert_eq!(switch.switched_from(), Some(PLAYER));
 }
 
-// covers: S226
+// covers: S227
 #[test]
 fn picking_a_source_forgets_the_switch() {
     let mut watch = SourceQuitWatch::new(WhenSourceQuits::SwitchToSystem);
