@@ -753,6 +753,71 @@ pub unsafe extern "C" fn asc_renderer_shortfall_frames(renderer: *const AscRende
     unsafe { control_side(renderer) }.map_or(0, RendererControl::shortfall_frames)
 }
 
+/// Any thread: the capture frames by which the renderer's slow-down made up
+/// shortages of its reader (S206), apart from the trims that follow the
+/// capture's clock, in all; 0 for a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_shortage_frames(renderer: *const AscRenderer) -> u64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::shortage_frames)
+}
+
+/// Any thread: the observer's least slack, in ns of capture frames: `W - P`
+/// at the start of a callback less what the callback needs, below 0 when a
+/// callback found too few frames (S229). False, leaving `slack_ns` alone,
+/// until the output has played its warm-up and a callback was measured
+/// since, and for a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer; `slack_ns` is null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_least_slack_ns(
+    renderer: *const AscRenderer,
+    slack_ns: *mut i64,
+) -> bool {
+    // SAFETY: by the caller's contract the handle is null or live.
+    let Some(slack) = unsafe { control_side(renderer) }.and_then(RendererControl::least_slack_ns)
+    else {
+        return false;
+    };
+    if !slack_ns.is_null() {
+        // SAFETY: non-null, and writable by the caller's contract.
+        unsafe { slack_ns.write(slack) };
+    }
+    true
+}
+
+/// Any thread: the observer's largest drop of the lateness floor below the
+/// floor at the reader's latest anchor, in ns (S229); 0 without output
+/// times or for a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_floor_drop_ns(renderer: *const AscRenderer) -> u64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::floor_drop_ns)
+}
+
+/// Any thread: the observer's steps in the device's output times, callbacks
+/// whose output time lay more than 1 ms off the previous callback's plus
+/// its frames (S229); 0 without output times or for a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_time_steps(renderer: *const AscRenderer) -> u64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::time_steps)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1139,6 +1204,12 @@ mod tests {
             assert_eq!(asc_renderer_late_max_ns(c), control.late_max_ns());
             assert_eq!(asc_renderer_late_callbacks(c), control.late_callbacks());
             assert_eq!(asc_renderer_shortfall_frames(c), rust.shortfall_frames());
+            assert_eq!(asc_renderer_shortage_frames(c), control.shortage_frames());
+            let mut slack = i64::MIN;
+            let measured = asc_renderer_least_slack_ns(c, &mut slack);
+            assert_eq!(measured.then_some(slack), control.least_slack_ns());
+            assert_eq!(asc_renderer_floor_drop_ns(c), control.floor_drop_ns());
+            assert_eq!(asc_renderer_time_steps(c), control.time_steps());
             assert!(asc_renderer_fade_rendered(c));
             assert!(
                 c_out.iter().all(|&s| s == 0.0),
@@ -1249,6 +1320,12 @@ mod tests {
             assert_eq!(asc_renderer_late_max_ns(null), 0);
             assert_eq!(asc_renderer_late_callbacks(null), 0);
             assert_eq!(asc_renderer_shortfall_frames(null), 0);
+            assert_eq!(asc_renderer_shortage_frames(null), 0);
+            let mut slack = 7;
+            assert!(!asc_renderer_least_slack_ns(null, &mut slack));
+            assert_eq!(slack, 7);
+            assert_eq!(asc_renderer_floor_drop_ns(null), 0);
+            assert_eq!(asc_renderer_time_steps(null), 0);
             asc_renderer_destroy(null);
             let renderer = asc_renderer_create(ring, 48_000, 48_000, 2, 1.0);
             asc_renderer_render(renderer, ptr::null_mut(), 4);
