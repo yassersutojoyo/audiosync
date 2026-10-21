@@ -12,21 +12,25 @@
 //!
 //! Cast has no shared clock (C73), so it is kept in step only by its
 //! measured offset (C77): while one is on, local outputs wait that long for
-//! it ([`CastSpeakers::anchor`]). Local outputs never wait for it to start.
-//! Only the user sets the offset, and it is kept per device for the next
-//! session; Resync is the user's too (C79).
+//! it ([`CastSpeakers::anchor`]). With an AirPlay speaker chosen as well, the
+//! one with the shorter latency is held back to the longer: AirPlay through
+//! its speakers' delay, Cast through a delay line in front of its ring
+//! ([`CastSpeakers::set_hold_back`]). Local outputs never wait for it to
+//! start. Only the user sets the offset, and it is kept per device for the
+//! next session; Resync is the user's too (C79).
 //!
 //! The capture feeds the device through a [`CastLease`] of the one
-//! [`CastTap`]: equalized session-rate audio goes into the ring of the
-//! current Cast session. Each session has its own ring, whose writer reaches
-//! the capture through a bounded channel, and the old writer comes back the
-//! same way, so the capture never allocates, frees, locks or blocks (C8).
+//! [`CastTap`]: equalized session-rate audio goes through the session's delay
+//! line into its ring. Each session has its own ring and delay line, which
+//! reach the capture through a bounded channel and come back the same way,
+//! so the capture never allocates, frees, locks or blocks (C8).
 //!
 //! The sender sits behind [`CastLink`], so this logic is tested with a fake;
 //! [`HostLink`] is the real one.
 
 use std::collections::BTreeMap;
 use std::io;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -44,6 +48,7 @@ use audiosync_cast::host::{
 use audiosync_cast::media::Metadata;
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
 use audiosync_cast::status::{ControlType, DeviceVolume};
+use audiosync_core::fade::Fade;
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
 
 use super::SESSION_RATE;
@@ -57,23 +62,121 @@ const RING_FRAMES: usize = SESSION_RATE as usize * 2;
 /// Writers in flight between the UI thread and the capture, each way.
 const HANDOFF: usize = 8;
 
+/// The longest hold-back of the Cast feed, in frames: the ceiling of L.
+const MAX_HOLD_BACK_FRAMES: usize = MAX_HOLD_BACK_MS as usize * SESSION_RATE as usize / 1000;
+
+/// The smallest page size Windows maps memory in.
+const PAGE_BYTES: usize = 4096;
+
+/// Interleaved stereo frames held back by a delay that may change while it
+/// runs: a change fades out, moves the read point and fades in, so it
+/// never clicks.
+struct DelayLine {
+    buffer: Box<[f32]>,
+    /// The frame written next.
+    write: usize,
+    /// The delay in frames; `None` until the first frame, which takes the
+    /// target at once since only silence is behind it.
+    delay: Option<usize>,
+    fade: Fade,
+}
+
+impl DelayLine {
+    /// Allocates; on the UI thread only.
+    fn new(max_frames: usize) -> DelayLine {
+        let mut buffer = vec![0.0_f32; (max_frames + 1) * 2].into_boxed_slice();
+        // Zeroed memory is mapped on first touch: touch each page here so the
+        // capture thread never takes the page fault.
+        let last = buffer.len() - 1;
+        let stride = PAGE_BYTES / size_of::<f32>();
+        for index in (0..last).step_by(stride).chain([last]) {
+            // SAFETY: `index` is in bounds, so the pointer is valid and aligned.
+            unsafe { std::ptr::write_volatile(&raw mut buffer[index], 0.0) };
+        }
+        DelayLine {
+            buffer,
+            write: 0,
+            delay: None,
+            fade: Fade::opened(SESSION_RATE),
+        }
+    }
+
+    /// Takes in the whole frames of `input` and hands as many frames, held
+    /// back by `target` frames, to `out`. Never allocates.
+    fn process(&mut self, input: &[f32], target: usize, mut out: impl FnMut(&[f32])) {
+        let capacity = self.buffer.len() / 2;
+        let target = target.min(capacity - 1);
+        let mut chunk = [0.0_f32; 512];
+        for piece in input.chunks(chunk.len()) {
+            let frames = piece.len() / 2;
+            for (frame, held) in piece
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .zip(chunk.as_chunks_mut::<2>().0)
+            {
+                let delay = *self.delay.get_or_insert(target);
+                if delay == target {
+                    self.fade.fade_in();
+                } else if self.fade.is_closed() {
+                    self.delay = Some(target);
+                    self.fade.fade_in();
+                } else {
+                    self.fade.fade_out();
+                }
+                let delay = self.delay.unwrap_or(target);
+                let write = self.write * 2;
+                self.buffer[write..write + 2].copy_from_slice(frame.as_slice());
+                let read = (self.write + capacity - delay) % capacity * 2;
+                let gain = self.fade.next_gain();
+                held[0] = self.buffer[read] * gain;
+                held[1] = self.buffer[read + 1] * gain;
+                self.write = (self.write + 1) % capacity;
+            }
+            out(&chunk[..frames * 2]);
+        }
+    }
+}
+
+/// A Cast session's writer behind its delay line; built and freed on the
+/// UI thread only.
+struct CastWriter {
+    audio: AudioWriter,
+    delay: DelayLine,
+}
+
+impl CastWriter {
+    fn new(audio: AudioWriter) -> CastWriter {
+        CastWriter {
+            audio,
+            delay: DelayLine::new(MAX_HOLD_BACK_FRAMES),
+        }
+    }
+}
+
 /// The capture's end of the Cast feed.
 pub struct CastTap {
-    inbox: Receiver<Option<AudioWriter>>,
-    outbox: SyncSender<AudioWriter>,
-    writer: Option<AudioWriter>,
+    inbox: Receiver<Option<CastWriter>>,
+    outbox: SyncSender<CastWriter>,
+    writer: Option<CastWriter>,
     /// A writer the full outbox couldn't take yet; kept, never freed here.
-    retired: Option<AudioWriter>,
+    retired: Option<CastWriter>,
+    /// How many frames the feed is held back (C77), set by the UI thread.
+    hold_back: Arc<AtomicUsize>,
 }
 
 impl CastTap {
     /// Takes the newest writer the UI thread handed over, then writes the
-    /// first `frames` frames of interleaved stereo `block` through it.
-    /// Never allocates, frees, locks or blocks (C8).
+    /// first `frames` frames of interleaved stereo `block` through it, held
+    /// back as the UI thread asks. Never allocates, frees, locks or blocks
+    /// (C8).
     pub fn push(&mut self, block: &[f32], frames: usize) {
         self.take_handoffs();
-        if let Some(writer) = &self.writer {
-            writer.write_f32(&block[..(frames * 2).min(block.len())]);
+        let target = self.hold_back.load(Ordering::Relaxed);
+        if let Some(CastWriter { audio, delay }) = self.writer.as_mut() {
+            delay.process(&block[..(frames * 2).min(block.len())], target, |held| {
+                audio.write_f32(held);
+            });
         }
     }
 
@@ -97,7 +200,7 @@ impl CastTap {
 
     /// On the UI thread, with the tap in its slot: drops every writer it
     /// holds or waits for, and takes `writer`.
-    fn replace_all(&mut self, writer: Option<AudioWriter>) {
+    fn replace_all(&mut self, writer: Option<CastWriter>) {
         while self.inbox.try_recv().is_ok() {}
         self.retired = None;
         self.writer = writer;
@@ -150,11 +253,13 @@ impl Drop for CastLease {
 
 /// The UI thread's end of the Cast feed.
 pub struct CastFeed {
-    to_tap: SyncSender<Option<AudioWriter>>,
-    from_tap: Receiver<AudioWriter>,
+    to_tap: SyncSender<Option<CastWriter>>,
+    from_tap: Receiver<CastWriter>,
     slot: CastFeedSlot,
     /// The newest writer (or none) the full handoff couldn't take yet.
-    waiting: Option<Option<AudioWriter>>,
+    waiting: Option<Option<CastWriter>>,
+    /// The tap's hold-back, in frames.
+    hold_back: Arc<AtomicUsize>,
 }
 
 impl CastFeed {
@@ -165,11 +270,13 @@ impl CastFeed {
     fn with_handoff(handoff: usize) -> CastFeed {
         let (to_tap, inbox) = mpsc::sync_channel(handoff);
         let (outbox, from_tap) = mpsc::sync_channel(handoff);
+        let hold_back = Arc::new(AtomicUsize::new(0));
         let tap = CastTap {
             inbox,
             outbox,
             writer: None,
             retired: None,
+            hold_back: Arc::clone(&hold_back),
         };
         CastFeed {
             to_tap,
@@ -178,7 +285,15 @@ impl CastFeed {
                 tap: Arc::new(Mutex::new(Some(tap))),
             },
             waiting: None,
+            hold_back,
         }
+    }
+
+    /// Holds the feed back by `frames` from now on, up to the ceiling of L;
+    /// returns whether that changed.
+    fn set_hold_back(&self, frames: usize) -> bool {
+        let frames = frames.min(MAX_HOLD_BACK_FRAMES);
+        self.hold_back.swap(frames, Ordering::Relaxed) != frames
     }
 
     pub fn slot(&self) -> &CastFeedSlot {
@@ -190,7 +305,7 @@ impl CastFeed {
     /// the handoff is full and the tap is lent to a capture that hasn't
     /// pushed since.
     fn hand(&mut self, writer: Option<AudioWriter>) -> bool {
-        self.waiting = Some(writer);
+        self.waiting = Some(writer.map(CastWriter::new));
         self.flush()
     }
 
@@ -446,6 +561,21 @@ impl CastSpeakers {
         }
         let id = self.enabled?;
         Some(self.memory().offset(&id).unwrap_or_default())
+    }
+
+    /// Holds the feed back by `hold_back_ms`, live, so a device whose offset
+    /// is shorter than L plays at L (C77). A change fades over 20 ms.
+    pub fn set_hold_back(&mut self, hold_back_ms: f64) {
+        let ms = if hold_back_ms.is_finite() {
+            hold_back_ms.clamp(0.0, MAX_HOLD_BACK_MS)
+        } else {
+            0.0
+        };
+        let frames = (ms * f64::from(SESSION_RATE) / 1000.0).round() as usize;
+        if self.feed.set_hold_back(frames) {
+            self.log
+                .log(|| format!("Cast: the feed is held back {ms:.0} ms to meet L"));
+        }
     }
 
     fn entry(&self, id: DeviceId) -> Option<&Entry> {
@@ -1196,6 +1326,64 @@ pub mod tests {
     }
 
     #[test]
+    fn the_session_hears_the_capture_held_back() {
+        let (fake, mut cast) = listed();
+        let mut lease = cast.lease().expect("the tap");
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_hold_back(1.0);
+        lease.push(&[0.25; 128], 64);
+        let mut bytes = Vec::new();
+        fake.state().readers[0].read_into(&mut bytes, 64);
+        let (held, heard) = bytes.split_at(48 * 4);
+        assert!(held.iter().all(|byte| *byte == 0), "1 ms of silence first");
+        assert!(heard.iter().any(|byte| *byte != 0));
+    }
+
+    fn delayed(line: &mut DelayLine, input: &[f32], target: usize) -> Vec<f32> {
+        let mut out = Vec::new();
+        line.process(input, target, |held| out.extend_from_slice(held));
+        out
+    }
+
+    #[test]
+    fn the_delay_line_passes_audio_on_unchanged_or_late_by_its_hold_back() {
+        let ramp: Vec<f32> = (0..2000).map(|i| i as f32 / 4000.0).collect();
+        assert_eq!(delayed(&mut DelayLine::new(4800), &ramp, 0), ramp);
+        let out = delayed(&mut DelayLine::new(4800), &ramp, 100);
+        assert!(out[..200].iter().all(|sample| *sample == 0.0));
+        assert_eq!(out[200..], ramp[..1800]);
+        let out = delayed(&mut DelayLine::new(50), &ramp, 100);
+        assert_eq!(out[100..], ramp[..1900], "held back at most its length");
+    }
+
+    #[test]
+    fn a_new_hold_back_fades_out_and_in_without_a_jump() {
+        let step = std::f32::consts::TAU * 440.0 / SESSION_RATE as f32;
+        let sine: Vec<f32> = (0..24_000)
+            .flat_map(|i| {
+                let sample = 0.5 * (i as f32 * step).sin();
+                [sample, sample]
+            })
+            .collect();
+        let mut line = DelayLine::new(48_000);
+        let mut out = delayed(&mut line, &sine[..9600], 0);
+        out.extend(delayed(&mut line, &sine[9600..], 12_000));
+        let largest = out
+            .as_chunks::<2>()
+            .0
+            .windows(2)
+            .map(|pair| (pair[1][0] - pair[0][0]).abs())
+            .fold(0.0, f32::max);
+        assert!(largest < 0.5 * step * 1.5, "largest step {largest}");
+        assert_eq!(
+            out[40_000..],
+            sine[16_000..24_000],
+            "then 12 000 frames late"
+        );
+    }
+
+    #[test]
     fn a_writer_the_full_handoff_refused_reaches_the_capture_after_the_next_poll() {
         let mut feed = CastFeed::new();
         let mut lease = feed.slot().lease().expect("the tap");
@@ -1221,7 +1409,7 @@ pub mod tests {
         let (second, _) = audio_ring(64);
         let (third, reader) = audio_ring(64);
         for writer in [first, second, third] {
-            feed.to_tap.try_send(Some(writer)).unwrap();
+            feed.to_tap.try_send(Some(CastWriter::new(writer))).unwrap();
             lease.push(&[0.5; 2], 1);
         }
         assert_eq!(reader.available(), 1, "the newest writer plays");

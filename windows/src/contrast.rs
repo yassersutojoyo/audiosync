@@ -452,7 +452,9 @@ fn keyboard_shortcuts_are_declared() {
 /// AirPlay on Windows is new and not yet checked against a real receiver,
 /// so no text promises it: the translatable strings naming AirPlay are the
 /// speaker kind, what a listed speaker can't do yet, the AirPlay delay field
-/// (spec S181), which shows only while the AirPlay sender runs, and the notice
+/// (spec S181), which shows only while the AirPlay sender runs, the notice
+/// that AirPlay speakers playing can't wait long enough for a Google Cast
+/// speaker, with its short name, and the notice
 /// that the sender stopped or couldn't start, with its Retry button and its
 /// short name for the dismiss button, and the note that discovery has found
 /// no speaker yet (alone, or with Google Cast's in one sentence), which
@@ -476,6 +478,10 @@ fn no_text_promises_airplay() {
                     .contains("notice-airplay-stopped: @tr(\"AirPlay stopped or couldn't start.")
                 || line.contains("notice-retry-label: @tr(\"Retry starting AirPlay\")")
                 || line.contains("return @tr(\"AirPlay stopped\");")
+                || line.contains(
+                    "return @tr(\"AirPlay speakers can wait at most 3 s for a Google Cast speaker,"
+                )
+                || line.contains("return @tr(\"AirPlay ahead of {}\", name);")
                 || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
                 || line.contains("plays one AirPlay 2 speaker at a time, so {} waits.")
                 || line.contains("@tr(\"Waiting for the other AirPlay 2 speaker\")")

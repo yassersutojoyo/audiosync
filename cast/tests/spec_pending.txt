@@ -9,4 +9,4 @@ C20 TLS 1.2 with ECDHE-RSA AES-GCM and CBC suites: the platform TLS stacks offer
 # Timing: hardware, and the app's interface.
 C74 Latency of seconds: hardware, G7.
 C75 Growing latency: hardware, G7 (partly done: drops and rebuffers are counted, C79).
-C77 Measured-offset output: the Mac app's per-speaker delay control and its wording, M5 (partly done: OUTPUT_SYNC says measured offset, DeviceMemory stores the offset per device id and changes it only on the host's request, and the Windows app sets it from the speaker's delay control, says it is set by ear and keeps it between runs).
+C77 Measured-offset output: the Mac app's per-speaker delay control and its wording, M5 (partly done: OUTPUT_SYNC says measured offset, DeviceMemory stores the offset per device id and changes it only on the host's request, and the Windows app sets it from the speaker's delay control, says it is set by ear and keeps it between runs; with AirPlay on as well, the Windows app holds the AirPlay speakers, up to the sender's 3000 ms delay (P99), or the Cast feed back so both play at the longer of L and the offset).
