@@ -1066,6 +1066,7 @@ typedef struct AscCalibrationAirPlay {
     double new_ms;       /* the median, whole ms; NONE_CERTAIN: old_ms */
     double spread_ms;    /* the largest minus the smallest difference among the certain rows */
     size_t certain_rows; /* how many AirPlay rows are certain */
+    bool clamped;        /* new_ms hit an end of its range */
 } AscCalibrationAirPlay;
 
 /* One change Apply lists; writing back old_ms, or removing the stored value when has_old is false, undoes it. */
@@ -1080,8 +1081,9 @@ typedef struct AscCalibrationChange {
 /*
  * A run over `count` speakers, `reference` the index of the reference, a
  * local output. NULL for an unsupported rate, a reference that isn't a
- * local output among them, only the reference, an unknown kind or a NULL
- * array with a nonzero count.
+ * local output among them, only the reference, an expected arrival whose
+ * recording wouldn't fit 2^21 frames at that rate, an unknown kind or a
+ * NULL array with a nonzero count.
  */
 AscCalibrationRun *asc_calibration_run_create(uint32_t rate, const AscCalibrationSpeaker *speakers, size_t count, size_t reference);
 

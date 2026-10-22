@@ -123,6 +123,7 @@ pub struct AscCalibrationAirPlay {
     pub new_ms: f64,
     pub spread_ms: f64,
     pub certain_rows: usize,
+    pub clamped: bool,
 }
 
 /// One change Apply writes; writing back `old_ms` (or removing the stored
@@ -162,7 +163,8 @@ fn stored(value: Option<f64>) -> (bool, f64) {
 
 /// Starts a run over `count` speakers, `reference` the index of the
 /// reference, a local output: null for an unsupported rate, a reference
-/// that isn't a local output among them, only the reference, an unknown
+/// that isn't a local output among them, only the reference, an expected
+/// arrival whose recording wouldn't fit 2^21 frames at `rate`, an unknown
 /// kind or a null array with a nonzero count.
 ///
 /// # Safety
@@ -418,6 +420,7 @@ pub unsafe extern "C" fn asc_calibration_sheet_airplay(
             new_ms: shared.new_ms.unwrap_or(old_ms),
             spread_ms: shared.spread_ms,
             certain_rows: shared.certain_rows,
+            clamped: shared.clamped,
         })
     };
     true
@@ -868,7 +871,10 @@ mod tests {
         let mut airplay = AscCalibrationAirPlay::default();
         // SAFETY: a live sheet and a local value.
         assert!(unsafe { asc_calibration_sheet_airplay(sheet, &mut airplay) });
-        assert_eq!((airplay.has_old, airplay.new_ms), (false, 2100.0));
+        assert_eq!(
+            (airplay.has_old, airplay.new_ms, airplay.clamped),
+            (false, 2100.0, false)
+        );
         assert_eq!(airplay.certain_rows, 1);
 
         let mut untouched = AscCalibrationRow::default();

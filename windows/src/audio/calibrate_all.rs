@@ -246,6 +246,20 @@ enum Stage {
     Over,
 }
 
+impl Stage {
+    /// The microphone stopped on its own before its recording was whole:
+    /// waiting for the deadline would only keep the music faded.
+    fn microphone_lost(&self) -> bool {
+        match self {
+            Stage::Warming { mic, .. } | Stage::Playing { mic, .. } => mic.stopped(),
+            Stage::Recording {
+                step, mic, start, ..
+            } => mic.stopped() && mic.frames_recorded() < start + step.window_frames,
+            _ => false,
+        }
+    }
+}
+
 /// One Calibrate All run, or one Measure Again, from the music fading out
 /// to the sheet. The UI thread ticks it every few tens of ms.
 pub struct AllRun {
@@ -523,6 +537,9 @@ impl AllRun {
                 return self.end(rig, Some(reason), None, now_ns);
             }
             self.pending_end.get_or_insert(reason);
+        }
+        if self.stage.microphone_lost() {
+            return self.fail(rig, Failure::NoMicrophone, now_ns);
         }
         match std::mem::replace(&mut self.stage, Stage::Over) {
             Stage::Quiet { until_ns } => {
@@ -877,6 +894,7 @@ fn plan_failure(error: PlanError) -> Failure {
         PlanError::NoReference => Failure::NoReference,
         PlanError::NothingToMeasure => Failure::NothingToMeasure,
         PlanError::DuplicateId => Failure::Unfinished,
+        PlanError::TooLong => Failure::TooLong(None),
     }
 }
 
@@ -894,12 +912,31 @@ pub(crate) mod tests {
     const MIC_RATE: u32 = 22_050;
     const TICK_NS: u64 = 20_000_000;
 
+    /// What goes wrong with every recording the fake microphone opens.
+    #[derive(Default)]
+    struct MicFault {
+        /// No first frame ever comes.
+        cold: Cell<bool>,
+        /// No frame comes after this moment.
+        frozen_at: Cell<Option<u64>>,
+        /// It stopped on its own, as an unplugged device does.
+        stopped: Cell<bool>,
+    }
+
+    impl MicFault {
+        fn unplug(&self, now_ns: u64) {
+            self.frozen_at.set(Some(now_ns));
+            self.stopped.set(true);
+        }
+    }
+
     struct FakeMic {
         id: MicrophoneId,
         first_ns: u64,
         now: Rc<Cell<u64>>,
         tap: Arc<CalibrationTap>,
         heard_after_ms: Option<f64>,
+        fault: Rc<MicFault>,
     }
 
     impl Microphone for FakeMic {
@@ -908,16 +945,24 @@ pub(crate) mod tests {
         }
 
         fn first_frame_ns(&self) -> Option<u64> {
-            (self.now.get() > self.first_ns).then_some(self.first_ns)
+            (!self.fault.cold.get() && self.now.get() > self.first_ns).then_some(self.first_ns)
         }
 
         fn frames_recorded(&self) -> usize {
-            let since = self.now.get().saturating_sub(self.first_ns);
+            let now = self
+                .now
+                .get()
+                .min(self.fault.frozen_at.get().unwrap_or(u64::MAX));
+            let since = now.saturating_sub(self.first_ns);
             (since as f64 * f64::from(self.id.rate) / 1e9) as usize
         }
 
         fn gap_at(&self) -> Option<usize> {
             None
+        }
+
+        fn stopped(&self) -> bool {
+            self.fault.stopped.get()
         }
 
         fn take(&mut self, start: usize, count: usize) -> Vec<f32> {
@@ -965,6 +1010,9 @@ pub(crate) mod tests {
         heard_after_ms: BTreeMap<String, Vec<f64>>,
         sweeps: BTreeMap<String, usize>,
         mic: Result<MicrophoneId, MicrophoneError>,
+        mic_fault: Rc<MicFault>,
+        /// The capture writes no block, as when the source sends nothing.
+        capture_off: bool,
     }
 
     fn member(class: Class, id: &str, offset_ms: Option<f64>, latency_ms: f64) -> Member {
@@ -1011,12 +1059,17 @@ pub(crate) mod tests {
                     device: "mic".to_owned(),
                     rate: MIC_RATE,
                 }),
+                mic_fault: Rc::default(),
+                capture_off: false,
             }
         }
 
         /// One capture block of 10 ms through the tap, as the converter
         /// writes it.
         fn capture_block(&self) {
+            if self.capture_off {
+                return;
+            }
             let mut block = [0.0_f32; 960];
             let mut cursor = self.tap.block_cursor();
             let starts = cursor == 0;
@@ -1073,6 +1126,7 @@ pub(crate) mod tests {
                 now: Rc::clone(&self.now),
                 tap: Arc::clone(&self.tap),
                 heard_after_ms,
+                fault: Rc::clone(&self.mic_fault),
             }))
         }
     }
@@ -1423,6 +1477,119 @@ pub(crate) mod tests {
             Some(Failure::NotPlaying)
         );
         assert!(!rig.tap.is_active());
+        // Its recording wouldn't fit the estimate's limit at this rate.
+        let mut rig = FakeRig::new();
+        rig.lineup.members[3].latency_ms = 1e9;
+        assert_eq!(
+            AllRun::start(&mut rig, now, DebugLog::default()).err(),
+            Some(Failure::TooLong(None))
+        );
+        assert!(!rig.tap.is_active());
+    }
+
+    #[test]
+    fn an_unplugged_microphone_ends_the_run_at_once() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let mut unplugged_at = None;
+        let mut ended_at = None;
+        let finished = run_to_end(&mut rig, &mut run, |rig, run| {
+            let first = matches!(run.progress(), Progress::Measuring { row: 1, .. });
+            if first && rig.tap.played_at_ns().is_some() && unplugged_at.is_none() {
+                unplugged_at = Some(rig.now.get());
+                rig.mic_fault.unplug(rig.now.get());
+            }
+            if ended_at.is_none() && unplugged_at.is_some() && !run.is_running() {
+                ended_at = Some(rig.now.get());
+            }
+        });
+        assert_eq!(finished.failure, Some(Failure::NoMicrophone));
+        assert_eq!(finished.sheet.unwrap().ended(), Some(EndReason::Cancelled));
+        let took = ended_at.unwrap_or_else(|| rig.now.get()) - unplugged_at.expect("unplugged");
+        assert!(took <= TICK_NS, "ended {took} ns after the unplug");
+        given_back(&rig);
+    }
+
+    #[test]
+    fn a_microphone_that_stalls_is_waited_for_until_the_deadline() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let mut stalled_at = None;
+        let mut estimated_at = None;
+        let finished = run_to_end(&mut rig, &mut run, |rig, run| {
+            if rig.tap.played_at_ns().is_some() && stalled_at.is_none() {
+                stalled_at = Some(rig.now.get());
+                rig.mic_fault.frozen_at.set(Some(rig.now.get()));
+            }
+            if estimated_at.is_none() && matches!(run.progress(), Progress::Estimating { .. }) {
+                estimated_at = Some(rig.now.get());
+            }
+        });
+        assert_eq!(finished.failure, None);
+        let sheet = finished.sheet.expect("a sheet");
+        assert!(
+            sheet.rows()[1..]
+                .iter()
+                .all(|r| matches!(r.state, RowState::Refused(refused) if refused.reason == calibrate::Refusal::TooShort))
+        );
+        let waited = estimated_at.expect("it estimated") - stalled_at.expect("it stalled");
+        assert!(waited >= ns(STALL_S), "gave up after {waited} ns");
+        given_back(&rig);
+    }
+
+    #[test]
+    fn a_microphone_that_never_delivers_a_frame_gives_up_after_the_warm_up_limit() {
+        let mut rig = FakeRig::new();
+        rig.mic_fault.cold.set(true);
+        let started = rig.now.get();
+        let mut run = start(&mut rig);
+        let mut ended_at = None;
+        let finished = run_to_end(&mut rig, &mut run, |rig, run| {
+            if ended_at.is_none() && !run.is_running() {
+                ended_at = Some(rig.now.get());
+            }
+        });
+        assert_eq!(finished.failure, Some(Failure::NoMicrophone));
+        assert_eq!(rig.tap.played_at_ns(), None, "no sweep played");
+        assert!(ended_at.unwrap_or_else(|| rig.now.get()) - started >= ns(WARM_UP_LIMIT_S));
+        given_back(&rig);
+    }
+
+    #[test]
+    fn a_source_that_sends_nothing_fails_as_silent() {
+        let mut rig = FakeRig::new();
+        rig.capture_off = true;
+        let mut run = start(&mut rig);
+        let finished = run_to_end(&mut rig, &mut run, |_, _| {});
+        assert_eq!(finished.failure, Some(Failure::SourceSilent));
+        assert_eq!(finished.sheet.unwrap().ended(), Some(EndReason::Cancelled));
+        assert_eq!(rig.solo, None);
+    }
+
+    #[test]
+    fn cancel_while_estimating_ends_the_run_once_the_estimate_is_back() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let mut asked = None;
+        let finished = run_to_end(&mut rig, &mut run, |rig, run| {
+            if asked.is_none() && matches!(run.progress(), Progress::Estimating { row: 1, .. }) {
+                let now = rig.now.get();
+                run.cancel(rig, now);
+                asked = Some(run.progress());
+            }
+        });
+        assert!(
+            matches!(asked, Some(Progress::Estimating { .. })),
+            "the estimate runs on: {asked:?}"
+        );
+        assert_eq!(finished.failure, None);
+        let mut sheet = finished.sheet.expect("a sheet");
+        assert_eq!(sheet.ended(), Some(EndReason::Cancelled));
+        assert_eq!(
+            sheet.apply().err(),
+            Some(ApplyRefusal::Ended(EndReason::Cancelled))
+        );
+        given_back(&rig);
     }
 
     #[test]

@@ -1047,6 +1047,7 @@ export global Strings {
     out property <string> calibration-microphone-changed: @tr("The microphone changed between the two measurements. Keep one microphone as the default input, and try again.");
     out property <string> calibration-microphone-skipped: @tr("The microphone dropped audio during the measurement, so its timing can't be trusted. Try again.");
     out property <string> calibration-hands-free: @tr("The default microphone is a Bluetooth headset's hands-free input, and recording from it would switch the headset to call mode. Choose another input in Settings > System > Sound, and try again.");
+    out property <string> calibration-microphone-in-use: @tr("Another app has the microphone to itself. Close that app, or turn off \"Allow applications to take exclusive control of this device\" for the microphone under Settings > System > Sound > More sound settings, and try again.");
     out property <string> calibration-unfinished: @tr("AudioSync couldn't finish working out the delay. Try again.");
     out property <string> calibration-too-short: @tr("The recording was too short. Try again.");
     out property <string> calibration-too-long: @tr("The delays are too long to measure in one recording at the microphone's sample rate. Lower the largest delay, or set the microphone's format to 48 kHz in Settings > System > Sound, and try again.");
