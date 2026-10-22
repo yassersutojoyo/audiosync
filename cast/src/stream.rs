@@ -205,7 +205,7 @@ struct Shared {
     /// The pump's rate and block size, the same in every codec.
     pump_format: StreamFormat,
     route: Mutex<Route>,
-    allowed: Vec<IpAddr>,
+    allowed: Mutex<Vec<IpAddr>>,
     artwork: Mutex<Option<Artwork>>,
     live: Mutex<Live>,
     wake: Condvar,
@@ -292,7 +292,7 @@ impl StreamServer {
                 format,
                 path: format!("/{token}.{}", format.extension()),
             }),
-            allowed: config.allowed,
+            allowed: Mutex::new(config.allowed),
             artwork: Mutex::new(None),
             live: Mutex::new(Live {
                 generation: 0,
@@ -352,6 +352,12 @@ impl StreamServer {
 
     pub fn format(&self) -> StreamFormat {
         lock(&self.shared.route).format
+    }
+
+    /// Replaces the addresses that get an answer: a group's follow its
+    /// leader and its members (C103).
+    pub fn set_allowed(&self, allowed: Vec<IpAddr>) {
+        *lock(&self.shared.allowed) = allowed;
     }
 
     /// Serves the stream in `codec` from now on, under the same token with
@@ -460,7 +466,8 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
                 // Accepted sockets inherit the listener's non-blocking mode
                 // on WinSock and BSD.
                 let _ = stream.set_nonblocking(false);
-                if !shared.allowed.contains(&peer.ip()) {
+                let allowed = lock(&shared.allowed).contains(&peer.ip());
+                if !allowed {
                     shared.report(ServerEvent::Refused {
                         from: peer.ip(),
                         status: 403,
@@ -617,7 +624,8 @@ fn serve(mut stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>) {
     let Some(request) = read_request(&mut stream) else {
         return;
     };
-    if !shared.allowed.contains(&from) {
+    let allowed = lock(&shared.allowed).contains(&from);
+    if !allowed {
         shared.report(ServerEvent::Refused { from, status: 403 });
         return simple_response(&mut stream, "403 Forbidden", "");
     }

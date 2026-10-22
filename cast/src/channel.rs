@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use crate::error::{EndReason, LaunchError};
+use crate::group::MultizoneMessage;
 use crate::ids::RequestIds;
 use crate::media::{
     IdleReason, LoadRequest, MAX_CONTENT_ID, MediaError, MediaStatus, PlayerState, VolumeError,
@@ -67,6 +68,8 @@ pub enum Event {
     /// The app's virtual connection closed while the app still runs; the
     /// sender opened it again, which it does once (C82).
     AppReconnected,
+    /// A message on the multizone namespace of a group (C94, C96).
+    Multizone(MultizoneMessage),
     /// A message the sender dropped, for the log (C26 to C28, C31).
     Dropped(Dropped),
     /// The channel is over; nothing more will be sent (sections 4 and 8).
@@ -176,6 +179,9 @@ pub struct Channel {
     volume_queued: Option<f64>,
     /// The level last sent, until the next `RECEIVER_STATUS` reports one.
     volume_unconfirmed: Option<f64>,
+    /// The member list was asked for: the channel is a group's, and the
+    /// multizone namespace is read rather than dropped (C27, C94).
+    multizone: bool,
 }
 
 impl Channel {
@@ -197,6 +203,7 @@ impl Channel {
             volume_sent: None,
             volume_queued: None,
             volume_unconfirmed: None,
+            multizone: false,
         };
         channel.connect(PLATFORM);
         channel.request(
@@ -208,6 +215,17 @@ impl Channel {
             json!({"type": "GET_STATUS"}),
         );
         channel
+    }
+
+    /// Asks a group's platform for its members (C94). Nothing waits for the
+    /// answer: without one the member list stays unknown.
+    pub fn request_members(&mut self) {
+        self.multizone = true;
+        self.send_request(
+            PLATFORM,
+            Namespace::Multizone,
+            json!({"type": "GET_STATUS"}),
+        );
     }
 
     /// The next message to send, in order.
@@ -503,6 +521,9 @@ impl Channel {
         }
         let namespace = match Namespace::from_name(&message.namespace) {
             Some(Namespace::DeviceAuth) => return self.drop_message(Dropped::DeviceAuth),
+            Some(Namespace::Multizone) if !self.multizone => {
+                return self.drop_message(Dropped::Namespace(message.namespace));
+            }
             Some(namespace) => namespace,
             None => return self.drop_message(Dropped::Namespace(message.namespace)),
         };
@@ -524,6 +545,10 @@ impl Channel {
                 self.outbox.push_back(pong);
             }
             (Namespace::Connection, "CLOSE") => self.on_close(now, &message.source_id),
+            (Namespace::Multizone, kind) => {
+                let message = MultizoneMessage::from_payload(kind, &payload);
+                self.events.push_back(Event::Multizone(message));
+            }
             (Namespace::Receiver, "RECEIVER_STATUS") => {
                 self.on_status(id, ReceiverStatus::from_payload(&payload));
             }

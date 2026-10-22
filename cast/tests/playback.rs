@@ -64,6 +64,7 @@ fn config(device: &FakeDevice) -> SessionConfig {
             title: Some("First".to_owned()),
             ..Metadata::default()
         },
+        group: None,
     }
 }
 

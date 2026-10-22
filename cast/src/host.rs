@@ -39,6 +39,7 @@ use serde_json::{Map, Value, json};
 use crate::audio::{AudioReader, Codec, StreamFormat};
 use crate::client::QUIT_BUDGET;
 use crate::discovery::DeviceId;
+use crate::group::GroupRecords;
 use crate::media::{IdleReason, MediaError, Metadata};
 use crate::session::{CastSession, SessionConfig, SessionEnd, SessionError, SessionEvent};
 
@@ -141,6 +142,9 @@ pub struct CastTarget {
     pub id: DeviceId,
     /// Where to connect, as the device list has them (C15, C16).
     pub addresses: Vec<SocketAddr>,
+    /// Set when the target is a Cast group, which plays as one device
+    /// (C3, C93); the host keeps it current from discovery (C90, C103).
+    pub group: Option<GroupRecords>,
 }
 
 /// Why [`CastHost::start`] refused at once, before any network call.
@@ -239,6 +243,7 @@ impl HostEvent {
                     | SessionEvent::Stream(_)
                     | SessionEvent::Volume(_)
                     | SessionEvent::Rebuffering
+                    | SessionEvent::GroupMessage(_)
             ),
             HostEvent::CommandFailed { .. } => true,
             _ => false,
@@ -688,6 +693,7 @@ impl Worker {
             addresses: target.addresses,
             format,
             metadata,
+            group: target.group,
         };
         // Connect retries go out live, while the start still runs; one that
         // finds the outbox full, or held events not yet sent, is dropped

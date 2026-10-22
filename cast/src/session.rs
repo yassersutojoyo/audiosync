@@ -15,6 +15,7 @@ use crate::audio::{AudioReader, Codec, StreamFormat};
 use crate::channel::{Event, PlaybackEnd};
 use crate::client::{CastClient, QUIT_BUDGET};
 use crate::error::{Backoff, ConnectError, EndReason, LaunchError};
+use crate::group::{GroupMember, GroupRecords, MemberList, MultizoneMessage};
 use crate::ids::RequestIds;
 use crate::media::{
     IdleReason, LoadRequest, MediaError, MediaStatus, Metadata, PlayerState, VolumeError,
@@ -151,6 +152,12 @@ pub enum SessionEvent {
     },
     /// From the stream server, for the log.
     Stream(ServerEvent),
+    /// A group's member list changed (C94); the host matches the members
+    /// to the devices it found (C95).
+    Members(Vec<GroupMember>),
+    /// A multizone message type the session doesn't act on, once per type
+    /// and session, for the log (C96).
+    GroupMessage(String),
     Ended(SessionEnd),
 }
 
@@ -163,6 +170,10 @@ pub struct SessionConfig {
     /// device (C84).
     pub format: StreamFormat,
     pub metadata: Metadata,
+    /// Set for a Cast group: every connect takes the addresses from its
+    /// latest records instead of `addresses` (C90, C93), and the stream
+    /// server answers its members too (C103).
+    pub group: Option<GroupRecords>,
 }
 
 /// Whether a failed first `LOAD` in `codec` is retried in FLAC (C84):
@@ -182,6 +193,16 @@ pub fn falls_back_to_flac(codec: Codec, error: &MediaError) -> bool {
 pub fn connect_retrying(
     addresses: &[SocketAddr],
     selected: &AtomicBool,
+    on_failure: impl FnMut(ConnectError, Duration),
+) -> Result<CastClient, Option<ConnectError>> {
+    connect_retrying_with(|| addresses.to_vec(), selected, on_failure)
+}
+
+/// [`connect_retrying`] with the addresses read again before every
+/// attempt, as a group's records may move while it retries (C90).
+pub fn connect_retrying_with(
+    mut addresses: impl FnMut() -> Vec<SocketAddr>,
+    selected: &AtomicBool,
     mut on_failure: impl FnMut(ConnectError, Duration),
 ) -> Result<CastClient, Option<ConnectError>> {
     let mut backoff = Backoff::new();
@@ -189,9 +210,9 @@ pub fn connect_retrying(
         if !selected.load(Ordering::SeqCst) {
             return Err(None);
         }
-        match CastClient::connect(addresses, RequestIds::random()) {
+        match CastClient::connect(&addresses(), RequestIds::random()) {
             Ok(client) => return Ok(client),
-            Err(error @ (ConnectError::Group | ConnectError::NoAddress)) => {
+            Err(error @ ConnectError::NoAddress) => {
                 return Err(Some(error));
             }
             Err(error) => {
@@ -234,6 +255,12 @@ pub struct CastSession {
     /// Set by the host once it quits: every teardown from then on keeps to
     /// [`QUIT_BUDGET`] (C88).
     quitting: Arc<AtomicBool>,
+    group: Option<GroupRecords>,
+    members: MemberList,
+    /// Multizone types already logged this session (C96).
+    group_types_logged: Vec<String>,
+    /// What the stream server answers now, besides the channel's address.
+    allowed: Vec<IpAddr>,
 }
 
 fn teardown_budget(quitting: &AtomicBool) -> Duration {
@@ -276,7 +303,12 @@ impl CastSession {
         quitting: Arc<AtomicBool>,
         on_failure: impl FnMut(ConnectError, Duration),
     ) -> Result<CastSession, SessionError> {
-        let mut client = match connect_retrying(&config.addresses, &selected, on_failure) {
+        let group = config.group.clone();
+        let connected = match &group {
+            Some(records) => connect_retrying_with(|| records.get().group, &selected, on_failure),
+            None => connect_retrying(&config.addresses, &selected, on_failure),
+        };
+        let mut client = match connected {
             Ok(client) => client,
             Err(error) => {
                 return Err(SessionError::Connect(
@@ -284,6 +316,9 @@ impl CastSession {
                 ));
             }
         };
+        if group.is_some() {
+            client.request_members();
+        }
         client.set_selected(Arc::clone(&selected));
         let app = match client.launch() {
             Ok(app) => app,
@@ -292,12 +327,16 @@ impl CastSession {
                 return Err(error.into());
             }
         };
-        let mut allowed: Vec<IpAddr> = config.addresses.iter().map(SocketAddr::ip).collect();
+        let mut allowed: Vec<IpAddr> = match &group {
+            Some(records) => records.allowed(),
+            None => config.addresses.iter().map(SocketAddr::ip).collect(),
+        };
         allowed.push(client.address().ip());
+        allowed.sort();
         allowed.dedup();
         let stream_config = StreamConfig {
             local_ip: client.local_address().ip(),
-            allowed,
+            allowed: allowed.clone(),
             format: config.format,
         };
         let server = match StreamServer::start(stream_config, reader) {
@@ -336,6 +375,10 @@ impl CastSession {
             error_recovered: false,
             finished_reloaded: false,
             quitting,
+            group,
+            members: MemberList::new(),
+            group_types_logged: Vec::new(),
+            allowed,
         };
         if let Err(error) = session.load_with_fallback() {
             session.teardown(teardown_budget(&session.quitting));
@@ -464,6 +507,7 @@ impl CastSession {
                 }
             }
             self.collect_server_events();
+            self.follow_group();
             if self.playing && Instant::now() >= self.next_diagnostics {
                 let diagnostics = self.diagnostics();
                 self.report(SessionEvent::Diagnostics(diagnostics));
@@ -506,6 +550,7 @@ impl CastSession {
                     SessionEvent::Diagnostics(_)
                         | SessionEvent::Stream(_)
                         | SessionEvent::Volume(_)
+                        | SessionEvent::GroupMessage(_)
                 )
             });
             if let Some(index) = routine {
@@ -521,6 +566,36 @@ impl CastSession {
         }
         self.teardown(teardown_budget(&self.quitting));
         self.report(SessionEvent::Ended(end));
+    }
+
+    /// Keeps the stream server answering a group's current addresses and
+    /// its members' (C103).
+    fn follow_group(&mut self) {
+        let Some(records) = &self.group else {
+            return;
+        };
+        let mut allowed = records.allowed();
+        allowed.push(self.client.address().ip());
+        allowed.sort();
+        allowed.dedup();
+        if allowed != self.allowed {
+            self.server.set_allowed(allowed.clone());
+            self.allowed = allowed;
+        }
+    }
+
+    fn on_multizone(&mut self, message: MultizoneMessage) {
+        if let MultizoneMessage::Other(kind) = &message {
+            if !self.group_types_logged.contains(kind) {
+                self.group_types_logged.push(kind.clone());
+                self.report(SessionEvent::GroupMessage(kind.clone()));
+            }
+            return;
+        }
+        if self.members.apply(&message) {
+            let members = self.members.members().unwrap_or_default().to_vec();
+            self.report(SessionEvent::Members(members));
+        }
     }
 
     fn collect_server_events(&mut self) {
@@ -605,6 +680,7 @@ impl CastSession {
                 }
             }
             Event::MediaStatus(status) => self.last_media = Some(status),
+            Event::Multizone(message) => self.on_multizone(message),
             Event::Rebuffering => {
                 self.rebuffers += 1;
                 self.stall_since = Some(Instant::now());
@@ -663,12 +739,22 @@ impl CastSession {
         while self.client.poll_event().is_some() {}
         let addresses = self.addresses.clone();
         let selected = Arc::clone(&self.selected);
-        let result = connect_retrying(&addresses, &selected, |error, retry_in| {
+        let group = self.group.clone();
+        let on_failure = |error, retry_in| {
             self.report(SessionEvent::ConnectFailed { error, retry_in });
-        });
+        };
+        // A group is resolved afresh: its leader may have handed over (C90,
+        // C97).
+        let result = match &group {
+            Some(records) => connect_retrying_with(|| records.get().group, &selected, on_failure),
+            None => connect_retrying(&addresses, &selected, on_failure),
+        };
         self.client = match result {
             Ok(mut client) => {
                 client.set_selected(Arc::clone(&self.selected));
+                if group.is_some() {
+                    client.request_members();
+                }
                 client
             }
             Err(None) => return self.end(SessionEnd::Deselected),

@@ -21,6 +21,8 @@ pub const NS_HEARTBEAT: &str = "urn:x-cast:com.google.cast.tp.heartbeat";
 pub const NS_RECEIVER: &str = "urn:x-cast:com.google.cast.receiver";
 /// Playback (section 5).
 pub const NS_MEDIA: &str = "urn:x-cast:com.google.cast.media";
+/// A group's member list (C94 to C96).
+pub const NS_MULTIZONE: &str = "urn:x-cast:com.google.cast.multizone";
 /// Device authentication, which this sender never uses (C30, C31).
 pub const NS_DEVICE_AUTH: &str = "urn:x-cast:com.google.cast.tp.deviceauth";
 
@@ -31,6 +33,7 @@ pub enum Namespace {
     Heartbeat,
     Receiver,
     Media,
+    Multizone,
     DeviceAuth,
 }
 
@@ -42,6 +45,7 @@ impl Namespace {
             NS_HEARTBEAT => Some(Namespace::Heartbeat),
             NS_RECEIVER => Some(Namespace::Receiver),
             NS_MEDIA => Some(Namespace::Media),
+            NS_MULTIZONE => Some(Namespace::Multizone),
             NS_DEVICE_AUTH => Some(Namespace::DeviceAuth),
             _ => None,
         }
@@ -53,6 +57,7 @@ impl Namespace {
             Namespace::Heartbeat => NS_HEARTBEAT,
             Namespace::Receiver => NS_RECEIVER,
             Namespace::Media => NS_MEDIA,
+            Namespace::Multizone => NS_MULTIZONE,
             Namespace::DeviceAuth => NS_DEVICE_AUTH,
         }
     }
