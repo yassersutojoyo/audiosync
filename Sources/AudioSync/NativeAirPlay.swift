@@ -20,11 +20,7 @@ final class NativeAirPlay {
     static let pollInterval: DispatchTimeInterval = .milliseconds(250)
     /// The receivers the debug hook AUDIOSYNC_AIRPLAY_PCM names; the core
     /// reads the same variable and lets them use PCM when they are added.
-    static let pcmDebugIDs: Set<String> = Set(
-        (ProcessInfo.processInfo.environment["AUDIOSYNC_AIRPLAY_PCM"] ?? "")
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty })
+    static let pcmDebugIDs = NativeAirPlayID.pcmDebugIDs(ProcessInfo.processInfo.environment["AUDIOSYNC_AIRPLAY_PCM"])
 
     /// The receivers listed, the speakers added, L, and the pairings and
     /// prompts under way (main queue; the app records prompts and turn-offs

@@ -4682,11 +4682,23 @@ pub mod tests {
     #[test]
     fn the_pcm_variable_names_speakers_by_id() {
         assert!(pcm_debug_devices(None).is_empty());
+        assert!(pcm_debug_devices(Some("")).is_empty());
         assert!(pcm_debug_devices(Some(" , ")).is_empty());
         assert_eq!(
-            pcm_debug_devices(Some("AA:BB, raop:Den ,,CC")),
-            BTreeSet::from(["AA:BB".to_owned(), "raop:Den".to_owned(), "CC".to_owned()])
+            pcm_debug_devices(Some("A1B2C3D4E5F6")),
+            BTreeSet::from(["A1B2C3D4E5F6".to_owned()])
         );
+        assert_eq!(
+            pcm_debug_devices(Some(
+                "a1:b2:c3:d4:e5:f6, raop:0011223344AA@Den ,,0011223344aa"
+            )),
+            BTreeSet::from([
+                "A1B2C3D4E5F6".to_owned(),
+                "raop:0011223344AA@Den".to_owned(),
+                "0011223344AA".to_owned(),
+            ])
+        );
+        assert!(!pcm_debug_devices(Some("A1B2C3D4E5F6")).contains("A1B2C3D4E5F7"));
     }
 
     #[test]
