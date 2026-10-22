@@ -514,7 +514,17 @@ version = "0.1.0"
 dependencies = [
  "audiosync-airplay",
  "audiosync-cast",
+ "audiosync-remote",
  "zeroize",
+]
+
+[[package]]
+name = "audiosync-remote"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

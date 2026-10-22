@@ -378,7 +378,7 @@ fn a_code_expires() {
 #[test]
 fn wrong_codes_are_limited_then_locked() {
     let timing = Timing {
-        wrong_code_window: Duration::from_millis(250),
+        wrong_code_window: Duration::from_secs(1),
         ..Timing::default()
     };
     let remote = start_with(config("limits", timing));
@@ -401,7 +401,7 @@ fn wrong_codes_are_limited_then_locked() {
             "too_many_tries"
         };
         assert_eq!(limited.error(), expected);
-        thread::sleep(Duration::from_millis(300));
+        thread::sleep(Duration::from_millis(1100));
     }
     assert!(remote.server.pairing_locked());
     let locked = post(&remote, "/api/pair", None, &right);
@@ -651,6 +651,17 @@ impl Events {
         true
     }
 
+    /// Reads until `done` holds, for 5 s at most, so a slow runner only waits longer.
+    fn read_until(&mut self, done: impl Fn(&Events) -> bool) {
+        let until = Instant::now() + Duration::from_secs(5);
+        while !done(self) && Instant::now() < until {
+            assert!(
+                self.read_for(Duration::from_millis(50)),
+                "the stream closed"
+            );
+        }
+    }
+
     fn head(&self) -> &str {
         self.data.split("\r\n\r\n").next().unwrap_or_default()
     }
@@ -698,7 +709,7 @@ fn the_event_stream_delivers_each_revision_once_and_heartbeats() {
     let token = pair(&remote);
     remote.server.publish(sample());
     let mut events = Events::open(&remote, &token);
-    assert!(events.read_for(Duration::from_millis(200)));
+    events.read_until(|events| !events.revisions().is_empty());
     assert!(events.head().starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(
         events
@@ -718,15 +729,17 @@ fn the_event_stream_delivers_each_revision_once_and_heartbeats() {
         remote.server.publish(state.clone());
     }
     remote.server.publish(state.clone());
-    assert!(events.read_for(Duration::from_millis(200)));
+    events.read_until(|events| events.revisions().len() >= 4);
     assert_eq!(events.revisions(), [1, 2, 3, 4]);
 
-    assert!(events.read_for(Duration::from_millis(500)));
+    events.read_until(|events| events.heartbeats() >= 1);
     assert!(events.heartbeats() >= 1, "{:?}", events.data);
-    assert_eq!(events.revisions(), [1, 2, 3, 4]);
+    assert!(events.read_for(Duration::from_millis(300)));
+    assert_eq!(events.revisions(), [1, 2, 3, 4], "a revision came twice");
 
     // A second stream starts from the current snapshot.
     let mut late = Events::open(&remote, &token);
+    late.read_until(|events| !events.revisions().is_empty());
     assert!(late.read_for(Duration::from_millis(200)));
     assert_eq!(late.revisions(), [4]);
 
@@ -765,7 +778,7 @@ fn devices_survive_a_restart_and_can_all_be_forgotten() {
     }
 
     let mut events = Events::open(&second, &tokens[5]);
-    assert!(events.read_for(Duration::from_millis(200)));
+    events.read_until(|events| !events.revisions().is_empty());
     second.server.forget_all().unwrap();
     assert_eq!(second.server.device_count(), 0);
     assert!(
