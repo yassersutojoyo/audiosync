@@ -117,7 +117,7 @@ body:
     attributes:
       label: Debug log
       description: |
-        Quit AudioSync (on Windows, from the tray icon's menu), start it again with its debug log on, listen as usual, quit, and drag the log file in here. The log starts over at every launch.
+        Quit AudioSync (on Windows, File > Exit, or Exit AudioSync in the notification area icon's menu), start it again with its debug log on, listen as usual, quit, and drag the log file in here. The log starts over at every launch.
 
         Mac, in Terminal: `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, the log is `/tmp/audiosync-debug.log`.
         Windows, in PowerShell in the folder with the exe: `$env:AUDIOSYNC_DEBUG=1; .\audiosync.exe`, the log is `%TEMP%\audiosync-debug.log`.
