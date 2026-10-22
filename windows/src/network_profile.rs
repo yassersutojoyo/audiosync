@@ -107,17 +107,44 @@ pub struct NetworkList;
 #[cfg(windows)]
 impl ProfileSource for NetworkList {
     fn connected(&self) -> Option<Vec<Category>> {
-        use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
+        APARTMENT.with(|_| ());
+        connected_categories()
+    }
+}
 
-        // SAFETY: initializes COM for this thread only, balanced below.
+#[cfg(windows)]
+thread_local! {
+    /// COM for the thread that reads, from its first reading until it ends.
+    static APARTMENT: Apartment = Apartment::enter();
+}
+
+/// COM in the multithreaded apartment while this lives; a thread already in
+/// another apartment keeps it, and COM works there too.
+#[cfg(windows)]
+struct Apartment {
+    initialized: bool,
+}
+
+#[cfg(windows)]
+impl Apartment {
+    fn enter() -> Apartment {
+        use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+
+        // SAFETY: initializes COM for this thread only; Drop balances it on
+        // the same thread.
         let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
-        let categories = connected_categories();
-        if initialized {
-            // SAFETY: balances the successful CoInitializeEx above; the COM
-            // objects were released when `connected_categories` returned.
-            unsafe { CoUninitialize() };
+        Apartment { initialized }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Apartment {
+    fn drop(&mut self) {
+        if self.initialized {
+            // SAFETY: balances this thread's successful CoInitializeEx; each
+            // reading released its COM objects before it returned.
+            unsafe { windows::Win32::System::Com::CoUninitialize() };
         }
-        categories
     }
 }
 

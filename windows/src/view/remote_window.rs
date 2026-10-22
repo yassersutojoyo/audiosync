@@ -91,6 +91,8 @@ pub(super) struct RemoteHost {
     public: PublicNetworkWarning,
     /// When the Public network notice last appeared.
     public_since: String,
+    /// The last reading failed and the log says so; repeats aren't logged.
+    profiles_unread: bool,
 }
 
 impl Default for RemoteHost {
@@ -113,6 +115,7 @@ impl Default for RemoteHost {
             watch: None,
             public: PublicNetworkWarning::default(),
             public_since: String::new(),
+            profiles_unread: false,
         }
     }
 }
@@ -315,6 +318,7 @@ impl App {
             host.commands = None;
             host.watch = None;
             host.public = PublicNetworkWarning::default();
+            host.profiles_unread = false;
             host.server.take()
         };
         if let Some(server) = server {
@@ -469,6 +473,16 @@ impl App {
             let Some(reading) = host.watch.as_ref().and_then(Watch::latest) else {
                 return;
             };
+            if reading.is_none() {
+                if !host.profiles_unread {
+                    host.profiles_unread = true;
+                    self.log.log(|| {
+                        "web remote: Windows didn't say which networks are Public".to_owned()
+                    });
+                }
+                return;
+            }
+            host.profiles_unread = false;
             let was = host.public;
             if !host.public.read(reading.as_deref()) {
                 return;
