@@ -38,7 +38,7 @@ struct CastAddressSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 8) {
-                if adding { ProgressView().controlSize(.small).accessibilityHidden(true) }
+                if adding { ProgressView().controlSize(.small).accessibilityLabel(t.castAddLooking) }
                 Spacer(minLength: 0)
                 Button(t.cancel) { model.castAddShown = false }
                     .keyboardShortcut(.cancelAction)
@@ -50,6 +50,7 @@ struct CastAddressSheet: View {
         .padding(20)
         .frame(width: 420, alignment: .leading)
         .onAppear { fieldFocused = true }
+        .onDisappear { model.castAddGeneration += 1 }
         .onChange(of: problem) {
             if let problem { AccessibilityNotification.Announcement(t.castAddProblem(problem)).post() }
         }
@@ -61,8 +62,11 @@ struct CastAddressSheet: View {
             problem = .unreadable
             return
         }
+        problem = nil
         adding = true
+        let generation = model.castAddGeneration
         model.actions.addCastAddress(typed) { found in
+            guard model.castAddGeneration == generation else { return }
             adding = false
             if let found {
                 problem = found

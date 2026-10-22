@@ -141,6 +141,9 @@ final class AppModel: ObservableObject {
     @Published var castCanAdd = false
     /// The main window shows the sheet that adds a Cast device by address.
     @Published var castAddShown = false
+    /// Moves on whenever the address sheet goes away, so an add still being
+    /// tried for a sheet that was cancelled is dropped.
+    var castAddGeneration = 0
     /// The Mac's built-in speakers are listed, so local offsets are relative
     /// to them (S173, S181).
     @Published var hasLocalReference = true

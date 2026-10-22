@@ -367,10 +367,7 @@ struct CastModel {
         switch change {
         case .appeared(let device, let offset, _), .changed(let device, let offset):
             if removedManual.contains(device.id) { return false }
-            // Found by a browse: Remove goes on to forget the address it was added with.
-            if case .appeared(_, _, let former?) = change, let address = manualAddresses.removeValue(forKey: former) {
-                manualAddresses[device.id] = address
-            }
+            if case .appeared(_, _, let former?) = change { identified(former, as: device.id) }
             if let offset { offsets[device.id] = offset > 0 ? offset : nil }
             let changed = devices[device.id] != device
             devices[device.id] = device
@@ -395,6 +392,21 @@ struct CastModel {
     }
 
     func offset(of id: String) -> Double { offsets[id] ?? 0 }
+
+    /// A browse found the device added by address as `old` under its `id`
+    /// (C18), and the sender moved its session there: what the app holds
+    /// about it moves too, so it stays on and playing, and Remove still
+    /// forgets its address.
+    private mutating func identified(_ old: String, as new: String) {
+        if let address = manualAddresses.removeValue(forKey: old) { manualAddresses[new] = address }
+        if enabled == old { enabled = new }
+        if starting == old { starting = new }
+        if let current = attempt, current.device == old {
+            attempt = Attempt(number: current.number, device: new, status: current.status)
+        }
+        if let volume = volumes.removeValue(forKey: old) { volumes[new] = volume }
+        if let wanted = requested, wanted.id == old { requested = (new, wanted.level) }
+    }
 
     /// The sender listed `id` for an address the user added: it shows again
     /// if it was removed. Returns the address it had before, if another one.
@@ -491,7 +503,8 @@ struct CastModel {
         case .groupLog: return nil
         case .discoveryStopped:
             discovery = .failed
-            devices = devices.filter { $0.key == attempt?.device }
+            // The sender keeps the playing device and those added by address.
+            devices = devices.filter { $0.key == attempt?.device || $0.value.manual }
             return .changed
         case .failed:
             let wasOn = enabled

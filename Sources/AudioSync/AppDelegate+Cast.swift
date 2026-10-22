@@ -68,6 +68,7 @@ extension AppDelegate {
         for change in changes {
             DebugTrace.log("[AudioSync] Cast discovery: " + Self.castLogLine(change))
             castModel.apply(change)
+            if case .appeared(let device, _, let former?) = change { moveCastNotices(from: former, to: device.id) }
         }
         castFollow()
     }
@@ -79,6 +80,21 @@ extension AppDelegate {
             castOutcome(outcome)
         }
         castFollow()
+    }
+
+    /// What was said about a device added by address goes with it to the
+    /// ID a browse found it under.
+    private func moveCastNotices(from old: String, to new: String) {
+        var list = appModel.notices
+        let moves = [(Notice.cast(old), Notice.cast(new)), (Notice.airPlayAhead(old), Notice.airPlayAhead(new))]
+        var moved = false
+        for (from, to) in moves {
+            guard let notice = list.items.first(where: { $0.subject == from }) else { continue }
+            list.clear([from])
+            list.post(notice.text, subject: to, at: notice.date, title: notice.title, settings: notice.settings)
+            moved = true
+        }
+        if moved { appModel.notices = list }
     }
 
     /// The session follows the model, then local outputs and the views.
@@ -203,7 +219,10 @@ extension AppDelegate {
     func addCastAddress(_ typed: String, completion: @escaping (CastAddProblem?) -> Void) {
         guard let address = CastManualAddress(typed) else { return completion(.unreadable) }
         guard let sender = castSender else { return completion(.notFound) }
-        sender.addDevice(address, probe: true) { [weak self] id in
+        // A sheet cancelled while the address is tried adds nothing.
+        let generation = appModel.castAddGeneration
+        let stillWanted = { [weak self] in self?.appModel.castAddGeneration == generation }
+        sender.addDevice(address, probe: true, stillWanted: stillWanted) { [weak self] id in
             guard let self, self.castSender === sender, let id else {
                 DebugTrace.log("[AudioSync] Cast: nothing answers at \(address.text)")
                 completion(.notFound)

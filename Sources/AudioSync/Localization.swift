@@ -876,6 +876,8 @@ struct UIStrings {
     let castAddField = "Address"
     let castAddInvalid = "That isn't an IP address or host name. Check it and try again."
     let castAddNotFound = "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
+    /// What VoiceOver reads for the spinner while the address is tried.
+    let castAddLooking = "Looking for the speaker…"
     func castAddProblem(_ problem: CastAddProblem) -> String {
         switch problem {
         case .unreadable: return castAddInvalid

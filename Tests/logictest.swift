@@ -4881,6 +4881,32 @@ do {
           "cast model: a manual device a browse finds keeps its address under the new id, and Remove there forgets "
             + "only the address")
 
+    var moving = CastModel()
+    moving.addedManually(manualID, address: lounge)
+    moving.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    _ = moving.turnOn(manualID)
+    moving.startSent(manualID)
+    _ = moving.started(manualID, attempt: 7, refusal: 0)
+    _ = moving.apply(.playing(attempt: 7))
+    _ = moving.apply(.volume(attempt: 7, CastVolume(level: 0.4, muted: false, fixed: false)))
+    moving.apply(.gone(id: manualID))
+    if let browsed { moving.apply(browsed) }
+    let playsMoved = moving.status(of: realID) == .playing && moving.status(of: manualID) == .idle
+        && moving.enabled == realID && moving.playingDevice == realID && moving.volumes[realID]?.level == 0.4
+        && moving.manualAddresses == [realID: lounge]
+    let turnOnAgain = moving.turnOn(realID)
+    let turnedOff = moving.turnOff(realID)
+    check(playsMoved && turnOnAgain == nil && turnedOff && moving.plan(streaming: true) == .stop,
+          "cast model: a playing speaker added by address that a browse finds stays on and playing under its id, "
+            + "and Off still stops it")
+
+    var stopped = CastModel()
+    stopped.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    stopped.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    _ = stopped.apply(.discoveryStopped)
+    check(stopped.devices[manualID] != nil && stopped.devices[realID] == nil,
+          "cast model: when discovery stops, a speaker added by address stays listed, as the sender keeps it")
+
     check(t.castAddProblem(.notFound)
             == "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
             && t.castAddProblem(.unreadable) == t.castAddInvalid
