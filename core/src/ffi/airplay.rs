@@ -492,6 +492,31 @@ fn pcm_debug_allows(id: &str, value: Option<&str>) -> bool {
     audiosync_airplay::sender::pcm_debug_devices(value).contains(id)
 }
 
+/// The options for the stereo pair or home theater group added under `id`
+/// at `position`; `pcm_list` is the debug hook's value, and the sender
+/// gives every member the target's PCM choice.
+fn target_options(
+    airplay: &AscAirPlay,
+    id: &str,
+    position: f64,
+    pcm_list: Option<&str>,
+) -> SpeakerOptions {
+    let mut options = SpeakerOptions::new(speaker_volume(position, airplay.master));
+    options.delay = airplay.hold_back;
+    options.pcm = pcm_debug_allows(id, pcm_list);
+    options
+}
+
+/// Fills in a target member's own password and credentials.
+fn member_credentials(airplay: &AscAirPlay) -> impl FnMut(&DeviceKey, &mut SpeakerOptions) + '_ {
+    |key, own| {
+        let member = receiver_id(key);
+        own.password = airplay.passwords.get(&member).cloned();
+        own.credentials = airplay.store.get(&member).cloned();
+        own.homekit_credentials = airplay.identity.get(&member).cloned();
+    }
+}
+
 /// The reason code of an unsupported receiver.
 fn reason_code(reason: UnsupportedReason) -> i32 {
     match reason {
@@ -1764,11 +1789,10 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
             airplay.pump();
             if let Some(target) = airplay.targets.get(id) {
                 let position = volume.clamp(0.0, 100.0);
-                let mut options = SpeakerOptions::new(speaker_volume(position, airplay.master));
-                options.delay = airplay.hold_back;
-                // The sender gives every member the target's PCM choice.
-                options.pcm = pcm_debug_allows(
+                let options = target_options(
+                    airplay,
                     id,
+                    position,
                     std::env::var(audiosync_airplay::sender::AIRPLAY_PCM_ENV)
                         .ok()
                         .as_deref(),
@@ -1779,16 +1803,10 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                     .iter()
                     .map(|member| receiver_id(&member.key))
                     .collect();
-                let (passwords, store, identity) =
-                    (&airplay.passwords, &airplay.store, &airplay.identity);
-                let counters = airplay
-                    .sender
-                    .add_target(target.clone(), options, |key, own| {
-                        let member = receiver_id(key);
-                        own.password = passwords.get(&member).cloned();
-                        own.credentials = store.get(&member).cloned();
-                        own.homekit_credentials = identity.get(&member).cloned();
-                    });
+                let counters =
+                    airplay
+                        .sender
+                        .add_target(target.clone(), options, member_credentials(airplay));
                 let key = DeviceKey::Instance(ServiceKind::AirPlay, id.to_owned());
                 let added = Added {
                     key,
@@ -5404,6 +5422,34 @@ mod tests {
             b"gpn=Kitchen".to_vec(),
         ];
         Device::from_records(record.device_key(), None, Some(&record)).expect("a device")
+    }
+
+    #[test]
+    fn a_target_named_in_the_pcm_variable_gives_every_member_pcm() {
+        let mut handle = create_with(quiet);
+        let (left, right) = (pair_member(0x31, "0x2004"), pair_member(0x32, "0x4"));
+        let found = audiosync_airplay::targets::find_targets([&left, &right]);
+        let pair = found.first().cloned().expect("a pair");
+        let pair_id = pair.id.to_string();
+        let member_ids = format!("{}, {}", receiver_id(&left.key), receiver_id(&right.key));
+        for (list, pcm) in [
+            (format!("{pair_id}, 0011223344AA"), true),
+            (member_ids, false),
+            (String::new(), false),
+        ] {
+            let airplay = inside(handle);
+            let options = target_options(airplay, &pair_id, 40.0, Some(&list));
+            let members = audiosync_airplay::sender::member_options(
+                &pair,
+                &options,
+                member_credentials(airplay),
+            );
+            let keys: Vec<_> = members.iter().map(|(key, _)| key.clone()).collect();
+            assert_eq!(keys, [left.key.clone(), right.key.clone()], "{list}");
+            assert!(members.iter().all(|(_, own)| own.pcm == pcm), "{list}");
+        }
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
     }
 
     #[test]
