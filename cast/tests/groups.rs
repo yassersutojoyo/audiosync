@@ -668,8 +668,8 @@ fn a_group_keeps_one_stream_response_per_address() {
 
 #[test]
 fn an_address_the_group_dropped_gets_403() {
-    // The session puts the leader it connected to on the static list, and a
-    // handover moves the records before any recover runs (C97).
+    // A group's session leaves the static list empty; the leader is seeded
+    // here so the test shows the records alone decide after a handover (C97).
     let local = IpAddr::from([127, 0, 0, 1]);
     let (writer, reader) = audio_ring(48_000);
     let config = StreamConfig {
