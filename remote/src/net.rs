@@ -15,21 +15,26 @@ pub fn is_private_peer(peer: IpAddr) -> bool {
 }
 
 /// Whether a connection from `peer` to this machine's `local` address is
-/// let in: a private peer, or an IPv6 peer in the same /64 as `local`,
-/// which on a home network with global IPv6 is the phone next to it.
+/// let in: a private peer, or an IPv6 peer in the same /64 as a native
+/// global `local`, which on a home network is the phone next to it.
 pub fn admits_peer(peer: IpAddr, local: IpAddr) -> bool {
     if is_private_peer(peer) {
         return true;
     }
     match (peer.to_canonical(), local.to_canonical()) {
         (IpAddr::V6(peer), IpAddr::V6(local)) => {
-            !local.is_unspecified()
-                && !local.is_loopback()
-                && !local.is_multicast()
-                && peer.segments()[..4] == local.segments()[..4]
+            native_global(local) && peer.segments()[..4] == local.segments()[..4]
         }
         _ => false,
     }
+}
+
+/// Global unicast (2000::/3) whose /64 is a real link. Teredo (2001::/32)
+/// and 6to4 (2002::/16) prefixes are built from a public IPv4 address that
+/// strangers on the internet share.
+fn native_global(address: Ipv6Addr) -> bool {
+    let segments = address.segments();
+    segments[0] & 0xe000 == 0x2000 && segments[..2] != [0x2001, 0] && segments[0] != 0x2002
 }
 
 /// Splits `host[:port]` (RFC 9110 §7.2) into the host, without brackets
@@ -152,6 +157,21 @@ mod tests {
         assert!(!admits_peer(v6("2001:db8:1:2::5"), v4(127, 0, 0, 1)));
         assert!(!admits_peer(v4(8, 8, 8, 8), v6("::ffff:8.8.8.1")));
         assert!(!admits_peer(v6("::5"), v6("::")), "no link to share");
+        let teredo = v6("2001:0:4136:e378:8000:63bf:3fff:fdd2");
+        assert!(
+            !admits_peer(v6("2001:0:4136:e378::1"), teredo),
+            "a Teredo /64 is the relay's, not a link"
+        );
+        let six_to_four = v6("2002:cb00:7101::10");
+        assert!(
+            !admits_peer(v6("2002:cb00:7101::20"), six_to_four),
+            "a 6to4 /64 is a public IPv4 address's"
+        );
+        assert!(!admits_peer(v6("ff02::1:2"), v6("ff02::1")), "multicast");
+        assert!(
+            admits_peer(v6("2001:db9::5"), v6("2001:db9::10")),
+            "2001::/16 outside Teredo stays native"
+        );
         assert!(admits_peer(v4(192, 168, 1, 20), local), "private stays in");
         assert!(admits_peer(v6("fe80::1"), local));
     }
