@@ -389,9 +389,10 @@ fn the_stream_server_writes_the_samples_as_given() {
     let stop = Arc::new(AtomicBool::new(false));
     let feeder = feed(writer, -12_345, Arc::clone(&stop));
     let mut stream = get(&server, "GET", "");
-    let (_, body) = http::read_response(&mut stream, Duration::from_millis(200));
+    // A loaded CI runner can take longer than 200 ms to send the first block.
+    let (_, body) = http::read_response(&mut stream, Duration::from_millis(1000));
     let chunks = http::chunks(&body);
-    assert!(chunks.len() > 1);
+    assert!(chunks.len() > 1, "{} chunks", chunks.len());
     let samples: Vec<i16> = chunks[1..]
         .iter()
         .flat_map(|chunk| chunk.as_chunks::<2>().0.iter())
