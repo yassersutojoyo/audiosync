@@ -213,6 +213,10 @@ pub struct FakeAp2 {
     pub event_port: u16,
     /// Requests left unanswered, by key.
     pub silent: Vec<String>,
+    /// The next request with this key is answered only when the test calls
+    /// [`Ap2Rig::release`].
+    pub hold: Option<String>,
+    held: Vec<u8>,
     /// Requests answered only after this long, by key.
     pub pause: HashMap<String, Duration>,
     /// A body in place of the usual answer, by key.
@@ -251,6 +255,8 @@ impl FakeAp2 {
             challenge: None,
             event_port: EVENT_PORT,
             silent: Vec::new(),
+            hold: None,
+            held: Vec::new(),
             pause: HashMap::new(),
             bodies: HashMap::new(),
             no_data_port: false,
@@ -349,9 +355,15 @@ impl FakeAp2 {
             response.headers.push("CSeq", cseq);
             response.headers.push("Server", "AirTunes/fake");
             let bytes = response.encode();
-            match self.framing.as_mut() {
-                Some(framing) => out.extend(framing.seal(&bytes)),
-                None => out.extend(bytes),
+            let sealed = match self.framing.as_mut() {
+                Some(framing) => framing.seal(&bytes),
+                None => bytes,
+            };
+            if self.hold.as_deref() == Some(key.as_str()) {
+                self.hold = None;
+                self.held = sealed;
+            } else {
+                out.extend(sealed);
             }
             // The answer that completes the pairing goes in plain text; the
             // next request is the first framed one (P67, P153).
@@ -575,6 +587,14 @@ impl Ap2Rig {
             }
             self.pump();
         }
+    }
+
+    /// The receiver answers the request [`FakeAp2::hold`] kept back.
+    pub fn release(&mut self) {
+        let answer = std::mem::take(&mut self.fake.held);
+        assert!(!answer.is_empty(), "no answer held");
+        self.session.handle_input(&answer, self.now);
+        self.pump();
     }
 
     /// The receiver sends `request` on the event connection.
