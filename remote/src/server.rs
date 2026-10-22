@@ -172,7 +172,8 @@ pub enum ServerEvent {
         from: IpAddr,
         status: u16,
     },
-    /// A peer outside the private, link-local and loopback ranges, closed at accept.
+    /// A peer outside the private, link-local and loopback ranges and not on
+    /// this machine's IPv6 /64, closed at accept.
     NotPrivate {
         from: IpAddr,
     },
@@ -210,7 +211,7 @@ impl fmt::Display for ServerEvent {
             ServerEvent::NotPrivate { from } => {
                 write!(
                     f,
-                    "remote: closed a connection from {from}, not a private address"
+                    "remote: closed a connection from {from}, not a private or on-link address"
                 )
             }
             ServerEvent::Busy { from } => {
@@ -560,7 +561,10 @@ fn accept_loop(listeners: &[TcpListener], shared: &Arc<Shared>) {
 
 fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
     let from = peer.ip().to_canonical();
-    if !net::is_private_peer(from) {
+    let admitted = stream
+        .local_addr()
+        .is_ok_and(|local| net::admits_peer(from, local.ip()));
+    if !admitted {
         shared.report(ServerEvent::NotPrivate { from });
         let _ = stream.shutdown(Shutdown::Both);
         return;

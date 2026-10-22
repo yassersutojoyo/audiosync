@@ -14,6 +14,24 @@ pub fn is_private_peer(peer: IpAddr) -> bool {
     }
 }
 
+/// Whether a connection from `peer` to this machine's `local` address is
+/// let in: a private peer, or an IPv6 peer in the same /64 as `local`,
+/// which on a home network with global IPv6 is the phone next to it.
+pub fn admits_peer(peer: IpAddr, local: IpAddr) -> bool {
+    if is_private_peer(peer) {
+        return true;
+    }
+    match (peer.to_canonical(), local.to_canonical()) {
+        (IpAddr::V6(peer), IpAddr::V6(local)) => {
+            !local.is_unspecified()
+                && !local.is_loopback()
+                && !local.is_multicast()
+                && peer.segments()[..4] == local.segments()[..4]
+        }
+        _ => false,
+    }
+}
+
 /// Splits `host[:port]` (RFC 9110 §7.2) into the host, without brackets
 /// around an IPv6 literal, and the port.
 fn split_host(value: &str) -> Option<(&str, Option<u16>)> {
@@ -120,6 +138,22 @@ mod tests {
         ] {
             assert!(!is_private_peer(refused), "{refused}");
         }
+    }
+
+    #[test]
+    fn a_global_ipv6_peer_on_the_same_link_is_let_in() {
+        // A phone that resolved the .local name to a global AAAA connects
+        // from its own global address in the same /64.
+        let local = v6("2001:db8:1:2::10");
+        assert!(admits_peer(v6("2001:db8:1:2:aaaa:bbbb:cccc:dddd"), local));
+        assert!(admits_peer(v6("2001:db8:1:2::10"), local));
+        assert!(!admits_peer(v6("2001:db8:1:3::5"), local), "another prefix");
+        assert!(!admits_peer(v6("2001:db9:1:2::5"), local), "another prefix");
+        assert!(!admits_peer(v6("2001:db8:1:2::5"), v4(127, 0, 0, 1)));
+        assert!(!admits_peer(v4(8, 8, 8, 8), v6("::ffff:8.8.8.1")));
+        assert!(!admits_peer(v6("::5"), v6("::")), "no link to share");
+        assert!(admits_peer(v4(192, 168, 1, 20), local), "private stays in");
+        assert!(admits_peer(v6("fe80::1"), local));
     }
 
     #[test]
