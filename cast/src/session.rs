@@ -325,13 +325,17 @@ impl CastSession {
                 return Err(error.into());
             }
         };
-        let mut allowed: Vec<IpAddr> = match &group {
+        let allowed: Vec<IpAddr> = match &group {
             Some(_) => Vec::new(),
-            None => config.addresses.iter().map(SocketAddr::ip).collect(),
+            None => {
+                let mut allowed: Vec<IpAddr> =
+                    config.addresses.iter().map(SocketAddr::ip).collect();
+                allowed.push(client.address().ip());
+                allowed.sort();
+                allowed.dedup();
+                allowed
+            }
         };
-        allowed.push(client.address().ip());
-        allowed.sort();
-        allowed.dedup();
         let stream_config = StreamConfig {
             local_ip: client.local_address().ip(),
             allowed,
@@ -738,7 +742,6 @@ impl CastSession {
             Ok(mut client) => {
                 client.set_selected(Arc::clone(&self.selected));
                 if group.is_some() {
-                    self.server.set_allowed(vec![client.address().ip()]);
                     client.request_members();
                 }
                 client

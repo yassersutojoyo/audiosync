@@ -787,8 +787,9 @@ fn idle_connection(remote: &Remote) -> TcpStream {
 }
 
 fn read_all(stream: &mut TcpStream) -> String {
+    // 5 s ran out once on a busy PC before the server's answer and close arrived.
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(Duration::from_secs(20)))
         .unwrap();
     let mut data = Vec::new();
     // A reset after the server closed counts as closed.

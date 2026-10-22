@@ -366,11 +366,12 @@ impl Shared {
     }
 
     fn admits(&self, from: IpAddr) -> bool {
-        if lock(&self.allowed).contains(&from) {
-            return true;
+        // A static entry would outlive a handover until the next recover
+        // (C97), so a group's records alone decide.
+        match lock(&self.group).clone() {
+            Some(records) => records.allowed().contains(&from),
+            None => lock(&self.allowed).contains(&from),
         }
-        let group = lock(&self.group).clone();
-        group.is_some_and(|records| records.allowed().contains(&from))
     }
 }
 
@@ -501,8 +502,9 @@ impl StreamServer {
         *lock(&self.shared.allowed) = allowed;
     }
 
-    /// Also answers whatever `records` hold at the time of each request: a
-    /// group's current addresses and its members' (C103).
+    /// Answers whatever `records` hold at the time of each request, a
+    /// group's current addresses and its members' (C103), in place of the
+    /// static list.
     pub fn follow_group(&self, records: GroupRecords) {
         *lock(&self.shared.group) = Some(records);
     }
