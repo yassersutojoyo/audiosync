@@ -160,7 +160,7 @@ extern "C" {
 #define ASC_CAST_GONE 3     /* it left the list */
 
 /* What a Cast device is (AscCastDevice.flags), bit by bit. */
-#define ASC_CAST_FLAG_GROUP 1   /* a Cast group: listed, never driven */
+#define ASC_CAST_FLAG_GROUP 1   /* a Cast group: plays as one device, with its own volume and offset */
 #define ASC_CAST_FLAG_OFFLINE 2 /* its records went away while a session with it runs */
 #define ASC_CAST_FLAG_MANUAL 4  /* added by address; no browse has found its id yet */
 
@@ -168,7 +168,7 @@ extern "C" {
 #define ASC_CAST_REFUSED_NONE 0    /* it didn't */
 #define ASC_CAST_REFUSED_BUSY 1    /* another Cast device plays or starts: one at a time */
 #define ASC_CAST_REFUSED_UNKNOWN 2 /* the id is not a listed device */
-#define ASC_CAST_REFUSED_GROUP 3   /* the device is a Cast group */
+#define ASC_CAST_REFUSED_GROUP 3   /* no longer reported: a Cast group starts like a device */
 #define ASC_CAST_REFUSED_CLOSED 4  /* NULL or dead handle */
 #define ASC_CAST_REFUSED_INVALID 5 /* NULL or non-UTF-8 id */
 
@@ -189,6 +189,8 @@ extern "C" {
 #define ASC_CAST_EVENT_MEMORY_CHANGED 14   /* store asc_cast_memory_json */
 #define ASC_CAST_EVENT_DISCOVERY_STOPPED 15 /* discovery's mDNS daemon ended; its devices were reported gone */
 #define ASC_CAST_EVENT_FAILED 16           /* the sender stopped working (a bug); destroy it, create a new one; .detail where a panic was, or "" */
+#define ASC_CAST_EVENT_MEMBERS 17          /* the playing group's members changed: asc_cast_member_count, asc_cast_member */
+#define ASC_CAST_EVENT_GROUP_LOG 18        /* a line about a Cast group for the debug log in .detail */
 
 /* How a Cast attempt ended (AscCastEvent.reason). */
 #define ASC_CAST_END_STOPPED 1     /* the sender's own teardown */
@@ -207,7 +209,7 @@ extern "C" {
 #define ASC_CAST_ERROR_VOLUME_FIXED 7 /* the device's volume is locked */
 #define ASC_CAST_ERROR_VOLUME 8       /* the device was not ready, or has no volume step */
 #define ASC_CAST_ERROR_ARTWORK 9      /* artwork that is not PNG or JPEG, or over 1280 by 720 */
-#define ASC_CAST_ERROR_GROUP 10       /* the device is a Cast group */
+#define ASC_CAST_ERROR_GROUP 10       /* no longer reported: a Cast group plays like a device */
 
 /* A Cast stream's format (AscCastEvent.format). */
 #define ASC_CAST_FORMAT_WAV 1
@@ -1495,6 +1497,16 @@ typedef struct AscCastDevice {
 } AscCastDevice;
 
 /*
+ * One member of the playing Cast group. The strings are NUL-terminated
+ * UTF-8 that the handle owns, valid until the next asc_cast_member call on
+ * it or its destroy.
+ */
+typedef struct AscCastMember {
+    const char *id;   /* the listed device it is, as AscCastDevice.id; "" when none matches: show the name alone */
+    const char *name; /* the name the group gives it, "" when none */
+} AscCastMember;
+
+/*
  * One thing that happened to an attempt, or to the sender. The strings are
  * NUL-terminated UTF-8 that the handle owns, valid until the next
  * asc_cast_next_event call on it or its destroy. Fields a kind doesn't use
@@ -1580,11 +1592,25 @@ bool asc_cast_next_event(AscCast *cast, AscCastEvent *event);
  * its attempt number (1 or more). The stream plays what the input writes
  * from then on, with the metadata and artwork set last; the format that
  * worked last on the device is tried first. Returns 0, starting nothing,
- * for a NULL or dead handle, an id that isn't listed, a group, or while
+ * for a NULL or dead handle, an id that isn't listed, or while
  * another Cast device plays or starts; *refused (when refused isn't NULL)
  * gets the ASC_CAST_REFUSED_* code, ASC_CAST_REFUSED_NONE on success.
  */
 uint64_t asc_cast_start(AscCast *cast, const char *id, int32_t *refused);
+
+/*
+ * How many members the playing group has, as its latest
+ * ASC_CAST_EVENT_MEMBERS reported; 0 while none are known, when no group
+ * plays, and for a NULL or dead handle.
+ */
+size_t asc_cast_member_count(AscCast *cast);
+
+/*
+ * Writes member `index` of the playing group into *member and returns true.
+ * Returns false, leaving *member as it was, for an index past the count or
+ * a NULL pointer or handle.
+ */
+bool asc_cast_member(AscCast *cast, size_t index, AscCastMember *member);
 
 /*
  * Stops the session, or the attempt to start one: connect retries and the
