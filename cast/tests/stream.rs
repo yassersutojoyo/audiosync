@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, StreamFormat, audio_ring};
 use audiosync_cast::stream::{
-    BlockQueue, ResponseEnd, ServerEvent, StreamConfig, StreamServer, image_size,
+    BlockQueue, FetchHeaders, MAX_LOGGED_NAMES, MAX_LOGGED_TEXT, ResponseEnd, ServerEvent,
+    StreamConfig, StreamServer, image_size,
 };
 use common::http;
 
@@ -159,11 +160,18 @@ fn a_get_is_a_chunked_200_with_the_headers_and_range_is_ignored() {
     assert_eq!(http::status(&head), 200);
     assert_eq!(http::header(&head, "Content-Type"), Some("audio/wav"));
     assert!(body.is_empty(), "HEAD has no body");
-    assert!(events(&server).contains(&ServerEvent::Fetch {
-        from: LOCAL,
-        head: false,
-        range: true
-    }));
+    let fetched = events(&server).into_iter().find_map(|event| match event {
+        ServerEvent::Fetch {
+            from,
+            head,
+            headers,
+        } => Some((from, head, headers.range)),
+        _ => None,
+    });
+    assert_eq!(
+        fetched,
+        Some((LOCAL, false, Some("bytes=1000-".to_owned())))
+    );
     stop.store(true, Ordering::SeqCst);
     feeder.join().expect("feeder");
     server.stop();
@@ -442,5 +450,57 @@ fn other_methods_get_405() {
     let mut stream = get(&server, "POST", "Content-Length: 0\r\n");
     let (head, _) = http::read_response(&mut stream, Duration::ZERO);
     assert_eq!(http::status(&head), 405);
+    server.stop();
+}
+
+// covers: G6
+#[test]
+fn a_fetch_logs_its_header_names_and_three_values_capped_and_never_the_token() {
+    let (server, _writer) = server(vec![LOCAL]);
+    let token = server.token().to_owned();
+    let user_agent = format!("CrKey/1.56 {token} {}", "x".repeat(300));
+    let mut extra = format!(
+        "User-Agent: {user_agent}\r\nIcy-MetaData: 1\r\nReferer: {}\r\nX-{token}: secret-value\r\n",
+        server.url()
+    );
+    for index in 0..40 {
+        extra.push_str(&format!("X-Filler-{index}: secret-value\r\n"));
+    }
+    let mut stream = get(&server, "HEAD", &extra);
+    let (head, _) = http::read_response(&mut stream, Duration::from_millis(200));
+    assert_eq!(http::status(&head), 200);
+
+    let seen = events(&server);
+    let headers: &FetchHeaders = seen
+        .iter()
+        .find_map(|event| match event {
+            ServerEvent::Fetch { headers, .. } => Some(headers),
+            _ => None,
+        })
+        .expect("a fetch event");
+    assert_eq!(headers.names.len(), MAX_LOGGED_NAMES);
+    assert_eq!(
+        headers.more,
+        45 - MAX_LOGGED_NAMES,
+        "Host, 4 headers and 40 fillers"
+    );
+    assert_eq!(
+        headers.names[..4],
+        ["Host", "User-Agent", "Icy-MetaData", "Referer"]
+    );
+    assert_eq!(headers.names[4], "X-<token>");
+    assert_eq!(headers.icy_metadata.as_deref(), Some("1"));
+    assert_eq!(headers.range, None);
+    let logged_agent = headers.user_agent.as_deref().expect("the user agent");
+    assert!(
+        logged_agent.starts_with("CrKey/1.56 <token> x"),
+        "{logged_agent}"
+    );
+    assert_eq!(logged_agent.chars().count(), MAX_LOGGED_TEXT);
+
+    let log = format!("{seen:?}");
+    assert!(!log.contains(&token), "the token reached the log: {log}");
+    assert!(!log.contains("secret-value"), "only three values are kept");
+    assert!(!log.contains("http://"), "the Referer value is not kept");
     server.stop();
 }
