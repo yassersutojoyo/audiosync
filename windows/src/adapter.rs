@@ -5103,6 +5103,79 @@ mod tests {
         );
     }
 
+    /// After `speaker` turned its stored key down: the row asks for a code
+    /// again, it is off with a notice saying it needs a PIN, and switching it
+    /// on starts a new pairing.
+    fn assert_key_forgotten(
+        adapter: &mut AudioAdapter<MockBackend>,
+        fake: &FakeAirPlay,
+        speaker: &Device,
+        name: &str,
+    ) {
+        let id = ap(speaker);
+        let state = adapter.snapshot();
+        assert_eq!(state.pin_prompt, None, "no prompt opens by itself");
+        let row = state.speaker(&id).unwrap();
+        assert!(!row.enabled && !row.paired);
+        assert_eq!(row.availability, Availability::NeedsCode);
+        assert!(!state.running);
+        assert_eq!(
+            messages(adapter),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: name.to_owned(),
+                problem: ui_model::AirPlayProblem::NeedsPin,
+            }]
+        );
+        fake.take_calls();
+        adapter.set_speaker_enabled(&id, true);
+        assert_eq!(fake.take_calls(), [Call::StartPairing(id_of(speaker))]);
+        assert!(messages(adapter).is_empty(), "a new attempt clears it");
+    }
+
+    #[test]
+    fn an_apple_tv_that_turns_its_stored_key_down_asks_for_a_pin_again() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEF", 0x11)),
+        );
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&id).unwrap().paired);
+
+        fake.fail(&tv, ErrorKind::PairingRequired);
+        adapter.poll();
+        assert_key_forgotten(&mut adapter, &fake, &tv, "Den TV");
+    }
+
+    #[test]
+    fn an_airplay2_speaker_that_turns_its_stored_key_down_asks_for_a_pin_again() {
+        use crate::audio::pairings::tests::homekit;
+        use audiosync_airplay::sender::SpeakerEvent as AirPlayEvent;
+
+        let (mut adapter, fake, loft) = airplay2_adapter(true);
+        let id = ap(&loft);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&loft, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&loft, PairingEvent::HomeKitPaired(homekit(0x33)));
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&id).unwrap().paired);
+
+        fake.push(SenderEvent::Speaker {
+            key: loft.key.clone(),
+            event: AirPlayEvent::HomeKitRejected,
+        });
+        fake.fail(&loft, ErrorKind::PairingRequired);
+        adapter.poll();
+        assert_key_forgotten(&mut adapter, &fake, &loft, "Loft");
+    }
+
     #[test]
     fn a_failed_pairing_closes_the_prompt_with_a_notice() {
         let (mut adapter, fake, tv) = apple_tv_adapter();
