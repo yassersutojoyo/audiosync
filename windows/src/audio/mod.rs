@@ -12,6 +12,8 @@
 //!   (`audiosync-airplay`), and the capture's feed into it.
 //! - [`backend`]: the [`backend::AudioBackend`] trait the UI's adapter
 //!   (`crate::adapter`) uses, and its types.
+//! - [`calibration`]: measuring a local output's offset against the
+//!   reference with the microphone.
 //! - [`controller`]: the backend logic, over a [`controller::Driver`] that owns
 //!   the platform calls.
 //! - `mock` (tests only): an in-memory driver and the backend over it.
@@ -37,6 +39,7 @@
 
 pub mod airplay;
 pub mod backend;
+pub mod calibration;
 pub mod capture;
 pub mod cast;
 pub mod controller;

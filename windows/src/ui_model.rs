@@ -13,6 +13,8 @@ use audiosync_core::policy::source_quit::WhenSourceQuits;
 #[cfg(any(not(windows), test))]
 use audiosync_core::volume;
 
+use crate::audio::calibration::Phase;
+
 pub use crate::settings::Appearance;
 
 /// The largest offset the sync controls accept, in milliseconds (the macOS
@@ -513,6 +515,20 @@ pub struct AppState {
     pub when_source_quits: WhenSourceQuits,
     /// The speaker list's note about Google Cast discovery.
     pub cast_list: CastList,
+    /// The microphone calibration a row shows.
+    pub calibration: CalibrationState,
+}
+
+/// The microphone calibration of one local speaker (spec S232): where it
+/// stands, on the row of the speaker it concerns.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CalibrationState {
+    /// The speaker it concerns; `None` when none ran.
+    pub speaker_id: Option<String>,
+    pub phase: Phase,
+    /// A run holds the outputs (it runs, or a cut-off sweep plays out): no
+    /// other may start.
+    pub busy: bool,
 }
 
 impl AppState {
@@ -644,6 +660,18 @@ pub trait Backend {
     /// Retry on the notice that AirPlay stopped: starts a new AirPlay
     /// sender, and the speakers that were on come back once it lists them.
     fn retry_airplay(&mut self) {}
+
+    /// Calibrate with Microphone on local speaker `id`'s row.
+    fn start_calibration(&mut self, _id: &str) {}
+
+    /// Cancel on the running calibration: its speaker's delay stays.
+    fn cancel_calibration(&mut self) {}
+
+    /// Moves a calibration on; the UI calls it every few tens of ms while
+    /// [`CalibrationState::busy`]. Returns whether the snapshot changed.
+    fn tick_calibration(&mut self) -> bool {
+        false
+    }
 
     /// Takes in what happened since the last call (devices that came or went,
     /// a source that quit, an output that failed) and says whether the
@@ -882,6 +910,7 @@ impl MockBackend {
             airplay_none_found: false,
             when_source_quits: WhenSourceQuits::Stop,
             cast_list: CastList::Quiet,
+            calibration: CalibrationState::default(),
         };
         MockBackend {
             state,

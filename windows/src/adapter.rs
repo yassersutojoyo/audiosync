@@ -62,6 +62,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use audiosync_core::clock;
 use audiosync_core::eq::EqSettings;
 use audiosync_core::policy::delay::{native_airplay_adjustment_ms, native_airplay_latency_ms};
 use audiosync_core::policy::session::{
@@ -78,6 +79,7 @@ use crate::audio::backend::{
     StopReason,
 };
 use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
+use crate::audio::calibration::{self, CalibrationRun};
 use crate::audio::capture::WHOLE_SYSTEM_NAME;
 use crate::audio::routing::{DirectPath, DirectReason};
 use crate::data_folder;
@@ -87,9 +89,9 @@ use crate::settings::{
     SettingsFile,
 };
 use crate::ui_model::{
-    self, AppState, Availability, Backend, CastList, CastRow, CastState, Group, GroupError, Notice,
-    NoticeMessage, PasswordPrompt, PinPhase, PinPrompt, Source, SourceKind, Speaker, SpeakerKind,
-    ViewSettings, Waiting, clamp_delay_ms,
+    self, AppState, Availability, Backend, CalibrationState, CastList, CastRow, CastState, Group,
+    GroupError, Notice, NoticeMessage, PasswordPrompt, PinPhase, PinPrompt, Source, SourceKind,
+    Speaker, SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -282,6 +284,11 @@ pub struct AudioAdapter<A: AudioBackend> {
     view: ViewSettings,
     /// What a session does when the app it captures quits (spec S227).
     when_source_quits: WhenSourceQuits,
+    /// The microphone calibration running, or letting its cut-off sweep
+    /// play out.
+    calibration_run: Option<CalibrationRun>,
+    /// What the rows show of the last calibration.
+    calibration: calibration::Status,
 }
 
 impl<A: AudioBackend> AudioAdapter<A> {
@@ -356,6 +363,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             reconnecting: BTreeMap::new(),
             view: ViewSettings::default(),
             when_source_quits: WhenSourceQuits::Stop,
+            calibration_run: None,
+            calibration: calibration::Status::default(),
         };
         adapter.restore(saved);
         // Settings ignored at launch: the user is told now why the defaults
@@ -658,6 +667,46 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     fn running(&self) -> bool {
         self.audio.running_source().is_some()
+    }
+
+    /// What a calibration's line about output `endpoint_id` depends on.
+    fn calibration_context(&self, endpoint_id: &str) -> calibration::Context {
+        let outputs = self.audio.outputs();
+        calibration::Context {
+            streaming: self.running(),
+            reference: outputs
+                .iter()
+                .find(|output| output.is_reference)
+                .map(|output| output.id.clone()),
+            speaker_on: outputs
+                .iter()
+                .any(|output| output.id == endpoint_id && output.enabled),
+        }
+    }
+
+    /// Shows `phase` for output `endpoint_id`'s calibration.
+    fn show_calibration(&mut self, endpoint_id: &str, phase: calibration::Phase) {
+        self.calibration = calibration::Status {
+            id: Some(endpoint_id.to_owned()),
+            phase,
+            context: Some(self.calibration_context(endpoint_id)),
+            holds_outputs: self
+                .calibration_run
+                .as_ref()
+                .is_some_and(CalibrationRun::holds_outputs),
+        };
+    }
+
+    /// An ended calibration's line goes once streaming, the reference or
+    /// its speaker's switch changed. Returns whether it went.
+    fn follow_calibration_context(&mut self) -> bool {
+        let Some(id) = self.calibration.id.clone() else {
+            return false;
+        };
+        let next = self.calibration.following(&self.calibration_context(&id));
+        let changed = next != self.calibration;
+        self.calibration = next;
+        changed
     }
 
     /// Speakers turned on, local, AirPlay and Cast, connected or not (S162).
@@ -2001,6 +2050,11 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 }),
             when_source_quits: self.when_source_quits,
             cast_list: self.cast_list(),
+            calibration: CalibrationState {
+                speaker_id: self.calibration.id.as_deref().map(speaker_key),
+                phase: self.calibration.phase,
+                busy: self.calibration_run.is_some(),
+            },
         }
     }
 
@@ -2132,6 +2186,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             Some(SpeakerKey::Local(endpoint_id)) => {
                 self.audio
                     .set_output_delay(&endpoint_id, clamp_delay_ms(ms));
+                self.calibration = self.calibration.offset_changed(&endpoint_id);
             }
             Some(SpeakerKey::AirPlay(airplay_id)) => {
                 self.audio
@@ -2431,8 +2486,61 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         changed |= self.count_airplay_quiet();
         changed |= self.count_cast_quiet();
         changed |= self.keep_settings_aside(true);
+        changed |= self.tick_calibration();
+        changed |= self.follow_calibration_context();
         changed |= self.persist();
         changed
+    }
+
+    fn start_calibration(&mut self, id: &str) {
+        let Some(SpeakerKey::Local(endpoint_id)) = SpeakerKey::parse(id) else {
+            return;
+        };
+        if self.calibration_run.is_some() {
+            return;
+        }
+        let started = CalibrationRun::start(
+            &mut self.audio,
+            &endpoint_id,
+            clock::now_ns(),
+            self.log.clone(),
+        );
+        match started {
+            Ok(run) => {
+                let phase = run.phase();
+                self.calibration_run = Some(run);
+                self.show_calibration(&endpoint_id, phase);
+            }
+            Err(failure) => {
+                self.show_calibration(&endpoint_id, calibration::Phase::Failed(failure))
+            }
+        }
+    }
+
+    fn cancel_calibration(&mut self) {
+        if let Some(run) = self.calibration_run.as_mut() {
+            run.cancel(&mut self.audio, clock::now_ns());
+        }
+        let _ = self.tick_calibration();
+    }
+
+    fn tick_calibration(&mut self) -> bool {
+        let Some(run) = self.calibration_run.as_mut() else {
+            return false;
+        };
+        let changed = run.tick(&mut self.audio, clock::now_ns());
+        let chosen = run.chosen().to_owned();
+        let phase = run.phase();
+        if !run.holds_outputs() {
+            self.calibration_run = None;
+        }
+        let before = self.calibration.clone();
+        if before.phase != phase || before.id.as_deref() != Some(chosen.as_str()) {
+            self.show_calibration(&chosen, phase);
+        } else {
+            self.calibration.holds_outputs = self.calibration_run.is_some();
+        }
+        changed || before != self.calibration
     }
 
     fn view_settings(&self) -> ViewSettings {
@@ -5247,6 +5355,75 @@ mod tests {
 
     /// The PC's own speakers (the reference), a Bluetooth speaker and a TV,
     /// as at a launch.
+    #[test]
+    fn a_calibration_that_cant_run_says_why_and_leaves_the_delay() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        let earbuds = key("bluetooth");
+        adapter.set_speaker_delay(&earbuds, 80.0);
+        adapter.start_calibration(&earbuds);
+        let state = adapter.snapshot();
+        assert_eq!(
+            state.calibration.speaker_id.as_deref(),
+            Some(earbuds.as_str())
+        );
+        assert_eq!(
+            state.calibration.phase,
+            calibration::Phase::Failed(calibration::Failure::NotPlaying)
+        );
+        assert!(!state.calibration.busy);
+        // Streaming, but the mock has no microphone: refused before the
+        // music fades, and nothing holds the outputs.
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, "bluetooth");
+        adapter.start_calibration(&earbuds);
+        let state = adapter.snapshot();
+        assert_eq!(
+            state.calibration.phase,
+            calibration::Phase::Failed(calibration::Failure::NoMicrophone)
+        );
+        assert!(!state.calibration.busy);
+        assert_eq!(speaker_of(&adapter, &earbuds).delay_ms, Some(80.0));
+        // The reference itself has nothing to calibrate.
+        adapter.start_calibration(&key("builtin"));
+        assert_eq!(
+            adapter.snapshot().calibration.phase,
+            calibration::Phase::Failed(calibration::Failure::NoReference)
+        );
+        // A delay set by hand takes the line about that speaker away.
+        adapter.start_calibration(&earbuds);
+        adapter.set_speaker_delay(&earbuds, 90.0);
+        assert_eq!(
+            adapter.snapshot().calibration.phase,
+            calibration::Phase::Idle
+        );
+    }
+
+    #[test]
+    fn a_calibrations_line_goes_once_its_speaker_is_turned_off() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, "bluetooth");
+        adapter.start_calibration(&key("bluetooth"));
+        assert_ne!(
+            adapter.snapshot().calibration.phase,
+            calibration::Phase::Idle
+        );
+        adapter.set_speaker_enabled(&key("bluetooth"), false);
+        adapter.poll();
+        assert_eq!(
+            adapter.snapshot().calibration.phase,
+            calibration::Phase::Idle
+        );
+    }
+
     fn reference_audio() -> MockBackend {
         let mut audio = MockBackend::empty();
         audio.connect_output_as("builtin", "Speakers", OutputKind::BuiltIn);

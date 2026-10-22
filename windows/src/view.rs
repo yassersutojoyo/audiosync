@@ -23,6 +23,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, Vec
 
 mod password;
 
+use crate::audio::calibration::{self, Failure, Phase, Step, Which};
 use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
@@ -258,6 +259,10 @@ impl NoticeAnnouncer {
 
 /// How often the backend is polled for what happened on its own.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How often a running calibration is moved on: the signal waits for the
+/// microphone's first frames, and each run ends once its recording is in.
+const CALIBRATION_TICK: Duration = Duration::from_millis(20);
 
 /// How often Launch at Sign-In is read again from the registry, so a change
 /// in Task Manager shows in the menus (Slint's menu bar says nothing before
@@ -538,6 +543,8 @@ pub struct App {
     on_refresh: RefCell<Option<RefreshHook>>,
     /// Which new notice Narrator is told about.
     notice_announcer: RefCell<NoticeAnnouncer>,
+    /// The calibration ending Narrator was last told about.
+    calibration_announced: RefCell<Option<(String, Phase)>>,
     /// The delay fields holding a number out of range, so Narrator hears
     /// the range once as a field goes out of it (`newly_out_of_range`).
     out_of_range: RefCell<HashSet<String>>,
@@ -545,6 +552,8 @@ pub struct App {
     announcement_timer: Timer,
     /// Polls the backend; it stops when the app is dropped.
     poll_timer: Timer,
+    /// Moves a microphone calibration on while one holds the outputs.
+    calibration_timer: Timer,
     /// Launch at Sign-In and its notice, which the windows own: the
     /// backend's notices are about audio.
     login: RefCell<LaunchAtLogin>,
@@ -716,9 +725,11 @@ impl App {
             frames: RefCell::default(),
             on_refresh: RefCell::new(None),
             notice_announcer: RefCell::default(),
+            calibration_announced: RefCell::default(),
             out_of_range: RefCell::default(),
             announcement_timer: Timer::default(),
             poll_timer: Timer::default(),
+            calibration_timer: Timer::default(),
             login: RefCell::new(LaunchAtLogin::new(
                 launch_at_login::system_store(),
                 std::env::current_exe().ok(),
@@ -833,6 +844,28 @@ impl App {
     pub fn update(&self, change: impl FnOnce(&mut dyn Backend)) {
         change(self.backend.borrow_mut().as_mut());
         self.refresh();
+    }
+
+    /// Ticks a calibration that holds the outputs every 20 ms until it
+    /// lets them go.
+    fn follow_calibration(&self, weak: &Weak<App>) {
+        if !self.snapshot().calibration.busy || self.calibration_timer.running() {
+            return;
+        }
+        let weak = weak.clone();
+        self.calibration_timer
+            .start(TimerMode::Repeated, CALIBRATION_TICK, move || {
+                with_app(&weak, App::tick_calibration)
+            });
+    }
+
+    fn tick_calibration(&self) {
+        if self.backend.borrow_mut().tick_calibration() {
+            self.refresh();
+        }
+        if !self.snapshot().calibration.busy {
+            self.calibration_timer.stop();
+        }
     }
 
     /// Lets the backend take in what happened on its own, and shows it.
@@ -1234,6 +1267,7 @@ impl App {
                 ui_model::MAX_DELAY_MS,
                 format_offset_ms,
             );
+            row.calibration_status = calibration_status(&strings, &state, speaker);
             row
         };
         let (this_pc, connected) = state.layout();
@@ -1287,6 +1321,22 @@ impl App {
             }
             Announcement::Clear => self.clear_announcement(),
             Announcement::Keep => {}
+        }
+        let ended = calibration_ended(
+            &mut self.calibration_announced.borrow_mut(),
+            &state.calibration,
+        );
+        let calibration_said = ended
+            .and_then(|id| all.iter().find(|row| row.id == id.as_str()))
+            .map(|row| row.calibration_status.clone())
+            .filter(|said| !said.is_empty());
+        if let Some(said) = calibration_said {
+            let said = match notice_said.take() {
+                Some(notice) => strings.invoke_announcements(notice, said),
+                None => said,
+            };
+            self.announce(said.clone());
+            notice_said = Some(said);
         }
         let sources: Vec<SharedString> = state
             .sources
@@ -1590,6 +1640,19 @@ impl App {
         main.on_cast_resync_requested(move |id| {
             with_app(&w, |app| app.update(|b| b.resync_speaker(&id)))
         });
+        let w = weak.clone();
+        main.on_calibrate_requested(move |id| {
+            with_app(&w, |app| {
+                app.update(|b| b.start_calibration(&id));
+                app.follow_calibration(&w);
+            });
+        });
+        let w = weak.clone();
+        main.on_cancel_calibration_requested(move || {
+            with_app(&w, |app| app.update(|b| b.cancel_calibration()))
+        });
+        let w = weak.clone();
+        main.on_calibration_privacy_requested(move || with_app(&w, App::open_microphone_privacy));
         let w = weak.clone();
         main.on_group_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_group(&id))));
         let w = weak.clone();
@@ -1946,10 +2009,8 @@ impl App {
         let _ = self.guide.hide();
     }
 
-    /// Opens the Settings page a guide button asks for; only the pages the
-    /// guide names, nothing else. When the shell doesn't take it, the guide
-    /// says where to find the page.
-    /// Opens the microphone privacy settings for the notice that asks.
+    /// Opens the microphone privacy settings for the notice or the
+    /// calibration that asks.
     fn open_microphone_privacy(&self) {
         let uri = SettingsPage::MicrophonePrivacy.uri();
         if !crate::platform::open_settings(uri) {
@@ -1958,6 +2019,9 @@ impl App {
         }
     }
 
+    /// Opens the Settings page a guide button asks for; only the pages the
+    /// guide names, nothing else. When the shell doesn't take it, the guide
+    /// says where to find the page.
     fn open_guide_page(&self, page: GuidePage) {
         let Some(page) = settings_page(page) else {
             return;
@@ -2728,6 +2792,20 @@ pub fn speaker_item(
         delay_range_hint: SharedString::default(),
         reference_name: state.reference_name.as_deref().unwrap_or_default().into(),
         sync_open: sync_open && speaker.delay_ms.is_some(),
+        calibratable: is_calibratable(speaker),
+        calibrating: state.calibration.speaker_id.as_deref() == Some(speaker.id.as_str())
+            && state.calibration.phase.is_running(),
+        calibration_enabled: !state.calibration.busy
+            && calibration::unavailable(
+                state.running,
+                state.reference_name.is_some(),
+                speaker.enabled,
+            )
+            .is_none(),
+        // Needs the strings: set by the caller (`App::refresh`).
+        calibration_status: SharedString::default(),
+        calibration_privacy: state.calibration.speaker_id.as_deref() == Some(speaker.id.as_str())
+            && state.calibration.phase == Phase::Failed(Failure::MicrophoneDenied),
         auto_connect: speaker.auto_connect,
         availability: availability(speaker.availability),
         paired: speaker.paired,
@@ -2739,6 +2817,119 @@ pub fn speaker_item(
             .map_or(CastState::Idle, |cast| cast_state(cast.state)),
         muted: speaker.cast.is_some_and(|cast| cast.muted),
         volume_fixed: speaker.cast.is_some_and(|cast| cast.volume_fixed),
+    }
+}
+
+/// A local output with an offset (not the reference, AirPlay or Cast): it
+/// can be calibrated with the microphone.
+fn is_calibratable(speaker: &ui_model::Speaker) -> bool {
+    speaker.delay_ms.is_some()
+        && speaker.cast.is_none()
+        && !matches!(
+            speaker.kind,
+            ui_model::SpeakerKind::AirPlay
+                | ui_model::SpeakerKind::AirPlay2
+                | ui_model::SpeakerKind::Cast
+        )
+}
+
+/// The line under a speaker's Calibrate button: what its calibration does,
+/// how it ended, or why one can't start; empty when there is nothing to say.
+fn calibration_status(
+    strings: &Strings<'_>,
+    state: &AppState,
+    speaker: &ui_model::Speaker,
+) -> SharedString {
+    if !is_calibratable(speaker) {
+        return SharedString::default();
+    }
+    let reference = state.reference_name.as_deref().unwrap_or_default();
+    let shown = if state.calibration.speaker_id.as_deref() == Some(speaker.id.as_str()) {
+        state.calibration.phase
+    } else {
+        Phase::Idle
+    };
+    match shown {
+        Phase::Idle => match calibration::unavailable(
+            state.running,
+            state.reference_name.is_some(),
+            speaker.enabled,
+        ) {
+            Some(Failure::NoReference) => strings.get_calibration_no_reference(),
+            Some(_) => strings.get_calibration_turn_on(),
+            None => SharedString::default(),
+        },
+        Phase::Running(Step::Preparing) => strings.get_calibration_preparing(),
+        Phase::Running(Step::Measuring(Which::Reference)) => {
+            strings.invoke_calibration_listening(reference.into())
+        }
+        Phase::Running(Step::Measuring(Which::Chosen)) => {
+            strings.get_calibration_listening_chosen()
+        }
+        Phase::Running(Step::Estimating) => strings.get_calibration_estimating(),
+        Phase::Done { offset_ms, clamped } => {
+            let ms = offset_ms.round() as i32;
+            if clamped {
+                strings.invoke_calibration_done_clamped(ms)
+            } else {
+                strings.invoke_calibration_done(ms)
+            }
+        }
+        Phase::Cancelled => strings.get_calibration_cancelled(),
+        Phase::Failed(failure) => {
+            strings.invoke_calibration_failed(calibration_failure(strings, reference, failure))
+        }
+    }
+}
+
+/// The speaker whose calibration just ended, once per ending, so Narrator
+/// hears how it ended without the focus moving to its line.
+fn calibration_ended(
+    announced: &mut Option<(String, Phase)>,
+    calibration: &ui_model::CalibrationState,
+) -> Option<String> {
+    let ended = matches!(
+        calibration.phase,
+        Phase::Done { .. } | Phase::Failed(_) | Phase::Cancelled
+    );
+    let now = calibration
+        .speaker_id
+        .clone()
+        .filter(|_| ended)
+        .map(|id| (id, calibration.phase));
+    if now == *announced {
+        return None;
+    }
+    announced.clone_from(&now);
+    now.map(|(id, _)| id)
+}
+
+fn calibration_failure(strings: &Strings<'_>, reference: &str, failure: Failure) -> SharedString {
+    let subject = |which: Option<Which>| -> SharedString {
+        match which {
+            Some(Which::Reference) if !reference.is_empty() => reference.into(),
+            Some(Which::Chosen) => strings.get_calibration_this_speaker(),
+            _ => strings.get_calibration_a_speaker(),
+        }
+    };
+    match failure {
+        Failure::NoReference => strings.get_calibration_no_reference(),
+        Failure::NotPlaying => strings.invoke_calibration_not_playing(reference.into()),
+        Failure::MicrophoneDenied => strings.get_calibration_microphone_denied(),
+        Failure::NoMicrophone => strings.get_calibration_no_microphone(),
+        Failure::UnsupportedRate => strings.get_calibration_unsupported_rate(),
+        Failure::SourceSilent => strings.get_calibration_source_silent(),
+        Failure::Interrupted => strings.get_calibration_interrupted(),
+        Failure::MicrophoneChanged => strings.get_calibration_microphone_changed(),
+        Failure::MicrophoneSkipped => strings.get_calibration_microphone_skipped(),
+        Failure::HandsFreeMicrophone => strings.get_calibration_hands_free(),
+        Failure::Unfinished => strings.get_calibration_unfinished(),
+        Failure::TooShort(_) => strings.get_calibration_too_short(),
+        Failure::TooLong(_) => strings.get_calibration_too_long(),
+        Failure::Clipped(which) => strings.invoke_calibration_clipped(subject(which)),
+        Failure::TooQuiet(which) => strings.invoke_calibration_too_quiet(subject(which)),
+        Failure::AmbiguousEcho(which) => strings.invoke_calibration_echo(subject(which)),
+        Failure::Implausible => strings.get_calibration_implausible(),
     }
 }
 
@@ -3423,6 +3614,92 @@ mod tests {
             .chain(app.models.connected.iter())
             .find(|s| s.id == id)
             .expect("the speaker has a row")
+    }
+
+    #[test]
+    fn only_a_local_output_with_an_offset_offers_calibration_and_says_what_it_needs() {
+        let app = app_over(MockBackend::new());
+        assert!(row_of(&app, "local:desk").calibratable);
+        assert!(
+            !row_of(&app, "local:speakers").calibratable,
+            "the reference"
+        );
+        let desk = row_of(&app, "local:desk");
+        assert!(!desk.calibration_enabled, "streaming is off");
+        assert_eq!(
+            desk.calibration_status,
+            app.strings().get_calibration_turn_on()
+        );
+
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        backend.set_speaker_enabled("local:desk", true);
+        let app = app_over(backend);
+        let desk = row_of(&app, "local:desk");
+        assert!(desk.calibration_enabled);
+        assert_eq!(desk.calibration_status, "", "nothing stands in the way");
+
+        let mut state = app.snapshot();
+        state.calibration.speaker_id = Some("local:desk".into());
+        state.calibration.phase = Phase::Failed(Failure::MicrophoneDenied);
+        let speaker = state.speaker("local:desk").unwrap().clone();
+        let line = calibration_status(&app.strings(), &state, &speaker);
+        assert!(
+            line.contains("Privacy"),
+            "it says where to allow it: {line}"
+        );
+        state.calibration.phase = Phase::Done {
+            offset_ms: 412.4,
+            clamped: false,
+        };
+        let line = calibration_status(&app.strings(), &state, &speaker);
+        assert!(line.contains("412"), "{line}");
+    }
+
+    #[test]
+    fn a_calibrations_ending_is_announced_once() {
+        let mut announced = None;
+        let mut calibration = ui_model::CalibrationState {
+            speaker_id: Some("local:desk".into()),
+            phase: Phase::Running(Step::Preparing),
+            busy: true,
+        };
+        assert_eq!(calibration_ended(&mut announced, &calibration), None);
+        calibration.phase = Phase::Failed(Failure::MicrophoneSkipped);
+        assert_eq!(
+            calibration_ended(&mut announced, &calibration).as_deref(),
+            Some("local:desk")
+        );
+        calibration.busy = false;
+        assert_eq!(
+            calibration_ended(&mut announced, &calibration),
+            None,
+            "said"
+        );
+        calibration.phase = Phase::Idle;
+        assert_eq!(calibration_ended(&mut announced, &calibration), None);
+        calibration.phase = Phase::Failed(Failure::MicrophoneSkipped);
+        assert_eq!(
+            calibration_ended(&mut announced, &calibration).as_deref(),
+            Some("local:desk"),
+            "a second run that ends the same way"
+        );
+    }
+
+    #[test]
+    fn a_blocked_microphone_offers_its_privacy_settings_on_the_row() {
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        backend.set_speaker_enabled("local:desk", true);
+        let app = app_over(backend);
+        let mut state = app.snapshot();
+        let speaker = state.speaker("local:desk").unwrap().clone();
+        assert!(!speaker_item(&state, &speaker, false, true, None).calibration_privacy);
+        state.calibration.speaker_id = Some("local:desk".into());
+        state.calibration.phase = Phase::Failed(Failure::MicrophoneDenied);
+        assert!(speaker_item(&state, &speaker, false, true, None).calibration_privacy);
+        let bt = state.speaker("local:bt").unwrap().clone();
+        assert!(!speaker_item(&state, &bt, false, true, None).calibration_privacy);
     }
 
     /// Opens the desk's and the headset's sync controls, types 400 into the

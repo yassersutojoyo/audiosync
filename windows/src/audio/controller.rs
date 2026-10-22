@@ -72,6 +72,7 @@ use super::backend::{
     BackendError, BackendEvent, CastDiscovery, CastInfo, CastProblem, OutputInfo, OutputKind,
     SourceId, SourceInfo, StopReason, TIMED_OUT,
 };
+use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::capture::{
     CaptureAttempt, CaptureTarget, Feeds, LoopbackMode, SampleType, decide_capture, display_name,
     input_sources, running_app, source_list,
@@ -272,6 +273,20 @@ pub trait Driver {
         control: RendererControl,
         gain: Arc<SharedGain>,
     ) -> Result<Self::Renderer, BackendError>;
+
+    /// Starts recording the default input device, mono at its own rate,
+    /// with room for `seconds`.
+    fn open_microphone(&mut self, _seconds: f64) -> Result<Box<dyn Microphone>, MicrophoneError> {
+        Err(MicrophoneError::Missing)
+    }
+}
+
+/// Output `id`'s gain: 0 while a calibration lets only `solo` be heard.
+fn solo_gain(solo: Option<&str>, id: &str, gain: f32) -> f32 {
+    match solo {
+        Some(solo) if solo != id => 0.0,
+        _ => gain,
+    }
 }
 
 /// A running session.
@@ -427,6 +442,13 @@ pub struct Controller<D: Driver> {
     /// Whether a quit of the captured app stops the session or moves it to
     /// the whole system (spec S227).
     quit_watch: SourceQuitWatch,
+    /// The microphone calibration's way into every capture.
+    calibration_tap: Arc<CalibrationTap>,
+    /// The one local output a calibration lets be heard.
+    calibration_solo: Option<String>,
+    /// Sessions started so far, captures started again included: a
+    /// calibration tells by it that its session went on.
+    sessions_started: u64,
 }
 
 impl<D: Driver> Controller<D> {
@@ -468,6 +490,9 @@ impl<D: Driver> Controller<D> {
             refused: BTreeMap::new(),
             track_info: TrackInfo::default(),
             track_source: None,
+            calibration_tap: Arc::new(CalibrationTap::new()),
+            calibration_solo: None,
+            sessions_started: 0,
         }
     }
 
@@ -969,7 +994,11 @@ impl<D: Driver> Controller<D> {
             reader.control().set_delay_frames(params.delay_frames);
             let control = RendererControl::new(&reader);
             control.set_bluetooth(endpoint.kind == OutputKind::Bluetooth);
-            let gain = Arc::new(SharedGain::new(params.gain));
+            let gain = Arc::new(SharedGain::new(solo_gain(
+                self.calibration_solo.as_deref(),
+                &endpoint.id,
+                params.gain,
+            )));
             let failed = match self.driver.start_renderer(
                 &endpoint,
                 reader,
@@ -1359,8 +1388,16 @@ impl<D: Driver> Controller<D> {
     /// Gives a playing output its current gain.
     fn apply_gain(&self, id: &str) {
         if let Some(playing) = self.session.as_ref().and_then(|s| s.outputs.get(id)) {
-            playing.gain.set(self.policy.params(id).gain);
+            playing.gain.set(self.gain_of(id));
         }
+    }
+
+    fn gain_of(&self, id: &str) -> f32 {
+        solo_gain(
+            self.calibration_solo.as_deref(),
+            id,
+            self.policy.params(id).gain,
+        )
     }
 
     /// Starts a session capturing `source`, or, while the last session's
@@ -1606,6 +1643,7 @@ impl<D: Driver> Controller<D> {
         let feeds = Feeds {
             airplay: feed,
             cast,
+            calibration: Some(Arc::clone(&self.calibration_tap)),
         };
         let capture = self
             .driver
@@ -1628,6 +1666,7 @@ impl<D: Driver> Controller<D> {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.restart_timeline();
         }
+        self.sessions_started += 1;
         self.session = Some(Session {
             source: source.clone(),
             target,
@@ -2216,6 +2255,41 @@ impl<D: Driver> AudioBackend for Controller<D> {
 
     fn cast_memory_json(&self) -> Option<String> {
         self.cast.as_ref().and_then(CastSpeakers::memory_json)
+    }
+
+    fn calibration_engine(&self) -> Engine {
+        let playing = self.playing_ids();
+        Engine {
+            session: self.session.as_ref().map(|_| self.sessions_started),
+            hold_backs_ms: playing
+                .iter()
+                .map(|id| (id.clone(), self.policy.hold_back_ms(id)))
+                .collect(),
+            playing,
+            reference: self.policy.reference().map(str::to_owned),
+        }
+    }
+
+    fn calibration_tap(&self) -> Option<Arc<CalibrationTap>> {
+        Some(Arc::clone(&self.calibration_tap))
+    }
+
+    fn set_calibration_solo(&mut self, id: Option<&str>) {
+        if self.calibration_solo.as_deref() == id {
+            return;
+        }
+        self.calibration_solo = id.map(str::to_owned);
+        self.log.log(|| match id {
+            Some(id) => format!("calibration: only {} is heard", label(&self.names, id)),
+            None => "calibration: every output is heard again".to_owned(),
+        });
+        for id in self.playing_ids() {
+            self.apply_gain(&id);
+        }
+    }
+
+    fn open_microphone(&mut self, seconds: f64) -> Result<Box<dyn Microphone>, MicrophoneError> {
+        self.driver.open_microphone(seconds)
     }
 
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
@@ -3226,6 +3300,42 @@ mod tests {
                 gain: 1.0,
             })
         );
+    }
+
+    #[test]
+    fn a_calibration_lets_one_output_be_heard_and_then_all_again() {
+        let mut backend = backend();
+        backend.set_output_volume(SPEAKERS, 50.0);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let gain = |backend: &MockBackend, id| backend.playing_params(id).unwrap().gain;
+        backend.set_calibration_solo(Some(SPEAKERS));
+        assert_eq!(gain(&backend, SPEAKERS), 0.125);
+        assert_eq!(gain(&backend, HEADPHONES), 0.0);
+        backend.set_output_volume(HEADPHONES, 80.0);
+        assert_eq!(
+            gain(&backend, HEADPHONES),
+            0.0,
+            "a volume change keeps it silent"
+        );
+        backend.set_calibration_solo(None);
+        assert_eq!(gain(&backend, SPEAKERS), 0.125);
+        assert!(gain(&backend, HEADPHONES) > 0.0);
+    }
+
+    #[test]
+    fn a_calibration_sees_a_restarted_session_as_another() {
+        let mut backend = backend();
+        assert_eq!(backend.calibration_engine().session, None);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let first = backend.calibration_engine();
+        assert!(first.session.is_some());
+        assert_eq!(first.playing.len(), 2);
+        assert_eq!(first.hold_backs_ms.len(), 2);
+        backend.stop();
+        poll_quietly(&mut backend, 3);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        poll_quietly(&mut backend, 3);
+        assert_ne!(backend.calibration_engine().session, first.session);
     }
 
     #[test]
