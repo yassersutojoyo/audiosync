@@ -1121,8 +1121,8 @@ fn the_ptp_service_serves_every_member_until_the_last_leaves() {
     let a: IpAddr = [192, 0, 2, 1].into();
     let b: IpAddr = [192, 0, 2, 2].into();
     let now = Instant::now();
-    service.start(a, now);
-    service.start(b, now);
+    service.start(SocketAddr::new(a, 0), now);
+    service.start(SocketAddr::new(b, 0), now);
     service.handle_timeout(now + Duration::from_millis(200));
     let mut to = Vec::new();
     while let Some(transmit) = service.poll_transmit() {
@@ -1135,7 +1135,7 @@ fn the_ptp_service_serves_every_member_until_the_last_leaves() {
     let follow = service.poll_transmit().expect("a Follow_Up");
     assert_eq!(follow.to.ip(), b);
     service.stop_peer(a);
-    assert_eq!(service.peers(), &[b]);
+    assert_eq!(service.peers(), &[SocketAddr::new(b, 0)]);
     service.handle_timeout(now + Duration::from_secs(2));
     while let Some(transmit) = service.poll_transmit() {
         assert_eq!(transmit.to.ip(), b);

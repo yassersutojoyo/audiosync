@@ -8,7 +8,7 @@
 mod common;
 
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -251,6 +251,37 @@ fn drain(service: &mut PtpService) -> Vec<PtpTransmit> {
     std::iter::from_fn(|| service.poll_transmit()).collect()
 }
 
+// covers: P17, P162
+#[test]
+fn ptp_keeps_the_scope_of_a_link_local_receiver() {
+    let clock = SenderClock::new(Instant::now());
+    let ports = PtpPorts {
+        event: 31_900,
+        general: 32_000,
+    };
+    let ip = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0x30);
+    let mut service = PtpService::new(clock, IDENTITY, ports);
+    let now = Instant::now();
+    service.start(SocketAddr::V6(SocketAddrV6::new(ip, 7000, 0, 7)), now);
+    let sent = drain(&mut service);
+    assert!(!sent.is_empty());
+    for transmit in &sent {
+        let SocketAddr::V6(to) = transmit.to else {
+            panic!("{:?}", transmit.to);
+        };
+        assert_eq!((*to.ip(), to.scope_id()), (ip, 7), "{to}");
+    }
+    let theirs = [0x00, 0x11, 0x22, 0xFF, 0xFE, 0x33, 0x44, 0x55];
+    let source = SocketAddr::V6(SocketAddrV6::new(ip, 41_234, 0, 7));
+    service.handle_message(&message(0x1, theirs, 3, 44), source, now);
+    let answers = drain(&mut service);
+    assert_eq!(answers.len(), 1);
+    assert_eq!(
+        answers[0].to,
+        SocketAddr::V6(SocketAddrV6::new(ip, ports.general, 0, 7))
+    );
+}
+
 // covers: P159, P160, P161, P162, P163, P167
 #[test]
 fn ptp_messages() {
@@ -271,7 +302,7 @@ fn ptp_messages() {
 
     // From the session SETUP answer: an Announce at once, a Sync every
     // 125 ms, and a Follow_Up after each Sync (P160, P161, P167).
-    service.start(peer, t0);
+    service.start(SocketAddr::new(peer, 0), t0);
     let mut sent: Vec<(Instant, PtpTransmit)> = Vec::new();
     let mut follow_up_times: HashMap<u16, Instant> = HashMap::new();
     let mut now = t0;

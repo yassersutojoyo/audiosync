@@ -505,7 +505,7 @@ impl Driver {
                         (Some(run), Some(remote))
                             if remote.ip().to_canonical().is_ipv6() == run.v6 =>
                         {
-                            run.service.start(remote.ip(), now);
+                            run.service.start(remote, now);
                         }
                         // It fell back to an address outside the service's
                         // family, which no clock serves (P158, P179).
