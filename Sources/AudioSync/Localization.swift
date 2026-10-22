@@ -812,10 +812,15 @@ struct UIStrings {
     }
     func castGroupNote(_ members: CastGroupMembers) -> String {
         switch members {
-        case .notReported: return "Speaker group"
-        case .unknown: return "Speaker group, members unknown"
-        case .known(let names): return "Speaker group: " + names.joined(separator: ", ")
+        case .notReported: return "Google Cast group"
+        case .unknown: return "Google Cast group, members unknown"
+        case .known(let names): return "Google Cast group: " + listed(names)
         }
+    }
+    /// "A", "A and B", "A, B and C".
+    func listed(_ names: [String]) -> String {
+        guard let last = names.last, names.count > 1 else { return names.first ?? "" }
+        return names.dropLast().joined(separator: ", ") + " and " + last
     }
     /// Under a Cast speaker's volume while it connects or plays.
     let castMute = "Mute"

@@ -364,6 +364,13 @@ struct CastModel {
 
     func offset(of id: String) -> Double { offsets[id] ?? 0 }
 
+    /// The device that is on while its session plays, a group included: the
+    /// one Cast row a calibration run measures.
+    var playingDevice: String? {
+        guard let id = enabled, status(of: id) == .playing else { return nil }
+        return id
+    }
+
     /// The user turns `id` on, a group like any device: refused while
     /// another one is on, a member of the group that is on included (C2, C99).
     mutating func turnOn(_ id: String) -> CastProblem? {

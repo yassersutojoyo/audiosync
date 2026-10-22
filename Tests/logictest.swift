@@ -4278,11 +4278,13 @@ do {
     check(stopped.members == nil && stopped.turnOn(kitchen) == nil, "cast group: once it is off, a member can play")
 
     let t = UIStrings()
-    check(t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: .notReported)) == "Speaker group"
+    check(t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: .notReported)) == "Google Cast group"
             && t.castNote(CastRow(status: .playing, muted: false, volumeFixed: false, group: .unknown))
-                == "Speaker group, members unknown"
-            && t.castNote(CastRow(status: .playing, muted: false, volumeFixed: false, group: .known(["Kitchen", "Den"])))
-                == "Speaker group: Kitchen, Den"
+                == "Google Cast group, members unknown"
+            && t.castNote(CastRow(status: .playing, muted: false, volumeFixed: false,
+                                  group: .known(["Kitchen", "Den", "Office"])))
+                == "Google Cast group: Kitchen, Den and Office"
+            && t.listed(["Kitchen"]) == "Kitchen" && t.listed(["Kitchen", "Den"]) == "Kitchen and Den"
             && t.castNote(CastRow(status: .playing, muted: true, volumeFixed: false, group: .known(["Kitchen"])))
                 == "Muted on the group"
             && t.castNote(CastRow(status: .connecting, muted: false, volumeFixed: false, group: .notReported)) == "Connecting…",
@@ -4305,8 +4307,27 @@ do {
     }
     check(logged == .groupLog("group Home announced") && logged?.attempt == nil,
           "cast group: a group log event carries its line for the debug log")
-    check(CastRefusal.problem(ASC_CAST_REFUSED_GROUP) == .notResponding,
-          "cast group: the retired group refusal maps to nothing group-specific")
+    check(CastRefusal.problem(ASC_CAST_REFUSED_GROUP) == .notResponding
+            && CastEnd.failed(CastError(ASC_CAST_ERROR_GROUP)).problem == .notResponding,
+          "cast group: the retired group refusal and error map to nothing group-specific")
+
+    // Calibrate All reads the Cast row as AppDelegate+CalibrateAll does.
+    check(m.playingDevice == home && ended.playingDevice == nil,
+          "cast group: the playing group is the Cast speaker a calibration run measures")
+    let device = m.playingDevice ?? ""
+    let calibration = CalibrateAllFlow.Inputs(
+        streaming: true, reference: "mac", localOutputs: [(id: "mac", name: "MacBook Speakers")],
+        localOffsets: [:], holdBacks: [:],
+        cast: (id: CastID.app(device), name: "Home", offsetMs: m.offsets[device], waitMs: 0),
+        airPlay: [], airPlayDelayMs: 0, airPlayHoldBackMs: 0)
+    let planned = (try? CalibrateAllFlow.plan(calibration).get()) ?? []
+    let castRows = planned.filter { $0.kind == .cast }
+    check(castRows.map(\.id) == [CastID.app(home)] && castRows.first?.offsetMs == 650,
+          "cast group: Calibrate All lists the playing group as one Cast row with its own offset", "\(planned)")
+    var measured = m
+    check(CastID.device(castRows.first?.id ?? "").flatMap { measured.setOffset($0, ms: 720) } == 720
+            && measured.offset(of: home) == 720 && measured.offset(of: kitchen) == 120 && measured.offset(of: den) == 0,
+          "cast group: the measured offset is stored under the group's id, the members' stay as they were")
 }
 
 // MARK: AirPlay, Google Cast and local outputs at one latency: the hold-backs, the AirPlay cap and the notice (C77)
@@ -4467,7 +4488,7 @@ do {
     check(usbRange && airPlayRange && castRange, "web remote: each delay carries the range its field in the window takes",
           "\(range("usb")) \(range("hp")) \(range("cast"))")
     let groupOpen = field("group", "available") as? Bool == true
-    let groupNote = field("group", "notice") as? String == "Speaker group"
+    let groupNote = field("group", "notice") as? String == "Google Cast group"
     let codeOff = field("tv", "available") as? Bool == false
     let codeNote = field("tv", "notice") as? String == t.remoteTurnOnInApp
     let pairedOpen = field("tv2", "available") as? Bool == true

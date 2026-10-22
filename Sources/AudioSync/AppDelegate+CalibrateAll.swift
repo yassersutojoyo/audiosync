@@ -248,7 +248,7 @@ extension AppDelegate {
                 if let receiver = NativeAirPlayID.receiver(id), native.model.isPlaying(receiver) { ids.insert(id) }
             }
         }
-        if let device = castModel.enabled, castModel.status(of: device) == .playing { ids.insert(CastID.app(device)) }
+        if let device = castModel.playingDevice { ids.insert(CastID.app(device)) }
         return ids
     }
 
