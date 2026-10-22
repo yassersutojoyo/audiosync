@@ -216,10 +216,11 @@ fn a_failed_ap2_metadata_request_is_a_warning() {
     assert_eq!(metadata_sent(&rig.fake).len(), 1);
     assert!(rig.failure().is_none());
     assert!(
-        rig.events.contains(&Ap2Event::Warning(Warning::RequestFailed {
-            method: Method::SetParameter,
-            status: 500,
-        })),
+        rig.events
+            .contains(&Ap2Event::Warning(Warning::RequestFailed {
+                method: Method::SetParameter,
+                status: 500,
+            })),
         "{:?}",
         rig.events
     );
@@ -286,19 +287,19 @@ fn ap2_metadata_queued_before_ready_is_dropped_by_teardown() {
     rig.pump();
     rig.session.teardown(now);
     rig.pump();
-    let [track, ..] = all_three();
-    assert_eq!(
-        rig.session.send_metadata(track, now),
-        Err(MetadataError::SessionEnded)
-    );
 
     // The initial volume's late answer lets the TEARDOWN go out.
     rig.fake.silent.clear();
     answer_last(&mut rig);
     rig.advance(Duration::from_secs(10));
     let keys = rig.keys();
-    assert!(keys.contains(&"TEARDOWN"), "{keys:?}");
     assert!(metadata_sent(&rig.fake).is_empty(), "{keys:?}");
+    assert!(keys.contains(&"TEARDOWN"), "{keys:?}");
+    let [track, ..] = all_three();
+    assert_eq!(
+        rig.session.send_metadata(track, rig.now),
+        Err(MetadataError::SessionEnded)
+    );
 }
 
 // covers: P123, P157
