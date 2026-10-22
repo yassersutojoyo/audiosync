@@ -10,8 +10,8 @@
  * sample per call. The core owns no thread, device or file: the host
  * captures, plays and runs every thread, and calls in here.
  * The exceptions are AudioSync's own AirPlay and Google Cast senders
- * (asc_airplay_*, asc_cast_*), which run their own threads and network
- * sockets.
+ * (asc_airplay_*, asc_cast_*) and its web remote (asc_remote_*), which run
+ * their own threads and network sockets.
  *
  * Real-time calls (marked "Real-time safe") never allocate, free, lock, wait,
  * log or make a system call, and never panic: bad arguments make them do
@@ -243,6 +243,17 @@ extern "C" {
 #define ASC_STREAMING_OFF 0        /* no session runs */
 #define ASC_STREAMING_RUNNING 1    /* a session runs */
 #define ASC_STREAMING_REBUILDING 2 /* a session is being rebuilt (a capture format change): counts as on */
+
+/* The port the web remote listens on unless its configuration names another (unassigned at IANA). */
+#define ASC_REMOTE_DEFAULT_PORT 7655
+
+/* Why asc_remote_start returned NULL. */
+#define ASC_REMOTE_ERROR_NONE 0        /* it didn't */
+#define ASC_REMOTE_ERROR_CONFIG 1      /* the configuration doesn't read, or the callback is NULL */
+#define ASC_REMOTE_ERROR_PORT_IN_USE 2 /* another program listens on the port: offer another */
+#define ASC_REMOTE_ERROR_LISTEN 3      /* no address could be listened on for another reason */
+#define ASC_REMOTE_ERROR_RANDOM 4      /* no randomness for the pairing code */
+#define ASC_REMOTE_ERROR_FAILED 5      /* a panic while starting */
 
 /* ---- Version and volume ------------------------------------------------- */
 
@@ -1537,6 +1548,98 @@ size_t asc_cast_input_write(AscCastInput *input, const float *samples, size_t fr
  * that pointer to NULL; a NULL address or pointer does nothing.
  */
 void asc_cast_input_destroy(AscCastInput **input);
+
+/* ---- Web remote (AudioSync's own, remote/) --------------------------------- */
+
+/*
+ * AudioSync's web remote: a small HTTP server on the home network that
+ * serves one page to paired phones. The host publishes a full snapshot as
+ * JSON whenever something the page shows changes; each change a phone makes
+ * comes back through the command callback, on a server thread, and the host
+ * applies it on its main thread like a click in its window, then publishes
+ * the result. The server never calls the host for a read.
+ * Every asc_remote_* call on a handle runs on one control thread at a time,
+ * never an audio thread. asc_remote_stop waits for a callback in progress,
+ * so the callback must not wait for the thread that stops the remote.
+ * A panic inside a call returns that call's failure value (NULL, false or 0).
+ */
+typedef struct AscRemote AscRemote;
+
+/*
+ * The host's command callback, on a server thread, one call at a time:
+ * command_json is NUL-terminated UTF-8 valid during the call only, either
+ * {"type":"speaker","id":...} with the posted "on", "volume" (0 to 100) and
+ * "delay_ms" among the fields, or {"type":"master","volume":...}. Every
+ * value was checked against the last snapshot's ranges.
+ */
+typedef void (*AscRemoteCommand)(void *context, const char *command_json);
+
+/*
+ * Starts the remote. config_json is {"port", "local_name", "devices_path",
+ * "listen"}, each optional: the port (default ASC_REMOTE_DEFAULT_PORT), the
+ * computer's name so <local_name>.local is an accepted address, the file
+ * that keeps the paired devices' token hashes (none: memory only), and the
+ * IP literals to listen on (default every IPv6 and IPv4 address). command
+ * gets each accepted change with context; both may be used from any thread
+ * until asc_remote_stop returns. Returns NULL on failure with the reason
+ * (ASC_REMOTE_ERROR_*) in *error when error isn't NULL.
+ */
+AscRemote *asc_remote_start(const char *config_json, AscRemoteCommand command, void *context, int32_t *error);
+
+/* The port the remote listens on. */
+uint32_t asc_remote_port(AscRemote *remote);
+
+/*
+ * Publishes the snapshot in state_json: {"master": {"volume"}, "now_playing":
+ * {"title", "artist", "source"} or null, "speakers": [{"id", "name", "kind",
+ * "on", "volume", "delay_ms", "delay_min_ms", "delay_max_ms", "available",
+ * "notice"}]}, volumes 0 to 100, ids unique. The server numbers it and
+ * streams it to the open pages; an unchanged snapshot sends nothing.
+ * Returns false when it doesn't read; the previous one then stays.
+ */
+bool asc_remote_publish(AscRemote *remote, const char *state_json);
+
+/*
+ * The pairing code that works now, 6 digits, or NULL when none does (it
+ * expired after 10 minutes: call asc_remote_rotate_code). The string is the
+ * handle's, valid until the next code call on it or its stop.
+ */
+const char *asc_remote_pairing_code(AscRemote *remote);
+
+/*
+ * Makes a new pairing code, for when the user opens the setting: the old
+ * one stops working and a lockout after too many wrong codes ends. Returns
+ * it as asc_remote_pairing_code does; NULL when no code could be made.
+ */
+const char *asc_remote_rotate_code(AscRemote *remote);
+
+/* Whether 20 wrong codes locked pairing until the next asc_remote_rotate_code. */
+bool asc_remote_pairing_locked(AscRemote *remote);
+
+/* How many devices are paired (8 at most; pairing a ninth drops the oldest). */
+uint32_t asc_remote_device_count(AscRemote *remote);
+
+/*
+ * Forgets every paired device: their next request is refused and their open
+ * pages lose the stream. Returns false when the device file couldn't be
+ * written; they are still forgotten until the app quits.
+ */
+bool asc_remote_forget_all(AscRemote *remote);
+
+/*
+ * The oldest debug-log line not taken yet (pairing, refusals, file
+ * problems; never a code or a token), or NULL when there is none. The
+ * string is the handle's, valid until the next call of this on it or its stop.
+ */
+const char *asc_remote_next_log(AscRemote *remote);
+
+/*
+ * Stops the remote and frees it: closes the port and every connection and
+ * waits for a command callback in progress; once it returns the callback is
+ * never called again. Takes the address of the host's pointer and sets that
+ * pointer to NULL; a NULL address or pointer does nothing.
+ */
+void asc_remote_stop(AscRemote **remote);
 
 #ifdef __cplusplus
 }

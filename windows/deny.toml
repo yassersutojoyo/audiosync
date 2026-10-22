@@ -30,6 +30,7 @@ exceptions = [
     { crate = "audiosync-core", allow = ["GPL-3.0-or-later"] },
     { crate = "audiosync-airplay", allow = ["GPL-3.0-or-later"] },
     { crate = "audiosync-cast", allow = ["GPL-3.0-or-later"] },
+    { crate = "audiosync-remote", allow = ["GPL-3.0-or-later"] },
     # Slint's crates are "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR
     # LicenseRef-Slint-Software-3.0"; public builds take them under
     # GPL-3.0-only, which only Slint's crates may use.

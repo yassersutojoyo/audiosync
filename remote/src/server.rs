@@ -92,6 +92,35 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    /// Reads `{"port"?, "local_name"?, "devices_path"?, "listen"?}`, the
+    /// defaults filling in what is missing; `listen` is a list of IP
+    /// literals. None when a field has the wrong type or value.
+    pub fn from_json(text: &str) -> Option<Config> {
+        let value: serde_json::Value = serde_json::from_str(text).ok()?;
+        let object = value.as_object()?;
+        let mut config = Config::default();
+        if let Some(port) = object.get("port") {
+            config.port = u16::try_from(port.as_u64()?).ok()?;
+        }
+        if let Some(name) = object.get("local_name") {
+            config.local_name = Some(name.as_str()?.to_owned());
+        }
+        if let Some(path) = object.get("devices_path") {
+            config.devices_path =
+                Some(PathBuf::from(path.as_str()?)).filter(|path| !path.as_os_str().is_empty());
+        }
+        if let Some(listen) = object.get("listen") {
+            config.listen = listen
+                .as_array()?
+                .iter()
+                .map(|address| address.as_str()?.parse().ok())
+                .collect::<Option<_>>()?;
+        }
+        Some(config)
+    }
+}
+
 /// Why the server didn't start, or a code couldn't be made.
 #[derive(Debug)]
 pub enum RemoteError {
@@ -975,5 +1004,40 @@ mod tests {
         }
         .to_string();
         assert_eq!(line, "remote: pairing from 127.0.0.1 failed: wrong code");
+    }
+
+    #[test]
+    fn a_config_reads_from_json_with_defaults() {
+        let config = Config::from_json("{}").unwrap();
+        assert_eq!(config.port, DEFAULT_PORT);
+        assert_eq!(config.listen.len(), 2);
+        assert_eq!(config.devices_path, None);
+        let config = Config::from_json(
+            r#"{"port": 0, "local_name": "kitchen", "devices_path": "remote-devices.json", "listen": ["127.0.0.1", "::1"]}"#,
+        )
+        .unwrap();
+        assert_eq!(config.port, 0);
+        assert_eq!(config.local_name.as_deref(), Some("kitchen"));
+        assert_eq!(
+            config.devices_path,
+            Some(PathBuf::from("remote-devices.json"))
+        );
+        assert_eq!(
+            config.listen,
+            [
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                IpAddr::V6(Ipv6Addr::LOCALHOST)
+            ]
+        );
+        for bad in [
+            "[]",
+            "not json",
+            r#"{"port": 70000}"#,
+            r#"{"port": "80"}"#,
+            r#"{"local_name": 1}"#,
+            r#"{"listen": ["nowhere"]}"#,
+        ] {
+            assert!(Config::from_json(bad).is_none(), "{bad}");
+        }
     }
 }

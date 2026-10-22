@@ -27,6 +27,8 @@ ffi-panic-probe = []
 audiosync-airplay = { path = "../airplay" }
 # AudioSync's own Google Cast sender (cast/), reached the same way (src/ffi/cast.rs).
 audiosync-cast = { path = "../cast" }
+# AudioSync's web remote (remote/), reached the same way (src/ffi/remote.rs).
+audiosync-remote = { path = "../remote" }
 # Wipes the pairing store's plaintext from memory (src/airplay_pairings.rs);
 # already in the tree through the AirPlay sender.
 zeroize = "1.8.1"

@@ -19,8 +19,10 @@
 //! - [`airplay`]: AudioSync's own AirPlay sender: discovery, speakers, their
 //!   events and the capture's input.
 //! - [`cast`]: AudioSync's own Google Cast sender: discovery, one device's
-//!   session, its events, the device memory and the capture's input. These
-//!   two are the parts of this interface that run threads and sockets of
+//!   session, its events, the device memory and the capture's input.
+//! - [`remote`]: AudioSync's web remote: its server, the snapshots the host
+//!   publishes, the pairing code and the host's command callback. These
+//!   three are the parts of this interface that run threads and sockets of
 //!   their own.
 //!
 //! Threading (S113, S132): each handle states which thread makes which call.
@@ -48,6 +50,7 @@ pub mod airplay;
 pub mod calibrate;
 pub mod cast;
 pub mod device_volume;
+pub mod remote;
 pub mod render;
 pub mod ring;
 pub mod source_quit;
@@ -57,6 +60,7 @@ pub use self::airplay::*;
 pub use self::calibrate::*;
 pub use self::cast::*;
 pub use self::device_volume::*;
+pub use self::remote::*;
 pub use self::render::*;
 pub use self::ring::*;
 pub use self::source_quit::*;
@@ -380,12 +384,13 @@ mod tests {
     const HEADER: &str = include_str!("../include/audiosync_core.h");
 
     /// Every source file of the C interface, by its path under `src/`.
-    const SOURCES: [(&str, &str); 9] = [
+    const SOURCES: [(&str, &str); 10] = [
         ("ffi.rs", include_str!("ffi.rs")),
         ("ffi/airplay.rs", include_str!("ffi/airplay.rs")),
         ("ffi/calibrate.rs", include_str!("ffi/calibrate.rs")),
         ("ffi/cast.rs", include_str!("ffi/cast.rs")),
         ("ffi/device_volume.rs", include_str!("ffi/device_volume.rs")),
+        ("ffi/remote.rs", include_str!("ffi/remote.rs")),
         ("ffi/render.rs", include_str!("ffi/render.rs")),
         ("ffi/ring.rs", include_str!("ffi/ring.rs")),
         ("ffi/source_quit.rs", include_str!("ffi/source_quit.rs")),
@@ -815,13 +820,9 @@ mod tests {
         );
         assert!(rust.structs.len() >= 7, "found {:?}", rust.structs.keys());
         assert!(rust.handles.len() >= 8, "found {:?}", rust.handles);
-        // No callback type crosses the interface since the FIFO feed's pipe
-        // sink went; the parsers stay for the next one
-        // (`rust_types_have_their_c_spelling` checks them).
-        assert!(
-            rust.callbacks.is_empty(),
-            "found {:?}",
-            rust.callbacks.keys()
+        assert_eq!(
+            rust.callbacks.keys().collect::<Vec<_>>(),
+            ["AscRemoteCommand"]
         );
         let header = header_declarations();
         let out_of_date = "include/audiosync_core.h is out of date";
@@ -1186,6 +1187,16 @@ mod tests {
             ("ASC_CAST_ERROR_GROUP", CAST_ERROR_GROUP.to_string()),
             ("ASC_CAST_FORMAT_WAV", CAST_FORMAT_WAV.to_string()),
             ("ASC_CAST_FORMAT_FLAC", CAST_FORMAT_FLAC.to_string()),
+            ("ASC_REMOTE_DEFAULT_PORT", REMOTE_DEFAULT_PORT.to_string()),
+            ("ASC_REMOTE_ERROR_NONE", REMOTE_ERROR_NONE.to_string()),
+            ("ASC_REMOTE_ERROR_CONFIG", REMOTE_ERROR_CONFIG.to_string()),
+            (
+                "ASC_REMOTE_ERROR_PORT_IN_USE",
+                REMOTE_ERROR_PORT_IN_USE.to_string(),
+            ),
+            ("ASC_REMOTE_ERROR_LISTEN", REMOTE_ERROR_LISTEN.to_string()),
+            ("ASC_REMOTE_ERROR_RANDOM", REMOTE_ERROR_RANDOM.to_string()),
+            ("ASC_REMOTE_ERROR_FAILED", REMOTE_ERROR_FAILED.to_string()),
         ]
         .into_iter()
         .map(|(name, value)| (name.to_owned(), value))
