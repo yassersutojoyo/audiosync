@@ -369,6 +369,51 @@ fn a_target_takes_one_airplay2_place_for_all_its_members() {
     sender.shutdown();
 }
 
+// covers: P180
+#[test]
+fn an_airplay2_target_read_back_reports_the_target_volume_under_the_leader() {
+    let _serial = serial();
+    let first = Ap2Server::start(FakeAp2::new());
+    let second = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start(true);
+    let mut events = Events::default();
+    let (da, db) = (
+        airplay2_only(&first, 1, "0x0,0x10040"),
+        airplay2_only(&second, 2, "0x0,0x10040"),
+    );
+    let target = pair(vec![member(Some(&da), 1), member(Some(&db), 2)], None);
+    let id = target.id.clone();
+    sender.add_target(target, options(), |_, _| {});
+    for key in [&da.key, &db.key] {
+        assert!(playing(&mut events, &sender, key, 1));
+    }
+    let reported = |events: &Events, key: &DeviceKey| -> Vec<f64> {
+        events
+            .of(key)
+            .into_iter()
+            .filter_map(|event| match event {
+                SpeakerEvent::VolumeReported(db) => Some(db),
+                _ => None,
+            })
+            .collect()
+    };
+    sender.set_target_volume(&id, Volume::Db(-12.0));
+    sender.read_target_volume(&id);
+    assert!(
+        wait_until(LONG, || {
+            events.drain(&sender);
+            reported(&events, &da.key) == vec![-12.0]
+        }),
+        "{:?}",
+        events.of(&da.key)
+    );
+    assert!(reported(&events, &db.key).is_empty());
+    for server in [&first, &second] {
+        assert!(!server.fake().keys().contains(&"GET_PARAMETER".to_owned()));
+    }
+    sender.shutdown();
+}
+
 fn states_of(events: &Events, key: &DeviceKey) -> Vec<SpeakerState> {
     events
         .of(key)

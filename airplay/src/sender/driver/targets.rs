@@ -212,15 +212,20 @@ impl Driver {
         }
     }
 
-    /// Asks the leader, or the first member that plays (P180).
+    /// Asks the leader, or the first member that plays (P180); on the
+    /// AirPlay 2 path that member reports the target's last set volume.
     pub(super) fn read_target_volume(&mut self, id: &TargetId, now: Instant) {
         let Some(run) = self.driven.get(id) else {
             return;
         };
         let plays = |key: &DeviceKey| {
-            self.speakers.get(key).is_some_and(|speaker| {
-                matches!(&speaker.phase, Phase::Active(active) if active.stream_id.is_some())
-            })
+            self.speakers
+                .get(key)
+                .is_some_and(|speaker| match &speaker.phase {
+                    Phase::Active(active) => active.stream_id.is_some(),
+                    Phase::Ap2(active) => active.stream_id.is_some(),
+                    _ => false,
+                })
         };
         let leader = run.target.leader.clone().filter(|key| plays(key));
         let source = leader.or_else(|| {
@@ -230,10 +235,8 @@ impl Driver {
                 .map(|member| member.key.clone())
                 .find(|key| plays(key))
         });
-        if let Some(key) = source
-            && let Some(active) = self.active(&key)
-        {
-            active.session.read_volume(now);
+        if let Some(key) = source {
+            self.read_volume(&key, now);
         }
     }
 

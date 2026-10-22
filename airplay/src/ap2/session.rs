@@ -2,7 +2,8 @@
 //! P153, P157, P165): `GET /info` in plain text, the HomeKit pairing, then
 //! every byte framed; the session SETUP, the event connection, the second
 //! `/info`, RECORD, SETPEERS under PTP, the volume, the stream SETUP and
-//! FLUSH; `POST /feedback` every 2 s; TEARDOWN of the stream and then of
+//! FLUSH; now-playing metadata after that (P123); `POST /feedback` every
+//! 2 s; TEARDOWN of the stream and then of
 //! the session. Audio packets come in a later stage: a ready session sends
 //! none.
 
@@ -19,6 +20,7 @@ use crate::homekit::{
     VerifyStep,
 };
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
+use crate::metadata::{Metadata, MetadataError, MetadataSupport};
 use crate::rtsp::{Message, Method, Parser, Request, Response};
 use crate::secret::Secret;
 use crate::session::{
@@ -182,7 +184,7 @@ pub enum Ap2Output {
     Close,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum Kind {
     Info { first: bool },
     PairSetup,
@@ -191,6 +193,7 @@ enum Kind {
     Record,
     SetPeers,
     Volume(Volume),
+    Metadata(Metadata),
     StreamSetup,
     Flush,
     Feedback,
@@ -199,14 +202,14 @@ enum Kind {
 }
 
 impl Kind {
-    fn method(self) -> Method {
+    fn method(&self) -> Method {
         match self {
             Kind::Info { .. } => Method::Get,
             Kind::PairSetup | Kind::PairVerify | Kind::Feedback => Method::Post,
             Kind::SessionSetup | Kind::StreamSetup => Method::Setup,
             Kind::Record => Method::Record,
             Kind::SetPeers => Method::SetPeers,
-            Kind::Volume(_) => Method::SetParameter,
+            Kind::Volume(_) | Kind::Metadata(_) => Method::SetParameter,
             Kind::Flush => Method::Flush,
             Kind::TeardownStream | Kind::TeardownSession => Method::Teardown,
         }
@@ -296,6 +299,7 @@ pub struct Ap2Session {
     feedback_wanted: bool,
     feedback_misses: u8,
     pending_volume: Option<Volume>,
+    metadata_queue: VecDeque<Metadata>,
     teardown_deadline: Option<Instant>,
     last_timing_request: Option<Instant>,
     server: Option<String>,
@@ -377,6 +381,7 @@ impl Ap2Session {
             feedback_wanted: false,
             feedback_misses: 0,
             pending_volume: None,
+            metadata_queue: VecDeque::new(),
             teardown_deadline: None,
             last_timing_request: None,
             server: None,
@@ -828,6 +833,23 @@ impl Ap2Session {
         }
     }
 
+    /// Queues a now-playing request (P123 to P127) for the types features
+    /// bits 17, 15 and 16 list; bit 50 isn't read (P128). It goes out once
+    /// the stream SETUP is answered and the stream flushed, after any
+    /// pending volume.
+    pub fn send_metadata(&mut self, metadata: Metadata, now: Instant) -> Result<(), MetadataError> {
+        if matches!(self.state, Ap2State::Closed | Ap2State::TearingDown) {
+            return Err(MetadataError::SessionEnded);
+        }
+        if !MetadataSupport::from_features(self.config.features).allows(metadata.kind()) {
+            return Err(MetadataError::NotListed);
+        }
+        metadata.validate()?;
+        self.metadata_queue.push_back(metadata);
+        self.drive(now);
+        Ok(())
+    }
+
     /// Ends the session: TEARDOWN of the stream, then of the session, at
     /// most 2 s in all (P35, P42, P129). Before the session SETUP is
     /// answered there is nothing to tear down and the connection just
@@ -840,6 +862,7 @@ impl Ap2Session {
                 self.state = Ap2State::TearingDown;
                 self.teardown_deadline = Some(now + TEARDOWN_TIMEOUT);
                 self.pending_volume = None;
+                self.metadata_queue.clear();
                 self.feedback_wanted = false;
                 self.stream_setup_waiting = false;
                 self.drive(now);
@@ -889,6 +912,7 @@ impl Ap2Session {
         self.feedback_due = None;
         self.events_retry_at = None;
         self.pending_volume = None;
+        self.metadata_queue.clear();
         self.pairing = None;
         self.outputs.push_back(Output::Close);
     }
@@ -916,6 +940,7 @@ impl Ap2Session {
         self.in_flight = None;
         self.auth = None;
         self.set_up = false;
+        self.metadata_queue.clear();
         self.feedback_due = None;
         self.feedback_wanted = false;
         self.feedback_misses = 0;
@@ -950,10 +975,14 @@ impl Ap2Session {
                     self.flush_pending = false;
                     return self.send(Kind::Flush, now, false);
                 }
-                if self.state == Ap2State::Ready
-                    && let Some(volume) = self.pending_volume.take()
-                {
-                    self.send(Kind::Volume(volume), now, false);
+                if self.state != Ap2State::Ready {
+                    return;
+                }
+                if let Some(volume) = self.pending_volume.take() {
+                    return self.send(Kind::Volume(volume), now, false);
+                }
+                if let Some(metadata) = self.metadata_queue.pop_front() {
+                    self.send(Kind::Metadata(metadata), now, false);
                 }
             }
             _ => {}
@@ -992,10 +1021,10 @@ impl Ap2Session {
         self.next_cseq = self.next_cseq.wrapping_add(1);
         request.headers.push("CSeq", cseq.to_string());
         let local_control = self.connection.map_or(0, |c| c.control_port);
-        match kind {
+        match &kind {
             Kind::Info { first } => {
                 request.headers.push(PROTOCOL_VERSION_HEADER, "1");
-                if first {
+                if *first {
                     request.headers.push("Content-Type", PLIST_CONTENT_TYPE);
                     request.body = bodies::info_request();
                 }
@@ -1025,6 +1054,15 @@ impl Ap2Session {
             Kind::Volume(volume) => {
                 request.headers.push("Content-Type", "text/parameters");
                 request.body = volume.parameter_body().into_bytes();
+            }
+            Kind::Metadata(metadata) => {
+                request
+                    .headers
+                    .push("Content-Type", metadata.content_type());
+                request
+                    .headers
+                    .push("RTP-Info", format!("rtptime={}", metadata.rtptime()));
+                request.body = metadata.body();
             }
             Kind::StreamSetup => {
                 request.headers.push("Content-Type", PLIST_CONTENT_TYPE);
@@ -1226,6 +1264,11 @@ impl Ap2Session {
                 {
                     self.state = Ap2State::Ready;
                     self.event(Ap2Event::Ready(stream));
+                }
+            }
+            Kind::Metadata(_) => {
+                if !success {
+                    self.warn(method, code);
                 }
             }
             Kind::Feedback => {
