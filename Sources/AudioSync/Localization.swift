@@ -1112,6 +1112,8 @@ struct UIStrings {
         '\(airPlay2Toggle)', in the gear menu or the AudioSync menu, lets
         AudioSync play to AirPlay 2 speakers, stereo pairs and home theater
         groups. It's off at first; turn it on, then quit and reopen AudioSync.
+        With it on, a stereo pair or home theater group shows as one row, and
+        its note names the speakers in it.
 
         Google Cast
         Local and AirPlay speakers play in step: once their delays are set,
