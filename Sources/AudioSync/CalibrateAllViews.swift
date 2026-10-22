@@ -121,6 +121,7 @@ struct CalibrateAllSheetView: View {
                         Text(current(row, t: t))
                             .monospacedDigit()
                             .accessibilityLabel(t.calibrateAllCurrentColumn + ", " + current(row, t: t))
+                            .accessibilityHidden(row.result == .reference)
                         Text(t.calibrateAllResult(row))
                             .monospacedDigit()
                             .foregroundStyle(color(row))

@@ -3855,6 +3855,18 @@ do {
             && ends == [.sourceChanged, .speakerOff, .speakerOff, .speakersChanged, .speakersChanged, .delaysChanged],
           "calibrate all: a switched source, a speaker turned off, a changed list or a moved delay stops the run (S240)",
           "\(ends)")
+    var connecting = started
+    connecting.switchedOn.insert("native:b")
+    var connected = connecting
+    connected.playing.insert("native:b")
+    check(CalibrateAllFlow.end(start: connecting, now: connecting, taking: taking) == nil
+            && CalibrateAllFlow.end(start: connecting, now: connected, taking: taking) == .speakersChanged,
+          "calibrate all: a speaker still connecting at the start that begins playing stops the run, unmuted (S240)")
+    check(t.calibrateAllLine(.ended(.rateChanged))
+                == "The audio's sample rate changed during the measurement. Nothing was changed."
+            && t.calibrateAllLine(.cannotMeasureAgain(name: "Desk"))
+                == "Turn on streaming, the built-in speakers and Desk to measure it again.",
+          "calibrate all: a changed sample rate and a Measure Again that can't start say so in their own words")
     check(CalibrateAllEnd.delaysChanged.core == UInt32(ASC_CALIBRATION_END_CANCELLED)
             && CalibrateAllEnd.speakerOff.core == UInt32(ASC_CALIBRATION_END_SPEAKER_OFF)
             && t.calibrateAllLine(.ended(.sourceChanged))
@@ -3994,6 +4006,28 @@ do {
     check(CalibrateAllFlow.unchanged(measuredFrom, current: { $0.id == "usb" ? 150 : 9 })
             && !CalibrateAllFlow.unchanged(measuredFrom, current: { $0.id == "usb" ? 120 : nil }),
           "calibrate all: Apply writes nothing once a delay moved after the measurement")
+
+    // Undo puts back what Apply replaced, and forgets a delay that wasn't stored (S238).
+    let previous = AirPlayDelay(adjustmentMs: 250)
+    let undo = CalibrateAllUndo(writes: [.local(id: "usb", ms: 100, old: 150), .local(id: "hdmi", ms: 40, old: nil),
+                                         .cast(id: "cast:tv", ms: 900, old: nil), .cast(id: "cast:hall", ms: 300, old: 250),
+                                         .airPlay(ms: 1965, old: 1750)],
+                                previousAirPlay: previous)
+    let restores = CalibrateAllFlow.restores(undo)
+    check(restores == [.airPlay(previous), .cast(id: "cast:hall", ms: 250), .cast(id: "cast:tv", ms: nil),
+                       .local(id: "hdmi", ms: nil), .local(id: "usb", ms: 150)],
+          "calibrate all: Undo restores each replaced delay and the AirPlay delay, and forgets one that wasn't stored",
+          "\(restores)")
+    var castMemory = CastModel()
+    _ = castMemory.setOffset("tv", ms: 900)
+    for case .cast(let id, .none) in restores where id == "cast:tv" { _ = castMemory.clearOffset("tv") }
+    var again = inputs
+    again.cast = (id: "cast:tv", name: "TV", offsetMs: castMemory.offsets["tv"], waitMs: 0)
+    let replanned = (try? CalibrateAllFlow.plan(again).get()) ?? []
+    check(castMemory.offsets["tv"] == nil && !castMemory.clearOffset("tv")
+            && replanned.count > 2 && replanned[2].offsetMs == nil && replanned[2].latencyMs == 0,
+          "calibrate all: after Undo a Cast speaker without a stored offset is searched again, not measured from 0 ms",
+          "\(replanned)")
 
     check(t.calibrateAllProgress(.listening(name: "Desk", sweep: 2)) == "Listening to Desk, sweep 2 of 2…"
             && t.calibrateAllProgress(.listening(name: "MacBook Speakers", sweep: 0)) == "Listening to MacBook Speakers…"

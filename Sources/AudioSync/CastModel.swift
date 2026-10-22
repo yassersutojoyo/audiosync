@@ -450,6 +450,12 @@ struct CastModel {
         return clamped
     }
 
+    /// Forgets the offset of `id`, so its next calibration searches the
+    /// longest window again; false when none was stored.
+    mutating func clearOffset(_ id: String) -> Bool {
+        offsets.removeValue(forKey: id) != nil
+    }
+
     /// An offset in whole ms, clamped to 0 to 20 000; nil when it isn't finite.
     static func clampedOffset(_ ms: Double) -> Double? {
         guard ms.isFinite else { return nil }

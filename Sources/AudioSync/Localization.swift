@@ -370,6 +370,7 @@ struct UIStrings {
         case .speakersChanged: "The speakers changed during the measurement."
         case .speakerOff: "A speaker was turned off during the measurement."
         case .sourceChanged: "The source was switched during the measurement."
+        case .rateChanged: "The audio's sample rate changed during the measurement."
         case .delaysChanged: "A delay changed during the measurement."
         case .failed(let failure): calibrationFailure(failure)
         }
@@ -384,6 +385,8 @@ struct UIStrings {
             return calibrateAllEndReason(end) + " The row for \(name) wasn't changed."
         case .changedSinceMeasured:
             return "A delay changed after the measurement, so nothing was applied. Calibrate again."
+        case .cannotMeasureAgain(let name):
+            return "Turn on streaming, the built-in speakers and \(name) to measure it again."
         case .applied:
             return "New delays applied."
         case .undone:

@@ -63,7 +63,7 @@ extension AppDelegate {
         let taking = [sheet.speakers[0].id, speaker.id]
         let playing = calibratePlayingIDs()
         guard engine.isRunning, taking.allSatisfy(playing.contains) else {
-            appModel.calibrateAll.line = .againEnded(name: speaker.name, .speakerOff)
+            appModel.calibrateAll.line = .cannotMeasureAgain(name: speaker.name)
             return
         }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
@@ -114,20 +114,19 @@ extension AppDelegate {
     func undoCalibrateAll() {
         guard let undo = calibrateAllUndo else { return }
         calibrateAllUndo = nil
-        for write in undo.writes.reversed() {
-            switch write {
-            case .local(let id, _, let old):
-                if let old {
-                    setLocalOffset(id, old)
-                } else {
-                    localOffsetMs[id] = nil
-                    calibrationOffsetChanged(id)
-                }
-            case .cast(let id, _, let old):
-                // The Cast sender can't forget an offset; 0 is what the row showed without one.
-                setCastOffset(id, old ?? 0)
-            case .airPlay:
-                airPlayDelay = undo.previousAirPlay
+        for restore in CalibrateAllFlow.restores(undo) {
+            switch restore {
+            case .local(let id, let ms?):
+                setLocalOffset(id, ms)
+            case .local(let id, .none):
+                localOffsetMs[id] = nil
+                calibrationOffsetChanged(id)
+            case .cast(let id, let ms?):
+                setCastOffset(id, ms)
+            case .cast(let id, .none):
+                clearCastOffset(id)
+            case .airPlay(let previous):
+                airPlayDelay = previous
             }
         }
         DebugTrace.log("[AudioSync] calibrate all: undone")
@@ -400,7 +399,7 @@ final class CalibrateAllRun {
         if let change = CalibrateAllFlow.end(start: context, now: app.calibrateAllContext(taking: taking), taking: taking) {
             return end(change)
         }
-        guard app.engine.captureRate == captureRate else { return end(.sourceChanged) }
+        guard app.engine.captureRate == captureRate else { return end(.rateChanged) }
         let now = clock.nowNs()
         switch stage {
         case .quiet(let until):

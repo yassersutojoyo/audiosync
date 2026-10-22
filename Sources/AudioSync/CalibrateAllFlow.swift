@@ -56,6 +56,8 @@ enum CalibrateAllEnd: Equatable {
     case speakersChanged
     case speakerOff
     case sourceChanged
+    /// The capture's sample rate changed, so the recording no longer lines up.
+    case rateChanged
     /// A delay or hold-back of a speaker taking part moved.
     case delaysChanged
     case failed(CalibrationFailure)
@@ -180,6 +182,9 @@ enum CalibrateAllLine: Equatable {
     case againEnded(name: String, CalibrateAllEnd)
     /// A delay changed after the run, so Apply wrote nothing.
     case changedSinceMeasured
+    /// Measure Again couldn't start: streaming, the reference or the row's
+    /// speaker is off.
+    case cannotMeasureAgain(name: String)
     case applied
     case undone
 }
@@ -188,6 +193,13 @@ enum CalibrateAllLine: Equatable {
 struct CalibrateAllUndo {
     var writes: [CalibrateAllWrite]
     var previousAirPlay: AirPlayDelay
+}
+
+/// One value Undo puts back; a nil delay means none was stored.
+enum CalibrateAllRestore: Equatable {
+    case local(id: String, ms: Double?)
+    case cast(id: String, ms: Double?)
+    case airPlay(AirPlayDelay)
 }
 
 enum CalibrateAllFlow {
@@ -275,6 +287,9 @@ enum CalibrateAllFlow {
     static func end(start: CalibrateAllContext, now: CalibrateAllContext, taking: [String]) -> CalibrateAllEnd? {
         if now.source != start.source { return .sourceChanged }
         if !now.streaming || taking.contains(where: { !now.playing.contains($0) }) { return .speakerOff }
+        // A speaker that was still connecting starts playing unmuted and would hear another's sweep.
+        let joined = now.playing.subtracting(start.playing).subtracting(taking)
+        if joined.contains(where: now.switchedOn.contains) { return .speakersChanged }
         if now.session != start.session || now.switchedOn != start.switchedOn { return .speakersChanged }
         if now.delays != start.delays { return .delaysChanged }
         return nil
@@ -345,6 +360,18 @@ enum CalibrateAllFlow {
             case .local: return .local(id: speaker.id, ms: change.new_ms, old: old)
             case .cast: return .cast(id: speaker.id, ms: change.new_ms, old: old)
             case .airPlay: return .airPlay(ms: change.new_ms, old: old)
+            }
+        }
+    }
+
+    /// What Undo writes, newest first, so the values Apply replaced come
+    /// back; a speaker that had no stored delay gets none again (S238).
+    static func restores(_ undo: CalibrateAllUndo) -> [CalibrateAllRestore] {
+        undo.writes.reversed().map { write in
+            switch write {
+            case .local(let id, _, let old): .local(id: id, ms: old)
+            case .cast(let id, _, let old): .cast(id: id, ms: old)
+            case .airPlay: .airPlay(undo.previousAirPlay)
             }
         }
     }
