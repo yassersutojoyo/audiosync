@@ -949,6 +949,15 @@ mod tests {
                 "ASC_AIRPLAY_REASON_ONE_AIRPLAY2",
                 AIRPLAY_REASON_ONE_AIRPLAY2.to_string(),
             ),
+            (
+                "ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS",
+                AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS.to_string(),
+            ),
+            ("ASC_AIRPLAY_FLAG_TARGET", AIRPLAY_FLAG_TARGET.to_string()),
+            (
+                "ASC_AIRPLAY_FLAG_INCOMPLETE",
+                AIRPLAY_FLAG_INCOMPLETE.to_string(),
+            ),
             ("ASC_AIRPLAY_FLAG_RAOP", AIRPLAY_FLAG_RAOP.to_string()),
             ("ASC_AIRPLAY_FLAG_AIRPLAY", AIRPLAY_FLAG_AIRPLAY.to_string()),
             (

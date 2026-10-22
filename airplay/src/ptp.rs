@@ -1,7 +1,8 @@
 //! The PTP service of the AirPlay 2 path (P158 to P163, P167), sans-I/O:
-//! the sender is the unicast grandmaster of its one PTP receiver, sending
-//! Announce once a second and a two-step Sync with its Follow_Up eight
-//! times a second, and answering that receiver's Delay_Req. Every
+//! the sender is the unicast grandmaster of its one PTP receiver, or of
+//! every member of its one target (P179), sending each Announce once a
+//! second and a two-step Sync with its Follow_Up eight times a second, and
+//! answering their Delay_Req. Every
 //! timestamp is the sender clock read as PTP time (P163). Message layouts
 //! follow IEEE 1588-2008 version 2.
 
@@ -111,14 +112,15 @@ impl Default for PtpPorts {
     }
 }
 
-/// One PTP service for the sender's one AirPlay 2 session (P158, P169).
+/// One PTP service for the sender's one AirPlay 2 session, or the sessions
+/// of one target's members (P158, P169, P179).
 #[derive(Debug)]
 pub struct PtpService {
     clock: SenderClock,
     identity: [u8; 8],
     remote_ports: PtpPorts,
-    /// The receiver it serves while a PTP session runs (P167).
-    peer: Option<IpAddr>,
+    /// The receivers it serves while their PTP sessions run (P167, P179).
+    peers: Vec<IpAddr>,
     next_announce: Option<Instant>,
     next_sync: Option<Instant>,
     announce_seq: u16,
@@ -132,7 +134,7 @@ impl PtpService {
             clock,
             identity,
             remote_ports,
-            peer: None,
+            peers: Vec::new(),
             next_announce: None,
             next_sync: None,
             announce_seq: 0,
@@ -145,26 +147,49 @@ impl PtpService {
         self.identity
     }
 
-    /// The receiver served now, if any.
+    /// The first receiver served now, if any.
     pub fn peer(&self) -> Option<IpAddr> {
-        self.peer
+        self.peers.first().copied()
+    }
+
+    /// Every receiver served now.
+    pub fn peers(&self) -> &[IpAddr] {
+        &self.peers
     }
 
     /// A PTP session SETUP to `peer` was answered 200 (P167): the first
-    /// Announce goes at once, and Sync every 125 ms from now on.
+    /// Announce goes at once, and Sync every 125 ms from now on. Another
+    /// member of the same target joins the schedule already running
+    /// (P179).
     pub fn start(&mut self, peer: IpAddr, now: Instant) {
-        self.peer = Some(peer.to_canonical());
-        self.next_announce = Some(now);
-        self.next_sync = Some(now);
-        self.handle_timeout(now);
+        let peer = peer.to_canonical();
+        if self.peers.contains(&peer) {
+            return;
+        }
+        self.peers.push(peer);
+        if self.peers.len() == 1 {
+            self.next_announce = Some(now);
+            self.next_sync = Some(now);
+            self.handle_timeout(now);
+        }
     }
 
-    /// The session ended (P167): nothing more is sent.
+    /// Every session ended (P167): nothing more is sent.
     pub fn stop(&mut self) {
-        self.peer = None;
+        self.peers.clear();
         self.next_announce = None;
         self.next_sync = None;
         self.transmits.clear();
+    }
+
+    /// One receiver's session ended; the others are still served.
+    pub fn stop_peer(&mut self, peer: IpAddr) {
+        let peer = peer.to_canonical();
+        self.peers.retain(|known| *known != peer);
+        self.transmits.retain(|transmit| transmit.to.ip() != peer);
+        if self.peers.is_empty() {
+            self.stop();
+        }
     }
 
     pub fn poll_timeout(&self) -> Option<Instant> {
@@ -181,14 +206,22 @@ impl PtpService {
     /// Queues the Announce and Sync messages due at `now`. A late turn
     /// sends one of each, not a burst, and the schedule goes on from now.
     pub fn handle_timeout(&mut self, now: Instant) {
-        let Some(peer) = self.peer else {
+        if self.peers.is_empty() {
             return;
-        };
+        }
         if let Some(due) = self.next_announce
             && due <= now
         {
             let bytes = self.announce();
-            self.queue(MessageType::Announce, peer, self.announce_seq, bytes);
+            for index in 0..self.peers.len() {
+                let peer = self.peers[index];
+                self.queue(
+                    MessageType::Announce,
+                    peer,
+                    self.announce_seq,
+                    bytes.clone(),
+                );
+            }
             self.announce_seq = self.announce_seq.wrapping_add(1);
             self.next_announce = Some(next_after(due, ANNOUNCE_INTERVAL, now));
         }
@@ -196,18 +229,30 @@ impl PtpService {
             && due <= now
         {
             let bytes = self.sync();
-            self.queue(MessageType::Sync, peer, self.sync_seq, bytes);
+            for index in 0..self.peers.len() {
+                let peer = self.peers[index];
+                self.queue(MessageType::Sync, peer, self.sync_seq, bytes.clone());
+            }
             self.sync_seq = self.sync_seq.wrapping_add(1);
             self.next_sync = Some(next_after(due, SYNC_INTERVAL, now));
         }
     }
 
     /// The Sync with `sequence_id` left at `sent`: its Follow_Up carries
-    /// that time (P161).
+    /// that time (P161). For the first receiver served.
     pub fn sync_sent(&mut self, sequence_id: u16, sent: Instant) {
-        let Some(peer) = self.peer else {
+        if let Some(peer) = self.peer() {
+            self.sync_sent_to(sequence_id, peer, sent);
+        }
+    }
+
+    /// The Sync with `sequence_id` left for `peer` at `sent`: that
+    /// receiver's Follow_Up carries the time.
+    pub fn sync_sent_to(&mut self, sequence_id: u16, peer: IpAddr, sent: Instant) {
+        let peer = peer.to_canonical();
+        if !self.peers.contains(&peer) {
             return;
-        };
+        }
         let bytes = self.follow_up(sequence_id, self.clock.ptp(sent));
         self.queue(MessageType::FollowUp, peer, sequence_id, bytes);
     }
@@ -216,10 +261,11 @@ impl PtpService {
     /// Only a Delay_Req from the receiver's address (P86) is answered
     /// (P162); everything else changes nothing.
     pub fn handle_message(&mut self, bytes: &[u8], source: SocketAddr, received: Instant) {
-        let Some(peer) = self.peer else {
-            return;
-        };
-        if !crate::transport::from_receiver(source, peer) {
+        if !self
+            .peers
+            .iter()
+            .any(|peer| crate::transport::from_receiver(source, *peer))
+        {
             return;
         }
         let Some(request) = DelayReq::parse(bytes) else {

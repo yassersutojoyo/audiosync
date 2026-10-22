@@ -100,6 +100,7 @@ extern "C" {
 #define ASC_AIRPLAY_REASON_AIRPLAY2_ONLY 6 /* only AirPlay 2 could serve it */
 #define ASC_AIRPLAY_REASON_TIMING 7        /* it refused NTP timing, and PTP can't take its place */
 #define ASC_AIRPLAY_REASON_ONE_AIRPLAY2 8  /* another AirPlay 2 speaker plays; one at a time */
+#define ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS 9 /* an Apple TV whose home theater group plays, or the group of one that plays alone */
 
 /* What discovery saw (AscAirPlayReceiver.flags), bit by bit. */
 #define ASC_AIRPLAY_FLAG_RAOP 1            /* announces _raop._tcp (AirPlay 1 audio) */
@@ -112,6 +113,8 @@ extern "C" {
 #define ASC_AIRPLAY_FLAG_AIRPLAY2 128      /* it lists AirPlay 2 features */
 #define ASC_AIRPLAY_FLAG_OVER_AIRPLAY2 256 /* the AirPlay 2 switch is on and the sender reaches it over AirPlay 2 */
 #define ASC_AIRPLAY_FLAG_PAIRED 512        /* credentials are kept for it, which asc_airplay_forget_pairing drops */
+#define ASC_AIRPLAY_FLAG_TARGET 1024       /* a stereo pair or home theater group, added like a speaker; only with the AirPlay 2 switch on */
+#define ASC_AIRPLAY_FLAG_INCOMPLETE 2048   /* a target with a member out of view, playing nothing, or reporting its partner unreachable */
 
 /* What a sender event reports (AscAirPlayEvent.kind). */
 #define ASC_AIRPLAY_EVENT_STATE 1    /* a speaker's state changed: .state */
@@ -1195,6 +1198,7 @@ typedef struct AscAirPlayReceiver {
     int32_t availability; /* ASC_AIRPLAY_AVAILABLE ... ASC_AIRPLAY_UNSUPPORTED */
     int32_t unsupported;  /* ASC_AIRPLAY_REASON_*: why it can't play */
     uint32_t flags;       /* ASC_AIRPLAY_FLAG_* bits */
+    const char *target;   /* the "pair:<tsid>" or "theater:<group>" ID of the target it is a member of, or "" */
 } AscAirPlayReceiver;
 
 /*

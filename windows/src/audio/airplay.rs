@@ -1673,6 +1673,8 @@ impl AirPlaySpeakers {
                     });
                     self.mark_stopped(&mut events);
                 }
+                // Stereo pairs and home theater groups are not listed here yet.
+                SenderEvent::TargetMissing { .. } => {}
             }
         }
         // Events it sent before it stopped were taken in above.
@@ -1953,6 +1955,7 @@ impl AirPlaySpeakers {
                         .log(|| format!("AirPlay receiver gone: {}", self.label(&id)));
                 }
             }
+            ReceiverEvent::Target(_) => {}
         }
     }
 

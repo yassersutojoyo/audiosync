@@ -83,6 +83,7 @@ use crate::stream::{
     DEFAULT_INPUT_FRAMES, DEFAULT_LATENCY_FRAMES, MAX_DELAY, SpeakerCounters, SpeakerLatency,
     Stream, StreamConfig, StreamCounters,
 };
+use crate::targets::{Target, TargetChange, TargetId};
 use crate::volume::Volume;
 
 use driver::{Command, Driver, Input};
@@ -231,12 +232,20 @@ pub struct ReceiverInfo {
     /// audio; it plays once the host pairs it ([`Sender::start_pairing`])
     /// and adds it with the credentials.
     pub plan: Result<(), ErrorKind>,
+    /// The stereo pair or home theater group it is a member of (P176). Its
+    /// shared group key, when it has one and no target, is only
+    /// information ([`Device::group_keys`], P175).
+    pub target: Option<TargetId>,
 }
 
 impl ReceiverInfo {
     pub fn new(device: Device) -> ReceiverInfo {
         let plan = plan(&device);
-        ReceiverInfo { device, plan }
+        ReceiverInfo {
+            device,
+            plan,
+            target: None,
+        }
     }
 }
 
@@ -276,6 +285,9 @@ pub enum ReceiverEvent {
     /// It is gone from the network (or discovery stopped); a running
     /// session goes on until its own connection says otherwise (P18).
     Gone(DeviceKey),
+    /// A stereo pair or home theater group appeared or changed, or went
+    /// away (P176). Its members are reported as devices too, before it.
+    Target(TargetChange),
 }
 
 /// Where a speaker is.
@@ -366,6 +378,13 @@ pub enum SenderEvent {
     /// playing; a host that wants discovery back starts it again, or
     /// replaces the sender.
     DiscoveryFailed,
+    /// The members of a target the host added that play nothing now: out
+    /// of view at the start, or lost and waiting for a retry (P181). Sent
+    /// whenever the list changes, empty once every member plays again.
+    TargetMissing {
+        id: TargetId,
+        missing: Vec<DeviceKey>,
+    },
 }
 
 /// The sender: one stream, any number of speakers, optional discovery.
@@ -505,6 +524,73 @@ impl Sender {
             counters: counters.clone(),
         });
         counters
+    }
+
+    /// Plays a stereo pair or home theater group: every member in view gets
+    /// a session of its own, on one path, with one delay and one volume,
+    /// those of `options`; the control device of a home theater group gets
+    /// none (P177 to P180). `member` fills in each member's own password
+    /// and credentials. A member out of view joins when discovery sees it
+    /// again (P181); members that join the target later wait for the next
+    /// add (P176). Adding a target already added updates its delay and
+    /// volume.
+    ///
+    /// Speaker events come for each member under its own key; the returned
+    /// counters are the members'.
+    pub fn add_target(
+        &self,
+        target: Target,
+        options: SpeakerOptions,
+        mut member: impl FnMut(&DeviceKey, &mut SpeakerOptions),
+    ) -> Vec<(DeviceKey, Arc<SpeakerCounters>)> {
+        let mut members = Vec::with_capacity(target.members.len());
+        for key in target.members.iter().map(|member| &member.key) {
+            let mut own = options.clone();
+            member(key, &mut own);
+            own.delay = options.delay;
+            own.volume = options.volume;
+            own.pcm = options.pcm;
+            let counters = self
+                .speaker_counters
+                .borrow_mut()
+                .entry(key.clone())
+                .or_insert_with(|| {
+                    Arc::new(SpeakerCounters::for_stream(self.stream_counters.clone()))
+                })
+                .clone();
+            members.push((key.clone(), own, counters));
+        }
+        let counters = members
+            .iter()
+            .map(|(key, _, counters)| (key.clone(), counters.clone()))
+            .collect();
+        self.command(Command::AddTarget {
+            target: Box::new(target),
+            members,
+        });
+        counters
+    }
+
+    /// Stops every member of a target, as [`Sender::remove_speaker`] does.
+    pub fn remove_target(&self, id: &TargetId) {
+        self.command(Command::RemoveTarget(id.clone()));
+    }
+
+    /// Sets a target's one delay d_s for all its members (P179).
+    pub fn set_target_delay(&self, id: &TargetId, delay: Duration) {
+        self.command(Command::SetTargetDelay(id.clone(), delay));
+    }
+
+    /// Sets a target's one volume, sent to every member (P180).
+    pub fn set_target_volume(&self, id: &TargetId, volume: Volume) {
+        self.command(Command::SetTargetVolume(id.clone(), volume));
+    }
+
+    /// Asks a target's leader for its volume, or the first member that
+    /// plays when the leader doesn't (P180); the answer comes as
+    /// [`SpeakerEvent::VolumeReported`] under that member's key.
+    pub fn read_target_volume(&self, id: &TargetId) {
+        self.command(Command::ReadTargetVolume(id.clone()));
     }
 
     /// The stored AirPlay 2 device ID (P5, P43), for the AirPlay 2 sessions

@@ -213,6 +213,8 @@ pub struct FakeAp2 {
     pub event_port: u16,
     /// Requests left unanswered, by key.
     pub silent: Vec<String>,
+    /// Requests answered only after this long, by key.
+    pub pause: HashMap<String, Duration>,
     /// A body in place of the usual answer, by key.
     pub bodies: HashMap<String, Vec<u8>>,
     /// The stream SETUP answer leaves out `dataPort`.
@@ -249,6 +251,7 @@ impl FakeAp2 {
             challenge: None,
             event_port: EVENT_PORT,
             silent: Vec::new(),
+            pause: HashMap::new(),
             bodies: HashMap::new(),
             no_data_port: false,
             data_port: DATA_PORT,
@@ -313,6 +316,9 @@ impl FakeAp2 {
             let key = request_key(&request);
             if self.silent.contains(&key) {
                 continue;
+            }
+            if let Some(pause) = self.pause.get(&key) {
+                thread::sleep(*pause);
             }
             let challenged = self.challenge.as_ref().is_some_and(|(wanted, _)| {
                 *wanted == key && !request.headers.contains("Authorization")
