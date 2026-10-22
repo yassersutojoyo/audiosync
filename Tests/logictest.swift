@@ -1360,6 +1360,13 @@ do {
     check(UIStrings().nativeAirPlayOneAirPlay2(name: "Loft")
             == "AudioSync plays one AirPlay 2 speaker at a time, so Loft waits. It starts once the other one stops.",
           "P169 native airplay: the waiting notice reads as on Windows")
+    let lets = "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+    let stops = "AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+    check(UIStrings().airPlay2Note(on: false, onAtLaunch: true) == stops
+            && UIStrings().airPlay2Note(on: true, onAtLaunch: true) == lets
+            && UIStrings().airPlay2Note(on: true, onAtLaunch: false) == lets
+            && UIStrings().airPlay2Note(on: false, onAtLaunch: false) == lets,
+          "AirPlay 2 switch: its note says AirPlay 2 stops only once turned off from a launch that runs it, as on Windows")
     check(UIStrings().nativeAirPlayWaitingTitle(name: "Loft") == "Loft waiting"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true, target: nil) == "Waiting for the other AirPlay 2 speaker"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, target: nil) == nil,

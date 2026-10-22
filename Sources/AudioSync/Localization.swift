@@ -529,8 +529,13 @@ struct UIStrings {
     /// The AirPlay 2 switch in the gear menu and the AudioSync menu, off at
     /// first; the sender reads it at launch.
     let airPlay2Toggle = "AirPlay 2 (Experimental)"
-    /// Its subtitle in the AudioSync menu, its tooltip and VoiceOver hint.
-    let airPlay2Note = "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+    /// Its subtitle in both menus, its tooltip and VoiceOver hint. The stop
+    /// sentence only once the user turns off AirPlay 2 that this launch runs.
+    func airPlay2Note(on: Bool, onAtLaunch: Bool) -> String {
+        !on && onAtLaunch
+            ? "AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+            : "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+    }
 
     // MARK: AirPlay pairing prompt
 
