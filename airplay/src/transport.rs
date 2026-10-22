@@ -1079,8 +1079,13 @@ mod tests {
         for socket in [&io.control, &io.timing] {
             assert_eq!(socket.read_timeout().expect("timeout"), None);
         }
-        let timing = SocketAddr::new(connection.local, connection.timing_port);
-        let control = SocketAddr::new(connection.local, connection.control_port);
+        let Connection {
+            local: sender,
+            control_port,
+            timing_port,
+        } = connection;
+        let timing = SocketAddr::new(sender, timing_port);
+        let control = SocketAddr::new(sender, control_port);
         let receiver = UdpSocket::bind("127.0.0.1:0").expect("receiver socket");
         receiver.set_read_timeout(Some(WAIT)).expect("timeout");
         let mut buf = [0u8; 64];
