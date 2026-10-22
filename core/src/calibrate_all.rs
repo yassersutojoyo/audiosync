@@ -61,6 +61,10 @@ pub enum PlanError {
     DuplicateId,
     /// Only the reference is on.
     NothingToMeasure,
+    /// A speaker's expected arrival is too late for its recording to fit
+    /// the estimate's 2^21 frames at this rate (S234): cut short, its sweep
+    /// would read as too quiet.
+    TooLong,
 }
 
 /// Why a run or a sheet ended before it could be applied.
@@ -158,6 +162,9 @@ pub struct AirPlayShared {
     pub spread_ms: f64,
     pub certain_rows: usize,
     pub state: SharedState,
+    /// The range cut the new delay: the AirPlay speakers stay off by the
+    /// rest.
+    pub clamped: bool,
 }
 
 /// What a change writes.
@@ -253,7 +260,7 @@ impl Run {
         }
         let mut states = vec![RowState::NotMeasured; speakers.len()];
         states[reference] = RowState::Reference;
-        Ok(Run {
+        let run = Run {
             rate,
             signal,
             rows: (0..speakers.len()).collect(),
@@ -264,7 +271,14 @@ impl Run {
             reference_ms: 0.0,
             next: Next::Reference,
             ended: None,
-        })
+        };
+        let cut = (0..run.speakers.len()).any(|row| {
+            !run.unknown_cast(row) && run.frames(run.expected_ms(row)) > MAX_RECORDING_FRAMES
+        });
+        if cut {
+            return Err(PlanError::TooLong);
+        }
+        Ok(run)
     }
 
     /// What to play and record next; `None` once the run is over.
@@ -410,19 +424,30 @@ impl Run {
         frame as f64 * 1000.0 / f64::from(self.rate)
     }
 
-    fn latency_window(&self, row: usize) -> usize {
+    fn expected_ms(&self, row: usize) -> f64 {
         let latency = self.speakers[row].latency_ms;
-        self.window(if latency.is_finite() { latency } else { 0.0 })
+        if latency.is_finite() { latency } else { 0.0 }
+    }
+
+    fn latency_window(&self, row: usize) -> usize {
+        self.window(self.expected_ms(row))
     }
 
     /// The sweep expected at `arrival_ms`, its length and [`TAIL_SECONDS`],
-    /// within what the estimate accepts.
-    fn window(&self, arrival_ms: f64) -> usize {
+    /// at least what the estimate accepts.
+    fn frames(&self, arrival_ms: f64) -> usize {
         let rate = f64::from(self.rate);
         let ms = arrival_ms.max(0.0) + (calibrate::SIGNAL_SECONDS + TAIL_SECONDS) * 1000.0;
         let shortest = self.signal.len() + (calibrate::MIN_EXTRA_SECONDS * rate).ceil() as usize;
-        let frames = (ms * rate / 1000.0).ceil().min(MAX_RECORDING_FRAMES as f64) as usize;
+        let frames = (ms * rate / 1000.0).ceil().min(usize::MAX as f64) as usize;
         frames.max(shortest)
+    }
+
+    /// [`Run::frames`] within the estimate's limit. [`Run::new`] refuses a
+    /// run the limit would cut, so only a searching Cast speaker's second
+    /// window meets it, and its sweep was already found inside the limit.
+    fn window(&self, arrival_ms: f64) -> usize {
+        self.frames(arrival_ms).min(MAX_RECORDING_FRAMES)
     }
 
     /// How much later than the reference the sweep arrived, and where.
@@ -505,6 +530,7 @@ fn shared(rows: &[Row]) -> Option<AirPlayShared> {
             spread_ms: 0.0,
             certain_rows: 0,
             state: SharedState::NoneCertain,
+            clamped: false,
         });
     };
     let spread_ms = high - low;
@@ -514,9 +540,10 @@ fn shared(rows: &[Row]) -> Option<AirPlayShared> {
     } else {
         differences[middle]
     };
+    let (new_ms, clamped) = moved(Class::AirPlay, old_ms, median);
     Some(AirPlayShared {
         old_ms,
-        new_ms: Some(moved(Class::AirPlay, old_ms, median).0),
+        new_ms: Some(new_ms),
         spread_ms,
         certain_rows: differences.len(),
         state: if spread_ms > MAX_AIRPLAY_SPREAD_MS {
@@ -524,6 +551,7 @@ fn shared(rows: &[Row]) -> Option<AirPlayShared> {
         } else {
             SharedState::Certain
         },
+        clamped,
     })
 }
 

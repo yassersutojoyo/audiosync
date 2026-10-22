@@ -39,7 +39,8 @@ extension AppDelegate {
         }
         guard let rate = CalibrationMicrophone.defaultInputRate() else { return calibrateAllFailed(.noMicrophone) }
         guard let handle = CalibrateAllRunHandle(rate: rate, speakers: speakers) else {
-            return calibrateAllFailed(.unsupportedRate)
+            // At a supported rate the core refuses only an arrival whose recording wouldn't fit there.
+            return calibrateAllFailed(asc_calibration_signal_frames(rate) > 0 ? .tooLong(nil) : .unsupportedRate)
         }
         var status = appModel.calibrateAll
         status.sheet = nil
