@@ -201,12 +201,17 @@ pub fn stream_setup(
 
 /// SETPEERS (P106, P165): the receiver's address first, then the sender's.
 pub fn peers(receiver: IpAddr, sender: &[IpAddr]) -> Vec<u8> {
-    let mut addresses = vec![text(&receiver.to_canonical().to_string())];
-    addresses.extend(
-        sender
-            .iter()
-            .map(|address| text(&address.to_canonical().to_string())),
-    );
+    peers_with_members(receiver, &[], sender)
+}
+
+/// SETPEERS to a member of a target (P179): the member, the other members,
+/// then the sender.
+pub fn peers_with_members(receiver: IpAddr, members: &[IpAddr], sender: &[IpAddr]) -> Vec<u8> {
+    let addresses = std::iter::once(&receiver)
+        .chain(members)
+        .chain(sender)
+        .map(|address| text(&address.to_canonical().to_string()))
+        .collect();
     binary(Value::Array(addresses))
 }
 

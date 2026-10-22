@@ -69,6 +69,9 @@ pub struct Ap2Config {
     /// The PTP service's clock, when it runs (P158). Without it a session
     /// never asks for PTP.
     pub ptp: Option<PtpPeer>,
+    /// The other members of the receiver's target, named in SETPEERS after
+    /// the receiver (P179).
+    pub members: Vec<IpAddr>,
     /// The host asked for a PIN pairing (P61): the connection runs
     /// `/pair-pin-start`, waits for [`Ap2Session::submit_pin`], then pair-setup
     /// M1 to M6 and a pair-verify (P153), and ends there without a session.
@@ -87,6 +90,7 @@ impl Ap2Config {
             device_id: [0; 6],
             timing: Timing::Ntp,
             ptp: None,
+            members: Vec::new(),
             pin_pairing: false,
         }
     }
@@ -1016,7 +1020,7 @@ impl Ap2Session {
                 request.headers.push("Content-Type", PEERS_CONTENT_TYPE);
                 let receiver = self.remote.map_or(IpAddr::from([0, 0, 0, 0]), |r| r.ip());
                 let local: Vec<IpAddr> = self.connection.iter().map(|c| c.local).collect();
-                request.body = bodies::peers(receiver, &local);
+                request.body = bodies::peers_with_members(receiver, &self.config.members, &local);
             }
             Kind::Volume(volume) => {
                 request.headers.push("Content-Type", "text/parameters");

@@ -55,10 +55,9 @@ impl Driver {
     /// to retry its own (P169): that one, and every AirPlay 1 session, go on
     /// untouched.
     pub(super) fn start_ap2(&mut self, key: &DeviceKey, now: Instant) {
-        let running = self
-            .speakers
-            .iter()
-            .any(|(other, speaker)| other != key && speaker.holds_ap2());
+        let running = self.speakers.iter().any(|(other, speaker)| {
+            other != key && speaker.holds_ap2() && !self.same_target(key, other)
+        });
         if running {
             let error = SessionError::new(ErrorKind::Unsupported(
                 UnsupportedReason::OneAirPlay2Session,
@@ -82,6 +81,7 @@ impl Driver {
             first.filter(|_| wants).map(|address| address.ip())
         });
         let ptp = ptp_family.and_then(|family| self.ptp_peer(key, family));
+        let members = self.other_member_addresses(key);
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
@@ -102,6 +102,7 @@ impl Driver {
         config.password = speaker.options.password.clone();
         config.device_id = self.device_id;
         config.ptp = ptp;
+        config.members = members;
         config.timing = if self.ptp_timing.contains(key) {
             Timing::Ptp
         } else {
@@ -225,6 +226,7 @@ impl Driver {
         let io = active.io.take();
         let events = active.events_io.take();
         let stream_id = active.stream_id.take();
+        let remote = active.session.remote();
         if let Some(io) = io {
             self.retired.extend(io.close());
         }
@@ -235,8 +237,8 @@ impl Driver {
             self.stream.remove_speaker(id);
             self.stream_ids.remove(&id);
         }
-        if let Some(run) = &mut self.ptp {
-            run.service.stop();
+        if let (Some(run), Some(remote)) = (&mut self.ptp, remote) {
+            run.service.stop_peer(remote.ip());
         }
     }
 
@@ -302,7 +304,8 @@ impl Driver {
             sent = true;
             run.io.send(transmit.port, transmit.to, &transmit.bytes);
             if transmit.kind == MessageType::Sync {
-                run.service.sync_sent(transmit.sequence_id, Instant::now());
+                run.service
+                    .sync_sent_to(transmit.sequence_id, transmit.to.ip(), Instant::now());
             }
         }
         sent
@@ -396,8 +399,12 @@ impl Driver {
                     if let (Some(run), Some(remote)) = (&mut self.ptp, remote) {
                         run.service.start(remote.ip(), now);
                     }
-                } else {
-                    // P158: the service runs only while the session uses PTP.
+                } else if self
+                    .ptp
+                    .as_ref()
+                    .is_some_and(|run| run.service.peers().is_empty())
+                {
+                    // P158: the service runs only while a session uses PTP.
                     self.close_ptp();
                 }
             }
@@ -411,7 +418,12 @@ impl Driver {
             Ap2Event::Warning(warning) => self.emit_speaker(key, SpeakerEvent::Warning(warning)),
             Ap2Event::Failed(error) => {
                 let verifying = self.ap2_active(key).is_some_and(|active| active.verifying);
-                if verifying && error.kind == ErrorKind::PairingRequired {
+                let member = self
+                    .speakers
+                    .get(key)
+                    .is_some_and(|speaker| speaker.target.is_some());
+                let settling = member && self.settling(key, error.kind, now);
+                if verifying && error.kind == ErrorKind::PairingRequired && !settling {
                     self.reject_homekit(key);
                 }
                 self.on_failed(key, error, now);

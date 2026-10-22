@@ -17,7 +17,7 @@ use std::fmt;
 use std::net::{IpAddr, SocketAddr, SocketAddrV6};
 
 pub use resolve::{DnsRecord, Resolver};
-pub use txt::{AirPlayTxt, RaopTxt, Txt};
+pub use txt::{AirPlayTxt, GroupKeys, RaopTxt, Txt};
 
 use crate::error::{ErrorKind, UnsupportedReason};
 use crate::metadata::MetadataSupport;
@@ -167,6 +167,12 @@ impl StatusFlags {
     pub const PIN_REQUIRED: u32 = 3;
     pub const PASSWORD_REQUIRED: u32 = 7;
     pub const ONE_TIME_PAIRING_REQUIRED: u32 = 9;
+    pub const RELAYING_SUPPORTED: u32 = 11;
+    pub const SILENT_PRIMARY: u32 = 12;
+    /// The device leads its tight sync group (P172, P173).
+    pub const TIGHT_SYNC_LEADER: u32 = 13;
+    /// Its tight sync partner is unreachable (P172, P181).
+    pub const TIGHT_SYNC_PARTNER_UNREACHABLE: u32 = 14;
     pub const SESSION_ACTIVE: u32 = 17;
 
     /// A hex number, with or without `0x`, that fits in 32 bits.
@@ -411,6 +417,27 @@ impl Device {
             .and_then(|txt| txt.features)
             .or_else(|| self.raop_txt.as_ref().and_then(|txt| txt.features))
             .unwrap_or_default()
+    }
+
+    /// The group keys of its AirPlay TXT record, all empty without one
+    /// (P172).
+    pub fn group_keys(&self) -> &GroupKeys {
+        static NONE: GroupKeys = GroupKeys {
+            gid: None,
+            is_group_leader: None,
+            contains_group_leader: None,
+            parent_group_id: None,
+            parent_contains_group_leader: None,
+            group_public_name: None,
+            tight_sync_id: None,
+            tsm: None,
+            psgid: None,
+            psgtp: None,
+            psgsz: None,
+            pgm: None,
+            home_group_id: None,
+        };
+        self.airplay_txt.as_ref().map_or(&NONE, |txt| &txt.group)
     }
 
     /// RAOP `am` or AirPlay `model` starts with `AppleTV` (P46).

@@ -30,6 +30,9 @@ pub enum UnsupportedReason {
     Timing,
     /// Another AirPlay 2 session is running (P169).
     OneAirPlay2Session,
+    /// The Apple TV of a home theater group the host plays, or the group of
+    /// an Apple TV the host plays by itself (P177).
+    PlaysThroughSpeakers,
 }
 
 impl fmt::Display for UnsupportedReason {
@@ -43,6 +46,7 @@ impl fmt::Display for UnsupportedReason {
             UnsupportedReason::AirPlay2Only => "AirPlay 2 only",
             UnsupportedReason::Timing => "timing",
             UnsupportedReason::OneAirPlay2Session => "one AirPlay 2 speaker at a time",
+            UnsupportedReason::PlaysThroughSpeakers => "plays through its speakers",
         })
     }
 }

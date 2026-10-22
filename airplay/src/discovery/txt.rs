@@ -263,6 +263,87 @@ pub struct AirPlayTxt {
     pub required_sender_features: Option<String>,
     pub firmware_version: Option<String>,
     pub os_version: Option<String>,
+    /// The group keys of P172, each read on its own.
+    pub group: GroupKeys,
+}
+
+/// The group keys of an AirPlay TXT record (P172), reported raw. Text keys
+/// are trimmed; a boolean or integer that doesn't parse drops only itself.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GroupKeys {
+    /// `gid`: one UUID, or `<tsid>+<n>+<uuid>`.
+    pub gid: Option<String>,
+    /// `igl`, or `isGroupLeader` from the speakers that send that instead.
+    pub is_group_leader: Option<bool>,
+    /// `gcgl`.
+    pub contains_group_leader: Option<bool>,
+    /// `pgid`.
+    pub parent_group_id: Option<String>,
+    /// `pgcgl`.
+    pub parent_contains_group_leader: Option<bool>,
+    /// `gpn`: a stereo pair's name, or the Apple TV a speaker plays for.
+    pub group_public_name: Option<String>,
+    /// `tsid`: shared by the members of a stereo pair.
+    pub tight_sync_id: Option<String>,
+    /// `tsm`, meaning unknown.
+    pub tsm: Option<u64>,
+    /// `psgid`.
+    pub psgid: Option<String>,
+    /// `psgtp`.
+    pub psgtp: Option<u64>,
+    /// `psgsz`: how many devices the group of an Apple TV has.
+    pub psgsz: Option<u64>,
+    /// `pgm`, meaning unknown.
+    pub pgm: Option<u64>,
+    /// `hgid`: home group UUID.
+    pub home_group_id: Option<String>,
+}
+
+impl GroupKeys {
+    pub fn read(txt: &Txt) -> GroupKeys {
+        let text = |key: &str| {
+            txt.string(key)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        GroupKeys {
+            gid: text("gid"),
+            is_group_leader: txt.flag("igl").or_else(|| txt.flag("isGroupLeader")),
+            contains_group_leader: txt.flag("gcgl"),
+            parent_group_id: text("pgid"),
+            parent_contains_group_leader: txt.flag("pgcgl"),
+            group_public_name: text("gpn"),
+            tight_sync_id: text("tsid"),
+            tsm: txt.int("tsm"),
+            psgid: text("psgid"),
+            psgtp: txt.int("psgtp"),
+            psgsz: txt.int("psgsz"),
+            pgm: txt.int("pgm"),
+            home_group_id: text("hgid"),
+        }
+    }
+
+    /// The part of `gid` before the first `+`, lowercased, so both forms of
+    /// one group compare equal.
+    pub fn group_key(&self) -> Option<String> {
+        self.gid.as_deref().and_then(group_key)
+    }
+
+    /// The middle field of a `<tsid>+<n>+<uuid>` `gid`.
+    pub fn gid_middle(&self) -> Option<u64> {
+        let mut fields = self.gid.as_deref()?.split('+');
+        let _tsid = fields.next()?;
+        let middle = fields.next()?;
+        fields.next()?;
+        parse_int(middle)
+    }
+}
+
+/// A group identifier compared case-insensitively, up to its first `+`.
+pub fn group_key(text: &str) -> Option<String> {
+    let key = text.split('+').next().unwrap_or_default().trim();
+    (!key.is_empty()).then(|| key.to_ascii_lowercase())
 }
 
 impl AirPlayTxt {
@@ -289,6 +370,7 @@ impl AirPlayTxt {
             required_sender_features: text("rsf"),
             firmware_version: text("fv"),
             os_version: text("osvers"),
+            group: GroupKeys::read(txt),
         }
     }
 }

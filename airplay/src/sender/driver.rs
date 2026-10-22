@@ -13,6 +13,7 @@
 //! meanwhile wait at most that long.
 
 mod ap2;
+mod targets;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -36,6 +37,7 @@ use crate::sdp::Codec;
 use crate::secret::Secret;
 use crate::session::{Output, Session, SessionConfig, SessionEvent, State, TEARDOWN_TIMEOUT};
 use crate::stream::{self, SpeakerConfig, SpeakerCounters, Stream, StreamEvent, Transmit};
+use crate::targets::{Target, TargetId, Targets};
 use crate::transport::{self, IoEvent, RtspIo, SessionIo, SessionKey};
 use crate::volume::Volume;
 
@@ -91,6 +93,14 @@ pub(crate) enum Command {
     CancelPairing(DeviceKey),
     ForgetHomeKit(DeviceKey),
     SetAirPlay2DeviceId([u8; 6]),
+    AddTarget {
+        target: Box<Target>,
+        members: Vec<(DeviceKey, SpeakerOptions, Arc<SpeakerCounters>)>,
+    },
+    RemoveTarget(TargetId),
+    SetTargetDelay(TargetId, Duration),
+    SetTargetVolume(TargetId, Volume),
+    ReadTargetVolume(TargetId),
     Shutdown,
 }
 
@@ -235,6 +245,8 @@ struct Speaker {
     /// Its AirPlay 2 session failed and waits for its own retry, so it
     /// keeps the one AirPlay 2 place (P169).
     ap2_retry: bool,
+    /// The target the host added it with (P177).
+    target: Option<TargetId>,
 }
 
 impl Speaker {
@@ -283,6 +295,12 @@ pub(crate) struct Driver {
     ptp_receiver_ports: crate::ptp::PtpPorts,
     /// The host was told that PTP is unavailable (P158).
     ptp_unavailable_told: bool,
+    /// The stereo pairs and home theater groups in view (P176).
+    targets: Targets,
+    /// The targets the host added (P177).
+    driven: BTreeMap<TargetId, targets::TargetRun>,
+    /// When the sender last tore down a member of a target (P181).
+    teardowns: HashMap<DeviceKey, Instant>,
 }
 
 impl Driver {
@@ -319,6 +337,9 @@ impl Driver {
             ptp_ports: crate::ptp::PtpPorts::default(),
             ptp_receiver_ports: crate::ptp::PtpPorts::default(),
             ptp_unavailable_told: false,
+            targets: Targets::new(),
+            driven: BTreeMap::new(),
+            teardowns: HashMap::new(),
         }
     }
 
@@ -429,6 +450,7 @@ impl Driver {
             Input::Command(command) => self.command(*command, now),
             Input::Io(event) => self.io_event(event, now),
         }
+        self.report_missing_members();
     }
 
     fn next_deadline(&self, now: Instant) -> Instant {
@@ -808,7 +830,14 @@ impl Driver {
             Phase::Ap2(active) => {
                 self.sessions.remove(&active.key);
                 self.sessions.remove(&active.events_key);
-                self.close_ptp();
+                // The members of a target share the service (P179).
+                let shared = self
+                    .speakers
+                    .values()
+                    .any(|speaker| matches!(speaker.phase, Phase::Ap2(_)));
+                if !shared {
+                    self.close_ptp();
+                }
             }
             Phase::Waiting(_) | Phase::Failed | Phase::Idle => {}
         }
@@ -908,10 +937,26 @@ impl Driver {
         if path_switch {
             speaker.airplay1_outcome = Some(error.kind);
         }
+        let target = speaker.target.clone();
+        // Soon after the sender's own TEARDOWN, a member that refuses or
+        // asks for pairing is still letting go of the old session (P181).
+        let settling = !closing
+            && !alac_retry
+            && !path_switch
+            && target.is_some()
+            && self.settling(key, error.kind, now);
+        if settling {
+            self.teardowns.remove(key);
+        }
+        let Some(speaker) = self.speakers.get_mut(key) else {
+            return;
+        };
         let retry_at = if closing {
             None
         } else if alac_retry || path_switch {
             Some(now)
+        } else if settling {
+            speaker.backoff.on_failure(ErrorKind::Lost, now)
         } else {
             speaker.backoff.on_failure(error.kind, now)
         };
@@ -937,6 +982,9 @@ impl Driver {
             self.directory.remember_pcm_refused(key);
             self.start_session(key, now);
         } else if path_switch {
+            if let Some(id) = &target {
+                self.move_target_to_airplay2(id, key, now);
+            }
             self.start_session(key, now);
         } else {
             let state = retry_at.map_or(SpeakerState::Failed, |at| SpeakerState::Retrying { at });
@@ -983,10 +1031,14 @@ impl Driver {
         speaker.ap2_waiting = false;
         speaker.phase = Phase::Waiting(now);
         let key = key.clone();
+        let target = speaker.target.clone();
         self.emit_speaker(
             &key,
             SpeakerEvent::State(SpeakerState::Retrying { at: now }),
         );
+        if let Some(target) = target {
+            self.wake_target_waiters(&target, now);
+        }
     }
 
     /// Reports a speaker stopped, and forgets it if the host removed it.
@@ -1209,6 +1261,11 @@ impl Driver {
                 }
             }
             Command::ForgetHomeKit(key) => self.forget_homekit(&key),
+            Command::AddTarget { target, members } => self.add_target(*target, members, now),
+            Command::RemoveTarget(id) => self.remove_target(&id, now),
+            Command::SetTargetDelay(id, delay) => self.set_target_delay(&id, delay, now),
+            Command::SetTargetVolume(id, volume) => self.set_target_volume(&id, volume, now),
+            Command::ReadTargetVolume(id) => self.read_target_volume(&id, now),
             Command::Shutdown => self.shutdown(now),
         }
     }
@@ -1237,8 +1294,13 @@ impl Driver {
                     airplay1_outcome: None,
                     ap2_waiting: false,
                     ap2_retry: false,
+                    target: None,
                 },
             );
+            if self.controls_driven_target(&key) {
+                let reason = crate::error::UnsupportedReason::PlaysThroughSpeakers;
+                return self.refuse(&key, SessionError::new(ErrorKind::Unsupported(reason)), now);
+            }
             self.start_session(&key, now);
             return;
         };
@@ -1265,6 +1327,12 @@ impl Driver {
             return;
         };
         speaker.removing = true;
+        if speaker.target.is_some() {
+            self.teardowns.insert(key.clone(), now);
+        }
+        let Some(speaker) = self.speakers.get_mut(key) else {
+            return;
+        };
         let held = speaker.holds_ap2();
         match &mut speaker.phase {
             Phase::Active(active) => active.session.teardown(now),
@@ -1327,6 +1395,7 @@ impl Driver {
             let ap2 = self.speakers.get(key).is_some_and(|speaker| {
                 speaker.device.choose_path(true, speaker.airplay1_outcome)
                     == Ok(ProtocolPath::AirPlay2)
+                    || (speaker.device.verdict.airplay2 && self.target_on_airplay2(speaker))
             });
             if ap2 {
                 return self.start_ap2(key, now);
@@ -1495,8 +1564,16 @@ impl Driver {
         }
     }
 
-    /// Reports what discovery changed in the directory to the host.
+    /// Reports what discovery changed in the directory to the host: the
+    /// devices first, each with its target, then the targets (P176).
     fn report_changes(&mut self, changes: Vec<DirectoryEvent>) {
+        if changes.is_empty() {
+            return;
+        }
+        let before = self.target_refs();
+        let target_changes = self.targets.update(self.directory.devices());
+        let after = self.target_refs();
+        let mut updated = BTreeSet::new();
         for change in changes {
             match change {
                 DirectoryEvent::Updated(device) => {
@@ -1506,7 +1583,10 @@ impl Driver {
                         speaker.device = (*device).clone();
                     }
                     let key = device.key.clone();
-                    let info = Box::new(ReceiverInfo::new(*device));
+                    updated.insert(key.clone());
+                    let mut info = Box::new(ReceiverInfo::new(*device));
+                    info.target = after.get(&key).cloned();
+                    self.rejoin_member(&key, Instant::now());
                     let event = if self.reported.insert(key) {
                         ReceiverEvent::Appeared(info)
                     } else {
@@ -1520,6 +1600,22 @@ impl Driver {
                     }
                 }
             }
+        }
+        let moved: Vec<DeviceKey> = self
+            .reported
+            .iter()
+            .filter(|key| !updated.contains(*key) && before.get(*key) != after.get(*key))
+            .cloned()
+            .collect();
+        for key in moved {
+            if let Some(device) = self.directory.device(&key).cloned() {
+                let mut info = Box::new(ReceiverInfo::new(device));
+                info.target = after.get(&key).cloned();
+                self.emit(SenderEvent::Receiver(ReceiverEvent::Changed(info)));
+            }
+        }
+        for change in target_changes {
+            self.emit(SenderEvent::Receiver(ReceiverEvent::Target(change)));
         }
     }
 
@@ -1550,6 +1646,9 @@ impl Driver {
         }
         for key in std::mem::take(&mut self.reported) {
             self.emit(SenderEvent::Receiver(ReceiverEvent::Gone(key)));
+        }
+        for change in self.targets.update(std::iter::empty()) {
+            self.emit(SenderEvent::Receiver(ReceiverEvent::Target(change)));
         }
     }
 
@@ -1732,6 +1831,7 @@ mod tests {
                 airplay1_outcome: None,
                 ap2_waiting: false,
                 ap2_retry: false,
+                target: None,
             },
         );
 
