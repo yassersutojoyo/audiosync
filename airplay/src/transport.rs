@@ -35,12 +35,8 @@
 //! a blocked send when the socket is shut down, so that one ends at its send
 //! timeout, and nobody waits for it.
 //!
-//! The RTSP reader waits for data with a timed peek and reads only what is
-//! already queued. On Windows a receive that times out may have taken bytes
-//! that arrived as it expired, and the socket is left indeterminate
-//! (`SO_RCVTIMEO` in Microsoft's `setsockopt` documentation); a peek takes
-//! nothing, and a shutdown doesn't wake a blocked TCP receive there, so
-//! the reader can't block without a timeout either.
+//! The RTSP reader times out only in a peek, then reads queued bytes: a
+//! cancel can't drop bytes a peek never took (Windows `SO_RCVTIMEO`; see core/NOTES.md).
 //!
 //! A pairing (P47) needs only the TCP connection: [`RtspIo`] runs the same
 //! RTSP reader and writer threads, without UDP sockets.

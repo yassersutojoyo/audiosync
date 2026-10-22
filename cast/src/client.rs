@@ -1,11 +1,8 @@
 //! The channel over a real TLS connection (C19 to C21), driven on the
 //! caller's thread with blocking sockets and short read timeouts.
 //!
-//! A read waits for data with a timed peek and then reads only what is
-//! already queued ([`PeekedTcp`]). On Windows a receive that times out may
-//! have taken bytes that arrived as it expired, and the socket is left
-//! indeterminate (`SO_RCVTIMEO` in Microsoft's `setsockopt`
-//! documentation); a peek takes nothing.
+//! A read times out only in a peek, then reads queued bytes ([`PeekedTcp`]):
+//! a cancel can't drop bytes a peek never took (Windows `SO_RCVTIMEO`).
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
