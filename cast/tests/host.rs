@@ -13,12 +13,13 @@ use std::time::{Duration, Instant};
 use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, audio_ring};
 use audiosync_cast::discovery::DeviceId;
 use audiosync_cast::host::{
-    AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, OUTPUT_SYNC, OutputSync, StartRefused,
+    AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, MAX_HOST_EVENTS, OUTPUT_SYNC,
+    OutputSync, StartRefused,
 };
 use audiosync_cast::media::Metadata;
 use audiosync_cast::message::NS_MEDIA;
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
-use common::{Behavior, FakeDevice, OnLaunch, OnLoad};
+use common::{Behavior, Command, FakeDevice, OnLaunch, OnLoad};
 use serde_json::{Value, json};
 
 const A: DeviceId = DeviceId([0xA1; 16]);
@@ -584,5 +585,75 @@ fn recovery_and_its_retries_reach_the_host_while_the_device_is_unreachable() {
         ),
         "{events:?}"
     );
+    assert!(host.shutdown());
+}
+
+// Partly C80 and C81: events held for a host that stopped polling go out
+// ahead of a later recovery's, which still arrive while the device is
+// unreachable instead of after the retries end.
+#[test]
+fn held_events_do_not_hold_back_a_later_recovery() {
+    let device = FakeDevice::start(Behavior::default());
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    let (_feed, reader) = ring();
+    host.start(target(A, &device), 48_000, Metadata::default(), reader)
+        .expect("starts");
+    wait_for(&host, Duration::from_secs(10), started(A));
+    // Each fails at once and fills the outbox while the host doesn't poll.
+    for _ in 0..MAX_HOST_EVENTS + 16 {
+        host.set_volume(f64::NAN);
+    }
+    thread::sleep(Duration::from_millis(500));
+    // A reconnect that works: its events find the outbox full and are held.
+    device.send(Command::DropConnection);
+    assert!(device.wait_for_count("GET_STATUS", 3, Duration::from_secs(10)));
+    thread::sleep(Duration::from_millis(500));
+    // Powered off: the next recovery retries until the device is deselected.
+    device.join();
+    let mut recovering = 0;
+    let events = wait_for(&host, Duration::from_secs(10), |event| match event {
+        HostEvent::Session {
+            event: SessionEvent::Recovering(_),
+            ..
+        } => {
+            recovering += 1;
+            false
+        }
+        HostEvent::Session {
+            event: SessionEvent::ConnectFailed { .. },
+            ..
+        } => recovering == 2,
+        _ => false,
+    });
+    let order: Vec<&SessionEvent> = events
+        .iter()
+        .filter_map(|event| match event {
+            HostEvent::Session { event, .. }
+                if matches!(
+                    event,
+                    SessionEvent::Recovering(_)
+                        | SessionEvent::Recovered { .. }
+                        | SessionEvent::ConnectFailed { .. }
+                ) =>
+            {
+                Some(event)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        matches!(
+            order.as_slice(),
+            [
+                SessionEvent::Recovering(_),
+                SessionEvent::Recovered { relaunched: false },
+                SessionEvent::Recovering(_),
+                SessionEvent::ConnectFailed { .. },
+            ]
+        ),
+        "{order:?}"
+    );
+    host.stop();
+    wait_for(&host, Duration::from_secs(3), ended(A));
     assert!(host.shutdown());
 }

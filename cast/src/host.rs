@@ -291,6 +291,23 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Sends held events in order until the outbox is full.
+fn flush(held: &mut VecDeque<HostEvent>, outbox: &SyncSender<HostEvent>) {
+    while let Some(event) = held.pop_front() {
+        match outbox.try_send(event) {
+            Ok(()) => {}
+            Err(TrySendError::Full(event)) => {
+                held.push_front(event);
+                return;
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                held.clear();
+                return;
+            }
+        }
+    }
+}
+
 impl Shared {
     /// Frees the slot when it still belongs to `attempt`.
     fn release(&self, attempt: AttemptId) {
@@ -528,10 +545,8 @@ struct Worker {
     inbox: Receiver<Command>,
     outbox: SyncSender<HostEvent>,
     /// Events that must not be dropped, waiting for room in the outbox.
-    held: VecDeque<HostEvent>,
-    /// Whether `held` is empty, for the session's recovery sink, which must
-    /// not overtake held events.
-    in_order: Arc<AtomicBool>,
+    /// Shared with the session's recovery sink, which sends them first.
+    held: Arc<Mutex<VecDeque<HostEvent>>>,
     shared: Arc<Shared>,
     running: Option<Running>,
 }
@@ -541,51 +556,41 @@ impl Worker {
         Worker {
             inbox,
             outbox,
-            held: VecDeque::new(),
-            in_order: Arc::new(AtomicBool::new(true)),
+            held: Arc::new(Mutex::new(VecDeque::new())),
             shared,
             running: None,
         }
     }
 
     fn emit(&mut self, event: HostEvent) {
-        self.flush();
+        let mut held = lock(&self.held);
+        flush(&mut held, &self.outbox);
         if event.is_routine() {
             // Held events go first; a routine one behind them is stale by
             // the time there is room.
-            if self.held.is_empty() {
+            if held.is_empty() {
                 let _ = self.outbox.try_send(event);
             }
             return;
         }
-        if self.held.len() >= MAX_HOST_EVENTS {
-            let oldest_session = self
-                .held
+        if held.len() >= MAX_HOST_EVENTS {
+            let oldest_session = held
                 .iter()
                 .position(|held| matches!(held, HostEvent::Session { .. }));
             if let Some(index) = oldest_session {
-                self.held.remove(index);
+                held.remove(index);
             }
         }
-        self.held.push_back(event);
-        self.flush();
+        held.push_back(event);
+        flush(&mut held, &self.outbox);
     }
 
     fn flush(&mut self) {
-        while let Some(event) = self.held.pop_front() {
-            match self.outbox.try_send(event) {
-                Ok(()) => {}
-                Err(TrySendError::Full(event)) => {
-                    self.held.push_front(event);
-                    break;
-                }
-                Err(TrySendError::Disconnected(_)) => {
-                    self.held.clear();
-                    break;
-                }
-            }
-        }
-        self.in_order.store(self.held.is_empty(), Ordering::SeqCst);
+        flush(&mut lock(&self.held), &self.outbox);
+    }
+
+    fn nothing_held(&self) -> bool {
+        lock(&self.held).is_empty()
     }
 
     fn quitting(&self) -> bool {
@@ -602,7 +607,7 @@ impl Worker {
                     Err(TryRecvError::Disconnected) => Some(Command::Quit),
                 }
             } else {
-                let wait = if self.held.is_empty() {
+                let wait = if self.nothing_held() {
                     Duration::from_secs(1)
                 } else {
                     TICK
@@ -731,7 +736,7 @@ impl Worker {
         // finds the outbox full, or held events not yet sent, is dropped
         // rather than block the worker or overtake them.
         let outbox = self.outbox.clone();
-        let in_order = self.held.is_empty();
+        let in_order = self.nothing_held();
         let quitting = Arc::clone(&self.shared.quitting);
         let result = CastSession::start_with(
             config,
@@ -802,12 +807,15 @@ impl Worker {
     }
 
     /// Sends a recovering session's events straight to the host (C80,
-    /// C81); the worker sits in the session's retries until they end.
+    /// C81), after the held ones; the worker sits in the session's retries
+    /// until they end, so it can't flush them itself.
     fn recovery_sink(&self, attempt: AttemptId, device: DeviceId) -> EventSink {
         let outbox = self.outbox.clone();
-        let in_order = Arc::clone(&self.in_order);
+        let held = Arc::clone(&self.held);
         Box::new(move |event| {
-            if !in_order.load(Ordering::SeqCst) {
+            let mut held = lock(&held);
+            flush(&mut held, &outbox);
+            if !held.is_empty() {
                 return Err(event);
             }
             let sent = outbox.try_send(HostEvent::Session {

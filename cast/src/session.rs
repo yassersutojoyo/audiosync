@@ -762,9 +762,11 @@ impl CastSession {
     /// the device stays selected. `reload` loads the stream again even when
     /// the app still runs, after a playback error (C86).
     fn recover(&mut self, reason: EndReason, reload: bool) {
-        self.recovering = true;
+        // A recovery inside another's load must not end the outer one's
+        // live events.
+        let was = std::mem::replace(&mut self.recovering, true);
         self.recover_now(reason, reload);
-        self.recovering = false;
+        self.recovering = was;
     }
 
     fn recover_now(&mut self, reason: EndReason, reload: bool) {

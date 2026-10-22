@@ -195,6 +195,25 @@ fn a_deselect_ends_a_connect_while_it_waits() {
     );
     let _ = clearing.join();
     silent.join();
+
+    // TCP is accepted (the listen backlog does it) but the TLS handshake
+    // never gets an answer.
+    let stalled = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let address = stalled.local_addr().expect("address");
+    let (selected, clearing) = deselect_after(Duration::from_millis(300));
+    let started = Instant::now();
+    let error = CastClient::connect_while(&[address], RequestIds::starting_at(1), &selected)
+        .expect_err("deselected");
+    assert!(
+        matches!(error, ConnectError::Ended(EndReason::Stopped)),
+        "{error}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(1_500),
+        "{:?}",
+        started.elapsed()
+    );
+    let _ = clearing.join();
 }
 
 #[test]

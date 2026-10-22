@@ -26,6 +26,8 @@ use crate::status::{AppSession, ReceiverStatus};
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// The longest a read waits before timers run again.
 const READ_SLICE: Duration = Duration::from_millis(50);
+/// How often a TLS handshake waiting on the device looks again.
+const HANDSHAKE_POLL: Duration = Duration::from_millis(5);
 /// Events kept for a host that doesn't poll: beyond this, the oldest
 /// status and drop reports go first; launch results and the end are kept.
 pub const MAX_EVENTS: usize = 64;
@@ -222,22 +224,33 @@ impl CastClient {
         }
         let tcp_error = |error| ConnectError::Tcp { address, error };
         tcp.set_nodelay(true).map_err(tcp_error)?;
-        tcp.set_read_timeout(Some(CONNECT_TIMEOUT))
-            .map_err(tcp_error)?;
         tcp.set_write_timeout(Some(CONNECT_TIMEOUT))
             .map_err(tcp_error)?;
         let local_address = tcp.local_addr().map_err(tcp_error)?;
         let tls_error = |message: String| ConnectError::Tls { address, message };
         let connector = tls_connector().map_err(|error| tls_error(error.to_string()))?;
-        let stream =
-            connector
-                .connect(&address.ip().to_string(), tcp)
-                .map_err(|error| match error {
-                    HandshakeError::Failure(error) => tls_error(error.to_string()),
-                    HandshakeError::WouldBlock(_) => {
-                        tls_error("the handshake timed out".to_owned())
+        // Non-blocking, so a device that stalls the handshake can't keep a
+        // deselect waiting longer than one poll step (C88).
+        tcp.set_nonblocking(true).map_err(tcp_error)?;
+        let deadline = Instant::now() + CONNECT_TIMEOUT;
+        let mut handshake = connector.connect(&address.ip().to_string(), tcp);
+        let stream = loop {
+            match handshake {
+                Ok(stream) => break stream,
+                Err(HandshakeError::Failure(error)) => return Err(tls_error(error.to_string())),
+                Err(HandshakeError::WouldBlock(pending)) => {
+                    if !selected.load(Ordering::SeqCst) {
+                        return Err(ConnectError::Ended(EndReason::Stopped));
                     }
-                })?;
+                    if Instant::now() >= deadline {
+                        return Err(tls_error("the handshake timed out".to_owned()));
+                    }
+                    thread::sleep(HANDSHAKE_POLL);
+                    handshake = pending.handshake();
+                }
+            }
+        };
+        stream.get_ref().set_nonblocking(false).map_err(tcp_error)?;
         let fingerprint = stream
             .peer_certificate()
             .ok()
