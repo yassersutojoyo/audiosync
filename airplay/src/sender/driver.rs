@@ -278,6 +278,9 @@ pub(crate) struct Driver {
     reported: BTreeSet<DeviceKey>,
     now_playing: Option<NowPlaying>,
     retired: Vec<JoinHandle<()>>,
+    /// The threads of a closed PTP service, which keep its ports bound
+    /// until they end (P158).
+    ptp_closing: Vec<JoinHandle<()>>,
     /// Set by shutdown: sessions still open at this time are closed.
     stopping: Option<Instant>,
     /// The AirPlay 2 switch (P2, P170).
@@ -338,6 +341,7 @@ impl Driver {
             reported: BTreeSet::new(),
             now_playing: None,
             retired: Vec::new(),
+            ptp_closing: Vec::new(),
             stopping: None,
             airplay2: false,
             ptp_timing: BTreeSet::new(),
@@ -399,6 +403,8 @@ impl Driver {
     /// then is blocked in a send that only its own timeout ends; it holds
     /// nothing but its socket, and is left to end by itself (P129).
     fn join_threads(&mut self, deadline: Instant) {
+        let closing = std::mem::take(&mut self.ptp_closing);
+        self.retired.extend(closing);
         loop {
             let (done, running): (Vec<_>, Vec<_>) = self
                 .retired

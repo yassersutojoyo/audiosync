@@ -265,7 +265,8 @@ impl Driver {
     /// The AirPlay 2 session is over: the PTP ports are let go.
     pub(super) fn close_ptp(&mut self) {
         if let Some(run) = self.ptp.take() {
-            self.retired.extend(run.io.close());
+            self.ptp_closing.retain(|thread| !thread.is_finished());
+            self.ptp_closing.extend(run.io.close());
         }
     }
 
@@ -322,6 +323,11 @@ impl Driver {
         let mut uuid = [0u8; 16];
         uuid.copy_from_slice(&random[6..]);
         let identity = clock_identity(identity_random);
+        // An IPv6 wildcard socket takes the IPv4 port too on most systems, so
+        // the old service's ports must be free first; this waits one read timeout at most.
+        for thread in self.ptp_closing.drain(..) {
+            let _ = thread.join();
+        }
         match PtpIo::open(family.to_canonical(), self.ptp_ports, self.notify()) {
             Ok(io) => {
                 let peer = PtpPeer {
