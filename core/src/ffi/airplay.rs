@@ -61,7 +61,7 @@
 //! that was there before, notes each panic's location.
 
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -424,6 +424,9 @@ pub struct AscAirPlay {
     /// The passwords the host handed over, by receiver ID, for this
     /// handle's life only; wiped from memory when dropped.
     passwords: HashMap<String, Secret>,
+    /// The receiver IDs that get PCM instead of ALAC, from
+    /// [`audiosync_airplay::sender::PCM_DEVICES_ENV`] when the handle was made.
+    pcm_devices: BTreeSet<String>,
     /// The receivers with a pairing running, by ID, with the key the
     /// sender knows each by: a receiver that leaves discovery while the
     /// user reads its PIN (the wait has no timeout, P51) still takes the
@@ -1537,6 +1540,11 @@ fn create_configured(open_browser: OpenBrowser, airplay2_setting: bool) -> *mut 
                 airplay2,
                 identity: IdentityStore::in_memory(),
                 passwords: HashMap::new(),
+                pcm_devices: audiosync_airplay::sender::pcm_devices(
+                    std::env::var(audiosync_airplay::sender::PCM_DEVICES_ENV)
+                        .ok()
+                        .as_deref(),
+                ),
                 pairing: HashMap::new(),
                 ending: HashMap::new(),
                 master: 100.0,
@@ -1763,12 +1771,18 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                     .iter()
                     .map(|member| receiver_id(&member.key))
                     .collect();
-                let (passwords, store, identity) =
-                    (&airplay.passwords, &airplay.store, &airplay.identity);
+                options.pcm = airplay.pcm_devices.contains(id);
+                let (passwords, store, identity, pcm_devices) = (
+                    &airplay.passwords,
+                    &airplay.store,
+                    &airplay.identity,
+                    &airplay.pcm_devices,
+                );
                 airplay
                     .sender
                     .add_target(target.clone(), options, |key, own| {
                         let member = receiver_id(key);
+                        own.pcm = pcm_devices.contains(&member);
                         own.password = passwords.get(&member).cloned();
                         own.credentials = store.get(&member).cloned();
                         own.homekit_credentials = identity.get(&member).cloned();
@@ -1794,6 +1808,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
             options.password = airplay.passwords.get(id).cloned();
             options.credentials = airplay.store.get(id).cloned();
             options.homekit_credentials = airplay.identity.get(id).cloned();
+            options.pcm = airplay.pcm_devices.contains(id);
             airplay.sender.add_speaker(device, options);
             let added = Added {
                 key,

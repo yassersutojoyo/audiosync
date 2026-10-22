@@ -2447,6 +2447,13 @@ do {
     check(AppSettings.airPlay2On(setting: true, environment: [:])
             && AppSettings.airPlay2On(setting: false, environment: ["AUDIOSYNC_AIRPLAY2": "1"]),
           "settings: the switch or AUDIOSYNC_AIRPLAY2=1 turns AirPlay 2 on")
+    check(AppSettings.airPlayPCMDevices(environment: [:]).isEmpty
+            && AppSettings.airPlayPCMDevices(environment: ["AUDIOSYNC_AIRPLAY_PCM": " , "]).isEmpty,
+          "settings: no AUDIOSYNC_AIRPLAY_PCM lists no PCM receiver")
+    check(AppSettings.airPlayPCMDevices(environment: ["AUDIOSYNC_AIRPLAY_PCM": "raop:Kitchen"]) == ["raop:Kitchen"]
+            && AppSettings.airPlayPCMDevices(environment: ["AUDIOSYNC_AIRPLAY_PCM": " raop:Kitchen , airplay:Den,,"])
+                == ["raop:Kitchen", "airplay:Den"],
+          "settings: AUDIOSYNC_AIRPLAY_PCM lists trimmed receiver IDs")
     check(stored.values[Keys.enabledAirPlay] as? [String] == ["airplay-1", "airplay-2"],
           "settings: a set of speakers is stored as a sorted list")
     store.save(source: .system)

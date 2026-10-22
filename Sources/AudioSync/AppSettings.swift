@@ -111,6 +111,14 @@ struct AppSettings: Equatable {
     static func airPlay2On(setting: Bool, environment: [String: String]) -> Bool {
         setting || environment["AUDIOSYNC_AIRPLAY2"] == "1"
     }
+
+    /// The receiver IDs in AUDIOSYNC_AIRPLAY_PCM, a comma-separated debug
+    /// list: the core gives them PCM instead of ALAC, the app only logs it.
+    static func airPlayPCMDevices(environment: [String: String]) -> Set<String> {
+        let ids = (environment["AUDIOSYNC_AIRPLAY_PCM"] ?? "").split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        return Set(ids.filter { !$0.isEmpty })
+    }
     /// D0 of the migration: what a local speaker without a delay of its own
     /// played with before the local delay model (S77, S179).
     var defaultDelayMs = AppSettings.standardDelayMs

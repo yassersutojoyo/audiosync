@@ -29,6 +29,7 @@ final class NativeAirPlay {
     private let onChange: (NativeReceiverChange) -> Void
     private let onEvent: (NativeSpeakerEvent, NativeAirPlayOutcome?) -> Void
     private let queue = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.native-airplay", qos: .userInitiated)
+    private let pcmDevices = AppSettings.airPlayPCMDevices(environment: ProcessInfo.processInfo.environment)
     /// The sender (queue only).
     private var handle: OpaquePointer?
     /// Its audio input, installed in `NativeAirPlayTap` (queue only).
@@ -71,6 +72,9 @@ final class NativeAirPlay {
     /// 100) times the master. Main queue.
     func add(_ id: String, volume: Double) {
         model.added(id)
+        if pcmDevices.contains(id) {
+            DebugTrace.log("[AudioSync] native AirPlay: \(id) joins with PCM instead of ALAC (AUDIOSYNC_AIRPLAY_PCM)")
+        }
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }
             if !asc_airplay_add_speaker(handle, id, volume) {

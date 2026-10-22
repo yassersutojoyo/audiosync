@@ -58,7 +58,7 @@
 mod driver;
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::io;
 use std::sync::Arc;
@@ -120,6 +120,23 @@ pub const AIRPLAY2_SWITCH_ENV: &str = "AUDIOSYNC_AIRPLAY2";
 /// The switch's value from the environment variable's: on only for `1`.
 pub fn airplay2_switch(value: Option<&str>) -> bool {
     value == Some("1")
+}
+
+/// The environment variable a host reads for the devices that get
+/// [`SpeakerOptions::pcm`]: a debug hook for trying PCM on a receiver while
+/// PCM stays opt-in (P74), with no setting behind it.
+pub const PCM_DEVICES_ENV: &str = "AUDIOSYNC_AIRPLAY_PCM";
+
+/// The device IDs in the variable's value: comma separated, each trimmed,
+/// empty ones skipped.
+pub fn pcm_devices(value: Option<&str>) -> BTreeSet<String> {
+    value
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// A new random AirPlay 2 device ID for a host to store once (P5), or

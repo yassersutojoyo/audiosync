@@ -850,6 +850,9 @@ pub struct AirPlaySpeakers {
     /// What is playing, as the sender was given it last: a new sender gets
     /// it too.
     now_playing: Option<NowPlaying>,
+    /// The speaker IDs that get PCM instead of ALAC, from
+    /// [`audiosync_airplay::sender::PCM_DEVICES_ENV`] at launch.
+    pcm_devices: BTreeSet<String>,
     log: DebugLog,
 }
 
@@ -894,6 +897,11 @@ impl AirPlaySpeakers {
             store_change: None,
             store_kept_aside: None,
             now_playing: None,
+            pcm_devices: audiosync_airplay::sender::pcm_devices(
+                std::env::var(audiosync_airplay::sender::PCM_DEVICES_ENV)
+                    .ok()
+                    .as_deref(),
+            ),
             log,
         };
         speakers.open_airplay2();
@@ -1922,7 +1930,19 @@ impl AirPlaySpeakers {
         options.credentials = self.store.get(id).cloned();
         options.homekit_credentials = self.store.homekit(id).cloned();
         options.password = self.password(id);
+        options.pcm = self.pcm_devices.contains(id);
         options
+    }
+
+    /// Logs that speaker `id` joins with PCM, from the debug variable.
+    fn log_pcm(&self, id: &str) {
+        self.log.log(|| {
+            format!(
+                "AirPlay speaker {}: PCM instead of ALAC ({})",
+                self.label(id),
+                audiosync_airplay::sender::PCM_DEVICES_ENV
+            )
+        });
     }
 
     /// Adds the speakers that should play and removes the ones that
@@ -1975,6 +1995,9 @@ impl AirPlaySpeakers {
                     options.delay.as_millis()
                 )
             });
+            if options.pcm {
+                self.log_pcm(&id);
+            }
             let added = match self.targets.get(&id) {
                 Some(target) => self.add_target(target.clone(), options),
                 None => {
@@ -2000,6 +2023,10 @@ impl AirPlaySpeakers {
                 own.credentials = self.store.get(&id).cloned();
                 own.homekit_credentials = self.store.homekit(&id).cloned();
                 own.password = self.password(&id);
+                own.pcm = self.pcm_devices.contains(&id);
+                if own.pcm {
+                    self.log_pcm(&id);
+                }
                 (member.key.clone(), own)
             })
             .collect();
@@ -3320,6 +3347,39 @@ pub mod tests {
             DebugLog::default(),
             PairingStore::in_memory(),
         )
+    }
+
+    #[test]
+    fn pcm_variable_lists_trimmed_device_ids() {
+        use audiosync_airplay::sender::pcm_devices;
+        assert!(pcm_devices(None).is_empty());
+        assert!(pcm_devices(Some("")).is_empty());
+        assert!(pcm_devices(Some(" , ,")).is_empty());
+        assert_eq!(
+            pcm_devices(Some("raop:Kitchen")),
+            BTreeSet::from(["raop:Kitchen".to_owned()])
+        );
+        assert_eq!(
+            pcm_devices(Some(" raop:Kitchen , airplay:Den,,AA:BB:CC:DD:EE:FF ")),
+            BTreeSet::from([
+                "raop:Kitchen".to_owned(),
+                "airplay:Den".to_owned(),
+                "AA:BB:CC:DD:EE:FF".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn only_listed_speakers_join_with_pcm() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        assert!(!airplay.options("raop:Kitchen").pcm);
+        airplay.pcm_devices =
+            audiosync_airplay::sender::pcm_devices(Some("raop:Kitchen, airplay:Den"));
+        assert!(airplay.options("raop:Kitchen").pcm);
+        assert!(airplay.options("airplay:Den").pcm);
+        assert!(!airplay.options("raop:Unknown").pcm);
+        assert!(!airplay.options("Kitchen").pcm);
     }
 
     const PASSWORD_TXT: &[&str] = &[
