@@ -5,6 +5,12 @@ on:
     branches: ['**']
   pull_request:
 
+# A newer push to a feature branch cancels that branch's older run; every
+# commit on main keeps its own group, so main's runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   build-and-test:
     runs-on: macos-15
