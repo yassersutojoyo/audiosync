@@ -413,7 +413,7 @@ component CalibrationCard inherits Card {
                     text: Strings.calibrate-all-undo;
                     enabled: root.can-undo && !root.running;
                     accessible-label: Strings.calibrate-all-undo;
-                    accessible-description: Strings.calibrate-all-undo-help;
+                    accessible-description: root.outcome != "" ? root.outcome + " " + Strings.calibrate-all-undo-help : Strings.calibrate-all-undo-help;
                     clicked => {
                         root.undo();
                         if !root.can-undo {
@@ -426,6 +426,7 @@ component CalibrationCard inherits Card {
                     text: Strings.calibrate-all-close;
                     enabled: !root.running;
                     accessible-label: Strings.calibrate-all-close-label;
+                    accessible-description: root.outcome;
                     clicked => {
                         root.close();
                     }

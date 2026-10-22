@@ -120,6 +120,8 @@ export component RemoteWindow inherits Window {
                             text: Strings.remote-switch;
                             checked: root.remote-on;
                             accessible-label: Strings.remote-switch;
+                            // Slint has no live region: the focused switch carries the failure.
+                            accessible-description: !root.remote-on ? "" : root.port-problem ? (root.port-in-use ? Strings.remote-port-in-use(root.port) : Strings.remote-port-unavailable(root.port)) : root.problem;
                             toggled => {
                                 root.remote-toggled(self.checked);
                                 // Show what the app did, even if it couldn't start.
@@ -147,6 +149,7 @@ export component RemoteWindow inherits Window {
                                 input-type: number;
                                 placeholder-text: Strings.remote-port-label;
                                 accessible-label: Strings.remote-port-label;
+                                accessible-description: root.port-invalid ? Strings.remote-port-invalid : "";
                                 accepted(text) => {
                                     root.port-submitted(text);
                                 }
@@ -154,6 +157,7 @@ export component RemoteWindow inherits Window {
 
                             Button {
                                 text: Strings.remote-use-port;
+                                accessible-description: root.port-invalid ? Strings.remote-port-invalid : "";
                                 clicked => {
                                     root.port-submitted(port-field.text);
                                 }
@@ -302,6 +306,7 @@ export component RemoteWindow inherits Window {
                             Button {
                                 text: Strings.remote-forget-all;
                                 enabled: root.devices > 0 || root.forget-failed;
+                                accessible-description: root.forget-failed ? Strings.remote-forget-failed : "";
                                 clicked => {
                                     root.forget-all-requested();
                                 }
