@@ -507,6 +507,25 @@ struct UIStrings {
     func nativeAirPlayWaitingTitle(name: String) -> String { "\(name) waiting" }
     /// Under the name of a speaker waiting for the AirPlay 2 slot.
     let waitingForAirPlay2 = "Waiting for the other AirPlay 2 speaker"
+    /// An Apple TV whose home theater group AudioSync plays to (P177).
+    func nativeAirPlayPlaysThroughSpeakers(name: String) -> String {
+        "\(name) plays through its home theater speakers, and AudioSync already plays to them, so it's off. "
+            + "Turn the group off to play to the Apple TV itself."
+    }
+    /// A home theater group whose Apple TV AudioSync plays to by itself (P177).
+    func nativeAirPlayAppleTVPlays(name: String) -> String {
+        "AudioSync already plays to \(name)'s Apple TV, so the group is off. Turn the Apple TV off to play to the group."
+    }
+    /// A member of a stereo pair or home theater group asks for a password
+    /// AudioSync doesn't have, so the group went off (P176).
+    func nativeAirPlayMemberNeedsPassword(member: String, target: String) -> String {
+        "\(member) in \(target) asks for a password, so \(target) is off. Turn \(target) on again to enter it."
+    }
+    /// A member of a stereo pair or home theater group switched on by
+    /// itself while the group is listed (P176).
+    func nativeAirPlayPlaysInGroup(name: String, group: String) -> String {
+        "\(name) plays as part of \(group), so it stays off by itself."
+    }
 
     // MARK: AirPlay pairing prompt
 
@@ -795,10 +814,21 @@ struct UIStrings {
     // MARK: Google Cast speakers
 
     /// The note under a speaker's name, also read in its VoiceOver hint:
-    /// what a Cast speaker does, or that an AirPlay 2 speaker waits.
-    func rowNote(cast: CastRow?, waitingForAirPlay2: Bool) -> String? {
+    /// what a Cast speaker does, that an AirPlay 2 speaker waits, or what a
+    /// stereo pair or home theater group is made of.
+    func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, target: AirPlayTargetRow?) -> String? {
         if let cast { return castNote(cast) }
-        return waitingForAirPlay2 ? self.waitingForAirPlay2 : nil
+        if waitingForAirPlay2 { return self.waitingForAirPlay2 }
+        return target.map(airPlayTargetNote)
+    }
+    /// A stereo pair or home theater group: its kind and members, or the
+    /// members that are missing (P176, P181).
+    func airPlayTargetNote(_ target: AirPlayTargetRow) -> String {
+        let kind = target.kind == .stereoPair ? "Stereo pair" : "Home theater group"
+        if target.incomplete {
+            return target.missing.isEmpty ? kind + ", a speaker is missing" : kind + ", missing " + listed(target.missing)
+        }
+        return target.members.isEmpty ? kind : kind + ": " + listed(target.members)
     }
     /// Under a Cast speaker's name: where one that is on stands, and that a
     /// group is one, with its members once it reports them; nil otherwise.

@@ -147,7 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: - AirPlay speakers (`+AirPlay`)
 
-    /// The sender's speakers in its order (`NativeAirPlayModel.rows`).
+    /// The sender's speakers in its order (`NativeAirPlayModel.rows(enabled:)`).
     var airplayOrder: [String] = [] {
         didSet { retimeLocalOutputs() }   // a chosen speaker may have come or gone (S79, S177)
     }

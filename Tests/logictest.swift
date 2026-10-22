@@ -1270,7 +1270,7 @@ do {
               receiver("E5", "Old", .unsupported), receiver("F6", "Attic", .needsPairing)] {
         model.apply(.appeared(r))
     }
-    check(model.rows == ["native:B2", "native:A1", "native:C3"], "native airplay: rows by name", "\(model.rows)")
+    check(model.rows(enabled: []) == ["native:B2", "native:A1", "native:C3"], "native airplay: rows by name", "\(model.rows(enabled: []))")
     check(model.access("A1") == .open && model.access("B2") == .code(password: false)
             && model.access("C3") == .code(password: true) && model.access("D4") == nil,
           "native airplay: a needs-PIN or password receiver shows as asking for a code")
@@ -1293,12 +1293,12 @@ do {
             && model.apply(.state(id: "A1", .playing, retryMs: nil)) == .playingChanged("native:A1", playing: true),
           "native airplay: playing is reported once")
     model.apply(.gone(id: "A1", name: nil))
-    check(model.rows.contains("native:A1") && model.access("A1") == .open && model.soundingIDs == ["native:A1"],
+    check(model.rows(enabled: []).contains("native:A1") && model.access("A1") == .open && model.soundingIDs == ["native:A1"],
           "EC12 native airplay: a speaker that plays on after its announcement lapsed stays listed and chosen")
     check(model.apply(.error(id: "A1", .connectionLost, retryMs: 1000, detail: "Lost")) == nil
             && model.apply(.state(id: "A1", .retrying, retryMs: 1000)) == .playingChanged("native:A1", playing: false),
           "native airplay: a lost speaker the sender retries stays on")
-    check(!model.rows.contains("native:A1") && model.soundingIDs.isEmpty,
+    check(!model.rows(enabled: []).contains("native:A1") && model.soundingIDs.isEmpty,
           "EC12 native airplay: gone and not playing, it leaves the list and holds nothing back")
     check(model.apply(.error(id: "A1", .notResponding, retryMs: nil, detail: "Unreachable")) == .turnOff("native:A1", .unreachable)
             && model.apply(.error(id: "A1", .pairingRequired, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsCode)
@@ -1336,8 +1336,8 @@ do {
             == "AudioSync plays one AirPlay 2 speaker at a time, so Loft waits. It starts once the other one stops.",
           "P169 native airplay: the waiting notice reads as on Windows")
     check(UIStrings().nativeAirPlayWaitingTitle(name: "Loft") == "Loft waiting"
-            && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true) == "Waiting for the other AirPlay 2 speaker"
-            && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false) == nil,
+            && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true, target: nil) == "Waiting for the other AirPlay 2 speaker"
+            && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, target: nil) == nil,
           "P169 native airplay: the notice's title and the row's note, as on Windows")
     check(UIStrings().nativeAirPlayTimingUnavailable(name: "Loft")
             == "Loft needs PTP timing, which isn't available, so it's off. Another app may be using ports 319 and 320.",
@@ -1433,14 +1433,14 @@ do {
         model.computerName = "Studio Mac"
         model.apply(.appeared(mac))
         model.apply(.appeared(tv))
-        check(model.rows == [NativeAirPlayID.app(tv.id)] && model.soundingIDs == [NativeAirPlayID.app(tv.id)],
-              "native airplay: this Mac's own AirPlay Receiver is never listed (S100)", "\(model.rows)")
+        check(model.rows(enabled: []) == [NativeAirPlayID.app(tv.id)] && model.soundingIDs == [NativeAirPlayID.app(tv.id)],
+              "native airplay: this Mac's own AirPlay Receiver is never listed (S100)", "\(model.rows(enabled: []))")
         model.computerName = "Office Mac"
         model.apply(.changed(mac))
-        check(model.rows.count == 2, "native airplay: a receiver named otherwise than this Mac is listed")
+        check(model.rows(enabled: []).count == 2, "native airplay: a receiver named otherwise than this Mac is listed")
         var unnamed = NativeAirPlayModel()
         unnamed.apply(.appeared(mac))
-        check(unnamed.rows == [NativeAirPlayID.app(mac.id)], "native airplay: with no computer name known, nothing is hidden")
+        check(unnamed.rows(enabled: []) == [NativeAirPlayID.app(mac.id)], "native airplay: with no computer name known, nothing is hidden")
     }
     do {
         var failing = NativeAirPlayModel()
@@ -1647,6 +1647,194 @@ do {
 }
 
 check(AudioDevices.isVirtual(transport: kAudioDeviceTransportTypeAirPlay), "devices: macOS's own AirPlay output is hidden by default")
+
+// MARK: Native AirPlay targets — stereo pairs and home theater groups as one row (P176 to P181)
+do {
+    let pair = "pair:5A1B2C3D", left = "02005E005350", right = "02005E005351"
+    func member(_ id: String, _ name: String, of target: String,
+                _ availability: NativeReceiver.Availability = .available) -> NativeReceiver {
+        NativeReceiver(id: id, name: name, model: "AudioAccessory5,1", availability: availability, reason: nil,
+                       hints: ["raop", "airplay", "airplay2"], target: target)
+    }
+    func target(_ id: String, _ name: String, incomplete: Bool = false) -> NativeReceiver {
+        NativeReceiver(id: id, name: name, model: "", availability: .available, reason: nil,
+                       hints: ["airplay2", "target"], isTarget: true, incomplete: incomplete)
+    }
+    func listedPair() -> NativeAirPlayModel {
+        var model = NativeAirPlayModel()
+        model.apply(.appeared(member(left, "Left", of: pair)))
+        model.apply(.appeared(member(right, "Right", of: pair)))
+        model.apply(.appeared(target(pair, "Living Room")))
+        return model
+    }
+    let t = UIStrings()
+    let app = NativeAirPlayID.app
+
+    check(NativeTarget.kind(pair) == .stereoPair && NativeTarget.kind("theater:9F00") == .homeTheater
+            && NativeTarget.kind(left) == nil && NativeTarget.kind("raop:pair:x") == nil,
+          "P176 native airplay: a target's ID says its kind; a receiver's never does")
+    check(NativeReceiverChange.appeared(member(left, "Left", of: pair)).logLine.hasSuffix("member of " + pair),
+          "P176 native airplay: a member's log line names its target")
+
+    var early = NativeAirPlayModel()
+    early.apply(.appeared(member(left, "Left", of: pair)))
+    check(early.rows(enabled: []).isEmpty,
+          "P176 native airplay: a member that names its target is held before the target is listed, so auto-connect never takes it alone")
+
+    var model = listedPair()
+    model.apply(.appeared(NativeReceiver(id: "K3", name: "Kitchen", model: "", availability: .available, reason: nil,
+                                         hints: [])))
+    check(model.rows(enabled: []) == ["native:K3", app(pair)],
+          "P176 native airplay: a stereo pair is one row, its members show only as part of it", "\(model.rows(enabled: []))")
+    let row = model.targetRow(pair)
+    check(row == AirPlayTargetRow(kind: .stereoPair, members: ["Left", "Right"], missing: [], incomplete: false)
+            && model.targetRow("K3") == nil,
+          "P176 native airplay: the pair's row knows its kind and members; a speaker's row has none")
+    check(t.rowNote(cast: nil, waitingForAirPlay2: false, target: row) == "Stereo pair: Left and Right"
+            && t.airPlayTargetNote(AirPlayTargetRow(kind: .homeTheater, members: ["Left", "Right", "Sub"], missing: [],
+                                                    incomplete: false)) == "Home theater group: Left, Right and Sub"
+            && t.airPlayTargetNote(AirPlayTargetRow(kind: .stereoPair, members: [], missing: [], incomplete: false))
+                == "Stereo pair",
+          "P176 native airplay: the row names the kind and its members, as a Cast group's row does")
+    let note = t.rowNote(cast: nil, waitingForAirPlay2: false, target: row) ?? ""
+    check(t.rowHint(SpeakerState(enabled: false, streaming: false), note: note).hasPrefix(note),
+          "P176 native airplay: VoiceOver reads the pair's note in the row's hint")
+    check(t.rowNote(cast: nil, waitingForAirPlay2: true, target: row) == t.waitingForAirPlay2,
+          "P169 native airplay: a target waiting for the AirPlay 2 slot says so first")
+
+    let on: Set<String> = [app(pair), app(left)]
+    check(model.plan(streaming: true, enabled: on)
+            == NativeAirPlayPlan(add: [pair], remove: [], turnOff: [], release: [left]),
+          "P176 native airplay: the pair is added as one speaker; a member that was on by itself is switched off for it")
+    model.added(left)
+    check(model.plan(streaming: true, enabled: on).remove == [left],
+          "P176 native airplay: a member playing by itself leaves the sender when its pair is switched on")
+    model.removed(left)
+    check(model.holdingTarget(right, on: false) == pair && model.holdingTarget("K3", on: false) == nil,
+          "P176 native airplay: a member of a listed pair can't be turned on by itself")
+
+    var single = NativeAirPlayModel()
+    single.apply(.appeared(NativeReceiver(id: left, name: "Left", model: "", availability: .available, reason: nil,
+                                          hints: [])))
+    single.added(left)
+    single.apply(.changed(member(left, "Left", of: pair)))
+    single.apply(.appeared(member(right, "Right", of: pair)))
+    single.apply(.appeared(target(pair, "Living Room")))
+    let leftOn: Set<String> = [app(left)]
+    check(single.rows(enabled: leftOn).contains(app(left)) && single.plan(streaming: true, enabled: leftOn).isEmpty
+            && single.holdingTarget(left, on: true) == nil,
+          "P176 native airplay: a member left on by itself before its pair was listed keeps playing and keeps its row")
+    check(!single.rows(enabled: leftOn).contains(app(right)) && single.rows(enabled: leftOn).contains(app(pair)),
+          "P176 native airplay: the member that is off shows as part of the pair")
+
+    var playing = listedPair()
+    playing.added(pair)
+    _ = playing.apply(.state(id: pair, .playing, retryMs: nil))
+    playing.apply(.gone(id: pair, name: "Living Room"))
+    playing.apply(.changed(member(left, "Left", of: "")))
+    check(playing.rows(enabled: [app(pair)]).contains(app(pair)) && playing.holdingTarget(left, on: false) == pair
+            && playing.holdingTarget(left, on: true) == pair && !playing.rows(enabled: [app(left)]).contains(app(left)),
+          "P176 native airplay: a pair gone while it plays keeps its row until switched off, and its members can't join meanwhile")
+    _ = playing.apply(.state(id: pair, .retrying, retryMs: 1000))
+    check(playing.rows(enabled: [app(pair)]).contains(app(pair)),
+          "P176 native airplay: a gone pair still in the sender keeps its row while it reconnects")
+    playing.removed(pair)
+    check(playing.holdingTarget(left, on: false) == nil && playing.rows(enabled: []).contains(app(left))
+            && !playing.rows(enabled: []).contains(app(pair)),
+          "P176 native airplay: switched off, the gone pair's row goes and its members are speakers again")
+
+    var missing = listedPair()
+    missing.apply(.gone(id: right, name: "Right"))
+    missing.apply(.changed(target(pair, "Living Room", incomplete: true)))
+    check(missing.targetRow(pair)
+            == AirPlayTargetRow(kind: .stereoPair, members: ["Left", "Right"], missing: ["Right"], incomplete: true)
+            && t.airPlayTargetNote(missing.targetRow(pair)!) == "Stereo pair, missing Right",
+          "P181 native airplay: a member out of view is named missing")
+    var partner = listedPair()
+    partner.apply(.changed(target(pair, "Living Room", incomplete: true)))
+    check(partner.targetRow(pair)?.incomplete == true
+            && t.airPlayTargetNote(partner.targetRow(pair)!) == "Stereo pair, a speaker is missing"
+            && t.airPlayTargetNote(AirPlayTargetRow(kind: .homeTheater, members: ["Left", "Right"],
+                                                    missing: ["Left", "Right"], incomplete: true))
+                == "Home theater group, missing Left and Right",
+          "P181 native airplay: an incomplete target with no member out of view says a speaker is missing")
+
+    var reached = NativeAirPlayModel()
+    var over = member(left, "Left", of: pair)
+    over.overAirPlay2 = true
+    reached.apply(.appeared(over))
+    reached.apply(.appeared(target(pair, "Living Room")))
+    check(reached.reachedOverAirPlay2(pair) && !listedPair().reachedOverAirPlay2(pair),
+          "P177 native airplay: a pair reached over AirPlay 2 through a member is tagged AirPlay 2")
+
+    var theater = NativeAirPlayModel()
+    theater.added("theater:9F00")
+    check(NativeSpeakerEvent.Problem.playsThroughSpeakers.turnOff == .playsThroughSpeakers
+            && theater.apply(.error(id: "theater:9F00", .playsThroughSpeakers, retryMs: nil, detail: ""))
+                == .turnOff("native:theater:9F00", .playsThroughSpeakers),
+          "P177 native airplay: a group whose Apple TV plays, or an Apple TV whose group plays, goes off")
+    let texts = [t.nativeAirPlayPlaysThroughSpeakers(name: "Den TV"), t.nativeAirPlayAppleTVPlays(name: "Den"),
+                 t.nativeAirPlayPlaysInGroup(name: "Right", group: "Living Room")]
+    check(texts == ["Den TV plays through its home theater speakers, and AudioSync already plays to them, so it's off. "
+                        + "Turn the group off to play to the Apple TV itself.",
+                    "AudioSync already plays to Den's Apple TV, so the group is off. Turn the Apple TV off to play to the group.",
+                    "Right plays as part of Living Room, so it stays off by itself."]
+            && !texts.joined().contains("\u{2014}"),
+          "P177 native airplay: the Apple TV, its group and a held member each say why they are off")
+
+    var pw = NativeAirPlayModel()
+    pw.apply(.appeared(member(left, "Left", of: pair)))
+    pw.apply(.appeared(member(right, "Right", of: pair, .needsPassword)))
+    pw.apply(.appeared(target(pair, "Living Room")))
+    let ask = NativePrompt(id: right, password: true, wrong: false)
+    check(pw.turnedOnByUser(pair) == .prompt && pw.nextPrompt() == ask
+            && pw.plan(streaming: true, enabled: [app(pair)]).add.isEmpty,
+          "P176 native airplay: switched on, a pair asks for its member's password by the member's name and waits for it")
+    check(pw.answered(ask, code: "secret") == .sendPassword(pair: false) && pw.promptTargets.isEmpty
+            && pw.plan(streaming: true, enabled: [app(pair)]).add == [pair],
+          "P176 native airplay: once the member's password is in, the pair starts")
+    pw.added(pair)
+    let again = NativePrompt(id: right, password: true, wrong: true)
+    check(pw.apply(.error(id: pair, .wrongPassword, retryMs: nil, detail: "")) == nil
+            && pw.apply(.error(id: right, .wrongPassword, retryMs: nil, detail: "")) == .prompt
+            && pw.nextPrompt() == again && pw.promptTargets[right] == pair,
+          "P176 native airplay: a member that turns the password down is asked again by name, not the pair")
+    check(pw.answered(again, code: nil) == .turnOff(.cancelled) && !pw.turnedOff(pair) && pw.promptTargets.isEmpty,
+          "P176 native airplay: cancelling the member's password turns the pair off and drops the prompt")
+    var auto = listedPair()
+    auto.added(pair)
+    check(auto.apply(.error(id: pair, .passwordRequired, retryMs: nil, detail: "")) == nil
+            && auto.apply(.error(id: right, .passwordRequired, retryMs: nil, detail: ""))
+                == .turnOff(app(pair), .memberNeedsPassword(right)),
+          "P176 native airplay: a pair auto-connect turned on goes off when a member asks for a password, naming the member")
+
+    var oneSide = listedPair()
+    _ = oneSide.turnedOnByUser(pair)
+    oneSide.added(pair)
+    _ = oneSide.apply(.state(id: pair, .playing, retryMs: nil))   // Left plays: the attempt is over
+    check(oneSide.apply(.error(id: right, .wrongPassword, retryMs: nil, detail: ""))
+            == .turnOff(app(pair), .memberNeedsPassword(right)) && !oneSide.passwords.contains(right),
+          "P176 native airplay: Left plays, then Right refuses its password: the pair goes off, naming Right, and asks again when turned on")
+    oneSide.removed(pair)
+    var asksAgain = oneSide
+    asksAgain.apply(.changed(member(right, "Right", of: pair, .needsPassword)))
+    check(asksAgain.turnedOnByUser(pair) == .prompt
+            && asksAgain.nextPrompt() == NativePrompt(id: right, password: true, wrong: false),
+          "P176 native airplay: turned on again, the pair asks for the member's password")
+    check(t.nativeAirPlayMemberNeedsPassword(member: "Right", target: "Living Room")
+            == "Right in Living Room asks for a password, so Living Room is off. Turn Living Room on again to enter it.",
+          "P176 native airplay: the notice names the member and its pair")
+
+    var plain = NativeAirPlayModel()
+    plain.apply(.appeared(NativeReceiver(id: left, name: "Left", model: "", availability: .available, reason: nil,
+                                         hints: [])))
+    plain.apply(.appeared(NativeReceiver(id: right, name: "Right", model: "", availability: .available, reason: nil,
+                                         hints: [])))
+    check(plain.rows(enabled: []) == [app(left), app(right)] && plain.holdingTarget(left, on: false) == nil
+            && plain.plan(streaming: true, enabled: [app(left), app(right)]).release.isEmpty
+            && plain.targetRow(left) == nil && plain.members(of: pair).isEmpty,
+          "P170 native airplay: with the AirPlay 2 switch off no target or member link is listed, and nothing changes")
+}
 
 // MARK: Pairing store — plaintext by design, so its folder stays out of backups
 do {

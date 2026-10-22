@@ -381,7 +381,10 @@ final class NativeAirPlay {
                                       availability: availability(raw.availability),
                                       reason: reason(raw.unsupported), hints: hints(raw.flags),
                                       overAirPlay2: raw.flags & UInt32(ASC_AIRPLAY_FLAG_OVER_AIRPLAY2) != 0,
-                                      paired: raw.flags & UInt32(ASC_AIRPLAY_FLAG_PAIRED) != 0)
+                                      paired: raw.flags & UInt32(ASC_AIRPLAY_FLAG_PAIRED) != 0,
+                                      target: text(raw.target),
+                                      isTarget: raw.flags & UInt32(ASC_AIRPLAY_FLAG_TARGET) != 0,
+                                      incomplete: raw.flags & UInt32(ASC_AIRPLAY_FLAG_INCOMPLETE) != 0)
         return raw.event == ASC_AIRPLAY_APPEARED ? .appeared(receiver) : .changed(receiver)
     }
 
@@ -434,6 +437,7 @@ final class NativeAirPlay {
         switch reason {
         case ASC_AIRPLAY_REASON_TIMING: return .timingUnavailable
         case ASC_AIRPLAY_REASON_ONE_AIRPLAY2: return .oneAirPlay2
+        case ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS: return .playsThroughSpeakers
         default: return .unsupported
         }
     }
@@ -473,6 +477,7 @@ final class NativeAirPlay {
         case ASC_AIRPLAY_REASON_AIRPLAY2_ONLY: return "AirPlay 2 only"
         case ASC_AIRPLAY_REASON_TIMING: return "timing"
         case ASC_AIRPLAY_REASON_ONE_AIRPLAY2: return "one AirPlay 2 speaker at a time"
+        case ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS: return "plays through its speakers"
         default: return nil
         }
     }
@@ -490,6 +495,8 @@ final class NativeAirPlay {
             (ASC_AIRPLAY_FLAG_AIRPLAY2, "airplay2"),
             (ASC_AIRPLAY_FLAG_OVER_AIRPLAY2, "over-airplay2"),
             (ASC_AIRPLAY_FLAG_PAIRED, "paired"),
+            (ASC_AIRPLAY_FLAG_TARGET, "target"),
+            (ASC_AIRPLAY_FLAG_INCOMPLETE, "incomplete"),
         ]
         return names.filter { flags & UInt32($0.0) != 0 }.map(\.1)
     }
