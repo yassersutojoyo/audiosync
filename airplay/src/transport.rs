@@ -579,6 +579,8 @@ fn ptp_loop(
     move || {
         let mut buf = [0u8; DATAGRAM_BYTES];
         while !stop.load(Ordering::Acquire) {
+            #[cfg(test)]
+            let _receiving = tests::Receiving::enter(&socket);
             match socket.recv_from(&mut buf) {
                 Ok((0, _)) => {}
                 Ok((len, source)) => {
@@ -629,6 +631,8 @@ fn timing_loop(
     move || {
         let mut buf = [0u8; DATAGRAM_BYTES];
         while !stop.load(Ordering::Acquire) {
+            #[cfg(test)]
+            let _receiving = tests::Receiving::enter(&socket);
             match socket.recv_from(&mut buf) {
                 Ok((0, _)) => {}
                 Ok((len, source)) => {
@@ -675,6 +679,8 @@ fn control_loop(
     move || {
         let mut buf = [0u8; DATAGRAM_BYTES];
         while !stop.load(Ordering::Acquire) {
+            #[cfg(test)]
+            let _receiving = tests::Receiving::enter(&socket);
             match socket.recv_from(&mut buf) {
                 Ok((0, _)) => {}
                 Ok((len, source)) => {
@@ -813,6 +819,58 @@ mod tests {
         /// Makes [`wake`] on this thread send nothing, as when the local
         /// address is gone.
         pub(super) static WAKE_FAILS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// The local ports of the UDP sockets whose thread is past its stop
+    /// check, so it ends only once its receive returns.
+    static RECEIVING: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+
+    /// Marks a UDP thread's socket as receiving for one loop pass.
+    pub(super) struct Receiving(Option<u16>);
+
+    impl Receiving {
+        pub(super) fn enter(socket: &UdpSocket) -> Self {
+            let port = socket.local_addr().ok().map(|address| address.port());
+            if let Some(port) = port {
+                RECEIVING
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(port);
+            }
+            Receiving(port)
+        }
+    }
+
+    impl Drop for Receiving {
+        fn drop(&mut self) {
+            let Some(port) = self.0 else { return };
+            let mut ports = RECEIVING
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(at) = ports.iter().position(|&p| p == port) {
+                ports.swap_remove(at);
+            }
+        }
+    }
+
+    /// Waits until the threads of the sockets on `ports` are all receiving,
+    /// or `WAIT` passes.
+    fn all_receiving(ports: &[u16]) -> bool {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            {
+                let receiving = RECEIVING
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if ports.iter().all(|port| receiving.contains(port)) {
+                    return true;
+                }
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
     }
 
     /// A driver that panics on the events `bug` picks, as a bug in a
@@ -1274,7 +1332,7 @@ mod tests {
         let tcp = TcpStream::connect(listener.local_addr().expect("address")).expect("connect");
         let (_receiver_end, _) = listener.accept().expect("accept");
         let notify = |_: IoEvent| true;
-        let (io, _) = SessionIo::open(
+        let (io, connection) = SessionIo::open(
             SessionKey(7),
             1,
             tcp,
@@ -1289,8 +1347,12 @@ mod tests {
         };
         let ptp = PtpIo::open(IpAddr::from([127, 0, 0, 1]), ports, notify).expect("PTP I/O");
         // A thread that sees the stop flag before its first receive ends at
-        // once, wake-up or not, which a loaded test run hits.
-        thread::sleep(POLL_INTERVAL * 4);
+        // once, which proves nothing about the backstop.
+        let event_port = ptp.event.local_addr().expect("event address").port();
+        assert!(
+            all_receiving(&[connection.control_port, connection.timing_port, event_port]),
+            "every UDP thread reaches its receive"
+        );
         WAKE_FAILS.with(|fails| fails.set(true));
         let mut threads = io.close();
         threads.extend(ptp.close());
