@@ -312,6 +312,8 @@ function showPairing(message) {
   stopStream();
   snapshot = null;
   lost = false;
+  ui.banner.hidden = true;
+  ui.controls.disabled = false;
   ui.remote.hidden = true;
   ui.pair.hidden = false;
   ui.pairHint.textContent = isStandalone() ? TEXT.hintStandalone : TEXT.hintBrowser;
@@ -323,17 +325,28 @@ function showPairing(message) {
 function showRemote() {
   ui.pair.hidden = true;
   ui.remote.hidden = false;
-  ui.loading.hidden = snapshot !== null;
+  ui.loading.hidden = snapshot !== null || lost;
   ui.controls.hidden = snapshot === null;
+}
+
+function clearErrors() {
+  showError(ui.masterError, "");
+  for (const row of rows.values()) { showError(row.error, ""); }
 }
 
 function setLost(value, message) {
   const text = message || TEXT.lost;
   if (value && (!lost || ui.bannerText.textContent !== text)) { announce(text); }
-  if (!value && lost) { announce(TEXT.back); }
+  if (!value && lost) {
+    announce(TEXT.back);
+    clearErrors();
+  }
   if (value) { ui.bannerText.textContent = text; }
   lost = value;
   ui.banner.hidden = !value;
+  ui.loading.hidden = value || snapshot !== null;
+  // A disabled fieldset drops focus to the page top; keep it on Retry instead.
+  if (value && ui.controls.contains(document.activeElement)) { ui.retry.focus(); }
   ui.controls.disabled = value;
 }
 
@@ -455,6 +468,10 @@ function sender(send, onFail) {
 
 function rangeControl(input, output, read, write, onFail) {
   let held = false;
+  const showPercent = (value) => {
+    output.value = TEXT.percent(value);
+    input.setAttribute("aria-valuetext", TEXT.percent(value));
+  };
   const send = sender(write, (problem, settled) => {
     if (problem) { onFail(problem.message); }
     if (settled && !held) { control.show(read()); }
@@ -463,13 +480,13 @@ function rangeControl(input, output, read, write, onFail) {
     held: () => held || send.busy(),
     show(value) {
       input.value = String(Math.round(value));
-      output.value = TEXT.percent(Math.round(value));
+      showPercent(Math.round(value));
     },
   };
   input.addEventListener("pointerdown", () => { held = true; });
   input.addEventListener("input", () => {
     const value = Number(input.value);
-    output.value = TEXT.percent(value);
+    showPercent(value);
     send.set(value);
   });
   input.addEventListener("change", () => {
@@ -494,6 +511,7 @@ function makeRow(speaker) {
   names.className = "names";
   const name = document.createElement("h2");
   name.id = `${key}-name`;
+  name.tabIndex = -1;
   const kind = document.createElement("p");
   kind.className = "kind muted";
   names.append(name, kind);
@@ -635,6 +653,11 @@ function updateRow(row, speaker) {
   row.name.textContent = speaker.name;
   row.kind.textContent = speaker.kind;
   row.root.classList.toggle("off-line", !speaker.available);
+  // Hiding the focused control drops focus to the page top; keep it on this speaker.
+  const focused = document.activeElement;
+  if (!speaker.available && (row.body.contains(focused) || row.power.parentElement.contains(focused))) {
+    row.name.focus();
+  }
   row.body.hidden = !speaker.available;
   row.power.parentElement.hidden = !speaker.available;
   row.less.setAttribute("aria-label", `${TEXT.lessDelay}, ${speaker.name}`);
