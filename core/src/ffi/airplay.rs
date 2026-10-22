@@ -80,7 +80,7 @@ use audiosync_airplay::metadata::TrackInfo;
 use audiosync_airplay::pairing::{Credentials, PairingEvent};
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
-    AIRPLAY2_SWITCH_ENV, NowPlaying, ReceiverEvent, ReceiverInfo, Sender, SenderConfig,
+    AIRPLAY2_SWITCH_ENV, NowPlaying, Progress, ReceiverEvent, ReceiverInfo, Sender, SenderConfig,
     SenderEvent, SpeakerError, SpeakerEvent, SpeakerOptions, SpeakerState, airplay2_switch,
 };
 use audiosync_airplay::stream::{MAX_DELAY, SpeakerCounters, SpeakerLatency};
@@ -444,6 +444,11 @@ pub struct AscAirPlay {
     master: f64,
     /// Every speaker's delay d_s ([`asc_airplay_set_hold_back`]).
     hold_back: Duration,
+    /// What is playing as the sender was last given it, so new progress
+    /// goes out with the track and artwork it belongs to.
+    now_playing: NowPlaying,
+    /// When the sender was given `now_playing`.
+    now_playing_at: Instant,
     /// Whether a call on this handle or its input panicked, or discovery
     /// died, and where the panic happened; shared with the input.
     death: Arc<Death>,
@@ -1550,6 +1555,8 @@ fn create_configured(open_browser: OpenBrowser, airplay2_setting: bool) -> *mut 
                 ending: HashMap::new(),
                 master: 100.0,
                 hold_back: Duration::ZERO,
+                now_playing: NowPlaying::default(),
+                now_playing_at: Instant::now(),
                 death: Arc::new(Death::new()),
                 panics_before,
                 failure_reported: false,
@@ -2061,6 +2068,16 @@ impl AscAirPlayCounters {
 }
 
 impl AscAirPlay {
+    /// Gives the sender what is playing, as of `now`, and keeps it.
+    fn give_now_playing(&mut self, now_playing: NowPlaying, now: Instant) -> bool {
+        if self.sender.set_now_playing(now_playing.clone()).is_err() {
+            return false;
+        }
+        self.now_playing = now_playing;
+        self.now_playing_at = now;
+        true
+    }
+
     /// The counters of the speaker added under `id`, or of `id` alone when
     /// it is a member of an added target; `None` when it is neither.
     fn counters(&self, id: &str) -> Option<AscAirPlayCounters> {
@@ -2192,17 +2209,84 @@ pub unsafe extern "C" fn asc_airplay_set_now_playing(
         artist: artist.unwrap_or_default().to_owned(),
         album: album.unwrap_or_default().to_owned(),
     });
-    let now_playing = NowPlaying {
-        track,
-        artwork: (!jpeg.is_empty()).then(|| jpeg.to_vec()),
-        progress: None,
-    };
+    let artwork = (!jpeg.is_empty()).then(|| jpeg.to_vec());
     // SAFETY: by the caller's contract null or a live handle that no other
     // call uses now.
     unsafe {
         live(airplay, false, |airplay| {
-            airplay.sender.set_now_playing(now_playing).is_ok()
+            let now = Instant::now();
+            let progress = if track == airplay.now_playing.track {
+                let since = now.saturating_duration_since(airplay.now_playing_at);
+                airplay
+                    .now_playing
+                    .progress
+                    .map(|progress| moved_on(progress, since))
+            } else {
+                None
+            };
+            let now_playing = NowPlaying {
+                track,
+                artwork,
+                progress,
+            };
+            airplay.give_now_playing(now_playing, now)
         })
+    }
+}
+
+/// Sets how far into the track the audio arriving now is, and how long the
+/// track is, in ms, for the receivers that show progress (P126). It goes out
+/// with the track and artwork set last ([`asc_airplay_set_now_playing`]),
+/// now and to every speaker that starts or restarts later. A length that
+/// isn't positive and finite sends none; so does another track, until this
+/// is called again, while the same track set again keeps it. An elapsed
+/// time outside 0 to the length is taken as its nearest end. Returns false,
+/// changing nothing, for a null or dead handle.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_set_progress(
+    airplay: *mut AscAirPlay,
+    elapsed_ms: f64,
+    length_ms: f64,
+) -> bool {
+    let progress = host_progress(elapsed_ms, length_ms);
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, false, |airplay| {
+            let now_playing = NowPlaying {
+                progress,
+                ..airplay.now_playing.clone()
+            };
+            airplay.give_now_playing(now_playing, Instant::now())
+        })
+    }
+}
+
+/// Progress from the host's milliseconds (P126); none without a length.
+fn host_progress(elapsed_ms: f64, length_ms: f64) -> Option<Progress> {
+    if !(length_ms.is_finite() && length_ms > 0.0) {
+        return None;
+    }
+    let length = Duration::try_from_secs_f64(length_ms / 1000.0).ok()?;
+    let elapsed = if elapsed_ms.is_finite() {
+        Duration::from_secs_f64(elapsed_ms.clamp(0.0, length_ms) / 1000.0).min(length)
+    } else {
+        Duration::ZERO
+    };
+    Some(Progress { elapsed, length })
+}
+
+/// `progress` as it stands `since` later: the receiver's bar runs on with
+/// the stream whether the player plays or not, so a resend runs on with it,
+/// up to the track's end.
+fn moved_on(progress: Progress, since: Duration) -> Progress {
+    Progress {
+        elapsed: progress.elapsed.saturating_add(since).min(progress.length),
+        length: progress.length,
     }
 }
 
@@ -3886,6 +3970,127 @@ mod tests {
             "{:?}",
             receiver.bodies(Method::SetParameter)
         );
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    #[test]
+    fn host_progress_needs_a_length_and_keeps_elapsed_within_it() {
+        let progress = |elapsed: u64, length: u64| Progress {
+            elapsed: Duration::from_millis(elapsed),
+            length: Duration::from_millis(length),
+        };
+        assert_eq!(
+            host_progress(30_000.0, 200_000.0),
+            Some(progress(30_000, 200_000))
+        );
+        assert_eq!(host_progress(-5.0, 1000.0), Some(progress(0, 1000)));
+        assert_eq!(host_progress(f64::NAN, 1000.0), Some(progress(0, 1000)));
+        assert_eq!(host_progress(9000.0, 1000.0), Some(progress(1000, 1000)));
+        for length in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::MAX] {
+            assert_eq!(host_progress(10.0, length), None, "{length}");
+        }
+        assert_eq!(
+            moved_on(progress(1000, 5000), Duration::from_secs(2)),
+            progress(3000, 5000)
+        );
+        assert_eq!(
+            moved_on(progress(4000, 5000), Duration::from_secs(2)),
+            progress(5000, 5000)
+        );
+    }
+
+    #[test]
+    fn progress_reaches_a_speaker_as_rtp_bounds_and_a_new_track_drops_it() {
+        // SAFETY: a null handle is part of the contract.
+        assert!(!unsafe { asc_airplay_set_progress(ptr::null_mut(), 0.0, 1000.0) });
+
+        let receiver = Loopback::start();
+        let id = "02005E005332";
+        let mut txt = OPEN.to_vec();
+        txt.push("md=0,1,2");
+        let record = ServiceRecord {
+            port: receiver.port,
+            addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))],
+            ..raop(id, "Den", &txt)
+        };
+        let mut handle = listing(vec![record]);
+        let c_id = c_string(id);
+        let none = ptr::null::<c_char>();
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 50.0)) };
+        let events = events_until(handle, |seen| has_state(seen, id, AIRPLAY_STATE_PLAYING));
+        assert!(has_state(&events, id, AIRPLAY_STATE_PLAYING), "{events:?}");
+        let progress_bodies = || -> Vec<[u32; 3]> {
+            receiver
+                .bodies(Method::SetParameter)
+                .iter()
+                .filter_map(|body| body.strip_prefix("progress: "))
+                .map(|bounds| {
+                    let bounds: Vec<u32> = bounds
+                        .trim()
+                        .split('/')
+                        .map(|n| n.parse().unwrap())
+                        .collect();
+                    [bounds[0], bounds[1], bounds[2]]
+                })
+                .collect()
+        };
+        // SAFETY: a live handle, used by this thread only; C strings.
+        unsafe {
+            assert!(asc_airplay_set_now_playing(
+                handle,
+                c"Track One".as_ptr(),
+                none,
+                none,
+                ptr::null(),
+                0
+            ));
+            assert!(asc_airplay_set_progress(handle, 30_000.0, 200_000.0));
+        }
+        assert!(wait_for(|| !progress_bodies().is_empty()));
+        let [start, current, end] = progress_bodies()[0];
+        assert_eq!(current.wrapping_sub(start), 30 * SAMPLE_RATE);
+        assert_eq!(end.wrapping_sub(start), 200 * SAMPLE_RATE);
+
+        // SAFETY: a live handle, used by this thread only, nothing else
+        // running on it; C strings.
+        unsafe {
+            assert!(asc_airplay_set_now_playing(
+                handle,
+                c"Track One".as_ptr(),
+                none,
+                none,
+                ptr::null(),
+                0
+            ));
+            assert!((*handle).now_playing.progress.is_some(), "the same track");
+            assert!(asc_airplay_set_now_playing(
+                handle,
+                c"Track Two".as_ptr(),
+                none,
+                none,
+                ptr::null(),
+                0
+            ));
+            assert!((*handle).now_playing.progress.is_none(), "another track");
+            assert!(asc_airplay_set_progress(handle, 0.0, 0.0));
+            assert!(asc_airplay_set_now_playing(
+                handle,
+                c"Track Three".as_ptr(),
+                none,
+                none,
+                ptr::null(),
+                0
+            ));
+        }
+        // Each request follows the one before on the connection, so once
+        // the third track arrives, every progress sent before it has too.
+        assert!(wait_for(|| receiver
+            .bodies(Method::SetParameter)
+            .iter()
+            .any(|body| body.contains("Track Three"))));
+        assert_eq!(progress_bodies().len(), 2, "the same track's, then none");
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }

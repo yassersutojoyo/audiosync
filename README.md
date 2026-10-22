@@ -36,13 +36,20 @@ AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay s
 ## What's new in 0.6
 
 - Google Cast speakers, on the Mac and on Windows, one at a time. You set each one's offset by ear, and Resync restarts it if it drifts.
-- Cast and AirPlay speakers together: the side that's ahead waits for the other, AirPlay up to 20 s.
+- Cast and AirPlay speakers together: the side that's ahead waits for the other, AirPlay up to 3 s.
 - On the Mac, Calibrate with Microphone sets a local speaker's delay for you.
 - On the Mac, rename a speaker with a double-click on its name.
 - If the app you capture quits, AudioSync can switch to all system audio instead of stopping.
 - Local speakers with a clock that runs a bit fast or slow stay in time with smaller corrections.
 - Diagrams in the Guide.
 - AirPlay 2 is in there, but experimental and off. See below.
+
+On `main` (coming in 0.7), in both the Mac and the Windows app:
+
+- Web Remote: turn it on and a phone on your home network can switch speakers on and off and set volumes and delays. It's plain HTTP, so keep it at home.
+- Calibrate All Speakers measures every speaker that's on, one after the other, and lets you apply or undo the new delays in one go.
+- Calibrate with Microphone works on Windows too.
+- AirPlay can wait up to 20 s for a Cast speaker instead of 3.
 
 The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 
@@ -55,7 +62,7 @@ The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 
 Like Airfoil, but less. Not made by Rogue Amoeba, no shared code.
 
-Google Cast speakers work in both the Mac and the Windows app, one at a time. Cast has no shared clock, so AudioSync can't sync them by itself: you set an offset by ear for each Cast speaker and it's remembered. If one drifts, hit Resync under its volume. That restarts the stream with a short gap, and it never happens on its own. In 0.6, speaker groups made in the Google Home app can't play. On `main` (coming in 0.7) a group plays as one speaker, with one volume and one offset, and its row names the members once the group reports them. A speaker in the group keeps its own row and is busy while the group plays. When a Cast speaker and AirPlay speakers are on together, the faster side waits for the slower one, but AirPlay can only wait up to 20 s. Past that a notice tells you how far ahead AirPlay plays.
+Google Cast speakers work in both the Mac and the Windows app, one at a time. Cast has no shared clock, so AudioSync can't sync them by itself: you set an offset by ear for each Cast speaker and it's remembered. If one drifts, hit Resync under its volume. That restarts the stream with a short gap, and it never happens on its own. In 0.6, speaker groups made in the Google Home app can't play. On `main` (coming in 0.7) a group plays as one speaker, with one volume and one offset, and its row names the members once the group reports them. A speaker in the group keeps its own row and is busy while the group plays. When a Cast speaker and AirPlay speakers are on together, the faster side waits for the slower one, but AirPlay can only wait so long: 3 s in 0.6, 20 s on `main`. Past that a notice tells you how far ahead AirPlay plays.
 
 ## Install
 

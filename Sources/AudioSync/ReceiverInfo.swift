@@ -21,6 +21,8 @@ struct ReceiverInfo: Equatable {
 
     let fields: TrackMetadata.Fields
     let artwork: Artwork
+    /// The track's position, only while the track itself shows (P126).
+    var position: NowPlayingMonitor.Position? = nil
 
     /// `track`: Now Playing's current reading, nil while there is none (not
     /// polling, or no reading since polling started).
@@ -41,7 +43,7 @@ struct ReceiverInfo: Equatable {
             let artwork: Artwork = track.artwork != nil ? .track
                 : track.bundleID == NowPlayingMonitor.spotify ? .wait : .neutral
             return ReceiverInfo(fields: .init(title: track.title, artist: track.artist, album: track.album),
-                                artwork: artwork)
+                                artwork: artwork, position: track.position)
         }
         var fields = untitled
         if let name = sourceName?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -67,7 +69,8 @@ struct ReceiverInfo: Equatable {
     /// After `seconds` of showing these fields, a wait for artwork that hasn't
     /// come is over: AudioSync's icon takes its place.
     func waited(_ seconds: TimeInterval) -> ReceiverInfo {
-        artwork == .wait && seconds >= Self.artworkWait ? ReceiverInfo(fields: fields, artwork: .neutral) : self
+        artwork == .wait && seconds >= Self.artworkWait
+            ? ReceiverInfo(fields: fields, artwork: .neutral, position: position) : self
     }
 
     /// Whether to hold track info back: Now Playing started polling
@@ -91,6 +94,8 @@ struct SentTrackInfo {
     private(set) var neutral = false
     /// When the sender was given `fields`.
     private(set) var fieldsSince = Date.distantPast
+    /// The position the sender has for `fields`; new fields drop it there.
+    private(set) var position: NowPlayingMonitor.Position?
     /// When `sendTrackInfo` runs again by itself, as a wait ends.
     var recheckAt: Date?
 
@@ -103,6 +108,9 @@ struct SentTrackInfo {
         /// The player's artwork is on its way: look again at this date, when
         /// the wait for it ends (`ReceiverInfo.artworkWait`).
         var waitUntil: Date?
+        /// Give the sender `position` (`NativeAirPlay.setProgress`).
+        var sendsPosition = false
+        var position: NowPlayingMonitor.Position?
     }
 
     /// Records and returns what changed: `info` is what receivers should show
@@ -119,6 +127,12 @@ struct SentTrackInfo {
             fieldsSince = now
             image = nil
             neutral = false
+            position = nil
+        }
+        if info.position != position {
+            update.sendsPosition = true
+            update.position = info.position
+            position = info.position
         }
         switch info.waited(now.timeIntervalSince(fieldsSince)).artwork {
         case .track:
@@ -152,6 +166,8 @@ struct TrackInfoFeed {
         /// Look again at this date (`recheckFired`, then `send`); nil when
         /// there is no wait or this date is already scheduled.
         var recheckAt: Date?
+        var sendsPosition = false
+        var position: NowPlayingMonitor.Position?
     }
 
     /// A model update; true when sending just started and everything goes out.
@@ -199,6 +215,8 @@ struct TrackInfoFeed {
         let update = sent.update(info, artwork: artwork, icon: icon, now: now)
         step.fields = update.fields
         step.picture = update.picture
+        step.sendsPosition = update.sendsPosition
+        step.position = update.position
         if let date = update.waitUntil { recheck(at: date) }
         return step
     }

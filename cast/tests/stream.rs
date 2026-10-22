@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, StreamFormat, audio_ring};
 use audiosync_cast::stream::{
-    BlockQueue, ResponseEnd, ServerEvent, StreamConfig, StreamServer, image_size,
+    BlockQueue, FetchHeaders, MAX_LOGGED_NAMES, MAX_LOGGED_TEXT, ResponseEnd, ServerEvent,
+    StreamConfig, StreamServer, image_size,
 };
 use common::http;
 
@@ -159,11 +160,18 @@ fn a_get_is_a_chunked_200_with_the_headers_and_range_is_ignored() {
     assert_eq!(http::status(&head), 200);
     assert_eq!(http::header(&head, "Content-Type"), Some("audio/wav"));
     assert!(body.is_empty(), "HEAD has no body");
-    assert!(events(&server).contains(&ServerEvent::Fetch {
-        from: LOCAL,
-        head: false,
-        range: true
-    }));
+    let fetched = events(&server).into_iter().find_map(|event| match event {
+        ServerEvent::Fetch {
+            from,
+            head,
+            headers,
+        } => Some((from, head, headers.range)),
+        _ => None,
+    });
+    assert_eq!(
+        fetched,
+        Some((LOCAL, false, Some("bytes=1000-".to_owned())))
+    );
     stop.store(true, Ordering::SeqCst);
     feeder.join().expect("feeder");
     server.stop();
@@ -529,5 +537,147 @@ fn frames_the_full_ring_refused_count_as_dropped() {
         dropped >= 60_000,
         "{dropped}: the ring's overflow is missing"
     );
+    server.stop();
+}
+
+// The G6 hardware check reads these log lines.
+#[test]
+fn a_fetch_logs_its_header_names_and_three_values_capped_and_never_the_token() {
+    let (server, _writer) = server(vec![LOCAL]);
+    let token = server.token().to_owned();
+    let user_agent = format!("CrKey/1.56 {token} {}", "x".repeat(300));
+    let mut extra = format!(
+        "User-Agent: {user_agent}\r\nIcy-MetaData: 1\r\nReferer: {}\r\nX-{token}: secret-value\r\n",
+        server.url()
+    );
+    for index in 0..40 {
+        extra.push_str(&format!("X-Filler-{index}: secret-value\r\n"));
+    }
+    let mut stream = get(&server, "HEAD", &extra);
+    let (head, _) = http::read_response(&mut stream, Duration::from_millis(200));
+    assert_eq!(http::status(&head), 200);
+
+    let seen = events(&server);
+    let headers: &FetchHeaders = seen
+        .iter()
+        .find_map(|event| match event {
+            ServerEvent::Fetch { headers, .. } => Some(headers),
+            _ => None,
+        })
+        .expect("a fetch event");
+    assert_eq!(headers.names.len(), MAX_LOGGED_NAMES);
+    assert_eq!(
+        headers.more,
+        45 - MAX_LOGGED_NAMES,
+        "Host, 4 headers and 40 fillers"
+    );
+    assert_eq!(
+        headers.names[..4],
+        ["Host", "User-Agent", "Icy-MetaData", "Referer"]
+    );
+    assert_eq!(headers.names[4], "X-<token>");
+    assert_eq!(headers.icy_metadata.as_deref(), Some("1"));
+    assert_eq!(headers.range, None);
+    let logged_agent = headers.user_agent.as_deref().expect("the user agent");
+    assert!(
+        logged_agent.starts_with("CrKey/1.56 <token> x"),
+        "{logged_agent}"
+    );
+    assert_eq!(logged_agent.chars().count(), MAX_LOGGED_TEXT);
+
+    let log = format!("{seen:?}");
+    assert!(!log.contains(&token), "the token reached the log: {log}");
+    assert!(!log.contains("secret-value"), "only three values are kept");
+    assert!(!log.contains("http://"), "the Referer value is not kept");
+    server.stop();
+}
+
+/// The logged headers of one `HEAD` fetch carrying `extra`.
+fn logged_headers(server: &StreamServer, extra: &str) -> FetchHeaders {
+    let mut stream = get(server, "HEAD", extra);
+    let (head, _) = http::read_response(&mut stream, Duration::from_millis(200));
+    assert_eq!(http::status(&head), 200);
+    events(server)
+        .into_iter()
+        .find_map(|event| match event {
+            ServerEvent::Fetch { headers, .. } => Some(headers),
+            _ => None,
+        })
+        .expect("a fetch event")
+}
+
+// The G6 hardware check reads these log lines.
+#[test]
+fn a_token_split_across_header_names_is_redacted() {
+    let (server, _writer) = server(vec![LOCAL]);
+    let token = server.token().to_owned();
+    let (first, second) = token.split_at(token.len() / 2);
+    let headers = logged_headers(
+        &server,
+        &format!("X-{first}: 1\r\nX-{second}: 1\r\nX-Request-1234567: 1\r\n"),
+    );
+    assert_eq!(
+        headers.names,
+        ["Host", "<redacted>", "<redacted>", "X-Request-1234567"],
+        "seven hex digits in a row stay"
+    );
+    server.stop();
+}
+
+// The G6 hardware check reads these log lines.
+#[test]
+fn an_uppercase_token_is_scrubbed() {
+    let (server, _writer) = server(vec![LOCAL]);
+    let token = server.token().to_owned();
+    let upper = token.to_ascii_uppercase();
+    let headers = logged_headers(
+        &server,
+        &format!("X-{upper}: 1\r\nUser-Agent: CrKey {upper}\r\n"),
+    );
+    assert_eq!(headers.names[1], "X-<token>");
+    assert_eq!(headers.user_agent.as_deref(), Some("CrKey <token>"));
+    assert!(!format!("{headers:?}").to_ascii_lowercase().contains(&token));
+    server.stop();
+}
+
+// The G6 hardware check reads these log lines.
+#[test]
+fn a_percent_encoded_token_is_scrubbed() {
+    let (server, _writer) = server(vec![LOCAL]);
+    let token = server.token().to_owned();
+    let once: String = token.bytes().map(|byte| format!("%{byte:02X}")).collect();
+    let twice = once.replace('%', "%25");
+    let headers = logged_headers(
+        &server,
+        &format!("X-{once}: 1\r\nUser-Agent: CrKey {twice}\r\nRange: bytes=0-\r\n"),
+    );
+    assert_eq!(headers.names[1], "X-<token>");
+    assert_eq!(headers.user_agent.as_deref(), Some("CrKey <token>"));
+    assert_eq!(headers.range.as_deref(), Some("bytes=0-"));
+    server.stop();
+}
+
+// The G6 hardware check reads these log lines.
+#[test]
+fn a_decimal_byte_range_is_logged_verbatim_and_a_range_holding_the_token_is_not() {
+    let (server, _writer) = server(vec![LOCAL]);
+    let token = server.token().to_owned();
+    let (first, _) = token.split_at(token.len() / 2);
+    let cases = [
+        ("bytes=123456789-".to_owned(), "bytes=123456789-".to_owned()),
+        (
+            "bytes=123456789-123456799, 5-".to_owned(),
+            "bytes=123456789-123456799, 5-".to_owned(),
+        ),
+        (format!("bytes={token}-"), "bytes=<token>-".to_owned()),
+        // The trailing letters keep a chunk that happens to be all decimal
+        // from passing as an offset.
+        (format!("bytes=0-1,{first}ab-"), "<redacted>".to_owned()),
+        (format!("{first}=0-"), "<redacted>".to_owned()),
+    ];
+    for (sent, logged) in cases {
+        let headers = logged_headers(&server, &format!("Range: {sent}\r\n"));
+        assert_eq!(headers.range.as_deref(), Some(logged.as_str()), "{sent}");
+    }
     server.stop();
 }

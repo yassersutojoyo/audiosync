@@ -46,6 +46,11 @@ export global Fluent {
 }
 
 // Segoe Fluent Icons code points (the icon font Windows 11 ships).
+// The app cuts a speaker name to its limit while it is typed.
+export global NameField {
+    pure callback fit(string) -> string;
+}
+
 export global Glyphs {
     out property <string> speakers: "\u{E7F5}";
     out property <string> headphones: "\u{E7F6}";
@@ -958,6 +963,7 @@ export component AirPlayDelayControls inherits VerticalLayout {
     callback committed();
     // Escape in the field or on a step: drop what was typed.
     callback cancelled();
+    callback focus-changed(bool);
 
     spacing: 8px;
     accessible-role: groupbox;
@@ -999,6 +1005,9 @@ export component AirPlayDelayControls inherits VerticalLayout {
                     for delta in [-100, -10]: Button {
                         text: Strings.delay-step(delta);
                         accessible-label: Strings.delay-step-accessibility(delta);
+                        changed has-focus => {
+                            root.focus-changed(self.has-focus);
+                        }
                         clicked => {
                             root.stepped(delta);
                         }
@@ -1013,6 +1022,9 @@ export component AirPlayDelayControls inherits VerticalLayout {
                             text: root.delay-text;
                             horizontal-alignment: center;
                             accessible-label: Strings.airplay-delay-title;
+                            changed has-focus => {
+                                root.focus-changed(self.has-focus);
+                            }
                             accessible-description: root.range-hint != "" ? root.range-hint : root.pending ? Strings.delay-draft-hint : Strings.airplay-delay-hint;
                             edited(text) => {
                                 root.edited(text);
@@ -1038,6 +1050,9 @@ export component AirPlayDelayControls inherits VerticalLayout {
                     for delta in [10, 100]: Button {
                         text: Strings.delay-step(delta);
                         accessible-label: Strings.delay-step-accessibility(delta);
+                        changed has-focus => {
+                            root.focus-changed(self.has-focus);
+                        }
                         clicked => {
                             root.stepped(delta);
                         }
@@ -1082,6 +1097,13 @@ export component SpeakerRow inherits Rectangle {
     callback forget-pairing();
     // The fix after the device-volume hint.
     callback device-volume-fix();
+    // Rename… in its menu, or a double-click on its name: edit the name here.
+    callback rename-requested();
+    callback rename-edited(string);
+    // Enter in its name field: apply the name.
+    callback rename-committed();
+    // Escape in its name field: keep the old name.
+    callback rename-cancelled();
     // A Google Cast speaker's Mute (true) or Unmute (false), and its Resync.
     callback cast-muted(bool);
     callback cast-resync();
@@ -1097,7 +1119,10 @@ export component SpeakerRow inherits Rectangle {
     // is there and does no harm on Space or Enter: the sync controls' field,
     // else the delay button; the volume, else the options.
     public function take-focus(part: RowPart) {
-        if part == RowPart.sync && root.item.has-delay && root.item.sync-open {
+        if part == RowPart.name && root.item.renaming {
+            // The name field takes it as it is built.
+            root.pending-focus = RowPart.name;
+        } else if part == RowPart.sync && root.item.has-delay && root.item.sync-open {
             // The sync controls take it as they are built.
             root.pending-focus = RowPart.sync;
         } else if (part == RowPart.sync || part == RowPart.delay) && root.item.has-delay {
@@ -1125,6 +1150,14 @@ export component SpeakerRow inherits Rectangle {
     property <bool> resync-focused;
     property <bool> sync-focused;
     property <bool> options-focused;
+    property <bool> name-focused;
+    // The name field goes without reporting that it lost the focus.
+    changed renaming => {
+        if !self.renaming {
+            root.name-focused = false;
+        }
+    }
+    property <bool> renaming: root.item.renaming;
     // The sync controls go without reporting that they lost the focus.
     property <bool> sync-shown: root.item.has-delay && root.item.sync-open;
     changed sync-shown => {
@@ -1132,7 +1165,7 @@ export component SpeakerRow inherits Rectangle {
             root.sync-focused = false;
         }
     }
-    property <RowPart> focused-part: self.sync-focused ? RowPart.sync : self.options-focused ? RowPart.options : self.delay-focused ? RowPart.delay : volume-slider.slider-focused || self.fix-focused || self.mute-focused || self.resync-focused ? RowPart.volume : self.badge-focused ? RowPart.toggle : RowPart.none;
+    property <RowPart> focused-part: self.name-focused ? RowPart.name : self.sync-focused ? RowPart.sync : self.options-focused ? RowPart.options : self.delay-focused ? RowPart.delay : volume-slider.slider-focused || self.fix-focused || self.mute-focused || self.resync-focused ? RowPart.volume : self.badge-focused ? RowPart.toggle : RowPart.none;
     // A Google Cast speaker that connects or plays: its volume, Mute and
     // Resync reach it.
     property <bool> cast-live: root.item.cast && root.item.state != RowState.off && root.item.cast-state != CastState.idle;
@@ -1147,26 +1180,67 @@ export component SpeakerRow inherits Rectangle {
     property <string> note: root.item.cast && root.cast-note != "" ? root.cast-note : Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.row-note(root.item.state);
     property <string> caption: Strings.speaker-caption(root.item.show-kind ? Strings.speaker-kind(root.item.kind) : "", root.note);
 
+    // A click on the row's box works like its delay button; a row without a
+    // delay is outside every sync control.
+    // While the row is renaming, a click on it only applies the name.
+    function box-clicked() {
+        if root.item.has-delay && !root.item.renaming {
+            root.sync-toggled();
+        } else {
+            root.blank-clicked();
+        }
+    }
+
+    // Where the name's tooltip goes, in the row.
+    property <length> tip-x;
+    property <length> tip-y;
+    property <bool> name-hovered;
+    property <bool> tip-shown;
+    changed name-hovered => {
+        if !self.name-hovered {
+            root.tip-shown = false;
+        }
+    }
+
+    // A click on the name waits for a second one: two make a double-click,
+    // which renames, and one alone is a click on the row's box.
+    click-wait := Timer {
+        interval: 500ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.box-clicked();
+        }
+    }
+
+    Timer {
+        interval: 700ms;
+        running: root.name-hovered && !root.tip-shown;
+        triggered => {
+            root.tip-shown = true;
+        }
+    }
+
     border-radius: Fluent.radius-control;
     background: root.item.state == RowState.playing ? Tokens.playing-row : hover.has-hover ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
 
     // Around the row's content, so the hover fill stays on over the row's
-    // own controls (they still get their clicks and drags first). A click on
-    // the row's box works like its delay button; a row without a delay is
-    // outside every sync control. The delay button stays the keyboard's way.
+    // own controls (they still get their clicks and drags first). The delay
+    // button stays the keyboard's way to the sync controls.
     hover := TouchArea {
         clicked => {
-            if root.item.has-delay {
-                root.sync-toggled();
-            } else {
-                root.blank-clicked();
-            }
+            root.box-clicked();
         }
         menu := ContextMenuArea {
-            // An idle Cast speaker's menu would be empty.
-            enabled: !root.item.cast || root.cast-live;
             Menu {
+                MenuItem {
+                    title: Strings.rename-speaker;
+                    activated => {
+                        root.rename-requested();
+                    }
+                }
+
                 // Auto-connect is for local and AirPlay speakers; a Cast
                 // speaker's menu holds the controls under its volume.
                 if !root.item.cast: MenuItem {
@@ -1220,7 +1294,7 @@ export component SpeakerRow inherits Rectangle {
                         badge := SpeakerBadge {
                             glyph: Glyphs.speaker(root.item.kind);
                             state: root.item.state;
-                            label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind);
+                            label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind, root.item.system-name);
                             description: Strings.with-group-note(root.item.group-note, Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.help(root.item.state));
                             toggled => {
                                 root.toggled();
@@ -1249,15 +1323,101 @@ export component SpeakerRow inherits Rectangle {
 
                                 HorizontalLayout {
                                     spacing: 6px;
+                                    alignment: start;
 
-                                    Text {
-                                        text: root.item.name;
-                                        font-size: Tokens.font-size-body;
-                                        font-weight: root.item.state == RowState.playing ? 600 : 400;
-                                        color: Tokens.text;
-                                        vertical-alignment: center;
-                                        overflow: elide;
-                                        accessible-role: none;
+                                    // As wide as the name, so the blank space
+                                    // after it stays the row's box.
+                                    if !root.item.renaming: Rectangle {
+                                        horizontal-stretch: 1;
+                                        min-width: 0px;
+                                        preferred-width: name-label.preferred-width;
+                                        max-width: name-label.preferred-width;
+                                        min-height: name-label.preferred-height;
+
+                                        name-label := Text {
+                                            width: 100%;
+                                            height: 100%;
+                                            text: root.item.name;
+                                            font-size: Tokens.font-size-body;
+                                            font-weight: root.item.state == RowState.playing ? 600 : 400;
+                                            color: Tokens.text;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            accessible-role: none;
+                                        }
+
+                                        TouchArea {
+                                            changed has-hover => {
+                                                root.tip-x = self.absolute-position.x - root.absolute-position.x;
+                                                root.tip-y = self.absolute-position.y - root.absolute-position.y + self.height + 4px;
+                                                root.name-hovered = self.has-hover;
+                                            }
+                                            pointer-event(event) => {
+                                                if event.kind == PointerEventKind.down {
+                                                    root.tip-shown = false;
+                                                }
+                                            }
+                                            clicked => {
+                                                click-wait.running = true;
+                                            }
+                                            double-clicked => {
+                                                click-wait.running = false;
+                                                root.rename-requested();
+                                            }
+                                        }
+                                    }
+
+                                    // Escape keeps the old name; captured
+                                    // before the field sees the key.
+                                    if root.item.renaming: FocusScope {
+                                        horizontal-stretch: 1;
+                                        focus-on-click: false;
+                                        focus-on-tab-navigation: false;
+                                        capture-key-pressed(event) => {
+                                            if event.text == Key.Escape {
+                                                root.rename-cancelled();
+                                                return accept;
+                                            }
+                                            return reject;
+                                        }
+
+                                        name-field := TextField {
+                                            text: root.item.name-text;
+                                            placeholder-text: root.item.device-name;
+                                            accessible-label: Strings.speaker-name-field(root.item.device-name);
+                                            accessible-description: Strings.speaker-name-field-hint;
+                                            // Focused in its own init, before
+                                            // `changed has-focus` watches it:
+                                            // the row is told here.
+                                            init => {
+                                                if root.pending-focus == RowPart.name {
+                                                    root.pending-focus = RowPart.none;
+                                                    self.focus();
+                                                    self.select-all();
+                                                    root.name-focused = true;
+                                                }
+                                            }
+                                            property <bool> focus-asked: root.pending-focus == RowPart.name;
+                                            changed focus-asked => {
+                                                if self.focus-asked {
+                                                    root.pending-focus = RowPart.none;
+                                                    self.focus();
+                                                }
+                                            }
+                                            edited(text) => {
+                                                if NameField.fit(text) != text {
+                                                    self.text = NameField.fit(text);
+                                                    self.set-selection-offsets(self.text.character-count * 4, self.text.character-count * 4);
+                                                }
+                                                root.rename-edited(self.text);
+                                            }
+                                            accepted => {
+                                                root.rename-committed();
+                                            }
+                                            changed has-focus => {
+                                                root.name-focused = self.has-focus;
+                                            }
+                                        }
                                     }
 
                                     if root.item.auto-connect: Glyph {
@@ -1374,8 +1534,6 @@ export component SpeakerRow inherits Rectangle {
                                     glyph: Glyphs.more;
                                     label: Strings.speaker-options(root.item.name);
                                     glyph-color: Tokens.teal-text;
-                                    // A Cast speaker's menu has nothing while it is idle.
-                                    enabled: !root.item.cast || root.cast-live;
                                     clicked => {
                                         // show() takes a point in the menu area, not in this button's layout.
                                         menu.show({
@@ -1499,63 +1657,90 @@ export component SpeakerRow inherits Rectangle {
                     padding-left: Fluent.name-inset - 12px;
                     padding-bottom: 4px;
 
-                    // A click on the controls' blank space is inside them, not
-                    // on the row: it neither closes them nor applies the typing.
-                    TouchArea {
-                        SyncControls {
-                            name: root.item.name;
-                            delay-text: root.item.delay-text;
-                            pending: root.item.delay-pending;
-                            range-hint: root.item.delay-range-hint;
-                            reference-name: root.item.reference-name;
-                            cast: root.item.cast;
-                            calibratable: root.item.calibratable;
-                            calibrating: root.item.calibrating;
-                            calibration-enabled: root.item.calibration-enabled;
-                            calibration-status: root.item.calibration-status;
-                            calibration-privacy: root.item.calibration-privacy;
-                            calibrate => {
-                                root.calibrate();
+                    // A click on the controls' blank space is a click on the
+                    // row's box: it closes them and applies the typing, as
+                    // on the Mac.
+                    SyncControls {
+                        name: root.item.name;
+                        delay-text: root.item.delay-text;
+                        pending: root.item.delay-pending;
+                        range-hint: root.item.delay-range-hint;
+                        reference-name: root.item.reference-name;
+                        cast: root.item.cast;
+                        calibratable: root.item.calibratable;
+                        calibrating: root.item.calibrating;
+                        calibration-enabled: root.item.calibration-enabled;
+                        calibration-status: root.item.calibration-status;
+                        calibration-privacy: root.item.calibration-privacy;
+                        calibrate => {
+                            root.calibrate();
+                        }
+                        cancel-calibration => {
+                            root.cancel-calibration();
+                        }
+                        calibration-privacy-requested => {
+                            root.calibration-privacy();
+                        }
+                        init => {
+                            // The field keeps what was typed (the app's draft).
+                            if root.pending-focus == RowPart.sync {
+                                root.pending-focus = RowPart.none;
+                                self.focus-field();
                             }
-                            cancel-calibration => {
-                                root.cancel-calibration();
+                        }
+                        property <bool> focus-asked: root.pending-focus == RowPart.sync;
+                        changed focus-asked => {
+                            if self.focus-asked {
+                                root.pending-focus = RowPart.none;
+                                self.focus-field();
                             }
-                            calibration-privacy-requested => {
-                                root.calibration-privacy();
-                            }
-                            init => {
-                                // The field keeps what was typed (the app's draft).
-                                if root.pending-focus == RowPart.sync {
-                                    root.pending-focus = RowPart.none;
-                                    self.focus-field();
-                                }
-                            }
-                            property <bool> focus-asked: root.pending-focus == RowPart.sync;
-                            changed focus-asked => {
-                                if self.focus-asked {
-                                    root.pending-focus = RowPart.none;
-                                    self.focus-field();
-                                }
-                            }
-                            stepped(delta) => {
-                                root.delay-stepped(delta);
-                            }
-                            edited(text) => {
-                                root.delay-edited(text);
-                            }
-                            committed => {
-                                root.delay-committed();
-                            }
-                            cancelled => {
-                                root.delay-cancelled();
-                            }
-                            changed focus-within => {
-                                root.sync-focused = self.focus-within;
-                            }
+                        }
+                        stepped(delta) => {
+                            root.delay-stepped(delta);
+                        }
+                        edited(text) => {
+                            root.delay-edited(text);
+                        }
+                        committed => {
+                            root.delay-committed();
+                        }
+                        cancelled => {
+                            root.delay-cancelled();
+                        }
+                        changed focus-within => {
+                            root.sync-focused = self.focus-within;
                         }
                     }
                 }
             }
+        }
+    }
+
+    // The name's tooltip, over the row's own content so the next row can't
+    // cover it. Narrator reads the device name from the toggle instead.
+    if root.tip-shown && !root.item.renaming: Rectangle {
+        x: min(root.tip-x, max(0px, root.width - self.width));
+        y: min(root.tip-y, max(0px, root.height - self.height));
+        width: min(tip-text.preferred-width + 16px, root.width);
+        height: tip-text.preferred-height + 10px;
+        border-radius: Fluent.radius-control;
+        border-width: 1px;
+        border-color: Fluent.stroke;
+        background: Tokens.surface;
+        drop-shadow-blur: 8px;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-color: Tokens.text.with-alpha(0.18);
+        accessible-role: none;
+
+        tip-text := Text {
+            x: 8px;
+            width: parent.width - 16px;
+            text: Strings.speaker-name-tooltip(root.item.system-name);
+            font-size: Tokens.font-size-caption;
+            color: Tokens.text;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
         }
     }
 }

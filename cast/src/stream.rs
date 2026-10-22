@@ -80,12 +80,12 @@ impl std::error::Error for StreamError {}
 /// What the server reports for the log.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerEvent {
-    /// A stream `GET` or `HEAD`; `range` when it carried a `Range` header,
-    /// which is ignored (C60).
+    /// A stream `GET` or `HEAD`, with what the device asked for (G6); a
+    /// `Range` header is ignored (C60).
     Fetch {
         from: IpAddr,
         head: bool,
-        range: bool,
+        headers: FetchHeaders,
     },
     /// A request answered with an error status: 403 (C58), 404 (C57), 405,
     /// or 503 when the connections a session serves at once are open already.
@@ -94,6 +94,156 @@ pub enum ServerEvent {
     ResponseEnded(ResponseEnd),
     /// The listener failed; the server stops accepting.
     AcceptFailed(String),
+}
+
+/// The request headers of a stream fetch, for the log (G6): the names,
+/// but only the values that tell a device's behavior apart. Other values,
+/// such as a `Referer` holding the stream URL, are never kept. Kept text is
+/// percent-decoded, the path token in any case is replaced, and text that
+/// still holds a run of [`MAX_HEX_RUN`] hex digits is replaced whole (a
+/// plain decimal byte range excepted), so a token split across several
+/// names never reaches the log either.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FetchHeaders {
+    /// Header names in request order, at most [`MAX_LOGGED_NAMES`].
+    pub names: Vec<String>,
+    /// Names past [`MAX_LOGGED_NAMES`].
+    pub more: usize,
+    pub user_agent: Option<String>,
+    pub range: Option<String>,
+    pub icy_metadata: Option<String>,
+}
+
+/// Header names a fetch keeps for the log; a hostile client could send
+/// hundreds in one 8 KiB request.
+pub const MAX_LOGGED_NAMES: usize = 24;
+/// Characters kept of one header name or value.
+pub const MAX_LOGGED_TEXT: usize = 96;
+/// Hex digits in a row that make a kept name or value `<redacted>`.
+pub const MAX_HEX_RUN: usize = 8;
+
+impl FetchHeaders {
+    fn parse<'a>(lines: impl Iterator<Item = &'a str>) -> FetchHeaders {
+        let mut headers = FetchHeaders::default();
+        for line in lines {
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
+            let name = name.trim();
+            let slot = if name.eq_ignore_ascii_case("user-agent") {
+                Some(&mut headers.user_agent)
+            } else if name.eq_ignore_ascii_case("range") {
+                Some(&mut headers.range)
+            } else if name.eq_ignore_ascii_case("icy-metadata") {
+                Some(&mut headers.icy_metadata)
+            } else {
+                None
+            };
+            if let Some(slot) = slot.filter(|slot| slot.is_none()) {
+                *slot = Some(value.trim().to_owned());
+            }
+            if headers.names.len() < MAX_LOGGED_NAMES {
+                headers.names.push(name.to_owned());
+            } else {
+                headers.more += 1;
+            }
+        }
+        headers
+    }
+
+    /// Scrubs `token` before capping, so a cut never leaves part of it.
+    fn for_log(mut self, token: &str) -> FetchHeaders {
+        let scrub = |text: &mut String, is_range: bool| {
+            *text = replace_ignoring_case(&percent_decoded(text), token, "<token>");
+            if has_hex_run(text) && !(is_range && is_byte_range(text)) {
+                *text = "<redacted>".to_owned();
+            }
+            if text.chars().count() > MAX_LOGGED_TEXT {
+                *text = text.chars().take(MAX_LOGGED_TEXT).collect();
+            }
+        };
+        self.names.iter_mut().for_each(|name| scrub(name, false));
+        [&mut self.user_agent, &mut self.icy_metadata]
+            .into_iter()
+            .flatten()
+            .for_each(|value| scrub(value, false));
+        if let Some(range) = &mut self.range {
+            scrub(range, true);
+        }
+        self
+    }
+}
+
+/// Decodes `%XX` escapes until none is left, so a token escaped twice is
+/// found too; each pass shortens the text, so the loop ends.
+fn percent_decoded(text: &str) -> String {
+    let mut text = text.to_owned();
+    loop {
+        let bytes = text.as_bytes();
+        let mut decoded = Vec::with_capacity(bytes.len());
+        let mut index = 0;
+        while index < bytes.len() {
+            let digit = |at: usize| {
+                bytes
+                    .get(at)
+                    .and_then(|byte| char::from(*byte).to_digit(16))
+            };
+            match (bytes[index], digit(index + 1), digit(index + 2)) {
+                (b'%', Some(high), Some(low)) => {
+                    decoded.push((high * 16 + low) as u8);
+                    index += 3;
+                }
+                (byte, _, _) => {
+                    decoded.push(byte);
+                    index += 1;
+                }
+            }
+        }
+        if decoded.len() == bytes.len() {
+            return text;
+        }
+        text = String::from_utf8_lossy(&decoded).into_owned();
+    }
+}
+
+fn replace_ignoring_case(text: &str, needle: &str, with: &str) -> String {
+    if needle.is_empty() {
+        return text.to_owned();
+    }
+    // ASCII lowercasing keeps every byte offset, so matches index `text` too.
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for (at, _) in lower.match_indices(&needle.to_ascii_lowercase()) {
+        out.push_str(&text[last..at]);
+        out.push_str(with);
+        last = at + needle.len();
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
+/// `bytes=<digits>-<digits?>`, comma-separated: decimal offsets cannot
+/// carry the hex token, and they are what the debug line is read for.
+fn is_byte_range(text: &str) -> bool {
+    let Some(ranges) = text.strip_prefix("bytes=") else {
+        return false;
+    };
+    let decimal = |part: &str| part.bytes().all(|byte| byte.is_ascii_digit());
+    ranges.split(',').all(|range| {
+        range
+            .trim()
+            .split_once('-')
+            .is_some_and(|(first, last)| !first.is_empty() && decimal(first) && decimal(last))
+    })
+}
+
+fn has_hex_run(text: &str) -> bool {
+    let mut run = 0;
+    text.bytes().any(|byte| {
+        run = if byte.is_ascii_hexdigit() { run + 1 } else { 0 };
+        run >= MAX_HEX_RUN
+    })
 }
 
 /// How a stream response ended.
@@ -674,7 +824,7 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
 struct Request {
     method: String,
     path: String,
-    range: bool,
+    headers: FetchHeaders,
 }
 
 /// An error status from the accept thread, without a thread of its own.
@@ -748,15 +898,10 @@ fn read_request(stream: &mut TcpStream) -> Option<Request> {
     let method = parts.next()?.to_owned();
     let target = parts.next()?;
     let path = target.split('?').next().unwrap_or(target).to_owned();
-    let range = lines.any(|line| {
-        line.split(':')
-            .next()
-            .is_some_and(|name| name.trim().eq_ignore_ascii_case("range"))
-    });
     Some(Request {
         method,
         path,
-        range,
+        headers: FetchHeaders::parse(lines),
     })
 }
 
@@ -796,10 +941,12 @@ fn serve(mut stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>) {
         (request.path == route.path).then_some(route.format)
     };
     if let Some(format) = stream_format {
+        let token = request.path.trim_start_matches('/');
+        let token = token.split('.').next().unwrap_or_default();
         shared.report(ServerEvent::Fetch {
             from,
             head,
-            range: request.range,
+            headers: request.headers.for_log(token),
         });
         return serve_stream(stream, from, head, format, &shared);
     }

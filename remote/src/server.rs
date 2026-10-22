@@ -33,8 +33,15 @@ const COOKIE_MAX_AGE: u64 = 400 * 24 * 60 * 60;
 const ACCEPT_POLL: Duration = Duration::from_millis(20);
 /// Connections served at once, event streams included.
 const MAX_CONNECTIONS: usize = 32;
-/// Connections one address may hold, so one device can't take every slot.
+/// Connections one peer may hold, so one device can't take every slot.
 const MAX_CONNECTIONS_PER_PEER: usize = 8;
+/// Slots that connections not yet known to come from a paired device can't fill.
+const RESERVED_FOR_PAIRED: usize = 8;
+/// Reserved slots one peer may wait in at once.
+const RESERVED_PER_PEER: usize = 2;
+/// How long a connection in a reserved slot has to send its request; a
+/// browser on the same network sends it at once.
+const RESERVED_REQUEST: Duration = Duration::from_secs(1);
 /// Event streams one paired device may hold; a new one ends the oldest.
 const MAX_STREAMS_PER_DEVICE: usize = 2;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -50,7 +57,7 @@ pub const MAX_SERVER_EVENTS: usize = 64;
 pub struct Timing {
     /// How long a pairing code works.
     pub code_lifetime: Duration,
-    /// The window in which one address may send five wrong codes.
+    /// The window in which one peer may send five wrong codes.
     pub wrong_code_window: Duration,
     /// The longest an event stream stays silent; a comment line fills it.
     pub heartbeat: Duration,
@@ -83,6 +90,34 @@ pub struct Config {
     /// The paired-device file; none keeps the devices in memory only.
     pub devices_path: Option<PathBuf>,
     pub timing: Timing,
+    pub capacity: Capacity,
+}
+
+/// How many connections the server holds; the defaults are the product's,
+/// tests shrink them. A peer is one address ([`net::peer_group`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Capacity {
+    /// Connections at once.
+    pub connections: usize,
+    /// Connections one peer may hold.
+    pub per_peer: usize,
+    /// Of `connections`, the slots kept for requests that carry a paired
+    /// device's token: a connection let in while the others hold the rest
+    /// gets a short time to send its request and is answered 503 without one.
+    pub reserved: usize,
+    /// Reserved slots one peer may wait in at once.
+    pub reserved_per_peer: usize,
+}
+
+impl Default for Capacity {
+    fn default() -> Capacity {
+        Capacity {
+            connections: MAX_CONNECTIONS,
+            per_peer: MAX_CONNECTIONS_PER_PEER,
+            reserved: RESERVED_FOR_PAIRED,
+            reserved_per_peer: RESERVED_PER_PEER,
+        }
+    }
 }
 
 impl Default for Config {
@@ -97,6 +132,7 @@ impl Default for Config {
             local_name: None,
             devices_path: None,
             timing: Timing::default(),
+            capacity: Capacity::default(),
         }
     }
 }
@@ -213,6 +249,7 @@ impl fmt::Display for ServerEvent {
                     PairOutcome::Wrong | PairOutcome::Paired => "wrong code",
                     PairOutcome::Expired => "no code in force",
                     PairOutcome::Limited => "too many wrong codes this minute",
+                    PairOutcome::Blocked => "too many wrong codes until the code is renewed",
                     PairOutcome::Locked => "pairing locked until the code is renewed",
                 };
                 write!(f, "remote: pairing from {from} failed: {why}")
@@ -288,6 +325,7 @@ struct Shared {
     content_security_policy: String,
     heartbeat: Duration,
     request_timeout: Duration,
+    capacity: Capacity,
     pairing: Mutex<Pairing>,
     devices: Mutex<TokenStore>,
     device_file: DeviceFile,
@@ -302,9 +340,53 @@ struct Shared {
 }
 
 struct Connection {
-    from: IpAddr,
+    slot: Slot,
+    /// Set once the request carried a paired device's token.
+    paired: Arc<AtomicBool>,
     stream: TcpStream,
     thread: JoinHandle<()>,
+}
+
+/// What admission needs to know of a connection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Slot {
+    peer: IpAddr,
+    reserved: bool,
+    paired: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Admission {
+    Open,
+    /// Let in only to show a paired device's token (see [`Capacity::reserved`]).
+    Reserved,
+    Busy,
+    PeerBusy,
+}
+
+/// Whether a connection from `peer` is let in beside `held`. Connections
+/// that haven't shown a paired device's token share all but the reserved
+/// slots, so slow unpaired clients can't keep a paired phone out.
+fn admission(held: &[Slot], peer: IpAddr, capacity: Capacity) -> Admission {
+    if held.len() >= capacity.connections {
+        return Admission::Busy;
+    }
+    if held.iter().filter(|slot| slot.peer == peer).count() >= capacity.per_peer {
+        return Admission::PeerBusy;
+    }
+    let unpaired = held.iter().filter(|slot| !slot.paired).count();
+    if unpaired < capacity.connections.saturating_sub(capacity.reserved) {
+        return Admission::Open;
+    }
+    let waiting = held
+        .iter()
+        .filter(|slot| slot.peer == peer && slot.reserved && !slot.paired)
+        .count();
+    if waiting < capacity.reserved_per_peer {
+        Admission::Reserved
+    } else {
+        Admission::Busy
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -452,6 +534,7 @@ impl RemoteServer {
             content_security_policy,
             heartbeat: config.timing.heartbeat,
             request_timeout: config.timing.request,
+            capacity: config.capacity,
             pairing: Mutex::new(pairing),
             devices: Mutex::new(devices),
             device_file: DeviceFile::default(),
@@ -642,20 +725,23 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
     }
     // Accepted sockets inherit the listener's non-blocking mode on WinSock and BSD.
     let _ = stream.set_nonblocking(false);
-    let refused = {
+    let peer = net::peer_group(from);
+    let admitted = {
         let mut connections = lock(&shared.connections);
         connections.retain(|connection| !connection.thread.is_finished());
-        let from_peer = connections
+        let held: Vec<Slot> = connections
             .iter()
-            .filter(|connection| connection.from == from)
-            .count();
-        if connections.len() >= MAX_CONNECTIONS {
-            Some(ServerEvent::Busy { from })
-        } else if from_peer >= MAX_CONNECTIONS_PER_PEER {
-            Some(ServerEvent::PeerBusy { from })
-        } else {
-            None
-        }
+            .map(|connection| Slot {
+                paired: connection.paired.load(Ordering::SeqCst),
+                ..connection.slot
+            })
+            .collect();
+        admission(&held, peer, shared.capacity)
+    };
+    let refused = match admitted {
+        Admission::Open | Admission::Reserved => None,
+        Admission::Busy => Some(ServerEvent::Busy { from }),
+        Admission::PeerBusy => Some(ServerEvent::PeerBusy { from }),
     };
     if let Some(event) = refused {
         shared.report(event);
@@ -671,12 +757,21 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
     let Ok(handle) = stream.try_clone() else {
         return;
     };
+    let slot = Slot {
+        peer,
+        reserved: admitted == Admission::Reserved,
+        paired: false,
+    };
+    let paired = Arc::new(AtomicBool::new(false));
     let connection = Arc::clone(shared);
+    let marks = Arc::clone(&paired);
     let spawned = thread::Builder::new()
         .name("remote-http".to_owned())
         .spawn(move || {
             let closer = stream.try_clone();
-            let served = panic::catch_unwind(AssertUnwindSafe(|| serve(stream, from, &connection)));
+            let served = panic::catch_unwind(AssertUnwindSafe(|| {
+                serve(stream, from, slot.reserved, &marks, &connection);
+            }));
             if served.is_err() {
                 connection.report(ServerEvent::ConnectionPanicked);
             }
@@ -689,7 +784,8 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
         let mut connections = lock(&shared.connections);
         connections.retain(|connection| !connection.thread.is_finished());
         connections.push(Connection {
-            from,
+            slot,
+            paired,
             stream: handle,
             thread,
         });
@@ -712,14 +808,27 @@ fn error(error: ApiError) -> Answer {
     Answer::Response(Response::error(&error))
 }
 
-fn serve(mut stream: TcpStream, from: IpAddr, shared: &Shared) {
+/// Answers one request. In a reserved slot only a request with a paired
+/// device's token is served; `paired` is set once one shows it.
+fn serve(
+    mut stream: TcpStream,
+    from: IpAddr,
+    reserved: bool,
+    paired: &AtomicBool,
+    shared: &Shared,
+) {
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
     let _ = stream.set_nodelay(true);
     let Ok(local) = stream.local_addr() else {
         return;
     };
     let csp = shared.content_security_policy.as_str();
-    let request = match http::read_request(&mut stream, shared.request_timeout) {
+    let timeout = if reserved {
+        shared.request_timeout.min(RESERVED_REQUEST)
+    } else {
+        shared.request_timeout
+    };
+    let request = match http::read_request(&mut stream, timeout) {
         Ok(request) => request,
         Err(problem) => {
             let answer = match problem.status() {
@@ -735,6 +844,13 @@ fn serve(mut stream: TcpStream, from: IpAddr, shared: &Shared) {
         }
     };
     if shared.stopped.load(Ordering::SeqCst) {
+        return;
+    }
+    if shared.paired(&request).is_some() {
+        paired.store(true, Ordering::SeqCst);
+    } else if reserved {
+        shared.report(ServerEvent::Busy { from });
+        let _ = http::write_response(&mut stream, &Response::error(&text::busy()), csp);
         return;
     }
     match route(&request, from, local, shared) {
@@ -900,6 +1016,7 @@ fn pair(request: &Request, from: IpAddr, shared: &Shared) -> Answer {
         PairOutcome::Wrong => Some(text::wrong_code()),
         PairOutcome::Expired => Some(text::code_expired()),
         PairOutcome::Limited => Some(text::too_many_tries()),
+        PairOutcome::Blocked => Some(text::pairing_locked()),
         PairOutcome::Locked => Some(text::pairing_locked()),
     };
     if let Some(failure) = failure {
@@ -1054,6 +1171,85 @@ fn send_events(mut stream: TcpStream, token: &str, id: u64, shared: &Shared) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn held(peer: IpAddr, count: usize, reserved: bool, paired: bool) -> Vec<Slot> {
+        vec![
+            Slot {
+                peer,
+                reserved,
+                paired
+            };
+            count
+        ]
+    }
+
+    fn address(text: &str) -> IpAddr {
+        text.parse().unwrap()
+    }
+
+    // Private addresses are built from their parts: published files never spell one.
+    fn home(subnet: u8, host: u8) -> IpAddr {
+        IpAddr::V4(Ipv4Addr::new(10, 0, subnet, host))
+    }
+
+    #[test]
+    fn two_ipv6_hosts_in_one_64_have_a_connection_cap_each() {
+        let capacity = Capacity::default();
+        let laptop = net::peer_group(address("2001:db8:1:2::1"));
+        let mut slots = held(laptop, MAX_CONNECTIONS_PER_PEER, false, false);
+        assert_eq!(admission(&slots, laptop, capacity), Admission::PeerBusy);
+        let phone = net::peer_group(address("2001:db8:1:2::2"));
+        assert_eq!(admission(&slots, phone, capacity), Admission::Open);
+        slots.extend(held(phone, 1, false, true));
+        assert_eq!(admission(&slots, phone, capacity), Admission::Open);
+    }
+
+    #[test]
+    fn unpaired_connections_leave_the_reserved_slots_to_paired_devices() {
+        let capacity = Capacity::default();
+        let peers: Vec<IpAddr> = (1..=4).map(|host| home(0, host)).collect();
+        let mut slots: Vec<Slot> = peers[..3]
+            .iter()
+            .flat_map(|peer| held(*peer, MAX_CONNECTIONS_PER_PEER, false, false))
+            .collect();
+        assert_eq!(slots.len(), MAX_CONNECTIONS - RESERVED_FOR_PAIRED);
+        let fourth = peers[3];
+        for _ in 0..RESERVED_PER_PEER {
+            assert_eq!(admission(&slots, fourth, capacity), Admission::Reserved);
+            slots.extend(held(fourth, 1, true, false));
+        }
+        assert_eq!(admission(&slots, fourth, capacity), Admission::Busy);
+        // A reserved slot that showed a token holds it like any paired connection.
+        let paired_phone = home(0, 9);
+        slots.extend(held(paired_phone, 1, true, true));
+        assert_eq!(
+            admission(&slots, paired_phone, capacity),
+            Admission::Reserved
+        );
+        slots.extend(held(paired_phone, 1, true, true));
+        assert_eq!(
+            admission(&slots, paired_phone, capacity),
+            Admission::Reserved
+        );
+        let full: Vec<Slot> = (0..MAX_CONNECTIONS)
+            .map(|index| Slot {
+                peer: home(1, index as u8),
+                reserved: false,
+                paired: true,
+            })
+            .collect();
+        assert_eq!(admission(&full, paired_phone, capacity), Admission::Busy);
+    }
+
+    #[test]
+    fn paired_connections_leave_the_shared_slots_open() {
+        let capacity = Capacity::default();
+        let mut slots = Vec::new();
+        for host in 1..=3 {
+            slots.extend(held(home(0, host), MAX_CONNECTIONS_PER_PEER, false, true));
+        }
+        assert_eq!(admission(&slots, home(0, 4), capacity), Admission::Open);
+    }
 
     fn published(revisions: std::ops::RangeInclusive<u64>) -> Published {
         let mut published = Published::default();
