@@ -79,6 +79,11 @@ struct UiState {
     /// File > AirPlay 2 (Experimental) as saved, which applies at the next
     /// launch.
     airplay2_experimental: bool,
+    /// What the item was at launch: the mode the running sender has.
+    airplay2_at_launch: bool,
+    /// Says the item applies at the next launch, while it differs from
+    /// `airplay2_at_launch`.
+    airplay2_notice: Option<ui_model::Notice>,
     listed_virtual: ListedVirtual,
 }
 
@@ -280,6 +285,10 @@ const LOGIN_CHECK: Duration = Duration::from_secs(2);
 
 /// The Settings page where Windows turns startup apps on or off.
 const STARTUP_APPS_PAGE: &str = "ms-settings:startupapps";
+
+/// The AirPlay 2 (Experimental) notice's id, next to Launch at Sign-In's
+/// and as far from the backend's.
+const AIRPLAY2_NOTICE_ID: u64 = launch_at_login::NOTICE_ID - 1;
 
 /// How often, 20 ms apart, the saved main window size waits for the native
 /// window before it gives up (about two seconds).
@@ -802,6 +811,9 @@ impl App {
         let mut state = self.backend.borrow().snapshot();
         state.notices.extend(self.login.borrow().notice().cloned());
         state
+            .notices
+            .extend(self.ui.borrow().airplay2_notice.clone());
+        state
     }
 
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -841,7 +853,9 @@ impl App {
     }
 
     fn dismiss_notice(&self, id: u64) {
-        if self.login.borrow_mut().dismiss(id) {
+        let airplay2 =
+            id == AIRPLAY2_NOTICE_ID && self.ui.borrow_mut().airplay2_notice.take().is_some();
+        if airplay2 || self.login.borrow_mut().dismiss(id) {
             self.refresh();
         } else {
             self.update(|b| b.dismiss_notice(id));
@@ -850,6 +864,7 @@ impl App {
 
     fn dismiss_all_notices(&self) {
         self.login.borrow_mut().dismiss_notice();
+        self.ui.borrow_mut().airplay2_notice = None;
         self.update(|b| b.dismiss_all_notices());
     }
 
@@ -2227,9 +2242,18 @@ impl App {
     }
 
     /// Saved for the next launch: the running sender keeps the mode it
-    /// started with.
+    /// started with, which a notice says until the item is back to it.
     fn set_airplay2_experimental(&self, on: bool) {
-        self.ui.borrow_mut().airplay2_experimental = on;
+        {
+            let mut ui = self.ui.borrow_mut();
+            ui.airplay2_experimental = on;
+            ui.airplay2_notice = (on != ui.airplay2_at_launch).then(|| ui_model::Notice {
+                id: AIRPLAY2_NOTICE_ID,
+                subject: "AirPlay 2 (Experimental)".to_owned(),
+                message: NoticeMessage::AirPlay2NextLaunch { on },
+                time: crate::platform::notice_time(),
+            });
+        }
         self.log.log(|| {
             format!(
                 "AirPlay 2 (experimental): turned {}; applies at the next launch",
@@ -2302,6 +2326,7 @@ impl App {
         self.ui.borrow_mut().appearance = saved.appearance;
         self.ui.borrow_mut().remote = saved.remote;
         self.ui.borrow_mut().airplay2_experimental = saved.airplay2_experimental;
+        self.ui.borrow_mut().airplay2_at_launch = saved.airplay2_experimental;
         self.apply_appearance(saved.appearance);
         let Some(saved_frame) = saved.window else {
             return;
@@ -3437,6 +3462,12 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::LaunchAtLoginOffInSettings => {
             strings.get_notice_launch_at_login_off_in_settings()
         }
+        NoticeMessage::AirPlay2NextLaunch { on: true } => {
+            strings.get_notice_airplay2_on_next_launch()
+        }
+        NoticeMessage::AirPlay2NextLaunch { on: false } => {
+            strings.get_notice_airplay2_off_next_launch()
+        }
         NoticeMessage::HeardTwice {
             source,
             mute,
@@ -3500,6 +3531,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::LaunchAtLoginFailed => (NoticeKind::LaunchAtLoginFailed, ""),
         NoticeMessage::LaunchAtLoginNotRemoved => (NoticeKind::LaunchAtLoginNotRemoved, ""),
         NoticeMessage::LaunchAtLoginOffInSettings => (NoticeKind::LaunchAtLoginOffInSettings, ""),
+        NoticeMessage::AirPlay2NextLaunch { .. } => (NoticeKind::Airplay2NextLaunch, ""),
         NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
     };
     strings.invoke_notice_title(kind, name.into())
@@ -3643,6 +3675,38 @@ mod tests {
             .invoke_notice_dismissed(launch_at_login::NOTICE_ID as i32);
         assert!(app.snapshot().notices.is_empty());
         assert_eq!(app.main.get_notices().row_count(), 0);
+    }
+
+    #[test]
+    fn turning_airplay2_on_says_it_applies_at_the_next_launch_until_turned_back() {
+        let app = app_over(MockBackend::new());
+        assert!(app.snapshot().notices.is_empty());
+
+        app.main.invoke_airplay2_experimental_toggled(true);
+        let notices = app.snapshot().notices;
+        assert_eq!(notices.len(), 1);
+        assert_eq!(
+            notices[0].message,
+            NoticeMessage::AirPlay2NextLaunch { on: true }
+        );
+        assert_eq!(app.main.get_notices().row_count(), 1);
+        let strings = app.main.global::<Strings>();
+        assert_eq!(
+            notice_item(&strings, &notices[0]).message,
+            "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+        );
+
+        app.main.invoke_airplay2_experimental_toggled(false);
+        assert!(app.snapshot().notices.is_empty());
+        assert_eq!(app.main.get_notices().row_count(), 0);
+
+        app.main.invoke_airplay2_experimental_toggled(true);
+        app.main.invoke_notice_dismissed(AIRPLAY2_NOTICE_ID as i32);
+        assert!(app.snapshot().notices.is_empty());
+        assert!(
+            app.ui.borrow().airplay2_experimental,
+            "dismissing keeps it on"
+        );
     }
 
     #[test]
@@ -5609,6 +5673,8 @@ mod tests {
             NoticeMessage::LaunchAtLoginFailed,
             NoticeMessage::LaunchAtLoginNotRemoved,
             NoticeMessage::LaunchAtLoginOffInSettings,
+            NoticeMessage::AirPlay2NextLaunch { on: true },
+            NoticeMessage::AirPlay2NextLaunch { on: false },
         ];
         for message in messages {
             let label = dismiss_label(message.clone());

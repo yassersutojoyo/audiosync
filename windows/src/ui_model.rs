@@ -455,6 +455,9 @@ pub enum NoticeMessage {
     /// The Run value is written, but Task Manager or Settings has AudioSync
     /// turned off as a startup app; it is turned on again there.
     LaunchAtLoginOffInSettings,
+    /// File > AirPlay 2 (Experimental) was turned on (`on`) or off, which
+    /// applies once AudioSync is quit and opened again.
+    AirPlay2NextLaunch { on: bool },
     /// A Google Cast speaker can't play, so it is off.
     CastCantPlay {
         speaker: String,
