@@ -226,6 +226,14 @@ impl CastFeedSlot {
             slot: Arc::clone(&self.tap),
         })
     }
+
+    /// Whether the tap is in the slot, lent to no capture.
+    pub fn is_free(&self) -> bool {
+        self.tap
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    }
 }
 
 /// The tap, lent to one capture; dropping it puts the tap back.
@@ -482,6 +490,11 @@ impl CastSpeakers {
     /// The tap for a capture that starts; `None` while one holds it.
     pub fn lease(&self) -> Option<CastLease> {
         self.feed.slot().lease()
+    }
+
+    /// Whether the tap is free for a capture that starts.
+    pub fn is_free(&self) -> bool {
+        self.feed.slot().is_free()
     }
 
     pub fn discovery(&self) -> CastDiscovery {
