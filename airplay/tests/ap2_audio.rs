@@ -525,8 +525,10 @@ impl Recorder {
     fn bind() -> Recorder {
         let socket = UdpSocket::bind("127.0.0.1:0").expect("a socket");
         let reader = socket.try_clone().expect("a clone");
+        // Long, as in the sender (P86): on Windows a receive that times out
+        // as a datagram lands can drop it. Dropping the recorder wakes it.
         reader
-            .set_read_timeout(Some(Duration::from_millis(20)))
+            .set_read_timeout(Some(Duration::from_secs(2)))
             .expect("timeout");
         let got = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -536,7 +538,7 @@ impl Recorder {
             std::thread::spawn(move || {
                 let mut buffer = [0u8; 4096];
                 while !stop.load(Ordering::Acquire) {
-                    if let Ok((len, from)) = reader.recv_from(&mut buffer) {
+                    if let Ok((len @ 1.., from)) = reader.recv_from(&mut buffer) {
                         let datagram = (Instant::now(), from, buffer[..len].to_vec());
                         got.lock().expect("datagrams").push(datagram);
                     }
@@ -576,6 +578,9 @@ impl Recorder {
 impl Drop for Recorder {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        if let Ok(address) = self.socket.local_addr() {
+            let _ = self.socket.send_to(&[], address);
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
