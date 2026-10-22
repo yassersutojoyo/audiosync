@@ -1505,6 +1505,8 @@ typedef struct AscCastDevice {
     const char *name;  /* the name it announces, "" when none */
     const char *model; /* its model, "" when none */
     uint32_t flags;    /* ASC_CAST_FLAG_* bits */
+    const char *former; /* on the APPEARED of a device a browse found that was added by address:
+                           the "manual:<ip:port>" id it was listed under; "" otherwise */
 } AscCastDevice;
 
 /*

@@ -347,4 +347,51 @@ fn a_manual_address_works_without_txt_until_a_browse_finds_its_id() {
     assert!(list.get(DeviceKey::Manual(address)).is_none());
     assert_eq!(list.entries().len(), 1);
     assert!(list.get(DeviceKey::Id(id)).is_some());
+    assert_eq!(list.remove_manual(address), None, "found, it stays");
+    assert_eq!(list.entries().len(), 1);
+}
+
+// covers: C18
+#[test]
+fn a_manual_address_no_browse_found_can_be_taken_back() {
+    let mut list = DeviceList::new();
+    let address = SocketAddr::new(v4(10), 8009);
+    list.add_manual(address);
+    assert_eq!(
+        list.add_manual(address),
+        ListEvent::Updated(DeviceKey::Manual(address)),
+        "listed once"
+    );
+    assert_eq!(
+        list.remove_manual(address),
+        Some(ListEvent::Removed(DeviceKey::Manual(address)))
+    );
+    assert!(list.entries().is_empty());
+    assert_eq!(list.remove_manual(address), None);
+}
+
+// covers: C16, C18
+#[test]
+fn adding_the_address_of_a_listed_device_names_that_device() {
+    let mut list = DeviceList::new();
+    let found = record(
+        "A._googlecast._tcp.local.",
+        8009,
+        &[b"id=3f2a8c41d27e4b8f9a06c1d5e7f80b12"],
+    );
+    list.apply(BrowseEvent::Resolved(found));
+    let id = DeviceId::parse(ID).expect("id");
+    let address = SocketAddr::new(v4(10), 8009);
+    assert_eq!(
+        list.add_manual(address),
+        ListEvent::Updated(DeviceKey::Id(id)),
+        "the listed device, not a second row"
+    );
+    assert_eq!(list.entries().len(), 1);
+    let other_port = SocketAddr::new(v4(10), 8010);
+    assert_eq!(
+        list.add_manual(other_port),
+        ListEvent::Added(DeviceKey::Manual(other_port)),
+        "another port is another device"
+    );
 }
