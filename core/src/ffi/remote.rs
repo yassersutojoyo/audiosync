@@ -138,10 +138,17 @@ pub unsafe extern "C" fn asc_remote_start(
     context: *mut c_void,
     error: *mut i32,
 ) -> *mut AscRemote {
-    // SAFETY: as the caller's.
-    let text = unsafe { host_text(config_json) };
+    // A null configuration takes the defaults; one that isn't UTF-8 doesn't read.
+    let text = if config_json.is_null() {
+        Some("{}")
+    } else {
+        // SAFETY: as the caller's.
+        unsafe { host_text(config_json) }
+    };
     let started = panic::catch_unwind(AssertUnwindSafe(|| {
-        let config = Config::from_json(text.unwrap_or("{}")).ok_or(REMOTE_ERROR_CONFIG)?;
+        let config = text
+            .and_then(Config::from_json)
+            .ok_or(REMOTE_ERROR_CONFIG)?;
         let call = command.ok_or(REMOTE_ERROR_CONFIG)?;
         let host = HostCommand { call, context };
         let server = RemoteServer::start(config, move |command: &Command| host.deliver(command))
@@ -502,6 +509,7 @@ mod tests {
             REMOTE_ERROR_CONFIG
         );
         assert_eq!(start(c"{\"port\": 0}", None), REMOTE_ERROR_CONFIG);
+        assert_eq!(start(c"{\xff}", Some(record)), REMOTE_ERROR_CONFIG);
         assert_eq!(
             start(c"{\"port\": 0, \"listen\": []}", Some(record)),
             REMOTE_ERROR_LISTEN

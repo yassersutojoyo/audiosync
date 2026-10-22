@@ -829,6 +829,7 @@ impl CastSpeakers {
             return;
         };
         self.records = None;
+        self.requested = None;
         if let Some(link) = self.link.as_mut() {
             link.stop();
         }
@@ -1051,6 +1052,7 @@ impl CastSpeakers {
                 self.attempt = None;
                 self.records = None;
                 self.sent = None;
+                self.requested = None;
                 self.feed.hand(None);
                 self.list.set_in_session(DeviceKey::Id(device), false);
                 self.log
@@ -1733,6 +1735,26 @@ pub mod tests {
     }
 
     #[test]
+    fn an_unanswered_volume_is_forgotten_when_the_session_ends() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_volume(KITCHEN, 40.0);
+        cast.set_enabled(KITCHEN, false).unwrap();
+        assert_eq!(cast.speakers()[1].volume, 100.0, "stopped");
+
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_volume(KITCHEN, 40.0);
+        fake.report(HostEvent::Ended {
+            attempt: AttemptId(2),
+            device: id(KITCHEN),
+            end: SessionEnd::TakenOver,
+        });
+        cast.poll();
+        assert_eq!(cast.speakers()[1].volume, 100.0, "ended");
+    }
+
+    #[test]
     fn the_capture_feeds_the_current_session() {
         let (fake, mut cast) = listed();
         let mut lease = cast.lease().expect("the tap");
@@ -1775,6 +1797,24 @@ pub mod tests {
         assert_eq!(out[200..], ramp[..1800]);
         let out = delayed(&mut DelayLine::new(50), &ramp, 100);
         assert_eq!(out[100..], ramp[..1900], "held back at most its length");
+
+        let long: Vec<f32> = (0..(MAX_HOLD_BACK_FRAMES + 1000) * 2)
+            .map(|i| (i % 4000) as f32 / 4000.0)
+            .collect();
+        let out = delayed(
+            &mut DelayLine::new(MAX_HOLD_BACK_FRAMES),
+            &long,
+            MAX_HOLD_BACK_FRAMES,
+        );
+        let (held, heard) = out.split_at(MAX_HOLD_BACK_FRAMES * 2);
+        assert!(held.iter().all(|sample| *sample == 0.0));
+        assert_eq!(heard, &long[..2000], "the full 20 s");
+        let (_fake, mut cast) = listed();
+        cast.set_hold_back(MAX_HOLD_BACK_MS);
+        assert_eq!(
+            cast.feed.hold_back.load(Ordering::Relaxed),
+            MAX_HOLD_BACK_FRAMES
+        );
     }
 
     #[test]

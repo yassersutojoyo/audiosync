@@ -1225,7 +1225,7 @@ typedef struct AscAirPlayEvent {
  * Starts an AirPlay sender: its stream, silent until audio comes through its
  * input (asc_airplay_take_input), and its driver thread; discovery waits for
  * asc_airplay_start_discovery. The master starts at 100. Returns NULL when
- * the thread can't start.
+ * the thread can't start or creating the sender failed.
  */
 AscAirPlay *asc_airplay_create(void);
 
@@ -1249,7 +1249,7 @@ void asc_airplay_destroy(AscAirPlay **airplay);
 /*
  * Starts browsing the local network for AirPlay receivers over multicast DNS;
  * they arrive through asc_airplay_next_receiver. Returns false when the handle
- * is NULL or multicast DNS can't start.
+ * is NULL or dead or multicast DNS can't start.
  */
 bool asc_airplay_start_discovery(AscAirPlay *airplay);
 
@@ -1326,7 +1326,7 @@ double asc_airplay_set_hold_back(AscAirPlay *airplay, double hold_back_ms);
 
 /*
  * The base latency L in milliseconds: a local output lines up with the
- * speakers at L plus its own delay. 0 for a NULL handle.
+ * speakers at L plus its own delay. 0 for a NULL or dead handle.
  */
 double asc_airplay_latency_ms(const AscAirPlay *airplay);
 
