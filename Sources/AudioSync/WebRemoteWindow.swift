@@ -9,6 +9,7 @@ final class WebRemoteWindowController {
     private var window: NSWindow?
     private let remote: WebRemote
     private let text: UIStrings
+    private let announcer = WebRemoteAnnouncer()
 
     init(remote: WebRemote, text: UIStrings) {
         self.remote = remote
@@ -17,23 +18,40 @@ final class WebRemoteWindowController {
 
     func show() {
         if window == nil {
-            let host = NSHostingController(rootView: WebRemoteView(settings: remote.settings, text: text))
+            let view = WebRemoteView(settings: remote.settings, text: text, announcer: announcer)
+            let host = NSHostingController(rootView: view)
             let panel = NSWindow(contentViewController: host)
             panel.title = text.webRemoteTitle
             panel.styleMask = [.titled, .closable]
             panel.isReleasedWhenClosed = false
             panel.center()
             window = panel
+            announcer.window = panel
         }
         remote.windowOpened()
+        announcer.openedCode = remote.settings.code
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+    }
+}
+
+/// Reads the window's problems and pairing code to VoiceOver, only while the window is in front
+/// of the user: the remote polls every second, also with the window closed.
+final class WebRemoteAnnouncer {
+    weak var window: NSWindow?
+    /// The code made by opening the window; VoiceOver is already reading the window then.
+    var openedCode: String?
+
+    func say(_ line: String) {
+        guard NSApp.isActive, window?.isVisible == true else { return }
+        AccessibilityNotification.Announcement(line).post()
     }
 }
 
 struct WebRemoteView: View {
     @ObservedObject var settings: WebRemoteSettings
     let text: UIStrings
+    let announcer: WebRemoteAnnouncer
     @State private var portText = ""
 
     var body: some View {
@@ -78,26 +96,19 @@ struct WebRemoteView: View {
         .onAppear { portText = String(settings.port) }
         .onChange(of: settings.port) { _, port in portText = String(port) }
         .onChange(of: settings.status) { _, now in
-            if case .failed(let error, let port) = now {
-                AccessibilityNotification.Announcement(failure(error, port: port, t)).post()
-            }
+            if case .failed(let error, let port) = now { announcer.say(failure(error, port: port, t)) }
         }
         .onChange(of: settings.locked) { _, now in
-            if now { AccessibilityNotification.Announcement(t.webRemoteLocked).post() }
+            if now { announcer.say(t.webRemoteLocked) }
         }
         // Stopping the remote clears the code; only a running, unlocked remote shows it.
         .onChange(of: settings.code) { _, now in
-            guard isRunning, !settings.locked else { return }
-            let line = now.map { t.webRemoteCodeLabel($0) } ?? t.webRemoteCodeExpired
-            AccessibilityNotification.Announcement(line).post()
-        }
-        .onChange(of: settings.forgetFailed) { _, now in
-            if now { AccessibilityNotification.Announcement(t.webRemoteForgetFailed).post() }
+            defer { announcer.openedCode = nil }
+            guard isRunning, !settings.locked, now == nil || now != announcer.openedCode else { return }
+            announcer.say(now.map { t.webRemoteCodeLabel($0) } ?? t.webRemoteCodeExpired)
         }
         .onChange(of: RemotePort.parse(portText) == nil) { _, outOfRange in
-            if outOfRange && settings.enabled {
-                AccessibilityNotification.Announcement(t.webRemotePortRange).post()
-            }
+            if outOfRange && settings.enabled { announcer.say(t.webRemotePortRange) }
         }
     }
 
@@ -186,7 +197,11 @@ struct WebRemoteView: View {
             HStack {
                 Text(t.webRemoteDevices(settings.deviceCount))
                 Spacer()
-                Button(t.webRemoteForgetAll, role: .destructive) { settings.actions.forgetAll() }
+                Button(t.webRemoteForgetAll, role: .destructive) {
+                    settings.actions.forgetAll()
+                    // Read here, not on a change: a second failure in a row leaves forgetFailed true.
+                    if settings.forgetFailed { announcer.say(t.webRemoteForgetFailed) }
+                }
                     .disabled(settings.deviceCount == 0)
             }
             if settings.forgetFailed {
