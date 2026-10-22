@@ -569,3 +569,28 @@ fn a_percent_encoded_token_is_scrubbed() {
     assert_eq!(headers.range.as_deref(), Some("bytes=0-"));
     server.stop();
 }
+
+// covers: G6
+#[test]
+fn a_decimal_byte_range_is_logged_verbatim_and_a_range_holding_the_token_is_not() {
+    let (server, _writer) = server(vec![LOCAL]);
+    let token = server.token().to_owned();
+    let (first, _) = token.split_at(token.len() / 2);
+    let cases = [
+        ("bytes=123456789-".to_owned(), "bytes=123456789-".to_owned()),
+        (
+            "bytes=123456789-123456799, 5-".to_owned(),
+            "bytes=123456789-123456799, 5-".to_owned(),
+        ),
+        (format!("bytes={token}-"), "bytes=<token>-".to_owned()),
+        // The trailing letters keep a chunk that happens to be all decimal
+        // from passing as an offset.
+        (format!("bytes=0-1,{first}ab-"), "<redacted>".to_owned()),
+        (format!("{first}=0-"), "<redacted>".to_owned()),
+    ];
+    for (sent, logged) in cases {
+        let headers = logged_headers(&server, &format!("Range: {sent}\r\n"));
+        assert_eq!(headers.range.as_deref(), Some(logged.as_str()), "{sent}");
+    }
+    server.stop();
+}

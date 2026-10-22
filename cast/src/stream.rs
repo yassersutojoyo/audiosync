@@ -100,8 +100,9 @@ pub enum ServerEvent {
 /// but only the values that tell a device's behavior apart. Other values,
 /// such as a `Referer` holding the stream URL, are never kept. Kept text is
 /// percent-decoded, the path token in any case is replaced, and text that
-/// still holds a run of [`MAX_HEX_RUN`] hex digits is replaced whole, so a
-/// token split across several names never reaches the log either.
+/// still holds a run of [`MAX_HEX_RUN`] hex digits is replaced whole (a
+/// plain decimal byte range excepted), so a token split across several
+/// names never reaches the log either.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FetchHeaders {
     /// Header names in request order, at most [`MAX_LOGGED_NAMES`].
@@ -152,24 +153,23 @@ impl FetchHeaders {
 
     /// Scrubs `token` before capping, so a cut never leaves part of it.
     fn for_log(mut self, token: &str) -> FetchHeaders {
-        let scrub = |text: &mut String| {
+        let scrub = |text: &mut String, is_range: bool| {
             *text = replace_ignoring_case(&percent_decoded(text), token, "<token>");
-            if has_hex_run(text) {
+            if has_hex_run(text) && !(is_range && is_byte_range(text)) {
                 *text = "<redacted>".to_owned();
             }
             if text.chars().count() > MAX_LOGGED_TEXT {
                 *text = text.chars().take(MAX_LOGGED_TEXT).collect();
             }
         };
-        self.names.iter_mut().for_each(scrub);
-        [
-            &mut self.user_agent,
-            &mut self.range,
-            &mut self.icy_metadata,
-        ]
-        .into_iter()
-        .flatten()
-        .for_each(scrub);
+        self.names.iter_mut().for_each(|name| scrub(name, false));
+        [&mut self.user_agent, &mut self.icy_metadata]
+            .into_iter()
+            .flatten()
+            .for_each(|value| scrub(value, false));
+        if let Some(range) = &mut self.range {
+            scrub(range, true);
+        }
         self
     }
 }
@@ -221,6 +221,21 @@ fn replace_ignoring_case(text: &str, needle: &str, with: &str) -> String {
     }
     out.push_str(&text[last..]);
     out
+}
+
+/// `bytes=<digits>-<digits?>`, comma-separated: decimal offsets cannot
+/// carry the hex token, and they are what the debug line is read for.
+fn is_byte_range(text: &str) -> bool {
+    let Some(ranges) = text.strip_prefix("bytes=") else {
+        return false;
+    };
+    let decimal = |part: &str| part.bytes().all(|byte| byte.is_ascii_digit());
+    ranges.split(',').all(|range| {
+        range
+            .trim()
+            .split_once('-')
+            .is_some_and(|(first, last)| !first.is_empty() && decimal(first) && decimal(last))
+    })
 }
 
 fn has_hex_run(text: &str) -> bool {
