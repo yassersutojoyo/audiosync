@@ -1122,7 +1122,9 @@ struct UIStrings {
         the group reports them. Those speakers keep their own rows and are
         busy while the group plays. While a Cast speaker or group plays,
         Resync under its volume restarts the stream, with a short gap, so it
-        lines up at its offset again.
+        lines up at its offset again. If a Cast speaker doesn't show up, click
+        \(castAddByAddress) under the speaker list and enter its IP address or
+        host name.
 
         Notices
         When something needs your attention, such as a speaker that was switched
