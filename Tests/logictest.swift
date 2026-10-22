@@ -1742,6 +1742,19 @@ do {
     check(model.plan(streaming: true, enabled: on).remove == [left],
           "P176 native airplay: a member playing by itself leaves the sender when its pair is switched on")
     model.removed(left)
+    var unlisted = NativeAirPlayModel()
+    unlisted.added(pair)
+    let pairOn: Set<String> = [app(pair)]
+    check(unlisted.rows(enabled: pairOn) == [app(pair)] && unlisted.plan(streaming: true, enabled: pairOn).isEmpty,
+          "P176 native airplay: a target in the sender with no listing keeps its row")
+    let off = unlisted.plan(streaming: true, enabled: [])
+    unlisted.removed(pair)
+    check(off.remove == [pair] && off.changesRows && unlisted.rows(enabled: []).isEmpty
+            && unlisted.apply(.state(id: pair, .stopped, retryMs: nil)) == nil,
+          "P176 native airplay: switched off, an unlisted target's row goes when it is removed, since its Stopped event "
+            + "is passed over", "\(unlisted.rows(enabled: []))")
+    check(!NativeAirPlayPlan(add: ["K3"], remove: [], turnOff: []).changesRows,
+          "native airplay: a plan that only adds speakers leaves the rows to the sender's events")
     check(model.holdingTarget(right, on: false) == pair && model.holdingTarget("K3", on: false) == nil,
           "P176 native airplay: a member of a listed pair can't be turned on by itself")
 
