@@ -1215,7 +1215,11 @@ mod tests {
         let mut threads = io.close();
         threads.extend(ptp.close());
         WAKE_FAILS.with(|fails| fails.set(false));
-        let within = UDP_BACKSTOP + Duration::from_secs(1);
+        assert!(
+            !all_end_within(&threads, Duration::from_millis(200)),
+            "no wake-up was sent, so the UDP threads wait for the backstop"
+        );
+        let within = 2 * UDP_BACKSTOP;
         assert!(
             all_end_within(&threads, within),
             "every thread ends within the backstop"
