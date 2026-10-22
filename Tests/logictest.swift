@@ -4029,6 +4029,16 @@ do {
             && replanned.count > 2 && replanned[2].offsetMs == nil && replanned[2].latencyMs == 0,
           "calibrate all: after Undo a Cast speaker without a stored offset is searched again, not measured from 0 ms",
           "\(replanned)")
+    castMemory.apply(.changed(CastDevice(id: "tv", name: "TV"), offsetMs: 0))
+    again.cast = (id: "cast:tv", name: "TV", offsetMs: castMemory.offsets["tv"], waitMs: 0)
+    let reannounced = (try? CalibrateAllFlow.plan(again).get()) ?? []
+    check(castMemory.offsets["tv"] == nil && reannounced.count > 2 && reannounced[2].offsetMs == nil,
+          "calibrate all: the 0 ms the sender keeps after Undo doesn't come back when the device re-announces",
+          "\(castMemory.offsets)")
+    _ = castMemory.setOffset("tv", ms: 0)
+    castMemory.apply(.changed(CastDevice(id: "tv", name: "TV"), offsetMs: 0))
+    check(castMemory.offsets["tv"] == 0 && !castMemory.cleared.contains("tv"),
+          "calibrate all: an offset the user sets after Undo is kept again, 0 ms included", "\(castMemory.offsets)")
 
     // Two or more AirPlay rows always show their spread; the plain sentence only over 10 ms (S237).
     let close = t.calibrateAllAirPlay(.init(state: .certain, oldMs: 1750, newMs: 1960, spreadMs: 6, certainRows: 3))
