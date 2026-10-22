@@ -146,6 +146,29 @@ pub fn pcm_debug_devices(value: Option<&str>) -> std::collections::BTreeSet<Stri
         .collect()
 }
 
+/// The options [`Sender::add_target`] gives each member of `target`:
+/// `member` fills in its own password and credentials, and the target's
+/// delay, volume and PCM choice override whatever `member` set (P179, P180).
+pub fn member_options(
+    target: &Target,
+    options: &SpeakerOptions,
+    mut member: impl FnMut(&DeviceKey, &mut SpeakerOptions),
+) -> Vec<(DeviceKey, SpeakerOptions)> {
+    target
+        .members
+        .iter()
+        .map(|target_member| {
+            let key = &target_member.key;
+            let mut own = options.clone();
+            member(key, &mut own);
+            own.delay = options.delay;
+            own.volume = options.volume;
+            own.pcm = options.pcm;
+            (key.clone(), own)
+        })
+        .collect()
+}
+
 /// A new random AirPlay 2 device ID for a host to store once (P5), or
 /// `None` when the random source is unavailable.
 pub fn random_airplay2_device_id() -> Option<[u8; 6]> {
@@ -571,25 +594,22 @@ impl Sender {
         &self,
         target: Target,
         options: SpeakerOptions,
-        mut member: impl FnMut(&DeviceKey, &mut SpeakerOptions),
+        member: impl FnMut(&DeviceKey, &mut SpeakerOptions),
     ) -> Vec<(DeviceKey, Arc<SpeakerCounters>)> {
-        let mut members = Vec::with_capacity(target.members.len());
-        for key in target.members.iter().map(|member| &member.key) {
-            let mut own = options.clone();
-            member(key, &mut own);
-            own.delay = options.delay;
-            own.volume = options.volume;
-            own.pcm = options.pcm;
-            let counters = self
-                .speaker_counters
-                .borrow_mut()
-                .entry(key.clone())
-                .or_insert_with(|| {
-                    Arc::new(SpeakerCounters::for_stream(self.stream_counters.clone()))
-                })
-                .clone();
-            members.push((key.clone(), own, counters));
-        }
+        let members: Vec<_> = member_options(&target, &options, member)
+            .into_iter()
+            .map(|(key, own)| {
+                let counters = self
+                    .speaker_counters
+                    .borrow_mut()
+                    .entry(key.clone())
+                    .or_insert_with(|| {
+                        Arc::new(SpeakerCounters::for_stream(self.stream_counters.clone()))
+                    })
+                    .clone();
+                (key, own, counters)
+            })
+            .collect();
         let counters = members
             .iter()
             .map(|(key, _, counters)| (key.clone(), counters.clone()))
