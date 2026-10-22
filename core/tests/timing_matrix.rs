@@ -24,8 +24,10 @@
 //! - I5: over the last quarter, each output's delay stays within 2 ms.
 //! - I6: an output without wander whose clock is at least 20 ppm off is
 //!   trimmed with its clock by 9/10 of what it gained, against it by at most
-//!   16 frames; a late-first output from 20 s after its callbacks came on
-//!   time, once it has moved by their lateness.
+//!   16 frames, on a slow clock plus what the anchor floor falls toward its
+//!   stray stamps (S209 moves it later by that); a late-first output from
+//!   20 s after its callbacks came on time, or later when its trim's cap
+//!   needs longer to carry it their lateness, plus one ANCHOR_FALL_MS.
 //! - I7: with AirPlay chosen, the session lead stays 0 and no output
 //!   re-times.
 //! - I8 (stall cases only): a device that consumes nothing for 50 to 200 ms
@@ -48,7 +50,7 @@ use std::time::Instant;
 
 use audiosync_core::fade::FadeState;
 use audiosync_core::reader::{Reader, ReaderCounters};
-use audiosync_core::render::{Renderer, RendererControl};
+use audiosync_core::render::{ANCHOR_FALL_MS, Renderer, RendererControl, TRIM_SHARE};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 use proptest::prelude::*;
@@ -82,8 +84,8 @@ const FIRST_LATE_LARGE_MS: f64 = 45.0;
 /// included.
 const CAUGHT_UP: f64 = 1.0;
 /// Late-first: s after the callbacks came on time by which the anchor floor
-/// has fallen (ten ANCHOR_FALL_MS) and the trim, at up to about 3.9 ms a
-/// second, has carried the output the 45 ms.
+/// has fallen (ten ANCHOR_FALL_MS) and a trim of about 3.9 ms a second has
+/// carried the output the 45 ms; see [`fallen_after`] for slower trims.
 const FALLEN_AFTER: f64 = 20.0;
 
 /// I4: how far apart outputs may play beyond a capture block, in ms.
@@ -697,6 +699,36 @@ fn write_block(writer: &mut RingWriter, samples: &mut [f32], first: u64, at: f64
     writer.write_at(samples, samples.len() / 2, ns(at));
 }
 
+/// The most a device's trim moves its output, in capture ms a second: a
+/// 256th of a callback's reads and at least one frame (S207), so one frame
+/// in each 10 ms callback of 480 frames at 48 kHz, 2.1 ms a second.
+fn trim_ms_per_s(d: &Device) -> f64 {
+    let reads = d.callback * CAPTURE_RATE as usize / d.rate as usize;
+    let frames = (reads / TRIM_SHARE).max(1) as f64;
+    frames * 1000.0 / f64::from(CAPTURE_RATE) * f64::from(d.rate) / d.callback as f64
+}
+
+/// Late-first: s after the callbacks came on time from which I6 judges the
+/// trim, [`FALLEN_AFTER`] or, when the trim carries the output its `ms`
+/// slower, that long plus one [`ANCHOR_FALL_MS`].
+fn fallen_after(d: &Device, ms: f64) -> f64 {
+    FALLEN_AFTER.max(ms / trim_ms_per_s(d) + f64::from(ANCHOR_FALL_MS) / 1000.0)
+}
+
+/// Capture frames by which the anchor floor falls toward a device's two
+/// stray stamps, `1 - e^(-t / ANCHOR_FALL_MS)` of the gap at each (S209):
+/// the output is to move later by as much, so on a slow clock the trim
+/// carries it there against the clock.
+fn stray_fall_frames(d: &Device) -> u64 {
+    let Some((_, ms)) = d.strays else {
+        return 0;
+    };
+    let span_ms = d.callback as f64 * 1000.0 / f64::from(d.rate);
+    let kept = (-span_ms / f64::from(ANCHOR_FALL_MS)).exp();
+    let fall_ms = ms * (1.0 - kept * kept);
+    (fall_ms * f64::from(CAPTURE_RATE) / 1000.0).ceil() as u64
+}
+
 fn simulate(case: &Case) -> Outcome {
     let ring = Ring::for_rate(CAPTURE_RATE).unwrap();
     let mut writer = ring.writer().unwrap();
@@ -765,7 +797,7 @@ fn simulate(case: &Case) -> Outcome {
                 // output there, the trim follows the clock alone again.
                 trim_judged_from: d
                     .first_late
-                    .map_or(SETTLED, |(_, until)| until + FALLEN_AFTER),
+                    .map_or(SETTLED, |(ms, until)| until + fallen_after(d, ms)),
                 trim_from: None,
             };
             output.schedule();
@@ -955,7 +987,9 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
                 } else {
                     (sped, slowed)
                 };
-                own[5] = (with as f64) < gained * TRIM_WITH_SHARE || against > TRIM_AGAINST_FRAMES;
+                let carried = if d.ppm < 0.0 { stray_fall_frames(d) } else { 0 };
+                own[5] = (with as f64) < gained * TRIM_WITH_SHARE
+                    || against > TRIM_AGAINST_FRAMES + carried;
             }
             own[6] = case.airplay && (lead_moved || end.resyncs > 0);
             norms.push(norm);
@@ -1381,6 +1415,46 @@ fn every_windows_case_holds_every_invariant() {
             outcome.lines.join("\n")
         );
     }
+}
+
+// covers: S207, S209
+#[test]
+fn late_first_cases_on_draws_of_their_own_hold_every_invariant() {
+    // The matrix's late-first cases reuse their strata cases' draws; these
+    // nine take the draws after the stall cases'. Two failed I6 as first
+    // judged: f2's 1024-frame output on a slow clock, which S209's anchor
+    // floor moves 1.2 ms later toward its two stray stamps 54 ms early, and
+    // f20's 480-frame output at 48 kHz, whose trim of one frame a callback
+    // (S207) was still carrying it the 45 ms 20 s after its late start.
+    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed_bytes(SEED));
+    let mut runner = TestRunner::new_with_rng(Config::default(), rng);
+    let strategy = raw_case();
+    let mut draw = || strategy.new_tree(&mut runner).unwrap().current();
+    for _ in 0..CASES + STALL_CASES {
+        draw();
+    }
+    let cases: Vec<Case> = (0..CASES)
+        .filter(|&k| late_first_strata(k))
+        .map(|k| build_late_first(&draw(), k))
+        .collect();
+    let f2 = &cases[0].devices[1];
+    assert_eq!(
+        (f2.callback, f2.strays.map(|(_, ms)| ms.round())),
+        (1024, Some(54.0))
+    );
+    let f20 = &cases[4].devices[0];
+    assert_eq!(
+        (cases[4].k, f20.callback, f20.rate),
+        (20, 480, CAPTURE_RATE)
+    );
+    let outcomes = simulate_all(&cases);
+    let report: Vec<String> = outcomes.iter().flat_map(|o| o.lines.clone()).collect();
+    println!("{}", report.join("\n"));
+    assert!(
+        outcomes.iter().all(|o| !o.fails.iter().any(|&f| f)),
+        "{}",
+        report.join("\n")
+    );
 }
 
 proptest! {
