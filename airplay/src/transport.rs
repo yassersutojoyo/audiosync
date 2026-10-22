@@ -35,6 +35,12 @@
 //! a blocked send when the socket is shut down, so that one ends at its send
 //! timeout, and nobody waits for it.
 //!
+//! The UDP threads receive without a timeout (P86): on Windows a receive
+//! that times out as a datagram lands can drop that datagram, which would
+//! lose a resend or timing request. Closing wakes them instead with an
+//! empty datagram each socket sends itself ([`wake`]); the threads drop
+//! empty datagrams unread and uncounted.
+//!
 //! A pairing (P47) needs only the TCP connection: [`RtspIo`] runs the same
 //! RTSP reader and writer threads, without UDP sockets.
 //!
@@ -51,7 +57,9 @@
 //! errors count.
 
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Shutdown, SocketAddr, SocketAddrV6, TcpStream, UdpSocket};
+use std::net::{
+    IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV6, TcpStream, UdpSocket,
+};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -64,7 +72,7 @@ use crate::rtp::{self, ResendRequest};
 use crate::session::{CONNECT_TIMEOUT, Connection, RESPONSE_TIMEOUT, UdpSendResult};
 use crate::stream::{LocalSocket, SpeakerCounters};
 
-/// How often a blocked reader looks at its stop flag: the longest a thread
+/// How often a blocked RTSP reader looks at its stop flag: the longest it
 /// outlives its session's close.
 pub const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// The longest one UDP send may block before it is given up.
@@ -246,7 +254,6 @@ impl SessionIo {
         let control = UdpSocket::bind(bind_at)?;
         let timing = UdpSocket::bind(bind_at)?;
         for socket in [&control, &timing] {
-            socket.set_read_timeout(Some(POLL_INTERVAL))?;
             socket.set_write_timeout(Some(UDP_SEND_TIMEOUT))?;
         }
         let connection = Connection {
@@ -352,16 +359,21 @@ impl SessionIo {
     }
 
     /// Closes the connection and stops the threads. The handles come back
-    /// for the caller to join; every thread ends within [`POLL_INTERVAL`].
+    /// for the caller to join; the UDP threads end once their wake-up
+    /// arrives, the RTSP reader within [`POLL_INTERVAL`].
     pub(crate) fn close(mut self) -> Vec<JoinHandle<()>> {
         self.stop_all();
         std::mem::take(&mut self.threads)
     }
 
     fn stop_all(&mut self) {
-        self.stop.store(true, Ordering::Release);
+        if self.stop.swap(true, Ordering::AcqRel) {
+            return;
+        }
         self.writer = None;
         let _ = self.tcp.shutdown(Shutdown::Both);
+        wake(&self.control);
+        wake(&self.timing);
     }
 }
 
@@ -480,7 +492,6 @@ impl PtpIo {
         let event = UdpSocket::bind(SocketAddr::new(any, ports.event))?;
         let general = UdpSocket::bind(SocketAddr::new(any, ports.general))?;
         for socket in [&event, &general] {
-            socket.set_read_timeout(Some(POLL_INTERVAL))?;
             socket.set_write_timeout(Some(UDP_SEND_TIMEOUT))?;
         }
         let mut io = PtpIo {
@@ -511,15 +522,37 @@ impl PtpIo {
     /// Stops the thread, whose handle comes back for the caller to join;
     /// the sockets close when the thread lets go of its own.
     pub(crate) fn close(mut self) -> Vec<JoinHandle<()>> {
-        self.stop.store(true, Ordering::Release);
+        self.stop_all();
         std::mem::take(&mut self.threads)
+    }
+
+    fn stop_all(&mut self) {
+        if !self.stop.swap(true, Ordering::AcqRel) {
+            wake(&self.event);
+        }
     }
 }
 
 impl Drop for PtpIo {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
+        self.stop_all();
     }
+}
+
+/// Sends `socket` an empty datagram from itself, so a receive blocked on it
+/// returns and its thread sees the stop flag. A socket bound to every
+/// address is reached over loopback. When the send fails (the local
+/// address is gone) the thread stays blocked, holding only its socket.
+fn wake(socket: &UdpSocket) {
+    let Ok(mut address) = socket.local_addr() else {
+        return;
+    };
+    match address.ip() {
+        IpAddr::V4(ip) if ip.is_unspecified() => address.set_ip(Ipv4Addr::LOCALHOST.into()),
+        IpAddr::V6(ip) if ip.is_unspecified() => address.set_ip(Ipv6Addr::LOCALHOST.into()),
+        _ => {}
+    }
+    let _ = socket.send_to(&[], address);
 }
 
 fn ptp_loop(
@@ -531,6 +564,7 @@ fn ptp_loop(
         let mut buf = [0u8; DATAGRAM_BYTES];
         while !stop.load(Ordering::Acquire) {
             match socket.recv_from(&mut buf) {
+                Ok((0, _)) => {}
                 Ok((len, source)) => {
                     let at = Instant::now();
                     if !crate::ptp::may_be_delay_req(&buf[..len]) {
@@ -580,6 +614,7 @@ fn timing_loop(
         let mut buf = [0u8; DATAGRAM_BYTES];
         while !stop.load(Ordering::Acquire) {
             match socket.recv_from(&mut buf) {
+                Ok((0, _)) => {}
                 Ok((len, source)) => {
                     let received = Instant::now();
                     if !from_receiver(source, receiver) {
@@ -625,6 +660,7 @@ fn control_loop(
         let mut buf = [0u8; DATAGRAM_BYTES];
         while !stop.load(Ordering::Acquire) {
             match socket.recv_from(&mut buf) {
+                Ok((0, _)) => {}
                 Ok((len, source)) => {
                     if !from_receiver(source, receiver) {
                         counters.count_foreign_datagram();
@@ -649,15 +685,11 @@ fn control_loop(
     }
 }
 
-/// After a failed receive: a timeout just loops back to the stop flag; a
-/// reset (Windows reports one on the next receive after an ICMP
-/// unreachable) or any other error pauses briefly so a broken socket can't
-/// spin.
+/// After a failed receive: an interrupted one just loops back; a reset
+/// (Windows reports one on the next receive after an ICMP unreachable) or
+/// any other error pauses briefly so a broken socket can't spin.
 fn idle_after(error: &io::Error) {
-    if !matches!(
-        error.kind(),
-        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
-    ) {
+    if error.kind() != io::ErrorKind::Interrupted {
         thread::sleep(Duration::from_millis(5));
     }
 }
@@ -955,11 +987,6 @@ mod tests {
     fn the_udp_threads_count_and_drop_datagrams_from_another_address() {
         let timing = Arc::new(UdpSocket::bind("127.0.0.1:0").expect("timing socket"));
         let control = Arc::new(UdpSocket::bind("127.0.0.1:0").expect("control socket"));
-        for socket in [&timing, &control] {
-            socket
-                .set_read_timeout(Some(POLL_INTERVAL))
-                .expect("timeout");
-        }
         let receiver = IpAddr::from([192, 0, 2, 1]);
         let counters = Arc::new(SpeakerCounters::default());
         let stop = Arc::new(AtomicBool::new(false));
@@ -998,10 +1025,12 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         stop.store(true, Ordering::Release);
+        wake(&timing);
+        wake(&control);
         for thread in threads {
             thread.join().expect("a UDP thread");
         }
-        assert_eq!(counters.foreign_datagrams(), 2);
+        assert_eq!(counters.foreign_datagrams(), 2, "the wake-ups uncounted");
         assert_eq!(counters.timing_replies(), 0);
         assert!(received.try_recv().is_err(), "nothing reached the driver");
         stranger.set_nonblocking(true).expect("nonblocking");
@@ -1009,5 +1038,113 @@ mod tests {
             stranger.recv_from(&mut [0u8; 64]).is_err(),
             "no timing reply"
         );
+    }
+
+    /// Waits until every thread in `threads` has ended, or `WAIT` passes.
+    fn all_end(threads: &[JoinHandle<()>]) -> bool {
+        let deadline = Instant::now() + WAIT;
+        while threads.iter().any(|thread| !thread.is_finished()) {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        true
+    }
+
+    // The UDP sockets receive without a timeout, so no request can land as
+    // a timed receive gives up (on Windows that drops it): every request of
+    // repeated bursts is answered or handed on exactly once. Closing still
+    // ends every thread at once, woken by datagrams that aren't counted.
+    // covers: P86, P91, P144
+    #[test]
+    fn no_request_of_a_burst_is_lost_and_closing_wakes_the_udp_threads() {
+        const BURSTS: u16 = 20;
+        const PER_BURST: u16 = 50;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let tcp = TcpStream::connect(listener.local_addr().expect("address")).expect("connect");
+        let (_receiver_end, _) = listener.accept().expect("accept");
+        let (events, received) = mpsc::channel();
+        let notify = move |event: IoEvent| events.send(event).is_ok();
+        let counters = Arc::new(SpeakerCounters::default());
+        let (io, connection) = SessionIo::open(
+            SessionKey(6),
+            1,
+            tcp,
+            SenderClock::new(Instant::now()),
+            counters.clone(),
+            notify,
+        )
+        .expect("session I/O");
+        for socket in [&io.control, &io.timing] {
+            assert_eq!(socket.read_timeout().expect("timeout"), None);
+        }
+        let timing = SocketAddr::new(connection.local, connection.timing_port);
+        let control = SocketAddr::new(connection.local, connection.control_port);
+        let receiver = UdpSocket::bind("127.0.0.1:0").expect("receiver socket");
+        receiver.set_read_timeout(Some(WAIT)).expect("timeout");
+        let mut buf = [0u8; 64];
+        for burst in 0..BURSTS {
+            let seqs = burst * PER_BURST..(burst + 1) * PER_BURST;
+            for seq in seqs.clone() {
+                receiver
+                    .send_to(&timing_request(seq), timing)
+                    .expect("send");
+                receiver
+                    .send_to(&resend_request(seq, 1), control)
+                    .expect("send");
+            }
+            let mut replies = Vec::new();
+            for _ in seqs.clone() {
+                let (len, _) = receiver.recv_from(&mut buf).expect("a timing reply");
+                let reply = rtp::TimingPacket::parse(&buf[..len]).expect("a timing reply");
+                replies.push(reply.seq);
+            }
+            let (mut timing_events, mut resends) = (0, Vec::new());
+            while timing_events < PER_BURST || resends.len() < usize::from(PER_BURST) {
+                match received.recv_timeout(WAIT).expect("an event") {
+                    IoEvent::TimingRequest { .. } => timing_events += 1,
+                    IoEvent::Control { bytes, .. } => {
+                        let request = ResendRequest::parse(&bytes).expect("a resend request");
+                        resends.push(request.first);
+                    }
+                    other => panic!("unexpected {other:?}"),
+                }
+            }
+            replies.sort_unstable();
+            resends.sort_unstable();
+            let sent: Vec<u16> = seqs.collect();
+            assert_eq!(replies, sent, "every timing request of burst {burst}");
+            assert_eq!(resends, sent, "every resend request of burst {burst}");
+        }
+        let threads = io.close();
+        assert!(all_end(&threads), "closing wakes every thread");
+        assert_eq!(counters.timing_replies(), u64::from(BURSTS * PER_BURST));
+        assert_eq!(counters.foreign_datagrams(), 0, "the wake-ups uncounted");
+        assert!(
+            received.try_recv().is_err(),
+            "nothing more reached the driver"
+        );
+    }
+
+    // The PTP event socket receives without a timeout too, and closing the
+    // service, or dropping it, wakes its thread over loopback although the
+    // socket is bound to every address.
+    // covers: P158
+    #[test]
+    fn closing_the_ptp_service_wakes_its_thread() {
+        let ports = crate::ptp::PtpPorts {
+            event: 0,
+            general: 0,
+        };
+        let notify = |_: IoEvent| true;
+        let io = PtpIo::open(IpAddr::from([127, 0, 0, 1]), ports, notify).expect("PTP I/O");
+        assert_eq!(io.event.read_timeout().expect("timeout"), None);
+        let threads = io.close();
+        assert!(all_end(&threads), "closing wakes the PTP thread");
+        let mut io = PtpIo::open(IpAddr::from([127, 0, 0, 1]), ports, notify).expect("PTP I/O");
+        let threads = std::mem::take(&mut io.threads);
+        drop(io);
+        assert!(all_end(&threads), "dropping wakes the PTP thread");
     }
 }

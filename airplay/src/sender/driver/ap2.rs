@@ -324,10 +324,17 @@ impl Driver {
         uuid.copy_from_slice(&random[6..]);
         let identity = clock_identity(identity_random);
         // An IPv6 wildcard socket takes the IPv4 port too on most systems, so
-        // the old service's ports must be free first; this waits one read timeout at most.
-        for thread in self.ptp_closing.drain(..) {
-            let _ = thread.join();
+        // the old service's ports must be free first. Its thread ends once the
+        // close's wake-up reaches it; one that doesn't by THREAD_GRACE is left
+        // to the retired threads, and the bind fails as for a port in use.
+        let deadline = Instant::now() + THREAD_GRACE;
+        while self.ptp_closing.iter().any(|thread| !thread.is_finished())
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(1));
         }
+        let closing = std::mem::take(&mut self.ptp_closing);
+        self.retired.extend(closing);
         match PtpIo::open(family.to_canonical(), self.ptp_ports, self.notify()) {
             Ok(io) => {
                 let peer = PtpPeer {
