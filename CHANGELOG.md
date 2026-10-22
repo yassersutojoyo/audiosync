@@ -29,6 +29,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - The Guide has three diagrams, in light and dark: where the sound goes, what a speaker's delay does, and how a Cast speaker's offset fits with your other speakers. Each has a description for VoiceOver and Narrator.
 - When the app you capture quits, AudioSync can switch to all system audio instead of stopping. Turn on "Switch to All System Audio When the Source App Quits" in the app menu or the gear menu on the Mac, or in the File menu on Windows. A notice tells you when it switched.
 - On the Mac, you can rename a speaker: double-click its name, or choose "Rename…" from the speaker's … menu. The name stays after a restart and shows in the menu bar panel and in notices too. Clear it to go back to the device's own name, which the speaker's tooltip keeps showing while it's renamed.
+- On Windows too, you can rename a speaker: double-click its name, or right-click it or use its … button and choose Rename. Press Enter to keep the new name or Escape to cancel; a click outside the field keeps it too. The name stays after a restart and shows in the notification area flyout, in notices and in the AirPlay code and password dialogs. Leave it empty to go back to the device's own name, which the name's tooltip keeps showing while it's renamed.
 
 ### Changed
 
@@ -40,7 +41,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - On the Mac, a delay you've typed now applies as soon as you leave its field: when you click into another delay field, move on with Tab, or click any other control, such as a volume slider or the power switch. A step button adds to the value you typed.
 - On the Mac, a delay field no longer shows a character it can't take for a moment before removing it: the keystroke is blocked, and the field gets the red outline with a note on what it takes. While the field has the focus, one red outline marks it in place of the blue focus ring.
-- On the Mac, a click on the empty space of an open delay panel closes it, like a click anywhere else on the speaker's row.
+- On the Mac and on Windows, a click on the empty space of an open delay panel closes it, like a click anywhere else on the speaker's row.
 - On the Mac, a Bluetooth speaker that reports a latency below 50 ms or above 1 second no longer cuts its fade-out short when you switch it off, or holds the stop for the full half second. AudioSync uses the last plausible latency it saw for that speaker instead, or 150 ms. Your delays and the timing between speakers don't change.
 - A local speaker that plays later than your earliest one, because you set a delay on it or an AirPlay speaker is on, now keeps its timing when its clock runs a little fast or slow. AudioSync now nudges its speed in small, smoothed steps, where before it drifted until a short skip or moment of silence put it back. Speakers whose clocks keep time are also no longer adjusted back and forth when the system wakes AudioSync a little late now and then.
 - A local speaker at the same sample rate as the captured audio no longer runs short for a moment now and then when its clock runs a little fast. It gets the same small speed adjustments as a speaker at another rate, and plays the audio unchanged between them.

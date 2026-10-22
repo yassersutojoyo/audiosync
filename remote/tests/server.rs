@@ -9,7 +9,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use audiosync_remote::page::{self, hash_source};
-use audiosync_remote::{Command, Config, RemoteServer, ServerEvent, SpeakerChange, State, Timing};
+use audiosync_remote::{
+    Capacity, Command, Config, RemoteServer, ServerEvent, SpeakerChange, State, Timing,
+};
 use serde_json::{Value, json};
 
 const SAMPLE: &str = r#"{
@@ -49,6 +51,7 @@ fn config(name: &str, timing: Timing) -> Config {
         local_name: Some("kitchen".to_owned()),
         devices_path: Some(scratch(name)),
         timing,
+        capacity: Capacity::default(),
     }
 }
 
@@ -377,7 +380,7 @@ fn a_code_expires() {
 }
 
 #[test]
-fn wrong_codes_are_limited_then_locked() {
+fn wrong_codes_are_limited_then_refused_for_that_address_only() {
     let timing = Timing {
         wrong_code_window: Duration::from_secs(1),
         ..Timing::default()
@@ -386,7 +389,7 @@ fn wrong_codes_are_limited_then_locked() {
     let code = remote.server.pairing_code().unwrap();
     let right = json!({ "code": code }).to_string();
     let wrong = json!({ "code": wrong(&code) }).to_string();
-    for round in 0..4 {
+    for round in 0..2 {
         for _ in 0..5 {
             assert_eq!(
                 post(&remote, "/api/pair", None, &wrong).status,
@@ -396,7 +399,7 @@ fn wrong_codes_are_limited_then_locked() {
         }
         let limited = post(&remote, "/api/pair", None, &right);
         assert_eq!(limited.status, 429);
-        let expected = if round == 3 {
+        let expected = if round == 1 {
             "pairing_locked"
         } else {
             "too_many_tries"
@@ -404,12 +407,12 @@ fn wrong_codes_are_limited_then_locked() {
         assert_eq!(limited.error(), expected);
         thread::sleep(Duration::from_millis(1100));
     }
-    assert!(remote.server.pairing_locked());
-    let locked = post(&remote, "/api/pair", None, &right);
-    assert_eq!(locked.status, 429);
-    assert_eq!(locked.error(), "pairing_locked");
-    let fresh = remote.server.rotate_code().unwrap();
+    let refused = post(&remote, "/api/pair", None, &right);
+    assert_eq!(refused.status, 429);
+    assert_eq!(refused.error(), "pairing_locked");
+    // Only 127.0.0.1 used up its tries; pairing stays open to everyone else.
     assert!(!remote.server.pairing_locked());
+    let fresh = remote.server.rotate_code().unwrap();
     let reply = post(
         &remote,
         "/api/pair",
@@ -900,6 +903,37 @@ fn a_speaker_change_needs_a_published_speaker_and_an_id() {
     );
     assert_eq!(reply.status, 202, "{}", reply.body);
     assert_eq!(remote.received.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn reserved_slots_let_in_only_a_paired_device() {
+    let remote = start_with(Config {
+        capacity: Capacity {
+            connections: 4,
+            per_peer: 4,
+            reserved: 2,
+            reserved_per_peer: 1,
+        },
+        ..config("reserved", Timing::default())
+    });
+    remote.server.publish(sample());
+    let token = pair(&remote);
+    // Accepted in order, so both are counted before the next connection is.
+    let _slow: Vec<TcpStream> = (0..2).map(|_| idle_connection(&remote)).collect();
+    let unpaired = get(&remote, "/", None);
+    assert_eq!(unpaired.status, 503);
+    assert_eq!(unpaired.error(), "busy");
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        // The connections answered just before may not have ended yet.
+        let reply = get(&remote, "/api/state", Some(&token));
+        if reply.status == 200 {
+            break;
+        }
+        assert_eq!(reply.status, 503, "{}", reply.body);
+        assert!(Instant::now() < until, "a paired device stayed out");
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 #[test]

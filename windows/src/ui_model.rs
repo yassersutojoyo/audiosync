@@ -13,6 +13,8 @@ use audiosync_core::policy::source_quit::WhenSourceQuits;
 #[cfg(any(not(windows), test))]
 use audiosync_core::volume;
 
+#[cfg(any(not(windows), test))]
+use crate::speaker_names;
 use audiosync_core::calibrate_all::{AirPlayShared, Class, EndReason, RowState};
 
 pub use crate::audio::backend::CastMembers;
@@ -168,7 +170,10 @@ pub enum AirPlayProblem {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Speaker {
     pub id: String,
+    /// The name the user gave it, else its system name.
     pub name: String,
+    /// The name Windows or AirPlay discovery reports.
+    pub system_name: String,
     pub kind: SpeakerKind,
     /// Chosen by the user; it plays while streaming is on.
     pub enabled: bool,
@@ -733,6 +738,9 @@ pub trait Backend {
     /// The user entered `ms` in the AirPlay delay field.
     fn set_airplay_delay(&mut self, ms: f64);
     fn set_auto_connect(&mut self, id: &str, on: bool);
+    /// Gives speaker `id` the name `name`; an empty one brings back its
+    /// system name (spec S228).
+    fn rename_speaker(&mut self, id: &str, name: &str);
     /// Turns every present member on, or all of them off when the group is on.
     fn toggle_group(&mut self, id: &str);
     /// Makes a group of the speakers that are on now. The UI names it
@@ -950,6 +958,7 @@ impl MockBackend {
         let speaker = |id: &str, name: &str, kind, enabled, delay_ms| Speaker {
             id: id.into(),
             name: name.into(),
+            system_name: name.into(),
             kind,
             enabled,
             volume: volume::DEFAULT_LOCAL_POSITION,
@@ -1177,6 +1186,12 @@ impl Backend for MockBackend {
         }
     }
 
+    fn rename_speaker(&mut self, id: &str, name: &str) {
+        if let Some(speaker) = self.speaker_mut(id) {
+            speaker.name = speaker_names::shown_after(name, &speaker.system_name);
+        }
+    }
+
     fn toggle_group(&mut self, id: &str) {
         let Some(group) = self.state.groups.iter().find(|g| g.id == id).cloned() else {
             return;
@@ -1377,6 +1392,7 @@ mod tests {
         let speaker = |kind, enabled| Speaker {
             id: "local:x".into(),
             name: "X".into(),
+            system_name: "X".into(),
             kind,
             enabled,
             volume: 60.0,

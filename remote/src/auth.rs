@@ -11,12 +11,20 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::net;
+
 /// Digits in a pairing code.
 pub const CODE_DIGITS: usize = 6;
-/// Wrong codes one address may send within [`Limits::window`] before it gets 429.
+/// Wrong codes one peer may send within [`Limits::window`] before it gets 429.
+/// A peer is one address ([`net::peer_group`]).
 pub const WRONG_PER_WINDOW: usize = 5;
-/// Wrong codes in total after which pairing stays locked until the code is rotated.
-pub const WRONG_BEFORE_LOCK: u32 = 20;
+/// Wrong codes one peer may send until the code is rotated; after that only
+/// that peer is refused.
+pub const WRONG_PER_PEER: u32 = 10;
+/// Wrong codes from all peers together after which pairing stays locked for
+/// everyone until the code is rotated. Above [`WRONG_PER_PEER`], so one peer
+/// alone never locks out the others.
+pub const WRONG_BEFORE_LOCK: u32 = 40;
 /// Devices remembered at once; pairing another drops the oldest.
 pub const MAX_DEVICES: usize = 8;
 /// The paired-device file's format.
@@ -74,8 +82,10 @@ pub enum PairOutcome {
     Wrong,
     /// No code works now: it expired or none could be made.
     Expired,
-    /// This address sent [`WRONG_PER_WINDOW`] wrong codes within the window.
+    /// This peer sent [`WRONG_PER_WINDOW`] wrong codes within the window.
     Limited,
+    /// This peer sent [`WRONG_PER_PEER`] wrong codes; rotating the code lets it try again.
+    Blocked,
     /// [`WRONG_BEFORE_LOCK`] wrong codes in total; rotating the code unlocks.
     Locked,
 }
@@ -86,7 +96,14 @@ pub struct Pairing {
     limits: Limits,
     code: Option<(String, Instant)>,
     wrong_total: u32,
-    recent_wrong: HashMap<IpAddr, VecDeque<Instant>>,
+    /// Holds a peer only after a wrong try, so it never holds more than [`WRONG_BEFORE_LOCK`] peers.
+    wrong_by_peer: HashMap<IpAddr, PeerTries>,
+}
+
+#[derive(Debug, Default)]
+struct PeerTries {
+    total: u32,
+    recent: VecDeque<Instant>,
 }
 
 impl Pairing {
@@ -95,7 +112,7 @@ impl Pairing {
             limits,
             code: None,
             wrong_total: 0,
-            recent_wrong: HashMap::new(),
+            wrong_by_peer: HashMap::new(),
         };
         pairing.rotate(now)?;
         Ok(pairing)
@@ -105,7 +122,7 @@ impl Pairing {
     /// working, the lockout and the counts are cleared.
     pub fn rotate(&mut self, now: Instant) -> Result<String, RandomError> {
         self.wrong_total = 0;
-        self.recent_wrong.clear();
+        self.wrong_by_peer.clear();
         self.code = None;
         let code = random_code()?;
         self.code = Some((code.clone(), now));
@@ -124,28 +141,28 @@ impl Pairing {
         self.wrong_total >= WRONG_BEFORE_LOCK
     }
 
-    /// One try from `from`. A limited or locked try is refused before the
-    /// code is looked at, so the right code doesn't get through either.
+    /// One try from `from`. A limited, blocked or locked try is refused
+    /// before the code is looked at, so the right code doesn't get through either.
     pub fn attempt(&mut self, from: IpAddr, code: &str, now: Instant) -> PairOutcome {
         if self.locked() {
             return PairOutcome::Locked;
         }
+        let peer = net::peer_group(from);
         let window = self.limits.window;
-        self.recent_wrong.retain(|_, times| {
-            while times
+        if let Some(tries) = self.wrong_by_peer.get_mut(&peer) {
+            while tries
+                .recent
                 .front()
                 .is_some_and(|time| now.saturating_duration_since(*time) >= window)
             {
-                times.pop_front();
+                tries.recent.pop_front();
             }
-            !times.is_empty()
-        });
-        if self
-            .recent_wrong
-            .get(&from)
-            .is_some_and(|times| times.len() >= WRONG_PER_WINDOW)
-        {
-            return PairOutcome::Limited;
+            if tries.total >= WRONG_PER_PEER {
+                return PairOutcome::Blocked;
+            }
+            if tries.recent.len() >= WRONG_PER_WINDOW {
+                return PairOutcome::Limited;
+            }
         }
         let outcome = match self.current(now) {
             Some(current) if equal_in_constant_time(current.as_bytes(), code.trim().as_bytes()) => {
@@ -157,7 +174,9 @@ impl Pairing {
             None => PairOutcome::Expired,
         };
         self.wrong_total = self.wrong_total.saturating_add(1);
-        self.recent_wrong.entry(from).or_default().push_back(now);
+        let tries = self.wrong_by_peer.entry(peer).or_default();
+        tries.total = tries.total.saturating_add(1);
+        tries.recent.push_back(now);
         outcome
     }
 }
@@ -356,7 +375,7 @@ fn write_replacing(path: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn peer(last: u8) -> IpAddr {
         IpAddr::V4(Ipv4Addr::new(127, 0, 0, last))
@@ -426,8 +445,63 @@ mod tests {
         );
     }
 
+    /// Sends wrong codes from `from` a minute apart in fives, as fast as the window allows.
+    fn send_wrong(pairing: &mut Pairing, from: IpAddr, wrong: &str, start: Instant, count: u32) {
+        for index in 0..count {
+            let at = start + Duration::from_secs(60 * u64::from(index) / WRONG_PER_WINDOW as u64);
+            assert_eq!(
+                pairing.attempt(from, wrong, at),
+                PairOutcome::Wrong,
+                "try {index}"
+            );
+        }
+    }
+
     #[test]
-    fn twenty_wrong_codes_lock_pairing_until_rotation() {
+    fn one_peer_out_of_tries_is_refused_while_others_still_pair() {
+        let start = Instant::now();
+        let mut pairing = Pairing::new(short(), start).unwrap();
+        let code = pairing.current(start).unwrap().to_owned();
+        let wrong = wrong_for(&code);
+        send_wrong(&mut pairing, peer(1), &wrong, start, WRONG_PER_PEER);
+        let later = start + Duration::from_secs(300);
+        assert_eq!(pairing.attempt(peer(1), &code, later), PairOutcome::Blocked);
+        assert!(!pairing.locked());
+        assert_eq!(pairing.attempt(peer(2), &code, later), PairOutcome::Paired);
+        let fresh = pairing.rotate(later).unwrap();
+        assert_eq!(pairing.attempt(peer(1), &fresh, later), PairOutcome::Paired);
+    }
+
+    #[test]
+    fn two_ipv6_hosts_in_one_64_are_separate_peers() {
+        // The server admits IPv6 peers only from its own /64, so all of them share it.
+        let start = Instant::now();
+        let mut pairing = Pairing::new(short(), start).unwrap();
+        let code = pairing.current(start).unwrap().to_owned();
+        let wrong = wrong_for(&code);
+        let host = |last: u16| IpAddr::V6(Ipv6Addr::new(0xfdab, 0, 0, 1, 0, 0, 0, last));
+        send_wrong(&mut pairing, host(1), &wrong, start, WRONG_PER_PEER);
+        let later = start + Duration::from_secs(300);
+        assert_eq!(pairing.attempt(host(1), &code, later), PairOutcome::Blocked);
+        assert_eq!(pairing.attempt(host(2), &code, later), PairOutcome::Paired);
+    }
+
+    #[test]
+    fn one_peer_alone_never_locks_pairing() {
+        let start = Instant::now();
+        let mut pairing = Pairing::new(short(), start).unwrap();
+        let code = pairing.current(start).unwrap().to_owned();
+        let wrong = wrong_for(&code);
+        send_wrong(&mut pairing, peer(1), &wrong, start, WRONG_PER_PEER);
+        for minute in 5..5 + u64::from(WRONG_BEFORE_LOCK) {
+            let at = start + Duration::from_secs(60 * minute);
+            assert_eq!(pairing.attempt(peer(1), &wrong, at), PairOutcome::Blocked);
+        }
+        assert!(!pairing.locked());
+    }
+
+    #[test]
+    fn forty_wrong_codes_from_several_peers_lock_pairing_until_rotation() {
         let start = Instant::now();
         let mut pairing = Pairing::new(short(), start).unwrap();
         let code = pairing.current(start).unwrap().to_owned();

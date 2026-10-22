@@ -7,9 +7,13 @@
 mod common;
 
 use std::collections::{BTreeMap, VecDeque};
-use std::io::Write;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, UdpSocket};
+use std::io::{self, Write};
+use std::net::{
+    IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket,
+};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::ap2::bodies;
@@ -1010,6 +1014,118 @@ fn a_speaker_that_lost_its_address_in_the_moved_family_binds_the_service_in_anot
     assert_eq!(
         ptp_warnings(&events, &device.key),
         0,
+        "{:?}",
+        events.of(&device.key)
+    );
+    sender.shutdown();
+}
+
+/// Forwards a receiver's RTSP port from `[::1]` for its first `count`
+/// connections and from 127.0.0.1 after them, so each family refuses in turn.
+struct FamilyFlip {
+    stop: Arc<AtomicBool>,
+}
+
+impl FamilyFlip {
+    fn start(front: TcpListener, count: usize, to: SocketAddr) -> FamilyFlip {
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let port = front.local_addr().expect("address").port();
+        front.set_nonblocking(true).expect("nonblocking");
+        thread::spawn(move || {
+            let mut served = 0;
+            while served < count && !flag.load(Ordering::SeqCst) {
+                match front.accept() {
+                    Ok((client, _)) => {
+                        forward(client, to);
+                        served += 1;
+                    }
+                    Err(_) => thread::sleep(Duration::from_millis(10)),
+                }
+            }
+            drop(front);
+            let back = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).expect("the IPv4 port");
+            back.set_nonblocking(true).expect("nonblocking");
+            while !flag.load(Ordering::SeqCst) {
+                match back.accept() {
+                    Ok((client, _)) => forward(client, to),
+                    Err(_) => thread::sleep(Duration::from_millis(10)),
+                }
+            }
+        });
+        FamilyFlip { stop }
+    }
+}
+
+impl Drop for FamilyFlip {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
+fn forward(client: TcpStream, to: SocketAddr) {
+    let Ok(server) = TcpStream::connect(to) else {
+        return;
+    };
+    // An accepted socket inherits the listener's nonblocking mode on Windows.
+    client.set_nonblocking(false).expect("blocking");
+    for (from, into) in [(&client, &server), (&server, &client)] {
+        let (mut from, mut into) = (
+            from.try_clone().expect("a clone"),
+            into.try_clone().expect("a clone"),
+        );
+        thread::spawn(move || {
+            let _ = io::copy(&mut from, &mut into);
+            let _ = into.shutdown(Shutdown::Write);
+        });
+    }
+}
+
+// covers: P158
+#[test]
+fn a_moved_speaker_refused_in_the_new_family_plays_on_ntp_with_one_warning() {
+    let _serial = serial();
+    let Some(v6) = ipv6_loopback() else {
+        skipped("no IPv6 loopback");
+        return;
+    };
+    let server = Ap2Server::start(ptp_fake());
+    let front = TcpListener::bind((v6, 0)).expect("a listener");
+    let port = front.local_addr().expect("address").port();
+    if TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_err() {
+        skipped(&format!("port {port} is taken on IPv4"));
+        return;
+    }
+    // The first session (its NTP SETUP, then its PTP retry) lands on IPv6,
+    // outside the IPv4 service, which moves there; the restart is refused on
+    // IPv6 and lands on IPv4 again.
+    let _flip = FamilyFlip::start(front, 2, server.address);
+    let listener = PtpListener::bind();
+    let (sender, _host) = ptp_sender(&listener);
+    let mut events = Events::default();
+    let mut record = airplay_record(port, 1, "0x0,0x10240");
+    record.addresses = vec![
+        ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        ScopedAddr::new(v6),
+    ];
+    let device =
+        Device::from_records(DeviceKey::Id(device_id(1)), None, Some(&record)).expect("device");
+    sender.add_speaker(device.clone(), options());
+    assert!(
+        playing(&mut events, &sender, &device.key, 1),
+        "{:?}",
+        events.of(&device.key)
+    );
+    events.drain(&sender);
+    assert_eq!(
+        setup_timings(&server),
+        ["NTP", "PTP", "PTP", "NTP"],
+        "{:?}",
+        events.of(&device.key)
+    );
+    assert_eq!(
+        ptp_warnings(&events, &device.key),
+        1,
         "{:?}",
         events.of(&device.key)
     );
