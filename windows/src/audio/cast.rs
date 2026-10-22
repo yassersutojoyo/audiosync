@@ -83,11 +83,13 @@ pub struct CastTrack {
 
 /// The step the volume keys move a device by, 0 to 100: the device's own
 /// `stepInterval` (C69), or [`DEFAULT_VOLUME_STEP`] without a usable one.
+/// Rounded to a whole level and at least 1, so a tiny step still moves the
+/// slider and an odd one like 0.07 lands on whole percents.
 pub fn volume_step(volume: Option<&DeviceVolume>) -> f64 {
     volume
         .and_then(|volume| volume.step_interval)
         .filter(|step| step.is_finite() && *step > 0.0 && *step <= 1.0)
-        .map_or(DEFAULT_VOLUME_STEP, |step| step * 100.0)
+        .map_or(DEFAULT_VOLUME_STEP, |step| (step * 100.0).round().max(1.0))
 }
 
 /// Interleaved stereo frames held back by a delay that may change while it
@@ -1815,7 +1817,11 @@ pub mod tests {
             ..DeviceVolume::default()
         };
         assert_eq!(volume_step(Some(&reported(None))), 1.0);
-        assert!((volume_step(Some(&reported(Some(0.05)))) - 5.0).abs() < 1e-9);
+        assert_eq!(volume_step(Some(&reported(Some(0.05)))), 5.0);
+        assert_eq!(volume_step(Some(&reported(Some(0.07)))), 7.0);
+        assert_eq!(volume_step(Some(&reported(Some(0.125)))), 13.0);
+        assert_eq!(volume_step(Some(&reported(Some(0.004)))), 1.0);
+        assert_eq!(volume_step(Some(&reported(Some(1.0)))), 100.0);
         for bad in [0.0, -0.1, 1.5, f64::NAN] {
             assert_eq!(volume_step(Some(&reported(Some(bad)))), 1.0, "{bad}");
         }
@@ -1836,6 +1842,6 @@ pub mod tests {
             event: SessionEvent::Volume(reported(Some(0.02))),
         });
         cast.poll();
-        assert!((step_of(&cast).unwrap() - 2.0).abs() < 1e-9);
+        assert_eq!(step_of(&cast), Some(2.0));
     }
 }
