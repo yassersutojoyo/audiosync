@@ -3,9 +3,11 @@
 
 use audiosync_cast::framing::{FrameError, FrameReader, MAX_MESSAGE, decode_message, encode_frame};
 use audiosync_cast::message::{
-    CastMessage, Namespace, PayloadType, ProtocolVersion, SENDER, request_id,
+    CastMessage, Namespace, PayloadError, PayloadType, ProtocolVersion, SENDER, message_type,
+    request_id,
 };
-use serde_json::json;
+use prost::Message;
+use serde_json::{Value, json};
 
 fn sample() -> CastMessage {
     CastMessage::json(
@@ -115,4 +117,118 @@ fn the_cap_is_64_kb_both_ways_and_a_broken_message_is_a_fault() {
         encode_frame(&large),
         Err(FrameError::TooLarge(length)) if length > MAX_MESSAGE
     ));
+}
+
+// covers: C25
+#[test]
+fn a_prefix_of_exactly_64_kb_waits_for_its_body() {
+    let mut reader = FrameReader::new();
+    reader.push(&[0, 1]);
+    assert_eq!(reader.next_message(), Ok(None), "half a prefix");
+    reader.push(&[0, 0]);
+    assert_eq!(reader.next_message(), Ok(None));
+    reader.push(&[0; 1000]);
+    assert_eq!(reader.next_message(), Ok(None));
+    assert_eq!(reader.buffered(), 1004);
+
+    let mut padded = sample();
+    let mut length = MAX_MESSAGE;
+    loop {
+        padded.payload_utf8 = Some("x".repeat(length));
+        if padded.encoded_len() <= MAX_MESSAGE {
+            break;
+        }
+        length -= 1;
+    }
+    assert_eq!(padded.encoded_len(), MAX_MESSAGE);
+    let frame = encode_frame(&padded).expect("exactly the cap is allowed");
+    let mut reader = FrameReader::new();
+    reader.push(&frame);
+    assert_eq!(reader.next_message(), Ok(Some(padded)));
+}
+
+// covers: C25
+#[test]
+fn a_broken_body_is_consumed_and_the_next_frame_still_reads() {
+    let good = encode_frame(&sample()).expect("frame");
+    let mut reader = FrameReader::new();
+    reader.push(&[0, 0, 0, 2, 0xff, 0xff]);
+    reader.push(&good);
+    assert_eq!(reader.next_message(), Err(FrameError::Malformed));
+    assert_eq!(reader.buffered(), good.len());
+    assert_eq!(reader.next_message(), Ok(Some(sample())));
+}
+
+// covers: C28, C29
+#[test]
+fn payloads_that_are_not_a_json_object_and_odd_request_ids() {
+    let binary = CastMessage {
+        payload_type: PayloadType::Binary as i32,
+        payload_utf8: Some("{}".to_owned()),
+        payload_binary: Some(vec![1]),
+        ..sample()
+    };
+    assert_eq!(binary.json_payload(), Err(PayloadError::NotText));
+    let missing = CastMessage {
+        payload_utf8: None,
+        ..sample()
+    };
+    assert_eq!(missing.json_payload(), Err(PayloadError::NotText));
+    for (text, error) in [
+        ("", PayloadError::InvalidJson),
+        ("{\"type\": ", PayloadError::InvalidJson),
+        ("\"PING\"", PayloadError::NotAnObject),
+        ("null", PayloadError::NotAnObject),
+    ] {
+        let message = CastMessage {
+            payload_utf8: Some(text.to_owned()),
+            ..sample()
+        };
+        assert_eq!(message.json_payload(), Err(error), "{text:?}");
+    }
+
+    let payload = |value: Value| value.as_object().expect("object").clone();
+    for id in [
+        json!(-1),
+        json!(1.5),
+        json!("7"),
+        json!(null),
+        json!(u64::from(u32::MAX) + 1),
+    ] {
+        assert_eq!(request_id(&payload(json!({ "requestId": id }))), 0, "{id}");
+    }
+    assert_eq!(request_id(&payload(json!({}))), 0);
+    assert_eq!(
+        request_id(&payload(json!({ "requestId": u32::MAX }))),
+        u32::MAX
+    );
+    assert_eq!(message_type(&payload(json!({ "type": 1 }))), None);
+    assert_eq!(
+        message_type(&payload(json!({ "type": "PING" }))),
+        Some("PING")
+    );
+}
+
+// covers: C27
+#[test]
+fn only_exact_namespace_names_are_known() {
+    for namespace in [
+        Namespace::Connection,
+        Namespace::Heartbeat,
+        Namespace::Receiver,
+        Namespace::Media,
+        Namespace::DeviceAuth,
+    ] {
+        assert_eq!(Namespace::from_name(namespace.name()), Some(namespace));
+    }
+    for near in [
+        "",
+        "urn:x-cast:com.google.cast.media ",
+        "URN:X-CAST:COM.GOOGLE.CAST.MEDIA",
+        "urn:x-cast:com.google.cast.media.extra",
+        "urn:x-cast:com.google.cast",
+        "urn:x-cast:com.google.cast.tp.heartbeat/",
+    ] {
+        assert_eq!(Namespace::from_name(near), None, "{near:?}");
+    }
 }

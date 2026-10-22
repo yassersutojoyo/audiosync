@@ -639,3 +639,78 @@ fn a_close_from_the_platform_ends_the_channel() {
     );
     assert!(events(&mut channel).contains(&Event::Ended(EndReason::ClosedByDevice)));
 }
+
+// covers: C33
+#[test]
+fn a_launch_is_refused_before_the_first_status_and_while_one_runs() {
+    let start = Instant::now();
+    let mut channel = Channel::open(start, RequestIds::starting_at(1));
+    assert_eq!(channel.launch(start), Err(LaunchError::NotReady));
+    let out = sent(&mut channel);
+    assert_eq!(out.len(), 2, "only CONNECT and GET_STATUS: {out:?}");
+    channel.handle(start, status(1, Vec::new()));
+    assert!(channel.launch(start).is_ok());
+    sent(&mut channel);
+    assert_eq!(channel.launch(start), Err(LaunchError::NotReady));
+    assert!(sent(&mut channel).is_empty(), "no second LAUNCH");
+}
+
+#[test]
+fn ending_mid_launch_fails_the_launch_once_and_then_nothing_moves() {
+    let start = Instant::now();
+    let mut channel = ready(start, Vec::new());
+    channel.launch(start).expect("ready");
+    let reason = EndReason::Io("reset".to_owned());
+    channel.end(reason.clone());
+    assert!(
+        channel.poll_outbound().is_none(),
+        "the unsent LAUNCH is dropped"
+    );
+    assert_eq!(
+        events(&mut channel),
+        vec![
+            Event::LaunchFailed(LaunchError::Ended(reason.clone())),
+            Event::Ended(reason),
+        ]
+    );
+    channel.end(EndReason::Silent);
+    assert!(events(&mut channel).is_empty(), "a channel ends once");
+
+    channel.handle(
+        start,
+        json_message(PLATFORM, SENDER, NS_HEARTBEAT, json!({"type": "PING"})),
+    );
+    channel.handle(start, status(101, Vec::new()));
+    channel.tick(start + LAUNCH_TIMEOUT + DEAD_AFTER);
+    assert!(sent(&mut channel).is_empty());
+    assert!(events(&mut channel).is_empty());
+    assert_eq!(channel.launch(start), Err(LaunchError::NotReady));
+}
+
+// covers: C36
+#[test]
+fn a_message_without_a_type_or_for_someone_else_still_keeps_the_channel_alive() {
+    let start = Instant::now();
+    let mut channel = ready(start, Vec::new());
+    let untyped = start + Duration::from_secs(10);
+    channel.handle(
+        untyped,
+        json_message(PLATFORM, SENDER, NS_HEARTBEAT, json!({"requestId": 3})),
+    );
+    assert!(sent(&mut channel).is_empty());
+    assert!(events(&mut channel).is_empty(), "ignored without a report");
+    channel.tick(start + DEAD_AFTER);
+    assert!(!channel.is_ended());
+
+    let elsewhere = untyped + Duration::from_secs(10);
+    channel.handle(
+        elsewhere,
+        json_message(PLATFORM, "sender-7", NS_HEARTBEAT, json!({"type": "PING"})),
+    );
+    channel.tick(untyped + DEAD_AFTER);
+    assert!(!channel.is_ended());
+    channel.tick(elsewhere + DEAD_AFTER - Duration::from_millis(1));
+    assert!(!channel.is_ended());
+    channel.tick(elsewhere + DEAD_AFTER);
+    assert!(channel.is_ended());
+}

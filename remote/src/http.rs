@@ -265,6 +265,19 @@ mod tests {
     }
 
     #[test]
+    fn the_token_cookie_is_found_only_by_its_exact_name() {
+        let request = parse_head(
+            b"GET / HTTP/1.1\r\nCookie: xas_token=a; as_token_old=b; AS_TOKEN=c; as_token\r\nCookie: other=d",
+        )
+        .unwrap();
+        assert_eq!(request.cookie("as_token"), None);
+        let request = parse_head(b"GET / HTTP/1.1\r\nCookie: x=1;as_token=abc ;y=2").unwrap();
+        assert_eq!(request.cookie("as_token"), Some("abc"));
+        let request = parse_head(b"GET / HTTP/1.1\r\nCookie: as_token=").unwrap();
+        assert_eq!(request.cookie("as_token"), Some(""));
+    }
+
+    #[test]
     fn a_bad_head_is_refused() {
         for bad in [
             &b"GET / HTTP/2\r\nHost: x"[..],
