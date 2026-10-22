@@ -608,11 +608,15 @@ struct PtpListener {
 
 impl PtpListener {
     fn bind() -> PtpListener {
-        let event = UdpSocket::bind("127.0.0.1:0").expect("a socket");
+        PtpListener::bind_at(IpAddr::V4(Ipv4Addr::LOCALHOST))
+    }
+
+    fn bind_at(ip: IpAddr) -> PtpListener {
+        let event = UdpSocket::bind((ip, 0)).expect("a socket");
         event
             .set_read_timeout(Some(Duration::from_millis(100)))
             .expect("a timeout");
-        let general = UdpSocket::bind("127.0.0.1:0").expect("a socket");
+        let general = UdpSocket::bind((ip, 0)).expect("a socket");
         PtpListener {
             event,
             _general: general,
@@ -700,6 +704,85 @@ fn a_member_in_another_address_family_leaves_the_playing_members_ptp_alone() {
         );
         sender.shutdown();
     }
+}
+
+/// The IPv6 loopback address, or None where the runner has none.
+fn ipv6_loopback() -> Option<IpAddr> {
+    let ip = IpAddr::V6(Ipv6Addr::LOCALHOST);
+    TcpListener::bind((ip, 0)).ok().map(|_| ip)
+}
+
+fn ptp_warnings(events: &Events, key: &DeviceKey) -> usize {
+    events
+        .of(key)
+        .iter()
+        .filter(|event| **event == SpeakerEvent::Warning(Warning::PtpUnavailable))
+        .count()
+}
+
+fn timing_asked(server: &Ap2Server) -> Option<String> {
+    let fake = server.fake();
+    let setup = fake.last("SETUP session")?;
+    let body = read_dict(&setup.body)?;
+    Some(body.get("timingProtocol")?.as_string()?.to_owned())
+}
+
+// covers: P179
+#[test]
+fn a_member_in_another_family_that_comes_into_view_late_plays_on_ntp() {
+    let _serial = serial();
+    let Some(v6) = ipv6_loopback() else {
+        eprintln!("no IPv6 loopback here; skipped");
+        return;
+    };
+    let first = Ap2Server::start_on(v6, ptp_fake());
+    let second = Ap2Server::start(FakeAp2::new());
+    let listener = PtpListener::bind_at(v6);
+    let (sender, _host) = ptp_sender(&listener);
+    let mut events = Events::default();
+    let script = Script::default();
+    sender.start_discovery_with(Box::new(script.clone()));
+    let mut record = airplay_record(first.address.port(), 1, "0x0,0x10240");
+    record.addresses = vec![ScopedAddr::new(v6)];
+    let da =
+        Device::from_records(DeviceKey::Id(device_id(1)), None, Some(&record)).expect("device");
+    let db_key = DeviceKey::Id(device_id(2));
+    let target = pair(vec![member(Some(&da), 1), member(None, 2)], None);
+    sender.add_target(target, options(), |_, _| {});
+    assert!(
+        playing(&mut events, &sender, &da.key, 1),
+        "{:?}",
+        events.of(&da.key)
+    );
+    assert_eq!(timing_asked(&first).as_deref(), Some("PTP"));
+    assert_one_clock_keeps_syncing(&listener);
+
+    // The IPv4 member comes into view while the service runs on IPv6.
+    let mut late = airplay_record(second.address.port(), 2, "0x0,0x10240");
+    // Discovery keys a device by `deviceid` in its colon form (P10).
+    late.txt.retain(|entry| !entry.starts_with(b"deviceid="));
+    late.txt.push(b"deviceid=02:00:5E:00:53:02".to_vec());
+    script.push(BrowseEvent::Resolved(late));
+    assert!(
+        playing(&mut events, &sender, &db_key, 1),
+        "{:?}",
+        events.of(&db_key)
+    );
+    assert_eq!(timing_asked(&second).as_deref(), Some("NTP"));
+    assert_one_clock_keeps_syncing(&listener);
+    events.drain(&sender);
+    assert_eq!(
+        ptp_warnings(&events, &db_key),
+        1,
+        "{:?}",
+        events.of(&db_key)
+    );
+    assert_eq!(ptp_warnings(&events, &da.key), 0);
+    assert_eq!(
+        states_of(&events, &da.key),
+        [SpeakerState::Connecting, SpeakerState::Playing]
+    );
+    sender.shutdown();
 }
 
 // covers: P179
