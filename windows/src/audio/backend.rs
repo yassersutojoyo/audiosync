@@ -143,7 +143,7 @@ pub struct AirPlayInfo {
     pub enabled: bool,
     /// The volume slider position, 0 to 100.
     pub volume: f64,
-    /// Its own delay d_s in milliseconds, 0 to 3000.
+    /// Its own delay d_s in milliseconds, 0 to 20 000.
     pub delay_ms: f64,
     /// Whether it plays right now.
     pub playing: bool,
@@ -750,7 +750,7 @@ pub trait AudioBackend {
     fn set_airplay_volume(&mut self, id: &str, position: f64);
 
     /// Sets an AirPlay speaker's own delay d_s in milliseconds, live. A value
-    /// that isn't finite is ignored; others are clamped to 0 to 3000.
+    /// that isn't finite is ignored; others are clamped to 0 to 20 000.
     fn set_airplay_delay(&mut self, id: &str, delay_ms: f64);
 
     /// The AirPlay sender's base latency L_s in milliseconds, or `None`

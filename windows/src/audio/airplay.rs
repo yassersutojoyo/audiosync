@@ -604,7 +604,7 @@ pub fn airplay_volume(position: f64, master: f64) -> Volume {
     }
 }
 
-/// A delay setting as the sender's d_s, 0 to 3000 ms.
+/// A delay setting as the sender's d_s, 0 to 20 000 ms.
 fn speaker_delay(delay_ms: f64) -> Duration {
     Duration::from_secs_f64(delay_ms.clamp(0.0, MAX_DELAY.as_secs_f64() * 1000.0) / 1000.0)
 }
@@ -635,7 +635,7 @@ struct Settings {
     enabled: bool,
     /// The slider position, 0 to 100.
     volume: f64,
-    /// d_s in ms, 0 to 3000.
+    /// d_s in ms, 0 to 20 000.
     delay_ms: f64,
 }
 
@@ -4438,7 +4438,7 @@ pub mod tests {
         airplay.set_volume(&id, 50.0);
         airplay.set_master(50.0);
         airplay.set_delay(&id, 120.0);
-        airplay.set_delay(&id, 9000.0);
+        airplay.set_delay(&id, 25_000.0);
         airplay.set_volume(&id, 0.0);
         assert_eq!(
             fake.take_calls(),
@@ -4446,11 +4446,41 @@ pub mod tests {
                 Call::Volume(id.clone(), Volume::Db(-15.0)),
                 Call::Volume(id.clone(), Volume::Db(-22.5)),
                 Call::Delay(id.clone(), Duration::from_millis(120)),
-                Call::Delay(id.clone(), Duration::from_millis(3000)),
+                Call::Delay(id.clone(), Duration::from_millis(20_000)),
                 Call::Volume(id.clone(), Volume::Muted),
             ]
         );
-        assert_eq!(airplay.speakers()[0].delay_ms, 3000.0);
+        assert_eq!(airplay.speakers()[0].delay_ms, 20_000.0);
+    }
+
+    #[test]
+    fn a_delay_up_to_twenty_seconds_reaches_the_sender_in_full() {
+        // Calibrate All gives an AirPlay row up to the core's 20 s (P99).
+        assert_eq!(
+            MAX_DELAY.as_secs_f64() * 1000.0,
+            audiosync_core::policy::delay::MAX_DELAY_MS
+        );
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.take_calls();
+        airplay.set_delay(&id, 13_000.0);
+        airplay.set_hold_back(4000.0);
+        airplay.set_hold_back(9000.0);
+        assert_eq!(
+            fake.take_calls(),
+            [
+                Call::Delay(id.clone(), Duration::from_millis(13_000)),
+                Call::Delay(id.clone(), Duration::from_millis(17_000)),
+                Call::Delay(id.clone(), Duration::from_millis(20_000)),
+            ]
+        );
+        assert_eq!(airplay.speakers()[0].delay_ms, 13_000.0);
     }
 
     #[test]
@@ -4510,7 +4540,7 @@ pub mod tests {
             [
                 Call::Delay(id.clone(), Duration::from_millis(1200)),
                 Call::Delay(id.clone(), Duration::from_millis(1450)),
-                Call::Delay(id.clone(), Duration::from_millis(3000)),
+                Call::Delay(id.clone(), Duration::from_millis(5200)),
                 Call::Delay(id.clone(), Duration::from_millis(200)),
             ]
         );

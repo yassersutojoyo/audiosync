@@ -152,7 +152,7 @@ extern "C" {
 #define ASC_AIRPLAY_PAIRINGS_NEWER -3   /* a newer AudioSync wrote it: ignored and left as it is */
 
 /* The largest hold-back asc_airplay_set_hold_back applies, in ms: the sender's limit on a speaker's delay. */
-#define ASC_AIRPLAY_MAX_DELAY_MS 3000
+#define ASC_AIRPLAY_MAX_DELAY_MS 20000
 
 /* The rate of every Cast stream; the Cast input resamples the capture to it. */
 #define ASC_CAST_RATE 48000

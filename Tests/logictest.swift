@@ -4533,9 +4533,10 @@ do {
                 cast + NetworkHoldBack.castMs(airPlay: l, cast: cast),
                 offsets.keys.sorted().map { (holds[$0] ?? .nan) - offsets[$0]! })
     }
-    // Cast later than L by 1.25 s and by the full 3 s limit, earlier by
-    // 0.75 s and by all of L, and equal.
-    let cases: [(l: Double, cast: Double)] = [(1750, 3000), (1750, 4750), (1750, 1000), (2000, 0), (1750, 1750)]
+    // Cast later than L by 1.25 s, 3 s and 13 s, earlier by 0.75 s and by
+    // all of L, and equal.
+    let cases: [(l: Double, cast: Double)] = [(1750, 3000), (1750, 4750), (1750, 14_750), (1750, 1000), (2000, 0),
+                                              (1750, 1750)]
     let spreads = cases.map { c -> Double in
         let h = heard(l: c.l, cast: c.cast)
         let all = [h.airPlay, h.cast] + h.locals
@@ -4547,13 +4548,10 @@ do {
             && NetworkHoldBack.airPlayMs(airPlay: 1750, cast: nil) == 0 && NetworkHoldBack.castMs(airPlay: 1750, cast: nil) == 0
             && NetworkHoldBack.airPlayMs(airPlay: 1750, cast: .nan) == 0 && NetworkHoldBack.castMs(airPlay: .nan, cast: 0) == 0,
           "cast+airplay: nothing waits unless both are chosen")
-    let past = heard(l: 1750, cast: 6250)
-    let wanted = NetworkHoldBack.airPlayMs(airPlay: 1750, cast: 6250)
-    check(past.airPlay == 1750 + NetworkHoldBack.airPlayLimitMs && NetworkHoldBack.airPlayLimitMs == 3000
-            && past.cast - past.airPlay == NetworkHoldBack.airPlayAheadMs(wanted)
-            && past.locals.allSatisfy { abs($0 - past.cast) < 0.5 },
-          "cast+airplay: past the sender's 3000 ms limit AirPlay plays ahead of the others by what the notice says",
-          "\(past)")
+    check(NetworkHoldBack.airPlayLimitMs == 20_000
+            && NetworkHoldBack.airPlayAppliedMs(13_000) == 13_000 && NetworkHoldBack.airPlayAheadMs(13_000) == 0
+            && NetworkHoldBack.airPlayAppliedMs(23_000) == 20_000 && NetworkHoldBack.airPlayAheadMs(23_000) == 3000,
+          "cast+airplay: the sender holds AirPlay back up to 20 000 ms and past that plays ahead by the rest")
 
     let kitchen = "kitchen-1"
     var ahead = AirPlayAheadNotice()
@@ -4578,7 +4576,7 @@ do {
             && ahead.update(device: nil, aheadMs: 60) == AirPlayAheadNotice.Step(clear: kitchen, post: nil),
           "cast+airplay: a small lead reads as 0.1 s, and the notice clears when the Cast speaker goes off")
     let text = t.airPlayAheadOfCast(tenths: 15, speaker: "Kitchen")
-    check(text == "AirPlay speakers can wait at most 3 s for a Google Cast speaker, so they play about 1.5 s ahead of "
+    check(text == "AirPlay speakers can wait at most 20 s for a Google Cast speaker, so they play about 1.5 s ahead of "
             + "Kitchen. Lower its offset to keep them together." && !text.contains("\u{2014}")
             && t.airPlayAheadOfCast(tenths: 20, speaker: "Den").contains("about 2.0 s ahead of Den"),
           "cast+airplay: the notice says how far ahead, with no em dash")

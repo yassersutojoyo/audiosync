@@ -4922,7 +4922,7 @@ mod tests {
         };
         assert_eq!(
             notice_text(&strings, &ahead).as_str(),
-            "AirPlay speakers can wait at most 3 s for a Google Cast speaker, so they play \
+            "AirPlay speakers can wait at most 20 s for a Google Cast speaker, so they play \
              about 1.5 s ahead of Kitchen. Lower its offset to keep them together."
         );
         assert_eq!(

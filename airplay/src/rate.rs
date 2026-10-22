@@ -57,7 +57,7 @@ const MIN_SLOPE_SPAN: f64 = 10.0;
 const CORRECTION_FRAMES: f64 = 10.0 * NOMINAL_RATE;
 /// The share of R̂ that steering the offset may take: 50 ppm.
 const MAX_CORRECTION: f64 = 50e-6;
-/// Segments kept for c(n) of past frames: well over the 3 s largest delay
+/// Segments kept for c(n) of past frames: well over the 20 s largest delay
 /// plus the 2 s largest latency that sync packets look back.
 const KEPT_SEGMENTS: usize = 64;
 /// Fit points kept: 30 s at one per 8 ms, and some room.

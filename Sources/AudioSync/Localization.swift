@@ -901,7 +901,7 @@ struct UIStrings {
     /// The notice when the AirPlay speakers can't wait as long as the Cast
     /// speaker's offset asks; `tenths` of a second, shown as "1.5".
     func airPlayAheadOfCast(tenths: Int, speaker: String) -> String {
-        "AirPlay speakers can wait at most 3 s for a Google Cast speaker, so they play about \(tenths / 10).\(tenths % 10) s ahead of \(speaker). Lower its offset to keep them together."
+        "AirPlay speakers can wait at most 20 s for a Google Cast speaker, so they play about \(tenths / 10).\(tenths % 10) s ahead of \(speaker). Lower its offset to keep them together."
     }
 
     /// The notice when a Cast speaker can't play, or stopped, and is off.

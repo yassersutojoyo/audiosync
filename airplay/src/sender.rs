@@ -148,7 +148,7 @@ impl Default for SenderConfig {
 /// How the host wants a speaker played.
 #[derive(Clone, PartialEq)]
 pub struct SpeakerOptions {
-    /// d_s, 0 to 3000 ms (P99).
+    /// d_s, 0 to 20 000 ms (P99).
     pub delay: Duration,
     /// The speaker volume (P118).
     pub volume: Volume,
@@ -464,7 +464,7 @@ impl Sender {
     }
 
     /// The delay a host gives a local output with trim `local` (0 to
-    /// 3000 ms) so it plays in step with the speakers: L + d_local, counted
+    /// 20 000 ms) so it plays in step with the speakers: L + d_local, counted
     /// on the sender clock from c(n) (P114).
     pub fn local_output_delay(&self, local: Duration) -> Duration {
         self.latency() + local.min(MAX_DELAY)
@@ -658,7 +658,7 @@ impl Sender {
         self.command(Command::ForgetHomeKit(key.clone()));
     }
 
-    /// Sets a speaker's delay d_s, 0 to 3000 ms (P99, P100).
+    /// Sets a speaker's delay d_s, 0 to 20 000 ms (P99, P100).
     pub fn set_delay(&self, key: &DeviceKey, delay: Duration) {
         self.command(Command::SetDelay(key.clone(), delay));
     }

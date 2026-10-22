@@ -78,9 +78,9 @@ pub const VERSION: u32 = 2;
 /// The first format version with offsets relative to the reference.
 pub const OFFSETS_VERSION: u32 = 2;
 
-/// The longest own delay an AirPlay speaker takes, in milliseconds (the
-/// sender's limit).
-pub const MAX_AIRPLAY_DELAY_MS: f64 = 3000.0;
+/// The longest own delay an AirPlay speaker takes, in milliseconds: the
+/// sender's limit (P99), the core's delay range.
+pub const MAX_AIRPLAY_DELAY_MS: f64 = MAX_DELAY_MS;
 
 /// The most entries kept in each list or map: far more than anyone has
 /// devices, small enough that a damaged file can't make the app slow.
@@ -162,7 +162,7 @@ pub struct SavedSpeaker {
     pub volume: f64,
     /// The delay in milliseconds: for an output its offset relative to the
     /// reference, −2000 to +20 000 (0 to 20 000 in format 1, where it was
-    /// the output's own trim); 0 to 3000 for an AirPlay speaker's own delay.
+    /// the output's own trim); 0 to 20 000 for an AirPlay speaker's own delay.
     pub delay_ms: f64,
 }
 
@@ -970,7 +970,7 @@ mod tests {
                 "": {"enabled": true},
                 "quiet": {"volume": -5, "delay_ms": -20}
             },
-            "airplay": {"far": {"delay_ms": 5000, "volume": 101}},
+            "airplay": {"far": {"delay_ms": 25000, "volume": 101}, "near": {"delay_ms": 13000}},
             "auto_connect": ["lc:loud", "nonsense", "ap:", "zz:loud"],
             "groups": [
                 {"id": "group:1", "name": "Empty", "members": ["bad"]},
@@ -1007,7 +1007,11 @@ mod tests {
             })
         );
         assert!(!settings.outputs.contains_key(""));
-        assert_eq!(settings.airplay["far"].delay_ms, MAX_AIRPLAY_DELAY_MS);
+        assert_eq!(settings.airplay["far"].delay_ms, 20_000.0);
+        assert_eq!(
+            settings.airplay["near"].delay_ms, 13_000.0,
+            "a calibrated delay stays"
+        );
         assert_eq!(settings.airplay["far"].volume, 100.0);
         assert_eq!(
             settings.auto_connect,
