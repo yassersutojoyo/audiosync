@@ -825,6 +825,9 @@ impl Worker {
     /// Sends a recovering session's events straight to the host (C80,
     /// C81), after the held ones; the worker sits in the session's retries
     /// until they end, so it can't flush them itself.
+    // The sink hands an undelivered event back by value so the session keeps
+    // it; boxing it would allocate for every event.
+    #[allow(clippy::result_large_err)]
     fn recovery_sink(&self, attempt: AttemptId, device: DeviceId) -> EventSink {
         let outbox = self.outbox.clone();
         let held = Arc::clone(&self.held);
