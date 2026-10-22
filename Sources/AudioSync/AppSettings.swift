@@ -46,6 +46,8 @@ struct AppSettings: Equatable {
         static let equalizer = "equalizerSettings"
         static let webRemote = "webRemoteEnabled"
         static let webRemotePort = "webRemotePort"
+        /// The AirPlay 2 switch (P2), off when missing; read once per launch.
+        static let airPlay2 = "airPlay2Enabled"
         /// One delay in ms for every local speaker, from before delays were
         /// per speaker: where a speaker without its own delay started (S77).
         /// Read once by the migration (S179), never written.
@@ -101,6 +103,14 @@ struct AppSettings: Equatable {
     var whenSourceQuits = WhenSourceQuits.stop
     var webRemote = false
     var webRemotePort = RemotePort.default
+    var airPlay2 = false
+
+    /// Whether the sender runs AirPlay 2: the setting, or AUDIOSYNC_AIRPLAY2=1
+    /// in the environment, which the core reads too and which CI and debug
+    /// runs still use (P2).
+    static func airPlay2On(setting: Bool, environment: [String: String]) -> Bool {
+        setting || environment["AUDIOSYNC_AIRPLAY2"] == "1"
+    }
     /// D0 of the migration: what a local speaker without a delay of its own
     /// played with before the local delay model (S77, S179).
     var defaultDelayMs = AppSettings.standardDelayMs
@@ -134,6 +144,7 @@ struct AppSettings: Equatable {
         s.whenSourceQuits = WhenSourceQuits(defaultsValue: read(Keys.whenSourceQuits) as? String)
         s.webRemote = read(Keys.webRemote) as? Bool ?? false
         s.webRemotePort = read(Keys.webRemotePort).flatMap(number).flatMap(RemotePort.stored) ?? RemotePort.default
+        s.airPlay2 = read(Keys.airPlay2) as? Bool ?? false
         return s
     }
 
@@ -246,6 +257,8 @@ struct SettingsStore {
     func save(webRemote: Bool) { write(webRemote, Keys.webRemote) }
 
     func save(webRemotePort: Int) { write(webRemotePort, Keys.webRemotePort) }
+
+    func save(airPlay2: Bool) { write(airPlay2, Keys.airPlay2) }
 
     /// The AirPlay delay (S178).
     func save(airPlayDelay: AirPlayDelay) {

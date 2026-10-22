@@ -1230,6 +1230,13 @@ typedef struct AscAirPlayEvent {
 AscAirPlay *asc_airplay_create(void);
 
 /*
+ * asc_airplay_create with the app's AirPlay 2 setting: AirPlay 2 is on when
+ * airplay2 is true or when AUDIOSYNC_AIRPLAY2=1 is set; off, the sender makes
+ * no AirPlay 2 traffic.
+ */
+AscAirPlay *asc_airplay_create_with_airplay2(bool airplay2);
+
+/*
  * Stops the sender and frees it: every speaker is torn down and its threads
  * end within about 2 s, which this call waits for, so call it off the main
  * thread. Takes the address of the host's pointer and sets that pointer to
