@@ -318,8 +318,8 @@ fn with_stamps_a_fast_speaker_clock_is_trimmed_within_a_millisecond_all_hour() {
     // bench's speakers, and 100 ppm, five times what a trim capped at
     // ±20 ppm would follow. With blocks stamped at the exact times, every
     // callback's timing error stays within the trim's 15-frame dead zone
-    // plus a frame; like a host whose stamps come up to 2 ms late,
-    // within a millisecond (48 frames). Either way the converter is trimmed
+    // plus a frame; with stamps up to 2 ms late, within a millisecond
+    // (48 frames). Either way the converter is trimmed
     // one way only, by what the clock gained, the dead band never acts, and
     // the output on the host's clock is never trimmed and never moves.
     for (ppb, exact_stamps) in [
