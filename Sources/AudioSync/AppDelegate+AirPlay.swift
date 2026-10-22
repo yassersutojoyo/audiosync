@@ -227,6 +227,7 @@ extension AppDelegate {
                                       shows: receiverShows)
         sendCastTrackInfo(now: now)
         if let fields = step.fields { nativeAirPlay?.setTrack(fields) }
+        if step.sendsPosition { nativeAirPlay?.setProgress(step.position) }
         if let date = step.recheckAt { recheckTrackInfo(at: date) }
         guard let picture = step.picture else { return }
         // Encoded on the sender's queue, so it gets an image of its own.

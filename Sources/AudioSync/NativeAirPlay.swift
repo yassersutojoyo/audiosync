@@ -147,6 +147,17 @@ final class NativeAirPlay {
         }
     }
 
+    /// The track's position for the receivers that show progress, nil for
+    /// none (P126); it goes out with the track set last, and a new track
+    /// drops it in the core. Main queue.
+    func setProgress(_ position: NowPlayingMonitor.Position?) {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            let elapsed = position?.elapsed(at: Date()) ?? 0
+            _ = asc_airplay_set_progress(handle, elapsed * 1000, (position?.length ?? 0) * 1000)
+        }
+    }
+
     /// The artwork for the receivers that show it, scaled and encoded as a
     /// small JPEG on the queue (`TrackMetadata.jpeg`), and sent with the
     /// track set last. Main queue.

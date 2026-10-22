@@ -2257,6 +2257,54 @@ do {
     check(nothing(u), "sent track info: after the wait, the icon isn't sent again")
 }
 
+// MARK: Track progress for receivers that show it — a jump is news, running on isn't (P126)
+do {
+    typealias Position = NowPlayingMonitor.Position
+    let start = Date(timeIntervalSinceReferenceDate: 0)
+    let at30 = Position(elapsed: 30, length: 200, readAt: start, playing: true)
+    check(at30.elapsed(at: start + 10) == 40 && at30.elapsed(at: start + 500) == 200,
+          "progress: a playing track runs on from its reading, up to its length")
+    let paused = Position(elapsed: 30, length: 200, readAt: start, playing: false)
+    check(paused.elapsed(at: start + 10) == 30, "progress: a paused track stays where it was read")
+    check(!Position.jumped(from: at30, to: Position(elapsed: 32.5, length: 200, readAt: start + 2, playing: true))
+            && !Position.jumped(from: nil, to: nil),
+          "progress: a reading where the track ran on to is no news")
+    check(Position.jumped(from: at30, to: Position(elapsed: 90, length: 200, readAt: start + 2, playing: true))
+            && Position.jumped(from: at30, to: Position(elapsed: 5, length: 200, readAt: start + 2, playing: true)),
+          "progress: a seek forward or back is news")
+    check(Position.jumped(from: at30, to: Position(elapsed: 32, length: 180, readAt: start + 2, playing: true))
+            && Position.jumped(from: at30, to: nil) && Position.jumped(from: nil, to: at30),
+          "progress: another length, or a position coming or going, is news")
+
+    let song = TrackMetadata.Fields(title: "Song", artist: "Band", album: "Record")
+    let next = TrackMetadata.Fields(title: "Next", artist: "Band", album: "Record")
+    let spotify = NowPlayingMonitor.spotify
+    let track = NowPlayingMonitor.Track(bundleID: spotify, appName: "Spotify", title: "Song", artist: "Band",
+                                        album: "Record", isPlaying: false, artwork: nil, position: paused)
+    let untitled = TrackMetadata.Fields(title: "AudioSync", artist: "Live audio", album: "From your Mac")
+    check(ReceiverInfo.decide(track: track, source: .app(bundleID: spotify), sourceName: "Spotify",
+                              untitled: untitled).position == paused
+            && ReceiverInfo.decide(track: track, source: .system, sourceName: nil, untitled: untitled).position == nil,
+          "progress: only a track that shows takes its position to the receivers")
+
+    var sent = SentTrackInfo()
+    func shows(_ fields: TrackMetadata.Fields, _ position: Position?) -> ReceiverInfo {
+        ReceiverInfo(fields: fields, artwork: .neutral, position: position)
+    }
+    var u = sent.update(shows(song, at30), artwork: nil, icon: nil, now: start)
+    check(u.sendsPosition && u.position == at30, "progress: a new track's position goes out with it")
+    u = sent.update(shows(song, at30), artwork: nil, icon: nil, now: start + 1)
+    check(!u.sendsPosition, "progress: the same reading again gives the sender nothing")
+    u = sent.update(shows(song, paused), artwork: nil, icon: nil, now: start + 2)
+    check(u.sendsPosition && u.position == paused, "progress: a pause or a seek goes out")
+    u = sent.update(shows(next, nil), artwork: nil, icon: nil, now: start + 3)
+    check(u.fields == next && !u.sendsPosition,
+          "progress: a new track without a length sends none: the new track dropped it in the core")
+    u = sent.update(shows(song, paused), artwork: nil, icon: nil, now: start + 4)
+    check(u.fields == song && u.sendsPosition && u.position == paused,
+          "progress: back to a track whose reading went out before: the new track dropped it, so it goes again")
+}
+
 // MARK: When track info goes to the app's own sender (TrackInfoFeed, the AppDelegate wiring)
 do {
     let cover = NSImage(size: NSSize(width: 1, height: 1)), icon = NSImage(size: NSSize(width: 1, height: 1))
