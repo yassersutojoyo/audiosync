@@ -65,6 +65,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var nativeAirPlay: NativeAirPlay?
     /// When AudioSync's own sender may start again after a start failed.
     var nativeStarts = NativeSenderStarts()
+    /// Whether the PTP port notice shows; each new sender starts it afresh.
+    var ptpPortNotice = PtpPortNotice()
 
     // MARK: - Google Cast speakers (`+Cast`)
 

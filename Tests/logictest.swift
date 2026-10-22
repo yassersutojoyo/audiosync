@@ -1660,6 +1660,27 @@ do {
             && NativeSpeakerEvent.warning(id: "Z9", ptpPortsTaken: false, detail: "JackDisconnected").logLine(name: names)
             == "[AudioSync] native AirPlay: Z9 warning: JackDisconnected",
           "native airplay: volume and warning log lines")
+
+    check(!PtpPortNotice.shown(portsTaken: false, played: false, timingRows: 2)
+            && PtpPortNotice.shown(portsTaken: true, played: false, timingRows: 0)
+            && !PtpPortNotice.shown(portsTaken: true, played: true, timingRows: 0)
+            && PtpPortNotice.shown(portsTaken: true, played: true, timingRows: 1),
+          "ptp notice: shows once the ports are reported taken, until a speaker plays while no row needs PTP timing")
+    var ptp = PtpPortNotice()
+    ptp.turnedOff("native:H1", timing: true)
+    check(!ptp.shown, "ptp notice: a speaker off for PTP timing with no port clash reported says nothing about ports")
+    ptp.reported()
+    ptp.playing("native:N1")
+    check(ptp.shown, "ptp notice: an NTP speaker that plays leaves it while a PTP speaker is off for timing")
+    ptp.turnedOff("native:H1", timing: false)
+    check(!ptp.shown, "ptp notice: it clears once no row is off for PTP timing")
+    ptp.turnedOff("native:H2", timing: true)
+    check(ptp.shown, "ptp notice: it comes back when another speaker goes off for PTP timing, though reported once")
+    ptp.playing("native:H2")
+    check(!ptp.shown, "ptp notice: the PTP speaker playing clears it")
+    ptp.turnedOff("native:H1", timing: true)
+    ptp.listed(["native:N1"])
+    check(!ptp.shown && ptp.timingOff.isEmpty, "ptp notice: a row that leaves the list takes its timing reason along")
 }
 
 check(AudioDevices.isVirtual(transport: kAudioDeviceTransportTypeAirPlay), "devices: macOS's own AirPlay output is hidden by default")
