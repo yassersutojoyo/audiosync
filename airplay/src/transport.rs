@@ -35,11 +35,13 @@
 //! a blocked send when the socket is shut down, so that one ends at its send
 //! timeout, and nobody waits for it.
 //!
-//! The UDP threads receive without a timeout (P86): on Windows a receive
-//! that times out as a datagram lands can drop that datagram, which would
-//! lose a resend or timing request. Closing wakes them instead with an
-//! empty datagram each socket sends itself ([`wake`]); the threads drop
-//! empty datagrams unread and uncounted.
+//! The UDP threads receive with only a long backstop timeout
+//! ([`UDP_BACKSTOP`], P86): on Windows a receive that times out as a
+//! datagram lands can drop that datagram, which would lose a resend or
+//! timing request. Closing wakes them instead with an empty datagram each
+//! socket sends itself ([`wake`]); the threads drop empty datagrams unread
+//! and uncounted. A wake that can't be sent (the local address is gone)
+//! leaves the thread to its backstop.
 //!
 //! A pairing (P47) needs only the TCP connection: [`RtspIo`] runs the same
 //! RTSP reader and writer threads, without UDP sockets.
@@ -75,6 +77,10 @@ use crate::stream::{LocalSocket, SpeakerCounters};
 /// How often a blocked RTSP reader looks at its stop flag: the longest it
 /// outlives its session's close.
 pub const POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// How long a UDP receive waits before its thread looks at the stop flag
+/// again: the longest a UDP thread outlives a close whose wake-up couldn't
+/// be sent. Long, so a timed-out receive racing a datagram stays rare.
+pub(crate) const UDP_BACKSTOP: Duration = Duration::from_secs(2);
 /// The longest one UDP send may block before it is given up.
 const UDP_SEND_TIMEOUT: Duration = Duration::from_millis(20);
 /// The longest one RTSP write may block; the session's own response
@@ -254,6 +260,7 @@ impl SessionIo {
         let control = UdpSocket::bind(bind_at)?;
         let timing = UdpSocket::bind(bind_at)?;
         for socket in [&control, &timing] {
+            socket.set_read_timeout(Some(UDP_BACKSTOP))?;
             socket.set_write_timeout(Some(UDP_SEND_TIMEOUT))?;
         }
         let connection = Connection {
@@ -360,7 +367,8 @@ impl SessionIo {
 
     /// Closes the connection and stops the threads. The handles come back
     /// for the caller to join; the UDP threads end once their wake-up
-    /// arrives, the RTSP reader within [`POLL_INTERVAL`].
+    /// arrives (within [`UDP_BACKSTOP`] if it can't be sent), the RTSP
+    /// reader within [`POLL_INTERVAL`].
     pub(crate) fn close(mut self) -> Vec<JoinHandle<()>> {
         self.stop_all();
         std::mem::take(&mut self.threads)
@@ -491,6 +499,7 @@ impl PtpIo {
         };
         let event = UdpSocket::bind(SocketAddr::new(any, ports.event))?;
         let general = UdpSocket::bind(SocketAddr::new(any, ports.general))?;
+        event.set_read_timeout(Some(UDP_BACKSTOP))?;
         for socket in [&event, &general] {
             socket.set_write_timeout(Some(UDP_SEND_TIMEOUT))?;
         }
@@ -542,8 +551,12 @@ impl Drop for PtpIo {
 /// Sends `socket` an empty datagram from itself, so a receive blocked on it
 /// returns and its thread sees the stop flag. A socket bound to every
 /// address is reached over loopback. When the send fails (the local
-/// address is gone) the thread stays blocked, holding only its socket.
+/// address is gone) the thread ends at its [`UDP_BACKSTOP`] instead.
 fn wake(socket: &UdpSocket) {
+    #[cfg(test)]
+    if tests::WAKE_FAILS.with(std::cell::Cell::get) {
+        return;
+    }
     let Ok(mut address) = socket.local_addr() else {
         return;
     };
@@ -685,11 +698,15 @@ fn control_loop(
     }
 }
 
-/// After a failed receive: an interrupted one just loops back; a reset
-/// (Windows reports one on the next receive after an ICMP unreachable) or
-/// any other error pauses briefly so a broken socket can't spin.
+/// After a failed receive: the backstop timeout or an interrupted one just
+/// loops back to the stop flag; a reset (Windows reports one on the next
+/// receive after an ICMP unreachable) or any other error pauses briefly so
+/// a broken socket can't spin.
 fn idle_after(error: &io::Error) {
-    if error.kind() != io::ErrorKind::Interrupted {
+    if !matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+    ) {
         thread::sleep(Duration::from_millis(5));
     }
 }
@@ -772,6 +789,12 @@ mod tests {
     use std::net::TcpListener;
 
     const WAIT: Duration = Duration::from_secs(2);
+
+    thread_local! {
+        /// Makes [`wake`] on this thread send nothing, as when the local
+        /// address is gone.
+        pub(super) static WAKE_FAILS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
 
     /// A driver that panics on the events `bug` picks, as a bug in a
     /// thread's work would, and passes every other event on.
@@ -1042,7 +1065,11 @@ mod tests {
 
     /// Waits until every thread in `threads` has ended, or `WAIT` passes.
     fn all_end(threads: &[JoinHandle<()>]) -> bool {
-        let deadline = Instant::now() + WAIT;
+        all_end_within(threads, WAIT)
+    }
+
+    fn all_end_within(threads: &[JoinHandle<()>], wait: Duration) -> bool {
+        let deadline = Instant::now() + wait;
         while threads.iter().any(|thread| !thread.is_finished()) {
             if Instant::now() >= deadline {
                 return false;
@@ -1052,10 +1079,11 @@ mod tests {
         true
     }
 
-    // The UDP sockets receive without a timeout, so no request can land as
-    // a timed receive gives up (on Windows that drops it): every request of
-    // repeated bursts is answered or handed on exactly once. Closing still
-    // ends every thread at once, woken by datagrams that aren't counted.
+    // The UDP sockets receive with only a long backstop timeout, so a
+    // request rarely lands as a timed receive gives up (on Windows that
+    // drops it): every request of repeated bursts is answered or handed on
+    // exactly once. Closing still ends every thread at once, woken by
+    // datagrams that aren't counted.
     // covers: P86, P91, P144
     #[test]
     fn no_request_of_a_burst_is_lost_and_closing_wakes_the_udp_threads() {
@@ -1077,7 +1105,8 @@ mod tests {
         )
         .expect("session I/O");
         for socket in [&io.control, &io.timing] {
-            assert_eq!(socket.read_timeout().expect("timeout"), None);
+            let timeout = socket.read_timeout().expect("timeout").expect("a backstop");
+            assert!(timeout >= Duration::from_secs(1), "{timeout:?}");
         }
         let Connection {
             local: sender,
@@ -1132,7 +1161,7 @@ mod tests {
         );
     }
 
-    // The PTP event socket receives without a timeout too, and closing the
+    // The PTP event socket receives with the long backstop too, and closing the
     // service, or dropping it, wakes its thread over loopback although the
     // socket is bound to every address.
     // covers: P158
@@ -1144,12 +1173,52 @@ mod tests {
         };
         let notify = |_: IoEvent| true;
         let io = PtpIo::open(IpAddr::from([127, 0, 0, 1]), ports, notify).expect("PTP I/O");
-        assert_eq!(io.event.read_timeout().expect("timeout"), None);
+        let timeout = io
+            .event
+            .read_timeout()
+            .expect("timeout")
+            .expect("a backstop");
+        assert!(timeout >= Duration::from_secs(1), "{timeout:?}");
         let threads = io.close();
         assert!(all_end(&threads), "closing wakes the PTP thread");
         let mut io = PtpIo::open(IpAddr::from([127, 0, 0, 1]), ports, notify).expect("PTP I/O");
         let threads = std::mem::take(&mut io.threads);
         drop(io);
         assert!(all_end(&threads), "dropping wakes the PTP thread");
+    }
+
+    // A close whose wake-up can't be sent, as when the session's local
+    // address went away with the network, still ends the session's UDP
+    // threads and the PTP thread within the backstop, not never.
+    // covers: P86, P158
+    #[test]
+    fn udp_threads_end_within_the_backstop_when_the_wake_up_cant_be_sent() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let tcp = TcpStream::connect(listener.local_addr().expect("address")).expect("connect");
+        let (_receiver_end, _) = listener.accept().expect("accept");
+        let notify = |_: IoEvent| true;
+        let (io, _) = SessionIo::open(
+            SessionKey(7),
+            1,
+            tcp,
+            SenderClock::new(Instant::now()),
+            Arc::new(SpeakerCounters::default()),
+            notify,
+        )
+        .expect("session I/O");
+        let ports = crate::ptp::PtpPorts {
+            event: 0,
+            general: 0,
+        };
+        let ptp = PtpIo::open(IpAddr::from([127, 0, 0, 1]), ports, notify).expect("PTP I/O");
+        WAKE_FAILS.with(|fails| fails.set(true));
+        let mut threads = io.close();
+        threads.extend(ptp.close());
+        WAKE_FAILS.with(|fails| fails.set(false));
+        let within = UDP_BACKSTOP + Duration::from_secs(1);
+        assert!(
+            all_end_within(&threads, within),
+            "every thread ends within the backstop"
+        );
     }
 }
