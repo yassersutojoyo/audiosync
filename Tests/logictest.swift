@@ -4403,6 +4403,15 @@ do {
     check(offsets.setOffset(kitchen, ms: 250) == nil && offsets.setOffset(kitchen, ms: 30_000) == 20_000
             && offsets.offset(of: kitchen) == 20_000, "cast: an offset is stored clamped, and only when it changes")
 
+    var seeded = CastModel()
+    seeded.apply(.appeared(CastDevice(id: "hall", name: "Hall"), offsetMs: 500))
+    check(seeded.offsets["hall"] == 500, "cast: a device's first announcement seeds the offset its memory holds")
+    _ = seeded.setOffset("hall", ms: 300)
+    seeded.apply(.changed(CastDevice(id: "hall", name: "Hall"), offsetMs: 500))
+    check(seeded.offsets["hall"] == 300,
+          "cast: a memory offset read before the user's change and delivered after it doesn't overwrite it",
+          "\(seeded.offsets)")
+
     let start = Date()
     var listed = CastModel()
     check(listed.listState(now: start) == .quiet, "cast: no note before the search starts")
