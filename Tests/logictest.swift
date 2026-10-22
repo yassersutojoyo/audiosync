@@ -1644,6 +1644,22 @@ do {
             && NativeSpeakerEvent.timeline(latencyMs: 1750, restarted: true).logLine(name: names)
             == "[AudioSync] native AirPlay: timeline: L = 1750 ms, restarted",
           "native airplay: latency and timeline log lines")
+
+    var volumes = NativeAirPlayModel()
+    volumes.apply(.appeared(receiver("A1", "Kitchen", .available)))
+    check(volumes.apply(.volume(id: "A1", position: 80)) == nil,
+          "native airplay: a volume from a speaker the app didn't add moves no slider")
+    volumes.added("A1")
+    check(volumes.apply(.volume(id: "A1", position: 80)) == .volumeChanged("native:A1", 80),
+          "native airplay: a volume changed on the speaker moves its slider")
+    check(volumes.apply(.warning(id: "A1", ptpPortsTaken: true, detail: "PtpUnavailable")) == .ptpPortsTaken
+            && volumes.apply(.warning(id: "A1", ptpPortsTaken: false, detail: "JackDisconnected")) == nil,
+          "native airplay: of the warnings, only a PTP port clash becomes a notice")
+    check(NativeSpeakerEvent.volume(id: "A1", position: 79.6).logLine(name: names)
+            == "[AudioSync] native AirPlay: Kitchen (A1) volume changed on the speaker: slider at 80"
+            && NativeSpeakerEvent.warning(id: "Z9", ptpPortsTaken: false, detail: "JackDisconnected").logLine(name: names)
+            == "[AudioSync] native AirPlay: Z9 warning: JackDisconnected",
+          "native airplay: volume and warning log lines")
 }
 
 check(AudioDevices.isVirtual(transport: kAudioDeviceTransportTypeAirPlay), "devices: macOS's own AirPlay output is hidden by default")

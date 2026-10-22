@@ -126,6 +126,16 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_PASSWORD_NEEDED 7 /* a pairing needs the password (.error PASSWORD_REQUIRED) or got a wrong one (WRONG_PASSWORD, forgotten) */
 #define ASC_AIRPLAY_EVENT_PAIRING_FAILED 8  /* a pairing ended without credentials: .error (WRONG_PIN, NOT_RESPONDING, ...) */
 #define ASC_AIRPLAY_EVENT_PAIRED 9          /* paired, credentials stored; .detail "" or why they last this run only */
+#define ASC_AIRPLAY_EVENT_VOLUME 10         /* its volume was changed on the speaker itself: .volume, the slider position that plays at it */
+#define ASC_AIRPLAY_EVENT_WARNING 11        /* something to show; the session goes on: .warning, .detail for a debug log */
+
+/* What a warning reports (AscAirPlayEvent.warning). */
+#define ASC_AIRPLAY_WARNING_JACK_DISCONNECTED 1          /* nothing is plugged into its audio jack */
+#define ASC_AIRPLAY_WARNING_AUTH_SETUP_FAILED 2          /* POST /auth-setup failed */
+#define ASC_AIRPLAY_WARNING_REQUEST_FAILED 3             /* a volume, metadata, flush or keep-alive request failed */
+#define ASC_AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID 4 /* its pair-verify signature didn't check out */
+#define ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN 5            /* PTP port 319 or 320 can't be bound: receivers that need PTP can't play; once per sender */
+#define ASC_AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY 6         /* it has no address in the PTP service's family and plays on NTP */
 
 /* A speaker's state (AscAirPlayEvent.state). */
 #define ASC_AIRPLAY_STATE_CONNECTING 1 /* a session is starting */
@@ -1218,7 +1228,9 @@ typedef struct AscAirPlayEvent {
     double latency_ms;               /* a latency event's L + d_s, a timeline event's L */
     int64_t receiver_latency_frames; /* a latency event's Audio-Latency; -1 when it sent none */
     bool restarted;                  /* a timeline event after a restart */
-    const char *detail;              /* an error event's error, a failure event's panic location; for a debug log (no secrets) */
+    const char *detail;              /* an error or warning event's text, a failure event's panic location; for a debug log (no secrets) */
+    double volume;                   /* a volume event's slider position, 0 to 100 */
+    int32_t warning;                 /* a warning event's ASC_AIRPLAY_WARNING_* */
 } AscAirPlayEvent;
 
 /*
@@ -1298,6 +1310,17 @@ bool asc_airplay_remove_speaker(AscAirPlay *airplay, const char *id);
  * volume isn't finite.
  */
 bool asc_airplay_set_volume(AscAirPlay *airplay, const char *id, double volume);
+
+/*
+ * Asks every speaker added for its own volume, which someone may have changed
+ * on the speaker itself; a stereo pair or home theater group asks its leader.
+ * Only playing sessions answer. A level that moves a slider comes as
+ * ASC_AIRPLAY_EVENT_VOLUME and is never sent back to the speaker; a level read
+ * before the host last set the volume, or within 1 s of it, is dropped.
+ * Speakers that leave volume to the sender, and ones that turned a read down
+ * once, aren't asked.
+ */
+void asc_airplay_read_volumes(AscAirPlay *airplay);
 
 /*
  * Sets the master position (0 to 100), which scales every speaker's volume,

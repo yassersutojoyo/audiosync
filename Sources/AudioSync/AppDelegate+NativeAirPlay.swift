@@ -54,7 +54,7 @@ extension AppDelegate {
     private func nativeStartFinished(_ native: NativeAirPlay, started: Bool) {
         let news = nativeStarts.finished(started: started, at: Date())
         if started {
-            clearNotices([Notice.airplaySender])
+            clearNotices([Notice.airplaySender, Notice.airplayPtp])   // a new sender binds PTP anew
             resendTrackInfo()   // a new sender knows nothing of what plays
             // Its discovery raised the Local Network prompt, if any: the
             // probe may ask now, and an empty list counts from here.
@@ -143,6 +143,13 @@ extension AppDelegate {
                 clearNotices([SpeakerKey.make(id: id, airplay: true)])
             }
             pushModel()   // the row says it waits, or no longer
+        case .volumeChanged(let id, let position):
+            // Calibrate All Speakers keeps it silent and sets its volume back when the run ends.
+            guard calibrateAllRun?.silences(airPlay: id) != true else { return }
+            airplayVolume[id] = position
+            pushModel()
+        case .ptpPortsTaken:
+            postNotice(text.nativeAirPlayPtpPortsTaken, subject: Notice.airplayPtp)
         }
     }
 
