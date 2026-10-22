@@ -1147,6 +1147,17 @@ bool asc_calibration_sheet_replace(AscCalibrationSheet *sheet, AscCalibrationShe
 /* Frees a sheet. */
 void asc_calibration_sheet_destroy(AscCalibrationSheet *sheet);
 
+/*
+ * A Cast speaker's expected arrival (AscCalibrationSpeaker.latency_ms), which
+ * is also how long the music sent to it plays out, in ms: its stored offset
+ * plus hold_back_ms, the Cast feed's hold-back, plus 500 ms. With no stored
+ * offset (has_offset false, or an offset of 0 or less) it is hold_back_ms
+ * plus a guess by format, the session's ASC_CAST_FORMAT_: 3000 ms for WAV,
+ * 6000 ms for FLAC or a format not reported yet. The FLAC guess is derived,
+ * not measured. Never a delay for another output.
+ */
+double asc_calibration_cast_wait_ms(bool has_offset, double offset_ms, double hold_back_ms, int32_t format);
+
 /* ---- AirPlay sender (AudioSync's own, airplay/) ----------------------------- */
 
 /*

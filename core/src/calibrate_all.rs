@@ -1,4 +1,4 @@
-//! Calibrate All Speakers (S235 to S240): the reference and then every
+//! Calibrate All Speakers (S235 to S241): the reference and then every
 //! speaker that is on, one at a time, each measured twice against the
 //! reference with the microphone as S232 to S234 measure one output, and the
 //! results sheet the user applies, undoes or measures a row of again.
@@ -10,8 +10,9 @@
 
 use crate::calibrate::{self, GUARD_MS, MAX_RECORDING_FRAMES, Recording, Refusal, Refused};
 use crate::policy::delay::{
-    self, DEFAULT_AIRPLAY_DELAY_MS, MAX_DELAY_MS, MAX_OFFSET_MS, MIN_OFFSET_MS,
+    self, DEFAULT_AIRPLAY_DELAY_MS, MAX_DELAY_MS, MAX_HOLD_BACK_MS, MAX_OFFSET_MS, MIN_OFFSET_MS,
 };
+use audiosync_cast::audio::Codec;
 
 /// Recorded past the end of the sweep's expected arrival.
 pub const TAIL_SECONDS: f64 = 1.0;
@@ -20,6 +21,43 @@ pub const MAX_UNCERTAINTY_MS: f64 = 10.0;
 /// Above this spread the AirPlay speakers differ by more than one shared
 /// delay can make up for.
 pub const MAX_AIRPLAY_SPREAD_MS: f64 = 10.0;
+
+/// Added to a Cast speaker's measured offset for what the measurement
+/// leaves out, as for a local output (S232).
+pub const CAST_LATENCY_ALLOWANCE_MS: f64 = 500.0;
+/// How long a WAV stream already sent to a Cast speaker with no stored
+/// offset is taken to play on (S241): within the 2 to 5 s that users
+/// report for live WAV (CAST_SPEC C77a).
+pub const CAST_UNKNOWN_WAV_MS: f64 = 3000.0;
+/// The same for FLAC (S241). Derived, not measured: reports put the start
+/// later as the byte rate falls, and FLAC has about half of WAV's. G7
+/// replaces it with a measured figure.
+pub const CAST_UNKNOWN_FLAC_MS: f64 = 6000.0;
+
+/// How long after audio enters a Cast speaker's feed it is heard, in ms
+/// (S241): its stored offset plus the feed's hold-back plus
+/// [`CAST_LATENCY_ALLOWANCE_MS`]; with no offset stored (`None`, 0 or
+/// less, or not a number) the hold-back plus the guess for `format`, the
+/// session's codec, the longer guess while none is reported. It is the
+/// speaker's expected arrival (S235) and how long the music sent to it
+/// plays out; it never delays another output (C77).
+pub fn cast_wait_ms(offset_ms: Option<f64>, hold_back_ms: f64, format: Option<Codec>) -> f64 {
+    let hold_back_ms = if hold_back_ms.is_finite() {
+        hold_back_ms.clamp(0.0, MAX_HOLD_BACK_MS)
+    } else {
+        0.0
+    };
+    match offset_ms.filter(|ms| *ms > 0.0) {
+        Some(offset_ms) => offset_ms.min(MAX_DELAY_MS) + hold_back_ms + CAST_LATENCY_ALLOWANCE_MS,
+        None => {
+            let guess_ms = match format {
+                Some(Codec::Wav) => CAST_UNKNOWN_WAV_MS,
+                Some(Codec::Flac) | None => CAST_UNKNOWN_FLAC_MS,
+            };
+            hold_back_ms + guess_ms
+        }
+    }
+}
 
 /// How a speaker's delay is kept, which decides how a measured difference
 /// moves it.

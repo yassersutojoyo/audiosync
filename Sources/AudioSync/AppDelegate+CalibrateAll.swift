@@ -223,10 +223,11 @@ extension AppDelegate {
     func calibrateAllPlan() -> Result<[CalibrateAllSpeaker], CalibrateAllBlocker> {
         let playing = calibratePlayingIDs()
         let airPlayL = airPlayChosenAndListed ? airPlayLatencyMs : nil
-        var cast: (id: String, name: String, offsetMs: Double?, waitMs: Double)?
+        var cast: (id: String, name: String, offsetMs: Double?, waitMs: Double, format: Int32)?
         if let device = castModel.enabled, playing.contains(CastID.app(device)) {
             cast = (id: CastID.app(device), name: castName(device), offsetMs: castModel.offsets[device],
-                    waitMs: NetworkHoldBack.castMs(airPlay: airPlayL, cast: castModel.anchorMs))
+                    waitMs: NetworkHoldBack.castMs(airPlay: airPlayL, cast: castModel.anchorMs),
+                    format: castModel.playingFormat)
         }
         let wanted = NetworkHoldBack.airPlayMs(airPlay: airPlayL, cast: castModel.anchorMs)
         let inputs = CalibrateAllFlow.Inputs(

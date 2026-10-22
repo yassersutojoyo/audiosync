@@ -5384,6 +5384,60 @@ mod tests {
     }
 
     #[test]
+    fn calibrate_all_waits_for_the_cast_feeds_hold_back_and_a_guess_by_format() {
+        use audiosync_cast::audio::{Codec, StreamFormat};
+        use audiosync_cast::discovery::DeviceId;
+        use audiosync_cast::host::{AttemptId, HostEvent};
+        use audiosync_cast::media::MediaError;
+        use audiosync_cast::session::SessionEvent;
+        use audiosync_core::calibrate_all::Class;
+
+        use crate::audio::calibrate_all::lineup;
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let (mut backend, _fake, kitchen) = local_delay_with_airplay();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        let device = DeviceId::parse(KITCHEN).unwrap();
+        cast.report(HostEvent::Started {
+            attempt: AttemptId(1),
+            device,
+            format: StreamFormat::wav(48_000).unwrap(),
+        });
+        backend.poll();
+        let wait = |backend: &MockBackend| {
+            lineup(backend)
+                .members
+                .into_iter()
+                .find(|member| member.class == Class::Cast)
+                .map(|member| member.latency_ms)
+        };
+        // No offset: the feed is held back to L = 1750 ms, then the WAV guess.
+        assert_eq!(wait(&backend), Some(1750.0 + 3000.0));
+        backend.set_cast_offset(KITCHEN, 1000.0);
+        assert_eq!(wait(&backend), Some(1000.0 + 750.0 + 500.0), "measured");
+        backend.set_cast_offset(KITCHEN, 0.0);
+        assert_eq!(wait(&backend), Some(1750.0 + 3000.0), "0 ms is no offset");
+        cast.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device,
+            event: SessionEvent::FormatFallback {
+                from: Codec::Wav,
+                to: Codec::Flac,
+                reason: MediaError::LoadFailed {
+                    detailed_error_code: None,
+                },
+            },
+        });
+        backend.poll();
+        assert_eq!(wait(&backend), Some(1750.0 + 6000.0), "FLAC");
+    }
+
+    #[test]
     fn the_airplay_delay_is_an_adjustment_on_top_of_the_sender_latency() {
         let (mut backend, fake, kitchen) = local_delay_with_airplay();
         backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();

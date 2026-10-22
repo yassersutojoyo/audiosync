@@ -4039,13 +4039,13 @@ do {
         streaming: true, reference: "mac",
         localOutputs: [(id: "usb", name: "Desk"), (id: "mac", name: "MacBook Speakers")],
         localOffsets: ["usb": 150], holdBacks: ["mac": 1750, "usb": 1900],
-        cast: (id: "cast:tv", name: "TV", offsetMs: nil, waitMs: 0),
+        cast: (id: "cast:tv", name: "TV", offsetMs: nil, waitMs: 0, format: ASC_CAST_FORMAT_WAV),
         airPlay: [(id: "native:a", name: "Kitchen"), (id: "native:b", name: "Bedroom")],
         airPlayDelayMs: 1750, airPlayHoldBackMs: 0)
     let planned = (try? CalibrateAllFlow.plan(inputs).get()) ?? []
     check(planned.map(\.id) == ["mac", "usb", "cast:tv", "native:a", "native:b"]
             && planned[0].offsetMs == nil && planned[1].offsetMs == 150 && planned[1].latencyMs == 2400
-            && planned[2].offsetMs == nil && planned[2].latencyMs == 0
+            && planned[2].offsetMs == nil && planned[2].latencyMs == 3000
             && planned[3].offsetMs == 1750 && planned[3].latencyMs == 2250 && planned[4].latencyMs == 2250,
           "calibrate all: the reference first, then each speaker with its stored delay and expected arrival, "
             + "one for every AirPlay speaker, so a sweep has left them all when its window or play-out ends (S235)",
@@ -4053,6 +4053,16 @@ do {
     check(CalibrateAllFlow.quietSeconds(planned) == 3 && CalibrateAllFlow.settleSeconds(planned[3]) == 3,
           "calibrate all: the music on its way plays out before the first sweep, a Cast speaker's unknown latency included",
           "\(CalibrateAllFlow.quietSeconds(planned))")
+
+    var held = inputs
+    held.cast = (id: "cast:tv", name: "TV", offsetMs: nil, waitMs: 1750, format: ASC_CAST_FORMAT_FLAC)
+    let heldPlan = (try? CalibrateAllFlow.plan(held).get()) ?? []
+    held.cast = (id: "cast:tv", name: "TV", offsetMs: 1000, waitMs: 750, format: ASC_CAST_FORMAT_FLAC)
+    let measuredPlan = (try? CalibrateAllFlow.plan(held).get()) ?? []
+    check(heldPlan.count > 2 && heldPlan[2].latencyMs == 7750 && CalibrateAllFlow.quietSeconds(heldPlan) == 7.75
+            && measuredPlan.count > 2 && measuredPlan[2].latencyMs == 2250,
+          "calibrate all: a Cast speaker without an offset waits its feed's hold-back plus the FLAC guess, "
+            + "one with an offset its offset, hold-back and allowance (S241)", "\(heldPlan) \(measuredPlan)")
 
     var alone = inputs
     alone.localOutputs = [(id: "mac", name: "MacBook Speakers")]
@@ -4260,21 +4270,21 @@ do {
     _ = castMemory.setOffset("tv", ms: 900)
     for case .cast(let id, .none) in restores where id == "cast:tv" { _ = castMemory.clearOffset("tv") }
     var again = inputs
-    again.cast = (id: "cast:tv", name: "TV", offsetMs: castMemory.offsets["tv"], waitMs: 0)
+    again.cast = (id: "cast:tv", name: "TV", offsetMs: castMemory.offsets["tv"], waitMs: 0, format: ASC_CAST_FORMAT_WAV)
     let replanned = (try? CalibrateAllFlow.plan(again).get()) ?? []
     check(castMemory.offsets["tv"] == nil && !castMemory.clearOffset("tv")
-            && replanned.count > 2 && replanned[2].offsetMs == nil && replanned[2].latencyMs == 0,
+            && replanned.count > 2 && replanned[2].offsetMs == nil && replanned[2].latencyMs == 3000,
           "calibrate all: after Undo a Cast speaker without a stored offset is searched again, not measured from 0 ms",
           "\(replanned)")
     castMemory.apply(.changed(CastDevice(id: "tv", name: "TV"), offsetMs: 0))
-    again.cast = (id: "cast:tv", name: "TV", offsetMs: castMemory.offsets["tv"], waitMs: 0)
+    again.cast = (id: "cast:tv", name: "TV", offsetMs: castMemory.offsets["tv"], waitMs: 0, format: ASC_CAST_FORMAT_WAV)
     let reannounced = (try? CalibrateAllFlow.plan(again).get()) ?? []
     check(castMemory.offsets["tv"] == nil && reannounced.count > 2 && reannounced[2].offsetMs == nil,
           "calibrate all: the 0 ms the sender keeps after Undo doesn't come back when the device re-announces",
           "\(castMemory.offsets)")
     var castAfterRestart = CastModel()
     castAfterRestart.apply(.appeared(CastDevice(id: "tv", name: "TV"), offsetMs: 0))
-    again.cast = (id: "cast:tv", name: "TV", offsetMs: castAfterRestart.offsets["tv"], waitMs: 0)
+    again.cast = (id: "cast:tv", name: "TV", offsetMs: castAfterRestart.offsets["tv"], waitMs: 0, format: ASC_CAST_FORMAT_WAV)
     let afterRestart = (try? CalibrateAllFlow.plan(again).get()) ?? []
     check(castAfterRestart.offsets["tv"] == nil && castAfterRestart.offset(of: "tv") == 0
             && afterRestart.count > 2 && afterRestart[2].offsetMs == nil,
@@ -4328,12 +4338,17 @@ do {
             && m.attempt?.number == 3 && m.status(of: kitchen) == .connecting,
           "cast: the attempt number comes back, connecting")
 
-    check(m.apply(.started(attempt: 2)) == nil && m.status(of: kitchen) == .connecting,
+    check(m.apply(.started(attempt: 2, format: ASC_CAST_FORMAT_WAV)) == nil && m.status(of: kitchen) == .connecting,
           "cast: an event of an older attempt is dropped")
     check(m.apply(.ended(attempt: 2, .failed(.connect))) == nil && m.enabled == kitchen,
           "cast: a late end of an older attempt never turns the speaker off")
-    check(m.apply(.started(attempt: 3)) == .playing(kitchen) && m.status(of: kitchen) == .playing,
-          "cast: the current attempt plays")
+    check(m.playingFormat == 0 && m.apply(.started(attempt: 3, format: ASC_CAST_FORMAT_WAV)) == .playing(kitchen)
+            && m.status(of: kitchen) == .playing && m.playingFormat == ASC_CAST_FORMAT_WAV,
+          "cast: the current attempt plays, in the format it reports")
+    var fellBack = m
+    check(fellBack.apply(.formatFallback(attempt: 3, format: ASC_CAST_FORMAT_FLAC)) == nil
+            && fellBack.playingFormat == ASC_CAST_FORMAT_FLAC,
+          "cast: a format fallback changes the format Calibrate All waits for (S241)")
     check(m.apply(.volume(attempt: 3, CastVolume(level: 0.4, muted: true, fixed: false))) == .changed
             && approx(m.volume(of: kitchen), 40, 1e-9) && m.volumes[kitchen]?.muted == true,
           "cast: the device's volume and mute follow its status")
@@ -4412,6 +4427,10 @@ do {
     raw.volume_fixed = true
     check(CastEvent(raw) == .volume(attempt: 7, CastVolume(level: 0.25, muted: false, fixed: true))
             && CastEvent(raw)?.attempt == 7, "cast: a volume event copies level, mute and fixed")
+    raw.kind = ASC_CAST_EVENT_FORMAT_FALLBACK
+    raw.format = ASC_CAST_FORMAT_FLAC
+    check(CastEvent(raw) == .formatFallback(attempt: 7, format: ASC_CAST_FORMAT_FLAC),
+          "cast: a format fallback event copies the format")
     raw.kind = 999
     check(CastEvent(raw) == nil, "cast: an unknown event kind is skipped")
     let change: CastDeviceChange? = kitchen.withCString { id in
@@ -4504,7 +4523,7 @@ do {
     check(m.groupMembers(of: home, name: name) == .notReported, "cast group: no member note while it connects")
 
     var silent = m
-    check(silent.apply(.started(attempt: 5)) == .playing(home) && silent.groupMembers(of: home, name: name) == .unknown,
+    check(silent.apply(.started(attempt: 5, format: ASC_CAST_FORMAT_WAV)) == .playing(home) && silent.groupMembers(of: home, name: name) == .unknown,
           "cast group: playing without a member list says the members are unknown")
     _ = silent.apply(.members(attempt: 5, []))
     check(silent.groupMembers(of: home, name: name) == .unknown, "cast group: an empty member list stays unknown")
@@ -4513,7 +4532,7 @@ do {
     check(m.apply(.members(attempt: 4, list)) == nil && m.members == nil, "cast group: members of an older attempt are dropped")
     check(m.apply(.members(attempt: 5, list)) == .changed && m.apply(.members(attempt: 5, list)) == nil,
           "cast group: a member list changes the row once")
-    _ = m.apply(.started(attempt: 5))
+    _ = m.apply(.started(attempt: 5, format: ASC_CAST_FORMAT_WAV))
     check(m.groupMembers(of: home, name: name) == .known(["Kitchen speaker", "Garage"]),
           "cast group: members by their row's name, an unlisted one by the group's name for it")
     check(m.apply(.groupLog("Cast group message PLAYBACK_SESSION_UPDATED")) == nil,
@@ -4576,7 +4595,7 @@ do {
     let calibration = CalibrateAllFlow.Inputs(
         streaming: true, reference: "mac", localOutputs: [(id: "mac", name: "MacBook Speakers")],
         localOffsets: [:], holdBacks: [:],
-        cast: (id: CastID.app(device), name: "Home", offsetMs: m.offsets[device], waitMs: 0),
+        cast: (id: CastID.app(device), name: "Home", offsetMs: m.offsets[device], waitMs: 0, format: ASC_CAST_FORMAT_WAV),
         airPlay: [], airPlayDelayMs: 0, airPlayHoldBackMs: 0)
     let planned = (try? CalibrateAllFlow.plan(calibration).get()) ?? []
     let castRows = planned.filter { $0.kind == .cast }
@@ -4597,7 +4616,7 @@ do {
     _ = m.turnOn(tv)
     m.startSent(tv)
     _ = m.started(tv, attempt: 9, refusal: ASC_CAST_REFUSED_NONE)
-    _ = m.apply(.started(attempt: 9))
+    _ = m.apply(.started(attempt: 9, format: ASC_CAST_FORMAT_WAV))
     _ = m.apply(.volume(attempt: 9, CastVolume(level: 0.4, muted: false, fixed: false)))
     check(m.stepVolume(tv, up: true) == .level(0.4 + CastModel.fallbackVolumeStep)
             && approx(m.volume(of: tv), 45, 1e-9),
