@@ -6,8 +6,14 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Added
 
+- Google Cast speakers, on the Mac and on Windows. They're listed with your other speakers and start and stop with streaming, with their own volume and Mute. One plays at a time, and speaker groups made in the Google Home app can't play.
+- Cast has no shared clock, so AudioSync can't line a Cast speaker up by itself: you set its offset by ear under the speaker, and it's kept for that speaker. If one drifts, Resync under its volume restarts the stream with a short gap. AudioSync never does that on its own.
+- When a Cast speaker and AirPlay speakers are on together, the side that's ahead waits for the other. AirPlay can wait at most 3 seconds; past that a notice says how far ahead AirPlay plays and suggests lowering the Cast speaker's offset.
+- AirPlay 2, experimental and off unless you start AudioSync with `AUDIOSYNC_AIRPLAY2=1`. It plays one AirPlay 2 speaker at a time: a second one waits with a note under its name and starts once the first stops. A speaker that asks for a PIN gets the pairing prompt, and a pairing the speaker turns down is forgotten, so the next try pairs again. It hasn't been tried on a real AirPlay 2 receiver yet.
+- On the Mac, Calibrate with Microphone under a local speaker sets its delay for you. It pauses the music, plays a short, quiet sweep on the built-in speakers and then on that speaker, and sets the delay from the difference. It needs the built-in speakers in the list. If you cancel, the microphone isn't allowed, or the result isn't clear, the delay stays as it was and AudioSync says why.
+- The Guide has three diagrams, in light and dark: where the sound goes, what a speaker's delay does, and how a Cast speaker's offset fits with your other speakers. Each has a description for VoiceOver and Narrator.
+- When the app you capture quits, AudioSync can switch to all system audio instead of stopping. Turn on "Switch to All System Audio When the Source App Quits" in the app menu or the gear menu on the Mac, or in the File menu on Windows. A notice tells you when it switched.
 - On the Mac, you can rename a speaker: double-click its name, or choose "Rename…" from the speaker's … menu. The name stays after a restart and shows in the menu bar panel and in notices too. Clear it to go back to the device's own name, which the speaker's tooltip keeps showing while it's renamed.
-- On Windows, View > Appearance shows AudioSync's windows in Light or Dark, or follows Windows with Match System. Ctrl+W closes the window you're in, and Ctrl+Q exits AudioSync from any of its windows.
 
 ### Changed
 
@@ -25,6 +31,14 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A local speaker at the same sample rate as the captured audio no longer runs short for a moment now and then when its clock runs a little fast. It gets the same small speed adjustments as a speaker at another rate, and plays the audio unchanged between them.
 - On the Mac, a speaker (often Bluetooth) that started while the system was waking AudioSync late, or whose second wake-up came late, no longer plays a little ahead of your other speakers for the whole session, or skips once right after it starts. Once its wake-ups come on time again, it eases to the timing you set, so the same delay lands on the same timing every session.
 - On the Mac, a speaker whose timestamps briefly said it was early no longer ends up that much later than its delay when you change the delay within the next minute, and the debug log no longer counts that minute's wake-ups as late.
+- Raising a playing speaker's delay by more than 5 seconds restarts it at the new delay, instead of leaving it silent for the whole increase.
+
+### Windows (preview)
+
+- This is the first release with the Windows 11 version, for x64 and ARM64 PCs. It isn't code-signed, so SmartScreen may warn the first time you open it. Everything above applies to it too, except where an entry says "On the Mac".
+- A Now Playing card in the main window follows what Windows reports as playing, with the track, artist and artwork, and Previous Track, play or pause and Next Track buttons.
+- View > Appearance shows AudioSync's windows in Light or Dark, or follows Windows with Match System. Ctrl+W closes the window you're in, and Ctrl+Q exits AudioSync from any of its windows.
+- The Guide now covers input devices, track info on AirPlay receivers, Launch at Sign-In, AirPlay passwords, and what happens when the source app quits.
 
 ## [0.5.0] - 2026-10-21
 
