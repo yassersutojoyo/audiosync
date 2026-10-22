@@ -193,7 +193,7 @@ export component RemoteWindow inherits Window {
                             }
 
                             if root.ip-address != "": AddressLine {
-                                label: Strings.remote-ip-label;
+                                label: root.local-address != "" ? Strings.remote-ip-label : Strings.remote-address-label;
                                 value: root.ip-address;
                             }
 

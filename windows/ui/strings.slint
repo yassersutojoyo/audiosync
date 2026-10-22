@@ -498,7 +498,7 @@ export global Strings {
             return @tr("Another app started casting to {}, so it's off in AudioSync.", speaker);
         }
         if problem == CastProblem.blocked {
-            return @tr("{} couldn't reach the stream on this PC, so it's off. Allow AudioSync through Windows Firewall on private networks, then turn it on again.", speaker);
+            return @tr("{} couldn't reach the stream on this PC, so it's off. Allow AudioSync in Windows Firewall on Private networks, or on Public networks if this network is set to Public, then turn it on again.", speaker);
         }
         return @tr("{} lost its connection, so it's off. Turn it on again to reconnect.", speaker);
     }
@@ -1226,7 +1226,7 @@ export global Strings {
     }
 
     public pure function calibrate-all-finished(clear: int, total: int) -> string {
-        return @tr("Calibration finished. {} of {} speakers measured clearly.", clear, total);
+        return @tr("Calibration finished. {} of {} measured clearly.", clear, total);
     }
 
     // A run that ended early: why, then that nothing changed.

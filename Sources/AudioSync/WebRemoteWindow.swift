@@ -116,9 +116,8 @@ struct WebRemoteView: View {
                     Text(t.webRemoteNoAddress).foregroundStyle(Brand.errorText)
                 }
                 ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
-                    let bonjour = index == 0 && settings.addresses.localHostName != nil
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(bonjour ? t.webRemoteAddressLabel : t.webRemoteIPLabel)
+                        Text(index == 0 ? t.webRemoteAddressLabel : t.webRemoteIPLabel)
                             .font(.caption)
                             .foregroundStyle(Brand.secondaryText)
                         Text(url)

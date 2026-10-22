@@ -400,7 +400,7 @@ struct UIStrings {
 
     let calibrateAllNothingCertain = "No speaker was measured clearly, so there is nothing to apply."
     func calibrateAllFinished(clear: Int, total: Int) -> String {
-        "Calibration finished. \(clear) of \(total) speakers measured clearly."
+        "Calibration finished. \(clear) of \(total) measured clearly."
     }
 
     // MARK: Main menu
@@ -1012,7 +1012,7 @@ struct UIStrings {
     let webRemoteTitle = "Web Remote"
     let webRemoteSummary = "Control the speakers from a phone or tablet on the same network."
     let webRemoteAddressTitle = "Address"
-    /// Above the Bonjour address, then above the IP address.
+    /// Above the first address, then above the IP address after the Bonjour one.
     let webRemoteAddressLabel = "On the phone, open"
     let webRemoteIPLabel = "If that doesn't open, use"
     let webRemoteSteps = "On the phone, open the address or scan the QR code, add the page to the Home Screen, "
