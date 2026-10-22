@@ -16,8 +16,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A Google Cast speaker now shows what's playing, with the title, artist, album and cover. When AudioSync doesn't know the track, the speaker gets none.
 - AirPlay speakers that show a track's progress now get how far into the track you are and how long it is. On the Mac that comes from Spotify and Music, on Windows from any app that reports its track's length. A track without a known length sends none.
 - When you change an AirPlay speaker's volume on the speaker itself, its slider in AudioSync follows, on speakers that report it.
-- With AirPlay 2 on, a notice tells you when another app holds port 319 or 320, which AirPlay 2 speakers that need PTP timing can't play without. It hasn't been tried on a real receiver yet.
-- Web Remote: too many wrong pairing codes from one device block pairing for that device, not for every phone, and a paired phone still gets in while other devices hold connections open.
+- With AirPlay 2 on, a notice tells you when another app holds port 319 or 320, so AirPlay 2 speakers that need PTP timing can't play. It hasn't been tried on a real receiver yet.
+- Web Remote: too many wrong pairing codes from one device block pairing for that device until the code is renewed, not for every phone, and a paired phone still gets in while other devices hold connections open.
 
 ### Changed
 
