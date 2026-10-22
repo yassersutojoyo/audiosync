@@ -7,6 +7,7 @@
 mod common;
 
 use std::collections::{BTreeMap, VecDeque};
+use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -712,6 +713,12 @@ fn ipv6_loopback() -> Option<IpAddr> {
     TcpListener::bind((ip, 0)).ok().map(|_| ip)
 }
 
+/// Says on the console, past the harness's output capture, that a test
+/// returned without running because the runner can't host it.
+fn skipped(reason: &str) {
+    let _ = writeln!(std::io::stderr(), "SKIPPED ({reason})");
+}
+
 fn ptp_warnings(events: &Events, key: &DeviceKey) -> usize {
     events
         .of(key)
@@ -746,7 +753,7 @@ fn timing_asked(server: &Ap2Server) -> Option<String> {
 fn a_member_in_another_family_that_comes_into_view_late_plays_on_ntp() {
     let _serial = serial();
     let Some(v6) = ipv6_loopback() else {
-        eprintln!("no IPv6 loopback here; skipped");
+        skipped("no IPv6 loopback");
         return;
     };
     let first = Ap2Server::start_on(v6, ptp_fake());
@@ -804,7 +811,7 @@ fn a_member_in_another_family_that_comes_into_view_late_plays_on_ntp() {
 fn a_member_that_connects_outside_the_services_family_plays_again_on_ntp() {
     let _serial = serial();
     let Some(v6) = ipv6_loopback() else {
-        eprintln!("no IPv6 loopback here; skipped");
+        skipped("no IPv6 loopback");
         return;
     };
     let first = Ap2Server::start(ptp_fake());
@@ -812,7 +819,7 @@ fn a_member_that_connects_outside_the_services_family_plays_again_on_ntp() {
     let port = second.address.port();
     // Its IPv4 address must refuse, so the session falls back to IPv6.
     if TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_err() {
-        eprintln!("port {port} is taken on IPv4; skipped");
+        skipped(&format!("port {port} is taken on IPv4"));
         return;
     }
     let listener = PtpListener::bind();
@@ -857,14 +864,14 @@ fn a_member_that_connects_outside_the_services_family_plays_again_on_ntp() {
 fn a_single_speaker_that_connects_outside_the_services_family_moves_the_service_there() {
     let _serial = serial();
     let Some(v6) = ipv6_loopback() else {
-        eprintln!("no IPv6 loopback here; skipped");
+        skipped("no IPv6 loopback");
         return;
     };
     let server = Ap2Server::start_on(v6, ptp_fake());
     let port = server.address.port();
     // Its IPv4 address must refuse, so the session falls back to IPv6.
     if TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_err() {
-        eprintln!("port {port} is taken on IPv4; skipped");
+        skipped(&format!("port {port} is taken on IPv4"));
         return;
     }
     let listener = PtpListener::bind_at(v6);
@@ -894,13 +901,13 @@ fn a_single_speaker_that_connects_outside_the_services_family_moves_the_service_
 /// played until the PTP service moved to IPv6; None where the runner can't.
 fn moved_to_ipv6() -> Option<(Ap2Server, PtpListener, Sender, HostAudio, Events, Device)> {
     let Some(v6) = ipv6_loopback() else {
-        eprintln!("no IPv6 loopback here; skipped");
+        skipped("no IPv6 loopback");
         return None;
     };
     let server = Ap2Server::start_on(v6, ptp_fake());
     let port = server.address.port();
     if TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_err() {
-        eprintln!("port {port} is taken on IPv4; skipped");
+        skipped(&format!("port {port} is taken on IPv4"));
         return None;
     }
     let listener = PtpListener::bind_at(v6);
@@ -947,7 +954,7 @@ fn a_speaker_lost_after_the_service_moved_reconnects_on_ptp_in_the_moved_family(
 
 // covers: P158
 #[test]
-fn a_speaker_that_falls_outside_the_moved_family_again_plays_on_ntp() {
+fn a_speaker_that_falls_outside_the_moved_family_later_moves_the_service_again() {
     let _serial = serial();
     let Some((server, _listener, sender, _host, mut events, device)) = moved_to_ipv6() else {
         return;
@@ -963,11 +970,46 @@ fn a_speaker_that_falls_outside_the_moved_family_again_plays_on_ntp() {
         "{:?}",
         events.of(&device.key)
     );
-    assert_eq!(setup_timings(&moved), ["PTP", "NTP"]);
+    // The fallback to IPv4 moves the service there; a receiver that takes
+    // only PTP keeps a clock.
+    assert_eq!(setup_timings(&moved), ["PTP", "PTP"]);
     events.drain(&sender);
     assert_eq!(
         ptp_warnings(&events, &device.key),
-        1,
+        0,
+        "{:?}",
+        events.of(&device.key)
+    );
+    sender.shutdown();
+}
+
+// covers: P158
+#[test]
+fn a_speaker_that_lost_its_address_in_the_moved_family_binds_the_service_in_another() {
+    let _serial = serial();
+    let Some((server, _listener, sender, _host, mut events, device)) = moved_to_ipv6() else {
+        return;
+    };
+    // Discovery now reports the receiver on IPv4 only, at the same port.
+    let mut record = airplay_record(server.address.port(), 1, "0x0,0x10240");
+    record.addresses = vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))];
+    let v4_only = Device::from_records(device.key.clone(), None, Some(&record)).expect("device");
+    sender.add_speaker(v4_only, options());
+    let port = server.address.port();
+    drop(server);
+    let mut fake = ptp_fake();
+    fake.status_once.clear();
+    let moved = Ap2Server::start_at(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port), fake);
+    assert!(
+        playing(&mut events, &sender, &device.key, 2),
+        "{:?}",
+        events.of(&device.key)
+    );
+    assert_eq!(setup_timings(&moved), ["PTP"]);
+    events.drain(&sender);
+    assert_eq!(
+        ptp_warnings(&events, &device.key),
+        0,
         "{:?}",
         events.of(&device.key)
     );
@@ -979,7 +1021,7 @@ fn a_speaker_that_falls_outside_the_moved_family_again_plays_on_ntp() {
 fn a_member_whose_ipv6_address_is_closed_plays_on_ipv4_with_ntp() {
     let _serial = serial();
     let Some(v6) = ipv6_loopback() else {
-        eprintln!("no IPv6 loopback here; skipped");
+        skipped("no IPv6 loopback");
         return;
     };
     let first = Ap2Server::start_on(v6, ptp_fake());
@@ -987,7 +1029,7 @@ fn a_member_whose_ipv6_address_is_closed_plays_on_ipv4_with_ntp() {
     let port = second.address.port();
     // Its IPv6 address must refuse, so the session falls back to IPv4.
     if TcpListener::bind((v6, port)).is_err() {
-        eprintln!("port {port} is taken on IPv6; skipped");
+        skipped(&format!("port {port} is taken on IPv6"));
         return;
     }
     let listener = PtpListener::bind_at(v6);

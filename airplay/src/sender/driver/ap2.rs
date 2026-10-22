@@ -85,6 +85,20 @@ impl Driver {
             .get(key)
             .map(|speaker| speaker.device.airplay_socket_addrs())
             .unwrap_or_default();
+        if matches!(restart, Some(Some(_))) {
+            self.ptp_retrying.insert(key.clone());
+        } else {
+            self.ptp_retrying.remove(key);
+        }
+        // A family the speaker no longer has an address in (a network
+        // change) is forgotten, so its sessions don't go without a clock.
+        if let Some(&moved) = self.ptp_moved.get(key)
+            && !addresses
+                .iter()
+                .any(|address| address.ip().to_canonical().is_ipv6() == moved)
+        {
+            self.ptp_moved.remove(key);
+        }
         let mut ptp = None;
         if wants && let Some(v6) = restart.flatten().or_else(|| self.ptp_v6(key)) {
             let in_family = |address: &SocketAddr| address.ip().to_canonical().is_ipv6() == v6;
@@ -280,7 +294,7 @@ impl Driver {
 
     /// The address family, IPv6 when true, of the PTP service for a
     /// session to `key`: the running service's while another member uses
-    /// it, the family it moved to for this speaker, IPv4 for a target with
+    /// it, the family it last moved to for this speaker, IPv4 for a target with
     /// a member reachable over IPv4, and otherwise the family of the
     /// receiver's first address (P158, P179).
     fn ptp_v6(&self, key: &DeviceKey) -> Option<bool> {
@@ -360,11 +374,11 @@ impl Driver {
 
     /// Closes, without a TEARDOWN, a session that took PTP over an address
     /// outside the service's family and starts the speaker again: with the
-    /// service moved to that family when no other session uses it and it
-    /// never moved for this speaker, else on NTP with the warning told once
-    /// (P158, P179).
+    /// service moved to that family when no other session uses it and the
+    /// session isn't already the restart after a move, else on NTP with the
+    /// warning told once (P158, P179).
     fn restart_outside_family(&mut self, key: &DeviceKey, landed_v6: bool, now: Instant) {
-        let family = if self.ptp_shared(key) || self.ptp_moved.contains_key(key) {
+        let family = if self.ptp_shared(key) || self.ptp_retrying.contains(key) {
             if self.ptp_family_told.insert(key.clone()) {
                 self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpUnavailable));
             }
