@@ -516,10 +516,15 @@ struct UIStrings {
     func nativeAirPlayAppleTVPlays(name: String) -> String {
         "AudioSync already plays to \(name)'s Apple TV, so the group is off. Turn the Apple TV off to play to the group."
     }
+    /// A member of a stereo pair or home theater group asks for a password
+    /// AudioSync doesn't have, so the group went off (P176).
+    func nativeAirPlayMemberNeedsPassword(member: String, target: String) -> String {
+        "\(member) in \(target) asks for a password, so \(target) is off. Turn \(target) on again to enter it."
+    }
     /// A member of a stereo pair or home theater group switched on by
     /// itself while the group is listed (P176).
     func nativeAirPlayPlaysInGroup(name: String, group: String) -> String {
-        "\(name) plays only as part of \(group), so it stays off by itself."
+        "\(name) plays as part of \(group), so it stays off by itself."
     }
 
     // MARK: AirPlay pairing prompt

@@ -432,6 +432,11 @@ extension AppDelegate {
             return NativeAirPlayID.receiver(id).flatMap(NativeTarget.kind) == nil
                 ? text.nativeAirPlayPlaysThroughSpeakers(name: name)
                 : text.nativeAirPlayAppleTVPlays(name: name)
+        case .memberNeedsPassword(let member):
+            let memberID = NativeAirPlayID.app(member)
+            let memberName = speakerNames.renamed(key: SpeakerKey.make(id: memberID, airplay: true))
+                ?? nativeAirPlay?.model.names[member] ?? member
+            return text.nativeAirPlayMemberNeedsPassword(member: memberName, target: name)
         case .cancelled: return text.airPlayTurnedOff(name: name, reason: .cancelled)
         case .pairingFailed: return text.nativeAirPlayPairingFailed(name: name)
         case .stillNeedsCode: return text.airPlayTurnedOff(name: name, reason: .stillNeedsCode)

@@ -178,6 +178,9 @@ enum NativeTurnOff: Equatable {
     case timingUnavailable
     /// An Apple TV and its home theater group never play at once (P177).
     case playsThroughSpeakers
+    /// A member of the target (its receiver ID) asks for a password
+    /// AudioSync doesn't have, outside the user's attempt (P176).
+    case memberNeedsPassword(String)
     /// The user cancelled its PIN or password prompt.
     case cancelled
     /// Its pairing ended without credentials (not for a wrong PIN, which
@@ -585,11 +588,16 @@ struct NativeAirPlayModel {
     }
 
     /// A member of a target in the sender turned its session down for a
-    /// password: within the target's attempt it is asked for by name (P176).
+    /// password: within the target's attempt it is asked for by name;
+    /// otherwise (auto-connect, or after another member played) the target
+    /// goes off naming it, and asks for it when turned on again (P176).
     private mutating func memberError(_ id: String, _ problem: NativeSpeakerEvent.Problem) -> NativeAirPlayOutcome? {
         guard problem == .passwordRequired || problem == .wrongPassword,
-              let target = memberOf[id], states[target] != nil, attempts.contains(target) else { return nil }
+              let target = memberOf[id], states[target] != nil else { return nil }
         passwords.remove(id)
+        guard attempts.contains(target) else {
+            return .turnOff(NativeAirPlayID.app(target), .memberNeedsPassword(id))
+        }
         promptTargets[id] = target
         return ask(id, .askingPassword(wrong: problem == .wrongPassword))
     }
@@ -702,10 +710,8 @@ struct NativeAirPlayModel {
             return waited ? .waiting(NativeAirPlayID.app(id), false) : nil
         case .error(let id, let problem, let retryMs, _):
             guard states[id] != nil else { return memberError(id, problem) }
-            // Within the user's attempt the member's own error follows and
-            // asks for its password by name.
-            if NativeTarget.kind(id) != nil, attempts.contains(id),
-               problem == .passwordRequired || problem == .wrongPassword {
+            // The member's own error follows and names it (`memberError`).
+            if NativeTarget.kind(id) != nil, problem == .passwordRequired || problem == .wrongPassword {
                 return nil
             }
             if problem == .oneAirPlay2 {
