@@ -83,7 +83,7 @@ use audiosync_airplay::sender::{
     AIRPLAY2_SWITCH_ENV, NowPlaying, ReceiverEvent, ReceiverInfo, Sender, SenderConfig,
     SenderEvent, SpeakerError, SpeakerEvent, SpeakerOptions, SpeakerState, airplay2_switch,
 };
-use audiosync_airplay::stream::{MAX_DELAY, SpeakerLatency};
+use audiosync_airplay::stream::{MAX_DELAY, SpeakerCounters, SpeakerLatency};
 use audiosync_airplay::targets::{Target, TargetChange, TargetId};
 use audiosync_airplay::volume::{MIN_DB, Volume};
 
@@ -323,6 +323,9 @@ struct Added {
     target: Option<TargetId>,
     /// A target's member IDs.
     members: Vec<String>,
+    /// Each session's counters by receiver ID: the speaker's own, or each
+    /// member's of a target (P144).
+    counters: Vec<(String, Arc<SpeakerCounters>)>,
 }
 
 impl Added {
@@ -1765,7 +1768,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                     .collect();
                 let (passwords, store, identity) =
                     (&airplay.passwords, &airplay.store, &airplay.identity);
-                airplay
+                let counters = airplay
                     .sender
                     .add_target(target.clone(), options, |key, own| {
                         let member = receiver_id(key);
@@ -1779,6 +1782,10 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                     position,
                     target: Some(target_id),
                     members,
+                    counters: counters
+                        .into_iter()
+                        .map(|(key, counters)| (receiver_id(&key), counters))
+                        .collect(),
                 };
                 airplay.added.insert(id.to_owned(), added);
                 return true;
@@ -1794,12 +1801,13 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
             options.password = airplay.passwords.get(id).cloned();
             options.credentials = airplay.store.get(id).cloned();
             options.homekit_credentials = airplay.identity.get(id).cloned();
-            airplay.sender.add_speaker(device, options);
+            let counters = airplay.sender.add_speaker(device, options);
             let added = Added {
                 key,
                 position,
                 target: None,
                 members: Vec::new(),
+                counters: vec![(id.to_owned(), counters)],
             };
             airplay.added.insert(id.to_owned(), added);
             true
@@ -1977,6 +1985,148 @@ pub unsafe extern "C" fn asc_airplay_restart_timeline(airplay: *mut AscAirPlay) 
     // SAFETY: by the caller's contract null or a live handle that no other
     // call uses now.
     unsafe { live(airplay, (), |airplay| airplay.sender.restart_timeline()) }
+}
+
+/// A speaker's counters (P144), as [`asc_airplay_speaker_counters`] copies
+/// them: one session's, or a stereo pair's or home theater group's summed
+/// over its members. They keep counting across the speaker's reconnects.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AscAirPlayCounters {
+    pub packets_sent: u64,
+    pub resend_requests: u64,
+    pub packets_resent: u64,
+    /// Requested packets not resent: no longer held, or resent three times.
+    pub not_held: u64,
+    pub timing_replies: u64,
+    /// Packets sent more than 5 ms after their time.
+    pub late_packets: u64,
+    pub silent_frames: u64,
+    /// The stream's count, since every session plays the one input.
+    pub input_frames_dropped: u64,
+    /// Datagrams dropped on the control and timing sockets because they
+    /// came from another address (P86, P91).
+    pub foreign_datagrams: u64,
+    /// How many sessions' counters were summed: 1 for a speaker, the member
+    /// count for a target.
+    pub sessions: u32,
+}
+
+/// The stream's counters (P144), as [`asc_airplay_stream_counters`] copies
+/// them.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct AscAirPlayStreamCounters {
+    /// The current input rate estimate R̂ (P101).
+    pub rate_hz: f64,
+    /// Packets cut and encoded, one per packet of the timeline.
+    pub packets_encoded: u64,
+    /// Silent frames inserted where the input hadn't arrived in time.
+    pub silent_frames: u64,
+    pub input_frames_dropped: u64,
+}
+
+impl AscAirPlayCounters {
+    fn add(&mut self, counters: &SpeakerCounters) {
+        self.packets_sent += counters.packets_sent();
+        self.resend_requests += counters.resend_requests();
+        self.packets_resent += counters.packets_resent();
+        self.not_held += counters.not_held();
+        self.timing_replies += counters.timing_replies();
+        self.late_packets += counters.late_packets();
+        self.silent_frames += counters.silent_frames();
+        self.input_frames_dropped = counters.input_frames_dropped();
+        self.foreign_datagrams += counters.foreign_datagrams();
+        self.sessions += 1;
+    }
+}
+
+impl AscAirPlay {
+    /// The counters of the speaker added under `id`, or of `id` alone when
+    /// it is a member of an added target; `None` when it is neither.
+    fn counters(&self, id: &str) -> Option<AscAirPlayCounters> {
+        let mut total = AscAirPlayCounters::default();
+        if let Some(added) = self.added.get(id) {
+            for (_, counters) in &added.counters {
+                total.add(counters);
+            }
+            return Some(total);
+        }
+        let (_, member) = self
+            .added
+            .values()
+            .flat_map(|added| &added.counters)
+            .find(|(member, _)| member == id)?;
+        total.add(member);
+        Some(total)
+    }
+}
+
+/// Copies into `out` the counters of the speaker added under `id`: a stereo
+/// pair's or home theater group's summed over its members, or one member's
+/// when `id` names a member of an added target. Reads atomics only, never
+/// blocking the sender. False, with `out` zeroed, when the handle or `id` is
+/// null, the handle is dead, or nothing was added under `id`; false and
+/// nothing written when `out` is null.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading
+/// contract; `id` is null or a NUL-terminated string; `out` is null or
+/// points to a writable `AscAirPlayCounters`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_speaker_counters(
+    airplay: *const AscAirPlay,
+    id: *const c_char,
+    out: *mut AscAirPlayCounters,
+) -> bool {
+    if out.is_null() {
+        return false;
+    }
+    // SAFETY: by the caller's contract null or a NUL-terminated string.
+    let found = match unsafe { host_text(id) } {
+        // SAFETY: by the caller's contract null or a live handle that no
+        // other call uses now; the call only reads it.
+        Some(id) => unsafe { live(airplay.cast_mut(), None, |airplay| airplay.counters(id)) },
+        None => None,
+    };
+    // SAFETY: non-null, and by the caller's contract writable.
+    unsafe { out.write(found.unwrap_or_default()) };
+    found.is_some()
+}
+
+/// Copies the stream's counters into `out`. False, with `out` zeroed, for a
+/// null or dead handle; false and nothing written when `out` is null.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading
+/// contract; `out` is null or points to a writable
+/// `AscAirPlayStreamCounters`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_stream_counters(
+    airplay: *const AscAirPlay,
+    out: *mut AscAirPlayStreamCounters,
+) -> bool {
+    if out.is_null() {
+        return false;
+    }
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now; the call only reads it.
+    let found = unsafe {
+        live(airplay.cast_mut(), None, |airplay| {
+            let stream = airplay.sender.stream_counters();
+            Some(AscAirPlayStreamCounters {
+                rate_hz: stream.rate(),
+                packets_encoded: stream.packets_encoded(),
+                silent_frames: stream.silent_frames(),
+                input_frames_dropped: stream.input_frames_dropped(),
+            })
+        })
+    };
+    // SAFETY: non-null, and by the caller's contract writable.
+    unsafe { out.write(found.unwrap_or_default()) };
+    found.is_some()
 }
 
 /// Sets what is playing, for the receivers that show it (P123 to P127): the
@@ -3362,6 +3512,221 @@ mod tests {
         assert!(receiver.methods().contains(&Method::Teardown));
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    #[test]
+    fn counters_cross_the_boundary_with_the_c_layout() {
+        use std::mem::{align_of, offset_of, size_of};
+        assert_eq!(size_of::<AscAirPlayCounters>(), 80);
+        assert_eq!(align_of::<AscAirPlayCounters>(), 8);
+        let offsets = [
+            offset_of!(AscAirPlayCounters, packets_sent),
+            offset_of!(AscAirPlayCounters, resend_requests),
+            offset_of!(AscAirPlayCounters, packets_resent),
+            offset_of!(AscAirPlayCounters, not_held),
+            offset_of!(AscAirPlayCounters, timing_replies),
+            offset_of!(AscAirPlayCounters, late_packets),
+            offset_of!(AscAirPlayCounters, silent_frames),
+            offset_of!(AscAirPlayCounters, input_frames_dropped),
+            offset_of!(AscAirPlayCounters, foreign_datagrams),
+            offset_of!(AscAirPlayCounters, sessions),
+        ];
+        assert_eq!(offsets, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72]);
+        assert_eq!(size_of::<AscAirPlayStreamCounters>(), 32);
+        assert_eq!(align_of::<AscAirPlayStreamCounters>(), 8);
+        let offsets = [
+            offset_of!(AscAirPlayStreamCounters, rate_hz),
+            offset_of!(AscAirPlayStreamCounters, packets_encoded),
+            offset_of!(AscAirPlayStreamCounters, silent_frames),
+            offset_of!(AscAirPlayStreamCounters, input_frames_dropped),
+        ];
+        assert_eq!(offsets, [0, 8, 16, 24]);
+    }
+
+    fn stale_counters() -> AscAirPlayCounters {
+        AscAirPlayCounters {
+            packets_sent: 7,
+            sessions: 3,
+            ..AscAirPlayCounters::default()
+        }
+    }
+
+    fn stale_stream() -> AscAirPlayStreamCounters {
+        AscAirPlayStreamCounters {
+            rate_hz: 1.0,
+            packets_encoded: 7,
+            ..AscAirPlayStreamCounters::default()
+        }
+    }
+
+    #[test]
+    fn counters_of_null_dead_or_unknown_speakers_are_zero() {
+        let id = c"02005E005331";
+        let mut counters = stale_counters();
+        let mut stream = stale_stream();
+        // SAFETY: null handles and pointers are part of the contract.
+        unsafe {
+            assert!(!asc_airplay_speaker_counters(
+                ptr::null(),
+                id.as_ptr(),
+                &mut counters
+            ));
+            assert_eq!(counters, AscAirPlayCounters::default());
+            assert!(!asc_airplay_stream_counters(ptr::null(), &mut stream));
+            assert_eq!(stream, AscAirPlayStreamCounters::default());
+        }
+
+        let mut handle = listing(vec![raop("02005E005331", "Kitchen", OPEN)]);
+        // SAFETY: a live handle, used by this thread only; C string literals.
+        unsafe {
+            assert!(!asc_airplay_speaker_counters(
+                handle,
+                id.as_ptr(),
+                ptr::null_mut()
+            ));
+            assert!(!asc_airplay_stream_counters(handle, ptr::null_mut()));
+            counters = stale_counters();
+            assert!(!asc_airplay_speaker_counters(
+                handle,
+                ptr::null(),
+                &mut counters
+            ));
+            assert_eq!(counters, AscAirPlayCounters::default());
+            counters = stale_counters();
+            assert!(
+                !asc_airplay_speaker_counters(handle, id.as_ptr(), &mut counters),
+                "listed but never added"
+            );
+            assert_eq!(counters, AscAirPlayCounters::default());
+            assert!(asc_airplay_stream_counters(handle, &mut stream));
+        }
+        inside(handle).death.dead.store(true, Ordering::Release);
+        stream = stale_stream();
+        // SAFETY: a dead handle is still a live pointer, used by this thread
+        // only.
+        unsafe {
+            assert!(!asc_airplay_stream_counters(handle, &mut stream));
+            assert_eq!(stream, AscAirPlayStreamCounters::default());
+            asc_airplay_destroy(&mut handle);
+        }
+    }
+
+    fn session_fields(counters: &SpeakerCounters) -> [u64; 9] {
+        [
+            counters.packets_sent(),
+            counters.resend_requests(),
+            counters.packets_resent(),
+            counters.not_held(),
+            counters.timing_replies(),
+            counters.late_packets(),
+            counters.silent_frames(),
+            counters.input_frames_dropped(),
+            counters.foreign_datagrams(),
+        ]
+    }
+
+    fn copied_fields(counters: &AscAirPlayCounters) -> [u64; 9] {
+        [
+            counters.packets_sent,
+            counters.resend_requests,
+            counters.packets_resent,
+            counters.not_held,
+            counters.timing_replies,
+            counters.late_packets,
+            counters.silent_frames,
+            counters.input_frames_dropped,
+            counters.foreign_datagrams,
+        ]
+    }
+
+    #[test]
+    fn a_playing_speakers_counters_are_its_sessions() {
+        let receiver = Loopback::start();
+        let id = "02005E005332";
+        let mut handle = listing(vec![loopback_record(id, "Desk", receiver.port)]);
+        let c_id = c_string(id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 50.0)) };
+        events_until(handle, |seen| has_state(seen, id, AIRPLAY_STATE_PLAYING));
+        let mut copied = AscAirPlayCounters::default();
+        assert!(wait_for(|| {
+            // SAFETY: a live handle, used by this thread only; a C string.
+            unsafe { asc_airplay_speaker_counters(handle, c_id.as_ptr(), &mut copied) };
+            copied.packets_sent > 0
+        }));
+        // The sender keeps counting while the copy is made, so each field
+        // lies between the session's reads just before and just after.
+        let session = inside(handle).added[id].counters[0].1.clone();
+        for _ in 0..3 {
+            let before = session_fields(&session);
+            // SAFETY: a live handle, used by this thread only; a C string.
+            assert!(unsafe { asc_airplay_speaker_counters(handle, c_id.as_ptr(), &mut copied) });
+            let after = session_fields(&session);
+            let within = before
+                .iter()
+                .zip(&copied_fields(&copied))
+                .zip(&after)
+                .all(|((low, field), high)| low <= field && field <= high);
+            assert!(within, "{before:?} {copied:?} {after:?}");
+            assert_eq!(copied.sessions, 1);
+        }
+
+        let stream = inside(handle).sender.stream_counters();
+        let before = stream.packets_encoded();
+        let mut copied = AscAirPlayStreamCounters::default();
+        // SAFETY: a live handle, used by this thread only.
+        assert!(unsafe { asc_airplay_stream_counters(handle, &mut copied) });
+        let after = stream.packets_encoded();
+        assert!(
+            before <= copied.packets_encoded && copied.packets_encoded <= after,
+            "{before} {copied:?} {after}"
+        );
+        assert!(copied.packets_encoded > 0, "{copied:?}");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    #[test]
+    fn a_targets_counters_sum_its_members_and_each_member_has_its_own() {
+        let mut handle = create_with(quiet);
+        let (left, right) = (pair_member(0x21, "0x2004"), pair_member(0x22, "0x4"));
+        let found = audiosync_airplay::targets::find_targets([&left, &right]);
+        let pair = found.first().cloned().expect("a pair");
+        inside(handle).airplay2 = true;
+        inside(handle).take_in(SenderEvent::Receiver(ReceiverEvent::Target(
+            TargetChange::Updated(Box::new(pair.clone())),
+        )));
+        let pair_id = CString::new(pair.id.to_string()).expect("an ID");
+        let left_id = CString::new(receiver_id(&left.key)).expect("an ID");
+        let mut copied = stale_counters();
+        // SAFETY: a live handle and NUL-terminated IDs.
+        unsafe {
+            assert!(!asc_airplay_speaker_counters(
+                handle,
+                left_id.as_ptr(),
+                &mut copied
+            ));
+            assert!(asc_airplay_add_speaker(handle, pair_id.as_ptr(), 40.0));
+            assert!(asc_airplay_speaker_counters(
+                handle,
+                pair_id.as_ptr(),
+                &mut copied
+            ));
+            assert_eq!(copied.sessions, 2);
+            assert!(asc_airplay_speaker_counters(
+                handle,
+                left_id.as_ptr(),
+                &mut copied
+            ));
+            assert_eq!(copied.sessions, 1);
+            assert!(asc_airplay_remove_speaker(handle, pair_id.as_ptr()));
+            assert!(!asc_airplay_speaker_counters(
+                handle,
+                left_id.as_ptr(),
+                &mut copied
+            ));
+            asc_airplay_destroy(&mut handle);
+        }
     }
 
     #[test]

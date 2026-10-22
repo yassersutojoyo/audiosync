@@ -1239,6 +1239,26 @@ do {
           == "[AudioSync] native AirPlay: gone Den TV (02005E005302)", "native airplay: a gone receiver it listed")
     check(NativeReceiverChange.gone(id: "02005E005309", name: nil).logLine
           == "[AudioSync] native AirPlay: gone 02005E005309", "native airplay: a gone receiver it never listed")
+
+    let stream = NativeStreamCounters(rateHz: 44_101.26, packetsEncoded: 1_200, silentFrames: 352, inputFramesDropped: 0)
+    let desk = NativeSpeakerCounters(packetsSent: 1_190, latePackets: 2, resendRequests: 3, packetsResent: 5,
+                                     timingReplies: 4, foreignDatagrams: 1)
+    let pair = NativeSpeakerCounters(packetsSent: 2_380, sessions: 2)
+    let status = NativeAirPlayStatus.logLine(latencyMs: 1750.9, stream: stream, speakers: [
+        .init(id: "02005E005321", name: "Desk", state: .playing, counters: desk),
+        .init(id: "pair:1", name: nil, state: .connecting, counters: pair),
+        .init(id: "02005E005322", name: "Gone", state: nil, counters: nil),
+    ])
+    check(status == """
+        [AudioSync] native AirPlay: L = 1750 ms, input rate 44101.3 Hz, 1200 packets encoded, 352 silent frames, 0 input frames dropped
+          AirPlay speaker Desk (02005E005321): playing; 1190 packets sent, 2 late, 3 resend requests, 5 resent, 4 timing replies, 1 datagrams from other addresses dropped
+          AirPlay speaker pair:1: connecting, 2 members summed; 2380 packets sent, 0 late, 0 resend requests, 0 resent, 0 timing replies, 0 datagrams from other addresses dropped
+          AirPlay speaker Gone (02005E005322): added
+        """, "native airplay: the status line has the Windows log's fields, a target's summed members, and a speaker the sender dropped",
+          status)
+    check(NativeAirPlayStatus.logLine(latencyMs: .nan, stream: nil, speakers: [])
+          == "[AudioSync] native AirPlay: L = 0 ms", "native airplay: a status line without the stream's counters")
+    check(NativeAirPlayStatus.interval == 5, "native airplay: the status line comes every 5 s, as on Windows")
 }
 do {
     check(NativeAirPlayID.app("02005E005301") == "native:02005E005301"

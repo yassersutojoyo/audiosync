@@ -41,6 +41,10 @@ final class NativeAirPlay {
     /// gets, also when it is created later (queue only).
     private(set) var holdBackMs = 0.0
     private var queuedHoldBackMs = 0.0
+    /// The receivers added to the sender, in the order they were added, and
+    /// the uptime of the last status line (queue only; `logStatusIfDue`).
+    private var addedIDs: [String] = []
+    private var lastStatus: TimeInterval = 0
 
     /// `onChange` gets each discovery change, `onEvent` each speaker or
     /// timeline event with what the model made of it, on the main queue.
@@ -73,7 +77,10 @@ final class NativeAirPlay {
         model.added(id)
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }
-            if !asc_airplay_add_speaker(handle, id, volume) {
+            if asc_airplay_add_speaker(handle, id, volume) {
+                if self.addedIDs.isEmpty { self.lastStatus = ProcessInfo.processInfo.systemUptime }
+                if !self.addedIDs.contains(id) { self.addedIDs.append(id) }
+            } else {
                 // Gone from the sender's list meanwhile: the next reconcile decides again.
                 DispatchQueue.main.async {
                     self.model.removed(id)
@@ -87,8 +94,9 @@ final class NativeAirPlay {
     func remove(_ id: String) {
         model.removed(id)
         queue.async { [weak self] in
-            guard let handle = self?.handle else { return }
+            guard let self, let handle = self.handle else { return }
             _ = asc_airplay_remove_speaker(handle, id)
+            self.addedIDs.removeAll { $0 == id }
         }
     }
 
@@ -329,11 +337,38 @@ final class NativeAirPlay {
             asc_airplay_input_destroy(&input)
         }
         asc_airplay_destroy(&handle)   // tears the speakers down, sets handle to nil
+        addedIDs.removeAll()
+    }
+
+    /// Hands the main queue the debug log's status line, at most every
+    /// `NativeAirPlayStatus.interval` while speakers are added. The counters
+    /// are atomics the sender keeps, so reading them never holds it up.
+    private func logStatusIfDue(_ handle: OpaquePointer) {
+        guard DebugTrace.enabled, !addedIDs.isEmpty else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastStatus >= NativeAirPlayStatus.interval else { return }
+        lastStatus = now
+        let latency = asc_airplay_latency_ms(handle)
+        var rawStream = AscAirPlayStreamCounters()
+        let stream = asc_airplay_stream_counters(handle, &rawStream) ? NativeStreamCounters(rawStream) : nil
+        let counters: [(String, NativeSpeakerCounters?)] = addedIDs.map { id in
+            var raw = AscAirPlayCounters()
+            return (id, asc_airplay_speaker_counters(handle, id, &raw) ? NativeSpeakerCounters(raw) : nil)
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.active else { return }
+            let speakers = counters.map { id, counters in
+                NativeAirPlayStatus.Speaker(id: id, name: self.model.names[id], state: self.model.states[id],
+                                            counters: counters)
+            }
+            DebugTrace.log(NativeAirPlayStatus.logLine(latencyMs: latency, stream: stream, speakers: speakers))
+        }
     }
 
     /// Takes every waiting change and event and hands them to the main queue at once.
     private func poll() {
         guard let handle else { return }
+        logStatusIfDue(handle)
         var changes: [NativeReceiverChange] = []
         var raw = AscAirPlayReceiver()
         while asc_airplay_next_receiver(handle, &raw) {
@@ -501,6 +536,21 @@ final class NativeAirPlay {
             (ASC_AIRPLAY_FLAG_INCOMPLETE, "incomplete"),
         ]
         return names.filter { flags & UInt32($0.0) != 0 }.map(\.1)
+    }
+}
+
+extension NativeSpeakerCounters {
+    init(_ raw: AscAirPlayCounters) {
+        self.init(packetsSent: raw.packets_sent, latePackets: raw.late_packets, resendRequests: raw.resend_requests,
+                  packetsResent: raw.packets_resent, timingReplies: raw.timing_replies,
+                  foreignDatagrams: raw.foreign_datagrams, sessions: raw.sessions)
+    }
+}
+
+extension NativeStreamCounters {
+    init(_ raw: AscAirPlayStreamCounters) {
+        self.init(rateHz: raw.rate_hz, packetsEncoded: raw.packets_encoded, silentFrames: raw.silent_frames,
+                  inputFramesDropped: raw.input_frames_dropped)
     }
 }
 
