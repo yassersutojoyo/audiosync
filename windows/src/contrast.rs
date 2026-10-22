@@ -483,7 +483,7 @@ fn no_text_promises_airplay() {
                 || line.contains("property <string> airplay-delay-")
                 || line
                     .contains("notice-airplay-stopped: @tr(\"AirPlay stopped or couldn't start.")
-                || line.contains("notice-retry-label: @tr(\"Retry starting AirPlay\")")
+                || line.contains("notice-retry-label: @tr(\"Start AirPlay again\")")
                 || line.contains("return @tr(\"AirPlay stopped\");")
                 || line.contains(
                     "return @tr(\"AirPlay speakers can wait at most 20 s for a Google Cast speaker,"

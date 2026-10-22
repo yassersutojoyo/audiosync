@@ -59,7 +59,7 @@ export global Strings {
     out property <string> notice-show-how-label: @tr("Show how to hear it only once");
     // The button on the notice that AirPlay stopped: starts it again.
     out property <string> notice-retry: @tr("Retry");
-    out property <string> notice-retry-label: @tr("Retry starting AirPlay");
+    out property <string> notice-retry-label: @tr("Start AirPlay again");
     out property <string> notice-open-privacy: @tr("Open Privacy Settings");
     out property <string> notice-open-privacy-label: @tr("Open the microphone privacy settings");
     out property <string> delay-field-label: @tr("Delay in milliseconds");
@@ -98,7 +98,7 @@ export global Strings {
     // The AirPlay delay (L): how long the local speakers wait for the
     // AirPlay speakers.
     out property <string> airplay-delay-title: @tr("AirPlay Delay");
-    out property <string> airplay-delay-hint: @tr("The speakers on this PC wait this long for the AirPlay speakers. Heard the AirPlay speakers late? Raise it.");
+    out property <string> airplay-delay-hint: @tr("While an AirPlay speaker is on, the speakers on this PC wait this long for it. Heard the AirPlay speakers late? Raise it.");
     out property <string> auto-connect: @tr("Auto-connect when available");
     out property <string> source-system: @tr("All System Audio");
 
@@ -236,16 +236,16 @@ export global Strings {
     }
     out property <string> remote-no-code: @tr("This code has expired. Select New Code to pair another phone.");
     out property <string> remote-new-code: @tr("New Code");
-    out property <string> remote-locked: @tr("Too many wrong codes were entered, so pairing is locked. Select New Code to unlock it.");
+    out property <string> remote-locked: @tr("Pairing is locked after too many wrong codes. Select New Code to unlock it.");
     out property <string> remote-devices-title: @tr("Paired Devices");
     public pure function remote-devices(count: int) -> string {
         if count == 0 {
-            return @tr("No device is paired.");
+            return @tr("No paired devices");
         }
         if count == 1 {
-            return @tr("1 device is paired.");
+            return @tr("1 paired device");
         }
-        return @tr("{} devices are paired.", count);
+        return @tr("{} paired devices", count);
     }
     out property <string> remote-forget-all: @tr("Forget All Remote Devices");
     out property <string> remote-http-note: @tr("The page uses plain HTTP, so use the web remote only on your home network.");
@@ -440,13 +440,13 @@ export global Strings {
             return @tr("{} declined the stream. AudioSync tries again shortly.", speaker);
         }
         if problem == AirPlayProblem.needs-password {
-            return @tr("{} asks for a password, so it's off. Turn it on again to enter it.", speaker);
+            return @tr("{} asks for a password, so it's off. Turn it on again to enter it. To use it without a password, set Allow Speaker & TV Access on the speaker (or in the Home app) to \"Anyone on the Same Network\" and turn off Require Password.", speaker);
         }
         if problem == AirPlayProblem.needs-pin {
             return @tr("{} needs pairing with a PIN, so it's off. Turn it on again to pair.", speaker);
         }
         if problem == AirPlayProblem.pairing-failed {
-            return @tr("{} couldn't be paired, so it's off. Make sure it's on, then turn {} on in AudioSync to try again.", speaker, speaker);
+            return @tr("Pairing with {} didn't finish, so it's off. To try again, turn it on and enter the PIN it shows.", speaker);
         }
         if problem == AirPlayProblem.pairing-not-yet {
             return @tr("{} needs a kind of pairing AudioSync for Windows can't do yet, so it's off.", speaker);
@@ -1117,7 +1117,7 @@ export global Strings {
     out property <string> calibrate-all-estimating: @tr("Working out the delays…");
     out property <string> calibrate-all-applied: @tr("New delays applied.");
     out property <string> calibrate-all-undone: @tr("The delays are back to what they were.");
-    out property <string> calibrate-all-stale: @tr("A delay changed after the measurement, so its results were cleared.");
+    out property <string> calibrate-all-stale: @tr("A delay changed after the measurement, so nothing was applied. Calibrate again.");
     out property <string> calibrate-all-ended-cancelled: @tr("Calibration cancelled.");
     out property <string> calibrate-all-ended-speakers: @tr("The speakers or their delays changed during the measurement.");
     out property <string> calibrate-all-ended-off: @tr("A speaker was turned off during the measurement.");
