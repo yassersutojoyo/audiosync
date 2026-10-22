@@ -1,8 +1,9 @@
 //! The WASAPI driver: process loopback and input device capture, one render
 //! stream per output, endpoint listing and notifications, the process
-//! snapshot, the read-only endpoint snapshot of the double-audio check, and
+//! snapshot, the read-only endpoint snapshot of the double-audio check,
 //! each output's own volume and mute (read, followed, and set only by the
-//! fix the user clicks).
+//! fix the user clicks), and the calibration's recording of the default
+//! input device.
 //!
 //! Each audio thread initializes COM in the multithreaded apartment and makes
 //! its own COM objects; only endpoint IDs, the ring's reader and writer, and
@@ -15,6 +16,7 @@ mod endpoint;
 mod loopback;
 mod media;
 mod media_sessions;
+mod microphone;
 mod processes;
 mod routing;
 mod volume;
@@ -28,6 +30,7 @@ use audiosync_core::ring::RingWriter;
 use audiosync_core::volume::SharedGain;
 
 use super::backend::BackendError;
+use super::calibration::{Microphone, MicrophoneError};
 use super::capture::{CaptureTarget, Feeds};
 use super::controller::{Controller, Driver};
 use super::outputs::{Endpoint, EndpointReading, Listing};
@@ -135,6 +138,10 @@ impl Driver for WasapiDriver {
         gain: Arc<SharedGain>,
     ) -> Result<endpoint::EndpointRenderer, BackendError> {
         endpoint::start(&endpoint.id, reader, control, gain)
+    }
+
+    fn open_microphone(&mut self, seconds: f64) -> Result<Box<dyn Microphone>, MicrophoneError> {
+        Ok(Box::new(microphone::open(seconds)?))
     }
 }
 

@@ -8,11 +8,13 @@
 //! `audiosync_core::policy::session`).
 
 use std::fmt;
+use std::sync::Arc;
 
 use audiosync_core::eq::EqSettings;
 use audiosync_core::policy::device_volume::DeviceVolume;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 
+use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::routing::DirectPath;
 
 /// What AudioSync captures.
@@ -755,6 +757,20 @@ pub trait AudioBackend {
 
     /// What a session does when the app it captures quits (spec S227).
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits);
+
+    /// What a microphone calibration depends on: the session, the outputs
+    /// that play, the reference and their hold-backs.
+    fn calibration_engine(&self) -> Engine;
+
+    /// The capture's calibration tap.
+    fn calibration_tap(&self) -> Option<Arc<CalibrationTap>>;
+
+    /// Only local output `id` is heard, the others at gain 0; `None`: every
+    /// output at its own gain again.
+    fn set_calibration_solo(&mut self, id: Option<&str>);
+
+    /// Starts recording the default input device, with room for `seconds`.
+    fn open_microphone(&mut self, seconds: f64) -> Result<Box<dyn Microphone>, MicrophoneError>;
 
     /// Handles device changes, lost outputs, the end of capture and what the
     /// AirPlay sender reports, and returns what the UI should know. Call it

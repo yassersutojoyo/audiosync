@@ -15,6 +15,7 @@
 //! ancestry can be captured. Where they can't be read, or AudioSync is
 //! missing from the snapshot, AudioSync refuses rather than capture itself.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use audiosync_core::channels::input_to_stereo;
@@ -26,6 +27,7 @@ use audiosync_core::ring::{RingWriter, is_supported_rate};
 use super::SESSION_RATE;
 use super::airplay::FeedLease;
 use super::backend::{BackendError, SourceId, SourceInfo};
+use super::calibration::CalibrationTap;
 use super::cast::CastLease;
 use super::outputs::{EndpointReading, is_hands_free};
 use super::process::{IDLE_PID, ProcessTable, SYSTEM_PID};
@@ -367,20 +369,31 @@ pub const CAPTURE_ATTEMPTS: [CaptureAttempt; 4] = [
 const CONVERT_CHUNK: usize = 1024;
 
 /// The network senders' feeds a capture is lent: each gets the same
-/// equalized audio as the ring.
+/// equalized audio as the ring. The calibration's tap rides along: it fades
+/// the music out of all of them and adds its test signal to the ring alone.
 #[derive(Default)]
 pub struct Feeds {
     pub airplay: Option<FeedLease>,
     pub cast: Option<CastLease>,
+    pub calibration: Option<Arc<CalibrationTap>>,
 }
 
 impl Feeds {
-    fn push(&mut self, block: &[f32], frames: usize, arrived: Instant) {
+    /// Hands `block` to the senders, after the calibration's fade, and adds
+    /// the calibration's signal from `signal` for the ring.
+    fn push(&mut self, block: &mut [f32], frames: usize, arrived: Instant, signal: &mut i64) {
+        let tap = self.calibration.as_deref().filter(|tap| tap.is_active());
+        if let Some(tap) = tap {
+            tap.fade_music(block);
+        }
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.push(block, frames, arrived);
         }
         if let Some(cast) = self.cast.as_mut() {
             cast.push(block, frames);
+        }
+        if let Some(tap) = tap {
+            tap.add_signal(block, signal);
         }
     }
 }
@@ -466,6 +479,9 @@ impl CaptureConverter {
             frames.min(data.len() / block)
         };
         let channels = usize::from(self.format.channels);
+        let mut signal = self.signal_cursor();
+        let starts_signal = signal == 0;
+        let mut written = 0;
         let mut done = 0;
         while done < frames {
             let n = (frames - done).min(CONVERT_CHUNK);
@@ -480,16 +496,34 @@ impl CaptureConverter {
                     &mut self.stereo[..n * 2],
                 );
             }
-            self.write_stereo(n, arrived);
+            written += self.write_stereo(n, arrived, &mut signal);
             done += n;
         }
-        self.writer.end_block_at(clock::now_ns());
+        let closed = clock::now_ns();
+        self.writer.end_block_at(closed);
+        if starts_signal
+            && written > 0
+            && let Some(tap) = self.feeds.calibration.as_ref()
+        {
+            tap.signal_started(closed, written);
+        }
+    }
+
+    /// Where this block's calibration signal starts, or -1 for none.
+    fn signal_cursor(&self) -> i64 {
+        self.feeds
+            .calibration
+            .as_ref()
+            .filter(|tap| tap.is_active())
+            .map_or(-1, |tap| tap.block_cursor())
     }
 
     /// Writes the first `frames` frames of `stereo`, resampled if needed and
     /// equalized, as part of the packet's block, and hands them to the
-    /// AirPlay sender as audio that arrived at `arrived`.
-    fn write_stereo(&mut self, frames: usize, arrived: Instant) {
+    /// AirPlay sender as audio that arrived at `arrived`. While a calibration
+    /// runs, the music fades out of both and the signal from `signal` goes
+    /// into the ring. Returns the frames written to the ring.
+    fn write_stereo(&mut self, frames: usize, arrived: Instant, signal: &mut i64) -> usize {
         let CaptureConverter {
             writer,
             equalizer,
@@ -503,23 +537,27 @@ impl CaptureConverter {
             None => {
                 let block = &mut stereo[..frames * 2];
                 equalizer.process(block);
+                feeds.push(block, frames, arrived, signal);
                 writer.write_part(block, frames);
-                feeds.push(block, frames, arrived);
+                frames
             }
             Some(resampler) => {
                 let input = &stereo[..frames * 2];
                 let mut consumed = 0;
+                let mut written = 0;
                 while consumed < frames {
                     let (used, produced) = resampler.process(&input[consumed * 2..], resampled);
                     let block = &mut resampled[..produced * 2];
                     equalizer.process(block);
+                    feeds.push(block, produced, arrived, signal);
                     writer.write_part(block, produced);
-                    feeds.push(block, produced, arrived);
+                    written += produced;
                     consumed += used;
                     if used == 0 && produced == 0 {
                         break;
                     }
                 }
+                written
             }
         }
     }
@@ -1187,6 +1225,35 @@ mod tests {
     }
 
     #[test]
+    fn a_calibration_silences_the_music_and_adds_its_signal_from_a_block_start() {
+        let (ring, writer) = session_ring_after_lead_in();
+        let (_control, processor) = equalizer();
+        let tap = Arc::new(CalibrationTap::new());
+        let feeds = Feeds {
+            calibration: Some(Arc::clone(&tap)),
+            ..Feeds::default()
+        };
+        let mut converter =
+            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor, feeds).unwrap();
+        let music = f32_bytes(&[0.5; 960]);
+        tap.engage();
+        // 30 ms of music fade out over the first 20.
+        for _ in 0..3 {
+            converter.push(&music, 480, false);
+        }
+        assert!(newest(&ring, 480).iter().all(|s| *s == 0.0));
+        assert_eq!(tap.played_at_ns(), None);
+        tap.play();
+        let before = clock::now_ns();
+        converter.push(&music, 480, false);
+        let signal = audiosync_core::calibrate::signal(SESSION_RATE).unwrap();
+        let heard = newest(&ring, 480);
+        assert!((0..480).all(|i| heard[2 * i] == signal[i] && heard[2 * i + 1] == signal[i]));
+        let played = tap.played_at_ns().expect("the block carried the signal's start");
+        assert!(played + 10_000_000 >= before, "stamped when its block closed");
+    }
+
+    #[test]
     fn float_stereo_at_the_session_rate_is_written_unchanged() {
         let (ring, writer) = session_ring_after_lead_in();
         let mut converter = new_converter(CAPTURE_ATTEMPTS[0].format, writer).unwrap();
@@ -1558,6 +1625,7 @@ mod tests {
         let feeds = Feeds {
             airplay: Some(lease),
             cast: None,
+            calibration: None,
         };
         let mut converter =
             CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor, feeds).unwrap();
