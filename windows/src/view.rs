@@ -1280,7 +1280,7 @@ impl App {
                 format_offset_ms,
             );
             row.calibration_status = calibration_status(&strings, &state, speaker);
-            row.cast_members = cast_members(&strings, speaker);
+            row.cast_group_note = cast_group_note(&strings, speaker);
             row.group_note = group_note(&strings, speaker);
             row
         };
@@ -2899,7 +2899,7 @@ pub fn speaker_item(
         volume_fixed: speaker.cast.as_ref().is_some_and(|cast| cast.volume_fixed),
         cast_group: cast_group(speaker).is_some(),
         // Needs the strings: set by the caller (`App::refresh`).
-        cast_members: SharedString::default(),
+        cast_group_note: SharedString::default(),
         group_note: SharedString::default(),
     }
 }
@@ -2908,13 +2908,26 @@ fn cast_group(speaker: &ui_model::Speaker) -> Option<&ui_model::CastGroup> {
     speaker.cast.as_ref()?.group.as_ref()
 }
 
-/// A Cast group's members as one list in the UI's words; empty while
-/// they are unknown, and for any other speaker.
-fn cast_members(strings: &Strings<'_>, speaker: &ui_model::Speaker) -> SharedString {
-    cast_group(speaker)
-        .and_then(|group| group.members.as_deref())
-        .map(|members| joined(strings, members))
-        .unwrap_or_default()
+/// The note under a Cast group's name, which Narrator reads too: what it
+/// is and its members as far as its session named them (spec C94). Empty
+/// for any other speaker.
+fn cast_group_note(strings: &Strings<'_>, speaker: &ui_model::Speaker) -> SharedString {
+    let Some(group) = cast_group(speaker) else {
+        return SharedString::default();
+    };
+    let unnamed = strings.get_cast_unnamed_member().to_string();
+    let (members, unknown) = match &group.members {
+        ui_model::CastMembers::NotReported => (SharedString::default(), false),
+        ui_model::CastMembers::Unknown => (SharedString::default(), true),
+        ui_model::CastMembers::Known(names) => {
+            let names: Vec<String> = names
+                .iter()
+                .map(|name| name.clone().unwrap_or_else(|| unnamed.clone()))
+                .collect();
+            (joined(strings, &names), names.is_empty())
+        }
+    };
+    strings.invoke_cast_group_note(members, unknown)
 }
 
 /// The line a stereo pair or home theater group row shows after its kind,
@@ -4926,58 +4939,65 @@ mod tests {
         let mut speaker = state.speaker("local:desk").unwrap().clone();
         speaker.name = "Attic".to_owned();
         speaker.kind = ui_model::SpeakerKind::Cast;
+        let group = |members| Some(ui_model::CastGroup { members });
         speaker.cast = Some(ui_model::CastRow {
             state: ui_model::CastState::Idle,
             muted: false,
             volume_fixed: false,
-            group: Some(ui_model::CastGroup { members: None }),
+            group: group(ui_model::CastMembers::NotReported),
         });
         let row = speaker_item(&state, &speaker, true, false, None);
         assert!(row.cast && row.cast_group);
-        let members = cast_members(&strings, &speaker);
-        assert_eq!(members.as_str(), "");
-        let note = |members: &SharedString| {
-            strings.invoke_cast_note(
-                CastState::Idle,
-                false,
-                strings.invoke_cast_group_note(members.clone()),
-            )
-        };
-        assert_eq!(note(&members).as_str(), "Group, members unknown");
+        let note = |speaker: &ui_model::Speaker| cast_group_note(&strings, speaker);
+        let label = |note: SharedString| strings.invoke_cast_group_label("Attic".into(), note);
         assert_eq!(
-            strings
-                .invoke_cast_group_label("Attic".into(), members.clone())
-                .as_str(),
+            note(&speaker).as_str(),
+            "Google Cast group",
+            "before it plays"
+        );
+        assert_eq!(label(note(&speaker)).as_str(), "Attic, Google Cast group");
+
+        speaker.cast.as_mut().unwrap().group = group(ui_model::CastMembers::Unknown);
+        assert_eq!(
+            note(&speaker).as_str(),
+            "Google Cast group, members unknown"
+        );
+        assert_eq!(
+            label(note(&speaker)).as_str(),
             "Attic, Google Cast group, members unknown"
         );
 
-        speaker.cast.as_mut().unwrap().group = Some(ui_model::CastGroup {
-            members: Some(vec!["Kitchen".to_owned(), "Living Room".to_owned()]),
-        });
-        let members = cast_members(&strings, &speaker);
-        assert_eq!(members.as_str(), "Kitchen and Living Room");
-        assert_eq!(note(&members).as_str(), "Group of Kitchen and Living Room");
+        speaker.cast.as_mut().unwrap().group = group(ui_model::CastMembers::Known(vec![
+            Some("Kitchen".to_owned()),
+            None,
+            Some("Living Room".to_owned()),
+        ]));
         assert_eq!(
-            strings
-                .invoke_cast_group_label("Attic".into(), members.clone())
-                .as_str(),
-            "Attic, Google Cast group of Kitchen and Living Room"
+            note(&speaker).as_str(),
+            "Google Cast group: Kitchen, an unnamed speaker and Living Room"
         );
         assert_eq!(
-            strings
-                .invoke_cast_note(
-                    CastState::Connecting,
-                    false,
-                    strings.invoke_cast_group_note(members)
-                )
-                .as_str(),
+            label(note(&speaker)).as_str(),
+            "Attic, Google Cast group: Kitchen, an unnamed speaker and Living Room"
+        );
+        let cast_note = |state, muted| strings.invoke_cast_note(state, muted, note(&speaker));
+        assert_eq!(
+            cast_note(CastState::Connecting, false).as_str(),
             "Connecting…",
             "where it is comes first"
+        );
+        assert_eq!(
+            cast_note(CastState::Playing, true).as_str(),
+            "Muted on the group"
+        );
+        assert_eq!(
+            cast_note(CastState::Playing, false).as_str(),
+            "Google Cast group: Kitchen, an unnamed speaker and Living Room"
         );
 
         let single = state.speaker("local:desk").unwrap();
         assert!(!speaker_item(&state, single, true, false, None).cast_group);
-        assert_eq!(cast_members(&strings, single).as_str(), "");
+        assert_eq!(cast_group_note(&strings, single).as_str(), "");
     }
 
     #[test]

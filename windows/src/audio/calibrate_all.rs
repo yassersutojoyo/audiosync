@@ -1478,4 +1478,56 @@ pub(crate) mod tests {
         assert_eq!(again.err(), Some(Failure::NotPlaying));
         given_back(&rig);
     }
+
+    #[test]
+    fn the_lineup_measures_a_playing_cast_group_under_its_id_and_leaves_one_off_out() {
+        use audiosync_cast::discovery::DeviceId;
+        use audiosync_cast::host::{AttemptId, HostEvent};
+        use audiosync_cast::session::SessionEvent;
+
+        use crate::audio::backend::SourceId;
+        use crate::audio::cast::tests::{ATTIC, FakeCast, LIVING};
+        use crate::audio::mock::MockBackend;
+
+        let mut backend = MockBackend::demo();
+        let cast = FakeCast::default();
+        cast.announce(ATTIC, "Attic", 32_123);
+        cast.announce(LIVING, "Living Room", 32_124);
+        backend.set_cast(cast.link());
+        backend.poll();
+        assert!(
+            backend
+                .cast_speakers()
+                .iter()
+                .all(|speaker| speaker.group.is_some()),
+            "both are groups"
+        );
+        backend.set_output_enabled("speakers", true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let casts = |backend: &MockBackend| -> Vec<(String, Option<f64>)> {
+            lineup(backend)
+                .members
+                .into_iter()
+                .filter(|member| member.class == Class::Cast)
+                .map(|member| (member.id, member.offset_ms))
+                .collect()
+        };
+        assert_eq!(casts(&backend), [], "both groups are off");
+
+        backend.set_cast_offset(ATTIC, 2400.0);
+        backend.set_cast_enabled(ATTIC, true).unwrap();
+        assert_eq!(casts(&backend), [], "Attic still connects");
+        cast.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: DeviceId::parse(ATTIC).unwrap(),
+            event: SessionEvent::Playing,
+        });
+        backend.poll();
+        assert_eq!(lineup(&backend).members[0].id, "speakers");
+        assert_eq!(
+            casts(&backend),
+            [(ATTIC.to_owned(), Some(2400.0))],
+            "Attic is measured as one speaker, Living Room is left out"
+        );
+    }
 }

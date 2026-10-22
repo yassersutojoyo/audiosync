@@ -1141,7 +1141,7 @@ export component SpeakerRow inherits Rectangle {
     // The line under the name: the kind of a connected speaker, and the note
     // of one that can't simply play, or that is on but can't play right now
     // ("Waiting for device", "Reconnecting…").
-    property <string> cast-note: Strings.cast-note(root.item.cast-state, root.item.muted, root.item.cast-group ? Strings.cast-group-note(root.item.cast-members) : "");
+    property <string> cast-note: Strings.cast-note(root.item.cast-state, root.item.muted, root.item.cast-group-note);
     property <string> note: root.item.cast && root.cast-note != "" ? root.cast-note : Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.row-note(root.item.state);
     property <string> caption: Strings.speaker-caption(root.item.show-kind ? Strings.speaker-kind(root.item.kind) : "", root.note);
 
@@ -1218,7 +1218,7 @@ export component SpeakerRow inherits Rectangle {
                         badge := SpeakerBadge {
                             glyph: Glyphs.speaker(root.item.kind);
                             state: root.item.state;
-                            label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-members) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind);
+                            label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind);
                             description: Strings.with-group-note(root.item.group-note, Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.help(root.item.state));
                             toggled => {
                                 root.toggled();

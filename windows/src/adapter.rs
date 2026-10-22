@@ -1760,6 +1760,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// An AirPlay speaker can't play from AudioSync, so it is off: tells the
     /// user, and stops streaming when nothing else is on (S136).
     fn airplay_cant_play(&mut self, id: &str, problem: AirPlayProblem) {
+        self.airplay_cant_play_as(id, self.airplay_name(id), problem);
+    }
+
+    /// As [`Self::airplay_cant_play`], the notice naming `speaker`: the
+    /// member of a target that asks for a password.
+    fn airplay_cant_play_as(&mut self, id: &str, speaker: String, problem: AirPlayProblem) {
         let reason = match problem {
             AirPlayProblem::NeedsPassword
             | AirPlayProblem::PairingNotYet
@@ -1773,21 +1779,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
             enabled_left: self.enabled_count(),
         });
         if let Some(subject) = reaction.notice {
-            let speaker = self.airplay_name(id);
             self.post(
                 subject,
                 NoticeMessage::AirPlayCantPlay {
-                    speaker,
+                    speaker: speaker.clone(),
                     problem: ui_problem(problem),
                 },
             );
         }
         if reaction.stop_session && self.running() {
             self.log.log(|| {
-                format!(
-                    "streaming stops: {} can't play and no other speaker is on",
-                    self.airplay_name(id)
-                )
+                format!("streaming stops: {speaker} can't play and no other speaker is on")
             });
             self.audio.stop();
         }
@@ -2026,6 +2028,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::AirPlayFailed { id, problem } => {
                 self.reconnecting.remove(&id);
                 self.airplay_cant_play(&id, problem);
+            }
+            BackendEvent::AirPlayMemberNeedsPassword { id, member } => {
+                self.reconnecting.remove(&id);
+                self.airplay_cant_play_as(&id, member, AirPlayProblem::NeedsPassword);
             }
             BackendEvent::AirPlayPaired { id } => {
                 self.reconnecting.remove(&id);
@@ -3181,7 +3187,9 @@ mod tests {
     use crate::audio::pairings::tests::credentials;
     use crate::audio::routing::HOLD_CHECKS;
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
-    use crate::ui_model::{CastProblem as UiCastProblem, MAX_DELAY_MS, MIN_DELAY_MS, SpeakerState};
+    use crate::ui_model::{
+        CastMembers, CastProblem as UiCastProblem, MAX_DELAY_MS, MIN_DELAY_MS, SpeakerState,
+    };
 
     const SPEAKERS: &str = "speakers";
     const HEADPHONES: &str = "headphones";
@@ -6930,7 +6938,7 @@ mod tests {
                 .members
                 .clone()
         };
-        assert_eq!(members(&group(&adapter)), None);
+        assert_eq!(members(&group(&adapter)), CastMembers::NotReported);
         assert!(
             adapter
                 .snapshot()
@@ -6961,7 +6969,10 @@ mod tests {
             }]),
         });
         adapter.poll();
-        assert_eq!(members(&group(&adapter)), Some(vec!["Kitchen".to_owned()]));
+        assert_eq!(
+            members(&group(&adapter)),
+            CastMembers::Known(vec![Some("Kitchen".to_owned())])
+        );
         adapter.set_speaker_volume(&cc(CAST_ATTIC), 50.0);
         assert_eq!(fake.state().volumes, [0.5]);
     }

@@ -351,9 +351,20 @@ pub struct CastInfo {
 /// A Cast group as its row shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CastGroup {
-    /// Its members by name, as its latest session listed them; `None`
-    /// until one did (spec C94).
-    pub members: Option<Vec<String>>,
+    pub members: CastMembers,
+}
+
+/// What a Cast group's row knows of its members (spec C94).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum CastMembers {
+    /// No session of the group has played yet.
+    #[default]
+    NotReported,
+    /// Its latest session played without naming them.
+    Unknown,
+    /// As its latest session listed them; `None` for a member that neither
+    /// a listed device nor the group names.
+    Known(Vec<Option<String>>),
 }
 
 /// Something the UI should know about, from [`AudioBackend::poll`].
@@ -429,6 +440,15 @@ pub enum BackendEvent {
         id: String,
         /// Why.
         problem: AirPlayProblem,
+    },
+    /// A member of a stereo pair or home theater group asks for a password
+    /// no prompt can take now, so the target was turned off.
+    AirPlayMemberNeedsPassword {
+        /// The target's ID.
+        id: String,
+        /// The member's name, which the notice gives: a member that is part
+        /// of its target has no row of its own.
+        member: String,
     },
     /// An Apple TV the user switched on was paired, and is on now.
     AirPlayPaired {

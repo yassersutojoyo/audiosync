@@ -51,7 +51,9 @@ use audiosync_core::fade::Fade;
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
 
 use super::SESSION_RATE;
-use super::backend::{BackendEvent, CastDiscovery, CastGroup, CastInfo, CastProblem, CastStatus};
+use super::backend::{
+    BackendEvent, CastDiscovery, CastGroup, CastInfo, CastMembers, CastProblem, CastStatus,
+};
 use crate::debug_log::DebugLog;
 
 /// The ring between the capture and a Cast session: 2 s at the session
@@ -554,10 +556,11 @@ impl CastSpeakers {
                 .clone()
                 .unwrap_or_else(|| device.instance.clone()),
             group: entry.is_group().then(|| CastGroup {
-                members: self
-                    .members
-                    .get(&id)
-                    .map(|members| self.member_names(members)),
+                members: match self.members.get(&id) {
+                    None => CastMembers::NotReported,
+                    Some(members) if members.is_empty() => CastMembers::Unknown,
+                    Some(members) => CastMembers::Known(self.member_names(members)),
+                },
             }),
             enabled: self.enabled == Some(id),
             volume: (level * 100.0).clamp(0.0, 100.0),
@@ -603,16 +606,18 @@ impl CastSpeakers {
     }
 
     /// A group's members by name: the name of the device a member is, when
-    /// one is listed, else the name the group gives it (C95).
-    fn member_names(&self, members: &[GroupMember]) -> Vec<String> {
+    /// one is listed, else the name the group gives it (C95), else `None`.
+    fn member_names(&self, members: &[GroupMember]) -> Vec<Option<String>> {
         members
             .iter()
-            .filter_map(|member| {
+            .map(|member| {
                 self.list
                     .member(member)
                     .and_then(|entry| entry.device.as_ref())
                     .and_then(|device| device.name.clone())
+                    .filter(|name| !name.is_empty())
                     .or_else(|| member.name.clone())
+                    .filter(|name| !name.is_empty())
             })
             .collect()
     }
@@ -898,10 +903,16 @@ impl CastSpeakers {
             && attempt.status != status
         {
             attempt.status = status;
+            let device = attempt.device;
             self.pending.push(BackendEvent::CastChanged);
             if status == CastStatus::Playing {
+                // A group lists its members before its stream plays (C94),
+                // so one that plays without a list keeps them unknown.
+                if self.entry(device).is_some_and(Entry::is_group) {
+                    self.members.entry(device).or_default();
+                }
                 self.pending.push(BackendEvent::CastPlaying {
-                    id: attempt.device.to_string(),
+                    id: device.to_string(),
                 });
             }
         }
@@ -1014,11 +1025,21 @@ impl CastSpeakers {
             SessionEvent::GroupMessage(kind) => self.log.log(|| format!("Cast group: {kind}")),
             SessionEvent::Members(members) => {
                 self.log.log(|| {
+                    let names: Vec<String> = self
+                        .member_names(&members)
+                        .into_iter()
+                        .zip(&members)
+                        .map(|(name, member)| {
+                            name.unwrap_or_else(|| {
+                                format!("unnamed, deviceId {}", member.device_id)
+                            })
+                        })
+                        .collect();
                     format!(
-                        "Cast group {}: {} members ({})",
+                        "Cast group {} members: {} ({})",
                         self.name(device),
                         members.len(),
-                        self.member_names(&members).join(", ")
+                        names.join(", ")
                     )
                 });
                 self.members.insert(device, members);
@@ -1257,7 +1278,12 @@ pub mod tests {
         let speakers = cast.speakers();
         let names: Vec<&str> = speakers.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["Attic", "Kitchen", "Living Room"]);
-        assert_eq!(speakers[0].group, Some(CastGroup { members: None }));
+        assert_eq!(
+            speakers[0].group,
+            Some(CastGroup {
+                members: CastMembers::NotReported
+            })
+        );
         assert_eq!(speakers[1].group, None);
         assert_eq!(speakers[1].id, KITCHEN);
         assert_eq!(cast.discovery(), CastDiscovery::Browsing);
@@ -1387,7 +1413,7 @@ pub mod tests {
         }
     }
 
-    fn group_members(cast: &CastSpeakers) -> Option<Vec<String>> {
+    fn group_members(cast: &CastSpeakers) -> CastMembers {
         cast.speakers()[0]
             .group
             .clone()
@@ -1404,7 +1430,11 @@ pub mod tests {
         let records = fake.state().groups[0].clone().expect("a group's records");
         let attic: SocketAddr = "192.0.2.10:32123".parse().unwrap();
         assert_eq!(records.get().group, [attic]);
-        assert_eq!(group_members(&cast), None, "unknown until named");
+        assert_eq!(
+            group_members(&cast),
+            CastMembers::NotReported,
+            "not reported before it plays"
+        );
 
         // Kitchen by its UUID in another case and with dashes, then one no
         // listed device matches.
@@ -1420,7 +1450,7 @@ pub mod tests {
         assert!(events.contains(&BackendEvent::CastChanged));
         assert_eq!(
             group_members(&cast),
-            Some(vec!["Kitchen".to_owned(), "Garage".to_owned()])
+            CastMembers::Known(vec![Some("Kitchen".to_owned()), Some("Garage".to_owned())])
         );
         assert_eq!(records.get().members, [attic.ip()]);
 
@@ -1454,12 +1484,48 @@ pub mod tests {
         cast.set_enabled(ATTIC, false).unwrap();
         assert_eq!(
             group_members(&cast),
-            Some(vec!["Kitchen".to_owned()]),
+            CastMembers::Known(vec![Some("Kitchen".to_owned())]),
             "the last list stays while it is off"
         );
         cast.set_enabled(ATTIC, true).unwrap();
         assert_eq!(fake.state().started.len(), 2);
-        assert_eq!(group_members(&cast), None);
+        assert_eq!(group_members(&cast), CastMembers::NotReported);
+    }
+
+    #[test]
+    fn a_group_that_plays_without_a_member_list_has_its_members_unknown() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        cast.poll();
+        assert_eq!(group_members(&cast), CastMembers::NotReported);
+        fake.report(playing(ATTIC));
+        cast.poll();
+        assert_eq!(group_members(&cast), CastMembers::Unknown);
+        cast.set_enabled(ATTIC, false).unwrap();
+        assert_eq!(
+            group_members(&cast),
+            CastMembers::Unknown,
+            "what its session showed stays while it is off"
+        );
+    }
+
+    #[test]
+    fn a_member_nobody_names_keeps_its_place_in_the_list() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        let nameless = GroupMember {
+            device_id: "porch-7".to_owned(),
+            id: None,
+            name: None,
+        };
+        fake.report(members(ATTIC, vec![member(KITCHEN, "Kitchen"), nameless]));
+        cast.poll();
+        assert_eq!(
+            group_members(&cast),
+            CastMembers::Known(vec![Some("Kitchen".to_owned()), None])
+        );
     }
 
     #[test]
@@ -1485,7 +1551,12 @@ pub mod tests {
         cast.poll();
         cast.set_streaming(true);
         cast.set_enabled(ATTIC, true).unwrap();
-        fake.report(members(ATTIC, vec![member("garage", "Garage")]));
+        let nameless = GroupMember {
+            device_id: "porch-7".to_owned(),
+            id: None,
+            name: None,
+        };
+        fake.report(members(ATTIC, vec![member("garage", "Garage"), nameless]));
         fake.report(HostEvent::Session {
             attempt: AttemptId(1),
             device: id(ATTIC),
@@ -1498,7 +1569,7 @@ pub mod tests {
             &[
                 "Cast group 00112233445566778899aabbccddeeff on port 32123: ca=- md=-",
                 "Cast: Attic switched on",
-                "Cast group Attic: 1 members (Garage)",
+                "Cast group Attic members: 2 (Garage, unnamed, deviceId porch-7)",
                 "Cast group: CASTING_GROUPS",
             ],
         );

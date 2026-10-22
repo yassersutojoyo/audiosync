@@ -2940,6 +2940,9 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::AirPlayFailed { id, problem } => {
             format!("AirPlay speaker ({id}) can't play ({problem:?}); it is turned off")
         }
+        BackendEvent::AirPlayMemberNeedsPassword { id, member } => {
+            format!("AirPlay target ({id}) turned off: its member {member} asks for a password")
+        }
         BackendEvent::AirPlayPaired { id } => format!("AirPlay speaker ({id}) paired and on"),
         BackendEvent::AirPlayStopped => {
             "the AirPlay sender stopped; it waits for the user's Retry".to_owned()

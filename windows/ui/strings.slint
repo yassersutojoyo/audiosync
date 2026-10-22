@@ -763,10 +763,13 @@ export global Strings {
     }
 
     // The note under a Google Cast speaker's name: where one that is on is,
-    // else a group's `group-note`; empty otherwise.
+    // else a group's `group-note` (empty for a single speaker).
     public pure function cast-note(state: CastState, muted: bool, group-note: string) -> string {
         if state == CastState.connecting {
             return @tr("Connecting…");
+        }
+        if muted && group-note != "" {
+            return @tr("Muted on the group");
         }
         if muted {
             return @tr("Muted on the speaker");
@@ -775,21 +778,26 @@ export global Strings {
     }
 
     // Under a Google Cast group's name: its members as "A, B and C"
-    // (list-and), or empty while no session has named them.
-    public pure function cast-group-note(members: string) -> string {
-        if members == "" {
-            return @tr("Group, members unknown");
+    // (list-and) once a session named them; `unknown` once one played
+    // without naming them.
+    public pure function cast-group-note(members: string, unknown: bool) -> string {
+        if members != "" {
+            return @tr("Google Cast group: {}", members);
         }
-        return @tr("Group of {}", members);
+        if unknown {
+            return @tr("Google Cast group, members unknown");
+        }
+        return @tr("Google Cast group");
     }
 
+    // A Google Cast group's member that neither a listed device nor the
+    // group names, in its member list.
+    out property <string> cast-unnamed-member: @tr("an unnamed speaker");
+
     // What Narrator reads for a Google Cast group's switch: "Attic, Google
-    // Cast group of Kitchen and Living Room".
-    public pure function cast-group-label(name: string, members: string) -> string {
-        if members == "" {
-            return @tr("{}, Google Cast group, members unknown", name);
-        }
-        return @tr("{}, Google Cast group of {}", name, members);
+    // Cast group: Kitchen and Living Room", the group's note after its name.
+    public pure function cast-group-label(name: string, note: string) -> string {
+        return @tr("{0}, {1}", name, note);
     }
 
     // Under a Google Cast speaker's volume while it connects or plays.

@@ -107,10 +107,10 @@ export struct SpeakerItem {
     muted: bool,
     // The Cast speaker's volume can't be changed from here.
     volume-fixed: bool,
-    // A Google Cast group, and its members as "A, B and C"; empty while
-    // they are unknown.
+    // A Google Cast group, and the note under its name
+    // (Strings.cast-group-note); empty for any other row.
     cast-group: bool,
-    cast-members: string,
+    cast-group-note: string,
     // A stereo pair or home theater group: what it is and its members, or
     // which member is missing (Strings.group-note); empty for any other row.
     group-note: string,
