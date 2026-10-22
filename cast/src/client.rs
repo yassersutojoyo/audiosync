@@ -1,5 +1,8 @@
 //! The channel over a real TLS connection (C19 to C21), driven on the
 //! caller's thread with blocking sockets and short read timeouts.
+//!
+//! A read times out only in a peek, then reads queued bytes ([`PeekedTcp`]):
+//! a cancel can't drop bytes a peek never took (Windows `SO_RCVTIMEO`).
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -103,9 +106,33 @@ pub fn tls_connector() -> Result<TlsConnector, native_tls::Error> {
         .build()
 }
 
+/// The TCP connection under the TLS stream: a read first peeks within the
+/// socket's read timeout, so a timeout only ever ends a peek.
+#[derive(Debug)]
+struct PeekedTcp(TcpStream);
+
+impl Read for PeekedTcp {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.0.peek(buf)? == 0 {
+            return Ok(0);
+        }
+        self.0.read(buf)
+    }
+}
+
+impl Write for PeekedTcp {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
+
 /// An open channel to one device.
 pub struct CastClient {
-    stream: TlsStream<TcpStream>,
+    stream: TlsStream<PeekedTcp>,
     reader: FrameReader,
     channel: Channel,
     /// Each event with its sequence number, so a call waits only for
@@ -181,15 +208,12 @@ impl CastClient {
         let local_address = tcp.local_addr().map_err(tcp_error)?;
         let tls_error = |message: String| ConnectError::Tls { address, message };
         let connector = tls_connector().map_err(|error| tls_error(error.to_string()))?;
-        let stream =
-            connector
-                .connect(&address.ip().to_string(), tcp)
-                .map_err(|error| match error {
-                    HandshakeError::Failure(error) => tls_error(error.to_string()),
-                    HandshakeError::WouldBlock(_) => {
-                        tls_error("the handshake timed out".to_owned())
-                    }
-                })?;
+        let stream = connector
+            .connect(&address.ip().to_string(), PeekedTcp(tcp))
+            .map_err(|error| match error {
+                HandshakeError::Failure(error) => tls_error(error.to_string()),
+                HandshakeError::WouldBlock(_) => tls_error("the handshake timed out".to_owned()),
+            })?;
         let fingerprint = stream
             .peer_certificate()
             .ok()
@@ -198,6 +222,7 @@ impl CastClient {
             .map(|der| Fingerprint::of(&der));
         stream
             .get_ref()
+            .0
             .set_read_timeout(Some(READ_SLICE))
             .map_err(tcp_error)?;
         let mut client = CastClient {
@@ -393,7 +418,7 @@ impl CastClient {
     /// Drops the connection without a teardown, before a reconnect (C81).
     pub fn disconnect(&mut self) {
         let _ = self.stream.shutdown();
-        let _ = self.stream.get_ref().shutdown(std::net::Shutdown::Both);
+        let _ = self.stream.get_ref().0.shutdown(std::net::Shutdown::Both);
         self.channel.end(EndReason::ClosedByDevice);
     }
 
@@ -414,6 +439,7 @@ impl CastClient {
         let _ = self
             .stream
             .get_ref()
+            .0
             .set_read_timeout(Some(wait.max(Duration::from_millis(1))));
         match self.stream.read(&mut self.buffer) {
             Ok(0) => self.channel.end(EndReason::ClosedByDevice),
@@ -475,5 +501,72 @@ impl CastClient {
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Shutdown, TcpListener};
+    use std::thread;
+
+    const SLICE: Duration = Duration::from_millis(20);
+
+    fn connected() -> (PeekedTcp, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let tcp = TcpStream::connect(listener.local_addr().expect("address")).expect("connect");
+        let (device, _) = listener.accept().expect("accept");
+        tcp.set_read_timeout(Some(SLICE)).expect("timeout");
+        (PeekedTcp(tcp), device)
+    }
+
+    // A frame whose halves straddle the read slice arrives whole, however
+    // often the wait between them times out.
+    #[test]
+    fn bytes_split_across_read_timeouts_arrive_intact() {
+        let (mut tcp, mut device) = connected();
+        let frame: Vec<u8> = (0..=255).collect();
+        let sent = frame.clone();
+        let writer = thread::spawn(move || {
+            for pause in [1, 2, 3] {
+                device.write_all(&sent[..100]).expect("write");
+                thread::sleep(SLICE * pause + Duration::from_millis(5));
+                device.write_all(&sent[100..]).expect("write");
+            }
+            device
+        });
+        let mut received = Vec::new();
+        let mut buffer = [0u8; 64];
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while received.len() < 3 * frame.len() && Instant::now() < deadline {
+            match tcp.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => received.extend_from_slice(&buffer[..count]),
+                Err(error) => assert!(
+                    matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ),
+                    "{error}"
+                ),
+            }
+        }
+        let _device = writer.join().expect("writer");
+        assert_eq!(received, frame.repeat(3));
+    }
+
+    // After the stop's shutdown the next read ends at once instead of
+    // waiting out its timeout.
+    #[test]
+    fn a_read_after_the_shutdown_ends_at_once() {
+        let (mut tcp, _device) = connected();
+        tcp.0
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("timeout");
+        tcp.0.shutdown(Shutdown::Both).expect("shutdown");
+        let started = Instant::now();
+        let mut buffer = [0u8; 16];
+        assert!(!matches!(tcp.read(&mut buffer), Ok(count) if count > 0));
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

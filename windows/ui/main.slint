@@ -8,7 +8,7 @@
 import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Appearance, CalibrationRowItem, CastList, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
+import { Appearance, CalibrationRowItem, CastList, GroupItem, MainControl, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
 import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
@@ -19,6 +19,7 @@ export { GuideWindow } from "guide.slint";
 export { HelpWindow } from "help.slint";
 export { RemoteWindow } from "remote.slint";
 export { Strings } from "strings.slint";
+export { NameField } from "widgets.slint";
 // The style's palette, for the theme preview (src/view.rs).
 export { Palette } from "std-widgets.slint";
 // The brand teal, for the standard controls' accent (src/view.rs).
@@ -41,6 +42,10 @@ component SpeakerSection inherits VerticalLayout {
     callback auto-connect-toggled(string, bool);
     callback forget-pairing(string);
     callback device-volume-fix(string);
+    callback rename-requested(string);
+    callback rename-edited(string, string);
+    callback rename-committed(string);
+    callback rename-cancelled(string);
     callback cast-muted(string, bool);
     callback cast-resync(string);
     callback calibrate(string);
@@ -123,6 +128,18 @@ component SpeakerSection inherits VerticalLayout {
                 device-volume-fix => {
                     root.device-volume-fix(speaker.id);
                 }
+                rename-requested => {
+                    root.rename-requested(speaker.id);
+                }
+                rename-edited(text) => {
+                    root.rename-edited(speaker.id, text);
+                }
+                rename-committed => {
+                    root.rename-committed(speaker.id);
+                }
+                rename-cancelled => {
+                    root.rename-cancelled(speaker.id);
+                }
                 cast-muted(muted) => {
                     root.cast-muted(speaker.id, muted);
                 }
@@ -173,6 +190,7 @@ component SpeakerSection inherits VerticalLayout {
 component EqualizerCard inherits Rectangle {
     in property <bool> on;
     callback clicked();
+    callback focus-changed(bool);
 
     // A Windows 11 settings card: the whole card is the button.
     background: touch.pressed ? Tokens.surface.mix(Tokens.text, 0.97) : touch.has-hover ? Tokens.surface.mix(Tokens.text, 0.95) : Tokens.surface;
@@ -190,6 +208,9 @@ component EqualizerCard inherits Rectangle {
 
     focus := FocusScope {
         focus-on-click: false;
+        changed has-focus => {
+            root.focus-changed(self.has-focus);
+        }
         key-pressed(event) => {
             if event.text == " " || event.text == Key.Return {
                 root.clicked();
@@ -281,6 +302,7 @@ component CalibrationCard inherits Card {
     callback measure-again(int);
     callback apply();
     callback undo();
+    callback focus-changed(bool);
     callback close();
 
     accessible-role: groupbox;
@@ -309,6 +331,9 @@ component CalibrationCard inherits Card {
             alignment: LayoutAlignment.start;
 
             calibrate-button := Button {
+                changed has-focus => {
+                    root.focus-changed(self.has-focus);
+                }
                 text: root.running ? Strings.calibration-cancel : Strings.calibrate-all;
                 enabled: root.running || root.can-start;
                 accessible-label: root.running ? Strings.calibrate-all-cancel-label : Strings.calibrate-all;
@@ -327,6 +352,9 @@ component CalibrationCard inherits Card {
             alignment: LayoutAlignment.start;
 
             Button {
+                changed has-focus => {
+                    root.focus-changed(self.has-focus);
+                }
                 text: Strings.notice-open-privacy;
                 accessible-label: Strings.notice-open-privacy-label;
                 clicked => {
@@ -370,6 +398,9 @@ component CalibrationCard inherits Card {
                     alignment: LayoutAlignment.start;
 
                     Button {
+                        changed has-focus => {
+                            root.focus-changed(self.has-focus);
+                        }
                         text: Strings.calibrate-all-again;
                         enabled: !root.running;
                         accessible-label: Strings.calibrate-all-again-label(row.name);
@@ -394,6 +425,9 @@ component CalibrationCard inherits Card {
                 spacing: 8px;
 
                 Button {
+                    changed has-focus => {
+                        root.focus-changed(self.has-focus);
+                    }
                     text: Strings.calibrate-all-apply;
                     accessible-label: Strings.calibrate-all-apply;
                     primary: true;
@@ -410,6 +444,9 @@ component CalibrationCard inherits Card {
                 }
 
                 undo-button := Button {
+                    changed has-focus => {
+                        root.focus-changed(self.has-focus);
+                    }
                     text: Strings.calibrate-all-undo;
                     enabled: root.can-undo && !root.running;
                     accessible-label: Strings.calibrate-all-undo;
@@ -423,6 +460,9 @@ component CalibrationCard inherits Card {
                 }
 
                 close-button := Button {
+                    changed has-focus => {
+                        root.focus-changed(self.has-focus);
+                    }
                     text: Strings.calibrate-all-close;
                     enabled: !root.running;
                     accessible-label: Strings.calibrate-all-close-label;
@@ -648,6 +688,13 @@ export component MainWindow inherits Window {
     // typed delay and keep the sync controls open.
     callback delay-apply-requested();
     callback auto-connect-toggled(string, bool);
+    // Rename… in a speaker's menu, or a double-click on its name.
+    callback speaker-rename-requested(string);
+    callback speaker-rename-edited(string, string);
+    // Enter in a speaker's name field: apply the name.
+    callback speaker-rename-committed(string);
+    // Escape in a speaker's name field: keep the old name.
+    callback speaker-rename-cancelled(string);
     callback forget-pairing-requested(string);
     // The fix under a speaker's device-volume hint.
     callback device-volume-fix-requested(string);
@@ -705,6 +752,7 @@ export component MainWindow inherits Window {
     callback dismiss-all-focus-changed(bool);
     callback speaker-focus-changed(string, RowPart);
     callback group-focus-changed(string, RowPart);
+    callback control-focus-changed(MainControl, bool);
     in-out property <int> focus-notice-index: -1;
     in-out property <string> focus-speaker-id;
     in-out property <RowPart> focus-speaker-part;
@@ -970,6 +1018,9 @@ export component MainWindow inherits Window {
                     text: Strings.streaming-switch;
                     checked: root.running;
                     accessible-label: Strings.streaming-switch;
+                    changed has-focus => {
+                        root.control-focus-changed(MainControl.power, self.has-focus);
+                    }
                     toggled => {
                         root.power-toggled(self.checked);
                         // Show what the engine did, even if it refused.
@@ -1043,6 +1094,9 @@ export component MainWindow inherits Window {
                                 model: root.sources;
                                 current-index: root.source-index;
                                 accessible-label: Strings.source-label;
+                                changed has-focus => {
+                                    root.control-focus-changed(MainControl.source, self.has-focus);
+                                }
                                 selected => {
                                     root.source-selected(self.current-index);
                                     self.current-index = root.source-index;
@@ -1058,6 +1112,9 @@ export component MainWindow inherits Window {
                         has-artwork: root.now-playing-has-artwork;
                         artwork: root.now-playing-artwork;
                         focused-button <=> root.now-playing-focused-button;
+                        changed focused-button => {
+                            root.control-focus-changed(MainControl.transport, self.focused-button >= 0);
+                        }
                         transport(button) => {
                             root.now-playing-transport(button);
                         }
@@ -1084,6 +1141,9 @@ export component MainWindow inherits Window {
                             VolumeSlider {
                                 volume: root.master-volume;
                                 label: Strings.master-volume;
+                                changed slider-focused => {
+                                    root.control-focus-changed(MainControl.master-volume, self.slider-focused);
+                                }
                                 changed(value) => {
                                     root.master-volume-changed(value);
                                 }
@@ -1095,6 +1155,9 @@ export component MainWindow inherits Window {
                         on: root.equalizer-on;
                         clicked => {
                             root.equalizer-requested();
+                        }
+                        focus-changed(has) => {
+                            root.control-focus-changed(MainControl.equalizer, has);
                         }
                     }
 
@@ -1120,6 +1183,9 @@ export component MainWindow inherits Window {
                         }
                         measure-again(row) => {
                             root.calibrate-all-again-requested(row);
+                        }
+                        focus-changed(has) => {
+                            root.control-focus-changed(MainControl.calibration, has);
                         }
                         apply => {
                             root.calibrate-all-apply-requested();
@@ -1201,6 +1267,18 @@ export component MainWindow inherits Window {
                         }
                         auto-connect-toggled(id, on) => {
                             root.auto-connect-toggled(id, on);
+                        }
+                        rename-requested(id) => {
+                            root.speaker-rename-requested(id);
+                        }
+                        rename-edited(id, text) => {
+                            root.speaker-rename-edited(id, text);
+                        }
+                        rename-committed(id) => {
+                            root.speaker-rename-committed(id);
+                        }
+                        rename-cancelled(id) => {
+                            root.speaker-rename-cancelled(id);
                         }
                     }
 
@@ -1323,6 +1401,18 @@ export component MainWindow inherits Window {
                         auto-connect-toggled(id, on) => {
                             root.auto-connect-toggled(id, on);
                         }
+                        rename-requested(id) => {
+                            root.speaker-rename-requested(id);
+                        }
+                        rename-edited(id, text) => {
+                            root.speaker-rename-edited(id, text);
+                        }
+                        rename-committed(id) => {
+                            root.speaker-rename-committed(id);
+                        }
+                        rename-cancelled(id) => {
+                            root.speaker-rename-cancelled(id);
+                        }
                     }
 
                     if root.airplay-delay-shown: AirPlayDelayControls {
@@ -1340,6 +1430,9 @@ export component MainWindow inherits Window {
                         }
                         cancelled => {
                             root.airplay-delay-cancelled();
+                        }
+                        focus-changed(has) => {
+                            root.control-focus-changed(MainControl.airplay-delay, has);
                         }
                     }
                 }
