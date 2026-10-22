@@ -1342,6 +1342,14 @@ impl Driver {
         speaker.options = options;
         speaker.counters = counters;
         speaker.removing = false;
+        // Its target went while it tore down: the host owns it alone now.
+        if speaker
+            .target
+            .as_ref()
+            .is_some_and(|id| !self.driven.contains_key(id))
+        {
+            speaker.target = None;
+        }
         match speaker.phase {
             Phase::Active(_) | Phase::Ap2(_) => {
                 self.command(Command::SetDelay(key.clone(), delay), now);

@@ -296,6 +296,45 @@ fn the_control_device_and_its_group_refuse_each_other() {
     sender.shutdown();
 }
 
+// covers: P179
+#[test]
+fn a_member_added_alone_while_its_target_tears_down_is_the_hosts_to_remove() {
+    let _serial = serial();
+    let a = NetReceiver::start(Behavior::default());
+    let b = NetReceiver::start(Behavior::default());
+    let (sender, _host) = start(false);
+    let mut events = Events::default();
+    let (da, db) = (a.device(1, PCM_TXT), b.device(2, PCM_TXT));
+    let target = pair(vec![member(Some(&da), 1), member(Some(&db), 2)], None);
+    let id = target.id.clone();
+    sender.add_target(target, options(), |_, _| {});
+    for key in [&da.key, &db.key] {
+        assert!(
+            playing(&mut events, &sender, key, 1),
+            "{:?}",
+            events.of(key)
+        );
+    }
+    sender.remove_target(&id);
+    sender.add_speaker(da.clone(), options());
+    assert!(
+        playing(&mut events, &sender, &da.key, 2),
+        "{:?}",
+        events.of(&da.key)
+    );
+    sender.remove_speaker(&da.key);
+    for key in [&da.key, &db.key] {
+        assert!(
+            events
+                .wait_state(&sender, key, 1, LONG, |s| *s == SpeakerState::Stopped)
+                .is_some(),
+            "{:?}",
+            events.of(key)
+        );
+    }
+    sender.shutdown();
+}
+
 fn airplay_record(port: u16, n: u8, features: &str) -> ServiceRecord {
     let id = device_id(n);
     ServiceRecord {
