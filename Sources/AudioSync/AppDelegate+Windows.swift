@@ -88,6 +88,7 @@ extension AppDelegate {
         a.setAirPlayDelay = { [weak self] ms in self?.setAirPlayDelay(ms) }
         a.setCastEnabled = { [weak self] id, on in self?.setCastEnabled(id, on) }
         a.setCastVolume = { [weak self] id, position in self?.setCastVolume(id, position) }
+        a.stepCastVolume = { [weak self] id, up in self?.stepCastVolume(id, up: up) }
         a.setCastMuted = { [weak self] id, muted in self?.setCastMuted(id, muted) }
         a.resyncCast = { [weak self] id in self?.resyncCast(id) }
         a.setCastOffset = { [weak self] id, ms in self?.setCastOffset(id, ms) }
@@ -117,6 +118,10 @@ extension AppDelegate {
         a.setShowVirtualDevices = { [weak self] on in self?.setShowVirtualDevices(on) }
         a.setSwitchWhenSourceQuits = { [weak self] on in
             self?.whenSourceQuits = on ? .system : .stop
+            self?.pushModel()
+        }
+        a.setAirPlay2 = { [weak self] on in
+            self?.airPlay2 = on
             self?.pushModel()
         }
         a.setAppearance = { [weak self] choice in self?.setAppearance(choice) }
@@ -239,6 +244,8 @@ extension AppDelegate {
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)
         publish(\.switchWhenSourceQuits, whenSourceQuits == .system)
+        publish(\.airPlay2, airPlay2)
+        publish(\.airPlay2AtLaunch, airPlay2AtLaunch)
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
         followCalibrationContext()
@@ -466,6 +473,12 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// Saved now; the sender reads it at the next launch (`airPlay2AtLaunch`).
+    @objc func toggleAirPlay2(_ sender: Any?) {
+        airPlay2.toggle()
+        pushModel()
+    }
+
     /// One of the Appearance submenu's items; each carries its choice's raw value.
     @objc func chooseAppearance(_ sender: Any?) {
         guard let raw = (sender as? NSMenuItem)?.representedObject as? String,
@@ -488,6 +501,11 @@ extension AppDelegate {
             menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         case #selector(toggleSwitchWhenSourceQuits(_:)):
             menuItem.state = whenSourceQuits == .system ? .on : .off
+        case #selector(toggleAirPlay2(_:)):
+            menuItem.state = airPlay2 ? .on : .off
+            let note = text.airPlay2Note(on: airPlay2, onAtLaunch: airPlay2AtLaunch)
+            menuItem.subtitle = note
+            menuItem.toolTip = note
         default:
             break
         }

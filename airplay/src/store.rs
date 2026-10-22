@@ -4,15 +4,17 @@
 //! keyed by packet number, in memory allocated once. Packets are encoded
 //! once and shared by every speaker of the codec (P80); each speaker keeps
 //! only its headers. The store covers the resend history of P88 plus the
-//! largest per-speaker delay (P111), so a speaker 3 s behind still finds
+//! largest per-speaker delay (P111), so a speaker 20 s behind still finds
 //! its packets and can resend its last 1024.
 
 use crate::audio::{PACKET_FRAMES, SAMPLE_RATE};
+use crate::stream::MAX_DELAY;
 
 /// Packets a session can resend (P88).
 pub const HISTORY_PACKETS: usize = 1024;
-/// The largest speaker delay, in packets: 3 s (P99, P111).
-pub const DELAY_PACKETS: usize = (3 * SAMPLE_RATE as usize).div_ceil(PACKET_FRAMES as usize);
+/// The largest speaker delay, in packets: 20 s (P99, P111).
+pub const DELAY_PACKETS: usize =
+    (MAX_DELAY.as_millis() as usize * SAMPLE_RATE as usize / 1000).div_ceil(PACKET_FRAMES as usize);
 /// Packets for the send margin M of at most 100 ms (P84), and one more.
 pub const MARGIN_PACKETS: usize = (SAMPLE_RATE as usize / 10).div_ceil(PACKET_FRAMES as usize) + 1;
 /// Packets one store holds (P111).

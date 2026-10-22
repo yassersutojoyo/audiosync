@@ -38,6 +38,9 @@ pub struct Speaker {
     pub on: bool,
     /// 0 to 100.
     pub volume: f64,
+    /// How far the page's volume keys move it, above 0 and at most 100; 1
+    /// when the snapshot leaves it out.
+    pub volume_step: f64,
     pub delay_ms: i64,
     pub delay_min_ms: i64,
     pub delay_max_ms: i64,
@@ -96,6 +99,16 @@ fn int_field(object: &Map<String, Value>, name: &str, at: &str) -> Result<i64, S
         .ok_or_else(|| invalid(format!("{at}{name} is not a whole number")))
 }
 
+fn step_field(object: &Map<String, Value>, at: &str) -> Result<f64, StateError> {
+    match object.get("volume_step") {
+        None => Ok(1.0),
+        Some(value) => value
+            .as_f64()
+            .filter(|step| step.is_finite() && *step > 0.0 && *step <= VOLUME_MAX)
+            .ok_or_else(|| invalid(format!("{at}volume_step is not a number above 0 up to 100"))),
+    }
+}
+
 fn volume_field(object: &Map<String, Value>, name: &str, at: &str) -> Result<f64, StateError> {
     field(object, name, at)?
         .as_f64()
@@ -143,6 +156,7 @@ impl State {
                 kind: text_field(object, "kind", &at)?,
                 on: bool_field(object, "on", &at)?,
                 volume: volume_field(object, "volume", &at)?,
+                volume_step: step_field(object, &at)?,
                 delay_ms: int_field(object, "delay_ms", &at)?,
                 delay_min_ms: int_field(object, "delay_min_ms", &at)?,
                 delay_max_ms: int_field(object, "delay_max_ms", &at)?,
@@ -184,6 +198,7 @@ impl State {
                     "kind": speaker.kind,
                     "on": speaker.on,
                     "volume": speaker.volume,
+                    "volume_step": speaker.volume_step,
                     "delay_ms": speaker.delay_ms,
                     "delay_min_ms": speaker.delay_min_ms,
                     "delay_max_ms": speaker.delay_max_ms,
@@ -379,6 +394,24 @@ mod tests {
         assert_eq!(written["speakers"][0]["notice"], Value::Null);
         let again = State::from_json(&state.to_json(7)).unwrap();
         assert_eq!(again, state);
+    }
+
+    #[test]
+    fn the_volume_step_defaults_to_1_and_takes_above_0_up_to_100() {
+        let state = State::from_json(SAMPLE).unwrap();
+        assert_eq!(state.speakers[1].volume_step, 1.0);
+        let stepped = SAMPLE.replace("\"volume\": 10,", "\"volume\": 10, \"volume_step\": 5,");
+        let state = State::from_json(&stepped).unwrap();
+        assert_eq!(state.speakers[1].volume_step, 5.0);
+        let written: Value = serde_json::from_str(&state.to_json(1)).unwrap();
+        assert_eq!(written["speakers"][1]["volume_step"], 5.0);
+        for bad in ["0", "-1", "101", "\"5\""] {
+            let json = SAMPLE.replace(
+                "\"volume\": 10,",
+                &format!("\"volume\": 10, \"volume_step\": {bad},"),
+            );
+            assert!(State::from_json(&json).is_err(), "{bad}");
+        }
     }
 
     #[test]

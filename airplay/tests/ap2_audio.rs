@@ -996,3 +996,57 @@ fn ap2_ptp_unavailable() {
     assert!(udp.general.take().is_empty());
     sender.shutdown();
 }
+
+// covers: P158
+#[test]
+fn ap2_ptp_clash_is_told_again_after_ptp_bound() {
+    let _serial = serial();
+    let udp = Udp::bind();
+    let mut fake = ptp_fake();
+    fake.status.insert("SETUP session".to_owned(), 501);
+    let server = Ap2Server::start(udp.fake(fake));
+    let local = free_ports();
+    let holder = UdpSocket::bind(("0.0.0.0", local.event)).expect("the port");
+    let (sender, _host) = start(SenderClock::new(Instant::now()), local, udp.ptp_ports());
+    let mut events = Events::default();
+    let speaker = device(&server, 65, PTP_FEATURES);
+    let key = speaker.key.clone();
+    let told = |events: &Events| {
+        events
+            .of(&key)
+            .into_iter()
+            .filter(|event| *event == SpeakerEvent::Warning(Warning::PtpUnavailable))
+            .count()
+    };
+    let opened = |events: &Events| {
+        events
+            .of(&key)
+            .into_iter()
+            .filter(|event| *event == SpeakerEvent::PtpOpened)
+            .count()
+    };
+    let attempt = |events: &mut Events, n: usize| {
+        sender.add_speaker(speaker.clone(), options());
+        assert!(
+            events
+                .wait_state(&sender, &key, n, LONG, |s| *s == SpeakerState::Failed)
+                .is_some(),
+            "{:?}",
+            events.of(&key)
+        );
+        sender.remove_speaker(&key);
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    attempt(&mut events, 1);
+    assert_eq!((told(&events), opened(&events)), (1, 0));
+    // The other app lets go: the next session binds PTP and says so.
+    drop(holder);
+    attempt(&mut events, 2);
+    assert_eq!((told(&events), opened(&events)), (1, 1));
+    // It takes the port again: the clash is told once more.
+    assert!(wait_until(LONG, || ports_free(local)));
+    let _holder = UdpSocket::bind(("0.0.0.0", local.event)).expect("the port");
+    attempt(&mut events, 3);
+    assert_eq!((told(&events), opened(&events)), (2, 1));
+    sender.shutdown();
+}

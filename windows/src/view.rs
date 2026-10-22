@@ -40,9 +40,9 @@ use crate::ui_model::{
 use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastList, CastProblem,
     CastState, DeviceVolumeHint, EqualizerWindow, GroupItem, GroupNameDialog, GuidePage,
-    GuideStepItem, GuideWindow, MainWindow, NoticeItem, NoticeKind, Palette, PasswordDialog,
-    PinDialog, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind, Strings,
-    Tokens, TrayFlyout,
+    GuideStepItem, GuideWindow, MainControl, MainWindow, NameField, NoticeItem, NoticeKind,
+    Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem,
+    SpeakerKind, Strings, Tokens, TrayFlyout, speaker_names,
 };
 
 mod help_window;
@@ -70,12 +70,26 @@ struct UiState {
     /// What is typed in each speaker's delay field, by speaker ID.
     delay_drafts: HashMap<String, TypedDelay>,
     airplay_delay_draft: TypedDelay,
+    /// The speaker whose name is being edited in its row, and what is typed
+    /// there; one at a time (spec S228).
+    rename: Option<(String, String)>,
+    /// The open rename's field has had the focus; only then does the focus
+    /// moving to another control apply the name.
+    rename_focused: bool,
     /// View > Show Virtual Devices; off at launch, like the Mac's default.
     show_virtual: bool,
     /// View > Appearance as chosen, which the theme preview doesn't change.
     appearance: ui_model::Appearance,
     /// File > Web Remote.
     remote: crate::remote::RemoteSettings,
+    /// File > AirPlay 2 (Experimental) as saved, which applies at the next
+    /// launch.
+    airplay2_experimental: bool,
+    /// What the item was at launch: the mode the running sender has.
+    airplay2_at_launch: bool,
+    /// Says the item applies at the next launch, while it differs from
+    /// `airplay2_at_launch`.
+    airplay2_notice: Option<ui_model::Notice>,
     listed_virtual: ListedVirtual,
 }
 
@@ -278,6 +292,10 @@ const LOGIN_CHECK: Duration = Duration::from_secs(2);
 /// The Settings page where Windows turns startup apps on or off.
 const STARTUP_APPS_PAGE: &str = "ms-settings:startupapps";
 
+/// The AirPlay 2 (Experimental) notice's id, next to Launch at Sign-In's
+/// and as far from the backend's.
+const AIRPLAY2_NOTICE_ID: u64 = launch_at_login::NOTICE_ID - 1;
+
 /// How often, 20 ms apart, the saved main window size waits for the native
 /// window before it gives up (about two seconds).
 const NATIVE_WINDOW_TRIES: u8 = 100;
@@ -349,6 +367,10 @@ struct MainFocus {
     speaker: Option<(SharedString, RowPart)>,
     /// A group row's control: the group id and the row's part.
     group: Option<(SharedString, RowPart)>,
+    /// Another main-window control: the streaming switch, the source, the
+    /// transport, the master volume, the equalizer or calibration card or
+    /// the AirPlay delay.
+    control: Option<MainControl>,
 }
 
 /// Notes that the notice `id` gained or lost the focus.
@@ -597,6 +619,17 @@ fn with_app(app: &Weak<App>, action: impl FnOnce(&App)) {
     }
 }
 
+/// Applies the open rename once the focus has left its field for another
+/// control, outside the focus callback, which must not rebuild the list.
+fn apply_rename_left(app: &Weak<App>) {
+    if let Some(id) = app.upgrade().and_then(|app| app.focus_left_rename()) {
+        let app = app.clone();
+        Timer::single_shot(Duration::ZERO, move || {
+            with_app(&app, |app| app.end_rename_in(&id, true));
+        });
+    }
+}
+
 /// Sets the main window's size as soon as its native window exists, checking
 /// every 20 ms up to `tries` times, then maximizes it when `maximized` (a
 /// size set on a maximized window would restore it to normal).
@@ -799,6 +832,9 @@ impl App {
         let mut state = self.backend.borrow().snapshot();
         state.notices.extend(self.login.borrow().notice().cloned());
         state
+            .notices
+            .extend(self.ui.borrow().airplay2_notice.clone());
+        state
     }
 
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -838,7 +874,9 @@ impl App {
     }
 
     fn dismiss_notice(&self, id: u64) {
-        if self.login.borrow_mut().dismiss(id) {
+        let airplay2 =
+            id == AIRPLAY2_NOTICE_ID && self.ui.borrow_mut().airplay2_notice.take().is_some();
+        if airplay2 || self.login.borrow_mut().dismiss(id) {
             self.refresh();
         } else {
             self.update(|b| b.dismiss_notice(id));
@@ -847,6 +885,7 @@ impl App {
 
     fn dismiss_all_notices(&self) {
         self.login.borrow_mut().dismiss_notice();
+        self.ui.borrow_mut().airplay2_notice = None;
         self.update(|b| b.dismiss_all_notices());
     }
 
@@ -1242,6 +1281,21 @@ impl App {
 
     /// Reads a snapshot and shows it in every window.
     pub fn refresh(&self) {
+        // A speaker that went mid-rename takes its name along; back, it
+        // shows that name, its field closed.
+        let gone = {
+            let mut ui = self.ui.borrow_mut();
+            let open = ui.rename.as_ref().map(|(id, _)| id.clone());
+            match open {
+                Some(id) if self.backend.borrow().snapshot().speaker(&id).is_none() => {
+                    ui.rename.take()
+                }
+                _ => None,
+            }
+        };
+        if let Some((id, text)) = gone {
+            self.backend.borrow_mut().rename_speaker(&id, &text);
+        }
         let state = self.snapshot();
         let strings = self.strings();
         {
@@ -1279,6 +1333,10 @@ impl App {
                 ui_model::MAX_DELAY_MS,
                 format_offset_ms,
             );
+            if let Some((_, text)) = ui.rename.as_ref().filter(|(id, _)| *id == speaker.id) {
+                row.renaming = true;
+                row.name_text = text.as_str().into();
+            }
             row.calibration_status = calibration_status(&strings, &state, speaker);
             row.cast_group_note = cast_group_note(&strings, speaker);
             row.group_note = group_note(&strings, speaker);
@@ -1433,6 +1491,8 @@ impl App {
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
         self.main.set_show_virtual_devices(ui.show_virtual);
+        self.main
+            .set_airplay2_experimental(ui.airplay2_experimental);
         self.main.set_launch_at_login(self.login.borrow().is_on());
         self.main
             .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
@@ -1664,7 +1724,23 @@ impl App {
         let w = weak.clone();
         main.on_airplay_delay_cancelled(move || with_app(&w, |app| app.end_delay_typing(false)));
         let w = weak.clone();
-        main.on_blank_clicked(move || with_app(&w, |app| app.end_delay_typing(true)));
+        main.on_blank_clicked(move || with_app(&w, App::blank_click));
+        main.global::<NameField>()
+            .on_fit(|text| speaker_names::fitting(&text).into());
+        let w = weak.clone();
+        main.on_speaker_rename_requested(move |id| with_app(&w, |app| app.start_rename(&id)));
+        let w = weak.clone();
+        main.on_speaker_rename_edited(move |id, text| {
+            with_app(&w, |app| app.edit_rename(&id, &text))
+        });
+        let w = weak.clone();
+        main.on_speaker_rename_committed(move |id| {
+            with_app(&w, |app| app.end_rename_in(&id, true))
+        });
+        let w = weak.clone();
+        main.on_speaker_rename_cancelled(move |id| {
+            with_app(&w, |app| app.end_rename_in(&id, false))
+        });
         let w = weak.clone();
         main.on_auto_connect_toggled(move |id, on| {
             with_app(&w, |app| app.update(|b| b.set_auto_connect(&id, on)))
@@ -1753,6 +1829,10 @@ impl App {
         let w = weak.clone();
         main.on_launch_at_login_toggled(move |on| with_app(&w, |app| app.set_launch_at_login(on)));
         let w = weak.clone();
+        main.on_airplay2_experimental_toggled(move |on| {
+            with_app(&w, |app| app.set_airplay2_experimental(on))
+        });
+        let w = weak.clone();
         main.on_notice_guide_requested(move |id| with_app(&w, |app| app.show_guide(id)));
         let w = weak.clone();
         main.on_notice_retry_requested(move |_| {
@@ -1763,24 +1843,37 @@ impl App {
         let w = weak.clone();
         main.on_notice_focus_changed(move |id, focused| {
             with_app(&w, |app| {
-                note_focus(&mut app.main_focus.borrow_mut().notice, id, focused)
-            })
+                note_focus(&mut app.main_focus.borrow_mut().notice, id, focused);
+            });
+            apply_rename_left(&w);
         });
         let w = weak.clone();
         main.on_dismiss_all_focus_changed(move |focused| {
-            with_app(&w, |app| app.main_focus.borrow_mut().dismiss_all = focused)
+            with_app(&w, |app| {
+                app.main_focus.borrow_mut().dismiss_all = focused;
+            });
+            apply_rename_left(&w);
         });
         let w = weak.clone();
         main.on_speaker_focus_changed(move |id, part| {
             with_app(&w, |app| {
-                note_row_focus(&mut app.main_focus.borrow_mut().speaker, id, part)
-            })
+                note_row_focus(&mut app.main_focus.borrow_mut().speaker, id, part);
+            });
+            apply_rename_left(&w);
         });
         let w = weak.clone();
         main.on_group_focus_changed(move |id, part| {
             with_app(&w, |app| {
-                note_row_focus(&mut app.main_focus.borrow_mut().group, id, part)
-            })
+                note_row_focus(&mut app.main_focus.borrow_mut().group, id, part);
+            });
+            apply_rename_left(&w);
+        });
+        let w = weak.clone();
+        main.on_control_focus_changed(move |control, focused| {
+            with_app(&w, |app| {
+                note_focus(&mut app.main_focus.borrow_mut().control, control, focused);
+            });
+            apply_rename_left(&w);
         });
         let w = weak.clone();
         main.on_close_requested(move || with_app(&w, App::close_main));
@@ -2199,7 +2292,19 @@ impl App {
     /// Opens or closes a speaker's sync controls (its delay button, or a
     /// click on its row). What was typed in the other delay fields applies
     /// first, their controls staying open; closing applies its own typing.
+    /// A click on the window's blank space, or on the row being renamed.
+    fn blank_click(&self) {
+        self.end_rename(true);
+        self.end_delay_typing(true);
+    }
+
     fn toggle_sync(&self, id: &str) {
+        let renaming_it = matches!(&self.ui.borrow().rename, Some((open, _)) if open == id);
+        if renaming_it {
+            self.blank_click();
+            return;
+        }
+        self.end_rename(true);
         self.apply_delay_typing(Some(id));
         let closed = {
             let mut ui = self.ui.borrow_mut();
@@ -2215,6 +2320,29 @@ impl App {
         } else {
             self.refresh();
         }
+    }
+
+    /// Saved for the next launch: the running sender keeps the mode it
+    /// started with, which a notice says until the item is back to it.
+    fn set_airplay2_experimental(&self, on: bool) {
+        {
+            let mut ui = self.ui.borrow_mut();
+            ui.airplay2_experimental = on;
+            ui.airplay2_notice = (on != ui.airplay2_at_launch).then(|| ui_model::Notice {
+                id: AIRPLAY2_NOTICE_ID,
+                subject: "AirPlay 2 (Experimental)".to_owned(),
+                message: NoticeMessage::AirPlay2NextLaunch { on },
+                time: crate::platform::notice_time(),
+            });
+        }
+        self.log.log(|| {
+            format!(
+                "AirPlay 2 (experimental): turned {}; applies at the next launch",
+                if on { "on" } else { "off" }
+            )
+        });
+        self.remember_view();
+        self.refresh();
     }
 
     fn show_virtual_devices(&self, on: bool) {
@@ -2262,6 +2390,7 @@ impl App {
             appearance: self.ui.borrow().appearance,
             window: ui_model::frame_to_keep(self.main_window_shows(), saved.window),
             remote: self.ui.borrow().remote,
+            airplay2_experimental: self.ui.borrow().airplay2_experimental,
         };
         if settings != saved {
             backend.set_view_settings(settings);
@@ -2277,6 +2406,8 @@ impl App {
         self.ui.borrow_mut().show_virtual = saved.show_virtual_devices;
         self.ui.borrow_mut().appearance = saved.appearance;
         self.ui.borrow_mut().remote = saved.remote;
+        self.ui.borrow_mut().airplay2_experimental = saved.airplay2_experimental;
+        self.ui.borrow_mut().airplay2_at_launch = saved.airplay2_experimental;
         self.apply_appearance(saved.appearance);
         let Some(saved_frame) = saved.window else {
             return;
@@ -2329,12 +2460,13 @@ impl App {
     /// Saves the settings now, with the main window's frame: the app is
     /// about to quit.
     pub fn save_settings(&self) {
-        // Quit drops a typed delay that wasn't applied, so a focus loss as
-        // the window goes applies nothing either.
+        // Quit drops a typed delay or name that wasn't applied, so a focus
+        // loss as the window goes applies nothing either.
         {
             let mut ui = self.ui.borrow_mut();
             ui.delay_drafts.clear();
             ui.airplay_delay_draft.cancel();
+            ui.rename = None;
         }
         self.remember_view();
         self.backend.borrow_mut().save_settings();
@@ -2406,6 +2538,105 @@ impl App {
         if let Some(id) = focused {
             self.focus_delay_button(&id);
         }
+    }
+
+    /// Rename… in a speaker's menu, or a double-click on its name: its row
+    /// shows a name field with the focus. A rename open in another row
+    /// applies first; one open in this row keeps its typing.
+    fn start_rename(&self, id: &str) {
+        let open = self
+            .ui
+            .borrow()
+            .rename
+            .as_ref()
+            .map(|(open, _)| open.clone());
+        if open.as_deref() != Some(id) {
+            self.end_rename(true);
+            let Some(name) = self.snapshot().speaker(id).map(|s| s.name.clone()) else {
+                return;
+            };
+            {
+                let mut ui = self.ui.borrow_mut();
+                ui.rename = Some((id.to_owned(), name));
+                ui.rename_focused = false;
+            }
+            // The field takes the focus; a control that went while it had
+            // the focus never reported losing it.
+            self.main_focus.borrow_mut().control = None;
+            self.refresh();
+        }
+        // After the menu that asked for it has closed and given the focus
+        // back to the control that had it, as on the Mac.
+        let main = self.main.as_weak();
+        let id = SharedString::from(id);
+        Timer::single_shot(Duration::ZERO, move || {
+            if let Some(main) = main.upgrade() {
+                main.set_focus_speaker_part(RowPart::Name);
+                main.set_focus_speaker_id(id);
+            }
+        });
+    }
+
+    fn edit_rename(&self, id: &str, text: &str) {
+        if let Some((open, typed)) = self.ui.borrow_mut().rename.as_mut()
+            && open == id
+        {
+            *typed = text.to_owned();
+        }
+    }
+
+    /// Ends the rename only if it is open in row `id`: a field that loses
+    /// the focus as it closes, after another row's rename began, must not
+    /// end that one.
+    fn end_rename_in(&self, id: &str, apply: bool) {
+        let open = matches!(&self.ui.borrow().rename, Some((open, _)) if open.as_str() == id);
+        if open {
+            self.end_rename(apply);
+        }
+    }
+
+    /// Ends the rename open in a row, if any: Enter, the field losing the
+    /// focus or a click outside it applies the name (`apply`), Escape keeps
+    /// the old one. The
+    /// keyboard focus, when it was in the field, goes to the row's toggle,
+    /// which Narrator reads with the name.
+    fn end_rename(&self, apply: bool) {
+        let Some((id, text)) = self.ui.borrow_mut().rename.take() else {
+            return;
+        };
+        self.ui.borrow_mut().rename_focused = false;
+        let focused = matches!(
+            &self.main_focus.borrow().speaker,
+            Some((focused, RowPart::Name)) if focused.as_str() == id
+        );
+        if apply {
+            self.update(|b| b.rename_speaker(&id, &text));
+        } else {
+            self.refresh();
+        }
+        if focused {
+            self.main.set_focus_speaker_part(RowPart::Toggle);
+            self.main.set_focus_speaker_id(id.as_str().into());
+        }
+    }
+
+    /// The speaker whose rename to apply, once the focus has left its name
+    /// field for another control, as on the Mac. Losing the focus to another
+    /// window or a popup, which give it back, applies nothing.
+    fn focus_left_rename(&self) -> Option<String> {
+        let mut ui = self.ui.borrow_mut();
+        let id = ui.rename.as_ref()?.0.clone();
+        let focus = self.main_focus.borrow();
+        if matches!(&focus.speaker, Some((held, RowPart::Name)) if *held == id) {
+            ui.rename_focused = true;
+            return None;
+        }
+        let elsewhere = focus.speaker.is_some()
+            || focus.group.is_some()
+            || focus.notice.is_some()
+            || focus.dismiss_all
+            || focus.control.is_some();
+        (ui.rename_focused && elsewhere).then_some(id)
     }
 
     /// The speaker's sync controls closed under the keyboard focus: its
@@ -2568,6 +2799,7 @@ impl App {
     fn close_main(&self) {
         // With a tray this is a click outside the controls, so what was typed
         // applies; without one it quits, and a quit drops it.
+        self.end_rename(self.tray_available.get());
         self.end_delay_typing(self.tray_available.get());
         self.remember_view();
         let _ = self.main.hide();
@@ -2856,9 +3088,19 @@ pub fn speaker_item(
 ) -> SpeakerItem {
     let delay = format_offset_ms(speaker.delay_ms.unwrap_or(0.0));
     let (device_volume, device_volume_percent) = device_volume_hint(speaker.device_volume);
+    let renamed = speaker.name != speaker.system_name;
     SpeakerItem {
         id: speaker.id.as_str().into(),
         name: speaker.name.as_str().into(),
+        system_name: if renamed {
+            speaker.system_name.as_str().into()
+        } else {
+            SharedString::default()
+        },
+        device_name: speaker.system_name.as_str().into(),
+        // Set by the caller while the name is edited (`App::refresh`).
+        renaming: false,
+        name_text: SharedString::default(),
         kind: speaker_kind(speaker.kind),
         show_kind,
         state: row_state(state.speaker_state(speaker)),
@@ -2897,6 +3139,7 @@ pub fn speaker_item(
             .map_or(CastState::Idle, |cast| cast_state(cast.state)),
         muted: speaker.cast.as_ref().is_some_and(|cast| cast.muted),
         volume_fixed: speaker.cast.as_ref().is_some_and(|cast| cast.volume_fixed),
+        volume_step: speaker.cast.as_ref().map_or(1.0, |cast| cast.volume_step) as f32,
         cast_group: cast_group(speaker).is_some(),
         // Needs the strings: set by the caller (`App::refresh`).
         cast_group_note: SharedString::default(),
@@ -3408,6 +3651,7 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             strings.invoke_notice_airplay_ahead(seconds.into(), speaker.as_str().into())
         }
         NoticeMessage::AirPlayStopped => strings.get_notice_airplay_stopped(),
+        NoticeMessage::AirPlayPtpPortsTaken => strings.get_notice_airplay_ptp_ports_taken(),
         NoticeMessage::SettingsNotSaved => strings.get_notice_settings_not_saved(),
         NoticeMessage::PairingsNotSaved => strings.get_notice_pairings_not_saved(),
         NoticeMessage::SettingsKeptAside { file } => {
@@ -3421,6 +3665,12 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::LaunchAtLoginNotRemoved => strings.get_notice_launch_at_login_not_removed(),
         NoticeMessage::LaunchAtLoginOffInSettings => {
             strings.get_notice_launch_at_login_off_in_settings()
+        }
+        NoticeMessage::AirPlay2NextLaunch { on: true } => {
+            strings.get_notice_airplay2_on_next_launch()
+        }
+        NoticeMessage::AirPlay2NextLaunch { on: false } => {
+            strings.get_notice_airplay2_off_next_launch()
         }
         NoticeMessage::HeardTwice {
             source,
@@ -3483,6 +3733,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
             (NoticeKind::AirplayAheadOfCast, speaker.as_str())
         }
         NoticeMessage::AirPlayStopped => (NoticeKind::AirplayStopped, ""),
+        NoticeMessage::AirPlayPtpPortsTaken => (NoticeKind::AirplayPtpPortsTaken, ""),
         NoticeMessage::SettingsNotSaved => (NoticeKind::SettingsNotSaved, ""),
         NoticeMessage::PairingsNotSaved => (NoticeKind::PairingsNotSaved, ""),
         NoticeMessage::SettingsKeptAside { .. } => (NoticeKind::SettingsKeptAside, ""),
@@ -3491,6 +3742,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::LaunchAtLoginFailed => (NoticeKind::LaunchAtLoginFailed, ""),
         NoticeMessage::LaunchAtLoginNotRemoved => (NoticeKind::LaunchAtLoginNotRemoved, ""),
         NoticeMessage::LaunchAtLoginOffInSettings => (NoticeKind::LaunchAtLoginOffInSettings, ""),
+        NoticeMessage::AirPlay2NextLaunch { .. } => (NoticeKind::Airplay2NextLaunch, ""),
         NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
     };
     strings.invoke_notice_title(kind, name.into())
@@ -3634,6 +3886,38 @@ mod tests {
             .invoke_notice_dismissed(launch_at_login::NOTICE_ID as i32);
         assert!(app.snapshot().notices.is_empty());
         assert_eq!(app.main.get_notices().row_count(), 0);
+    }
+
+    #[test]
+    fn turning_airplay2_on_says_it_applies_at_the_next_launch_until_turned_back() {
+        let app = app_over(MockBackend::new());
+        assert!(app.snapshot().notices.is_empty());
+
+        app.main.invoke_airplay2_experimental_toggled(true);
+        let notices = app.snapshot().notices;
+        assert_eq!(notices.len(), 1);
+        assert_eq!(
+            notices[0].message,
+            NoticeMessage::AirPlay2NextLaunch { on: true }
+        );
+        assert_eq!(app.main.get_notices().row_count(), 1);
+        let strings = app.main.global::<Strings>();
+        assert_eq!(
+            notice_item(&strings, &notices[0]).message,
+            "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+        );
+
+        app.main.invoke_airplay2_experimental_toggled(false);
+        assert!(app.snapshot().notices.is_empty());
+        assert_eq!(app.main.get_notices().row_count(), 0);
+
+        app.main.invoke_airplay2_experimental_toggled(true);
+        app.main.invoke_notice_dismissed(AIRPLAY2_NOTICE_ID as i32);
+        assert!(app.snapshot().notices.is_empty());
+        assert!(
+            app.ui.borrow().airplay2_experimental,
+            "dismissing keeps it on"
+        );
     }
 
     #[test]
@@ -4232,7 +4516,7 @@ mod tests {
             .invoke_delay_edited("local:bt".into(), "-200".into());
 
         // The blank part of the desk's row, right of its name.
-        click(window, 420.0, 625.0);
+        click(window, 600.0, 625.0);
         assert_eq!(
             delay_of(&app, "local:bt"),
             Some(-200.0),
@@ -4245,7 +4529,7 @@ mod tests {
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
         app.main.invoke_airplay_delay_edited("2100".into());
-        click(window, 420.0, 625.0);
+        click(window, 600.0, 625.0);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),
@@ -4255,10 +4539,10 @@ mod tests {
         assert!(!open(&app).contains("local:desk"), "and closed it");
 
         // The reference row has no delay: a click there is outside.
-        click(window, 420.0, 625.0);
+        click(window, 600.0, 625.0);
         app.main
             .invoke_delay_edited("local:desk".into(), "300".into());
-        click(window, 420.0, 190.0);
+        click(window, 600.0, 190.0);
         assert_eq!(delay_of(&app, "local:desk"), Some(300.0));
         assert!(open(&app).is_empty());
     }
@@ -4343,7 +4627,7 @@ mod tests {
     #[test]
     fn a_click_on_the_no_airplay_note_under_a_list_works_like_one_on_the_last_row() {
         let app = app_with_the_no_airplay_note(true);
-        click(app.main.window(), 420.0, 525.0);
+        click(app.main.window(), 600.0, 525.0);
         assert!(
             app.ui.borrow().sync_open.contains("local:desk"),
             "the desk's controls opened"
@@ -4372,30 +4656,26 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_the_blank_space_of_open_sync_controls_stays_inside_them() {
+    fn a_click_on_the_blank_space_of_open_sync_controls_closes_them_and_applies_the_typing() {
         let app = app_with_the_no_airplay_note(true);
-        click(app.main.window(), 420.0, 525.0);
-        app.main
-            .invoke_delay_edited("local:desk".into(), "400".into());
         // The open controls fill the desk's row from y 600 to 680: right of
         // the steps, then right of the line under them.
-        for (x, y) in [(900.0, 619.0), (600.0, 649.0)] {
+        for (x, y, ms) in [(900.0, 619.0, 400.0), (600.0, 649.0, 300.0)] {
+            app.main.invoke_sync_toggled("local:desk".into());
+            draw_frames();
+            app.main
+                .invoke_delay_edited("local:desk".into(), format!("{ms}").into());
             click(app.main.window(), x, y);
             assert!(
-                app.ui.borrow().sync_open.contains("local:desk"),
-                "the controls stay open at {x}, {y}"
+                app.ui.borrow().sync_open.is_empty(),
+                "the controls closed at {x}, {y}"
             );
-            assert!(desk_row(&app).delay_pending, "with their typing");
-            assert_eq!(delay_of(&app, "local:desk"), Some(120.0));
+            assert_eq!(
+                delay_of(&app, "local:desk"),
+                Some(ms),
+                "closing applied the typing"
+            );
         }
-        // The row's own blank space, above them, still closes them.
-        click(app.main.window(), 600.0, 545.0);
-        assert!(app.ui.borrow().sync_open.is_empty());
-        assert_eq!(
-            delay_of(&app, "local:desk"),
-            Some(400.0),
-            "closing applied it"
-        );
     }
 
     #[test]
@@ -4679,6 +4959,312 @@ mod tests {
         assert_eq!(state.airplay_delay_ms, Some(1750.0));
     }
 
+    fn name_of(app: &App, id: &str) -> String {
+        app.snapshot().speaker(id).unwrap().name.clone()
+    }
+
+    #[test]
+    fn a_rename_applies_on_enter_and_escape_keeps_the_old_name() {
+        let app = app_over(MockBackend::new());
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        let row = row_of(&app, "local:desk");
+        assert!(row.renaming && row.name_text == "Desk Speaker");
+        assert_eq!(
+            app.main.get_focus_speaker_part(),
+            RowPart::None,
+            "the focus waits for the menu to close"
+        );
+        slint::platform::update_timers_and_animations();
+        assert_eq!(app.main.get_focus_speaker_part(), RowPart::Name);
+
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "  Desk left ".into());
+        assert_eq!(
+            name_of(&app, "local:desk"),
+            "Desk Speaker",
+            "typing applies nothing"
+        );
+        app.main
+            .invoke_speaker_rename_committed("local:desk".into());
+        assert_eq!(name_of(&app, "local:desk"), "Desk left");
+        let row = row_of(&app, "local:desk");
+        assert!(!row.renaming);
+        assert_eq!(
+            row.system_name, "Desk Speaker",
+            "the tooltip keeps the device name"
+        );
+
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "Other".into());
+        app.main
+            .invoke_speaker_rename_cancelled("local:desk".into());
+        assert_eq!(name_of(&app, "local:desk"), "Desk left", "Escape keeps it");
+        assert!(app.ui.borrow().rename.is_none());
+
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "".into());
+        app.main
+            .invoke_speaker_rename_committed("local:desk".into());
+        assert_eq!(
+            name_of(&app, "local:desk"),
+            "Desk Speaker",
+            "empty brings it back"
+        );
+        assert_eq!(row_of(&app, "local:desk").system_name, "");
+    }
+
+    #[test]
+    fn one_rename_at_a_time_and_a_click_outside_applies_it() {
+        let app = app_over(MockBackend::new());
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        assert_eq!(
+            app.ui.borrow().rename,
+            Some(("local:desk".to_owned(), "Desk".to_owned())),
+            "asked again, it keeps the typing"
+        );
+
+        app.main.invoke_speaker_rename_requested("local:bt".into());
+        assert_eq!(
+            name_of(&app, "local:desk"),
+            "Desk",
+            "the open rename applied first"
+        );
+        assert!(!row_of(&app, "local:desk").renaming);
+        assert!(row_of(&app, "local:bt").renaming);
+
+        app.main
+            .invoke_speaker_rename_edited("local:bt".into(), "Headset".into());
+        app.main.invoke_blank_clicked();
+        assert_eq!(name_of(&app, "local:bt"), "Headset");
+        assert!(app.ui.borrow().rename.is_none());
+    }
+
+    #[test]
+    fn a_click_on_the_row_being_renamed_only_applies_the_name() {
+        let app = app_over(MockBackend::new());
+        draw_frames();
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
+        draw_frames();
+        click(app.main.window(), 600.0, 625.0);
+        assert_eq!(name_of(&app, "local:desk"), "Desk");
+        assert!(app.ui.borrow().rename.is_none());
+        assert!(app.ui.borrow().sync_open.is_empty(), "no delay panel");
+
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main.invoke_sync_toggled("local:desk".into());
+        assert!(app.ui.borrow().rename.is_none());
+        assert!(app.ui.borrow().sync_open.is_empty(), "no delay panel");
+    }
+
+    #[test]
+    fn the_name_field_stops_at_sixty_characters_while_typing() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        draw_frames();
+        for _ in 0..65 {
+            press(app.main.window(), "a");
+        }
+        let sixty = "a".repeat(60);
+        assert_eq!(
+            app.ui.borrow().rename,
+            Some(("local:desk".to_owned(), sixty.clone()))
+        );
+        press(app.main.window(), Key::Return);
+        assert_eq!(name_of(&app, "local:desk"), sixty);
+    }
+
+    #[test]
+    fn a_speaker_gone_mid_rename_closes_its_field() {
+        let app = app_over(MockBackend::new());
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
+        let mut unplugged = MockBackend::new();
+        unplugged.retain_speakers(|s| s.id != "local:desk");
+        *app.backend.borrow_mut() = Box::new(unplugged);
+        app.refresh();
+        assert!(app.ui.borrow().rename.is_none());
+
+        *app.backend.borrow_mut() = Box::new(MockBackend::new());
+        app.refresh();
+        assert!(
+            !row_of(&app, "local:desk").renaming,
+            "back, its field stays closed"
+        );
+    }
+
+    #[test]
+    fn a_double_click_on_a_name_renames_and_a_single_one_is_a_click_on_the_row() {
+        let app = app_over(MockBackend::new());
+        draw_frames();
+        let window = app.main.window();
+        // The desk's name.
+        click(window, 420.0, 625.0);
+        click(window, 420.0, 625.0);
+        assert!(
+            row_of(&app, "local:desk").renaming,
+            "the double-click renames"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        draw_frames();
+        assert!(
+            app.ui.borrow().sync_open.is_empty(),
+            "and doesn't open the sync controls"
+        );
+
+        app.main
+            .invoke_speaker_rename_cancelled("local:desk".into());
+        draw_frames();
+        click(window, 420.0, 625.0);
+        assert!(
+            app.ui.borrow().sync_open.is_empty(),
+            "one click waits for a second"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        draw_frames();
+        assert!(
+            app.ui.borrow().sync_open.contains("local:desk"),
+            "then works like a click on the row"
+        );
+    }
+
+    #[test]
+    fn rename_in_the_menu_opens_the_name_field_with_the_focus() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        draw_frames();
+        assert_eq!(
+            app.main_focus.borrow().speaker,
+            Some(("local:desk".into(), RowPart::Name)),
+            "the field took the focus"
+        );
+        press(app.main.window(), Key::Escape);
+        assert!(app.ui.borrow().rename.is_none(), "Escape closed it");
+        draw_frames();
+        assert_eq!(
+            app.main_focus.borrow().speaker,
+            Some(("local:desk".into(), RowPart::Toggle)),
+            "the focus went to the row's toggle"
+        );
+    }
+
+    #[test]
+    fn leaving_the_name_field_for_another_control_applies_the_name() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        draw_frames();
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
+
+        let window = app.main.window();
+        window.dispatch_event(WindowEvent::WindowActiveChanged(false));
+        draw_frames();
+        window.dispatch_event(WindowEvent::WindowActiveChanged(true));
+        draw_frames();
+        assert!(
+            app.ui.borrow().rename.is_some(),
+            "another window taking the focus applies nothing"
+        );
+
+        press(window, Key::Tab);
+        draw_frames();
+        assert!(app.ui.borrow().rename.is_none(), "Tab left the field");
+        assert_eq!(name_of(&app, "local:desk"), "Desk");
+    }
+
+    #[test]
+    fn leaving_the_name_field_for_the_master_volume_or_airplay_delay_applies_the_name() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        let window = app.main.window();
+        let rename = |name: &str| {
+            app.main
+                .invoke_speaker_rename_requested("local:desk".into());
+            draw_frames();
+            app.main
+                .invoke_speaker_rename_edited("local:desk".into(), name.into());
+        };
+
+        rename("Desk");
+        // The master volume's slider, in the left column.
+        click(window, 150.0, 275.0);
+        assert_eq!(
+            app.main_focus.borrow().control,
+            Some(MainControl::MasterVolume)
+        );
+        assert!(
+            app.ui.borrow().rename.is_none(),
+            "the volume took the focus"
+        );
+        assert_eq!(name_of(&app, "local:desk"), "Desk");
+
+        rename("Desk left");
+        // The AirPlay delay's field, under the lists scrolled to the end.
+        scroll(window, 640.0, 600.0, -2000.0);
+        click(window, 470.0, 620.0);
+        assert_eq!(
+            app.main_focus.borrow().control,
+            Some(MainControl::AirplayDelay)
+        );
+        assert!(app.ui.borrow().rename.is_none(), "the delay field took it");
+        assert_eq!(name_of(&app, "local:desk"), "Desk left");
+    }
+
+    #[test]
+    fn an_idle_cast_speakers_menu_button_works_for_rename() {
+        let mut backend = MockBackend::new();
+        let mut speaker = backend.snapshot().speaker("local:desk").unwrap().clone();
+        speaker.id = "cc:attic".into();
+        speaker.name = "Attic".into();
+        speaker.system_name = "Attic".into();
+        speaker.kind = ui_model::SpeakerKind::Cast;
+        speaker.enabled = false;
+        speaker.cast = Some(ui_model::CastRow {
+            state: ui_model::CastState::Idle,
+            muted: false,
+            volume_fixed: false,
+            volume_step: 1.0,
+            group: None,
+        });
+        backend.add_speaker(speaker);
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        draw_frames();
+        app.main.set_focus_speaker_part(RowPart::Options);
+        app.main.set_focus_speaker_id("cc:attic".into());
+        draw_frames();
+        assert_eq!(
+            app.main_focus.borrow().speaker,
+            Some(("cc:attic".into(), RowPart::Options)),
+            "the … button takes the focus: its menu has Rename"
+        );
+    }
+
     #[test]
     fn a_removed_speakers_typed_delay_is_dropped() {
         let app = app_over(MockBackend::new());
@@ -4886,6 +5472,7 @@ mod tests {
             state: ui_model::CastState::Connecting,
             muted: true,
             volume_fixed: false,
+            volume_step: 1.0,
             group: None,
         });
         let row = speaker_item(&state, &speaker, true, false, None);
@@ -4922,7 +5509,7 @@ mod tests {
         };
         assert_eq!(
             notice_text(&strings, &ahead).as_str(),
-            "AirPlay speakers can wait at most 3 s for a Google Cast speaker, so they play \
+            "AirPlay speakers can wait at most 20 s for a Google Cast speaker, so they play \
              about 1.5 s ahead of Kitchen. Lower its offset to keep them together."
         );
         assert_eq!(
@@ -4947,6 +5534,7 @@ mod tests {
             state: ui_model::CastState::Idle,
             muted: false,
             volume_fixed: false,
+            volume_step: 1.0,
             group: group(ui_model::CastMembers::NotReported),
         });
         let row = speaker_item(&state, &speaker, true, false, None);
@@ -5632,6 +6220,7 @@ mod tests {
                 problem: ui_model::AirPlayProblem::Refused,
             },
             NoticeMessage::AirPlayStopped,
+            NoticeMessage::AirPlayPtpPortsTaken,
             NoticeMessage::SettingsNotSaved,
             NoticeMessage::PairingsNotSaved,
             NoticeMessage::SettingsKeptAside { file: "f".into() },
@@ -5640,6 +6229,8 @@ mod tests {
             NoticeMessage::LaunchAtLoginFailed,
             NoticeMessage::LaunchAtLoginNotRemoved,
             NoticeMessage::LaunchAtLoginOffInSettings,
+            NoticeMessage::AirPlay2NextLaunch { on: true },
+            NoticeMessage::AirPlay2NextLaunch { on: false },
         ];
         for message in messages {
             let label = dismiss_label(message.clone());

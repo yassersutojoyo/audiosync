@@ -738,6 +738,9 @@ pub struct Renderer {
     warming: bool,
     /// The latest timed callback's `now - output time`, in ns (S209).
     callback_late_ns: i64,
+    /// The higher of that value and the one of the timed callback before,
+    /// so one stray early stamp on an anchor drops no anchor floor (S209).
+    anchor_late_ns: i64,
     /// The start lead is published: the host gave the period, or the
     /// first callback came. Not before, so a renderer whose hold-back the
     /// host hasn't set yet never moves the session lead (S208).
@@ -838,6 +841,7 @@ impl Renderer {
             floor_formed: false,
             warming: false,
             callback_late_ns: 0,
+            anchor_late_ns: 0,
             start_lead_fixed: false,
             awaiting_resync: false,
             correction_due: false,
@@ -1094,6 +1098,11 @@ impl Renderer {
     fn lateness(&mut self, time: u64, now: u64, frames: usize) -> u64 {
         let late = (i128::from(now) - i128::from(time))
             .clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+        self.anchor_late_ns = if self.earliest.is_some() {
+            late.max(self.callback_late_ns)
+        } else {
+            late
+        };
         self.callback_late_ns = late;
         let leak = (frames as u64).saturating_mul(EARLIEST_LEAK_NS_PER_S)
             / u64::from(self.device_rate.max(1));
@@ -1521,7 +1530,7 @@ impl Renderer {
         if report.correction != Correction::None {
             // What this callback's Jt counted from, so Jf is 0 from here.
             self.anchor_floor = match (self.late_floor(), self.anchor_floor) {
-                (Some(floor), Some(anchor)) => Some(floor.max(anchor.min(self.callback_late_ns))),
+                (Some(floor), Some(anchor)) => Some(floor.max(anchor.min(self.anchor_late_ns))),
                 (floor, _) => floor,
             };
             self.anchored_floor = self.anchor_floor;
@@ -2050,7 +2059,8 @@ mod tests {
     /// An output whose callbacks all come 60 ms late, but for `strays`
     /// early by `early_ns`, whose delay is set to 100 ms after them: how far
     /// behind the capture it plays a minute later, and its late callbacks.
-    fn resync_after_strays(strays: usize, early_ns: u64) -> (f64, u64) {
+    /// With `stray_anchor`, the callback that resyncs is early by as much.
+    fn resync_after_strays(strays: usize, early_ns: u64, stray_anchor: bool) -> (f64, u64) {
         let late = 60_000_000;
         let mut s = Stepped::new();
         let mut written = 0;
@@ -2064,12 +2074,25 @@ mod tests {
             ramp_step(&mut s, &mut written, late);
         }
         s.control.set_delay_frames(4800);
+        if stray_anchor {
+            // The fade-out takes two callbacks; the third resyncs.
+            ramp_step(&mut s, &mut written, late);
+            ramp_step(&mut s, &mut written, late);
+            assert_eq!(s.control.counters().resyncs, 0);
+            ramp_step(&mut s, &mut written, late - early_ns);
+            assert_eq!(s.control.counters().resyncs, 1);
+        }
         let mut behind = 0.0;
         for _ in 0..6000 {
             behind = ramp_step(&mut s, &mut written, late);
         }
         let counters = s.control.counters();
         assert_eq!(counters.resyncs, 1, "{counters:?}");
+        assert_eq!(
+            (counters.drift_skips, counters.drift_silences),
+            (0, 0),
+            "{counters:?}"
+        );
         (behind, s.renderer.late_callbacks())
     }
 
@@ -2078,9 +2101,27 @@ mod tests {
     fn a_resync_after_two_stray_early_stamps_lands_where_it_would_without_them() {
         // Both strays sit in the floor for up to 50 s; anchoring against it
         // used to put the output their size later for good.
-        let (calm, _) = resync_after_strays(0, 0);
+        let (calm, _) = resync_after_strays(0, 0, false);
         for early_ns in [20_000_000, 60_000_000] {
-            let (behind, late_callbacks) = resync_after_strays(2, early_ns);
+            let (behind, late_callbacks) = resync_after_strays(2, early_ns, false);
+            let moved_ms = (behind - calm) / 48.0;
+            assert!(
+                moved_ms.abs() < 2.0,
+                "{early_ns} ns strays: {moved_ms:.2} ms"
+            );
+            assert_eq!(late_callbacks, 0, "{early_ns} ns strays");
+        }
+    }
+
+    // covers: S209
+    #[test]
+    fn a_resync_on_a_third_stray_early_stamp_lands_where_it_would_without_them() {
+        // The anchor floor used to drop to the stray's value at the anchor:
+        // every later callback counted as that much late, and its drift was
+        // judged that much off, until the floor leaked back up.
+        let (calm, _) = resync_after_strays(0, 0, false);
+        for early_ns in [20_000_000, 40_000_000, 60_000_000] {
+            let (behind, late_callbacks) = resync_after_strays(2, early_ns, true);
             let moved_ms = (behind - calm) / 48.0;
             assert!(
                 moved_ms.abs() < 2.0,

@@ -24,17 +24,22 @@
 //! - I5: over the last quarter, each output's delay stays within 2 ms.
 //! - I6: an output without wander whose clock is at least 20 ppm off is
 //!   trimmed with its clock by 9/10 of what it gained, against it by at most
-//!   16 frames; a late-first output from 20 s after its callbacks came on
-//!   time, once it has moved by their lateness.
+//!   16 frames, on a slow clock plus what the anchor floor falls toward its
+//!   stray stamps (S209 moves it later by that); a late-first output from
+//!   20 s after its callbacks came on time, or later when its trim's cap
+//!   needs longer to carry it their lateness, plus one ANCHOR_FALL_MS.
 //! - I7: with AirPlay chosen, the session lead stays 0 and no output
 //!   re-times.
 //! - I8 (stall cases only): a device that consumes nothing for 50 to 200 ms
 //!   and then plays on later gets at most one correction for it, runs dry
 //!   none, and every output it doesn't stall gets none.
 //!
-//! In the late-first stratum the first output's callbacks come 15.4 or
-//! 45 ms late for its first 0.6 to 1.8 s, so its prime and its floor take
-//! them as on time, and then on time.
+//! The late-first stratum is its own nine cases after the stall cases, each
+//! a twin of one even Mac case that is not finding 2's (2, 4, 6, 18, 20,
+//! 22, 34, 36 and 38), on its draw and named after it with an f: the first
+//! output's callbacks come 15.4 or 45 ms late for its first 0.6 to 1.8 s,
+//! so its prime and its floor take them as on time, and then on time,
+//! without wander. The Mac cases they twin keep their wander.
 //!
 //! A Bluetooth output adds a capture block to its start lead (S230); the
 //! random mixes have none yet, see [`device`].
@@ -45,7 +50,7 @@ use std::time::Instant;
 
 use audiosync_core::fade::FadeState;
 use audiosync_core::reader::{Reader, ReaderCounters};
-use audiosync_core::render::{Renderer, RendererControl};
+use audiosync_core::render::{ANCHOR_FALL_MS, Renderer, RendererControl, TRIM_SHARE};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 use proptest::prelude::*;
@@ -79,8 +84,8 @@ const FIRST_LATE_LARGE_MS: f64 = 45.0;
 /// included.
 const CAUGHT_UP: f64 = 1.0;
 /// Late-first: s after the callbacks came on time by which the anchor floor
-/// has fallen (ten ANCHOR_FALL_MS) and the trim, at up to about 3.9 ms a
-/// second, has carried the output the 45 ms.
+/// has fallen (ten ANCHOR_FALL_MS) and a trim of about 3.9 ms a second has
+/// carried the output the 45 ms; see [`fallen_after`] for slower trims.
 const FALLEN_AFTER: f64 = 20.0;
 
 /// I4: how far apart outputs may play beyond a capture block, in ms.
@@ -352,8 +357,26 @@ fn device(o: &RawOutput, platform: Platform, shared: Option<(u64, u64)>) -> Devi
 /// Case `k` of the matrix, from `raw` and the strata of `k`.
 fn build(raw: &RawCase, k: usize, stall: bool) -> Case {
     if stall {
-        return build_stall(raw, k);
+        build_stall(raw, k)
+    } else {
+        build_mix(raw, k, false)
     }
+}
+
+/// Whether case `k`'s strata have a late-first case: a Mac case, since
+/// without output times the core never sees a late wake, at an even `k`
+/// that is not finding 2's.
+fn late_first_strata(k: usize) -> bool {
+    k % 2 == 0 && k % 8 != 0 && (k / 8) % 2 == 0
+}
+
+/// The late-first case on the strata of case `k`, from `raw`.
+fn build_late_first(raw: &RawCase, k: usize) -> Case {
+    assert!(late_first_strata(k), "case {k} has no late-first strata");
+    build_mix(raw, k, true)
+}
+
+fn build_mix(raw: &RawCase, k: usize, late_first: bool) -> Case {
     let stratum = k % 8;
     let first_held = stratum & 1 != 0;
     let first_converts = stratum & 2 != 0;
@@ -361,7 +384,6 @@ fn build(raw: &RawCase, k: usize, stall: bool) -> Case {
     // Finding 2: the first output alone sets the session lead and has no
     // other slack.
     let finding_2 = stratum == 0;
-    let late_first = k % 2 == 0 && !finding_2;
     let platform = if (k / 8) % 2 == 1 {
         Platform::Windows
     } else {
@@ -412,8 +434,7 @@ fn build(raw: &RawCase, k: usize, stall: bool) -> Case {
                 }
                 _ => {}
             }
-            // Mac only: without output times the core never sees a late wake.
-            if late_first && i == 0 && platform == Platform::Mac {
+            if late_first && i == 0 {
                 let ms = if (stratum / 2 + k / 16) % 2 == 0 {
                     FIRST_LATE_BT_MS
                 } else {
@@ -678,6 +699,36 @@ fn write_block(writer: &mut RingWriter, samples: &mut [f32], first: u64, at: f64
     writer.write_at(samples, samples.len() / 2, ns(at));
 }
 
+/// The most a device's trim moves its output, in capture ms a second: a
+/// 256th of a callback's reads and at least one frame (S207), so one frame
+/// in each 10 ms callback of 480 frames at 48 kHz, 2.1 ms a second.
+fn trim_ms_per_s(d: &Device) -> f64 {
+    let reads = d.callback * CAPTURE_RATE as usize / d.rate as usize;
+    let frames = (reads / TRIM_SHARE).max(1) as f64;
+    frames * 1000.0 / f64::from(CAPTURE_RATE) * f64::from(d.rate) / d.callback as f64
+}
+
+/// Late-first: s after the callbacks came on time from which I6 judges the
+/// trim, [`FALLEN_AFTER`] or, when the trim carries the output its `ms`
+/// slower, that long plus one [`ANCHOR_FALL_MS`].
+fn fallen_after(d: &Device, ms: f64) -> f64 {
+    FALLEN_AFTER.max(ms / trim_ms_per_s(d) + f64::from(ANCHOR_FALL_MS) / 1000.0)
+}
+
+/// Capture frames by which the anchor floor falls toward a device's two
+/// stray stamps, `1 - e^(-t / ANCHOR_FALL_MS)` of the gap at each (S209):
+/// the output is to move later by as much, so on a slow clock the trim
+/// carries it there against the clock.
+fn stray_fall_frames(d: &Device) -> u64 {
+    let Some((_, ms)) = d.strays else {
+        return 0;
+    };
+    let span_ms = d.callback as f64 * 1000.0 / f64::from(d.rate);
+    let kept = (-span_ms / f64::from(ANCHOR_FALL_MS)).exp();
+    let fall_ms = ms * (1.0 - kept * kept);
+    (fall_ms * f64::from(CAPTURE_RATE) / 1000.0).ceil() as u64
+}
+
 fn simulate(case: &Case) -> Outcome {
     let ring = Ring::for_rate(CAPTURE_RATE).unwrap();
     let mut writer = ring.writer().unwrap();
@@ -746,7 +797,7 @@ fn simulate(case: &Case) -> Outcome {
                 // output there, the trim follows the clock alone again.
                 trim_judged_from: d
                     .first_late
-                    .map_or(SETTLED, |(_, until)| until + FALLEN_AFTER),
+                    .map_or(SETTLED, |(ms, until)| until + fallen_after(d, ms)),
                 trim_from: None,
             };
             output.schedule();
@@ -936,7 +987,9 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
                 } else {
                     (sped, slowed)
                 };
-                own[5] = (with as f64) < gained * TRIM_WITH_SHARE || against > TRIM_AGAINST_FRAMES;
+                let carried = if d.ppm < 0.0 { stray_fall_frames(d) } else { 0 };
+                own[5] = (with as f64) < gained * TRIM_WITH_SHARE
+                    || against > TRIM_AGAINST_FRAMES + carried;
             }
             own[6] = case.airplay && (lead_moved || end.resyncs > 0);
             norms.push(norm);
@@ -993,7 +1046,11 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         0,
         format!(
             "case {}{} {:?} {} block {} align {:.2} ms {failed:?}",
-            if case.is_stall() { "s" } else { "" },
+            match (case.is_stall(), case.devices[0].first_late.is_some()) {
+                (true, _) => "s",
+                (false, true) => "f",
+                (false, false) => "",
+            },
             case.k,
             case.platform,
             if case.airplay { "airplay" } else { "local" },
@@ -1020,12 +1077,15 @@ fn run_all(cases: &[Case]) -> (Vec<Outcome>, f64) {
     std::thread::scope(|scope| {
         for _ in 0..workers.min(cases.len()) {
             scope.spawn(|| {
-                while let Some(case) = cases.get(next.fetch_add(1, Ordering::Relaxed)) {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(case) = cases.get(i) else {
+                        break;
+                    };
                     let started = Instant::now();
                     let outcome = simulate(case);
                     let took = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
                     busy_us.fetch_add(took, Ordering::Relaxed);
-                    let i = case.k + if case.is_stall() { CASES } else { 0 };
                     *results[i].lock().unwrap() = Some(outcome);
                 }
             });
@@ -1083,14 +1143,24 @@ fn seed_bytes(seed: u64) -> [u8; 32] {
 }
 
 /// The pinned cases, drawn once by proptest from [`SEED`], then the stall
-/// cases.
+/// cases, then the late-first ones, each on its strata case's draw.
 fn pinned_cases() -> Vec<Case> {
     let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed_bytes(SEED));
     let mut runner = TestRunner::new_with_rng(Config::default(), rng);
     let strategy = raw_case();
     let mut draw = || strategy.new_tree(&mut runner).unwrap().current();
-    let mut cases: Vec<Case> = (0..CASES).map(|k| build(&draw(), k, false)).collect();
+    let raws: Vec<RawCase> = (0..CASES).map(|_| draw()).collect();
+    let mut cases: Vec<Case> = raws
+        .iter()
+        .enumerate()
+        .map(|(k, raw)| build(raw, k, false))
+        .collect();
     cases.extend((0..STALL_CASES).map(|k| build(&draw(), k, true)));
+    cases.extend(
+        (0..CASES)
+            .filter(|&k| late_first_strata(k))
+            .map(|k| build_late_first(&raws[k], k)),
+    );
     cases
 }
 
@@ -1263,6 +1333,16 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
                 .any(|(case, _)| case.devices[0].first_late.is_some_and(|(m, _)| m == ms))
         );
     }
+    // The late-first cases are twins of their strata cases, which keep
+    // their wander.
+    assert!(
+        matrix()
+            .cases_where(|c| !c.is_stall() && late_first_strata(c.k))
+            .iter()
+            .any(
+                |(case, _)| case.devices[0].first_late.is_none() && case.devices[0].wander_ms > 0.0
+            )
+    );
     let on_time: Vec<Case> = late
         .iter()
         .map(|(case, _)| {
@@ -1300,7 +1380,7 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
             && !seen.fails.iter().any(|&f| f);
         failed += usize::from(!ok);
         lines.push(format!(
-            "case {}: {ms} ms late for {until:.2} s, floor down {:.2} ms, Jf down to {:.2} ms, {after:.2} ms 2 s later; moved {own:+.2} ms past its lateness, others up to {others:.2} ms{}",
+            "case f{}: {ms} ms late for {until:.2} s, floor down {:.2} ms, Jf down to {:.2} ms, {after:.2} ms 2 s later; moved {own:+.2} ms past its lateness, others up to {others:.2} ms{}",
             case.k,
             fall.drop_ms,
             fall.least_ms,
@@ -1337,6 +1417,46 @@ fn every_windows_case_holds_every_invariant() {
     }
 }
 
+// covers: S207, S209
+#[test]
+fn late_first_cases_on_draws_of_their_own_hold_every_invariant() {
+    // The matrix's late-first cases reuse their strata cases' draws; these
+    // nine take the draws after the stall cases'. Two failed I6 as first
+    // judged: f2's 1024-frame output on a slow clock, which S209's anchor
+    // floor moves 1.2 ms later toward its two stray stamps 54 ms early, and
+    // f20's 480-frame output at 48 kHz, whose trim of one frame a callback
+    // (S207) was still carrying it the 45 ms 20 s after its late start.
+    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed_bytes(SEED));
+    let mut runner = TestRunner::new_with_rng(Config::default(), rng);
+    let strategy = raw_case();
+    let mut draw = || strategy.new_tree(&mut runner).unwrap().current();
+    for _ in 0..CASES + STALL_CASES {
+        draw();
+    }
+    let cases: Vec<Case> = (0..CASES)
+        .filter(|&k| late_first_strata(k))
+        .map(|k| build_late_first(&draw(), k))
+        .collect();
+    let f2 = &cases[0].devices[1];
+    assert_eq!(
+        (cases[0].k, f2.callback, f2.strays.map(|(_, ms)| ms.round())),
+        (2, 1024, Some(54.0))
+    );
+    let f20 = &cases[4].devices[0];
+    assert_eq!(
+        (cases[4].k, f20.callback, f20.rate),
+        (20, 480, CAPTURE_RATE)
+    );
+    let outcomes = simulate_all(&cases);
+    let report: Vec<String> = outcomes.iter().flat_map(|o| o.lines.clone()).collect();
+    println!("{}", report.join("\n"));
+    assert!(
+        outcomes.iter().all(|o| !o.fails.iter().any(|&f| f)),
+        "{}",
+        report.join("\n")
+    );
+}
+
 proptest! {
     #![proptest_config(ProptestConfig {
         cases: 512,
@@ -1349,7 +1469,11 @@ proptest! {
     #[test]
     #[ignore = "512 cases of up to 180 s take minutes"]
     fn every_output_of_every_mix_holds_every_invariant(raw in raw_case()) {
-        let case = build(&raw, raw.k, raw.stall);
+        let case = if !raw.stall && late_first_strata(raw.k) && raw.seed % 2 == 1 {
+            build_late_first(&raw, raw.k)
+        } else {
+            build(&raw, raw.k, raw.stall)
+        };
         let outcome = simulate(&case);
         prop_assert!(!outcome.fails.iter().any(|&f| f), "{}", outcome.lines.join("\n"));
     }

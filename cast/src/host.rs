@@ -257,6 +257,7 @@ enum Command {
         target: CastTarget,
         format: StreamFormat,
         metadata: Metadata,
+        artwork: Option<Vec<u8>>,
         reader: AudioReader,
         selected: Arc<AtomicBool>,
     },
@@ -351,6 +352,19 @@ impl CastHost {
         metadata: Metadata,
         reader: AudioReader,
     ) -> Result<AttemptId, StartRefused> {
+        self.start_with_artwork(target, rate, metadata, None, reader)
+    }
+
+    /// [`CastHost::start`] with PNG or JPEG artwork that the first `LOAD`
+    /// already names (C53).
+    pub fn start_with_artwork(
+        &mut self,
+        target: CastTarget,
+        rate: u32,
+        metadata: Metadata,
+        artwork: Option<Vec<u8>>,
+        reader: AudioReader,
+    ) -> Result<AttemptId, StartRefused> {
         if self.worker.is_none() {
             return Err(StartRefused::Closed);
         }
@@ -377,6 +391,7 @@ impl CastHost {
             target,
             format,
             metadata,
+            artwork,
             reader,
             selected,
         };
@@ -436,7 +451,8 @@ impl CastHost {
     }
 
     /// Serves PNG or JPEG artwork (C53) for the metadata of the next
-    /// `LOAD`.
+    /// `LOAD`; send it after the [`CastHost::set_metadata`] it belongs to,
+    /// which drops the artwork of the track before.
     pub fn set_artwork(&self, bytes: Vec<u8>) {
         let _ = self.commands.send(Command::SetArtwork(bytes));
     }
@@ -626,9 +642,17 @@ impl Worker {
                 target,
                 format,
                 metadata,
+                artwork,
                 reader,
                 selected,
-            } => self.start(attempt, target, format, metadata, reader, selected),
+            } => self.start(
+                attempt,
+                target,
+                format,
+                (metadata, artwork),
+                reader,
+                selected,
+            ),
             Command::Stop => self.stop_running(),
             Command::SetVolume(level) => {
                 self.with_session(|session| session.set_volume(level).map_err(CommandError::Volume))
@@ -681,7 +705,7 @@ impl Worker {
         attempt: AttemptId,
         target: CastTarget,
         format: StreamFormat,
-        metadata: Metadata,
+        (metadata, artwork): (Metadata, Option<Vec<u8>>),
         reader: AudioReader,
         selected: Arc<AtomicBool>,
     ) {
@@ -693,6 +717,7 @@ impl Worker {
             addresses: target.addresses,
             format,
             metadata,
+            artwork,
             group: target.group,
         };
         // Connect retries go out live, while the start still runs; one that

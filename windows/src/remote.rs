@@ -127,6 +127,7 @@ pub fn snapshot(
                 // Like the row's button: "Will play" still turns on.
                 on: !state.speaker_state(speaker).click_turns_on(),
                 volume: volume(speaker.volume),
+                volume_step: speaker.cast.as_ref().map_or(1.0, |cast| cast.volume_step),
                 delay_ms: speaker
                     .delay_ms
                     .filter(|ms| ms.is_finite())
@@ -361,6 +362,7 @@ mod tests {
         Speaker {
             id: id.to_owned(),
             name: id.to_owned(),
+            system_name: id.to_owned(),
             kind,
             enabled: false,
             volume: 50.0,
@@ -382,6 +384,7 @@ mod tests {
             state: CastState::Idle,
             muted: false,
             volume_fixed: false,
+            volume_step: 1.0,
         });
         let mut den = speaker("den", SpeakerKind::AirPlay2, None);
         den.availability = Availability::AirPlay2NotYet;

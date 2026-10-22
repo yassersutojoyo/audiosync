@@ -8,9 +8,9 @@
 //! AirPlay speaker's switch, volume and delay (outputs by endpoint ID,
 //! AirPlay speakers by the ID they announce), the AirPlay delay adjustment,
 //! the master volume, the
-//! auto-connect marks, the groups, the equalizer, View > Show Virtual
-//! Devices, View > Appearance, the main window's place and size, and File >
-//! Web Remote with its port.
+//! auto-connect marks, the names the user gave speakers, the groups, the
+//! equalizer, View > Show Virtual Devices, View > Appearance, the main
+//! window's place and size, and File > Web Remote with its port.
 //!
 //! The file carries a format version ([`VERSION`]). A file from an older
 //! version is read for the fields it has; one from a newer version, one that
@@ -39,6 +39,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::speaker_names::SpeakerNames;
 use audiosync_core::eq::{BAND_COUNT, EqSettings};
 use audiosync_core::policy::delay::{
     MAX_DELAY_MS, MAX_OFFSET_MS, MIN_OFFSET_MS, sanitize_airplay_adjustment_ms,
@@ -78,9 +79,9 @@ pub const VERSION: u32 = 2;
 /// The first format version with offsets relative to the reference.
 pub const OFFSETS_VERSION: u32 = 2;
 
-/// The longest own delay an AirPlay speaker takes, in milliseconds (the
-/// sender's limit).
-pub const MAX_AIRPLAY_DELAY_MS: f64 = 3000.0;
+/// The longest own delay an AirPlay speaker takes, in milliseconds: the
+/// sender's limit (P99), the core's delay range.
+pub const MAX_AIRPLAY_DELAY_MS: f64 = MAX_DELAY_MS;
 
 /// The most entries kept in each list or map: far more than anyone has
 /// devices, small enough that a damaged file can't make the app slow.
@@ -162,7 +163,7 @@ pub struct SavedSpeaker {
     pub volume: f64,
     /// The delay in milliseconds: for an output its offset relative to the
     /// reference, −2000 to +20 000 (0 to 20 000 in format 1, where it was
-    /// the output's own trim); 0 to 3000 for an AirPlay speaker's own delay.
+    /// the output's own trim); 0 to 20 000 for an AirPlay speaker's own delay.
     pub delay_ms: f64,
 }
 
@@ -263,6 +264,24 @@ pub fn clamp_window(frame: WindowFrame) -> Option<WindowFrame> {
     })
 }
 
+/// One unreadable name costs only that name, not the whole settings file.
+fn names_that_are_text<'de, D>(deserializer: D) -> Result<BTreeMap<String, String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Object(entries) = value else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|(key, name)| match name {
+            serde_json::Value::String(name) => Some((key, name)),
+            _ => None,
+        })
+        .collect())
+}
+
 /// Everything the file keeps. See the module documentation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -283,6 +302,12 @@ pub struct Settings {
     pub airplay: BTreeMap<String, SavedSpeaker>,
     /// The speakers marked auto-connect, by speaker key.
     pub auto_connect: BTreeSet<String>,
+    /// The names the user gave speakers, by speaker key (spec S228).
+    #[serde(
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "names_that_are_text"
+    )]
+    pub speaker_names: BTreeMap<String, String>,
     pub groups: Vec<SavedGroup>,
     pub equalizer: SavedEqualizer,
     /// View > Show Virtual Devices.
@@ -300,6 +325,8 @@ pub struct Settings {
     pub when_source_quits: String,
     /// File > Web Remote: whether it is on, and its port.
     pub remote: RemoteSettings,
+    /// File > AirPlay 2 (Experimental); read at launch only (spec P170).
+    pub airplay2_experimental: bool,
 }
 
 impl Default for Settings {
@@ -312,6 +339,7 @@ impl Default for Settings {
             outputs: BTreeMap::new(),
             airplay: BTreeMap::new(),
             auto_connect: BTreeSet::new(),
+            speaker_names: BTreeMap::new(),
             groups: Vec::new(),
             equalizer: SavedEqualizer::default(),
             show_virtual_devices: false,
@@ -320,6 +348,7 @@ impl Default for Settings {
             airplay_adjustment_ms: 0.0,
             when_source_quits: WhenSourceQuits::Stop.stored().to_owned(),
             remote: RemoteSettings::default(),
+            airplay2_experimental: false,
         }
     }
 }
@@ -370,6 +399,16 @@ fn usable_id(id: &str) -> bool {
 /// Whether `key` is a speaker key the app can use (`lc:` or `ap:` and an ID).
 fn usable_key(key: &str) -> bool {
     key.len() <= MAX_TEXT && SpeakerKey::parse(key).is_some_and(|key| !key.id().is_empty())
+}
+
+/// A key a speaker's name may be saved under: a Google Cast speaker can be
+/// renamed too, though the core's keys don't know it.
+fn usable_name_key(key: &str) -> bool {
+    usable_key(key)
+        || key.len() <= MAX_TEXT
+            && key
+                .strip_prefix(crate::adapter::CAST_PREFIX)
+                .is_some_and(|id| !id.is_empty())
 }
 
 /// `text` cut to at most [`MAX_TEXT`] bytes, at a character boundary.
@@ -444,6 +483,15 @@ impl Settings {
                 .filter(|key| usable_key(key))
                 .take(MAX_ENTRIES)
                 .collect(),
+            speaker_names: SpeakerNames::from_saved(
+                &self
+                    .speaker_names
+                    .into_iter()
+                    .filter(|(key, _)| usable_name_key(key))
+                    .take(MAX_ENTRIES)
+                    .collect(),
+            )
+            .saved(),
             groups,
             equalizer: SavedEqualizer::from(self.equalizer.settings()),
             show_virtual_devices: self.show_virtual_devices,
@@ -455,6 +503,7 @@ impl Settings {
                 .stored()
                 .to_owned(),
             remote: self.remote.clamped(),
+            airplay2_experimental: self.airplay2_experimental,
         }
     }
 
@@ -762,6 +811,10 @@ mod tests {
         settings
             .auto_connect
             .insert("lc:{0.0.0.00000000}.{speakers}".to_owned());
+        settings.speaker_names.insert(
+            "lc:{0.0.0.00000000}.{speakers}".to_owned(),
+            "Desk".to_owned(),
+        );
         settings.groups.push(SavedGroup {
             id: "group:3".to_owned(),
             name: "Downstairs".to_owned(),
@@ -776,6 +829,74 @@ mod tests {
             gains_db: vec![4.0, 3.0, 0.0, 0.0, -1.5, 0.0, 0.0, 2.0, 2.5, 3.0],
         };
         settings
+    }
+
+    #[test]
+    fn speaker_names_are_kept_cleared_and_unusable_entries_skipped() {
+        let file = SettingsFile::at(test_dir("settings-speaker-names").join(FILE_NAME));
+        let mut names = SpeakerNames::default();
+        names.rename("lc:desk", "Desk", "Speakers");
+        names.rename("ap:kitchen", "Kitchen left", "Kitchen");
+        names.rename("cc:attic", "Attic", "Living Room speaker");
+        let settings = Settings {
+            speaker_names: names.saved(),
+            ..Settings::default()
+        };
+        file.save(&settings).expect("saved");
+        let (read, _) = file.load();
+        let mut names = SpeakerNames::from_saved(&read.speaker_names);
+        assert_eq!(
+            names.shown("lc:desk", "Speakers"),
+            "Desk",
+            "kept across a restart"
+        );
+        assert_eq!(names.shown("ap:kitchen", "Kitchen"), "Kitchen left");
+        assert_eq!(
+            names.shown("cc:attic", "Living Room speaker"),
+            "Attic",
+            "a Google Cast speaker's too"
+        );
+        assert_eq!(names.shown("lc:other", "Other"), "Other", "an unknown key");
+
+        names.rename("lc:desk", "", "Speakers");
+        let settings = Settings {
+            speaker_names: names.saved(),
+            ..Settings::default()
+        };
+        file.save(&settings).expect("saved");
+        let (read, _) = file.load();
+        assert!(
+            !read.speaker_names.contains_key("lc:desk"),
+            "cleared, the key goes"
+        );
+        assert_eq!(read.speaker_names.len(), 2);
+
+        let text = r#"{"version": 2, "speaker_names": {
+            "lc:desk": "  Desk  ", "nonsense": "Name", "ap:": "Name", "lc:blank": "  ",
+            "cc:attic": "Attic", "cc:": "Name"
+        }}"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        assert_eq!(
+            read.speaker_names,
+            BTreeMap::from([
+                ("cc:attic".to_owned(), "Attic".to_owned()),
+                ("lc:desk".to_owned(), "Desk".to_owned()),
+            ]),
+            "unusable keys and blank names are skipped"
+        );
+        let text = r#"{"version": 2, "master_volume": 40, "speaker_names": {
+            "lc:desk": "Desk", "lc:odd": 5, "ap:x": null
+        }}"#;
+        let (read, _) = Settings::from_json(text).expect("one odd name spoils nothing");
+        assert_eq!(read.master_volume, 40.0);
+        assert_eq!(
+            read.speaker_names,
+            BTreeMap::from([("lc:desk".to_owned(), "Desk".to_owned())])
+        );
+        let (read, _) = Settings::from_json(r#"{"version": 2, "speaker_names": 3}"#).expect("read");
+        assert!(read.speaker_names.is_empty());
+        let without = Settings::default().to_json();
+        assert!(!without.contains("speaker_names"), "no names, no field");
     }
 
     #[test]
@@ -818,6 +939,16 @@ mod tests {
         let (low, found) = read(r#"{"version": 2, "remote": {"on": true, "port": 80}}"#);
         assert_eq!(low.remote.port, audiosync_remote::DEFAULT_PORT);
         assert!(matches!(found, Loaded::Read { adjusted: true, .. }));
+    }
+
+    #[test]
+    fn airplay2_is_off_in_a_file_that_does_not_name_it() {
+        let read = |json: &str| Settings::from_json(json).expect("read").0;
+        assert!(!Settings::default().airplay2_experimental);
+        assert!(!read(r#"{"version": 2}"#).airplay2_experimental);
+        let on = read(r#"{"version": 2, "airplay2_experimental": true}"#);
+        assert!(on.airplay2_experimental);
+        assert!(read(&on.to_json()).airplay2_experimental);
     }
 
     #[test]
@@ -970,7 +1101,7 @@ mod tests {
                 "": {"enabled": true},
                 "quiet": {"volume": -5, "delay_ms": -20}
             },
-            "airplay": {"far": {"delay_ms": 5000, "volume": 101}},
+            "airplay": {"far": {"delay_ms": 25000, "volume": 101}, "near": {"delay_ms": 13000}},
             "auto_connect": ["lc:loud", "nonsense", "ap:", "zz:loud"],
             "groups": [
                 {"id": "group:1", "name": "Empty", "members": ["bad"]},
@@ -1007,7 +1138,11 @@ mod tests {
             })
         );
         assert!(!settings.outputs.contains_key(""));
-        assert_eq!(settings.airplay["far"].delay_ms, MAX_AIRPLAY_DELAY_MS);
+        assert_eq!(settings.airplay["far"].delay_ms, 20_000.0);
+        assert_eq!(
+            settings.airplay["near"].delay_ms, 13_000.0,
+            "a calibrated delay stays"
+        );
         assert_eq!(settings.airplay["far"].volume, 100.0);
         assert_eq!(
             settings.auto_connect,

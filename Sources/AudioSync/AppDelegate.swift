@@ -131,6 +131,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var showVirtualDevices: Bool {
         didSet { if showVirtualDevices != oldValue { store.save(showVirtualDevices: showVirtualDevices) } }
     }
+    /// The AirPlay 2 switch as the user left it; the sender reads
+    /// `airPlay2AtLaunch`, since it can't change mode while speakers play.
+    var airPlay2: Bool {
+        didSet { if airPlay2 != oldValue { store.save(airPlay2: airPlay2) } }
+    }
+    let airPlay2AtLaunch: Bool
     var appearance: AppAppearance {
         didSet {
             guard appearance != oldValue else { return }
@@ -233,6 +239,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showVirtualDevices = saved.showVirtualDevices
         appearance = saved.appearance
         whenSourceQuits = saved.whenSourceQuits
+        airPlay2 = saved.airPlay2
+        airPlay2AtLaunch = saved.airPlay2
         super.init()
     }
 
