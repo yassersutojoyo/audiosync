@@ -2089,4 +2089,41 @@ mod tests {
             assert_eq!(late_callbacks, 0, "{early_ns} ns strays");
         }
     }
+
+    /// An output whose first 100 callbacks come `late_ns` late and the
+    /// rest on time, whose delay is set to 100 ms half a second after they
+    /// came on time: how far behind the capture it plays a minute later.
+    fn resync_after_late_start(late_ns: u64) -> f64 {
+        let mut s = Stepped::new();
+        let mut written = 0;
+        for _ in 0..100 {
+            ramp_step(&mut s, &mut written, late_ns);
+        }
+        for _ in 0..50 {
+            ramp_step(&mut s, &mut written, 0);
+        }
+        s.control.set_delay_frames(4800);
+        let mut behind = 0.0;
+        for _ in 0..6000 {
+            behind = ramp_step(&mut s, &mut written, 0);
+        }
+        let counters = s.control.counters();
+        assert_eq!(counters.resyncs, 1, "{counters:?}");
+        behind
+    }
+
+    // covers: S209
+    #[test]
+    fn a_resync_while_the_anchor_floor_falls_after_a_late_start_lands_on_its_delay() {
+        // The anchor lands on the on-time callback, so the anchor floor
+        // must not keep the rest of its fall past it.
+        let calm = resync_after_late_start(0);
+        for late_ns in [15_400_000, 45_000_000] {
+            let moved_ms = (resync_after_late_start(late_ns) - calm) / 48.0;
+            assert!(
+                moved_ms.abs() < 2.0,
+                "{late_ns} ns late start: {moved_ms:.2} ms"
+            );
+        }
+    }
 }
