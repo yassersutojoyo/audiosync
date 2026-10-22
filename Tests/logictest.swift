@@ -3805,7 +3805,8 @@ do {
     check(m.rows == [den, "group1", kitchen] && m.offset(of: kitchen) == 250 && m.offset(of: den) == 0,
           "cast: rows by name, offsets from the device memory")
 
-    check(m.turnOn("group1") == .group && m.enabled == nil, "cast: a group stays off with a notice")
+    check(m.turnOn("group1") == nil && m.enabled == "group1" && m.turnOff("group1") && m.enabled == nil,
+          "cast: a group turns on and off like any speaker")
     check(m.turnOn(kitchen) == nil && m.turnOn(den) == .busy && m.enabled == kitchen,
           "cast: a second speaker stays off while one is on")
     check(m.plan(streaming: false) == .none && m.plan(streaming: true) == .start(kitchen),
@@ -3861,7 +3862,7 @@ do {
 
     check(CastEnd.failed(.connect).problem == .notResponding && CastEnd.failed(.launch).problem == .refused
             && CastEnd.failed(.noFetch).problem == .blocked && CastEnd.failed(.stream).problem == .connectionLost
-            && CastEnd.failed(.group).problem == .group && CastEnd.failed(nil).problem == .notResponding
+            && CastEnd.failed(nil).problem == .notResponding
             && CastEnd.stopped.problem == nil && CastEnd.deselected.problem == nil,
           "cast: each way a session ends maps to its notice, or none")
 
@@ -3934,7 +3935,7 @@ do {
     var idleFailure = CastModel()
     check(idleFailure.apply(.failed(detail: "")) == .senderFailed(wasOn: nil), "cast: no speaker named when none was on")
     check(t.castList(.noneFound)?.contains("Local Network") == true, "cast: none found points to Local Network access")
-    let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost, .group]
+    let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost]
     check(problems.allSatisfy { let text = t.castProblem($0, name: "Den"); return text.contains("Den") && !text.contains("\u{2014}") },
           "cast: every notice names the speaker, with no em dash")
     check(t.networkSpeakersNote(airPlayNone: true, cast: .noneFound) == "No AirPlay or Google Cast speakers found on this network"
@@ -3943,11 +3944,96 @@ do {
             && t.networkSpeakersNote(airPlayNone: false, cast: .quiet) == nil
             && t.networkSpeakersNote(airPlayNone: true, cast: .failed)?.hasPrefix(t.airPlayNoneFound) == true,
           "cast: Connected Speakers says where AirPlay and the Cast search stand")
-    check(t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: true)) == "Speaker groups not supported"
-            && t.castNote(CastRow(status: .connecting, muted: false, volumeFixed: false, group: false)) == "Connecting…"
-            && t.castNote(CastRow(status: .playing, muted: true, volumeFixed: false, group: false)) == "Muted on the speaker"
-            && t.castNote(CastRow(status: .playing, muted: false, volumeFixed: false, group: false)) == nil,
+    check(t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: nil)) == nil
+            && t.castNote(CastRow(status: .connecting, muted: false, volumeFixed: false, group: nil)) == "Connecting…"
+            && t.castNote(CastRow(status: .playing, muted: true, volumeFixed: false, group: nil)) == "Muted on the speaker"
+            && t.castNote(CastRow(status: .playing, muted: false, volumeFixed: false, group: nil)) == nil,
           "cast: the note under a speaker's name")
+}
+
+// MARK: Google Cast groups: one speaker row, its members from the session (C89 to C102)
+do {
+    let kitchen = "0123456789abcdef0123456789abcdef"
+    let den = "fedcba9876543210fedcba9876543210"
+    let home = "group-home"
+    var m = CastModel()
+    m.apply(.appeared(CastDevice(id: kitchen, name: "Kitchen"), offsetMs: 120))
+    m.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
+    m.apply(.appeared(CastDevice(id: home, name: "Home", group: true), offsetMs: 400))
+    let name: (CastMember) -> String = { $0.id == kitchen ? "Kitchen speaker" : $0.name }
+    check(m.rows == [den, home, kitchen] && m.groupMembers(of: home, name: name) == .notReported
+            && m.groupMembers(of: kitchen, name: name) == nil && m.offset(of: home) == 400,
+          "cast group: listed as one row with its own stored offset, members not reported while off")
+
+    check(m.turnOn(home) == nil && m.plan(streaming: true) == .start(home), "cast group: turns on and starts like a device")
+    check(m.turnOn(kitchen) == .busy && m.enabled == home,
+          "cast group: a member stays its own row and waits while the group plays")
+    m.startSent(home)
+    _ = m.started(home, attempt: 5, refusal: ASC_CAST_REFUSED_NONE)
+    check(m.groupMembers(of: home, name: name) == .notReported, "cast group: no member note while it connects")
+
+    var silent = m
+    check(silent.apply(.started(attempt: 5)) == .playing(home) && silent.groupMembers(of: home, name: name) == .unknown,
+          "cast group: playing without a member list says the members are unknown")
+    _ = silent.apply(.members(attempt: 5, []))
+    check(silent.groupMembers(of: home, name: name) == .unknown, "cast group: an empty member list stays unknown")
+
+    let list = [CastMember(id: kitchen, name: "Kitchen"), CastMember(id: "", name: "Garage")]
+    check(m.apply(.members(attempt: 4, list)) == nil && m.members == nil, "cast group: members of an older attempt are dropped")
+    check(m.apply(.members(attempt: 5, list)) == .changed && m.apply(.members(attempt: 5, list)) == nil,
+          "cast group: a member list changes the row once")
+    _ = m.apply(.started(attempt: 5))
+    check(m.groupMembers(of: home, name: name) == .known(["Kitchen speaker", "Garage"]),
+          "cast group: members by their row's name, an unlisted one by the group's name for it")
+    check(m.apply(.groupLog("Cast group message PLAYBACK_SESSION_UPDATED")) == nil,
+          "cast group: a group log line changes nothing shown")
+
+    check(m.setVolume(home, position: 30) == 0.3 && approx(m.volume(of: home), 30, 1e-9)
+            && approx(m.volume(of: kitchen), 100, 1e-9),
+          "cast group: one volume for the group, none sent to a member")
+    check(m.setOffset(home, ms: 650) == 650 && m.offset(of: home) == 650 && m.offset(of: kitchen) == 120
+            && m.anchorMs == 650,
+          "cast group: the offset is stored under the group's id, never a member's, and local outputs wait for it")
+
+    var ended = m
+    check(ended.apply(.ended(attempt: 5, .takenOver)) == .turnedOff(home, problem: .takenOver)
+            && ended.members == nil && ended.groupMembers(of: home, name: name) == .notReported,
+          "cast group: another sender casting to a member ends it as taken over and forgets the members")
+    var stopped = m
+    _ = stopped.turnOff(home)
+    stopped.stopSent()
+    check(stopped.members == nil && stopped.turnOn(kitchen) == nil, "cast group: once it is off, a member can play")
+
+    let t = UIStrings()
+    check(t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: .notReported)) == "Speaker group"
+            && t.castNote(CastRow(status: .playing, muted: false, volumeFixed: false, group: .unknown))
+                == "Speaker group, members unknown"
+            && t.castNote(CastRow(status: .playing, muted: false, volumeFixed: false, group: .known(["Kitchen", "Den"])))
+                == "Speaker group: Kitchen, Den"
+            && t.castNote(CastRow(status: .playing, muted: true, volumeFixed: false, group: .known(["Kitchen"])))
+                == "Muted on the group"
+            && t.castNote(CastRow(status: .connecting, muted: false, volumeFixed: false, group: .notReported)) == "Connecting…",
+          "cast group: the note under its name")
+    check(t.rowHint(.off, note: t.castNote(CastRow(status: .playing, muted: false, volumeFixed: false,
+                                                    group: .known(["Kitchen"]))))
+            .contains("Kitchen"),
+          "cast group: VoiceOver hears the members in the row's hint")
+
+    var raw = AscCastEvent()
+    raw.kind = ASC_CAST_EVENT_MEMBERS
+    raw.attempt = 5
+    check(CastEvent(raw, members: { list }) == .members(attempt: 5, list) && CastEvent(raw)?.attempt == 5,
+          "cast group: a members event copies the list the sender reads")
+    raw = AscCastEvent()
+    raw.kind = ASC_CAST_EVENT_GROUP_LOG
+    let logged: CastEvent? = "group Home announced".withCString { line in
+        raw.detail = line
+        return CastEvent(raw)
+    }
+    check(logged == .groupLog("group Home announced") && logged?.attempt == nil,
+          "cast group: a group log event carries its line for the debug log")
+    check(CastRefusal.problem(ASC_CAST_REFUSED_GROUP) == .notResponding,
+          "cast group: the retired group refusal maps to nothing group-specific")
 }
 
 // MARK: AirPlay, Google Cast and local outputs at one latency: the hold-backs, the AirPlay cap and the notice (C77)
@@ -4073,10 +4159,11 @@ do {
     let homePod = RemoteRow(Facts(id: "hp", name: "Kitchen", kind: "AirPlay 2", on: true, volume: 30, isAirPlay: true,
                                   airPlayDelayMs: 1750), text: t)
     let castIdle = RemoteRow(Facts(id: "cast", name: "Nest", kind: "Google Cast", on: false, volume: 50,
-                                   cast: (live: false, group: false, volumeFixed: false), offsetMs: 300), text: t)
+                                   cast: (live: false, volumeFixed: false), offsetMs: 300), text: t)
     let castGroup = RemoteRow(Facts(id: "group", name: "Home group", kind: "Google Cast", on: false, volume: 50,
-                                    cast: (live: false, group: true, volumeFixed: false),
-                                    note: t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: true))),
+                                    cast: (live: false, volumeFixed: false), offsetMs: 0,
+                                    note: t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false,
+                                                             group: .notReported))),
                               text: t)
     let locked = RemoteRow(Facts(id: "tv", name: "TV", kind: "AirPlay", on: false, volume: 50, isAirPlay: true,
                                  needsCode: true), text: t)
@@ -4106,14 +4193,14 @@ do {
     let castRange = range("cast") == [0, 300, 20000]
     check(usbRange && airPlayRange && castRange, "web remote: each delay carries the range its field in the window takes",
           "\(range("usb")) \(range("hp")) \(range("cast"))")
-    let groupOff = field("group", "available") as? Bool == false
-    let groupNote = field("group", "notice") as? String == "Speaker groups not supported"
+    let groupOpen = field("group", "available") as? Bool == true
+    let groupNote = field("group", "notice") as? String == "Speaker group"
     let codeOff = field("tv", "available") as? Bool == false
     let codeNote = field("tv", "notice") as? String == t.remoteTurnOnInApp
     let pairedOpen = field("tv2", "available") as? Bool == true
     let pairedQuiet = field("tv2", "notice") is NSNull
-    check(groupOff && groupNote && codeOff && codeNote && pairedOpen && pairedQuiet,
-          "web remote: a Cast group and a speaker that would ask for a code on the Mac can't be driven from the phone")
+    check(groupOpen && groupNote && codeOff && codeNote && pairedOpen && pairedQuiet,
+          "web remote: a Cast group plays from the phone; a speaker that would ask for a code on the Mac can't")
     check(snapshot.json == RemoteSnapshot(computerName: "Studio Mac", master: 80, nowPlaying: nil, rows: rows).json,
           "web remote: the same state gives the same text, so the core sends nothing new")
     let playing = RemoteSnapshot(computerName: "", master: 50,

@@ -656,15 +656,21 @@ struct UIStrings {
         if let cast { return castNote(cast) }
         return waitingForAirPlay2 ? self.waitingForAirPlay2 : nil
     }
-    /// Under a Cast speaker's name: a group can't play, and one that is on
-    /// says where it is; nil otherwise.
+    /// Under a Cast speaker's name: where one that is on stands, and that a
+    /// group is one, with its members once it reports them; nil otherwise.
     func castNote(_ row: CastRow) -> String? {
-        if row.group { return "Speaker groups not supported" }
         switch row.status {
         case .connecting: return "Connecting…"
         case .reconnecting: return "Reconnecting…"
-        case .playing: return row.muted ? "Muted on the speaker" : nil
-        case .idle: return nil
+        case .playing where row.muted: return row.group == nil ? "Muted on the speaker" : "Muted on the group"
+        case .playing, .idle: return row.group.map(castGroupNote)
+        }
+    }
+    func castGroupNote(_ members: CastGroupMembers) -> String {
+        switch members {
+        case .notReported: return "Speaker group"
+        case .unknown: return "Speaker group, members unknown"
+        case .known(let names): return "Speaker group: " + names.joined(separator: ", ")
         }
     }
     /// Under a Cast speaker's volume while it connects or plays.
@@ -735,8 +741,6 @@ struct UIStrings {
             return "Another app started casting to \(name), so it's off in AudioSync."
         case .connectionLost:
             return "\(name) lost its connection, so it's off. Turn it on again to reconnect."
-        case .group:
-            return "\(name) is a speaker group, which AudioSync can't play to. Turn on one of its speakers instead."
         }
     }
 

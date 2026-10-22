@@ -583,6 +583,8 @@ struct SpeakerRow: View {
                                 .font(.caption)
                                 .foregroundStyle(Brand.secondaryText)
                                 .lineLimit(1)
+                                // A group's member list can outrun the row.
+                                .help(note)
                                 .accessibilityHidden(true)
                         }
                         if speaker.autoConnect {
@@ -627,7 +629,7 @@ struct SpeakerRow: View {
                             model.actions.fixDeviceVolume(speaker.id)
                         }
                     }
-                    if let cast = speaker.cast, cast.live, !cast.group { castButtons(cast, t) }
+                    if let cast = speaker.cast, cast.live { castButtons(cast, t) }
                 }
             }
             if showSync, let ms = model.savedDelay(of: speaker.id) {
@@ -698,7 +700,7 @@ struct SpeakerRow: View {
         Button(t.renameSpeaker) { model.startRename(speaker) }
         if let cast = speaker.cast {
             // A Cast speaker never turns itself on: the menu has its session's actions.
-            if cast.live && !cast.group {
+            if cast.live {
                 Button(cast.muted ? t.castUnmute : t.castMute) { model.actions.setCastMuted(speaker.id, !cast.muted) }
                 Button(t.castResync) { model.actions.resyncCast(speaker.id) }
             }
