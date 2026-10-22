@@ -59,7 +59,7 @@ pub fn code_expired() -> ApiError {
     ApiError::new(
         401,
         "code_expired",
-        "That code has expired. Open the remote setting in AudioSync for a new one.",
+        "That code has expired. Select New Code in AudioSync's Web Remote window.",
     )
 }
 
@@ -131,7 +131,7 @@ pub fn pairing_locked() -> ApiError {
     ApiError::new(
         429,
         "pairing_locked",
-        "Too many wrong codes. Reopen the remote setting in AudioSync to pair again.",
+        "Too many wrong codes. Select New Code in AudioSync's Web Remote window to pair again.",
     )
 }
 

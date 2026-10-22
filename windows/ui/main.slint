@@ -16,6 +16,7 @@ export { TrayFlyout } from "flyout.slint";
 export { GroupNameDialog, PasswordDialog, PinDialog } from "dialogs.slint";
 export { GuideWindow } from "guide.slint";
 export { HelpWindow } from "help.slint";
+export { RemoteWindow } from "remote.slint";
 export { Strings } from "strings.slint";
 // The style's palette, for the theme preview (src/view.rs).
 export { Palette } from "std-widgets.slint";
@@ -455,6 +456,8 @@ export component MainWindow inherits Window {
     callback appearance-chosen(Appearance);
     callback switch-source-on-quit-toggled(bool);
     callback launch-at-login-toggled(bool);
+    // File > Web Remote…
+    callback remote-requested();
     callback notice-dismissed(int);
     callback notices-dismissed-all();
     // Show How on a notice: open its guide.
@@ -558,6 +561,13 @@ export component MainWindow inherits Window {
                 checked: root.launch-at-login;
                 activated => {
                     root.launch-at-login-toggled(!root.launch-at-login);
+                }
+            }
+
+            MenuItem {
+                title: Strings.menu-remote;
+                activated => {
+                    root.remote-requested();
                 }
             }
 

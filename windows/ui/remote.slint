@@ -1,0 +1,329 @@
+// File > Web Remote…: the setting, and while it is on, the address with its QR
+// code, the pairing code and the paired devices. Closing it keeps the remote on.
+
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { Tokens } from "tokens.slint";
+import { Strings } from "strings.slint";
+import { Fluent, SecondaryText, SectionTitle, ToggleSwitch } from "widgets.slint";
+
+// A label and its value, read by Narrator as one line.
+component AddressLine inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+
+    spacing: 2px;
+    accessible-role: text;
+    accessible-label: root.label + ": " + root.value;
+
+    Text {
+        text: root.label;
+        font-size: Tokens.font-size-caption;
+        color: Tokens.secondary-text;
+        accessible-role: none;
+    }
+
+    Text {
+        text: root.value;
+        color: Tokens.text;
+        font-size: Tokens.font-size-body;
+        wrap: word-wrap;
+        accessible-role: none;
+    }
+}
+
+export component RemoteWindow inherits Window {
+    // The setting: the remote serves the page while it is on.
+    in property <bool> remote-on;
+    // The server listens now (it is on and nothing stopped it).
+    in property <bool> listening;
+    // `http://<computer>.local:<port>`; empty when the computer's name is unusable.
+    in property <string> local-address;
+    // The same page by IP address; empty without a private address.
+    in property <string> ip-address;
+    in property <image> qr;
+    in property <bool> has-qr;
+    in property <string> code;
+    // The code with its digits apart, so Narrator reads them one by one.
+    in property <string> code-spoken;
+    in property <int> devices;
+    in property <bool> locked;
+    // The port the remote was asked to use can't be listened on.
+    in property <bool> port-problem;
+    // Another app has it (else Windows refuses it).
+    in property <bool> port-in-use;
+    in property <int> port;
+    // Why the remote couldn't start, when the port isn't the reason.
+    in property <string> problem;
+    // Forget All Remote Devices couldn't save the empty list.
+    in property <bool> forget-failed;
+    in property <bool> port-invalid;
+
+    callback remote-toggled(bool);
+    callback new-code-requested();
+    callback forget-all-requested();
+    callback port-submitted(string);
+    callback close-requested();
+    // Ctrl+Q, File > Exit from this window.
+    callback exit-requested();
+
+    title: Strings.remote-title;
+    icon: @image-url("../res/audiosync-256.png");
+    background: Tokens.background;
+    min-width: 360px;
+    min-height: 320px;
+    preferred-width: 460px;
+    preferred-height: 640px;
+    default-font-family: Fluent.font;
+    default-font-size: Tokens.font-size-body;
+    forward-focus: keys;
+
+    // Called each time the window opens, so Escape works before anything
+    // inside is clicked.
+    public function take-focus() {
+        switch.focus();
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == "w") {
+                root.close-requested();
+                return accept;
+            }
+            if event.modifiers.control && event.text.to-lowercase() == "q" {
+                root.exit-requested();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            scroll := ScrollView {
+                vertical-stretch: 1;
+
+                VerticalLayout {
+                    width: scroll.visible-width;
+                    padding: 18px;
+                    spacing: 14px;
+                    alignment: start;
+
+                    Text {
+                        text: Strings.remote-intro;
+                        color: Tokens.text;
+                        wrap: word-wrap;
+                        min-height: self.preferred-height;
+                    }
+
+                    HorizontalLayout {
+                        alignment: start;
+
+                        switch := ToggleSwitch {
+                            text: Strings.remote-switch;
+                            checked: root.remote-on;
+                            accessible-label: Strings.remote-switch;
+                            toggled => {
+                                root.remote-toggled(self.checked);
+                                // Show what the app did, even if it couldn't start.
+                                self.checked = root.remote-on;
+                            }
+                        }
+                    }
+
+                    if root.remote-on && root.port-problem: VerticalLayout {
+                        spacing: 8px;
+
+                        Text {
+                            text: root.port-in-use ? Strings.remote-port-in-use(root.port) : Strings.remote-port-unavailable(root.port);
+                            color: Tokens.error-text;
+                            wrap: word-wrap;
+                            min-height: self.preferred-height;
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+
+                            port-field := LineEdit {
+                                width: 120px;
+                                input-type: number;
+                                placeholder-text: Strings.remote-port-label;
+                                accessible-label: Strings.remote-port-label;
+                                accepted(text) => {
+                                    root.port-submitted(text);
+                                }
+                            }
+
+                            Button {
+                                text: Strings.remote-use-port;
+                                clicked => {
+                                    root.port-submitted(port-field.text);
+                                }
+                            }
+                        }
+
+                        if root.port-invalid: Text {
+                            text: Strings.remote-port-invalid;
+                            color: Tokens.error-text;
+                            wrap: word-wrap;
+                            min-height: self.preferred-height;
+                        }
+                    }
+
+                    if root.remote-on && !root.port-problem && root.problem != "": Text {
+                        text: root.problem;
+                        color: Tokens.error-text;
+                        wrap: word-wrap;
+                        min-height: self.preferred-height;
+                    }
+
+                    if root.listening: VerticalLayout {
+                        spacing: 14px;
+
+                        VerticalLayout {
+                            spacing: 8px;
+                            accessible-role: groupbox;
+                            accessible-label: Strings.remote-address-title;
+
+                            SectionTitle {
+                                text: Strings.remote-address-title;
+                            }
+
+                            if root.local-address != "": AddressLine {
+                                label: Strings.remote-address-label;
+                                value: root.local-address;
+                            }
+
+                            if root.ip-address != "": AddressLine {
+                                label: Strings.remote-ip-label;
+                                value: root.ip-address;
+                            }
+
+                            if root.local-address == "" && root.ip-address == "": SecondaryText {
+                                text: Strings.remote-no-address;
+                                min-height: self.preferred-height;
+                            }
+
+                            // Dark modules on white in both themes, as scanners expect.
+                            if root.has-qr: HorizontalLayout {
+                                alignment: start;
+
+                                Rectangle {
+                                    width: 176px;
+                                    height: 176px;
+                                    background: #ffffff;
+                                    border-radius: 4px;
+                                    accessible-role: image;
+                                    accessible-label: Strings.remote-qr-label(root.local-address);
+
+                                    Image {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        source: root.qr;
+                                        image-fit: contain;
+                                        image-rendering: pixelated;
+                                        accessible-role: none;
+                                    }
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 8px;
+                            accessible-role: groupbox;
+                            accessible-label: Strings.remote-code-title;
+
+                            SectionTitle {
+                                text: Strings.remote-code-title;
+                            }
+
+                            if root.code != "" && !root.locked: Text {
+                                text: root.code;
+                                color: Tokens.text;
+                                font-size: Tokens.font-size-title;
+                                font-weight: 600;
+                                letter-spacing: 4px;
+                                accessible-label: Strings.remote-code-label(root.code-spoken);
+                            }
+
+                            if root.code == "" && !root.locked: SecondaryText {
+                                text: Strings.remote-no-code;
+                                min-height: self.preferred-height;
+                            }
+
+                            if root.locked: Text {
+                                text: Strings.remote-locked;
+                                color: Tokens.error-text;
+                                wrap: word-wrap;
+                                min-height: self.preferred-height;
+                            }
+
+                            HorizontalLayout {
+                                alignment: start;
+
+                                Button {
+                                    text: Strings.remote-new-code;
+                                    clicked => {
+                                        root.new-code-requested();
+                                    }
+                                }
+                            }
+                        }
+
+                        SecondaryText {
+                            text: Strings.remote-http-note;
+                            min-height: self.preferred-height;
+                        }
+                    }
+
+                    if root.listening || root.devices > 0: VerticalLayout {
+                        spacing: 8px;
+                        accessible-role: groupbox;
+                        accessible-label: Strings.remote-devices-title;
+
+                        SectionTitle {
+                            text: Strings.remote-devices-title;
+                        }
+
+                        Text {
+                            text: Strings.remote-devices(root.devices);
+                            color: Tokens.text;
+                            wrap: word-wrap;
+                        }
+
+                        if root.forget-failed: Text {
+                            text: Strings.remote-forget-failed;
+                            color: Tokens.error-text;
+                            wrap: word-wrap;
+                            min-height: self.preferred-height;
+                        }
+
+                        HorizontalLayout {
+                            alignment: start;
+
+                            Button {
+                                text: Strings.remote-forget-all;
+                                enabled: root.devices > 0 || root.forget-failed;
+                                clicked => {
+                                    root.forget-all-requested();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                padding: 12px;
+                padding-left: 18px;
+                padding-right: 18px;
+                alignment: end;
+
+                Button {
+                    text: Strings.guide-close;
+                    clicked => {
+                        root.close-requested();
+                    }
+                }
+            }
+        }
+    }
+}

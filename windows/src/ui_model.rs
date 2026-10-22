@@ -718,6 +718,8 @@ pub struct ViewSettings {
     pub appearance: Appearance,
     /// The main window's place and size, once it has been shown.
     pub window: Option<WindowFrame>,
+    /// File > Web Remote.
+    pub remote: crate::remote::RemoteSettings,
 }
 
 /// Clamps a typed or stepped offset to what the sync controls accept, in

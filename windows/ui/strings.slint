@@ -209,6 +209,52 @@ export global Strings {
     // File > Launch at Sign-In and the tray menu's check item: AudioSync
     // starts in the tray when the user signs in to Windows.
     out property <string> launch-at-login: @tr("Launch at Sign-In");
+
+    // File > Web Remote… and its window: a page on the home network that a
+    // paired phone uses to switch speakers and set their volume and delay.
+    out property <string> menu-remote: @tr("Web Remote…");
+    out property <string> remote-title: @tr("Web Remote");
+    out property <string> remote-switch: @tr("Web Remote");
+    out property <string> remote-intro: @tr("Control your speakers from a phone on the same network as this PC. Open the address below on the phone and add it to the Home Screen first, then open it from there and enter the code.");
+    out property <string> remote-address-title: @tr("Address");
+    out property <string> remote-address-label: @tr("On the phone, open");
+    out property <string> remote-ip-label: @tr("If that doesn't open, use");
+    out property <string> remote-no-address: @tr("This PC has no address on a home network right now. Connect it to your Wi-Fi or Ethernet network.");
+    public pure function remote-qr-label(address: string) -> string {
+        return @tr("QR code for {}", address);
+    }
+    out property <string> remote-code-title: @tr("Pairing Code");
+    // What Narrator reads for the code, given its digits apart ("1 2 3 4 5 6").
+    public pure function remote-code-label(digits: string) -> string {
+        return @tr("Pairing code {}", digits);
+    }
+    out property <string> remote-no-code: @tr("This code has expired. Select New Code to pair another phone.");
+    out property <string> remote-new-code: @tr("New Code");
+    out property <string> remote-locked: @tr("Too many wrong codes were entered, so pairing is locked. Select New Code to unlock it.");
+    out property <string> remote-devices-title: @tr("Paired Devices");
+    public pure function remote-devices(count: int) -> string {
+        if count == 0 {
+            return @tr("No device is paired.");
+        }
+        if count == 1 {
+            return @tr("1 device is paired.");
+        }
+        return @tr("{} devices are paired.", count);
+    }
+    out property <string> remote-forget-all: @tr("Forget All Remote Devices");
+    out property <string> remote-http-note: @tr("The page uses plain HTTP, so use the web remote only on your home network.");
+    public pure function remote-port-in-use(port: int) -> string {
+        return @tr("Another app uses port {}, so the web remote can't start. Enter another port and select Use Port.", port);
+    }
+    // Windows keeps some ports for itself (Hyper-V, WSL) or refuses them for another reason.
+    public pure function remote-port-unavailable(port: int) -> string {
+        return @tr("Windows doesn't let AudioSync use port {}, so the web remote can't start. Enter another port and select Use Port.", port);
+    }
+    out property <string> remote-port-label: @tr("Port");
+    out property <string> remote-use-port: @tr("Use Port");
+    out property <string> remote-port-invalid: @tr("Enter a port from 1024 to 65535.");
+    out property <string> remote-failed: @tr("The web remote couldn't start. Turn it off and on again.");
+    out property <string> remote-forget-failed: @tr("AudioSync couldn't save the list of paired devices. Select Forget All Remote Devices again.");
     // A check item in File: on, the captured app quitting moves streaming to
     // the whole system; off, streaming stops. "Source app", since "the app"
     // in AudioSync's own File menu can read as AudioSync itself.
@@ -544,6 +590,8 @@ export global Strings {
     out property <string> help-more: @tr("To make a group, turn on the speakers you want, then choose Speakers > New Group from Active Speakers (Ctrl+N). Select the group to turn them all on or off at once. To rename or delete it, right-click it or use its … button.\n\nTo have a speaker turn on whenever it appears, right-click it or use its … button, and choose Auto-connect when available. At launch, AudioSync starts streaming only when such a speaker is there.\n\nThe equalizer shapes the sound on every speaker at once, with ten bands, a preamp and presets. Open it from its card or with View > Equalizer (Ctrl+E).\n\nAirPlay speakers with a screen, such as a TV, show the track's title, artist, album and artwork, taken from the media controls Windows shows for apps that support them. With All System Audio, that's the track that is playing; with one app, that app's track, even while paused. Otherwise they show AudioSync, the source's name, the album From your PC and AudioSync's icon.\n\nVirtual outputs, such as loopback drivers, are hidden unless one is on. View > Show Virtual Devices lists them all. Speakers > Refresh Devices (F5) reads the sources and outputs again.\n\nTo start AudioSync when you sign in to Windows, choose File > Launch at Sign-In, or Launch at Sign-In in the menu of the AudioSync icon in the notification area. AudioSync then starts there without opening its window. If AudioSync is turned off in Settings > Apps > Startup, that page opens with a notice: turn AudioSync on there.\n\nView > Appearance: Match System follows Windows; Light or Dark keeps AudioSync's windows that way. The AudioSync icon in the notification area always follows the Windows theme.\n\nAudioSync saves the source, each speaker's switch, delay and volume, your groups and the equalizer, and restores them the next time it starts.");
     out property <string> help-airplay-title: @tr("AirPlay");
     out property <string> help-airplay: @tr("AudioSync finds AirPlay speakers on your network by itself. If none show up, check that this PC is on the same network as your speakers and that the network is set to Private. If it has to stay Public, allow AudioSync on Public networks in Windows Firewall.\n\nAudioSync for Windows plays to AirPlay 1 receivers. A speaker that plays only AirPlay 2, or needs something else AudioSync for Windows can't do yet, is listed with a note saying so, and stays off.\n\nAn Apple TV that asks for a PIN shows \"Asks for a code\". When you turn it on, the TV shows a PIN: type it in the dialog that opens. AudioSync keeps the pairing, so the PIN isn't asked again. Forget Pairing in the speaker's … menu removes it. Auto-connect never starts a pairing: it shows a notice instead.\n\nA speaker protected by a password shows \"Asks for a code\" too. When you turn it on, type the password set for it in the Home app or in the speaker's settings. AudioSync keeps it in memory until it quits, so it asks once each time AudioSync starts. A wrong password brings the dialog back; Cancel leaves the speaker off. If a speaker turns the password down after it has started playing, it goes off with a notice. A speaker that auto-connect turned on goes off with a notice instead: turn it on yourself to type the password.\n\nIf AudioSync's AirPlay sender stops or can't start, a notice says so, with a Retry button.");
+    out property <string> help-remote-title: @tr("Web Remote");
+    out property <string> help-remote: @tr("A phone on the same network as this PC can switch your speakers on and off and set their volume and delay and the master volume. Choose File > Web Remote…, turn Web Remote on, and open the address it shows on the phone (or scan its QR code). Add the page to the Home Screen first, then open it from there and enter the code: on some phones, a pairing made in the browser doesn't carry over to the Home Screen. Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one.\n\nThe page uses plain HTTP, so use it only on your home network. Forget All Remote Devices unpairs every phone. If another app already uses the port, the window says so and lets you pick another one.");
     out property <string> help-notices-title: @tr("Notices");
     out property <string> help-notices: @tr("When something needs your attention, such as a speaker that was disconnected or an app that quit, a notice appears at the top of the main window, and the newest one in quick settings. Use its close button to dismiss it, or Dismiss All. Many notices also clear themselves once the cause is gone.\n\nWhen the app you picked as the source quits, streaming stops and a notice says so. To keep playing instead, turn on File > Switch to All System Audio When the Source App Quits: AudioSync then moves to All System Audio, and stays there when the app opens again.");
 
