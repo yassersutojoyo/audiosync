@@ -242,6 +242,9 @@ struct Speaker {
     /// Refused only because another AirPlay 2 session ran (P169): it starts
     /// once that session ends for good.
     ap2_waiting: bool,
+    /// When it was refused for that, as a count of such refusals: the
+    /// lowest waiting one is the first refused (P169).
+    ap2_refusal: u64,
     /// Its AirPlay 2 session failed and waits for its own retry, so it
     /// keeps the one AirPlay 2 place (P169).
     ap2_retry: bool,
@@ -273,6 +276,8 @@ pub(crate) struct Driver {
     pairing_sessions: HashMap<SessionKey, DeviceKey>,
     stream_ids: HashMap<stream::SpeakerId, DeviceKey>,
     next_session: u64,
+    /// Refusals for the one AirPlay 2 place so far (P169).
+    ap2_refusals: u64,
     directory: Directory,
     browser: Option<Box<dyn Browser + Send>>,
     reported: BTreeSet<DeviceKey>,
@@ -340,6 +345,7 @@ impl Driver {
             pairing_sessions: HashMap::new(),
             stream_ids: HashMap::new(),
             next_session: 0,
+            ap2_refusals: 0,
             directory: Directory::new(),
             browser: None,
             reported: BTreeSet::new(),
@@ -1047,9 +1053,14 @@ impl Driver {
         if self.stopping.is_some() || self.speakers.values().any(Speaker::holds_ap2) {
             return;
         }
-        let Some((key, speaker)) = self.speakers.iter_mut().find(|(_, speaker)| {
-            speaker.ap2_waiting && !speaker.removing && matches!(speaker.phase, Phase::Failed)
-        }) else {
+        let Some((key, speaker)) = self
+            .speakers
+            .iter_mut()
+            .filter(|(_, speaker)| {
+                speaker.ap2_waiting && !speaker.removing && matches!(speaker.phase, Phase::Failed)
+            })
+            .min_by_key(|(_, speaker)| speaker.ap2_refusal)
+        else {
             return;
         };
         speaker.ap2_waiting = false;
@@ -1327,6 +1338,7 @@ impl Driver {
                     removing: false,
                     airplay1_outcome: None,
                     ap2_waiting: false,
+                    ap2_refusal: 0,
                     ap2_retry: false,
                     target: None,
                 },
@@ -1343,6 +1355,14 @@ impl Driver {
         speaker.options = options;
         speaker.counters = counters;
         speaker.removing = false;
+        // Its target went while it tore down: the host owns it alone now.
+        if speaker
+            .target
+            .as_ref()
+            .is_some_and(|id| !self.driven.contains_key(id))
+        {
+            speaker.target = None;
+        }
         match speaker.phase {
             Phase::Active(_) | Phase::Ap2(_) => {
                 self.command(Command::SetDelay(key.clone(), delay), now);
@@ -1812,6 +1832,98 @@ mod tests {
         assert!(took < Duration::from_secs(1), "shutdown took {took:?}");
     }
 
+    // The old PTP service's thread still runs when a session wants the
+    // service bound again: the start waits for a later turn instead of
+    // joining it, and the speaker keeps the AirPlay 2 place (P158, P169).
+    #[test]
+    fn a_ptp_bind_waits_for_the_old_service_without_stalling_the_driver() {
+        use crate::discovery::{DeviceId, ScopedAddr, ServiceKind, ServiceRecord};
+        use std::net::{IpAddr, Ipv4Addr, TcpListener, UdpSocket};
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let free = || {
+            UdpSocket::bind("127.0.0.1:0")
+                .and_then(|socket| socket.local_addr())
+                .map(|address| address.port())
+                .expect("a free port")
+        };
+        let local = crate::ptp::PtpPorts {
+            event: free(),
+            general: free(),
+        };
+        let remote = crate::ptp::PtpPorts {
+            event: free(),
+            general: free(),
+        };
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency)
+            .with_airplay2(true, Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]))
+            .with_ptp_ports(local, remote);
+
+        // Receivers that take the connection and never answer.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+        let port = listener.local_addr().expect("an address").port();
+        let device = |n: u8| {
+            let id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, n]);
+            let record = ServiceRecord {
+                kind: ServiceKind::AirPlay,
+                instance: format!("Speaker {n}"),
+                host: format!("speaker-{n}.local"),
+                port,
+                txt: [
+                    "features=0x0,0x10240".to_owned(),
+                    "flags=0x4".to_owned(),
+                    "model=Speaker1,1".to_owned(),
+                    format!("deviceid={id}"),
+                ]
+                .into_iter()
+                .map(String::into_bytes)
+                .collect(),
+                addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))],
+            };
+            Device::from_records(DeviceKey::Id(id), None, Some(&record)).expect("a device")
+        };
+        let options = || SpeakerOptions::new(Volume::Db(-20.0));
+        let counters = || Arc::new(SpeakerCounters::default());
+
+        let (release, stuck) = mpsc::channel::<()>();
+        driver.ptp_closing.push(thread::spawn(move || {
+            let _ = stuck.recv_timeout(Duration::from_secs(10));
+        }));
+        let (first, second) = (device(1), device(2));
+        let (first_key, second_key) = (first.key.clone(), second.key.clone());
+        let started = Instant::now();
+        driver.add_speaker(first, options(), counters(), now);
+        let took = started.elapsed();
+        assert!(took < Duration::from_secs(1), "the driver waited {took:?}");
+        assert!(driver.speakers[&first_key].holds_ap2());
+        assert!(driver.ptp.is_none());
+        driver.add_speaker(second, options(), counters(), now);
+        assert!(
+            driver.speakers[&second_key].ap2_waiting,
+            "a second AirPlay 2 speaker is refused meanwhile"
+        );
+
+        let _ = release.send(());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while driver
+            .ptp_closing
+            .iter()
+            .any(|thread| !thread.is_finished())
+        {
+            assert!(Instant::now() < deadline, "the old thread ends");
+            thread::sleep(Duration::from_millis(5));
+        }
+        driver.run_timers(now + Duration::from_secs(1));
+        assert!(matches!(driver.speakers[&first_key].phase, Phase::Ap2(_)));
+        assert!(driver.ptp.is_some(), "the service is bound");
+        assert!(driver.speakers[&second_key].ap2_waiting);
+        drop(listener);
+    }
+
     /// A verifier without keys, for driving a session by hand.
     struct OpenVerifier;
 
@@ -1901,6 +2013,7 @@ mod tests {
                 removing: false,
                 airplay1_outcome: None,
                 ap2_waiting: false,
+                ap2_refusal: 0,
                 ap2_retry: false,
                 target: None,
             },

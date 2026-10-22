@@ -134,6 +134,7 @@ impl Driver {
                 removing: false,
                 airplay1_outcome: None,
                 ap2_waiting: false,
+                ap2_refusal: 0,
                 ap2_retry: false,
                 target: Some(id.clone()),
             },
