@@ -35,6 +35,13 @@
 //! a blocked send when the socket is shut down, so that one ends at its send
 //! timeout, and nobody waits for it.
 //!
+//! The RTSP reader waits for data with a timed peek and reads only what is
+//! already queued. On Windows a receive that times out may have taken bytes
+//! that arrived as it expired, and the socket is left indeterminate
+//! (`SO_RCVTIMEO` in Microsoft's `setsockopt` documentation); a peek takes
+//! nothing, and a shutdown doesn't wake a blocked TCP receive there, so
+//! the reader can't block without a timeout either.
+//!
 //! A pairing (P47) needs only the TCP connection: [`RtspIo`] runs the same
 //! RTSP reader and writer threads, without UDP sockets.
 //!
@@ -673,9 +680,11 @@ fn read_loop(
     move || {
         let mut buf = vec![0u8; READ_BYTES];
         loop {
-            match stream.read(&mut buf) {
+            match read_queued(&mut stream, &mut buf) {
                 Ok(0) => {
-                    notify(IoEvent::RtspClosed { session, attempt });
+                    if !stop.load(Ordering::Acquire) {
+                        notify(IoEvent::RtspClosed { session, attempt });
+                    }
                     break;
                 }
                 Ok(len) => {
@@ -701,12 +710,24 @@ fn read_loop(
                     }
                 }
                 Err(_) => {
-                    notify(IoEvent::RtspClosed { session, attempt });
+                    if !stop.load(Ordering::Acquire) {
+                        notify(IoEvent::RtspClosed { session, attempt });
+                    }
                     break;
                 }
             }
         }
     }
+}
+
+/// Reads from `stream` only once a peek within its read timeout shows data
+/// or the end of the stream, so a timeout never cuts into a read (see the
+/// module notes).
+fn read_queued(stream: &mut TcpStream, buf: &mut [u8]) -> io::Result<usize> {
+    if stream.peek(buf)? == 0 {
+        return Ok(0);
+    }
+    stream.read(buf)
 }
 
 /// Writes the session's requests in order until the session closes, in
@@ -801,6 +822,64 @@ mod tests {
             }
         }
         drop(io);
+    }
+
+    /// Collects the RTSP bytes `received` reports until `want` bytes came.
+    fn rtsp_bytes(received: &mpsc::Receiver<IoEvent>, want: usize) -> Vec<u8> {
+        let deadline = Instant::now() + WAIT;
+        let mut bytes = Vec::new();
+        while bytes.len() < want {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match received.recv_timeout(left) {
+                Ok(IoEvent::Rtsp { bytes: piece, .. }) => bytes.extend_from_slice(&piece),
+                Ok(_) => {}
+                Err(error) => panic!("only {} of {want} bytes: {error:?}", bytes.len()),
+            }
+        }
+        bytes
+    }
+
+    // A response whose halves straddle the reader's poll timeout arrives
+    // whole, however often the wait between them times out.
+    #[test]
+    fn rtsp_bytes_split_across_read_timeouts_arrive_intact() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let tcp = TcpStream::connect(listener.local_addr().expect("address")).expect("connect");
+        let (mut receiver, _) = listener.accept().expect("accept");
+        let (notify, received) = panicking_on(|_| false);
+        let io = RtspIo::open(SessionKey(7), 1, tcp, notify).expect("pairing I/O");
+        let first = b"RTSP/1.0 200 OK\r\nCSeq: 3\r\n";
+        let second = b"Content-Length: 0\r\n\r\n";
+        for pause in [1, 2, 3] {
+            receiver.write_all(first).expect("write");
+            thread::sleep(POLL_INTERVAL * pause + Duration::from_millis(5));
+            receiver.write_all(second).expect("write");
+            let bytes = rtsp_bytes(&received, first.len() + second.len());
+            assert_eq!(bytes, [&first[..], &second[..]].concat());
+        }
+        drop(io);
+    }
+
+    // Closing ends a reader waiting on a quiet connection within its poll
+    // timeout, without reporting the close as the receiver's doing.
+    #[test]
+    fn closing_ends_the_waiting_rtsp_reader() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let tcp = TcpStream::connect(listener.local_addr().expect("address")).expect("connect");
+        let (_receiver, _) = listener.accept().expect("accept");
+        let (notify, received) = panicking_on(|_| false);
+        let io = RtspIo::open(SessionKey(8), 1, tcp, notify).expect("pairing I/O");
+        thread::sleep(POLL_INTERVAL * 2);
+        let started = Instant::now();
+        for thread in io.close() {
+            thread.join().expect("join");
+        }
+        assert!(started.elapsed() < WAIT, "took {:?}", started.elapsed());
+        assert!(
+            !received
+                .try_iter()
+                .any(|event| matches!(event, IoEvent::RtspClosed { .. }))
+        );
     }
 
     /// A timing request with sequence number `seq` (P90).
