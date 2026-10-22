@@ -24,7 +24,7 @@ use audiosync_airplay::sender::{
 use audiosync_airplay::targets::{Member, Target, TargetId, TargetKind};
 use audiosync_airplay::volume::Volume;
 
-use common::ap2::{Ap2Server, FakeAp2, dict, int, plist, read_dict, read_value};
+use common::ap2::{Ap2Server, FakeAp2, dict, int, plist, read_dict, read_value, request_key};
 use common::hap::Answer;
 use common::net::{
     Behavior, Events, HostAudio, Log, NetReceiver, host_frame_of, play_times, serial, step_error,
@@ -720,6 +720,20 @@ fn ptp_warnings(events: &Events, key: &DeviceKey) -> usize {
         .count()
 }
 
+/// The `timingProtocol` of every session SETUP the receiver read, in order.
+fn setup_timings(server: &Ap2Server) -> Vec<String> {
+    let fake = server.fake();
+    fake.requests
+        .iter()
+        .map(|(request, _)| request)
+        .filter(|request| request_key(request) == "SETUP session")
+        .filter_map(|request| {
+            let body = read_dict(&request.body)?;
+            Some(body.get("timingProtocol")?.as_string()?.to_owned())
+        })
+        .collect()
+}
+
 fn timing_asked(server: &Ap2Server) -> Option<String> {
     let fake = server.fake();
     let setup = fake.last("SETUP session")?;
@@ -830,6 +844,108 @@ fn a_member_that_connects_outside_the_services_family_plays_again_on_ntp() {
         1,
         "{:?}",
         events.of(&db.key)
+    );
+    assert_eq!(
+        states_of(&events, &da.key),
+        [SpeakerState::Connecting, SpeakerState::Playing]
+    );
+    sender.shutdown();
+}
+
+// covers: P158
+#[test]
+fn a_single_speaker_that_connects_outside_the_services_family_moves_the_service_there() {
+    let _serial = serial();
+    let Some(v6) = ipv6_loopback() else {
+        eprintln!("no IPv6 loopback here; skipped");
+        return;
+    };
+    let server = Ap2Server::start_on(v6, ptp_fake());
+    let port = server.address.port();
+    // Its IPv4 address must refuse, so the session falls back to IPv6.
+    if TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_err() {
+        eprintln!("port {port} is taken on IPv4; skipped");
+        return;
+    }
+    let listener = PtpListener::bind_at(v6);
+    let (sender, _host) = ptp_sender(&listener);
+    let mut events = Events::default();
+    let mut record = airplay_record(port, 1, "0x0,0x10240");
+    record.addresses = vec![
+        ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        ScopedAddr::new(v6),
+    ];
+    let device =
+        Device::from_records(DeviceKey::Id(device_id(1)), None, Some(&record)).expect("device");
+    sender.add_speaker(device.clone(), options());
+    assert!(
+        playing(&mut events, &sender, &device.key, 1),
+        "{:?}",
+        events.of(&device.key)
+    );
+    assert_eq!(setup_timings(&server), ["NTP", "PTP", "PTP"]);
+    assert_one_clock_keeps_syncing(&listener);
+    events.drain(&sender);
+    assert_eq!(ptp_warnings(&events, &device.key), 0);
+    sender.shutdown();
+}
+
+// covers: P179, P181
+#[test]
+fn a_member_whose_ipv6_address_is_closed_plays_on_ipv4_with_ntp() {
+    let _serial = serial();
+    let Some(v6) = ipv6_loopback() else {
+        eprintln!("no IPv6 loopback here; skipped");
+        return;
+    };
+    let first = Ap2Server::start_on(v6, ptp_fake());
+    let second = Ap2Server::start(ptp_fake());
+    let port = second.address.port();
+    // Its IPv6 address must refuse, so the session falls back to IPv4.
+    if TcpListener::bind((v6, port)).is_err() {
+        eprintln!("port {port} is taken on IPv6; skipped");
+        return;
+    }
+    let listener = PtpListener::bind_at(v6);
+    let (sender, _host) = ptp_sender(&listener);
+    let mut events = Events::default();
+    let script = Script::default();
+    sender.start_discovery_with(Box::new(script.clone()));
+    let mut record = airplay_record(first.address.port(), 1, "0x0,0x10240");
+    record.addresses = vec![ScopedAddr::new(v6)];
+    let da =
+        Device::from_records(DeviceKey::Id(device_id(1)), None, Some(&record)).expect("device");
+    let db_key = DeviceKey::Id(device_id(2));
+    let target = pair(vec![member(Some(&da), 1), member(None, 2)], None);
+    sender.add_target(target, options(), |_, _| {});
+    assert!(
+        playing(&mut events, &sender, &da.key, 1),
+        "{:?}",
+        events.of(&da.key)
+    );
+
+    // The dual-stack member comes into view while the service runs on IPv6.
+    let mut late = airplay_record(port, 2, "0x0,0x10240");
+    late.addresses = vec![
+        ScopedAddr::new(v6),
+        ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+    ];
+    late.txt.retain(|entry| !entry.starts_with(b"deviceid="));
+    late.txt.push(b"deviceid=02:00:5E:00:53:02".to_vec());
+    script.push(BrowseEvent::Resolved(late));
+    assert!(
+        playing(&mut events, &sender, &db_key, 1),
+        "{:?}",
+        events.of(&db_key)
+    );
+    assert_eq!(setup_timings(&second), ["NTP", "PTP", "NTP"]);
+    assert_one_clock_keeps_syncing(&listener);
+    events.drain(&sender);
+    assert_eq!(
+        ptp_warnings(&events, &db_key),
+        1,
+        "{:?}",
+        events.of(&db_key)
     );
     assert_eq!(
         states_of(&events, &da.key),

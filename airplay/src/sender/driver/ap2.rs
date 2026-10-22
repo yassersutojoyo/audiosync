@@ -75,8 +75,8 @@ impl Driver {
         };
         // The PTP ports are bound only for a receiver that may take PTP:
         // one that took it before or sets features bit 41 (P157, P158).
-        let ntp_only = self.ntp_restart.remove(key);
-        let wants = !ntp_only
+        let restart = self.ptp_restart.remove(key);
+        let wants = restart != Some(None)
             && self.speakers.get(key).is_some_and(|speaker| {
                 self.ptp_timing.contains(key) || speaker.device.features().has(FEATURE_PTP)
             });
@@ -86,7 +86,7 @@ impl Driver {
             .map(|speaker| speaker.device.airplay_socket_addrs())
             .unwrap_or_default();
         let mut ptp = None;
-        if wants && let Some(v6) = self.ptp_v6(key) {
+        if wants && let Some(v6) = restart.flatten().or_else(|| self.ptp_v6(key)) {
             let in_family = |address: &SocketAddr| address.ip().to_canonical().is_ipv6() == v6;
             match addresses.iter().copied().find(in_family) {
                 Some(address) => {
@@ -348,16 +348,23 @@ impl Driver {
         }
     }
 
-    /// Closes the session and starts the speaker again asking for NTP
-    /// only, with the warning told once (P158, P179).
-    fn restart_on_ntp(&mut self, key: &DeviceKey, now: Instant) {
-        if self.ptp_family_told.insert(key.clone()) {
-            self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpUnavailable));
-        }
+    /// Closes, without a TEARDOWN, a session that took PTP over an address
+    /// outside the service's family and starts the speaker again: with the
+    /// service moved to that family when no other session uses it, else on
+    /// NTP with the warning told once (P158, P179).
+    fn restart_outside_family(&mut self, key: &DeviceKey, landed_v6: bool, now: Instant) {
+        let family = if self.ptp_shared(key) || !self.ptp_moved.insert(key.clone()) {
+            if self.ptp_family_told.insert(key.clone()) {
+                self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpUnavailable));
+            }
+            None
+        } else {
+            Some(landed_v6)
+        };
         if self.is_target_member(key) {
             self.note_teardown(key.clone(), now);
         }
-        self.ntp_restart.insert(key.clone());
+        self.ptp_restart.insert(key.clone(), family);
         self.end_session(key, Phase::Idle);
         self.start_session(key, now);
     }
@@ -473,7 +480,10 @@ impl Driver {
                         }
                         // It fell back to an address outside the service's
                         // family, which no clock serves (P158, P179).
-                        (Some(_), Some(_)) => self.restart_on_ntp(key, now),
+                        (Some(_), Some(remote)) => {
+                            let landed_v6 = remote.ip().to_canonical().is_ipv6();
+                            self.restart_outside_family(key, landed_v6, now);
+                        }
                         _ => {}
                     }
                 } else if !self.ptp_shared(key)
