@@ -720,9 +720,9 @@ pub struct Renderer {
     opening: usize,
     /// [`RESTART_INCREASE_MS`] in capture frames.
     restart_increase: i64,
-    /// The higher of the floor and the anchor floor at the reader's latest
-    /// anchor, fallen since toward the callbacks that came earlier, in ns
-    /// (S209); `None` until the floor has formed.
+    /// What Jt counted from at the reader's latest anchor, fallen since
+    /// toward the callbacks that came earlier, in ns (S209); `None` until
+    /// the floor has formed.
     anchor_floor: Option<i64>,
     /// The anchor floor as that anchor set it, for the observer (S229).
     anchored_floor: Option<i64>,
@@ -1519,9 +1519,9 @@ impl Renderer {
             self.tracking = RESTART;
         }
         if report.correction != Correction::None {
-            // The anchor landed by Jt, which counts from the higher of the two.
+            // What this callback's Jt counted from, so Jf is 0 from here.
             self.anchor_floor = match (self.late_floor(), self.anchor_floor) {
-                (Some(floor), Some(anchor)) => Some(floor.max(anchor)),
+                (Some(floor), Some(anchor)) => Some(floor.max(anchor.min(self.callback_late_ns))),
                 (floor, _) => floor,
             };
             self.anchored_floor = self.anchor_floor;
