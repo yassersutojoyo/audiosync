@@ -504,3 +504,68 @@ fn a_fetch_logs_its_header_names_and_three_values_capped_and_never_the_token() {
     assert!(!log.contains("http://"), "the Referer value is not kept");
     server.stop();
 }
+
+/// The logged headers of one `HEAD` fetch carrying `extra`.
+fn logged_headers(server: &StreamServer, extra: &str) -> FetchHeaders {
+    let mut stream = get(server, "HEAD", extra);
+    let (head, _) = http::read_response(&mut stream, Duration::from_millis(200));
+    assert_eq!(http::status(&head), 200);
+    events(server)
+        .into_iter()
+        .find_map(|event| match event {
+            ServerEvent::Fetch { headers, .. } => Some(headers),
+            _ => None,
+        })
+        .expect("a fetch event")
+}
+
+// covers: G6
+#[test]
+fn a_token_split_across_header_names_is_redacted() {
+    let (server, _writer) = server(vec![LOCAL]);
+    let token = server.token().to_owned();
+    let (first, second) = token.split_at(token.len() / 2);
+    let headers = logged_headers(
+        &server,
+        &format!("X-{first}: 1\r\nX-{second}: 1\r\nX-Request-1234567: 1\r\n"),
+    );
+    assert_eq!(
+        headers.names,
+        ["Host", "<redacted>", "<redacted>", "X-Request-1234567"],
+        "seven hex digits in a row stay"
+    );
+    server.stop();
+}
+
+// covers: G6
+#[test]
+fn an_uppercase_token_is_scrubbed() {
+    let (server, _writer) = server(vec![LOCAL]);
+    let token = server.token().to_owned();
+    let upper = token.to_ascii_uppercase();
+    let headers = logged_headers(
+        &server,
+        &format!("X-{upper}: 1\r\nUser-Agent: CrKey {upper}\r\n"),
+    );
+    assert_eq!(headers.names[1], "X-<token>");
+    assert_eq!(headers.user_agent.as_deref(), Some("CrKey <token>"));
+    assert!(!format!("{headers:?}").to_ascii_lowercase().contains(&token));
+    server.stop();
+}
+
+// covers: G6
+#[test]
+fn a_percent_encoded_token_is_scrubbed() {
+    let (server, _writer) = server(vec![LOCAL]);
+    let token = server.token().to_owned();
+    let once: String = token.bytes().map(|byte| format!("%{byte:02X}")).collect();
+    let twice = once.replace('%', "%25");
+    let headers = logged_headers(
+        &server,
+        &format!("X-{once}: 1\r\nUser-Agent: CrKey {twice}\r\nRange: bytes=0-\r\n"),
+    );
+    assert_eq!(headers.names[1], "X-<token>");
+    assert_eq!(headers.user_agent.as_deref(), Some("CrKey <token>"));
+    assert_eq!(headers.range.as_deref(), Some("bytes=0-"));
+    server.stop();
+}

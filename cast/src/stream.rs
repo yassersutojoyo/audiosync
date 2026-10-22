@@ -98,8 +98,10 @@ pub enum ServerEvent {
 
 /// The request headers of a stream fetch, for the log (G6): the names,
 /// but only the values that tell a device's behavior apart. Other values,
-/// such as a `Referer` holding the stream URL, are never kept, and any
-/// kept text that contains the path token has it replaced.
+/// such as a `Referer` holding the stream URL, are never kept. Kept text is
+/// percent-decoded, the path token in any case is replaced, and text that
+/// still holds a run of [`MAX_HEX_RUN`] hex digits is replaced whole, so a
+/// token split across several names never reaches the log either.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FetchHeaders {
     /// Header names in request order, at most [`MAX_LOGGED_NAMES`].
@@ -116,6 +118,8 @@ pub struct FetchHeaders {
 pub const MAX_LOGGED_NAMES: usize = 24;
 /// Characters kept of one header name or value.
 pub const MAX_LOGGED_TEXT: usize = 96;
+/// Hex digits in a row that make a kept name or value `<redacted>`.
+pub const MAX_HEX_RUN: usize = 8;
 
 impl FetchHeaders {
     fn parse(lines: impl Iterator<Item = &str>) -> FetchHeaders {
@@ -149,8 +153,9 @@ impl FetchHeaders {
     /// Scrubs `token` before capping, so a cut never leaves part of it.
     fn for_log(mut self, token: &str) -> FetchHeaders {
         let scrub = |text: &mut String| {
-            if !token.is_empty() && text.contains(token) {
-                *text = text.replace(token, "<token>");
+            *text = replace_ignoring_case(&percent_decoded(text), token, "<token>");
+            if has_hex_run(text) {
+                *text = "<redacted>".to_owned();
             }
             if text.chars().count() > MAX_LOGGED_TEXT {
                 *text = text.chars().take(MAX_LOGGED_TEXT).collect();
@@ -167,6 +172,63 @@ impl FetchHeaders {
         .for_each(scrub);
         self
     }
+}
+
+/// Decodes `%XX` escapes until none is left, so a token escaped twice is
+/// found too; each pass shortens the text, so the loop ends.
+fn percent_decoded(text: &str) -> String {
+    let mut text = text.to_owned();
+    loop {
+        let bytes = text.as_bytes();
+        let mut decoded = Vec::with_capacity(bytes.len());
+        let mut index = 0;
+        while index < bytes.len() {
+            let digit = |at: usize| {
+                bytes
+                    .get(at)
+                    .and_then(|byte| char::from(*byte).to_digit(16))
+            };
+            match (bytes[index], digit(index + 1), digit(index + 2)) {
+                (b'%', Some(high), Some(low)) => {
+                    decoded.push((high * 16 + low) as u8);
+                    index += 3;
+                }
+                (byte, _, _) => {
+                    decoded.push(byte);
+                    index += 1;
+                }
+            }
+        }
+        if decoded.len() == bytes.len() {
+            return text;
+        }
+        text = String::from_utf8_lossy(&decoded).into_owned();
+    }
+}
+
+fn replace_ignoring_case(text: &str, needle: &str, with: &str) -> String {
+    if needle.is_empty() {
+        return text.to_owned();
+    }
+    // ASCII lowercasing keeps every byte offset, so matches index `text` too.
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for (at, _) in lower.match_indices(&needle.to_ascii_lowercase()) {
+        out.push_str(&text[last..at]);
+        out.push_str(with);
+        last = at + needle.len();
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
+fn has_hex_run(text: &str) -> bool {
+    let mut run = 0;
+    text.bytes().any(|byte| {
+        run = if byte.is_ascii_hexdigit() { run + 1 } else { 0 };
+        run >= MAX_HEX_RUN
+    })
 }
 
 /// How a stream response ended.
