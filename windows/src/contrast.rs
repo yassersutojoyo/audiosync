@@ -460,7 +460,7 @@ fn keyboard_shortcuts_are_declared() {
 /// no speaker yet (alone, or with Google Cast's in one sentence), which
 /// shows only while it runs. The note and row state for a speaker waiting
 /// for the one AirPlay 2 slot show only behind the hidden AirPlay 2 switch.
-/// The calibration results' AirPlay line shows only when an AirPlay
+/// The calibration results' AirPlay lines show only when an AirPlay
 /// speaker took part, so the sender ran.
 /// An empty Connected Speakers list otherwise says just that it's empty, or
 /// that its virtual outputs are hidden. Seven strings of the AudioSync Guide
@@ -487,9 +487,10 @@ fn no_text_promises_airplay() {
                     "return @tr(\"AirPlay speakers can wait at most 3 s for a Google Cast speaker,"
                 )
                 || line.contains("return @tr(\"AirPlay ahead of {}\", name);")
-                || line.contains("return @tr(\"AirPlay delay: was {} ms.")
+                || line.contains("return @tr(\"AirPlay delay: was {}. New: {} ms")
                 || line.contains("return @tr(\"The AirPlay speakers differ by {} ms.")
-                || line.contains("return @tr(\"The AirPlay delay stays at {} ms.")
+                || line.contains("return @tr(\"No AirPlay speaker was measured clearly,")
+                || line.contains("calibrate-all-airplay-waits: @tr(\"AirPlay isn't playing,")
                 || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
                 || line.contains("plays one AirPlay 2 speaker at a time, so {} waits.")
                 || line.contains("@tr(\"Waiting for the other AirPlay 2 speaker\")")

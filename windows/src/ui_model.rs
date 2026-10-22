@@ -574,6 +574,9 @@ pub struct SheetState {
     /// The last Measure Again ended early, so its row stayed.
     pub again_ended: Option<EndReason>,
     pub can_apply: bool,
+    /// Apply or Undo would set the AirPlay delay while AirPlay doesn't
+    /// play, so it can't be worked out: both wait.
+    pub airplay_waits: bool,
     pub applied: bool,
     /// Undo restores what Apply replaced, in one step.
     pub can_undo: bool,

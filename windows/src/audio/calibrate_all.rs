@@ -1045,8 +1045,7 @@ pub(crate) mod tests {
             if let Some(who) = who {
                 self.solos.push(who.key());
             }
-            self.solo_times
-                .push((self.now.get(), who.map(Member::key)));
+            self.solo_times.push((self.now.get(), who.map(Member::key)));
             self.solo = who.cloned();
         }
 
@@ -1108,19 +1107,32 @@ pub(crate) mod tests {
     /// The results of a run over local speakers `(id, stored offset, heard
     /// after ms)`, the first the reference.
     pub(crate) fn local_sheet(speakers: &[(&str, f64, f64)]) -> (Sheet, Vec<Member>, u32) {
+        let speakers: Vec<(Class, &str, Option<f64>, f64)> = speakers
+            .iter()
+            .map(|&(id, offset, after)| (Class::Local, id, Some(offset), after))
+            .collect();
+        sheet_of(&speakers)
+    }
+
+    /// The results of a run over `(class, id, stored offset, heard after
+    /// ms)`, the first a local output and the reference.
+    pub(crate) fn sheet_of(
+        speakers: &[(Class, &str, Option<f64>, f64)],
+    ) -> (Sheet, Vec<Member>, u32) {
         let mut rig = FakeRig::new();
-        rig.lineup.reference = Some(speakers[0].0.to_owned());
+        rig.lineup.reference = Some(speakers[0].1.to_owned());
         rig.lineup.members = speakers
             .iter()
-            .map(|&(id, offset, _)| member(Class::Local, id, Some(offset), 2500.0 + offset))
+            .map(|&(class, id, offset, after)| member(class, id, offset, after + 450.0))
             .collect();
         rig.lineup.hold_backs_ms = speakers
             .iter()
-            .map(|&(id, offset, _)| (id.to_owned(), 2000.0 + offset))
+            .filter(|speaker| speaker.0 == Class::Local)
+            .map(|&(_, id, offset, _)| (id.to_owned(), 2000.0 + offset.unwrap_or(0.0)))
             .collect();
         rig.heard_after_ms = speakers
             .iter()
-            .map(|&(id, _, after)| (format!("local:{id}"), vec![after]))
+            .map(|&(class, id, _, after)| (member_key(class, id), vec![after]))
             .collect();
         let mut run = start(&mut rig);
         let finished = run_to_end(&mut rig, &mut run, |_, _| {});

@@ -3090,6 +3090,9 @@ fn sheet_outcome(strings: &Strings<'_>, reference: &str, sheet: &SheetState) -> 
     if let Some(reason) = sheet.ended {
         return strings.invoke_calibrate_all_stopped(ended_text(strings, reason));
     }
+    if sheet.airplay_waits {
+        return strings.get_calibrate_all_airplay_waits();
+    }
     if sheet.undone {
         return strings.get_calibrate_all_undone();
     }
@@ -3121,7 +3124,10 @@ fn sheet_ms(strings: &Strings<'_>, class: Class, ms: f64) -> SharedString {
 }
 
 fn row_detail(strings: &Strings<'_>, reference: &str, row: &SheetRow) -> SharedString {
-    let old = sheet_ms(strings, row.class, row.old_ms.unwrap_or(0.0));
+    let old = row.old_ms.map_or_else(
+        || strings.get_calibrate_all_none(),
+        |ms| sheet_ms(strings, row.class, ms),
+    );
     let measured = |m: &Measurement| {
         (
             old.clone(),
@@ -3153,20 +3159,28 @@ fn row_detail(strings: &Strings<'_>, reference: &str, row: &SheetRow) -> SharedS
 }
 
 fn airplay_line(strings: &Strings<'_>, shared: &AirPlayShared) -> SharedString {
-    let old = shared.old_ms.unwrap_or(0.0).round() as i32;
+    let old = shared.old_ms.map_or_else(
+        || strings.get_calibrate_all_none(),
+        |ms| sheet_ms(strings, Class::AirPlay, ms),
+    );
     let new = shared.new_ms.unwrap_or(0.0).round() as i32;
+    let spread = shared.spread_ms.round() as i32;
     let set = if shared.certain_rows == 1 {
-        strings.invoke_calibrate_all_airplay_one(old, new)
+        strings.invoke_calibrate_all_airplay_one(old.clone(), new)
     } else {
-        strings.invoke_calibrate_all_airplay_median(old, new, count(shared.certain_rows))
+        strings.invoke_calibrate_all_airplay_median(
+            old.clone(),
+            new,
+            count(shared.certain_rows),
+            spread,
+        )
     };
     match shared.state {
         SharedState::NoneCertain => strings.invoke_calibrate_all_airplay_none(old),
         SharedState::Certain => set,
         SharedState::Spread => {
-            let spread =
-                strings.invoke_calibrate_all_airplay_spread(shared.spread_ms.round() as i32);
-            format!("{set} {spread}").into()
+            let differ = strings.invoke_calibrate_all_airplay_spread(spread);
+            format!("{set} {differ}").into()
         }
     }
 }
@@ -3985,6 +3999,7 @@ mod tests {
             failure: None,
             again_ended: None,
             can_apply: true,
+            airplay_waits: false,
             applied: false,
             can_undo: false,
             undone: false,
@@ -3998,6 +4013,29 @@ mod tests {
         );
         assert!(card.rows[2].detail.contains("Measure Again"));
         assert!(card.airplay.contains("23 ms"), "{}", card.airplay);
+        assert!(card.airplay.contains("differ by"), "over 10 ms apart");
+        let never = SheetRow {
+            old_ms: None,
+            ..row("Den", Class::Cast, SheetRowState::Certain(clear))
+        };
+        let detail = row_detail(&strings, "", &never);
+        assert!(detail.starts_with("Was none."), "{detail}");
+        let sheet = state.calibrate_all.sheet.as_mut().unwrap();
+        let shared = sheet.airplay.as_mut().unwrap();
+        shared.spread_ms = 4.0;
+        shared.state = SharedState::Certain;
+        let card = calibrate_all_card(&strings, &state);
+        assert!(card.airplay.contains("4 ms apart"), "{}", card.airplay);
+        assert!(!card.airplay.contains("differ by"));
+        let sheet = state.calibrate_all.sheet.as_mut().unwrap();
+        sheet.airplay_waits = true;
+        sheet.can_apply = false;
+        let card = calibrate_all_card(&strings, &state);
+        assert_eq!(card.outcome, strings.get_calibrate_all_airplay_waits());
+        let sheet = state.calibrate_all.sheet.as_mut().unwrap();
+        sheet.airplay_waits = false;
+        sheet.can_apply = true;
+        let card = calibrate_all_card(&strings, &state);
         assert_eq!(card.said, strings.invoke_calibrate_all_finished(1, 2));
 
         let sheet = state.calibrate_all.sheet.as_mut().unwrap();

@@ -399,21 +399,30 @@ component CalibrationCard inherits Card {
                     primary: true;
                     enabled: root.can-apply && !root.running;
                     accessible-description: Strings.calibrate-all-apply-help;
+                    // Apply goes dead once applied: the focus moves on to
+                    // Undo rather than falling off the card.
                     clicked => {
                         root.apply();
+                        if root.can-undo {
+                            undo-button.focus();
+                        }
                     }
                 }
 
-                if root.can-undo: Button {
+                undo-button := Button {
                     text: Strings.calibrate-all-undo;
+                    enabled: root.can-undo && !root.running;
                     accessible-label: Strings.calibrate-all-undo;
                     accessible-description: Strings.calibrate-all-undo-help;
                     clicked => {
                         root.undo();
+                        if !root.can-undo {
+                            close-button.focus();
+                        }
                     }
                 }
 
-                Button {
+                close-button := Button {
                     text: Strings.calibrate-all-close;
                     enabled: !root.running;
                     accessible-label: Strings.calibrate-all-close-label;

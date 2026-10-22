@@ -79,7 +79,9 @@ use crate::audio::backend::{
     StopReason,
 };
 use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
-use audiosync_core::calibrate_all::{Applied, Class, EndReason, RowState, Sheet, Take, Target};
+use audiosync_core::calibrate_all::{
+    Applied, Change, Class, EndReason, RowState, Sheet, Take, Target,
+};
 
 use crate::audio::calibrate_all::{self, AllRun, Finished, Member, Progress};
 use crate::audio::calibration::{self, CalibrationRun, Failure};
@@ -958,8 +960,38 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// The AirPlay delay is set through the sender's latency, unknown while
+    /// AirPlay doesn't play: Apply and Undo wait rather than leave it out.
+    fn airplay_waits(&self, kept: &KeptSheet) -> bool {
+        if self.audio.airplay_sender_latency_ms().is_some() {
+            return false;
+        }
+        let airplay = |changes: &[Change]| changes.iter().any(|c| c.target == Target::AirPlay);
+        match &kept.applied {
+            Some(applied) => airplay(&applied.changes),
+            None => kept
+                .sheet
+                .changes()
+                .is_ok_and(|applied| airplay(&applied.changes)),
+        }
+    }
+
+    fn calibrate_all_waits(&self) -> bool {
+        let waits = self
+            .calibrate_all
+            .sheet
+            .as_ref()
+            .is_some_and(|kept| self.airplay_waits(kept));
+        if waits {
+            self.log
+                .log(|| "Calibrate All: the AirPlay delay waits for AirPlay to play".to_owned());
+        }
+        waits
+    }
+
     fn sheet_state(&self, kept: &KeptSheet, busy: bool) -> SheetState {
         let sheet = &kept.sheet;
+        let waits = self.airplay_waits(kept);
         let open = sheet.ended().is_none() && !sheet.applied();
         SheetState {
             rows: sheet
@@ -978,9 +1010,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
             ended: sheet.ended(),
             failure: kept.failure,
             again_ended: kept.again_ended,
-            can_apply: !busy && sheet.changes().is_ok(),
+            can_apply: !busy && !waits && sheet.changes().is_ok(),
+            airplay_waits: waits,
             applied: sheet.applied(),
-            can_undo: !busy && kept.applied.is_some(),
+            can_undo: !busy && !waits && kept.applied.is_some(),
             undone: kept.undone,
         }
     }
@@ -2868,7 +2901,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn apply_calibrate_all(&mut self) {
-        if self.calibrate_all.run.is_some() {
+        if self.calibrate_all.run.is_some() || self.calibrate_all_waits() {
             return;
         }
         let Some(kept) = self.calibrate_all.sheet.as_mut() else {
@@ -2895,6 +2928,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn undo_calibrate_all(&mut self) {
+        if self.calibrate_all.run.is_some() || self.calibrate_all_waits() {
+            return;
+        }
         let Some(kept) = self.calibrate_all.sheet.as_mut() else {
             return;
         };
@@ -5912,6 +5948,74 @@ mod tests {
         assert_eq!(state.sheet, None, "Apply would undo the new delay");
         assert_eq!(state.phase, AllPhase::Stale);
         assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(95.0));
+    }
+
+    fn keep(
+        adapter: &mut AudioAdapter<MockBackend>,
+        (sheet, members, rate): (Sheet, Vec<Member>, u32),
+    ) {
+        adapter.calibrate_all.sheet = Some(KeptSheet {
+            sheet,
+            members,
+            rate,
+            failure: None,
+            again_ended: None,
+            applied: None,
+            undone: false,
+        });
+    }
+
+    #[test]
+    fn undo_puts_back_a_cast_speaker_without_a_stored_offset_as_none() {
+        let (mut adapter, _) = cast_adapter();
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::sheet_of(&[
+                (Class::Local, SPEAKERS, Some(0.0), 2010.0),
+                (Class::Local, HEADPHONES, Some(0.0), 2060.0),
+                (Class::Cast, CAST_KITCHEN, None, 3100.0),
+            ]),
+        );
+        let offset = |adapter: &AudioAdapter<MockBackend>| {
+            adapter
+                .audio
+                .cast_speakers()
+                .into_iter()
+                .find(|cast| cast.id == CAST_KITCHEN)
+                .map(|cast| cast.offset_ms)
+        };
+        adapter.apply_calibrate_all();
+        assert!(offset(&adapter).is_some_and(|ms| ms > 0.0));
+        assert_ne!(speaker_of(&adapter, &key(HEADPHONES)).delay_ms, Some(0.0));
+
+        adapter.undo_calibrate_all();
+        // An offset of 0 is none: the next run searches for the speaker
+        // again from the core's cap.
+        assert_eq!(offset(&adapter), Some(0.0));
+        assert_eq!(speaker_of(&adapter, &cc(CAST_KITCHEN)).delay_ms, Some(0.0));
+        assert_eq!(speaker_of(&adapter, &key(HEADPHONES)).delay_ms, Some(0.0));
+    }
+
+    #[test]
+    fn apply_waits_for_airplay_to_play_rather_than_leave_its_delay_out() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::sheet_of(&[
+                (Class::Local, SPEAKERS, Some(0.0), 2010.0),
+                (Class::Local, HEADPHONES, Some(0.0), 2060.0),
+                (Class::AirPlay, "kitchen", Some(2000.0), 2050.0),
+            ]),
+        );
+        assert_eq!(adapter.audio.airplay_sender_latency_ms(), None);
+        let shown = adapter.snapshot().calibrate_all.sheet.expect("results");
+        assert!(shown.airplay_waits && !shown.can_apply);
+
+        adapter.apply_calibrate_all();
+        let shown = adapter.snapshot().calibrate_all.sheet.expect("results");
+        assert!(!shown.applied, "nothing was set");
+        assert_eq!(speaker_of(&adapter, &key(HEADPHONES)).delay_ms, Some(0.0));
     }
 
     #[test]

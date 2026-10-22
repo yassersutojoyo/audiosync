@@ -1029,6 +1029,9 @@ export global Strings {
     out property <string> calibrate-all-again: @tr("Measure Again");
     out property <string> calibrate-all-reference: @tr("The reference. The other speakers are measured against it.");
     out property <string> calibrate-all-not-measured: @tr("Not measured.");
+    // A delay never stored: "Was none."
+    out property <string> calibrate-all-none: @tr("none");
+    out property <string> calibrate-all-airplay-waits: @tr("AirPlay isn't playing, so the AirPlay delay can't be set now. Apply and Undo work again once it plays.");
     out property <string> calibrate-all-estimating: @tr("Working out the delays…");
     out property <string> calibrate-all-applied: @tr("New delays applied.");
     out property <string> calibrate-all-undone: @tr("The delays are back to what they were.");
@@ -1040,9 +1043,9 @@ export global Strings {
 
     public pure function calibrate-all-hint(reference: string) -> string {
         if reference == "" {
-            return @tr("Put the microphone where you listen. AudioSync pauses the music and plays a short sweep on the PC's own speakers and then on every speaker that is on, one at a time, twice each. Nothing changes until you choose Apply.");
+            return @tr("Put the microphone where you listen. AudioSync fades the music out, plays a short sweep on the PC's own speakers and then on every other speaker that is on, one at a time, twice each, and fades the music back in. Nothing changes until you choose Apply.");
         }
-        return @tr("Put the microphone where you listen. AudioSync pauses the music and plays a short sweep on {} and then on every speaker that is on, one at a time, twice each. Nothing changes until you choose Apply.", reference);
+        return @tr("Put the microphone where you listen. AudioSync fades the music out, plays a short sweep on {} and then on every other speaker that is on, one at a time, twice each, and fades the music back in. Nothing changes until you choose Apply.", reference);
     }
 
     public pure function calibrate-all-turn-on(reference: string) -> string {
@@ -1090,20 +1093,21 @@ export global Strings {
         return @tr("Not measured. {}", reason);
     }
 
-    public pure function calibrate-all-airplay-one(old: int, new: int) -> string {
-        return @tr("AirPlay delay: was {} ms. New: {} ms.", old, new);
+    // Old is a delay ("2000 ms") or calibrate-all-none.
+    public pure function calibrate-all-airplay-one(old: string, new: int) -> string {
+        return @tr("AirPlay delay: was {}. New: {} ms.", old, new);
     }
 
-    public pure function calibrate-all-airplay-median(old: int, new: int, count: int) -> string {
-        return @tr("AirPlay delay: was {} ms. New: {} ms, the middle value of {} AirPlay speakers.", old, new, count);
+    public pure function calibrate-all-airplay-median(old: string, new: int, count: int, spread: int) -> string {
+        return @tr("AirPlay delay: was {}. New: {} ms, the middle value of {} AirPlay speakers, which are {} ms apart.", old, new, count, spread);
     }
 
     public pure function calibrate-all-airplay-spread(spread: int) -> string {
         return @tr("The AirPlay speakers differ by {} ms. AudioSync sets one delay for all AirPlay speakers, so they can't all line up exactly.", spread);
     }
 
-    public pure function calibrate-all-airplay-none(old: int) -> string {
-        return @tr("The AirPlay delay stays at {} ms. No AirPlay speaker was measured clearly.", old);
+    public pure function calibrate-all-airplay-none(old: string) -> string {
+        return @tr("No AirPlay speaker was measured clearly, so the AirPlay delay stays at {}.", old);
     }
 
     public pure function calibrate-all-finished(clear: int, total: int) -> string {
