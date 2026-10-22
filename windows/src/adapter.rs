@@ -496,6 +496,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             appearance: saved.appearance,
             window: saved.window,
             remote: saved.remote,
+            airplay2_experimental: saved.airplay2_experimental,
         };
         self.saved = saved;
     }
@@ -592,6 +593,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             airplay_adjustment_ms: self.audio.airplay_adjustment(),
             when_source_quits: self.when_source_quits.stored().to_owned(),
             remote: self.view.remote,
+            airplay2_experimental: self.view.airplay2_experimental,
         }
         .clamped()
     }
@@ -5817,6 +5819,7 @@ mod tests {
                 on: true,
                 port: 8123,
             },
+            airplay2_experimental: true,
         });
         assert!(adapter.snapshot().running);
         adapter.poll();
@@ -5845,6 +5848,7 @@ mod tests {
         assert_eq!(state.groups, groups);
         assert_eq!(state.equalizer, equalizer);
         assert!(adapter.view_settings().show_virtual_devices);
+        assert!(adapter.view_settings().airplay2_experimental);
         assert_eq!(
             adapter.view_settings().appearance,
             ui_model::Appearance::Light

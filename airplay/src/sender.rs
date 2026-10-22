@@ -122,6 +122,22 @@ pub fn airplay2_switch(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
+/// The debug hook that lets the devices it names use PCM where they offer
+/// it (P74, G10): a comma-separated list of speaker IDs, with no UI.
+pub const AIRPLAY_PCM_ENV: &str = "AUDIOSYNC_AIRPLAY_PCM";
+
+/// The speaker IDs in [`AIRPLAY_PCM_ENV`]'s value, trimmed, empty ones
+/// skipped.
+pub fn pcm_debug_devices(value: Option<&str>) -> std::collections::BTreeSet<String> {
+    value
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// A new random AirPlay 2 device ID for a host to store once (P5), or
 /// `None` when the random source is unavailable.
 pub fn random_airplay2_device_id() -> Option<[u8; 6]> {

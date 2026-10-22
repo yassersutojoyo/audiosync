@@ -18,6 +18,13 @@ import SystemConfiguration
 final class NativeAirPlay {
     /// How often the queue asks the sender for discovery changes and events.
     static let pollInterval: DispatchTimeInterval = .milliseconds(250)
+    /// The receivers the debug hook AUDIOSYNC_AIRPLAY_PCM names; the core
+    /// reads the same variable and lets them use PCM when they are added.
+    static let pcmDebugIDs: Set<String> = Set(
+        (ProcessInfo.processInfo.environment["AUDIOSYNC_AIRPLAY_PCM"] ?? "")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty })
 
     /// The receivers listed, the speakers added, L, and the pairings and
     /// prompts under way (main queue; the app records prompts and turn-offs
@@ -69,6 +76,9 @@ final class NativeAirPlay {
     /// 100) times the master. Main queue.
     func add(_ id: String, volume: Double) {
         model.added(id)
+        if Self.pcmDebugIDs.contains(id) {
+            DebugTrace.log("[AudioSync] native AirPlay: \(id) may use PCM (AUDIOSYNC_AIRPLAY_PCM)")
+        }
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }
             if !asc_airplay_add_speaker(handle, id, volume) {

@@ -483,6 +483,12 @@ fn receiver_id(key: &DeviceKey) -> String {
     }
 }
 
+/// Whether the debug hook's value (spec P74, G10) lets the receiver `id`
+/// use PCM; the app logs the speakers it names.
+fn pcm_debug_allows(id: &str, value: Option<&str>) -> bool {
+    audiosync_airplay::sender::pcm_debug_devices(value).contains(id)
+}
+
 /// The reason code of an unsupported receiver.
 fn reason_code(reason: UnsupportedReason) -> i32 {
     match reason {
@@ -1773,6 +1779,12 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
             options.password = airplay.passwords.get(id).cloned();
             options.credentials = airplay.store.get(id).cloned();
             options.homekit_credentials = airplay.identity.get(id).cloned();
+            options.pcm = pcm_debug_allows(
+                id,
+                std::env::var(audiosync_airplay::sender::AIRPLAY_PCM_ENV)
+                    .ok()
+                    .as_deref(),
+            );
             airplay.sender.add_speaker(device, options);
             let added = Added {
                 key,
@@ -2670,6 +2682,15 @@ mod tests {
         airplay
             .sender
             .start_discovery_with(Box::new(Script(events)));
+    }
+
+    #[test]
+    fn the_pcm_debug_hook_allows_the_named_receivers_only() {
+        assert!(pcm_debug_allows("kitchen", Some("den, kitchen")));
+        assert!(pcm_debug_allows("den", Some("den, kitchen")));
+        assert!(!pcm_debug_allows("study", Some("den, kitchen")));
+        assert!(!pcm_debug_allows("kitchen", Some("")));
+        assert!(!pcm_debug_allows("kitchen", None));
     }
 
     #[test]

@@ -76,6 +76,9 @@ struct UiState {
     appearance: ui_model::Appearance,
     /// File > Web Remote.
     remote: crate::remote::RemoteSettings,
+    /// File > AirPlay 2 (Experimental) as saved, which applies at the next
+    /// launch.
+    airplay2_experimental: bool,
     listed_virtual: ListedVirtual,
 }
 
@@ -1433,6 +1436,8 @@ impl App {
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
         self.main.set_show_virtual_devices(ui.show_virtual);
+        self.main
+            .set_airplay2_experimental(ui.airplay2_experimental);
         self.main.set_launch_at_login(self.login.borrow().is_on());
         self.main
             .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
@@ -1752,6 +1757,10 @@ impl App {
         main.on_notices_dismissed_all(move || with_app(&w, App::dismiss_all_notices));
         let w = weak.clone();
         main.on_launch_at_login_toggled(move |on| with_app(&w, |app| app.set_launch_at_login(on)));
+        let w = weak.clone();
+        main.on_airplay2_experimental_toggled(move |on| {
+            with_app(&w, |app| app.set_airplay2_experimental(on))
+        });
         let w = weak.clone();
         main.on_notice_guide_requested(move |id| with_app(&w, |app| app.show_guide(id)));
         let w = weak.clone();
@@ -2217,6 +2226,20 @@ impl App {
         }
     }
 
+    /// Saved for the next launch: the running sender keeps the mode it
+    /// started with.
+    fn set_airplay2_experimental(&self, on: bool) {
+        self.ui.borrow_mut().airplay2_experimental = on;
+        self.log.log(|| {
+            format!(
+                "AirPlay 2 (experimental): turned {}; applies at the next launch",
+                if on { "on" } else { "off" }
+            )
+        });
+        self.remember_view();
+        self.refresh();
+    }
+
     fn show_virtual_devices(&self, on: bool) {
         {
             let mut ui = self.ui.borrow_mut();
@@ -2262,6 +2285,7 @@ impl App {
             appearance: self.ui.borrow().appearance,
             window: ui_model::frame_to_keep(self.main_window_shows(), saved.window),
             remote: self.ui.borrow().remote,
+            airplay2_experimental: self.ui.borrow().airplay2_experimental,
         };
         if settings != saved {
             backend.set_view_settings(settings);
@@ -2277,6 +2301,7 @@ impl App {
         self.ui.borrow_mut().show_virtual = saved.show_virtual_devices;
         self.ui.borrow_mut().appearance = saved.appearance;
         self.ui.borrow_mut().remote = saved.remote;
+        self.ui.borrow_mut().airplay2_experimental = saved.airplay2_experimental;
         self.apply_appearance(saved.appearance);
         let Some(saved_frame) = saved.window else {
             return;

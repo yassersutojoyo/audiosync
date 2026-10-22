@@ -221,14 +221,16 @@ fn backend(
     let mut audio = audio::wasapi::open().map_err(StartError::Audio)?;
     log.log(|| "audio: the WASAPI backend is open".to_owned());
     audio.set_debug_log(log.clone());
-    start_airplay(&mut audio, log);
-    let cast_file = start_cast(&mut audio, log);
-    audio.set_track_reader(Box::new(track_reader));
-    audio.set_receiver_labels(labels.clone());
     let settings_file = settings::SettingsFile::default_path().map_or_else(
         settings::SettingsFile::in_memory,
         settings::SettingsFile::at,
     );
+    // Read at launch only, like the Mac: a change applies at the next launch.
+    let airplay2 = settings_file.load().0.airplay2_experimental;
+    start_airplay(&mut audio, airplay2, log);
+    let cast_file = start_cast(&mut audio, log);
+    audio.set_track_reader(Box::new(track_reader));
+    audio.set_receiver_labels(labels.clone());
     let mut adapter = adapter::AudioAdapter::with_settings(
         audio,
         platform::notice_time,
@@ -293,10 +295,10 @@ fn receiver_labels(strings: &Strings<'_>) -> audio::now_playing::ReceiverLabels 
 /// sender the app runs on with local outputs only; without discovery no
 /// AirPlay speaker is listed.
 #[cfg(windows)]
-fn start_airplay(audio: &mut audio::wasapi::WasapiBackend, log: &DebugLog) {
+fn start_airplay(audio: &mut audio::wasapi::WasapiBackend, airplay2: bool, log: &DebugLog) {
     let starter_log = log.clone();
     audio.start_airplay(
-        Box::new(move || start_sender(&starter_log)),
+        Box::new(move || start_sender(airplay2, &starter_log)),
         open_pairings(log),
     );
 }
@@ -304,9 +306,9 @@ fn start_airplay(audio: &mut audio::wasapi::WasapiBackend, log: &DebugLog) {
 /// A new AirPlay sender, browsing for receivers when its discovery could
 /// start, and the feed for its input; `None` when it couldn't start.
 #[cfg(windows)]
-fn start_sender(log: &DebugLog) -> Option<audio::airplay::StartedSender> {
+fn start_sender(airplay2: bool, log: &DebugLog) -> Option<audio::airplay::StartedSender> {
     use audio::airplay::{FeedSlot, SenderLink, StartedSender};
-    let (link, input) = match SenderLink::start() {
+    let (link, input) = match SenderLink::start(airplay2) {
         Ok(started) => started,
         Err(error) => {
             log.log(|| format!("AirPlay: the sender couldn't start: {error}"));

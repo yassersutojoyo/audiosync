@@ -856,6 +856,9 @@ pub struct ViewSettings {
     pub window: Option<WindowFrame>,
     /// File > Web Remote.
     pub remote: crate::remote::RemoteSettings,
+    /// File > AirPlay 2 (Experimental), as saved; the sender reads it at
+    /// launch only.
+    pub airplay2_experimental: bool,
 }
 
 /// Clamps a typed or stepped offset to what the sync controls accept, in

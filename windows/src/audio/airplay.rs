@@ -74,8 +74,9 @@ use audiosync_airplay::metadata::MetadataError;
 use audiosync_airplay::pairing::{Credentials, PairingEvent, PinError};
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
-    AIRPLAY2_SWITCH_ENV, NowPlaying, ReceiverEvent, ReceiverInfo, Sender, SenderConfig,
-    SenderEvent, SpeakerError, SpeakerEvent, SpeakerOptions, SpeakerState, airplay2_switch,
+    AIRPLAY_PCM_ENV, AIRPLAY2_SWITCH_ENV, NowPlaying, ReceiverEvent, ReceiverInfo, Sender,
+    SenderConfig, SenderEvent, SpeakerError, SpeakerEvent, SpeakerOptions, SpeakerState,
+    airplay2_switch, pcm_debug_devices,
 };
 use audiosync_airplay::stream::{MAX_DELAY, SpeakerCounters, StreamCounters};
 use audiosync_airplay::targets::{Target, TargetChange, TargetId, TargetKind};
@@ -210,6 +211,12 @@ impl StartedSender {
 /// or couldn't start; `None` when it couldn't start (it logs why).
 pub type SenderStarter = Box<dyn FnMut() -> Option<StartedSender>>;
 
+/// Whether the AirPlay 2 path runs (spec P2, P170): when the saved setting
+/// is on, or the environment variable turns it on without a rebuild.
+pub fn airplay2_on(saved: bool, env: Option<&str>) -> bool {
+    saved || airplay2_switch(env)
+}
+
 /// The real sender.
 pub struct SenderLink {
     sender: Sender,
@@ -218,12 +225,14 @@ pub struct SenderLink {
 
 impl SenderLink {
     /// Starts the sender, whose stream and threads run from now on, and
-    /// gives its audio input for the capture.
-    pub fn start() -> io::Result<(SenderLink, InputWriter)> {
-        // The hidden AirPlay 2 switch (spec P2): an environment variable, so
-        // it flips without a rebuild and no control shows it.
+    /// gives its audio input for the capture. `saved_airplay2` is File >
+    /// AirPlay 2 (Experimental) as read at launch.
+    pub fn start(saved_airplay2: bool) -> io::Result<(SenderLink, InputWriter)> {
         let config = SenderConfig {
-            airplay2: airplay2_switch(std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref()),
+            airplay2: airplay2_on(
+                saved_airplay2,
+                std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
+            ),
             ..SenderConfig::default()
         };
         let airplay2 = config.airplay2;
@@ -850,6 +859,8 @@ pub struct AirPlaySpeakers {
     /// What is playing, as the sender was given it last: a new sender gets
     /// it too.
     now_playing: Option<NowPlaying>,
+    /// The speaker IDs [`AIRPLAY_PCM_ENV`] allows PCM for (spec P74, G10).
+    pcm_devices: BTreeSet<String>,
     log: DebugLog,
 }
 
@@ -894,6 +905,7 @@ impl AirPlaySpeakers {
             store_change: None,
             store_kept_aside: None,
             now_playing: None,
+            pcm_devices: pcm_debug_devices(std::env::var(AIRPLAY_PCM_ENV).ok().as_deref()),
             log,
         };
         speakers.open_airplay2();
@@ -1909,6 +1921,7 @@ impl AirPlaySpeakers {
         options.credentials = self.store.get(id).cloned();
         options.homekit_credentials = self.store.homekit(id).cloned();
         options.password = self.password(id);
+        options.pcm = self.pcm_devices.contains(id);
         options
     }
 
@@ -1962,6 +1975,14 @@ impl AirPlaySpeakers {
                     options.delay.as_millis()
                 )
             });
+            if options.pcm {
+                self.log.log(|| {
+                    format!(
+                        "AirPlay speaker {}: PCM allowed by {AIRPLAY_PCM_ENV}",
+                        self.label(&id)
+                    )
+                });
+            }
             let added = match self.targets.get(&id) {
                 Some(target) => self.add_target(target.clone(), options),
                 None => {
@@ -2989,6 +3010,8 @@ pub mod tests {
         /// The speaker added or the pairing started just before came with
         /// this password.
         Password(String, String),
+        /// The speaker added just before may use PCM.
+        Pcm(String),
         StartPairing(String),
         SubmitPin(String, String),
         CancelPairing(String),
@@ -3162,6 +3185,9 @@ pub mod tests {
                 state
                     .calls
                     .push(Call::Password(id_of(device), password.expose().to_owned()));
+            }
+            if options.pcm {
+                state.calls.push(Call::Pcm(id_of(device)));
             }
             None
         }
@@ -4589,6 +4615,47 @@ pub mod tests {
         assert!(airplay.enabled_ids().is_empty());
     }
 
+    #[test]
+    fn airplay2_is_off_unless_the_setting_or_the_variable_turns_it_on() {
+        // P170: with the setting off and the variable unset, nothing of the
+        // AirPlay 2 path starts.
+        assert!(!airplay2_on(false, None));
+        assert!(!airplay2_on(false, Some("0")));
+        assert!(airplay2_on(true, None));
+        assert!(airplay2_on(false, Some("1")));
+    }
+
+    #[test]
+    fn the_pcm_variable_names_speakers_by_id() {
+        assert!(pcm_debug_devices(None).is_empty());
+        assert!(pcm_debug_devices(Some(" , ")).is_empty());
+        assert_eq!(
+            pcm_debug_devices(Some("AA:BB, raop:Den ,,CC")),
+            BTreeSet::from(["AA:BB".to_owned(), "raop:Den".to_owned(), "CC".to_owned()])
+        );
+    }
+
+    #[test]
+    fn the_pcm_variable_allows_pcm_for_the_named_speaker_only() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let named = device(1, "Kitchen", OPEN_TXT);
+        let other = device(2, "Den", OPEN_TXT);
+        airplay.pcm_devices = pcm_debug_devices(Some(&id_of(&named)));
+        fake.appear(&named);
+        fake.appear(&other);
+        airplay.poll();
+        airplay.set_streaming(true);
+        airplay.set_enabled(&id_of(&named), true).unwrap();
+        airplay.set_enabled(&id_of(&other), true).unwrap();
+        let pcm: Vec<Call> = fake
+            .take_calls()
+            .into_iter()
+            .filter(|call| matches!(call, Call::Pcm(_)))
+            .collect();
+        assert_eq!(pcm, [Call::Pcm(id_of(&named))]);
+    }
+
     /// The password receiver Study, listed while streaming, with its
     /// password prompt open after the user switched it on.
     fn password_asked(fake: &FakeAirPlay, airplay: &mut AirPlaySpeakers) -> Device {
@@ -5590,7 +5657,7 @@ pub mod tests {
     #[test]
     fn a_loopback_receiver_is_listed_and_plays_through_the_real_sender() {
         let receiver = LoopbackReceiver::start();
-        let (link, input) = SenderLink::start().expect("the sender starts");
+        let (link, input) = SenderLink::start(false).expect("the sender starts");
         link.sender
             .start_discovery_with(Box::new(OneService(Some(BrowseEvent::Resolved(
                 receiver.record(),
