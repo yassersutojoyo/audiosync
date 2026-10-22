@@ -4043,5 +4043,25 @@ do {
     asc_cast_destroy(&second)
 }
 
+// MARK: Guide illustrations: each finds its place in the text, in order (GuideLayout)
+do {
+    let t = UIStrings()
+    let pieces = GuideLayout.pieces(of: t.helpText, anchor: t.guideArtAnchor)
+    check(pieces.compactMap(\.art) == GuideArt.allCases && pieces.last?.art == nil
+            && pieces.map(\.text).joined() == t.helpText,
+          "guide: every illustration has its anchor line, in order, and the text is kept whole",
+          "\(pieces.map(\.art))")
+    let starts = pieces.dropFirst().map { piece in piece.text.drop { $0 == " " } }
+    check(zip(starts, GuideArt.allCases).allSatisfy { $0.hasPrefix(t.guideArtAnchor($1)) },
+          "guide: each illustration sits just before its anchor line")
+
+    let made = GuideLayout.pieces(of: "a\n  - B x\nc", anchor: { $0 == .delay ? "- B" : "missing" })
+    check(made == [.init(text: "a\n", art: .delay), .init(text: "  - B x\nc", art: nil)],
+          "guide: a missing anchor leaves its illustration out; leading spaces are ignored", "\(made)")
+    check(GuideArt.allCases.allSatisfy { !$0.lightSVG.contains("<text") && !$0.darkSVG.contains("<text")
+                                         && $0.lightSVG != $0.darkSVG },
+          "guide: the illustrations carry no text and differ between light and dark")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

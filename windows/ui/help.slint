@@ -36,6 +36,29 @@ component HelpSection inherits VerticalLayout {
     @children
 }
 
+// An illustration from brand/guide/ (scripts/brand/guide_art.py), in the
+// variant for the theme: 360 px wide at most, narrower in a narrow window,
+// keeping the drawing's 440 by 160 shape.
+component HelpArt inherits Rectangle {
+    in property <image> light;
+    in property <image> dark;
+    in property <string> description;
+
+    height: min(360px, self.width) * 160 / 440;
+    accessible-role: image;
+    accessible-label: root.description;
+
+    Image {
+        x: 0;
+        y: 0;
+        width: min(360px, root.width);
+        height: root.height;
+        source: Tokens.dark ? root.dark : root.light;
+        image-fit: contain;
+        accessible-role: none;
+    }
+}
+
 export component HelpWindow inherits Window {
     // A double-audio notice is showing, so Show How has a guide to open.
     in property <bool> show-how-shown;
@@ -136,6 +159,12 @@ export component HelpWindow inherits Window {
                             min-height: self.preferred-height;
                         }
 
+                        HelpArt {
+                            light: @image-url("../../brand/guide/source.svg");
+                            dark: @image-url("../../brand/guide/source-dark.svg");
+                            description: Strings.help-art-source;
+                        }
+
                         HelpSection {
                             title: Strings.help-start-title;
                             body: Strings.help-start;
@@ -144,6 +173,32 @@ export component HelpWindow inherits Window {
                         HelpSection {
                             title: Strings.help-sync-title;
                             body: Strings.help-sync;
+
+                            HelpArt {
+                                light: @image-url("../../brand/guide/delay.svg");
+                                dark: @image-url("../../brand/guide/delay-dark.svg");
+                                description: Strings.help-art-delay;
+                            }
+
+                            Text {
+                                text: Strings.help-sync-cast;
+                                color: Tokens.text;
+                                wrap: word-wrap;
+                                min-height: self.preferred-height;
+                            }
+
+                            HelpArt {
+                                light: @image-url("../../brand/guide/classes.svg");
+                                dark: @image-url("../../brand/guide/classes-dark.svg");
+                                description: Strings.help-art-classes;
+                            }
+
+                            Text {
+                                text: Strings.help-sync-tune;
+                                color: Tokens.text;
+                                wrap: word-wrap;
+                                min-height: self.preferred-height;
+                            }
                         }
 
                         HelpSection {

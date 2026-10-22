@@ -826,10 +826,12 @@ struct UIStrings {
         More Controls
         - Sync: the Mac's built-in speakers are the reference and have no delay.
           Every other local speaker has a delay relative to them, which always
-          applies: click the time next to it to adjust it. A positive value
-          holds the speaker back; a negative one is for a speaker that sounds
-          late, such as Bluetooth. While an AirPlay speaker is on, every local
-          speaker also waits the 'AirPlay delay' under Connected Speakers for it.
+          applies: click the time next to it to adjust it. Once that control is
+          open, '\(calibrateWithMicrophone)' under it can measure the delay
+          instead. A positive value holds the speaker back; a negative one is
+          for a speaker that sounds late, such as Bluetooth. While an AirPlay
+          speaker is on, every local speaker also waits the 'AirPlay delay'
+          under Connected Speakers for it.
         - Groups: turn on the speakers you want, then choose 'New Group from Active
           Speakers' in the gear menu. Click the group to switch them all at once.
           To rename or delete a group, right-click it or use its ⋯ button.
@@ -865,13 +867,15 @@ struct UIStrings {
         after an internal error, Connected Speakers says so, with a Retry button.
 
         Google Cast
-        AudioSync can't sync Google Cast speakers automatically, so each one has
-        an offset you set by ear: click the time next to it. If the Cast speaker
-        sounds late, raise it, and the other speakers wait longer; if it sounds
-        early, lower it. AudioSync keeps the offset for that speaker. One Google
-        Cast speaker plays at a time, and speaker groups made in the Google Home
-        app can't play. While it plays, Resync under its volume restarts the
-        stream, with a short gap, so it lines up at its offset again.
+        Local and AirPlay speakers play in step: once their delays are set,
+        AudioSync keeps them together. It can't sync Google Cast speakers
+        automatically, so each one has an offset you set by ear: click the time
+        next to it. If the Cast speaker sounds late, raise it, and the other
+        speakers wait longer; if it sounds early, lower it. AudioSync keeps the
+        offset for that speaker. One Google Cast speaker plays at a time, and
+        speaker groups made in the Google Home app can't play. While it plays,
+        Resync under its volume restarts the stream, with a short gap, so it
+        lines up at its offset again.
 
         Notices
         When something needs your attention, such as a speaker that was switched
@@ -906,6 +910,27 @@ struct UIStrings {
         - Total latency is about 2 seconds because of the AirPlay buffer.
         - Delay, volume, and selection are saved per device and restored automatically.
         """
+    }
+
+    /// Each Guide illustration goes just before the line that starts with this text.
+    func guideArtAnchor(_ art: GuideArt) -> String {
+        switch art {
+        case .source: return "First Steps"
+        case .delay: return "- Groups:"
+        case .classes: return "Notices"
+        }
+    }
+
+    /// What each Guide illustration shows, read by VoiceOver.
+    func guideArtDescription(_ art: GuideArt) -> String {
+        switch art {
+        case .source:
+            return "The sound of the whole system or one app going into AudioSync, which plays it on several speakers and headphones at once."
+        case .delay:
+            return "Two speakers playing the same sound toward a listener. The second starts later, held back by its delay, so their waves line up."
+        case .classes:
+            return "Left: local and AirPlay speakers playing in step. Right: a Google Cast speaker starting after an offset you set by ear."
+        }
     }
 
     /// The Guide's note on 'Asks for a code'.

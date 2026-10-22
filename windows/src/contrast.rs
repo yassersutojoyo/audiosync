@@ -495,6 +495,8 @@ fn no_text_promises_airplay() {
                     "help-intro",
                     "help-start",
                     "help-sync",
+                    "help-sync-cast",
+                    "help-art-classes",
                     "help-volume",
                     "help-more",
                     "help-airplay-title",
@@ -717,6 +719,19 @@ fn the_audiosync_guide_is_wired_and_worded_in_strings() {
             "help.slint shows help-{name}"
         );
     }
+    // The Mac Guide's three illustrations, each in both themes with its
+    // description for Narrator.
+    for art in ["source", "delay", "classes"] {
+        assert!(
+            help.contains(&format!(
+                "light: @image-url(\"../../brand/guide/{art}.svg\");"
+            )) && help.contains(&format!(
+                "dark: @image-url(\"../../brand/guide/{art}-dark.svg\");"
+            )) && help.contains(&format!("description: Strings.help-art-{art};")),
+            "the Guide shows the {art} illustration"
+        );
+    }
+    assert!(help.contains("source: Tokens.dark ? root.dark : root.light;"));
 }
 
 /// The body of `function` in strings.slint, up to its closing brace.

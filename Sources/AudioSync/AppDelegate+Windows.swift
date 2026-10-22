@@ -350,29 +350,27 @@ extension AppDelegate {
         let window = GuideWindow(contentRect: frame, styleMask: style, backing: .buffered, defer: false)
         window.title = text.guideTitle
         window.isReleasedWhenClosed = false
-        window.contentMinSize = NSSize(width: 420, height: 300)
+        // 440 keeps the 360 pt illustrations whole with an always-on scroller.
+        window.contentMinSize = NSSize(width: 440, height: 300)
 
         let guideScroll = NSScrollView(frame: frame)
         guideScroll.hasVerticalScroller = true
         guideScroll.autohidesScrollers = true
         guideScroll.borderType = .noBorder
         guideScroll.autoresizingMask = [.width, .height]
-        let textView = NSTextView(frame: frame)
+        let textView = GuideTextView(frame: frame)
         textView.isEditable = false
         textView.isSelectable = true   // so a step can be copied
-        textView.isRichText = false
+        textView.isRichText = true     // for the illustrations; the text stays read-only
         textView.drawsBackground = true
         textView.backgroundColor = .textBackgroundColor   // both follow light and dark
-        textView.textColor = .labelColor
-        // The Guide's text is wrapped by hand with indented continuation
-        // lines, which line up only in a fixed-width face.
-        textView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         textView.textContainerInset = NSSize(width: 18, height: 16)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
-        textView.string = text.helpText
+        textView.textStorage?.setAttributedString(guideText())
+        textView.showArtForAppearance()
         textView.setAccessibilityLabel(text.guideTitle)
         guideScroll.documentView = textView
         window.contentView = guideScroll
@@ -385,6 +383,34 @@ extension AppDelegate {
         }
         window.setFrameAutosaveName(GuideWindow.frameName)
         return window
+    }
+
+    /// The Guide's text with its illustrations, in the light variant until the
+    /// text view picks the one for its appearance.
+    private func guideText() -> NSAttributedString {
+        // The text is wrapped by hand with indented continuation lines, which
+        // line up only in a fixed-width face.
+        let body: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+            .foregroundColor: NSColor.labelColor,
+        ]
+        let artParagraph = NSMutableParagraphStyle()
+        artParagraph.paragraphSpacingBefore = 6
+        artParagraph.paragraphSpacing = 14
+        var artAttributes = body
+        artAttributes[.paragraphStyle] = artParagraph
+
+        let guide = NSMutableAttributedString()
+        for piece in GuideLayout.pieces(of: text.helpText, anchor: text.guideArtAnchor) {
+            guide.append(NSAttributedString(string: piece.text, attributes: body))
+            guard let art = piece.art else { continue }
+            let attachment = GuideArtAttachment(art: art, label: text.guideArtDescription(art), dark: false)
+            let image = NSMutableAttributedString(attachment: attachment)
+            image.append(NSAttributedString(string: "\n"))
+            image.addAttributes(artAttributes, range: NSRange(location: 0, length: image.length))
+            guide.append(image)
+        }
+        return guide
     }
 
     // MARK: - App menu commands
@@ -446,6 +472,52 @@ extension AppDelegate {
         }
         return true
     }
+}
+
+/// The Guide's text: swaps each illustration for its light or dark variant
+/// when the appearance changes.
+private final class GuideTextView: NSTextView {
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        showArtForAppearance()
+    }
+
+    func showArtForAppearance() {
+        guard let storage = textStorage else { return }
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        var stale: [(NSRange, GuideArtAttachment)] = []
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            if let attachment = value as? GuideArtAttachment, attachment.dark != dark {
+                stale.append((range, attachment))
+            }
+        }
+        guard !stale.isEmpty else { return }
+        storage.beginEditing()
+        for (range, old) in stale {
+            storage.addAttribute(.attachment, value: GuideArtAttachment(art: old.art, label: old.label, dark: dark),
+                                 range: range)
+        }
+        storage.endEditing()
+    }
+}
+
+/// One Guide illustration, drawn from its SVG, with a description for VoiceOver.
+private final class GuideArtAttachment: NSTextAttachment {
+    let art: GuideArt
+    let label: String
+    let dark: Bool
+
+    init(art: GuideArt, label: String, dark: Bool) {
+        self.art = art
+        self.label = label
+        self.dark = dark
+        super.init(data: nil, ofType: nil)
+        let picture = NSImage(data: Data((dark ? art.darkSVG : art.lightSVG).utf8))
+        picture?.accessibilityDescription = label
+        image = picture
+    }
+
+    required init?(coder: NSCoder) { return nil }
 }
 
 /// The Guide's window: Escape closes it, like a sheet of help.
