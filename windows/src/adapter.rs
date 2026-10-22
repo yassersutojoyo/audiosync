@@ -96,9 +96,9 @@ use crate::settings::{
 };
 use crate::ui_model::{
     self, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
-    CalibrationState, CastAddressError, CastGroup, CastList, CastRow, CastState, Group, GroupError,
-    Notice, NoticeMessage, PasswordPrompt, PinPhase, PinPrompt, SheetRow, SheetState, Source,
-    SourceKind, Speaker, SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
+    CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastRow, CastState,
+    Group, GroupError, Notice, NoticeMessage, PasswordPrompt, PinPhase, PinPrompt, SheetRow,
+    SheetState, Source, SourceKind, Speaker, SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -1220,6 +1220,27 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .get(id)
             .cloned()
             .unwrap_or_else(|| id.to_owned())
+    }
+
+    /// What Add by Address… was given, when it is an address the kept
+    /// list holds or has room for.
+    fn cast_address_with_room(&self, text: &str) -> Result<CastAddress, CastAddressError> {
+        let Some(address) = CastAddress::parse(text) else {
+            self.log
+                .log(|| "Cast: Add by Address turned down what was typed".to_owned());
+            return Err(CastAddressError::Invalid);
+        };
+        if !cast_address::has_room(&self.cast_addresses, &address) {
+            self.log.log(|| {
+                format!(
+                    "Cast: Add by Address turned down {}, {} addresses are kept",
+                    address.text(),
+                    cast_address::MAX_ADDRESSES
+                )
+            });
+            return Err(CastAddressError::Full);
+        }
+        Ok(address)
     }
 
     /// The user switched a Cast speaker on or off. One that can't play
@@ -2581,17 +2602,21 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         }
     }
 
+    fn check_cast_address(&mut self, text: &str) -> Result<CastAddressCheck, CastAddressError> {
+        let address = self.cast_address_with_room(text)?;
+        let probe = self.cast_probe;
+        let log = self.log.clone();
+        Ok(CastAddressCheck::new(move || {
+            let answers = probe(&address);
+            if !answers {
+                log.log(|| format!("Cast: nothing answers at {}", address.text()));
+            }
+            answers
+        }))
+    }
+
     fn add_cast_address(&mut self, text: &str) -> Result<(), CastAddressError> {
-        let Some(address) = CastAddress::parse(text) else {
-            self.log
-                .log(|| "Cast: Add by Address turned down what was typed".to_owned());
-            return Err(CastAddressError::Invalid);
-        };
-        if !(self.cast_probe)(&address) {
-            self.log
-                .log(|| format!("Cast: nothing answers at {}", address.text()));
-            return Err(CastAddressError::NotFound);
-        }
+        let address = self.cast_address_with_room(text)?;
         cast_address::add(&mut self.cast_addresses, &address);
         self.audio.add_cast_address(address);
         self.take_events();
@@ -6884,16 +6909,36 @@ mod tests {
         let (mut adapter, _fake) = cast_adapter();
         adapter.set_cast_probe(|address| !address.host().ends_with(".invalid"));
         assert!(adapter.snapshot().cast_by_address);
+        let answers = |adapter: &mut AudioAdapter<_>, text: &str| {
+            adapter
+                .check_cast_address(text)
+                .map(CastAddressCheck::answers)
+        };
+        assert_eq!(
+            answers(&mut adapter, "not an address"),
+            Err(CastAddressError::Invalid)
+        );
         assert_eq!(
             adapter.add_cast_address("not an address"),
             Err(CastAddressError::Invalid)
         );
-        assert_eq!(
-            adapter.add_cast_address("speaker.invalid"),
-            Err(CastAddressError::NotFound)
+        assert_eq!(answers(&mut adapter, "speaker.invalid"), Ok(false));
+        assert!(
+            adapter
+                .snapshot()
+                .speaker(&cc_address("speaker.invalid"))
+                .is_none()
         );
         assert!(adapter.current_settings().cast_addresses.is_empty());
 
+        assert_eq!(answers(&mut adapter, " 192.0.2.20 "), Ok(true));
+        assert!(
+            adapter
+                .snapshot()
+                .speaker(&cc_address("192.0.2.20"))
+                .is_none(),
+            "the check lists nothing"
+        );
         assert_eq!(adapter.add_cast_address(" 192.0.2.20 "), Ok(()));
         let id = cc_address("192.0.2.20");
         let row = speaker_of(&adapter, &id);
@@ -6919,6 +6964,45 @@ mod tests {
         assert!(adapter.current_settings().cast_addresses.is_empty());
     }
 
+    // covers: C18
+    #[test]
+    fn add_by_address_turns_down_a_new_address_once_the_kept_list_is_full() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.set_cast_probe(|_| true);
+        for n in 0..cast_address::MAX_ADDRESSES {
+            assert_eq!(adapter.add_cast_address(&format!("s{n}.example")), Ok(()));
+        }
+        let speakers = adapter.snapshot().speakers.len();
+        assert_eq!(
+            adapter.check_cast_address("den.local").err(),
+            Some(CastAddressError::Full),
+            "turned down before the wait"
+        );
+        assert_eq!(
+            adapter.add_cast_address("den.local"),
+            Err(CastAddressError::Full)
+        );
+        assert!(
+            adapter
+                .snapshot()
+                .speaker(&cc_address("den.local"))
+                .is_none()
+        );
+        assert_eq!(adapter.snapshot().speakers.len(), speakers);
+        assert_eq!(
+            adapter.current_settings().cast_addresses.len(),
+            cast_address::MAX_ADDRESSES
+        );
+        assert_eq!(
+            adapter.add_cast_address("s3.example"),
+            Ok(()),
+            "kept already"
+        );
+
+        adapter.remove_cast_address(&cc_address("s3.example"));
+        assert_eq!(adapter.add_cast_address("den.local"), Ok(()));
+    }
+
     #[test]
     fn without_a_cast_sender_add_by_address_is_off() {
         let adapter = AudioAdapter::new(launch_audio(), || "09.41".to_owned(), DebugLog::default());
@@ -6936,7 +7020,6 @@ mod tests {
             audio
         };
         let mut adapter = launch(with_cast(), &path);
-        adapter.set_cast_probe(|_| true);
         assert_eq!(adapter.add_cast_address("192.0.2.20:8010"), Ok(()));
         adapter.poll();
 

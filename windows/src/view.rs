@@ -518,6 +518,10 @@ pub struct App {
     password_for: RefCell<Option<String>>,
     /// Add by Address…, for a Google Cast speaker discovery can't find.
     cast_address_dialog: CastAddressDialog,
+    /// The address check that runs while that dialog says it is checking.
+    cast_check: RefCell<Option<cast_address::PendingCheck>>,
+    /// Looks for that check's answer.
+    cast_check_timer: Timer,
     about: AboutDialog,
     guide: GuideWindow,
     /// The paragraphs the guide shows.
@@ -719,6 +723,8 @@ impl App {
             password_dialog: PasswordDialog::new()?,
             password_for: RefCell::new(None),
             cast_address_dialog: CastAddressDialog::new()?,
+            cast_check: RefCell::new(None),
+            cast_check_timer: Timer::default(),
             about: AboutDialog::new()?,
             guide: GuideWindow::new()?,
             guide_steps: Rc::new(VecModel::default()),
@@ -5462,9 +5468,26 @@ mod tests {
         );
 
         // The field took the cursor back with its text selected.
+        type_text(window, "speaker.full");
+        press(window, Key::Return);
+        assert!(!dialog.get_checking(), "turned down before any check");
+        assert_eq!(dialog.get_error(), strings.get_cast_address_full());
+        assert_eq!(
+            dialog.get_error(),
+            "AudioSync keeps up to 64 speakers added by address. Remove one you don't use, then try again."
+        );
+        assert!(
+            strings
+                .get_cast_address_full()
+                .contains(&crate::audio::cast_address::MAX_ADDRESSES.to_string())
+        );
+
         type_text(window, "speaker.invalid");
         press(window, Key::Return);
+        assert!(dialog.get_checking());
+        wait_for_cast_check(&app);
         assert!(window.is_visible());
+        assert!(!dialog.get_checking());
         assert_eq!(
             dialog.get_error(),
             "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
@@ -5472,11 +5495,105 @@ mod tests {
 
         type_text(window, "speaker.local");
         press(window, Key::Return);
+        wait_for_cast_check(&app);
         assert!(!window.is_visible(), "Enter added it");
         assert_eq!(dialog.get_address(), "", "the field is cleared");
         let state = app.snapshot();
         let row = state.speaker("cc:speaker.local").expect("listed");
         assert!(row.cast.as_ref().is_some_and(|cast| cast.added_by_address));
+    }
+
+    /// Waits for the Add by Address… check on its thread, then lets the
+    /// dialog take its answer.
+    fn wait_for_cast_check(app: &App) {
+        for _ in 0..400 {
+            if app.finish_cast_check() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("the address check didn't answer");
+    }
+
+    // covers: C18
+    #[test]
+    fn add_by_address_waits_for_the_check_with_the_field_and_add_held() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let speakers = app.snapshot().speakers.len();
+        app.main.invoke_cast_add_address_requested();
+        let dialog = &app.cast_address_dialog;
+        let window = dialog.window();
+        type_text(window, "speaker.local");
+        press(window, Key::Return);
+
+        assert!(window.is_visible(), "open while it checks");
+        assert!(dialog.get_checking());
+        assert_eq!(dialog.get_error(), "");
+        assert_eq!(
+            strings.get_cast_address_checking(),
+            "Looking for the speaker…"
+        );
+        assert_eq!(
+            app.snapshot().speakers.len(),
+            speakers,
+            "nothing listed yet"
+        );
+        type_text(window, "x");
+        assert_eq!(dialog.get_address(), "speaker.local", "the field waits");
+        press(window, Key::Return);
+        dialog.invoke_confirmed("kitchen.local".into());
+        // The answer came back on the check's thread; the dialog takes it
+        // only from the UI thread.
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(dialog.get_checking());
+
+        wait_for_cast_check(&app);
+        assert!(!window.is_visible());
+        assert!(!dialog.get_checking());
+        let state = app.snapshot();
+        assert!(state.speaker("cc:speaker.local").is_some());
+        assert!(
+            state.speaker("cc:kitchen.local").is_none(),
+            "one check at a time"
+        );
+        assert_eq!(state.speakers.len(), speakers + 1);
+    }
+
+    // covers: C18
+    #[test]
+    fn closing_add_by_address_while_it_checks_drops_the_answer() {
+        for close in ["Escape", "Cancel", "close button"] {
+            let app = app_over(MockBackend::new());
+            let speakers = app.snapshot().speakers.len();
+            app.main.invoke_cast_add_address_requested();
+            let dialog = &app.cast_address_dialog;
+            let window = dialog.window();
+            type_text(window, "speaker.local");
+            press(window, Key::Return);
+            assert!(dialog.get_checking());
+            match close {
+                "Escape" => press(window, Key::Escape),
+                "Cancel" => dialog.invoke_cancelled(),
+                _ => window.dispatch_event(WindowEvent::CloseRequested),
+            }
+            assert!(!window.is_visible(), "{close} closed it");
+            assert!(!dialog.get_checking());
+
+            std::thread::sleep(Duration::from_millis(20));
+            assert!(app.finish_cast_check(), "nothing left to wait for");
+            assert_eq!(
+                app.snapshot().speakers.len(),
+                speakers,
+                "{close}: nothing added"
+            );
+
+            app.main.invoke_cast_add_address_requested();
+            assert!(window.is_visible());
+            assert!(!dialog.get_checking());
+            assert_eq!(dialog.get_address(), "");
+            assert_eq!(dialog.get_error(), "");
+        }
     }
 
     #[test]

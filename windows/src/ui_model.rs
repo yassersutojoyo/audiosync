@@ -699,6 +699,23 @@ pub enum CastAddressError {
     Invalid,
     /// It doesn't resolve, or nothing answers on its port.
     NotFound,
+    /// The kept list already holds as many addresses as it can.
+    Full,
+}
+
+/// Add by Address…'s check that something answers at an address. It waits
+/// up to 3 s, so the UI runs it on a thread of its own.
+pub struct CastAddressCheck(Box<dyn FnOnce() -> bool + Send>);
+
+impl CastAddressCheck {
+    pub fn new(check: impl FnOnce() -> bool + Send + 'static) -> Self {
+        Self(Box::new(check))
+    }
+
+    /// Runs the check: whether something answered.
+    pub fn answers(self) -> bool {
+        (self.0)()
+    }
 }
 
 /// Why a new group wasn't made.
@@ -729,10 +746,15 @@ pub trait Backend {
     /// The Resync button of a Google Cast speaker: it restarts its stream so
     /// it plays at its set offset again.
     fn resync_speaker(&mut self, _id: &str) {}
-    /// Add by Address…: lists the Google Cast speaker at `text`, a host
-    /// name or IPv4 address with an optional port, and keeps it for the
-    /// next launch (spec C18). Nothing changes when `text` isn't one, or
-    /// when nothing answers there; finding that out waits up to 3 s.
+    /// Add by Address…, first step: turns `text` down when it isn't a host
+    /// name or IPv4 address with an optional port, or when no more
+    /// addresses can be kept; otherwise returns the check that something
+    /// answers there (spec C18).
+    fn check_cast_address(&mut self, _text: &str) -> Result<CastAddressCheck, CastAddressError> {
+        Err(CastAddressError::NotFound)
+    }
+    /// Then, once that check passed: lists the Google Cast speaker at
+    /// `text` and keeps it for the next launch, or turns it down as above.
     fn add_cast_address(&mut self, _text: &str) -> Result<(), CastAddressError> {
         Err(CastAddressError::NotFound)
     }
@@ -1232,13 +1254,25 @@ impl Backend for MockBackend {
         self.state.groups.retain(|g| g.id != id);
     }
 
-    /// A host under `.invalid` (RFC 6761) stands for one nothing answers.
+    /// A host under `.invalid` (RFC 6761) stands for one nothing answers,
+    /// and one under `.full` for one the kept list has no room for.
+    fn check_cast_address(&mut self, text: &str) -> Result<CastAddressCheck, CastAddressError> {
+        let Some(address) = crate::audio::cast_address::CastAddress::parse(text) else {
+            return Err(CastAddressError::Invalid);
+        };
+        if address.host().ends_with(".full") {
+            return Err(CastAddressError::Full);
+        }
+        let answers = !address.host().ends_with(".invalid");
+        Ok(CastAddressCheck::new(move || answers))
+    }
+
     fn add_cast_address(&mut self, text: &str) -> Result<(), CastAddressError> {
         let Some(address) = crate::audio::cast_address::CastAddress::parse(text) else {
             return Err(CastAddressError::Invalid);
         };
-        if address.host().ends_with(".invalid") {
-            return Err(CastAddressError::NotFound);
+        if address.host().ends_with(".full") {
+            return Err(CastAddressError::Full);
         }
         let id = format!("cc:{}", address.text());
         if self.state.speaker(&id).is_none() {

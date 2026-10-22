@@ -162,6 +162,11 @@ pub fn answers(address: &CastAddress) -> bool {
     spawned.is_ok() && receiver.recv_timeout(PROBE_WAIT).unwrap_or(false)
 }
 
+/// Whether the kept list holds `address` already or has room for it.
+pub fn has_room(list: &[String], address: &CastAddress) -> bool {
+    list.len() < MAX_ADDRESSES || list.contains(&address.text())
+}
+
 /// Adds `address` to the kept list unless it is there; returns whether it
 /// was added.
 pub fn add(list: &mut Vec<String>, address: &CastAddress) -> bool {
@@ -332,7 +337,14 @@ mod tests {
         assert_eq!(clamped(list), ["speaker.local", "192.0.2.10"]);
         let many: Vec<String> = (0..200).map(|n| format!("speaker-{n}.local")).collect();
         assert_eq!(clamped(many).len(), MAX_ADDRESSES);
-        let mut full: Vec<String> = (0..MAX_ADDRESSES).map(|n| format!("s{n}.local")).collect();
-        assert!(!add(&mut full, &CastAddress::parse("den.local").unwrap()));
+        let mut full: Vec<String> = (0..MAX_ADDRESSES)
+            .map(|n| format!("s{n}.example"))
+            .collect();
+        let den = CastAddress::parse("den.local").unwrap();
+        assert!(!has_room(&full, &den));
+        assert!(!add(&mut full, &den));
+        assert!(has_room(&full, &CastAddress::parse("s3.example").unwrap()));
+        full.pop();
+        assert!(has_room(&full, &den));
     }
 }

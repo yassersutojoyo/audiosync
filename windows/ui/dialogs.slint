@@ -7,7 +7,7 @@
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { PinPhase } from "types.slint";
-import { Card, DialogButton, Fluent, Glyph, Glyphs, TextField } from "widgets.slint";
+import { Announcer, Card, DialogButton, Fluent, Glyph, Glyphs, TextField } from "widgets.slint";
 
 export component GroupNameDialog inherits Dialog {
     in property <string> heading;
@@ -383,12 +383,17 @@ export component PasswordDialog inherits Dialog {
 // Add by Address…: one field for a Google Cast speaker's IP address or host
 // name, with an optional port. Enter adds, Escape cancels. An address that
 // is turned down keeps the dialog open with the reason above the field.
+// While the app checks that something answers there, the field and Add wait
+// and the dialog says it is checking; Cancel and Escape still close it.
 export component CastAddressDialog inherits Dialog {
     in-out property <string> address;
     // Why the last address was turned down; "" while there is none.
     in property <string> error;
+    in property <bool> checking;
     callback confirmed(string);
     callback cancelled();
+
+    property <string> status: root.checking ? Strings.cast-address-checking : root.error;
 
     title: Strings.cast-add-address-title;
     icon: @image-url("../res/audiosync-256.png");
@@ -449,12 +454,19 @@ export component CastAddressDialog inherits Dialog {
                 }
             }
 
+            if root.checking: Text {
+                text: Strings.cast-address-checking;
+                color: Tokens.muted;
+                wrap: word-wrap;
+            }
+
             TextField {
                 property <int> focus-request: root.focus-request;
                 text <=> root.address;
+                read-only: root.checking;
                 placeholder-text: Strings.cast-address-placeholder;
                 accessible-label: Strings.cast-address-label;
-                accessible-description: root.error != "" ? root.error : Strings.cast-add-address-message;
+                accessible-description: root.status != "" ? root.status : Strings.cast-add-address-message;
                 init => {
                     self.focus();
                 }
@@ -463,15 +475,24 @@ export component CastAddressDialog inherits Dialog {
                     self.select-all();
                 }
                 accepted => {
-                    root.confirmed(root.address);
+                    if !root.checking {
+                        root.confirmed(root.address);
+                    }
                 }
             }
+        }
+
+        // Narrator reads the check and why an address was turned down
+        // without moving the focus off the field.
+        Announcer {
+            said: root.status;
         }
     }
 
     DialogButton {
         text: Strings.add;
         primary: true;
+        active: !root.checking;
         dialog-button-role: accept;
         clicked => {
             root.confirmed(root.address);
