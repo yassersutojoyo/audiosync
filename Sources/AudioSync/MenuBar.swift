@@ -35,6 +35,8 @@ final class AppModel: ObservableObject {
         var waitingForAirPlay2 = false
         /// An AirPlay speaker AudioSync keeps a PIN pairing for.
         var paired = false
+        /// A stereo pair or home theater group: its kind and members (P176).
+        var airPlayTarget: AirPlayTargetRow? = nil
 
         /// A speaker AudioSync streams to through AirPlay, not a local output.
         var isAirPlay: Bool { tag == .airplay }
@@ -74,6 +76,8 @@ final class AppModel: ObservableObject {
         var setCastEnabled: (String, Bool) -> Void = { _, _ in }
         /// The device's own volume, slider position 0 to 100.
         var setCastVolume: (String, Double) -> Void = { _, _ in }
+        /// An arrow key on the device's slider: up or down one step.
+        var stepCastVolume: (String, Bool) -> Void = { _, _ in }
         var setCastMuted: (String, Bool) -> Void = { _, _ in }
         var resyncCast: (String) -> Void = { _ in }
         /// The offset the user set by ear, 0 to 20 000 ms.
@@ -101,6 +105,7 @@ final class AppModel: ObservableObject {
         var setLaunchAtLogin: (Bool) -> Void = { _ in }
         var setShowVirtualDevices: (Bool) -> Void = { _ in }
         var setSwitchWhenSourceQuits: (Bool) -> Void = { _ in }
+        var setAirPlay2: (Bool) -> Void = { _ in }
         var setAppearance: (AppAppearance) -> Void = { _ in }
         var transport: (NowPlayingMonitor.Command) -> Void = { _ in }
         var quit: () -> Void = {}
@@ -158,6 +163,8 @@ final class AppModel: ObservableObject {
     @Published var launchAtLogin = false
     @Published var showVirtualDevices = false
     @Published var switchWhenSourceQuits = false
+    @Published var airPlay2 = false
+    @Published var airPlay2AtLaunch = false
     @Published var appearance = AppAppearance.system
     /// Rows whose sync controls are expanded. Lives here rather than in view
     /// @State: the Command Line Tools toolchain ships without SwiftUI's macro plugins.
@@ -296,12 +303,15 @@ final class AppModel: ObservableObject {
 
     /// What Connected Speakers says about the network speakers it doesn't
     /// list: no AirPlay speaker found, and how the Google Cast search goes;
-    /// nil when there is nothing to say.
+    /// nil when there is nothing to say. The Local Network hint, when it
+    /// shows, gives the network advice once for both.
     var networkNote: String? {
-        text.networkSpeakersNote(airPlayNone: shownAirPlay.isEmpty && airPlayProblem == nil, cast: castList)
+        text.networkSpeakersNote(airPlayNone: shownAirPlay.isEmpty && airPlayProblem == nil, cast: castList,
+                                 hint: shownLocalNetworkHint)
     }
     /// Connected Speakers with no speaker at all.
-    var networkEmptyText: String { networkNote ?? text.airPlayNoneFound }
+    var networkEmptyText: String { networkNote ?? text.airPlayNoneFound(hint: shownLocalNetworkHint) }
+    private var shownLocalNetworkHint: LocalNetworkHint { localNetworkHint.shown(airPlayProblem: airPlayProblem != nil) }
 
     /// Why AirPlay can't work right now, shown in place of its speakers; nil
     /// while the sender runs or is starting.
@@ -764,7 +774,8 @@ struct MenuBarView: View {
             ForEach(layout.connected) { speaker in
                 CompactRow(name: speaker.name, symbol: speaker.tag.symbol, state: model.state(of: speaker),
                            text: t, height: rowHeight,
-                           hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2),
+                           hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
+                                           target: speaker.airPlayTarget),
                            renamedFrom: speaker.renamedFrom, kind: speaker.tag, airPlay2: speaker.airPlay2,
                            availability: speaker.availability,
                            deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {

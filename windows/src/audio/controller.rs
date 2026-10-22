@@ -77,7 +77,7 @@ use super::capture::{
     CaptureAttempt, CaptureTarget, Feeds, LoopbackMode, SampleType, decide_capture, display_name,
     input_sources, running_app, source_list,
 };
-use super::cast::{CastLink, CastSpeakers};
+use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::now_playing::{Follow, SharedLabels, TrackInfo, TrackReader, TrackSource};
 #[cfg(test)]
 use super::outputs::OutputParams;
@@ -696,22 +696,30 @@ impl<D: Driver> Controller<D> {
         self.retime();
     }
 
-    /// Gives the sender what its receivers should show of the playing
-    /// track, while an AirPlay speaker plays the capture.
+    /// Gives the senders what their receivers should show of the playing
+    /// track, while an AirPlay or Cast speaker plays the capture.
     fn sync_track_info(&mut self) {
         let sending = self.session.is_some()
-            && self
+            && (self
                 .airplay
                 .as_ref()
-                .is_some_and(|airplay| airplay.chosen());
+                .is_some_and(|airplay| airplay.chosen())
+                || self.cast.as_ref().is_some_and(CastSpeakers::chosen));
         if self.session.is_none() {
             self.track_source = None;
         }
         let source = if sending { self.track_source() } else { None };
-        let Some(now_playing) = self.track_info.sync(source.as_ref(), Instant::now()) else {
-            return;
-        };
-        if let Some(airplay) = self.airplay.as_mut() {
+        let now = Instant::now();
+        let now_playing = self.track_info.sync(source.as_ref(), now);
+        if let Some(cast) = self.cast.as_mut() {
+            let track = if self.track_info.reads() {
+                self.track_info.cast_track(now)
+            } else {
+                Some(CastTrack::default())
+            };
+            cast.set_track(track);
+        }
+        if let (Some(now_playing), Some(airplay)) = (now_playing, self.airplay.as_mut()) {
             airplay.set_now_playing(now_playing);
         }
     }
@@ -2164,6 +2172,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .and_then(AirPlaySpeakers::password_prompt)
     }
 
+    fn airplay_holding_target(&self, id: &str) -> Option<String> {
+        self.airplay.as_ref()?.holding_target(id)
+    }
+
     fn set_airplay_volume(&mut self, id: &str, position: f64) {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_volume(id, position);
@@ -2940,9 +2952,18 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::AirPlayFailed { id, problem } => {
             format!("AirPlay speaker ({id}) can't play ({problem:?}); it is turned off")
         }
+        BackendEvent::AirPlayMemberNeedsPassword { id, member } => {
+            format!("AirPlay target ({id}) turned off: its member {member} asks for a password")
+        }
         BackendEvent::AirPlayPaired { id } => format!("AirPlay speaker ({id}) paired and on"),
         BackendEvent::AirPlayStopped => {
             "the AirPlay sender stopped; it waits for the user's Retry".to_owned()
+        }
+        BackendEvent::AirPlayPtpFree => {
+            "an AirPlay session bound the PTP ports; they are free again".to_owned()
+        }
+        BackendEvent::AirPlayPtpPortsTaken => {
+            "PTP port 319 or 320 is taken; AirPlay speakers that need PTP can't play".to_owned()
         }
         BackendEvent::DeviceVolumeChanged { id } => {
             format!("output {}: its own volume changed", label(names, id))

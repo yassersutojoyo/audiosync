@@ -47,8 +47,9 @@ pub const DEFAULT_LATENCY_FRAMES: u32 = 77_175;
 pub const MIN_LATENCY_FRAMES: u32 = 11_025;
 /// The largest Lf the host may set: 2.0 s (P98).
 pub const MAX_LATENCY_FRAMES: u32 = 88_200;
-/// The largest per-speaker delay (P99).
-pub const MAX_DELAY: Duration = Duration::from_millis(3000);
+/// The largest per-speaker delay (P99): the host's own 20 s delay range, so
+/// a Calibrate All result or a Cast hold-back up to it is played in full.
+pub const MAX_DELAY: Duration = Duration::from_millis(20_000);
 /// Delay changes closer together than this become one flush (P100).
 pub const DELAY_MERGE: Duration = Duration::from_millis(250);
 /// A retransmission request asks for at most this many packets (P88).
@@ -97,7 +98,7 @@ pub struct SpeakerConfig {
     /// The sequence number and timestamp its RECORD announced (P32, P79).
     pub first_seq: u16,
     pub first_rtptime: u32,
-    /// d_s, clamped to 0 to 3000 ms (P99).
+    /// d_s, clamped to 0 to 20 000 ms (P99).
     pub delay: Duration,
     /// `Some` for a receiver with `sv=true`: the samples are scaled by this
     /// volume before encoding, in an encoding of its own (P121).
@@ -345,7 +346,7 @@ impl StreamCounters {
 }
 
 /// The local delay a host gives an output that used the engine's stored
-/// delay setting, migrated once (P114): clamp(configured − L, 0, 3000 ms).
+/// delay setting, migrated once (P114): clamp(configured − L, 0, 20 000 ms).
 pub fn migrate_local_delay(configured: Duration, latency: Duration) -> Duration {
     configured.saturating_sub(latency).min(MAX_DELAY)
 }
@@ -1080,7 +1081,7 @@ impl Stream {
         self.speakers.len() != before
     }
 
-    /// Sets a speaker's delay d_s, clamped to 0 to 3000 ms (P99). A speaker
+    /// Sets a speaker's delay d_s, clamped to 0 to 20 000 ms (P99). A speaker
     /// that has sent nothing yet just starts later or sooner; a playing one
     /// changes through a flush (P100) 250 ms after the last of a burst of
     /// changes, and plays on under its old delay until then.

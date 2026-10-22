@@ -1269,7 +1269,7 @@ mod tests {
 
     #[test]
     fn an_offset_is_not_held_to_3000_ms_with_an_airplay_speaker_chosen() {
-        // S178 replaces P114's 0 to 3000 ms trim: only the hold-back is
+        // S178 replaces P114's d_local trim: only the hold-back is
         // capped, at 20 000 ms (S176).
         let mut policy = policy_with(&["a", "b"]);
         policy.set_delay_ms("a", 5000.0);

@@ -26,6 +26,43 @@ enum NativeAirPlayID {
     static func playable(_ enabled: Set<String>) -> Set<String> {
         enabled.filter { receiver($0) != nil }
     }
+
+    /// The receiver IDs in AUDIOSYNC_AIRPLAY_PCM's value, read as the core
+    /// reads them: trimmed, empty ones skipped, `aa:bb:cc:dd:ee:ff` as
+    /// `AABBCCDDEEFF`.
+    static func pcmDebugIDs(_ value: String?) -> Set<String> {
+        let ids = (value ?? "").split(separator: ",").map { entry -> String in
+            let id = entry.trimmingCharacters(in: .whitespacesAndNewlines)
+            let hex = id.filter { $0 != ":" }
+            return hex.count == 12 && hex.allSatisfy(\.isHexDigit) ? hex.uppercased() : id
+        }
+        return Set(ids.filter { !$0.isEmpty })
+    }
+}
+
+/// The IDs the sender gives a stereo pair ("pair:<tsid>") or a home theater
+/// group ("theater:<group>") it lists as one target (P176). A receiver's own
+/// ID never starts this way.
+enum NativeTarget {
+    static func kind(_ id: String) -> AirPlayTargetRow.Kind? {
+        if id.hasPrefix("pair:") { return .stereoPair }
+        if id.hasPrefix("theater:") { return .homeTheater }
+        return nil
+    }
+}
+
+/// What a stereo pair or home theater group row says about its members
+/// (P176, P181).
+struct AirPlayTargetRow: Equatable {
+    enum Kind: Equatable { case stereoPair, homeTheater }
+    let kind: Kind
+    /// Every member's name, in view or not, by name.
+    let members: [String]
+    /// The members out of view, by name.
+    let missing: [String]
+    /// A member is out of view, plays nothing, or reports its partner
+    /// unreachable, even when no name is known for it.
+    let incomplete: Bool
 }
 
 /// Something the native sender reported about a speaker, or about the stream
@@ -48,6 +85,9 @@ enum NativeSpeakerEvent: Equatable {
         case unsupported
         case timingUnavailable = "timing unavailable"
         case oneAirPlay2 = "one AirPlay 2 speaker at a time"
+        /// An Apple TV whose home theater group plays, or a group whose
+        /// Apple TV plays by itself (P177).
+        case playsThroughSpeakers = "plays through its speakers"
 
         /// The sender tries again by itself, so the speaker stays on; any
         /// other problem turns it off, except a speaker waiting for the
@@ -69,6 +109,7 @@ enum NativeSpeakerEvent: Equatable {
             // pairing that ends with it can't play, as with `unsupported`.
             case .incompatible, .unsupported, .oneAirPlay2: return .cantPlay
             case .timingUnavailable: return .timingUnavailable
+            case .playsThroughSpeakers: return .playsThroughSpeakers
             }
         }
     }
@@ -159,6 +200,11 @@ enum NativeTurnOff: Equatable {
     case cantPlay
     /// It turned NTP timing down, and PTP timing isn't available.
     case timingUnavailable
+    /// An Apple TV and its home theater group never play at once (P177).
+    case playsThroughSpeakers
+    /// A member of the target (its receiver ID) asks for a password
+    /// AudioSync doesn't have, outside the user's attempt (P176).
+    case memberNeedsPassword(String)
     /// The user cancelled its PIN or password prompt.
     case cancelled
     /// Its pairing ended without credentials (not for a wrong PIN, which
@@ -228,8 +274,11 @@ struct NativeAirPlayPlan: Equatable {
     var remove: [String] = []
     /// Switched on but asking for what this sender can't give yet.
     var turnOff: [TurnOff] = []
+    /// Switched-on members of a switched-on target: they play as part of
+    /// it, so their own switches go off without a notice (P176).
+    var release: [String] = []
 
-    var isEmpty: Bool { add.isEmpty && remove.isEmpty && turnOff.isEmpty }
+    var isEmpty: Bool { add.isEmpty && remove.isEmpty && turnOff.isEmpty && release.isEmpty }
 }
 
 /// What the app does about a speaker event (`NativeAirPlayModel.apply`).
@@ -279,6 +328,10 @@ struct NativeAirPlayModel {
     /// own AirPlay Receiver, which is never listed (S100,
     /// `NativeReceiver.isThisMac`). Nil hides nothing.
     var computerName: String?
+    /// The target each member was last listed in (P176), kept while that
+    /// target is listed or in the sender, so a gone member is named missing
+    /// and a gone target that still plays holds its members.
+    private(set) var memberOf: [String: String] = [:]
 
     mutating func apply(_ change: NativeReceiverChange) {
         switch change {
@@ -288,17 +341,60 @@ struct NativeAirPlayModel {
                 receivers.removeValue(forKey: receiver.id)
             } else {
                 receivers[receiver.id] = receiver
+                if !receiver.target.isEmpty { memberOf[receiver.id] = receiver.target }
             }
         case .gone(let id, _):
             receivers.removeValue(forKey: id)
         }
+        pruneMembers()
+    }
+
+    private mutating func pruneMembers() {
+        memberOf = memberOf.filter { member, target in
+            if states[target] != nil { return true }
+            if let receiver = receivers[member] { return receiver.target == target }
+            return receivers[target] != nil
+        }
+    }
+
+    /// The members of the target `id`, in view or not (receiver IDs).
+    func members(of id: String) -> [String] {
+        memberOf.filter { $0.value == id }.map(\.key).sorted()
+    }
+
+    /// The target that holds the member `id` (P176): one in the sender, or
+    /// a listed one while `id` is off (`on` false). A member left on by
+    /// itself before its target was listed still plays alone. The sender
+    /// lists the members just before their target, so a member that names
+    /// its target is held already.
+    func holdingTarget(_ id: String, on: Bool) -> String? {
+        guard let target = memberOf[id] else { return nil }
+        if states[target] != nil { return target }
+        return !on && (receivers[target] != nil || receivers[id]?.target == target) ? target : nil
+    }
+
+    /// What the row of the target `id` says about its members; nil for a
+    /// speaker's row.
+    func targetRow(_ id: String) -> AirPlayTargetRow? {
+        guard let kind = NativeTarget.kind(id) else { return nil }
+        let ids = members(of: id)
+        func named(_ ids: [String]) -> [String] {
+            ids.map { names[$0] ?? $0 }.sorted { $0.lowercased() < $1.lowercased() }
+        }
+        let missing = named(ids.filter { receivers[$0] == nil })
+        return AirPlayTargetRow(kind: kind, members: named(ids), missing: missing,
+                                incomplete: receivers[id]?.incomplete == true || !missing.isEmpty)
     }
 
     func isPlaying(_ id: String) -> Bool { states[id] == .playing }
 
     /// Whether the sender reaches the listed receiver `id` over AirPlay 2:
     /// its row then names AirPlay 2 as its kind.
-    func reachedOverAirPlay2(_ id: String) -> Bool { receivers[id]?.overAirPlay2 == true }
+    /// A target counts when one of its members does.
+    func reachedOverAirPlay2(_ id: String) -> Bool {
+        if NativeTarget.kind(id) != nil { return members(of: id).contains { receivers[$0]?.overAirPlay2 == true } }
+        return receivers[id]?.overAirPlay2 == true
+    }
 
     /// Whether credentials are kept for the listed receiver `id`: its row
     /// offers Forget Pairing.
@@ -306,10 +402,13 @@ struct NativeAirPlayModel {
 
     /// The speaker list's rows, as app IDs: every receiver it shows
     /// (`NativeReceiver.access`), and any that still plays while its
-    /// announcement lapsed; by name, then ID.
-    var rows: [String] {
+    /// announcement lapsed; by name, then ID. A target in the sender stays
+    /// until switched off, and a member it holds shows as part of it
+    /// (P176). `enabled`: the switched-on app IDs.
+    func rows(enabled: Set<String>) -> [String] {
         var ids = Set(receivers.values.filter { $0.access != nil }.map(\.id))
-        ids.formUnion(states.keys.filter { isPlaying($0) })
+        ids.formUnion(states.keys.filter { isPlaying($0) || NativeTarget.kind($0) != nil })
+        ids = ids.filter { holdingTarget($0, on: enabled.contains(NativeAirPlayID.app($0))) == nil }
         return ids.sorted { a, b in
             let (x, y) = ((names[a] ?? a).lowercased(), (names[b] ?? b).lowercased())
             return x != y ? x < y : a < b
@@ -347,6 +446,9 @@ struct NativeAirPlayModel {
     /// Attempts that paired already: refused again, they go off instead of
     /// pairing in a loop.
     private(set) var pairedInAttempt: Set<String> = []
+    /// The target each member's password prompt is for (P176): the prompt
+    /// names the member, and its answer restarts the target.
+    private(set) var promptTargets: [String: String] = [:]
     /// Prompts waiting to be shown, oldest first (receiver IDs).
     private(set) var queuedPrompts: [String] = []
     /// The prompt that is open, until it is answered or taken back; the
@@ -364,6 +466,15 @@ struct NativeAirPlayModel {
     mutating func turnedOnByUser(_ id: String) -> NativeAirPlayOutcome? {
         endAttempt(id)
         attempts.insert(id)
+        if NativeTarget.kind(id) != nil {
+            var outcome: NativeAirPlayOutcome?
+            for member in members(of: id)
+            where receivers[member]?.availability == .needsPassword && !passwords.contains(member) {
+                promptTargets[member] = id
+                outcome = ask(member, .askingPassword(wrong: false))
+            }
+            return outcome
+        }
         switch receivers[id]?.availability {
         case .needsPin?:
             stages[id] = .pairing(afterWrongPin: false)
@@ -389,6 +500,11 @@ struct NativeAirPlayModel {
         attempts.remove(id)
         pairedInAttempt.remove(id)
         queuedPrompts.removeAll { $0 == id }
+        for (member, target) in promptTargets where target == id {
+            promptTargets[member] = nil
+            stages[member] = nil
+            queuedPrompts.removeAll { $0 == member }
+        }
     }
 
     /// Queues the prompt of `stage` for `id`.
@@ -448,6 +564,10 @@ struct NativeAirPlayModel {
         guard let code, !code.isEmpty else { return .turnOff(.cancelled) }
         if prompt.password {
             passwords.insert(id)
+            if promptTargets.removeValue(forKey: id) != nil {
+                stages[id] = nil
+                return .sendPassword(pair: false)
+            }
             if receivers[id]?.availability == .needsPin {
                 stages[id] = .pairing(afterWrongPin: false)
                 return .sendPassword(pair: true)
@@ -495,6 +615,21 @@ struct NativeAirPlayModel {
         default:
             return .turnOff(app, problem.turnOff)
         }
+    }
+
+    /// A member of a target in the sender turned its session down for a
+    /// password: within the target's attempt it is asked for by name;
+    /// otherwise (auto-connect, or after another member played) the target
+    /// goes off naming it, and asks for it when turned on again (P176).
+    private mutating func memberError(_ id: String, _ problem: NativeSpeakerEvent.Problem) -> NativeAirPlayOutcome? {
+        guard problem == .passwordRequired || problem == .wrongPassword,
+              let target = memberOf[id], states[target] != nil else { return nil }
+        passwords.remove(id)
+        guard attempts.contains(target) else {
+            return .turnOff(NativeAirPlayID.app(target), .memberNeedsPassword(id))
+        }
+        promptTargets[id] = target
+        return ask(id, .askingPassword(wrong: problem == .wrongPassword))
     }
 
     /// Takes a pairing event in.
@@ -549,9 +684,15 @@ struct NativeAirPlayModel {
     func plan(streaming: Bool, enabled: Set<String>) -> NativeAirPlayPlan {
         let wanted = Set(enabled.compactMap(NativeAirPlayID.receiver))
         var plan = NativeAirPlayPlan()
-        plan.remove = states.keys.filter { !streaming || !wanted.contains($0) }.sorted()
+        let released = wanted.filter { id in
+            memberOf[id].map { wanted.contains($0) && (receivers[$0] != nil || states[$0] != nil) } ?? false
+        }
+        plan.release = released.sorted()
+        plan.remove = states.keys.filter { !streaming || !wanted.contains($0) || released.contains($0) }.sorted()
         guard streaming else { return plan }
-        for id in wanted.sorted() where states[id] == nil {
+        for id in wanted.sorted() where states[id] == nil && !released.contains(id) {
+            // A target waits while a member's password prompt is open.
+            if promptTargets.values.contains(id) { continue }
             switch receivers[id]?.availability {
             case .available?:
                 plan.add.append(id)
@@ -576,6 +717,7 @@ struct NativeAirPlayModel {
     mutating func removed(_ id: String) {
         states.removeValue(forKey: id)
         waiting.remove(id)
+        pruneMembers()
     }
 
     /// The speakers in the sender waiting for the AirPlay 2 slot (P169).
@@ -597,7 +739,11 @@ struct NativeAirPlayModel {
             if was != now { return .playingChanged(NativeAirPlayID.app(id), playing: now) }
             return waited ? .waiting(NativeAirPlayID.app(id), false) : nil
         case .error(let id, let problem, let retryMs, _):
-            guard states[id] != nil else { return nil }
+            guard states[id] != nil else { return memberError(id, problem) }
+            // The member's own error follows and names it (`memberError`).
+            if NativeTarget.kind(id) != nil, problem == .passwordRequired || problem == .wrongPassword {
+                return nil
+            }
             if problem == .oneAirPlay2 {
                 return waiting.insert(id).inserted ? .waiting(NativeAirPlayID.app(id), true) : nil
             }
@@ -814,5 +960,62 @@ enum NativeAirPlayPairings {
         case .failed:
             return "the pairings file couldn't be moved into its own folder; its Apple TVs pair again"
         }
+    }
+}
+
+/// A speaker's counters as the sender copies them (P144,
+/// `asc_airplay_speaker_counters`): one session's, or a target's summed over
+/// its `sessions` members.
+struct NativeSpeakerCounters: Equatable {
+    var packetsSent: UInt64 = 0
+    var latePackets: UInt64 = 0
+    var resendRequests: UInt64 = 0
+    var packetsResent: UInt64 = 0
+    var timingReplies: UInt64 = 0
+    var foreignDatagrams: UInt64 = 0
+    var sessions: UInt32 = 1
+}
+
+/// The stream's counters (P144, `asc_airplay_stream_counters`).
+struct NativeStreamCounters: Equatable {
+    var rateHz: Double = 0
+    var packetsEncoded: UInt64 = 0
+    var silentFrames: UInt64 = 0
+    var inputFramesDropped: UInt64 = 0
+}
+
+/// The debug log's periodic AirPlay status: the stream's counters and each
+/// added speaker's, with the field names the Windows app's log uses, so the
+/// two logs read alike.
+enum NativeAirPlayStatus {
+    /// How often the line is logged while speakers are added, as on Windows.
+    static let interval: TimeInterval = 5
+
+    struct Speaker: Equatable {
+        let id: String
+        let name: String?
+        let state: NativeSpeakerEvent.State?
+        /// Nil when the sender no longer has the speaker.
+        let counters: NativeSpeakerCounters?
+    }
+
+    static func logLine(latencyMs: Double, stream: NativeStreamCounters?, speakers: [Speaker]) -> String {
+        var text = "[AudioSync] native AirPlay: L = \(latencyMs.isFinite ? Int(max(latencyMs, 0)) : 0) ms"
+        if let stream {
+            text += String(format: ", input rate %.1f Hz", stream.rateHz)
+                + ", \(stream.packetsEncoded) packets encoded, \(stream.silentFrames) silent frames"
+                + ", \(stream.inputFramesDropped) input frames dropped"
+        }
+        for speaker in speakers {
+            let label = speaker.name.map { "\($0) (\(speaker.id))" } ?? speaker.id
+            text += "\n  AirPlay speaker \(label): \(speaker.state?.rawValue ?? "added")"
+            guard let counters = speaker.counters else { continue }
+            if counters.sessions > 1 { text += ", \(counters.sessions) members summed" }
+            text += "; \(counters.packetsSent) packets sent, \(counters.latePackets) late"
+                + ", \(counters.resendRequests) resend requests, \(counters.packetsResent) resent"
+                + ", \(counters.timingReplies) timing replies"
+                + ", \(counters.foreignDatagrams) datagrams from other addresses dropped"
+        }
+        return text
     }
 }

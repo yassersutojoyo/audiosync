@@ -78,9 +78,9 @@ pub const VERSION: u32 = 2;
 /// The first format version with offsets relative to the reference.
 pub const OFFSETS_VERSION: u32 = 2;
 
-/// The longest own delay an AirPlay speaker takes, in milliseconds (the
-/// sender's limit).
-pub const MAX_AIRPLAY_DELAY_MS: f64 = 3000.0;
+/// The longest own delay an AirPlay speaker takes, in milliseconds: the
+/// sender's limit (P99), the core's delay range.
+pub const MAX_AIRPLAY_DELAY_MS: f64 = MAX_DELAY_MS;
 
 /// The most entries kept in each list or map: far more than anyone has
 /// devices, small enough that a damaged file can't make the app slow.
@@ -162,7 +162,7 @@ pub struct SavedSpeaker {
     pub volume: f64,
     /// The delay in milliseconds: for an output its offset relative to the
     /// reference, −2000 to +20 000 (0 to 20 000 in format 1, where it was
-    /// the output's own trim); 0 to 3000 for an AirPlay speaker's own delay.
+    /// the output's own trim); 0 to 20 000 for an AirPlay speaker's own delay.
     pub delay_ms: f64,
 }
 
@@ -300,6 +300,8 @@ pub struct Settings {
     pub when_source_quits: String,
     /// File > Web Remote: whether it is on, and its port.
     pub remote: RemoteSettings,
+    /// File > AirPlay 2 (Experimental); read at launch only (spec P170).
+    pub airplay2_experimental: bool,
 }
 
 impl Default for Settings {
@@ -320,6 +322,7 @@ impl Default for Settings {
             airplay_adjustment_ms: 0.0,
             when_source_quits: WhenSourceQuits::Stop.stored().to_owned(),
             remote: RemoteSettings::default(),
+            airplay2_experimental: false,
         }
     }
 }
@@ -455,6 +458,7 @@ impl Settings {
                 .stored()
                 .to_owned(),
             remote: self.remote.clamped(),
+            airplay2_experimental: self.airplay2_experimental,
         }
     }
 
@@ -821,6 +825,16 @@ mod tests {
     }
 
     #[test]
+    fn airplay2_is_off_in_a_file_that_does_not_name_it() {
+        let read = |json: &str| Settings::from_json(json).expect("read").0;
+        assert!(!Settings::default().airplay2_experimental);
+        assert!(!read(r#"{"version": 2}"#).airplay2_experimental);
+        let on = read(r#"{"version": 2, "airplay2_experimental": true}"#);
+        assert!(on.airplay2_experimental);
+        assert!(read(&on.to_json()).airplay2_experimental);
+    }
+
+    #[test]
     fn an_appearance_this_build_does_not_know_follows_windows() {
         let read = |json: &str| Settings::from_json(json).expect("read").0;
         assert_eq!(read(r#"{"version": 2}"#).appearance, Appearance::System);
@@ -970,7 +984,7 @@ mod tests {
                 "": {"enabled": true},
                 "quiet": {"volume": -5, "delay_ms": -20}
             },
-            "airplay": {"far": {"delay_ms": 5000, "volume": 101}},
+            "airplay": {"far": {"delay_ms": 25000, "volume": 101}, "near": {"delay_ms": 13000}},
             "auto_connect": ["lc:loud", "nonsense", "ap:", "zz:loud"],
             "groups": [
                 {"id": "group:1", "name": "Empty", "members": ["bad"]},
@@ -1007,7 +1021,11 @@ mod tests {
             })
         );
         assert!(!settings.outputs.contains_key(""));
-        assert_eq!(settings.airplay["far"].delay_ms, MAX_AIRPLAY_DELAY_MS);
+        assert_eq!(settings.airplay["far"].delay_ms, 20_000.0);
+        assert_eq!(
+            settings.airplay["near"].delay_ms, 13_000.0,
+            "a calibrated delay stays"
+        );
         assert_eq!(settings.airplay["far"].volume, 100.0);
         assert_eq!(
             settings.auto_connect,

@@ -496,6 +496,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             appearance: saved.appearance,
             window: saved.window,
             remote: saved.remote,
+            airplay2_experimental: saved.airplay2_experimental,
         };
         self.saved = saved;
     }
@@ -592,6 +593,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             airplay_adjustment_ms: self.audio.airplay_adjustment(),
             when_source_quits: self.when_source_quits.stored().to_owned(),
             remote: self.view.remote,
+            airplay2_experimental: self.view.airplay2_experimental,
         }
         .clamped()
     }
@@ -1255,6 +1257,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 },
                 muted: speaker.muted,
                 volume_fixed: speaker.volume_fixed,
+                volume_step: speaker.volume_step,
                 group: speaker.group.map(|group| CastGroup {
                     members: group.members,
                 }),
@@ -1760,6 +1763,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// An AirPlay speaker can't play from AudioSync, so it is off: tells the
     /// user, and stops streaming when nothing else is on (S136).
     fn airplay_cant_play(&mut self, id: &str, problem: AirPlayProblem) {
+        let message = NoticeMessage::AirPlayCantPlay {
+            speaker: self.airplay_name(id),
+            problem: ui_problem(problem),
+        };
+        self.airplay_off(id, problem, message);
+    }
+
+    /// As [`Self::airplay_cant_play`], with the notice `message`.
+    fn airplay_off(&mut self, id: &str, problem: AirPlayProblem, message: NoticeMessage) {
         let reason = match problem {
             AirPlayProblem::NeedsPassword
             | AirPlayProblem::PairingNotYet
@@ -1773,14 +1785,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             enabled_left: self.enabled_count(),
         });
         if let Some(subject) = reaction.notice {
-            let speaker = self.airplay_name(id);
-            self.post(
-                subject,
-                NoticeMessage::AirPlayCantPlay {
-                    speaker,
-                    problem: ui_problem(problem),
-                },
-            );
+            self.post(subject, message);
         }
         if reaction.stop_session && self.running() {
             self.log.log(|| {
@@ -1865,6 +1870,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
             if let Err(problem) = self.audio.start_airplay_pairing(id) {
                 self.airplay_cant_play(id, problem);
             }
+            return;
+        }
+        if problem == AirPlayProblem::PlaysInGroup
+            && let Some(target) = self.audio.airplay_holding_target(id)
+        {
+            let message = NoticeMessage::AirPlayPlaysInGroup {
+                speaker: self.airplay_name(id),
+                target,
+            };
+            self.airplay_off(id, problem, message);
             return;
         }
         self.airplay_cant_play(id, problem);
@@ -2027,6 +2042,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.reconnecting.remove(&id);
                 self.airplay_cant_play(&id, problem);
             }
+            BackendEvent::AirPlayMemberNeedsPassword { id, member } => {
+                self.reconnecting.remove(&id);
+                let message = NoticeMessage::AirPlayMemberNeedsPassword {
+                    target: self.airplay_name(&id),
+                    member,
+                };
+                self.airplay_off(&id, AirPlayProblem::NeedsPassword, message);
+            }
             BackendEvent::AirPlayPaired { id } => {
                 self.reconnecting.remove(&id);
                 self.log
@@ -2038,6 +2061,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::AirPlayStopped => {
                 self.reconnecting.clear();
                 self.post(NoticeSubject::AirPlay, NoticeMessage::AirPlayStopped);
+            }
+            BackendEvent::AirPlayPtpFree => {
+                self.notices.clear(&[NoticeSubject::AirPlayPtp]);
+            }
+            BackendEvent::AirPlayPtpPortsTaken => {
+                self.post(
+                    NoticeSubject::AirPlayPtp,
+                    NoticeMessage::AirPlayPtpPortsTaken,
+                );
             }
             // The next snapshot shows it; no notice, no focus change (S198).
             BackendEvent::DeviceVolumeChanged { .. } => {}
@@ -3181,7 +3213,9 @@ mod tests {
     use crate::audio::pairings::tests::credentials;
     use crate::audio::routing::HOLD_CHECKS;
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
-    use crate::ui_model::{CastProblem as UiCastProblem, MAX_DELAY_MS, MIN_DELAY_MS, SpeakerState};
+    use crate::ui_model::{
+        CastMembers, CastProblem as UiCastProblem, MAX_DELAY_MS, MIN_DELAY_MS, SpeakerState,
+    };
 
     const SPEAKERS: &str = "speakers";
     const HEADPHONES: &str = "headphones";
@@ -5451,6 +5485,62 @@ mod tests {
     }
 
     #[test]
+    fn the_ptp_port_clash_leaves_a_notice_until_ptp_binds() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::Warning(
+                audiosync_airplay::error::Warning::PtpUnavailable,
+            ),
+        });
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayPtpPortsTaken]);
+        // A speaker on AirPlay 1, or one that didn't bind PTP, says nothing
+        // about the ports.
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayPtpPortsTaken]);
+        fake.state(&kitchen, AirPlayState::Connecting);
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::PtpOpened,
+        });
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+    }
+
+    #[test]
+    fn a_ptp_bind_clears_the_notice_even_if_its_session_never_plays() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::Warning(
+                audiosync_airplay::error::Warning::PtpUnavailable,
+            ),
+        });
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayPtpPortsTaken]);
+        // It binds PTP, then fails before playing; the next session binds
+        // with no clash to tell and says nothing about the ports.
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::PtpOpened,
+        });
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        fake.state(&kitchen, AirPlayState::Connecting);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert!(
+            !messages(&adapter).contains(&NoticeMessage::AirPlayPtpPortsTaken),
+            "{:?}",
+            messages(&adapter)
+        );
+    }
+
+    #[test]
     fn a_discovery_failure_leaves_a_notice() {
         let (mut adapter, fake, kitchen, study) = airplay_adapter();
         // The sender reports every receiver gone just before.
@@ -5817,6 +5907,7 @@ mod tests {
                 on: true,
                 port: 8123,
             },
+            airplay2_experimental: true,
         });
         assert!(adapter.snapshot().running);
         adapter.poll();
@@ -5845,6 +5936,7 @@ mod tests {
         assert_eq!(state.groups, groups);
         assert_eq!(state.equalizer, equalizer);
         assert!(adapter.view_settings().show_virtual_devices);
+        assert!(adapter.view_settings().airplay2_experimental);
         assert_eq!(
             adapter.view_settings().appearance,
             ui_model::Appearance::Light
@@ -6850,11 +6942,16 @@ mod tests {
         adapter.poll();
         adapter.set_speaker_enabled(&ap(&kitchen), true);
         adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
-        adapter.set_speaker_delay(&cc(CAST_LIVING), 3000.0);
+        adapter.set_speaker_delay(&ap(&kitchen), 3250.0);
+        adapter.set_speaker_delay(&cc(CAST_LIVING), 15_000.0);
         adapter.poll();
-        assert!(messages(&adapter).is_empty(), "1.25 s more is within reach");
-        // L is 1.75 s: 6.25 s asks 4.5 s of the AirPlay speakers, 3 s at most.
-        adapter.set_speaker_delay(&cc(CAST_LIVING), 6250.0);
+        assert!(
+            messages(&adapter).is_empty(),
+            "13.25 s more is within reach"
+        );
+        // L is 1.75 s: 20 s asks 18.25 s on top of Kitchen's own 3.25 s,
+        // 1.5 s past the sender's 20 s.
+        adapter.set_speaker_delay(&cc(CAST_LIVING), 20_000.0);
         adapter.poll();
         assert_eq!(
             messages(&adapter),
@@ -6930,7 +7027,7 @@ mod tests {
                 .members
                 .clone()
         };
-        assert_eq!(members(&group(&adapter)), None);
+        assert_eq!(members(&group(&adapter)), CastMembers::NotReported);
         assert!(
             adapter
                 .snapshot()
@@ -6961,7 +7058,10 @@ mod tests {
             }]),
         });
         adapter.poll();
-        assert_eq!(members(&group(&adapter)), Some(vec!["Kitchen".to_owned()]));
+        assert_eq!(
+            members(&group(&adapter)),
+            CastMembers::Known(vec!["Kitchen".to_owned()])
+        );
         adapter.set_speaker_volume(&cc(CAST_ATTIC), 50.0);
         assert_eq!(fake.state().volumes, [0.5]);
     }

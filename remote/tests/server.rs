@@ -988,3 +988,185 @@ fn a_busy_port_is_reported_as_such() {
     );
     assert!(taken.unwrap_err().port_in_use());
 }
+
+/// Any method, with the headers a same-origin JSON request carries.
+fn send(remote: &Remote, method: &str, path: &str, token: Option<&str>, body: &str) -> Reply {
+    let host = host(remote);
+    let cookie = token.map_or(String::new(), |token| {
+        format!("Cookie: as_token={token}\r\n")
+    });
+    let raw = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json\r\n{cookie}Content-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    exchange(remote.server.port(), raw.as_bytes())
+}
+
+// The endpoint table: each route answers one method; any other gets 405 and its Allow.
+#[test]
+fn every_route_answers_a_wrong_method_with_405_and_its_allow() {
+    let remote = start("methods");
+    remote.server.publish(sample());
+    let token = pair(&remote);
+    let token = Some(token.as_str());
+    for (method, path, allow) in [
+        ("PUT", "/api/state", "GET"),
+        ("POST", "/api/state", "GET"),
+        ("DELETE", "/api/events", "GET"),
+        ("POST", "/api/events", "GET"),
+        ("PUT", "/api/pair", "POST"),
+        ("GET", "/api/unpair", "POST"),
+        ("DELETE", "/api/unpair", "POST"),
+        ("GET", "/api/speakers/kitchen", "POST"),
+        ("PATCH", "/api/speakers/kitchen", "POST"),
+        ("PUT", "/api/master", "POST"),
+        ("DELETE", "/", "GET"),
+        ("PUT", "/manifest.webmanifest", "GET"),
+        ("POST", "/icon-180.png", "GET"),
+    ] {
+        let reply = send(&remote, method, path, token, "{\"volume\": 5}");
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (405, "method_not_allowed"),
+            "{method} {path}"
+        );
+        assert_eq!(reply.header("allow"), Some(allow), "{method} {path}");
+        assert_eq!(reply.header("cache-control"), Some("no-store"));
+        assert_security_headers(&reply);
+    }
+    assert!(remote.received.lock().unwrap().is_empty());
+    assert_eq!(remote.server.device_count(), 1, "DELETE unpaired nothing");
+    assert_eq!(get(&remote, "/api/state", token).status, 200);
+}
+
+// The 4 KiB body limit: a body at it is read, one byte more gets 413 (RFC 9110 §15.5.14).
+#[test]
+fn a_body_at_the_limit_is_read_and_one_byte_more_gets_413() {
+    use audiosync_remote::http::MAX_BODY;
+
+    let remote = start("body-limit");
+    let code = remote.server.pairing_code().unwrap();
+    let pad = |body: String, length: usize| format!("{body}{}", " ".repeat(length - body.len()));
+    let over = pad(json!({ "code": code }).to_string(), MAX_BODY + 1);
+    let reply = post(&remote, "/api/pair", None, &over);
+    assert_eq!((reply.status, reply.error().as_str()), (413, "too_large"));
+    assert_eq!(reply.header("cache-control"), Some("no-store"));
+    assert_security_headers(&reply);
+    assert_eq!(
+        remote.server.pairing_code(),
+        Some(code.clone()),
+        "not used up"
+    );
+    assert_eq!(remote.server.device_count(), 0);
+
+    let at = pad(json!({ "code": code }).to_string(), MAX_BODY);
+    let reply = post(&remote, "/api/pair", None, &at);
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    assert_eq!(remote.server.device_count(), 1);
+}
+
+#[test]
+fn a_declared_length_over_the_limit_is_refused_before_the_body_arrives() {
+    let remote = start("declared-length");
+    let host = host(&remote);
+    let raw = format!(
+        "POST /api/pair HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json\r\nContent-Length: 1000000\r\n\r\n{{"
+    );
+    let asked = Instant::now();
+    let reply = exchange(remote.server.port(), raw.as_bytes());
+    assert_eq!((reply.status, reply.error().as_str()), (413, "too_large"));
+    assert!(
+        asked.elapsed() < Duration::from_secs(3),
+        "answered without waiting for the body: {:?}",
+        asked.elapsed()
+    );
+    assert_eq!(remote.server.device_count(), 0);
+}
+
+// Only the listed paths exist; anything else is 404, paired or not, and runs nothing.
+#[test]
+fn unknown_paths_get_a_json_404_with_or_without_a_token() {
+    let remote = start("unknown-paths");
+    remote.server.publish(sample());
+    let token = pair(&remote);
+    for token in [None, Some(token.as_str())] {
+        for path in [
+            "/api",
+            "/api/",
+            "/API/state",
+            "/api/state/",
+            "/api/statex",
+            "/api/speakers",
+            "/api/pair/again",
+            "/index.html",
+            "/../api/state",
+            "/icon-180.png/",
+            "//",
+        ] {
+            let reply = get(&remote, path, token);
+            assert_eq!(
+                (reply.status, reply.error().as_str()),
+                (404, "not_found"),
+                "{path} {token:?}"
+            );
+            assert_security_headers(&reply);
+        }
+        let posted = post(&remote, "/api/master/", token, "{\"volume\": 5}");
+        assert_eq!(posted.status, 404, "{token:?}");
+    }
+    assert!(remote.received.lock().unwrap().is_empty());
+}
+
+// DNS rebinding: a foreign Host is refused before any route, method or token
+// check, even when the Origin matches that Host.
+#[test]
+fn a_foreign_host_is_refused_first_even_with_a_matching_origin_and_a_token() {
+    let remote = start("rebinding");
+    remote.server.publish(sample());
+    let token = pair(&remote);
+    let code = remote.server.pairing_code().unwrap();
+    let port = remote.server.port();
+    let foreign = format!("evil.example:{port}");
+    let ask = |method: &str, path: &str, body: &str| {
+        let raw = format!(
+            "{method} {path} HTTP/1.1\r\nHost: {foreign}\r\nOrigin: http://{foreign}\r\nContent-Type: application/json\r\nCookie: as_token={token}\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        exchange(port, raw.as_bytes())
+    };
+    let pairing = json!({ "code": code }).to_string();
+    for (method, path, body) in [
+        ("POST", "/api/pair", pairing.as_str()),
+        ("POST", "/api/master", "{\"volume\": 5}"),
+        ("POST", "/api/speakers/kitchen", "{\"on\": false}"),
+        ("POST", "/api/unpair", "{}"),
+        ("GET", "/api/state", ""),
+        ("GET", "/api/events", ""),
+        ("PUT", "/api/state", ""),
+        ("GET", "/nothing", ""),
+    ] {
+        let reply = ask(method, path, body);
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (403, "bad_host"),
+            "{method} {path}"
+        );
+        assert_security_headers(&reply);
+    }
+    assert!(remote.received.lock().unwrap().is_empty());
+    assert_eq!(remote.server.pairing_code(), Some(code));
+    assert_eq!(remote.server.device_count(), 1);
+
+    // A Host without a port names port 80 (RFC 9110 §7.2); an empty one names nothing.
+    for line in [
+        "Host: 127.0.0.1\r\n",
+        "Host: \r\n",
+        "Host: kitchen.local\r\n",
+    ] {
+        let raw = format!("GET / HTTP/1.1\r\n{line}\r\n");
+        assert_eq!(exchange(port, raw.as_bytes()).status, 403, "{line:?}");
+    }
+    // Header names are case-insensitive (RFC 9110 §5.1).
+    let lower = format!("GET / HTTP/1.1\r\nhost: 127.0.0.1:{port}\r\n\r\n");
+    assert_eq!(exchange(port, lower.as_bytes()).status, 200);
+}

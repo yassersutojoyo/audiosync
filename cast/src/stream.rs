@@ -337,7 +337,7 @@ struct Shared {
     /// The pump's rate and block size, the same in every codec.
     pump_format: StreamFormat,
     route: Mutex<Route>,
-    allowed: Mutex<Vec<IpAddr>>,
+    allowed: Vec<IpAddr>,
     /// A group's records, read on every request so a handover or a new
     /// member is answered at once (C97, C103).
     group: Mutex<Option<GroupRecords>>,
@@ -370,7 +370,7 @@ impl Shared {
         // (C97), so a group's records alone decide.
         match lock(&self.group).clone() {
             Some(records) => records.allowed().contains(&from),
-            None => lock(&self.allowed).contains(&from),
+            None => self.allowed.contains(&from),
         }
     }
 }
@@ -436,7 +436,7 @@ impl StreamServer {
                 format,
                 path: format!("/{token}.{}", format.extension()),
             }),
-            allowed: Mutex::new(config.allowed),
+            allowed: config.allowed,
             group: Mutex::new(None),
             artwork: Mutex::new(None),
             live: Mutex::new(Live {
@@ -495,11 +495,6 @@ impl StreamServer {
 
     pub fn format(&self) -> StreamFormat {
         lock(&self.shared.route).format
-    }
-
-    /// Replaces the addresses that get an answer.
-    pub fn set_allowed(&self, allowed: Vec<IpAddr>) {
-        *lock(&self.shared.allowed) = allowed;
     }
 
     /// Answers whatever `records` hold at the time of each request, a

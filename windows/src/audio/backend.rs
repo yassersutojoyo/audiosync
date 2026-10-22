@@ -143,7 +143,7 @@ pub struct AirPlayInfo {
     pub enabled: bool,
     /// The volume slider position, 0 to 100.
     pub volume: f64,
-    /// Its own delay d_s in milliseconds, 0 to 3000.
+    /// Its own delay d_s in milliseconds, 0 to 20 000.
     pub delay_ms: f64,
     /// Whether it plays right now.
     pub playing: bool,
@@ -342,6 +342,9 @@ pub struct CastInfo {
     pub muted: bool,
     /// The device's volume is locked (`controlType` `fixed`, spec C68).
     pub volume_fixed: bool,
+    /// How far the volume keys move it, 0 to 100: the device's own step
+    /// (spec C69), or 1 when it reports none.
+    pub volume_step: f64,
     /// The user's measured offset in milliseconds, 0 to 20 000: how long
     /// the other outputs wait for this speaker while it is on (spec C77).
     pub offset_ms: f64,
@@ -351,9 +354,19 @@ pub struct CastInfo {
 /// A Cast group as its row shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CastGroup {
-    /// Its members by name, as its latest session listed them; `None`
-    /// until one did (spec C94).
-    pub members: Option<Vec<String>>,
+    pub members: CastMembers,
+}
+
+/// What a Cast group's row knows of its members (spec C94).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum CastMembers {
+    /// It is off, or its session hasn't played yet.
+    #[default]
+    NotReported,
+    /// Its session plays and named none of them.
+    Unknown,
+    /// The ones its session named, by name.
+    Known(Vec<String>),
 }
 
 /// Something the UI should know about, from [`AudioBackend::poll`].
@@ -430,6 +443,15 @@ pub enum BackendEvent {
         /// Why.
         problem: AirPlayProblem,
     },
+    /// A member of a stereo pair or home theater group asks for a password
+    /// no prompt can take now, so the target was turned off.
+    AirPlayMemberNeedsPassword {
+        /// The target's ID.
+        id: String,
+        /// The member's name, which the notice gives: a member that is part
+        /// of its target has no row of its own.
+        member: String,
+    },
     /// An Apple TV the user switched on was paired, and is on now.
     AirPlayPaired {
         /// The speaker's ID.
@@ -446,6 +468,12 @@ pub enum BackendEvent {
     /// did, so none is listed; [`AudioBackend::retry_airplay`] starts a new
     /// sender.
     AirPlayStopped,
+    /// Another app holds PTP port 319 or 320, so AirPlay speakers that need
+    /// PTP timing can't play (P158); reported once per sender.
+    AirPlayPtpPortsTaken,
+    /// A session bound the PTP ports after
+    /// [`BackendEvent::AirPlayPtpPortsTaken`]: the ports are free again.
+    AirPlayPtpFree,
     /// Google Cast speakers appeared, changed or went away, or one's state
     /// changed: list them again.
     CastChanged,
@@ -720,12 +748,18 @@ pub trait AudioBackend {
     /// The password prompt to show, if one waits and no PIN prompt is open.
     fn airplay_password_prompt(&self) -> Option<AirPlayPasswordPrompt>;
 
+    /// The name of the stereo pair or home theater group that holds the
+    /// AirPlay speaker `id` (see [`AirPlayProblem::PlaysInGroup`]).
+    fn airplay_holding_target(&self, _id: &str) -> Option<String> {
+        None
+    }
+
     /// Sets an AirPlay speaker's volume slider position (0 to 100), live. A
     /// value that isn't finite is ignored.
     fn set_airplay_volume(&mut self, id: &str, position: f64);
 
     /// Sets an AirPlay speaker's own delay d_s in milliseconds, live. A value
-    /// that isn't finite is ignored; others are clamped to 0 to 3000.
+    /// that isn't finite is ignored; others are clamped to 0 to 20 000.
     fn set_airplay_delay(&mut self, id: &str, delay_ms: f64);
 
     /// The AirPlay sender's base latency L_s in milliseconds, or `None`

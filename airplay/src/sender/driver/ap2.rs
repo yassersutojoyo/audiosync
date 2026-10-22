@@ -85,6 +85,20 @@ impl Driver {
             .get(key)
             .map(|speaker| speaker.device.airplay_socket_addrs())
             .unwrap_or_default();
+        if matches!(restart, Some(Some(_))) {
+            self.ptp_retrying.insert(key.clone());
+        } else {
+            self.ptp_retrying.remove(key);
+        }
+        // A family the speaker no longer has an address in (a network
+        // change) is forgotten, so its sessions don't go without a clock.
+        if let Some(&moved) = self.ptp_moved.get(key)
+            && !addresses
+                .iter()
+                .any(|address| address.ip().to_canonical().is_ipv6() == moved)
+        {
+            self.ptp_moved.remove(key);
+        }
         let mut ptp = None;
         if wants && let Some(v6) = restart.flatten().or_else(|| self.ptp_v6(key)) {
             let in_family = |address: &SocketAddr| address.ip().to_canonical().is_ipv6() == v6;
@@ -280,13 +294,17 @@ impl Driver {
 
     /// The address family, IPv6 when true, of the PTP service for a
     /// session to `key`: the running service's while another member uses
-    /// it, IPv4 for a target with a member reachable over IPv4, and
-    /// otherwise the family of the receiver's first address (P158, P179).
+    /// it, the family it last moved to for this speaker, IPv4 for a target with
+    /// a member reachable over IPv4, and otherwise the family of the
+    /// receiver's first address (P158, P179).
     fn ptp_v6(&self, key: &DeviceKey) -> Option<bool> {
         if let Some(run) = &self.ptp
             && self.ptp_shared(key)
         {
             return Some(run.v6);
+        }
+        if let Some(&moved) = self.ptp_moved.get(key) {
+            return Some(moved);
         }
         let has_v4 = |device: &&Device| {
             device
@@ -342,6 +360,9 @@ impl Driver {
                     peer: peer.clone(),
                     v6,
                 });
+                if std::mem::take(&mut self.ptp_unavailable_told) {
+                    self.emit_speaker(key, SpeakerEvent::PtpOpened);
+                }
                 Some(peer)
             }
             Err(_) => {
@@ -356,15 +377,17 @@ impl Driver {
 
     /// Closes, without a TEARDOWN, a session that took PTP over an address
     /// outside the service's family and starts the speaker again: with the
-    /// service moved to that family when no other session uses it, else on
-    /// NTP with the warning told once (P158, P179).
+    /// service moved to that family when no other session uses it and the
+    /// session isn't already the restart after a move, else on NTP with the
+    /// warning told once (P158, P179).
     fn restart_outside_family(&mut self, key: &DeviceKey, landed_v6: bool, now: Instant) {
-        let family = if self.ptp_shared(key) || !self.ptp_moved.insert(key.clone()) {
+        let family = if self.ptp_shared(key) || self.ptp_retrying.contains(key) {
             if self.ptp_family_told.insert(key.clone()) {
                 self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpOutsideFamily));
             }
             None
         } else {
+            self.ptp_moved.insert(key.clone(), landed_v6);
             Some(landed_v6)
         };
         if self.is_target_member(key) {

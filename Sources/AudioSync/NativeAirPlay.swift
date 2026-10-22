@@ -21,6 +21,9 @@ final class NativeAirPlay {
     /// Every how many polls the speakers are asked for their own volume
     /// (2 s), so a change made on a speaker reaches its slider.
     static let volumeReadPolls = 8
+    /// The receivers the debug hook AUDIOSYNC_AIRPLAY_PCM names; the core
+    /// reads the same variable and lets them use PCM when they are added.
+    static let pcmDebugIDs = NativeAirPlayID.pcmDebugIDs(ProcessInfo.processInfo.environment["AUDIOSYNC_AIRPLAY_PCM"])
 
     /// The receivers listed, the speakers added, L, and the pairings and
     /// prompts under way (main queue; the app records prompts and turn-offs
@@ -46,6 +49,10 @@ final class NativeAirPlay {
     /// gets, also when it is created later (queue only).
     private(set) var holdBackMs = 0.0
     private var queuedHoldBackMs = 0.0
+    /// The receivers added to the sender, in the order they were added, and
+    /// the uptime of the last status line (queue only; `logStatusIfDue`).
+    private var addedIDs: [String] = []
+    private var lastStatus: TimeInterval = 0
 
     /// `onChange` gets each discovery change, `onEvent` each speaker or
     /// timeline event with what the model made of it, on the main queue.
@@ -55,14 +62,16 @@ final class NativeAirPlay {
         self.onEvent = onEvent
     }
 
-    /// Creates the sender at `master` (0 to 100), installs its input and
-    /// starts discovery, on the queue. `completion` gets, on the main queue,
-    /// whether all of it worked; when the sender can't start or multicast DNS
-    /// can't browse, nothing is left running and nothing else happens.
-    func start(master: Double, completion: @escaping (Bool) -> Void) {
+    /// Creates the sender at `master` (0 to 100), with AirPlay 2 when
+    /// `airPlay2` is on or the environment variable turns it on, installs its
+    /// input and starts discovery, on the queue. `completion` gets, on the
+    /// main queue, whether all of it worked; when the sender can't start or
+    /// multicast DNS can't browse, nothing is left running and nothing else
+    /// happens.
+    func start(master: Double, airPlay2: Bool, completion: @escaping (Bool) -> Void) {
         queue.async { [weak self] in
             guard let self else { return }
-            let latency = self.startOnQueue(master: master)
+            let latency = self.startOnQueue(master: master, airPlay2: airPlay2)
             DispatchQueue.main.async {
                 if let latency, self.model.latencyMs == 0 { self.model.latencyMs = latency }
                 completion(latency != nil)
@@ -74,9 +83,15 @@ final class NativeAirPlay {
     /// 100) times the master. Main queue.
     func add(_ id: String, volume: Double) {
         model.added(id)
+        if Self.pcmDebugIDs.contains(id) {
+            DebugTrace.log("[AudioSync] native AirPlay: \(id) may use PCM (AUDIOSYNC_AIRPLAY_PCM)")
+        }
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }
-            if !asc_airplay_add_speaker(handle, id, volume) {
+            if asc_airplay_add_speaker(handle, id, volume) {
+                if self.addedIDs.isEmpty { self.lastStatus = ProcessInfo.processInfo.systemUptime }
+                if !self.addedIDs.contains(id) { self.addedIDs.append(id) }
+            } else {
                 // Gone from the sender's list meanwhile: the next reconcile decides again.
                 DispatchQueue.main.async {
                     self.model.removed(id)
@@ -90,8 +105,9 @@ final class NativeAirPlay {
     func remove(_ id: String) {
         model.removed(id)
         queue.async { [weak self] in
-            guard let handle = self?.handle else { return }
+            guard let self, let handle = self.handle else { return }
             _ = asc_airplay_remove_speaker(handle, id)
+            self.addedIDs.removeAll { $0 == id }
         }
     }
 
@@ -261,9 +277,9 @@ final class NativeAirPlay {
     // MARK: - On the queue
 
     /// The sender's L in ms once it runs, or nil when it couldn't start.
-    private func startOnQueue(master: Double) -> Double? {
+    private func startOnQueue(master: Double, airPlay2: Bool) -> Double? {
         if let handle { return asc_airplay_latency_ms(handle) }
-        guard let created = asc_airplay_create() else { return nil }
+        guard let created = asc_airplay_create_with_airplay2(airPlay2) else { return nil }
         handle = created
         // Before discovery, so a paired Apple TV is listed as able to play
         // from its first report.
@@ -274,7 +290,7 @@ final class NativeAirPlay {
         let moved = support.map { NativeAirPlayPairings.moveOlderFile(in: $0) } ?? .nothing
         let loaded = support.map { asc_airplay_open_pairings(created, NativeAirPlayPairings.file(in: $0).path) }
             ?? ASC_AIRPLAY_PAIRINGS_FAILED
-        // Reads and writes nothing while the hidden AirPlay 2 switch is off.
+        // Reads and writes nothing while AirPlay 2 is off.
         let airPlay2 = support.map {
             asc_airplay_open_airplay2_identity(created, NativeAirPlayPairings.airPlay2File(in: $0).path)
         }
@@ -332,6 +348,32 @@ final class NativeAirPlay {
             asc_airplay_input_destroy(&input)
         }
         asc_airplay_destroy(&handle)   // tears the speakers down, sets handle to nil
+        addedIDs.removeAll()
+    }
+
+    /// Hands the main queue the debug log's status line, at most every
+    /// `NativeAirPlayStatus.interval` while speakers are added. The counters
+    /// are atomics the sender keeps, so reading them never holds it up.
+    private func logStatusIfDue(_ handle: OpaquePointer) {
+        guard DebugTrace.enabled, !addedIDs.isEmpty else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastStatus >= NativeAirPlayStatus.interval else { return }
+        lastStatus = now
+        let latency = asc_airplay_latency_ms(handle)
+        var rawStream = AscAirPlayStreamCounters()
+        let stream = asc_airplay_stream_counters(handle, &rawStream) ? NativeStreamCounters(rawStream) : nil
+        let counters: [(String, NativeSpeakerCounters?)] = addedIDs.map { id in
+            var raw = AscAirPlayCounters()
+            return (id, asc_airplay_speaker_counters(handle, id, &raw) ? NativeSpeakerCounters(raw) : nil)
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.active else { return }
+            let speakers = counters.map { id, counters in
+                NativeAirPlayStatus.Speaker(id: id, name: self.model.names[id], state: self.model.states[id],
+                                            counters: counters)
+            }
+            DebugTrace.log(NativeAirPlayStatus.logLine(latencyMs: latency, stream: stream, speakers: speakers))
+        }
     }
 
     /// Takes every waiting change and event and hands them to the main queue at once.
@@ -342,6 +384,7 @@ final class NativeAirPlay {
             pollsSinceVolumeRead = 0
             asc_airplay_read_volumes(handle)
         }
+        logStatusIfDue(handle)
         var changes: [NativeReceiverChange] = []
         var raw = AscAirPlayReceiver()
         while asc_airplay_next_receiver(handle, &raw) {
@@ -391,7 +434,10 @@ final class NativeAirPlay {
                                       availability: availability(raw.availability),
                                       reason: reason(raw.unsupported), hints: hints(raw.flags),
                                       overAirPlay2: raw.flags & UInt32(ASC_AIRPLAY_FLAG_OVER_AIRPLAY2) != 0,
-                                      paired: raw.flags & UInt32(ASC_AIRPLAY_FLAG_PAIRED) != 0)
+                                      paired: raw.flags & UInt32(ASC_AIRPLAY_FLAG_PAIRED) != 0,
+                                      target: text(raw.target),
+                                      isTarget: raw.flags & UInt32(ASC_AIRPLAY_FLAG_TARGET) != 0,
+                                      incomplete: raw.flags & UInt32(ASC_AIRPLAY_FLAG_INCOMPLETE) != 0)
         return raw.event == ASC_AIRPLAY_APPEARED ? .appeared(receiver) : .changed(receiver)
     }
 
@@ -449,6 +495,7 @@ final class NativeAirPlay {
         switch reason {
         case ASC_AIRPLAY_REASON_TIMING: return .timingUnavailable
         case ASC_AIRPLAY_REASON_ONE_AIRPLAY2: return .oneAirPlay2
+        case ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS: return .playsThroughSpeakers
         default: return .unsupported
         }
     }
@@ -488,6 +535,7 @@ final class NativeAirPlay {
         case ASC_AIRPLAY_REASON_AIRPLAY2_ONLY: return "AirPlay 2 only"
         case ASC_AIRPLAY_REASON_TIMING: return "timing"
         case ASC_AIRPLAY_REASON_ONE_AIRPLAY2: return "one AirPlay 2 speaker at a time"
+        case ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS: return "plays through its speakers"
         default: return nil
         }
     }
@@ -505,8 +553,25 @@ final class NativeAirPlay {
             (ASC_AIRPLAY_FLAG_AIRPLAY2, "airplay2"),
             (ASC_AIRPLAY_FLAG_OVER_AIRPLAY2, "over-airplay2"),
             (ASC_AIRPLAY_FLAG_PAIRED, "paired"),
+            (ASC_AIRPLAY_FLAG_TARGET, "target"),
+            (ASC_AIRPLAY_FLAG_INCOMPLETE, "incomplete"),
         ]
         return names.filter { flags & UInt32($0.0) != 0 }.map(\.1)
+    }
+}
+
+extension NativeSpeakerCounters {
+    init(_ raw: AscAirPlayCounters) {
+        self.init(packetsSent: raw.packets_sent, latePackets: raw.late_packets, resendRequests: raw.resend_requests,
+                  packetsResent: raw.packets_resent, timingReplies: raw.timing_replies,
+                  foreignDatagrams: raw.foreign_datagrams, sessions: raw.sessions)
+    }
+}
+
+extension NativeStreamCounters {
+    init(_ raw: AscAirPlayStreamCounters) {
+        self.init(rateHz: raw.rate_hz, packetsEncoded: raw.packets_encoded, silentFrames: raw.silent_frames,
+                  inputFramesDropped: raw.input_frames_dropped)
     }
 }
 

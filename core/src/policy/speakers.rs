@@ -309,6 +309,9 @@ pub enum NoticeSubject {
     /// The AirPlay sender as a whole: it stopped after an internal error, or
     /// its discovery did.
     AirPlay,
+    /// Another app holds PTP port 319 or 320, so AirPlay speakers that need
+    /// PTP timing can't play (Windows).
+    AirPlayPtp,
     /// The user's settings file: it couldn't be written (Windows).
     SettingsFile,
     /// The speaker pairings' file: it couldn't be written (Windows).

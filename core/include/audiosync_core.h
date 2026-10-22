@@ -162,7 +162,7 @@ extern "C" {
 #define ASC_AIRPLAY_PAIRINGS_NEWER -3   /* a newer AudioSync wrote it: ignored and left as it is */
 
 /* The largest hold-back asc_airplay_set_hold_back applies, in ms: the sender's limit on a speaker's delay. */
-#define ASC_AIRPLAY_MAX_DELAY_MS 3000
+#define ASC_AIRPLAY_MAX_DELAY_MS 20000
 
 /* The rate of every Cast stream; the Cast input resamples the capture to it. */
 #define ASC_CAST_RATE 48000
@@ -1242,6 +1242,13 @@ typedef struct AscAirPlayEvent {
 AscAirPlay *asc_airplay_create(void);
 
 /*
+ * asc_airplay_create with the app's AirPlay 2 setting: AirPlay 2 is on when
+ * airplay2 is true or when AUDIOSYNC_AIRPLAY2=1 is set; off, the sender makes
+ * no AirPlay 2 traffic.
+ */
+AscAirPlay *asc_airplay_create_with_airplay2(bool airplay2);
+
+/*
  * Stops the sender and frees it: every speaker is torn down and its threads
  * end within about 2 s, which this call waits for, so call it off the main
  * thread. Takes the address of the host's pointer and sets that pointer to
@@ -1353,6 +1360,50 @@ double asc_airplay_latency_ms(const AscAirPlay *airplay);
  * starts over; a timeline event follows.
  */
 void asc_airplay_restart_timeline(AscAirPlay *airplay);
+
+/*
+ * A speaker's counters, as asc_airplay_speaker_counters copies them: one
+ * session's, or a stereo pair's or home theater group's summed over its
+ * members. They keep counting across the speaker's reconnects.
+ */
+typedef struct AscAirPlayCounters {
+    uint64_t packets_sent;
+    uint64_t resend_requests;
+    uint64_t packets_resent;
+    uint64_t not_held;             /* requested packets not resent: no longer held, or resent three times */
+    uint64_t timing_replies;
+    uint64_t late_packets;         /* sent more than 5 ms after their time */
+    uint64_t silent_frames;
+    uint64_t input_frames_dropped; /* the stream's count: every session plays the one input */
+    uint64_t foreign_datagrams;    /* dropped on the control and timing sockets: from another address */
+    uint32_t sessions;             /* sessions summed: 1 for a speaker, the member count for a target */
+} AscAirPlayCounters;
+
+/* The stream's counters, as asc_airplay_stream_counters copies them. */
+typedef struct AscAirPlayStreamCounters {
+    double rate_hz;                /* the current input rate estimate */
+    uint64_t packets_encoded;      /* one per packet of the timeline */
+    uint64_t silent_frames;        /* inserted where the input hadn't arrived in time */
+    uint64_t input_frames_dropped;
+} AscAirPlayStreamCounters;
+
+/*
+ * Copies into *out the counters of the speaker added under id: a stereo
+ * pair's or home theater group's summed over its members, or one member's
+ * when id names a member of an added target. Reads atomics only, never
+ * blocking the sender. False, with *out zeroed, when the handle or id is
+ * NULL, the sender stopped working, or nothing was added under id; false
+ * and nothing written when out is NULL.
+ */
+bool asc_airplay_speaker_counters(const AscAirPlay *airplay, const char *id,
+                                  AscAirPlayCounters *out);
+
+/*
+ * Copies the stream's counters into *out. False, with *out zeroed, for a
+ * NULL handle or a sender that stopped working; false and nothing written
+ * when out is NULL.
+ */
+bool asc_airplay_stream_counters(const AscAirPlay *airplay, AscAirPlayStreamCounters *out);
 
 /*
  * Sets what is playing, for the receivers that show it: the track's title,

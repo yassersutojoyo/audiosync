@@ -15,6 +15,7 @@ use audiosync_core::volume;
 
 use audiosync_core::calibrate_all::{AirPlayShared, Class, EndReason, RowState};
 
+pub use crate::audio::backend::CastMembers;
 use crate::audio::calibration::{Failure, Phase};
 
 pub use crate::settings::Appearance;
@@ -196,22 +197,23 @@ pub struct Speaker {
 
 /// A Google Cast speaker's own state. Its delay is the measured offset the
 /// user sets, since Cast can't be kept in sync automatically.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CastRow {
     pub state: CastState,
     /// The speaker reports itself muted.
     pub muted: bool,
     /// The speaker's volume can't be changed from here.
     pub volume_fixed: bool,
+    /// How far the volume keys move it, 0 to 100 (the device's own step).
+    pub volume_step: f64,
     /// Set for a Cast group, which plays as one speaker.
     pub group: Option<CastGroup>,
 }
 
-/// A Google Cast group: its members by name, as its latest session listed
-/// them; `None` until one did.
+/// A Google Cast group and what its row knows of its members.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CastGroup {
-    pub members: Option<Vec<String>>,
+    pub members: CastMembers,
 }
 
 /// Where a Google Cast speaker that is on is.
@@ -409,10 +411,19 @@ pub enum NoticeMessage {
         speaker: String,
         problem: AirPlayProblem,
     },
+    /// A member of the stereo pair or home theater group `target` stays off
+    /// by itself while the target is listed.
+    AirPlayPlaysInGroup { speaker: String, target: String },
+    /// A member of a stereo pair or home theater group asks for a password,
+    /// so the target is off.
+    AirPlayMemberNeedsPassword { target: String, member: String },
     /// AudioSync's AirPlay sender stopped after an internal error or
     /// couldn't start, so AirPlay speakers aren't listed or playing. The
     /// notice offers Retry ([`Backend::retry_airplay`]).
     AirPlayStopped,
+    /// Another app holds PTP port 319 or 320, so AirPlay speakers that need
+    /// PTP timing can't play. An AirPlay speaker that plays clears it.
+    AirPlayPtpPortsTaken,
     /// The settings file couldn't be written, so changes made now last only
     /// until AudioSync quits. Posted once until a save works again, which
     /// clears it.
@@ -455,6 +466,9 @@ pub enum NoticeMessage {
     /// The Run value is written, but Task Manager or Settings has AudioSync
     /// turned off as a startup app; it is turned on again there.
     LaunchAtLoginOffInSettings,
+    /// File > AirPlay 2 (Experimental) was turned on (`on`) or off, which
+    /// applies once AudioSync is quit and opened again.
+    AirPlay2NextLaunch { on: bool },
     /// A Google Cast speaker can't play, so it is off.
     CastCantPlay {
         speaker: String,
@@ -856,6 +870,9 @@ pub struct ViewSettings {
     pub window: Option<WindowFrame>,
     /// File > Web Remote.
     pub remote: crate::remote::RemoteSettings,
+    /// File > AirPlay 2 (Experimental), as saved; the sender reads it at
+    /// launch only.
+    pub airplay2_experimental: bool,
 }
 
 /// Clamps a typed or stepped offset to what the sync controls accept, in

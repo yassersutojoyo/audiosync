@@ -19,7 +19,7 @@ use audiosync_remote::auth::{DeviceFile, TokenStore};
 use audiosync_remote::{Command, Config, RemoteError, RemoteServer};
 use slint::{ComponentHandle, SharedString};
 
-use super::{App, availability, cast_members, cast_state, row_state, speaker_kind, with_app};
+use super::{App, availability, cast_group_note, cast_state, row_state, speaker_kind, with_app};
 use crate::Strings;
 use crate::remote::{self, Action, RemoteSettings, RowText};
 use crate::ui_model::{AppState, Speaker};
@@ -117,12 +117,7 @@ impl RowText for StringsText<'_> {
 
     fn note(&self, state: &AppState, speaker: &Speaker) -> String {
         if let Some(cast) = &speaker.cast {
-            let group_note = if cast.group.is_some() {
-                self.0
-                    .invoke_cast_group_note(cast_members(&self.0, speaker))
-            } else {
-                SharedString::default()
-            };
+            let group_note = cast_group_note(&self.0, speaker);
             let note = self
                 .0
                 .invoke_cast_note(cast_state(cast.state), cast.muted, group_note);

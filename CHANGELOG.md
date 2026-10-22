@@ -6,6 +6,21 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Added
 
+- Web Remote: control your speakers from a phone on the same network. It's off until you turn it on under Web Remote… in the gear menu or the Window menu on the Mac, or in the File menu on Windows. Open the address it shows or scan its QR code, enter the pairing code, and the phone can switch each speaker on and off, set its volume and delay and Master Volume, and show what's playing. It uses plain HTTP, so keep it to your home network. Forget All Remote Devices unpairs every phone, also while the remote is off.
+- Calibrate All Speakers, on the Mac and on Windows. It plays the test sweep on each speaker that's on, one at a time, and lists each speaker's new delay, or why it couldn't be measured. Apply sets them all as one change, Undo puts them all back, and Measure Again repeats one speaker. A Cast speaker that had no offset goes back to none on Undo, so the next run searches for it again, also after a restart.
+- On Windows, Calibrate with Microphone under a local speaker sets its delay for you, as on the Mac. If the microphone is blocked, AudioSync says so and offers to open the privacy settings.
+- A speaker group made in the Google Home app now plays as one Cast speaker, with one volume and one offset. Its row names the speakers in the group once the group reports them. Those speakers keep their own rows, but they're busy while the group plays.
+- AirPlay 2 has a switch now: turn on "AirPlay 2 (Experimental)" in the app menu or the gear menu on the Mac, or in the File menu on Windows. It's off by default, it's saved, and it takes effect the next time AudioSync starts.
+- With AirPlay 2 on, a stereo pair, or an Apple TV with HomePods as its home theater speakers, shows as one row with one switch and one volume. The row says "Stereo pair" or "Home theater group" with the speakers in it, or which one is missing. Like the rest of AirPlay 2, this hasn't been tried on real speakers yet.
+
+### Changed
+
+- AirPlay speakers can now wait up to 20 seconds instead of 3, so a long Cast offset or a large Calibrate All result plays in full instead of being cut short.
+
+## [0.6.0] - unreleased
+
+### Added
+
 - Google Cast speakers, on the Mac and on Windows. They're listed with your other speakers and start and stop with streaming, with their own volume and Mute. One plays at a time, and speaker groups made in the Google Home app can't play. If another app starts casting to a speaker AudioSync plays on, AudioSync turns it off and says so.
 - Cast has no shared clock, so AudioSync can't line a Cast speaker up by itself: you set its offset by ear under the speaker, and it's kept for that speaker. If one drifts, Resync under its volume restarts the stream with a short gap. AudioSync never does that on its own.
 - When a Cast speaker and AirPlay speakers are on together, the side that's ahead waits for the other. AirPlay can wait at most 3 seconds; past that a notice says how far ahead AirPlay plays and suggests lowering the Cast speaker's offset.

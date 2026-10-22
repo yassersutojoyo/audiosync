@@ -76,6 +76,14 @@ struct UiState {
     appearance: ui_model::Appearance,
     /// File > Web Remote.
     remote: crate::remote::RemoteSettings,
+    /// File > AirPlay 2 (Experimental) as saved, which applies at the next
+    /// launch.
+    airplay2_experimental: bool,
+    /// What the item was at launch: the mode the running sender has.
+    airplay2_at_launch: bool,
+    /// Says the item applies at the next launch, while it differs from
+    /// `airplay2_at_launch`.
+    airplay2_notice: Option<ui_model::Notice>,
     listed_virtual: ListedVirtual,
 }
 
@@ -277,6 +285,10 @@ const LOGIN_CHECK: Duration = Duration::from_secs(2);
 
 /// The Settings page where Windows turns startup apps on or off.
 const STARTUP_APPS_PAGE: &str = "ms-settings:startupapps";
+
+/// The AirPlay 2 (Experimental) notice's id, next to Launch at Sign-In's
+/// and as far from the backend's.
+const AIRPLAY2_NOTICE_ID: u64 = launch_at_login::NOTICE_ID - 1;
 
 /// How often, 20 ms apart, the saved main window size waits for the native
 /// window before it gives up (about two seconds).
@@ -799,6 +811,9 @@ impl App {
         let mut state = self.backend.borrow().snapshot();
         state.notices.extend(self.login.borrow().notice().cloned());
         state
+            .notices
+            .extend(self.ui.borrow().airplay2_notice.clone());
+        state
     }
 
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -838,7 +853,9 @@ impl App {
     }
 
     fn dismiss_notice(&self, id: u64) {
-        if self.login.borrow_mut().dismiss(id) {
+        let airplay2 =
+            id == AIRPLAY2_NOTICE_ID && self.ui.borrow_mut().airplay2_notice.take().is_some();
+        if airplay2 || self.login.borrow_mut().dismiss(id) {
             self.refresh();
         } else {
             self.update(|b| b.dismiss_notice(id));
@@ -847,6 +864,7 @@ impl App {
 
     fn dismiss_all_notices(&self) {
         self.login.borrow_mut().dismiss_notice();
+        self.ui.borrow_mut().airplay2_notice = None;
         self.update(|b| b.dismiss_all_notices());
     }
 
@@ -1280,7 +1298,7 @@ impl App {
                 format_offset_ms,
             );
             row.calibration_status = calibration_status(&strings, &state, speaker);
-            row.cast_members = cast_members(&strings, speaker);
+            row.cast_group_note = cast_group_note(&strings, speaker);
             row.group_note = group_note(&strings, speaker);
             row
         };
@@ -1433,6 +1451,8 @@ impl App {
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
         self.main.set_show_virtual_devices(ui.show_virtual);
+        self.main
+            .set_airplay2_experimental(ui.airplay2_experimental);
         self.main.set_launch_at_login(self.login.borrow().is_on());
         self.main
             .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
@@ -1752,6 +1772,10 @@ impl App {
         main.on_notices_dismissed_all(move || with_app(&w, App::dismiss_all_notices));
         let w = weak.clone();
         main.on_launch_at_login_toggled(move |on| with_app(&w, |app| app.set_launch_at_login(on)));
+        let w = weak.clone();
+        main.on_airplay2_experimental_toggled(move |on| {
+            with_app(&w, |app| app.set_airplay2_experimental(on))
+        });
         let w = weak.clone();
         main.on_notice_guide_requested(move |id| with_app(&w, |app| app.show_guide(id)));
         let w = weak.clone();
@@ -2217,6 +2241,29 @@ impl App {
         }
     }
 
+    /// Saved for the next launch: the running sender keeps the mode it
+    /// started with, which a notice says until the item is back to it.
+    fn set_airplay2_experimental(&self, on: bool) {
+        {
+            let mut ui = self.ui.borrow_mut();
+            ui.airplay2_experimental = on;
+            ui.airplay2_notice = (on != ui.airplay2_at_launch).then(|| ui_model::Notice {
+                id: AIRPLAY2_NOTICE_ID,
+                subject: "AirPlay 2 (Experimental)".to_owned(),
+                message: NoticeMessage::AirPlay2NextLaunch { on },
+                time: crate::platform::notice_time(),
+            });
+        }
+        self.log.log(|| {
+            format!(
+                "AirPlay 2 (experimental): turned {}; applies at the next launch",
+                if on { "on" } else { "off" }
+            )
+        });
+        self.remember_view();
+        self.refresh();
+    }
+
     fn show_virtual_devices(&self, on: bool) {
         {
             let mut ui = self.ui.borrow_mut();
@@ -2262,6 +2309,7 @@ impl App {
             appearance: self.ui.borrow().appearance,
             window: ui_model::frame_to_keep(self.main_window_shows(), saved.window),
             remote: self.ui.borrow().remote,
+            airplay2_experimental: self.ui.borrow().airplay2_experimental,
         };
         if settings != saved {
             backend.set_view_settings(settings);
@@ -2277,6 +2325,8 @@ impl App {
         self.ui.borrow_mut().show_virtual = saved.show_virtual_devices;
         self.ui.borrow_mut().appearance = saved.appearance;
         self.ui.borrow_mut().remote = saved.remote;
+        self.ui.borrow_mut().airplay2_experimental = saved.airplay2_experimental;
+        self.ui.borrow_mut().airplay2_at_launch = saved.airplay2_experimental;
         self.apply_appearance(saved.appearance);
         let Some(saved_frame) = saved.window else {
             return;
@@ -2897,9 +2947,10 @@ pub fn speaker_item(
             .map_or(CastState::Idle, |cast| cast_state(cast.state)),
         muted: speaker.cast.as_ref().is_some_and(|cast| cast.muted),
         volume_fixed: speaker.cast.as_ref().is_some_and(|cast| cast.volume_fixed),
+        volume_step: speaker.cast.as_ref().map_or(1.0, |cast| cast.volume_step) as f32,
         cast_group: cast_group(speaker).is_some(),
         // Needs the strings: set by the caller (`App::refresh`).
-        cast_members: SharedString::default(),
+        cast_group_note: SharedString::default(),
         group_note: SharedString::default(),
     }
 }
@@ -2908,13 +2959,19 @@ fn cast_group(speaker: &ui_model::Speaker) -> Option<&ui_model::CastGroup> {
     speaker.cast.as_ref()?.group.as_ref()
 }
 
-/// A Cast group's members as one list in the UI's words; empty while
-/// they are unknown, and for any other speaker.
-fn cast_members(strings: &Strings<'_>, speaker: &ui_model::Speaker) -> SharedString {
-    cast_group(speaker)
-        .and_then(|group| group.members.as_deref())
-        .map(|members| joined(strings, members))
-        .unwrap_or_default()
+/// The note under a Cast group's name, which Narrator reads too: what it
+/// is and its members as far as its session named them (spec C94). Empty
+/// for any other speaker.
+fn cast_group_note(strings: &Strings<'_>, speaker: &ui_model::Speaker) -> SharedString {
+    let Some(group) = cast_group(speaker) else {
+        return SharedString::default();
+    };
+    let (members, unknown) = match &group.members {
+        ui_model::CastMembers::NotReported => (SharedString::default(), false),
+        ui_model::CastMembers::Unknown => (SharedString::default(), true),
+        ui_model::CastMembers::Known(names) => (joined(strings, names), names.is_empty()),
+    };
+    strings.invoke_cast_group_note(members, unknown)
 }
 
 /// The line a stereo pair or home theater group row shows after its kind,
@@ -3390,6 +3447,10 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         | NoticeMessage::AirPlayCantPlay { speaker, problem } => {
             strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
         }
+        NoticeMessage::AirPlayPlaysInGroup { speaker, target } => strings
+            .invoke_notice_airplay_plays_in_group(speaker.as_str().into(), target.as_str().into()),
+        NoticeMessage::AirPlayMemberNeedsPassword { target, member } => strings
+            .invoke_notice_airplay_member_password(member.as_str().into(), target.as_str().into()),
         NoticeMessage::CastCantPlay { speaker, problem } => {
             strings.invoke_notice_cast(cast_problem(*problem), speaker.as_str().into())
         }
@@ -3398,6 +3459,7 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             strings.invoke_notice_airplay_ahead(seconds.into(), speaker.as_str().into())
         }
         NoticeMessage::AirPlayStopped => strings.get_notice_airplay_stopped(),
+        NoticeMessage::AirPlayPtpPortsTaken => strings.get_notice_airplay_ptp_ports_taken(),
         NoticeMessage::SettingsNotSaved => strings.get_notice_settings_not_saved(),
         NoticeMessage::PairingsNotSaved => strings.get_notice_pairings_not_saved(),
         NoticeMessage::SettingsKeptAside { file } => {
@@ -3411,6 +3473,12 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::LaunchAtLoginNotRemoved => strings.get_notice_launch_at_login_not_removed(),
         NoticeMessage::LaunchAtLoginOffInSettings => {
             strings.get_notice_launch_at_login_off_in_settings()
+        }
+        NoticeMessage::AirPlay2NextLaunch { on: true } => {
+            strings.get_notice_airplay2_on_next_launch()
+        }
+        NoticeMessage::AirPlay2NextLaunch { on: false } => {
+            strings.get_notice_airplay2_off_next_launch()
         }
         NoticeMessage::HeardTwice {
             source,
@@ -3462,11 +3530,18 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::AirPlayCantPlay { speaker, .. } => {
             (NoticeKind::AirplayCantPlay, speaker.as_str())
         }
+        NoticeMessage::AirPlayMemberNeedsPassword { target, .. } => {
+            (NoticeKind::AirplayCantPlay, target.as_str())
+        }
+        NoticeMessage::AirPlayPlaysInGroup { speaker, .. } => {
+            (NoticeKind::AirplayCantPlay, speaker.as_str())
+        }
         NoticeMessage::CastCantPlay { speaker, .. } => (NoticeKind::CastCantPlay, speaker.as_str()),
         NoticeMessage::AirPlayAheadOfCast { speaker, .. } => {
             (NoticeKind::AirplayAheadOfCast, speaker.as_str())
         }
         NoticeMessage::AirPlayStopped => (NoticeKind::AirplayStopped, ""),
+        NoticeMessage::AirPlayPtpPortsTaken => (NoticeKind::AirplayPtpPortsTaken, ""),
         NoticeMessage::SettingsNotSaved => (NoticeKind::SettingsNotSaved, ""),
         NoticeMessage::PairingsNotSaved => (NoticeKind::PairingsNotSaved, ""),
         NoticeMessage::SettingsKeptAside { .. } => (NoticeKind::SettingsKeptAside, ""),
@@ -3475,6 +3550,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::LaunchAtLoginFailed => (NoticeKind::LaunchAtLoginFailed, ""),
         NoticeMessage::LaunchAtLoginNotRemoved => (NoticeKind::LaunchAtLoginNotRemoved, ""),
         NoticeMessage::LaunchAtLoginOffInSettings => (NoticeKind::LaunchAtLoginOffInSettings, ""),
+        NoticeMessage::AirPlay2NextLaunch { .. } => (NoticeKind::Airplay2NextLaunch, ""),
         NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
     };
     strings.invoke_notice_title(kind, name.into())
@@ -3618,6 +3694,38 @@ mod tests {
             .invoke_notice_dismissed(launch_at_login::NOTICE_ID as i32);
         assert!(app.snapshot().notices.is_empty());
         assert_eq!(app.main.get_notices().row_count(), 0);
+    }
+
+    #[test]
+    fn turning_airplay2_on_says_it_applies_at_the_next_launch_until_turned_back() {
+        let app = app_over(MockBackend::new());
+        assert!(app.snapshot().notices.is_empty());
+
+        app.main.invoke_airplay2_experimental_toggled(true);
+        let notices = app.snapshot().notices;
+        assert_eq!(notices.len(), 1);
+        assert_eq!(
+            notices[0].message,
+            NoticeMessage::AirPlay2NextLaunch { on: true }
+        );
+        assert_eq!(app.main.get_notices().row_count(), 1);
+        let strings = app.main.global::<Strings>();
+        assert_eq!(
+            notice_item(&strings, &notices[0]).message,
+            "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+        );
+
+        app.main.invoke_airplay2_experimental_toggled(false);
+        assert!(app.snapshot().notices.is_empty());
+        assert_eq!(app.main.get_notices().row_count(), 0);
+
+        app.main.invoke_airplay2_experimental_toggled(true);
+        app.main.invoke_notice_dismissed(AIRPLAY2_NOTICE_ID as i32);
+        assert!(app.snapshot().notices.is_empty());
+        assert!(
+            app.ui.borrow().airplay2_experimental,
+            "dismissing keeps it on"
+        );
     }
 
     #[test]
@@ -4870,6 +4978,7 @@ mod tests {
             state: ui_model::CastState::Connecting,
             muted: true,
             volume_fixed: false,
+            volume_step: 1.0,
             group: None,
         });
         let row = speaker_item(&state, &speaker, true, false, None);
@@ -4906,7 +5015,7 @@ mod tests {
         };
         assert_eq!(
             notice_text(&strings, &ahead).as_str(),
-            "AirPlay speakers can wait at most 3 s for a Google Cast speaker, so they play \
+            "AirPlay speakers can wait at most 20 s for a Google Cast speaker, so they play \
              about 1.5 s ahead of Kitchen. Lower its offset to keep them together."
         );
         assert_eq!(
@@ -4926,58 +5035,99 @@ mod tests {
         let mut speaker = state.speaker("local:desk").unwrap().clone();
         speaker.name = "Attic".to_owned();
         speaker.kind = ui_model::SpeakerKind::Cast;
+        let group = |members| Some(ui_model::CastGroup { members });
         speaker.cast = Some(ui_model::CastRow {
             state: ui_model::CastState::Idle,
             muted: false,
             volume_fixed: false,
-            group: Some(ui_model::CastGroup { members: None }),
+            volume_step: 1.0,
+            group: group(ui_model::CastMembers::NotReported),
         });
         let row = speaker_item(&state, &speaker, true, false, None);
         assert!(row.cast && row.cast_group);
-        let members = cast_members(&strings, &speaker);
-        assert_eq!(members.as_str(), "");
-        let note = |members: &SharedString| {
-            strings.invoke_cast_note(
-                CastState::Idle,
-                false,
-                strings.invoke_cast_group_note(members.clone()),
-            )
-        };
-        assert_eq!(note(&members).as_str(), "Group, members unknown");
+        let note = |speaker: &ui_model::Speaker| cast_group_note(&strings, speaker);
+        let label = |note: SharedString| strings.invoke_cast_group_label("Attic".into(), note);
         assert_eq!(
-            strings
-                .invoke_cast_group_label("Attic".into(), members.clone())
-                .as_str(),
+            note(&speaker).as_str(),
+            "Google Cast group",
+            "before it plays"
+        );
+        assert_eq!(label(note(&speaker)).as_str(), "Attic, Google Cast group");
+
+        speaker.cast.as_mut().unwrap().group = group(ui_model::CastMembers::Unknown);
+        assert_eq!(
+            note(&speaker).as_str(),
+            "Google Cast group, members unknown"
+        );
+        assert_eq!(
+            label(note(&speaker)).as_str(),
             "Attic, Google Cast group, members unknown"
         );
 
-        speaker.cast.as_mut().unwrap().group = Some(ui_model::CastGroup {
-            members: Some(vec!["Kitchen".to_owned(), "Living Room".to_owned()]),
-        });
-        let members = cast_members(&strings, &speaker);
-        assert_eq!(members.as_str(), "Kitchen and Living Room");
-        assert_eq!(note(&members).as_str(), "Group of Kitchen and Living Room");
+        speaker.cast.as_mut().unwrap().group = group(ui_model::CastMembers::Known(vec![
+            "Kitchen".to_owned(),
+            "Living Room".to_owned(),
+        ]));
         assert_eq!(
-            strings
-                .invoke_cast_group_label("Attic".into(), members.clone())
-                .as_str(),
-            "Attic, Google Cast group of Kitchen and Living Room"
+            note(&speaker).as_str(),
+            "Google Cast group: Kitchen and Living Room"
         );
         assert_eq!(
-            strings
-                .invoke_cast_note(
-                    CastState::Connecting,
-                    false,
-                    strings.invoke_cast_group_note(members)
-                )
-                .as_str(),
+            label(note(&speaker)).as_str(),
+            "Attic, Google Cast group: Kitchen and Living Room"
+        );
+        let cast_note = |state, muted| strings.invoke_cast_note(state, muted, note(&speaker));
+        assert_eq!(
+            cast_note(CastState::Connecting, false).as_str(),
             "Connecting…",
             "where it is comes first"
+        );
+        assert_eq!(
+            cast_note(CastState::Playing, true).as_str(),
+            "Muted on the group"
+        );
+        assert_eq!(
+            cast_note(CastState::Playing, false).as_str(),
+            "Google Cast group: Kitchen and Living Room"
         );
 
         let single = state.speaker("local:desk").unwrap();
         assert!(!speaker_item(&state, single, true, false, None).cast_group);
-        assert_eq!(cast_members(&strings, single).as_str(), "");
+        assert_eq!(cast_group_note(&strings, single).as_str(), "");
+    }
+
+    #[test]
+    fn a_member_held_by_its_target_names_the_target() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let notice = NoticeMessage::AirPlayPlaysInGroup {
+            speaker: "Right".to_owned(),
+            target: "Living Room".to_owned(),
+        };
+        assert_eq!(
+            notice_text(&strings, &notice).as_str(),
+            "Right plays as part of Living Room, so it stays off by itself."
+        );
+        assert_eq!(notice_title(&strings, &notice).as_str(), "Right can't play");
+    }
+
+    #[test]
+    fn a_target_whose_member_asks_for_a_password_names_both() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let notice = NoticeMessage::AirPlayMemberNeedsPassword {
+            target: "Living Room".to_owned(),
+            member: "Right".to_owned(),
+        };
+        assert_eq!(
+            notice_text(&strings, &notice).as_str(),
+            "Right in Living Room asks for a password, so Living Room is off. Turn Living Room \
+             on again to enter it."
+        );
+        assert_eq!(
+            notice_title(&strings, &notice).as_str(),
+            "Living Room can't play"
+        );
     }
 
     #[test]
@@ -5576,6 +5726,7 @@ mod tests {
                 problem: ui_model::AirPlayProblem::Refused,
             },
             NoticeMessage::AirPlayStopped,
+            NoticeMessage::AirPlayPtpPortsTaken,
             NoticeMessage::SettingsNotSaved,
             NoticeMessage::PairingsNotSaved,
             NoticeMessage::SettingsKeptAside { file: "f".into() },
@@ -5584,6 +5735,8 @@ mod tests {
             NoticeMessage::LaunchAtLoginFailed,
             NoticeMessage::LaunchAtLoginNotRemoved,
             NoticeMessage::LaunchAtLoginOffInSettings,
+            NoticeMessage::AirPlay2NextLaunch { on: true },
+            NoticeMessage::AirPlay2NextLaunch { on: false },
         ];
         for message in messages {
             let label = dismiss_label(message.clone());

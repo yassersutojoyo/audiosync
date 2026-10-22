@@ -122,6 +122,30 @@ pub fn airplay2_switch(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
+/// The debug hook that lets the devices it names use PCM where they offer
+/// it (P74, G10): a comma-separated list of speaker IDs, with no UI.
+pub const AIRPLAY_PCM_ENV: &str = "AUDIOSYNC_AIRPLAY_PCM";
+
+/// The speaker IDs in [`AIRPLAY_PCM_ENV`]'s value, trimmed, empty ones
+/// skipped. A device ID written with colons or in lowercase
+/// (`aa:bb:cc:dd:ee:ff`) becomes the form speaker IDs use, `AABBCCDDEEFF`.
+pub fn pcm_debug_devices(value: Option<&str>) -> std::collections::BTreeSet<String> {
+    value
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(|id| {
+            let hex: String = id.chars().filter(|c| *c != ':').collect();
+            if hex.len() == 12 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                hex.to_ascii_uppercase()
+            } else {
+                id.to_owned()
+            }
+        })
+        .collect()
+}
+
 /// A new random AirPlay 2 device ID for a host to store once (P5), or
 /// `None` when the random source is unavailable.
 pub fn random_airplay2_device_id() -> Option<[u8; 6]> {
@@ -148,7 +172,7 @@ impl Default for SenderConfig {
 /// How the host wants a speaker played.
 #[derive(Clone, PartialEq)]
 pub struct SpeakerOptions {
-    /// d_s, 0 to 3000 ms (P99).
+    /// d_s, 0 to 20 000 ms (P99).
     pub delay: Duration,
     /// The speaker volume (P118).
     pub volume: Volume,
@@ -338,6 +362,10 @@ pub enum SpeakerEvent {
     AudioJack(JackStatus),
     /// The level a volume read reported (P122).
     VolumeReported(f64),
+    /// Its session bound the PTP ports after the host was told they were
+    /// taken ([`Warning::PtpUnavailable`]): a clash after this is told
+    /// again (P158).
+    PtpOpened,
     /// A PIN or password pairing on the AirPlay 2 path gave these HomeKit
     /// credentials (P152): the host stores them where secrets go and hands
     /// them back in [`SpeakerOptions::homekit_credentials`]. The sender
@@ -464,7 +492,7 @@ impl Sender {
     }
 
     /// The delay a host gives a local output with trim `local` (0 to
-    /// 3000 ms) so it plays in step with the speakers: L + d_local, counted
+    /// 20 000 ms) so it plays in step with the speakers: L + d_local, counted
     /// on the sender clock from c(n) (P114).
     pub fn local_output_delay(&self, local: Duration) -> Duration {
         self.latency() + local.min(MAX_DELAY)
@@ -658,7 +686,7 @@ impl Sender {
         self.command(Command::ForgetHomeKit(key.clone()));
     }
 
-    /// Sets a speaker's delay d_s, 0 to 3000 ms (P99, P100).
+    /// Sets a speaker's delay d_s, 0 to 20 000 ms (P99, P100).
     pub fn set_delay(&self, key: &DeviceKey, delay: Duration) {
         self.command(Command::SetDelay(key.clone(), delay));
     }

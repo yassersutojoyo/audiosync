@@ -31,6 +31,15 @@ struct NativeReceiver: Equatable {
     /// A PIN pairing's credentials are kept for it (either path), which
     /// Forget Pairing drops.
     var paired = false
+    /// The "pair:<tsid>" or "theater:<group>" ID of the stereo pair or home
+    /// theater group it plays in (P176), or "". Set only with the AirPlay 2
+    /// switch on.
+    var target = ""
+    /// A stereo pair or home theater group, listed like a speaker (P176).
+    var isTarget = false
+    /// A target with a member out of view, playing nothing, or reporting its
+    /// partner unreachable (P181).
+    var incomplete = false
 
     /// How the speaker list shows it, if at all: one that can play is open;
     /// one that asks for a PIN or a password needs a code, which AudioSync
@@ -61,6 +70,7 @@ struct NativeReceiver: Equatable {
         if !model.isEmpty { parts.append(model) }
         parts.append(availability.rawValue + (reason.map { " (\($0))" } ?? ""))
         if !hints.isEmpty { parts.append("hints: " + hints.joined(separator: " ")) }
+        if !target.isEmpty { parts.append("member of " + target) }
         return parts.joined(separator: ", ")
     }
 }

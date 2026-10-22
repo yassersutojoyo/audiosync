@@ -64,6 +64,7 @@ fn config(device: &FakeDevice) -> SessionConfig {
             title: Some("First".to_owned()),
             ..Metadata::default()
         },
+        artwork: None,
         group: None,
     }
 }
@@ -552,6 +553,70 @@ fn diagnostics_count_drift_and_resync_is_only_the_users() {
     let fresh = session.diagnostics();
     assert_eq!(fresh.rebuffers, 0);
     assert!(fresh.drift < Duration::from_millis(250));
+    session.stop();
+    device.join();
+}
+
+/// The header of a PNG of `width` by `height` pixels: all the stream server
+/// reads of it.
+fn png(width: u32, height: u32) -> Vec<u8> {
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    png.extend_from_slice(&width.to_be_bytes());
+    png.extend_from_slice(&height.to_be_bytes());
+    png.extend_from_slice(&[8, 2, 0, 0, 0]);
+    png
+}
+
+fn image_url(load: &Value) -> Option<&str> {
+    load["media"]["metadata"]["images"][0]["url"].as_str()
+}
+
+fn served(url: &str) -> Vec<u8> {
+    let (address, path) = http::split_url(url).expect("url");
+    let mut stream =
+        http::request(address, &format!("GET {path} HTTP/1.1\r\n\r\n")).expect("connects");
+    let (head, body) = http::read_response(&mut stream, Duration::from_millis(200));
+    assert_eq!(http::status(&head), 200);
+    body
+}
+
+// covers: C53, C54
+#[test]
+fn artwork_given_at_the_start_is_named_by_the_first_load_and_follows_its_track() {
+    let device = FakeDevice::start(Behavior::default());
+    let (writer, reader) = audio_ring(48_000);
+    let _feed = feed(writer, 9);
+    let selected = Arc::new(AtomicBool::new(true));
+    let cover = png(600, 600);
+    let config = SessionConfig {
+        artwork: Some(cover.clone()),
+        ..config(&device)
+    };
+    let mut session = CastSession::start(config, reader, selected, |_, _| {}).expect("plays");
+    let first = device.payloads(NS_MEDIA, "LOAD");
+    let url = image_url(&first[0]).expect("the cover's URL");
+    assert_eq!(served(url), cover);
+    assert_eq!(first[0]["media"]["metadata"]["title"], "First");
+
+    let next = png(300, 300);
+    session.set_metadata(Metadata {
+        title: Some("Second".to_owned()),
+        ..Metadata::default()
+    });
+    session.set_artwork(next.clone()).expect("served");
+    session.resync().expect("plays again");
+    let loads = device.payloads(NS_MEDIA, "LOAD");
+    let url = image_url(&loads[1]).expect("the new cover's URL");
+    assert_eq!(served(url), next);
+
+    session.set_metadata(Metadata {
+        title: Some("Third".to_owned()),
+        ..Metadata::default()
+    });
+    session.resync().expect("plays again");
+    let loads = device.payloads(NS_MEDIA, "LOAD");
+    assert_eq!(loads[2]["media"]["metadata"]["title"], "Third");
+    assert_eq!(image_url(&loads[2]), None, "no cover of the track before");
     session.stop();
     device.join();
 }

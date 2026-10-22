@@ -107,10 +107,13 @@ export struct SpeakerItem {
     muted: bool,
     // The Cast speaker's volume can't be changed from here.
     volume-fixed: bool,
-    // A Google Cast group, and its members as "A, B and C"; empty while
-    // they are unknown.
+    // How far the arrow keys move the volume: the Cast device's own step,
+    // 1 for every other row.
+    volume-step: float,
+    // A Google Cast group, and the note under its name
+    // (Strings.cast-group-note); empty for any other row.
     cast-group: bool,
-    cast-members: string,
+    cast-group-note: string,
     // A stereo pair or home theater group: what it is and its members, or
     // which member is missing (Strings.group-note); empty for any other row.
     group-note: string,
@@ -125,7 +128,7 @@ export struct GroupItem {
 }
 
 // What a notice is about, for its short name (Strings.notice-title).
-export enum NoticeKind { no-speaker, source-quit, source-switched, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast }
+export enum NoticeKind { no-speaker, source-quit, source-switched, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, airplay-ptp-ports-taken, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast, airplay2-next-launch }
 
 export struct NoticeItem {
     id: int,
