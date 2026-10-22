@@ -4349,10 +4349,14 @@ do {
     if case .level(let level)? = m.stepVolume(tv, up: false) { downLevel = level }
     check(downLevel.map { approx($0, 0.4, 1e-9) } == true, "cast step: the fallback step goes down too")
     _ = m.apply(.volume(attempt: 9, CastVolume(level: 0.4, muted: false, fixed: false, step: 0.02)))
-    check(m.setVolume(tv, position: 70) == 0.7 && m.stepVolume(tv, up: true) == .device(up: true)
-            && approx(m.volume(of: tv), 40, 1e-9),
-          "cast step: once the device reports its step, the key sends a step and the slider shows the reported level")
-    check(m.stepVolume(tv, up: false) == .device(up: false), "cast step: down by the device's step")
+    check(m.stepVolume(tv, up: true) == .device(up: true) && approx(m.volume(of: tv), 42, 1e-9),
+          "cast step: once the device reports its step, the key sends a step and the slider shows the level it should reach")
+    check(m.stepVolume(tv, up: true) == .device(up: true) && approx(m.volume(of: tv), 44, 1e-9),
+          "cast step: a second step before the device answers goes on from the level shown")
+    _ = m.apply(.volume(attempt: 9, CastVolume(level: 0.43, muted: false, fixed: false, step: 0.02)))
+    check(approx(m.volume(of: tv), 43, 1e-9), "cast step: the device's volume event replaces the level the step should reach")
+    check(m.stepVolume(tv, up: false) == .device(up: false) && approx(m.volume(of: tv), 41, 1e-9),
+          "cast step: down by the device's step")
     _ = m.apply(.volume(attempt: 9, CastVolume(level: 1, muted: false, fixed: true, step: 0.02)))
     check(m.stepVolume(tv, up: true) == nil, "cast step: a fixed volume takes no step")
     var top = CastModel()
@@ -4398,6 +4402,18 @@ do {
                                 shows: shows(next)).fields == next,
           "cast track info: a track change goes to the sender, kept for the next load")
     sender.discard()
+
+    // With no track known, Cast gets none of AudioSync's labels or its icon:
+    // blank fields, which the sender leaves out (C53), and no cover.
+    let blank = ReceiverInfo.decideForCast(track: nil, source: .system)
+    check(blank == ReceiverInfo(fields: .init(title: "", artist: "", album: ""), artwork: .neutral),
+          "cast track info: with no track known, the fields are blank, not AudioSync's labels")
+    var castFeed = TrackInfoFeed()
+    _ = castFeed.modelUpdated(sending: true)
+    let untitled = castFeed.send(sending: true, now: now, pollingSince: nil, hasReading: true, icon: nil,
+                                 shows: { (blank, nil) })
+    check(untitled.fields == blank.fields && untitled.picture == nil,
+          "cast track info: with no track known, the device gets blank fields and no cover")
 
     // A large cover fits C53: at most 1280 by 720, within the byte cap.
     let side = 2000

@@ -928,10 +928,6 @@ private struct DraftUnderline: Shape {
     }
 }
 
-/// A delay field as an AppKit text field. SwiftUI's own field shows a
-/// keystroke before its binding can turn it down, so a blocked character
-/// flashed in and out; a formatter here blocks it before it shows. AppKit's
-/// focus ring is off: `DelayFieldRing` draws the one ring the field shows.
 /// A Cast row's slider: the arrow keys and VoiceOver's adjust move the
 /// device's volume by its own step (C69); other sliders keep their own.
 private struct CastVolumeKeys: ViewModifier {
@@ -957,6 +953,10 @@ private struct CastVolumeKeys: ViewModifier {
     }
 }
 
+/// A delay field as an AppKit text field. SwiftUI's own field shows a
+/// keystroke before its binding can turn it down, so a blocked character
+/// flashed in and out; a formatter here blocks it before it shows. AppKit's
+/// focus ring is off: `DelayFieldRing` draws the one ring the field shows.
 private struct DelayTextField: NSViewRepresentable {
     /// The row's key in `delayPanels`, for the main window's click monitor.
     let rowID: String

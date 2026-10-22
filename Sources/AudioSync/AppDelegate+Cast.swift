@@ -197,17 +197,22 @@ extension AppDelegate {
     var sendsCastTrackInfo: Bool { castSender != nil && castModel.enabled != nil }
 
     /// Gives the Cast sender what changed in what the device should show,
-    /// the way `sendTrackInfo` gives AudioSync's AirPlay sender.
-    func sendCastTrackInfo(now: Date, shows: () -> (info: ReceiverInfo, artwork: NSImage?)) {
+    /// the way `sendTrackInfo` gives AudioSync's AirPlay sender, without
+    /// AudioSync's labels or icon in place of what isn't known (C53).
+    func sendCastTrackInfo(now: Date) {
         guard let sender = castSender else { return }
         let step = sender.trackInfo.send(sending: sendsCastTrackInfo, now: now, pollingSince: nowPlaying.startedAt,
-                                         hasReading: nowPlaying.hasReading, icon: NSApp.applicationIconImage,
-                                         shows: shows)
+                                         hasReading: nowPlaying.hasReading, icon: nil, shows: castShows)
         if let fields = step.fields { sender.setTrack(fields) }
         if let date = step.recheckAt { recheckTrackInfo(at: date) }
         guard let picture = step.picture else { return }
         // Encoded on the sender's queue, so it gets an image of its own.
         sender.setArtwork(picture.copy() as? NSImage ?? picture)
+    }
+
+    private func castShows() -> (info: ReceiverInfo, artwork: NSImage?) {
+        let track = nowPlaying.hasReading ? nowPlaying.track : nil
+        return (ReceiverInfo.decideForCast(track: track, source: audioSource), track?.artwork)
     }
 
     // MARK: - Rows and names

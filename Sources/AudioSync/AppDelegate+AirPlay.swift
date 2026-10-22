@@ -225,7 +225,7 @@ extension AppDelegate {
         let step = trackInfoFeed.send(sending: sendsTrackInfo, now: now, pollingSince: nowPlaying.startedAt,
                                       hasReading: nowPlaying.hasReading, icon: NSApp.applicationIconImage,
                                       shows: receiverShows)
-        sendCastTrackInfo(now: now, shows: receiverShows)
+        sendCastTrackInfo(now: now)
         if let fields = step.fields { nativeAirPlay?.setTrack(fields) }
         if let date = step.recheckAt { recheckTrackInfo(at: date) }
         guard let picture = step.picture else { return }

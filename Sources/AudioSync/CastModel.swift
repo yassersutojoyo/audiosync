@@ -508,18 +508,17 @@ struct CastModel {
     static let fallbackVolumeStep = 0.05
 
     /// An arrow key on the device's slider: one of its own steps once its
-    /// status gave one, and the slider then shows the level the device
-    /// reports; else the fallback step from the level shown. Nil when no
-    /// session runs for it or its volume is fixed.
+    /// status gave one, else the fallback step. Either way the slider, and
+    /// what VoiceOver reads back, shows the level the step should reach from
+    /// the level shown until the device's status answers. Nil when no session
+    /// runs for it or its volume is fixed.
     mutating func stepVolume(_ id: String, up: Bool) -> CastVolumeStep? {
         guard isLive(id), volumes[id]?.fixed != true else { return nil }
-        if let step = volumes[id]?.step, step > 0 {
-            if requested?.id == id { requested = nil }
-            return .device(up: up)
-        }
-        let level = min(1, max(0, volume(of: id) / 100 + (up ? Self.fallbackVolumeStep : -Self.fallbackVolumeStep)))
+        let deviceStep = volumes[id]?.step ?? 0
+        let size = deviceStep > 0 ? deviceStep : Self.fallbackVolumeStep
+        let level = min(1, max(0, volume(of: id) / 100 + (up ? size : -size)))
         requested = (id, level)
-        return .level(level)
+        return deviceStep > 0 ? .device(up: up) : .level(level)
     }
 
     /// The user's offset for `id`, as the field takes it; nil when unchanged
