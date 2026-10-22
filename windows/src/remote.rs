@@ -362,6 +362,7 @@ mod tests {
         Speaker {
             id: id.to_owned(),
             name: id.to_owned(),
+            system_name: id.to_owned(),
             kind,
             enabled: false,
             volume: 50.0,
