@@ -3,9 +3,10 @@
 
 use audiosync_core::calibrate::{self, MAX_RECORDING_FRAMES, Recording, Refusal, Refused};
 use audiosync_core::calibrate_all::{
-    ApplyRefusal, Class, EndReason, PlanError, Row, RowState, Run, SharedState, Sheet, Speaker,
-    Step, Take, Target,
+    ApplyRefusal, Class, EndReason, Measurement, PlanError, Row, RowState, Run, SharedState, Sheet,
+    Speaker, Step, Take, Target,
 };
+use audiosync_core::policy::delay::DEFAULT_AIRPLAY_DELAY_MS;
 
 const RATE: u32 = 48_000;
 
@@ -573,4 +574,304 @@ fn a_run_needs_a_local_reference_and_something_to_measure() {
         Run::new(8000, "ref", mixed()).err(),
         Some(PlanError::UnsupportedRate)
     );
+}
+
+fn measurement(row: &Row) -> Measurement {
+    match row.state {
+        RowState::Certain(m) | RowState::Uncertain(m) => m,
+        other => panic!("{} not measured: {other:?}", row.id),
+    }
+}
+
+// covers: S235
+#[test]
+fn an_empty_speaker_list_has_no_reference() {
+    assert_eq!(
+        Run::new(RATE, "ref", Vec::new()).err(),
+        Some(PlanError::NoReference)
+    );
+}
+
+// covers: S235
+#[test]
+fn a_latency_that_is_negative_infinite_or_huge_keeps_the_window_in_bounds() {
+    let speakers = vec![
+        speaker("ref", Class::Local, None, 50.0),
+        speaker("early", Class::Local, None, -500.0),
+        speaker("inf", Class::Local, None, f64::INFINITY),
+        speaker("far", Class::Local, None, 1e9),
+    ];
+    let mut run = Run::new(RATE, "ref", speakers).unwrap();
+    let steps = drive(&mut run, |_| Heard::At(50.0));
+    let window = |row| {
+        let windows: Vec<usize> = steps
+            .iter()
+            .filter(|s| s.row == row)
+            .map(|s| s.window_frames)
+            .collect();
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0], windows[1]);
+        windows[0]
+    };
+    assert_eq!(window(1), (1750.0 * 48.0) as usize);
+    assert_eq!(window(2), (1750.0 * 48.0) as usize);
+    assert_eq!(window(3), MAX_RECORDING_FRAMES);
+    assert!(
+        run.finish().rows()[1..]
+            .iter()
+            .all(|r| r.state.is_certain())
+    );
+}
+
+// covers: S236
+#[test]
+fn each_class_is_clamped_to_its_own_range_and_says_so() {
+    let speakers = vec![
+        speaker("ref", Class::Local, None, 50.0),
+        speaker("low", Class::Local, Some(-1900.0), 300.0),
+        speaker("high", Class::Local, Some(19_980.0), 50.0),
+        speaker("cast-low", Class::Cast, Some(30.0), 50.0),
+        speaker("cast-high", Class::Cast, Some(19_900.0), 300.0),
+        // Above the largest hold-back the sheet counts it as 20 000 ms, the
+        // most that plays, and moves it from there.
+        speaker("cast-over", Class::Cast, Some(30_000.0), 50.0),
+        speaker("air", Class::AirPlay, Some(19_950.0), 300.0),
+    ];
+    let mut run = Run::new(RATE, "ref", speakers).unwrap();
+    drive(
+        &mut run,
+        arrivals(&[
+            (1, [Heard::At(250.0); 2]),
+            (2, [Heard::At(10.0); 2]),
+            (3, [Heard::At(10.0); 2]),
+            (4, [Heard::At(250.0); 2]),
+            (5, [Heard::At(10.0); 2]),
+            (6, [Heard::At(150.0); 2]),
+        ]),
+    );
+    let sheet = run.finish();
+    let got: Vec<(f64, bool)> = sheet.rows()[1..]
+        .iter()
+        .map(|row| {
+            let m = measurement(row);
+            (m.new_ms, m.clamped)
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (-2000.0, true),
+            (20_000.0, true),
+            (0.0, true),
+            (20_000.0, true),
+            (19_960.0, false),
+            (20_000.0, true),
+        ]
+    );
+    assert_eq!(sheet.airplay().unwrap().new_ms, Some(20_000.0));
+
+    let speakers = vec![
+        speaker("ref", Class::Local, None, 50.0),
+        speaker("air", Class::AirPlay, Some(20.0), 50.0),
+    ];
+    let mut run = Run::new(RATE, "ref", speakers).unwrap();
+    drive(&mut run, arrivals(&[(1, [Heard::At(10.0); 2])]));
+    let sheet = run.finish();
+    let air = measurement(&sheet.rows()[1]);
+    assert_eq!((air.new_ms, air.clamped), (0.0, true));
+    assert_eq!(sheet.airplay().unwrap().new_ms, Some(0.0));
+}
+
+// covers: S236
+#[test]
+fn the_implausible_limit_is_22000_ms_on_either_sweep() {
+    let speakers = vec![
+        speaker("ref", Class::Local, None, 50.0),
+        speaker("edge", Class::Local, Some(0.0), 23_000.0),
+        speaker("past", Class::Local, None, 23_000.0),
+        speaker("tv", Class::Cast, None, 0.0),
+    ];
+    let mut run = Run::new(RATE, "ref", speakers).unwrap();
+    let steps = drive(
+        &mut run,
+        arrivals(&[
+            (1, [Heard::At(22_050.0); 2]),
+            (2, [Heard::At(22_050.0), Heard::At(22_051.0)]),
+            (3, [Heard::At(22_050.0); 2]),
+        ]),
+    );
+    assert_eq!(steps.len(), 7, "a good first sweep is followed by a second");
+    let sheet = run.finish();
+    let edge = measurement(&sheet.rows()[1]);
+    assert!(sheet.rows()[1].state.is_certain());
+    close(edge.difference_ms, 22_000.0);
+    assert_eq!((edge.new_ms, edge.clamped), (-2000.0, true));
+    assert_eq!(
+        sheet.rows()[2].state,
+        RowState::Refused(Refused {
+            reason: Refusal::Implausible,
+            recording: None,
+        })
+    );
+    let tv = measurement(&sheet.rows()[3]);
+    assert!(sheet.rows()[3].state.is_certain());
+    assert_eq!((tv.new_ms, tv.clamped), (20_000.0, true));
+}
+
+// covers: S237
+#[test]
+fn an_even_count_takes_the_mean_of_the_middle_two_and_a_spread_at_the_limit_is_certain() {
+    let speakers = vec![
+        speaker("ref", Class::Local, None, 50.0),
+        speaker("a", Class::AirPlay, Some(2000.0), 2000.0),
+        speaker("b", Class::AirPlay, Some(2000.0), 2000.0),
+        speaker("c", Class::AirPlay, Some(2000.0), 2000.0),
+        speaker("d", Class::AirPlay, Some(2000.0), 2000.0),
+    ];
+    let mut run = Run::new(RATE, "ref", speakers).unwrap();
+    // Heard 110, 100, 107 and 103 ms late: the middle two are 103 and 107.
+    drive(
+        &mut run,
+        arrivals(&[
+            (1, [Heard::At(160.0); 2]),
+            (2, [Heard::At(150.0); 2]),
+            (3, [Heard::At(157.0); 2]),
+            (4, [Heard::At(153.0); 2]),
+        ]),
+    );
+    let shared = *run.finish().airplay().unwrap();
+    assert_eq!(shared.certain_rows, 4);
+    assert_eq!(shared.new_ms, Some(2105.0));
+    close(shared.spread_ms, 10.0);
+    assert_eq!(shared.state, SharedState::Certain);
+}
+
+// covers: S237, S238
+#[test]
+fn speakers_without_a_stored_delay_apply_from_their_default_and_undo_to_none() {
+    let speakers = vec![
+        speaker("ref", Class::Local, None, 50.0),
+        speaker("air", Class::AirPlay, None, 2000.0),
+        speaker("den", Class::Local, None, 50.0),
+        speaker("tv", Class::Cast, None, 0.0),
+    ];
+    let mut run = Run::new(RATE, "ref", speakers).unwrap();
+    drive(
+        &mut run,
+        arrivals(&[
+            (1, [Heard::At(150.0); 2]),
+            (2, [Heard::At(70.0); 2]),
+            (3, [Heard::At(650.0); 2]),
+        ]),
+    );
+    let mut sheet = run.finish();
+    let shared = *sheet.airplay().unwrap();
+    assert_eq!(shared.old_ms, None);
+    assert_eq!(shared.new_ms, Some(DEFAULT_AIRPLAY_DELAY_MS + 100.0));
+    let applied = sheet.apply().unwrap();
+    let written: Vec<(Target, Option<f64>, f64)> = applied
+        .changes
+        .iter()
+        .map(|c| (c.target.clone(), c.old_ms, c.new_ms))
+        .collect();
+    assert_eq!(
+        written,
+        [
+            (Target::Speaker("den".to_owned()), None, -20.0),
+            (Target::Speaker("tv".to_owned()), None, 600.0),
+            (Target::AirPlay, None, DEFAULT_AIRPLAY_DELAY_MS + 100.0),
+        ],
+        "speakers in the order given, the AirPlay delay last"
+    );
+    assert_eq!(
+        applied.undo.undo(),
+        [
+            (Target::Speaker("den".to_owned()), None),
+            (Target::Speaker("tv".to_owned()), None),
+            (Target::AirPlay, None),
+        ]
+    );
+}
+
+// covers: S237, S238
+#[test]
+fn without_a_certain_airplay_row_only_the_other_speakers_change() {
+    let speakers = vec![
+        speaker("ref", Class::Local, None, 50.0),
+        speaker("air", Class::AirPlay, Some(1800.0), 2000.0),
+        speaker("den", Class::Local, Some(5.0), 50.0),
+    ];
+    let mut run = Run::new(RATE, "ref", speakers).unwrap();
+    drive(
+        &mut run,
+        arrivals(&[
+            (1, [Heard::At(150.0), Heard::At(190.0)]),
+            (2, [Heard::At(60.0); 2]),
+        ]),
+    );
+    let mut sheet = run.finish();
+    assert_eq!(sheet.airplay().unwrap().state, SharedState::NoneCertain);
+    let applied = sheet.apply().unwrap();
+    assert_eq!(applied.changes.len(), 1);
+    assert_eq!(applied.changes[0].target, Target::Speaker("den".to_owned()));
+    assert_eq!(applied.changes[0].new_ms, -5.0);
+}
+
+// covers: S239
+#[test]
+fn measure_again_on_an_airplay_row_works_the_shared_delay_out_again() {
+    let speakers = vec![
+        speaker("ref", Class::Local, None, 50.0),
+        speaker("a", Class::AirPlay, Some(2000.0), 2000.0),
+        speaker("b", Class::AirPlay, Some(2000.0), 2000.0),
+    ];
+    let mut run = Run::new(RATE, "ref", speakers).unwrap();
+    drive(
+        &mut run,
+        arrivals(&[(1, [Heard::At(150.0); 2]), (2, [Heard::Silence; 2])]),
+    );
+    let mut sheet = run.finish();
+    assert_eq!(sheet.airplay().unwrap().certain_rows, 1);
+    assert_eq!(sheet.airplay().unwrap().new_ms, Some(2100.0));
+    let first = sheet.rows()[1].clone();
+
+    let mut again = sheet.measure_again(2).unwrap();
+    drive(&mut again, |step| match step.take {
+        Take::Reference => Heard::At(50.0),
+        Take::Sweep(_) => Heard::At(160.0),
+    });
+    assert!(sheet.replace(again.finish()));
+    assert_eq!(sheet.rows()[1], first);
+    let shared = *sheet.airplay().unwrap();
+    assert_eq!(shared.certain_rows, 2);
+    assert_eq!(shared.new_ms, Some(2105.0));
+    close(shared.spread_ms, 10.0);
+}
+
+// covers: S239, S240
+#[test]
+fn an_ended_sheet_takes_no_row_from_another_sheet() {
+    let mut ended = Run::new(RATE, "ref", mixed()).unwrap();
+    ended.cancel(EndReason::SpeakersChanged);
+    let mut ended = ended.finish();
+    let mut run = Run::new(RATE, "ref", mixed()).unwrap();
+    drive(&mut run, |_| Heard::At(50.0));
+    let sheet = run.finish();
+    let mut again = sheet.measure_again(1).unwrap();
+    drive(&mut again, |_| Heard::At(50.0));
+    let rows = ended.rows().to_vec();
+    assert!(!ended.replace(again.finish()));
+    assert_eq!(ended.rows(), &rows[..]);
+    assert_eq!(ended.ended(), Some(EndReason::SpeakersChanged));
+}
+
+// covers: S240
+#[test]
+fn a_cancel_after_the_last_step_changes_nothing() {
+    let mut run = Run::new(RATE, "ref", mixed()).unwrap();
+    drive(&mut run, |_| Heard::At(50.0));
+    run.cancel(EndReason::SourceChanged);
+    let mut sheet = run.finish();
+    assert_eq!(sheet.ended(), None);
+    assert!(sheet.apply().is_ok());
 }
