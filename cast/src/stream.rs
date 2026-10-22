@@ -16,6 +16,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::audio::{AudioReader, Codec, FRAME_BYTES, StreamFormat};
+use crate::group::GroupRecords;
 
 /// The queue in front of a reader that doesn't keep up (C64).
 pub const QUEUE_LIMIT: Duration = Duration::from_secs(2);
@@ -337,6 +338,9 @@ struct Shared {
     pump_format: StreamFormat,
     route: Mutex<Route>,
     allowed: Mutex<Vec<IpAddr>>,
+    /// A group's records, read on every request so a handover or a new
+    /// member is answered at once (C97, C103).
+    group: Mutex<Option<GroupRecords>>,
     artwork: Mutex<Option<Artwork>>,
     live: Mutex<Live>,
     wake: Condvar,
@@ -359,6 +363,14 @@ impl Shared {
             events.pop_front();
         }
         events.push_back(event);
+    }
+
+    fn admits(&self, from: IpAddr) -> bool {
+        if lock(&self.allowed).contains(&from) {
+            return true;
+        }
+        let group = lock(&self.group).clone();
+        group.is_some_and(|records| records.allowed().contains(&from))
     }
 }
 
@@ -424,6 +436,7 @@ impl StreamServer {
                 path: format!("/{token}.{}", format.extension()),
             }),
             allowed: Mutex::new(config.allowed),
+            group: Mutex::new(None),
             artwork: Mutex::new(None),
             live: Mutex::new(Live {
                 responses: Responses::new(limit_frames),
@@ -483,10 +496,15 @@ impl StreamServer {
         lock(&self.shared.route).format
     }
 
-    /// Replaces the addresses that get an answer: a group's follow its
-    /// leader and its members (C103).
+    /// Replaces the addresses that get an answer.
     pub fn set_allowed(&self, allowed: Vec<IpAddr>) {
         *lock(&self.shared.allowed) = allowed;
+    }
+
+    /// Also answers whatever `records` hold at the time of each request: a
+    /// group's current addresses and its members' (C103).
+    pub fn follow_group(&self, records: GroupRecords) {
+        *lock(&self.shared.group) = Some(records);
     }
 
     /// Serves a group: one response per source address, at most `limit`
@@ -602,8 +620,7 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
                 // Accepted sockets inherit the listener's non-blocking mode
                 // on WinSock and BSD.
                 let _ = stream.set_nonblocking(false);
-                let allowed = lock(&shared.allowed).contains(&peer.ip());
-                if !allowed {
+                if !shared.admits(peer.ip()) {
                     shared.report(ServerEvent::Refused {
                         from: peer.ip(),
                         status: 403,
@@ -761,8 +778,7 @@ fn serve(mut stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>) {
     let Some(request) = read_request(&mut stream) else {
         return;
     };
-    let allowed = lock(&shared.allowed).contains(&from);
-    if !allowed {
+    if !shared.admits(from) {
         shared.report(ServerEvent::Refused { from, status: 403 });
         return simple_response(&mut stream, "403 Forbidden", "");
     }
