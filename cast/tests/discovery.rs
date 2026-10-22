@@ -211,7 +211,7 @@ fn the_keys_the_sender_reads_and_an_id_that_must_be_a_uuid() {
     }
 }
 
-// covers: C14, C3
+// covers: C14
 #[test]
 fn a_port_other_than_8009_marks_a_group() {
     assert_eq!(DEVICE_PORT, 8009);
