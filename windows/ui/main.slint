@@ -42,6 +42,8 @@ component SpeakerSection inherits VerticalLayout {
     callback device-volume-fix(string);
     callback cast-muted(string, bool);
     callback cast-resync(string);
+    callback calibrate(string);
+    callback cancel-calibration();
     // The part of a row with the keyboard focus changed; none: it lost it.
     callback focus-changed(string, RowPart);
     // A row built while this is its speaker's ID, or already built when it
@@ -124,6 +126,12 @@ component SpeakerSection inherits VerticalLayout {
                 }
                 cast-resync => {
                     root.cast-resync(speaker.id);
+                }
+                calibrate => {
+                    root.calibrate(speaker.id);
+                }
+                cancel-calibration => {
+                    root.cancel-calibration();
                 }
             }
         }
@@ -446,6 +454,9 @@ export component MainWindow inherits Window {
     // A Google Cast speaker's Mute or Unmute, and its Resync.
     callback cast-muted-requested(string, bool);
     callback cast-resync-requested(string);
+    // Calibrate with Microphone on a speaker's row, and its Cancel.
+    callback calibrate-requested(string);
+    callback cancel-calibration-requested();
     callback group-toggled(string);
 
     callback group-rename-requested(string);
@@ -924,6 +935,12 @@ export component MainWindow inherits Window {
                         delay-cancelled(id) => {
                             root.delay-cancelled(id);
                         }
+                        calibrate(id) => {
+                            root.calibrate-requested(id);
+                        }
+                        cancel-calibration => {
+                            root.cancel-calibration-requested();
+                        }
                         auto-connect-toggled(id, on) => {
                             root.auto-connect-toggled(id, on);
                         }
@@ -1035,6 +1052,12 @@ export component MainWindow inherits Window {
                         }
                         delay-cancelled(id) => {
                             root.delay-cancelled(id);
+                        }
+                        calibrate(id) => {
+                            root.calibrate-requested(id);
+                        }
+                        cancel-calibration => {
+                            root.cancel-calibration-requested();
                         }
                         auto-connect-toggled(id, on) => {
                             root.auto-connect-toggled(id, on);

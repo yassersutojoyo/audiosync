@@ -311,9 +311,8 @@ fn record(
                 // SAFETY: GetBuffer handed out `count` frames of float
                 // samples in the initialized format, readable until
                 // ReleaseBuffer.
-                let packet = unsafe {
-                    slice::from_raw_parts(data.cast::<f32>(), count * stream.channels)
-                };
+                let packet =
+                    unsafe { slice::from_raw_parts(data.cast::<f32>(), count * stream.channels) };
                 let scale = 1.0 / stream.channels as f32;
                 for (slot, frame) in out.iter_mut().zip(packet.chunks_exact(stream.channels)) {
                     *slot = frame.iter().sum::<f32>() * scale;

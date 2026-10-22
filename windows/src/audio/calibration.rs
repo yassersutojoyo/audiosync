@@ -19,7 +19,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
 use audiosync_core::calibrate::{
-    self, Calibration, FADE_SECONDS, MAX_RECORDING_FRAMES, MAX_RATE, MIN_RATE, Recording, Refusal,
+    self, Calibration, FADE_SECONDS, MAX_RATE, MAX_RECORDING_FRAMES, MIN_RATE, Recording, Refusal,
     Refused, SIGNAL_SECONDS,
 };
 
@@ -126,7 +126,7 @@ impl CalibrationTap {
         if !down && level >= FADE_FRAMES {
             return;
         }
-        for frame in block.chunks_exact_mut(2) {
+        for frame in block.as_chunks_mut::<2>().0 {
             if down {
                 level = level.saturating_sub(1);
             } else if level < FADE_FRAMES {
@@ -156,7 +156,7 @@ impl CalibrationTap {
         let stopping = self.stopping.load(Ordering::Acquire);
         let mut level = self.signal_level.load(Ordering::Relaxed);
         let mut next = *cursor as usize;
-        for frame in block.chunks_exact_mut(2) {
+        for frame in block.as_chunks_mut::<2>().0 {
             if next >= self.signal.len() || (stopping && level == 0) {
                 next = self.signal.len();
                 break;
@@ -292,15 +292,6 @@ pub struct Status {
 }
 
 impl Status {
-    /// What output `id`'s row shows.
-    pub fn phase_of(&self, id: &str) -> Phase {
-        if self.id.as_deref() == Some(id) {
-            self.phase
-        } else {
-            Phase::Idle
-        }
-    }
-
     /// The status once streaming, the reference or the speaker's switch may
     /// have changed: an ended run's line goes once its context moved; a
     /// running one stays, since the run checks for itself.
@@ -867,7 +858,9 @@ impl CalibrationRun {
             + STALL_S;
         let mic = match rig.open_microphone(room) {
             Ok(mic) => mic,
-            Err(MicrophoneError::Denied) => return self.fail(rig, Failure::MicrophoneDenied, now_ns),
+            Err(MicrophoneError::Denied) => {
+                return self.fail(rig, Failure::MicrophoneDenied, now_ns);
+            }
             Err(MicrophoneError::Missing) => return self.fail(rig, Failure::NoMicrophone, now_ns),
         };
         let heard = mic.id();
@@ -909,9 +902,7 @@ impl CalibrationRun {
         let spawned = thread::Builder::new()
             .name("audiosync-calibration".into())
             .spawn(move || {
-                let _ = send.send(calibrate::estimate(
-                    &signal, &reference, &chosen, rate, old,
-                ));
+                let _ = send.send(calibrate::estimate(&signal, &reference, &chosen, rate, old));
             });
         if spawned.is_err() {
             return self.fail(rig, Failure::Interrupted, now_ns);
@@ -982,10 +973,7 @@ impl CalibrationRun {
     fn end(&mut self, rig: &mut dyn Rig, phase: Phase, now_ns: u64) {
         self.phase = phase;
         self.reference_take = None;
-        let in_flight = matches!(
-            self.stage,
-            Stage::Playing { .. } | Stage::Recording { .. }
-        );
+        let in_flight = matches!(self.stage, Stage::Playing { .. } | Stage::Recording { .. });
         // Dropping the stage stops its microphone.
         self.stage = Stage::Over;
         let engine = rig.engine();
@@ -1249,7 +1237,10 @@ mod tests {
         assert!(!clamped);
         assert_eq!(rig.offsets["usb"], offset_ms);
         assert_eq!(rig.solo, None, "every output is heard again");
-        assert!(!rig.tap.engaged.load(Ordering::Relaxed), "the music is back");
+        assert!(
+            !rig.tap.engaged.load(Ordering::Relaxed),
+            "the music is back"
+        );
     }
 
     #[test]
@@ -1438,7 +1429,10 @@ mod tests {
 
     #[test]
     fn a_recording_starts_where_the_signal_entered_the_ring() {
-        assert_eq!(trim_start(1_500_000_000, 1_000_000_000, 48_000), Some(24_000));
+        assert_eq!(
+            trim_start(1_500_000_000, 1_000_000_000, 48_000),
+            Some(24_000)
+        );
         assert_eq!(trim_start(1_000_000_000, 1_500_000_000, 48_000), None);
         assert_eq!(
             recording_frames(2000.0, 48_000),
@@ -1451,9 +1445,7 @@ mod tests {
 
     #[test]
     fn a_refusal_names_the_recording_it_concerns() {
-        let refused = |reason, recording| {
-            outcome(&Err(Refused { reason, recording }))
-        };
+        let refused = |reason, recording| outcome(&Err(Refused { reason, recording }));
         assert_eq!(
             refused(Refusal::Clipped, Some(Recording::Chosen)),
             Outcome::Refuse(Failure::Clipped(Some(Which::Chosen)))
@@ -1488,7 +1480,6 @@ mod tests {
         assert_eq!(status.following(&off).phase, Phase::Idle);
         assert_eq!(status.offset_changed("usb").phase, Phase::Idle);
         assert_eq!(status.offset_changed("hdmi"), status);
-        assert_eq!(status.phase_of("hdmi"), Phase::Idle);
         let running = Status {
             phase: Phase::Running(Step::Preparing),
             ..status

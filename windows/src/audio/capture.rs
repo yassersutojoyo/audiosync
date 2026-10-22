@@ -1249,8 +1249,13 @@ mod tests {
         let signal = audiosync_core::calibrate::signal(SESSION_RATE).unwrap();
         let heard = newest(&ring, 480);
         assert!((0..480).all(|i| heard[2 * i] == signal[i] && heard[2 * i + 1] == signal[i]));
-        let played = tap.played_at_ns().expect("the block carried the signal's start");
-        assert!(played + 10_000_000 >= before, "stamped when its block closed");
+        let played = tap
+            .played_at_ns()
+            .expect("the block carried the signal's start");
+        assert!(
+            played + 10_000_000 >= before,
+            "stamped when its block closed"
+        );
     }
 
     #[test]

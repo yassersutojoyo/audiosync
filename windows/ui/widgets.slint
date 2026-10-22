@@ -758,6 +758,13 @@ export component SyncControls inherits VerticalLayout {
     in property <string> reference-name;
     // A Google Cast speaker's offset, which says so instead of the sync hint.
     in property <bool> cast;
+    // Calibrate with Microphone (see SpeakerItem).
+    in property <bool> calibratable;
+    in property <bool> calibrating;
+    in property <bool> calibration-enabled;
+    in property <string> calibration-status;
+    callback calibrate();
+    callback cancel-calibration();
     callback stepped(int);
     callback edited(string);
     // Enter in the field: apply what was typed.
@@ -874,6 +881,37 @@ export component SyncControls inherits VerticalLayout {
 
         SecondaryText {
             text: root.cast ? Strings.cast-sync-hint : Strings.sync-hint(root.reference-name);
+        }
+    }
+
+    if root.calibratable: VerticalLayout {
+        spacing: 2px;
+
+        HorizontalLayout {
+            alignment: start;
+
+            // One button for both, so the keyboard focus stays on it when
+            // a calibration starts or ends.
+            Button {
+                text: root.calibrating ? Strings.calibration-cancel : Strings.calibrate-with-microphone;
+                enabled: root.calibrating || root.calibration-enabled;
+                accessible-label: root.calibrating ? Strings.calibration-cancel-label(root.name) : Strings.calibrate-label(root.name);
+                accessible-description: root.calibration-status != "" ? root.calibration-status : Strings.calibration-hint(root.reference-name);
+                clicked => {
+                    if root.calibrating {
+                        root.cancel-calibration();
+                    } else {
+                        root.calibrate();
+                    }
+                }
+                changed has-focus => {
+                    root.focused-controls += self.has-focus ? 1 : -1;
+                }
+            }
+        }
+
+        SecondaryText {
+            text: root.calibration-status != "" ? root.calibration-status : Strings.calibration-hint(root.reference-name);
         }
     }
 }
@@ -1022,6 +1060,9 @@ export component SpeakerRow inherits Rectangle {
     // A Google Cast speaker's Mute (true) or Unmute (false), and its Resync.
     callback cast-muted(bool);
     callback cast-resync();
+    // Calibrate with Microphone, and Cancel while it runs.
+    callback calibrate();
+    callback cancel-calibration();
     // The part of the row with the keyboard focus changed; none: the row
     // lost it.
     callback focus-changed(RowPart);
@@ -1433,6 +1474,16 @@ export component SpeakerRow inherits Rectangle {
                             range-hint: root.item.delay-range-hint;
                             reference-name: root.item.reference-name;
                             cast: root.item.cast;
+                            calibratable: root.item.calibratable;
+                            calibrating: root.item.calibrating;
+                            calibration-enabled: root.item.calibration-enabled;
+                            calibration-status: root.item.calibration-status;
+                            calibrate => {
+                                root.calibrate();
+                            }
+                            cancel-calibration => {
+                                root.cancel-calibration();
+                            }
                             init => {
                                 // The field keeps what was typed (the app's draft).
                                 if root.pending-focus == RowPart.sync {

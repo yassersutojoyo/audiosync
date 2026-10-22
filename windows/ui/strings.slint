@@ -940,6 +940,75 @@ export global Strings {
         return @tr("Relative to {}. Heard this speaker first? Raise the value. Heard it late? Lower it.", reference);
     }
 
+    // Microphone calibration of a local speaker against the reference (spec
+    // S232), under its sync controls.
+    out property <string> calibrate-with-microphone: @tr("Calibrate with Microphone");
+    out property <string> calibration-cancel: @tr("Cancel");
+    out property <string> calibration-preparing: @tr("Pausing the music…");
+    out property <string> calibration-listening-chosen: @tr("Listening to this speaker…");
+    out property <string> calibration-estimating: @tr("Working out the delay…");
+    out property <string> calibration-cancelled: @tr("Calibration cancelled. The delay wasn't changed.");
+    out property <string> calibration-this-speaker: @tr("this speaker");
+    out property <string> calibration-a-speaker: @tr("a speaker");
+    out property <string> calibration-no-reference: @tr("Calibration measures against the PC's own speakers, and they aren't listed.");
+    out property <string> calibration-turn-on: @tr("Turn on streaming and this speaker to calibrate it.");
+    out property <string> calibration-microphone-denied: @tr("Windows is blocking microphone access for desktop apps. Turn on \"Let desktop apps access your microphone\" in Settings > Privacy & security > Microphone, and try again.");
+    out property <string> calibration-no-microphone: @tr("AudioSync couldn't record from the microphone. Check the input in Settings > System > Sound.");
+    out property <string> calibration-unsupported-rate: @tr("The microphone runs at a sample rate calibration can't use. Set its format to 48000 Hz in Settings > System > Sound, and try again.");
+    out property <string> calibration-source-silent: @tr("The audio source isn't sending audio, so the test sound couldn't play. Play something, or choose All System Audio as the source, and try again.");
+    out property <string> calibration-interrupted: @tr("Streaming, the speakers or their delays changed during the measurement.");
+    out property <string> calibration-too-short: @tr("The recording was too short. Try again.");
+    out property <string> calibration-too-long: @tr("The delays are too long to measure in one recording at the microphone's sample rate. Lower the largest delay, or set the microphone's format to 48000 Hz in Settings > System > Sound, and try again.");
+    out property <string> calibration-implausible: @tr("The two speakers were too far apart to measure.");
+
+    public pure function calibrate-label(name: string) -> string {
+        return @tr("Calibrate {} with the microphone", name);
+    }
+
+    public pure function calibration-cancel-label(name: string) -> string {
+        return @tr("Cancel calibrating {}", name);
+    }
+
+    public pure function calibration-hint(reference: string) -> string {
+        if reference == "" {
+            return @tr("Put the microphone where you listen. AudioSync pauses the music, plays a short, quiet sweep on the PC's own speakers and then on this speaker, and sets this speaker's delay from the difference.");
+        }
+        return @tr("Put the microphone where you listen. AudioSync pauses the music, plays a short, quiet sweep on {} and then on this speaker, and sets this speaker's delay from the difference.", reference);
+    }
+
+    public pure function calibration-listening(name: string) -> string {
+        return @tr("Listening to {}…", name);
+    }
+
+    public pure function calibration-not-playing(reference: string) -> string {
+        return @tr("Turn on streaming, this speaker and {} first.", reference);
+    }
+
+    public pure function calibration-clipped(subject: string) -> string {
+        return @tr("The microphone was overloaded while {} played. Turn the volume down or move the microphone farther away, and try again.", subject);
+    }
+
+    public pure function calibration-too-quiet(subject: string) -> string {
+        return @tr("The microphone barely heard {}. Turn the volume up or move the microphone closer, and try again.", subject);
+    }
+
+    public pure function calibration-echo(subject: string) -> string {
+        return @tr("An echo or another sound was almost as loud as {}. Give the microphone a clear line to both speakers and try again.", subject);
+    }
+
+    public pure function calibration-done(ms: int) -> string {
+        return @tr("Delay set to {}.", root.delay-value(ms));
+    }
+
+    public pure function calibration-done-clamped(ms: int) -> string {
+        return @tr("Delay set to {}, the end of the range. The measured difference is larger, so this speaker stays a little out of sync.", root.delay-value(ms));
+    }
+
+    // A calibration that changed nothing: why, then that the delay stays.
+    public pure function calibration-failed(reason: string) -> string {
+        return @tr("{} The delay wasn't changed.", reason);
+    }
+
     // The label of a delay step button: "−100", "+10".
     public pure function delay-step(delta: int) -> string {
         return delta < 0 ? "−" + (-delta) : "+" + delta;

@@ -407,6 +407,7 @@ mod tests {
             airplay_none_found: false,
             when_source_quits: Default::default(),
             cast_list: crate::ui_model::CastList::Quiet,
+            calibration: Default::default(),
         }
     }
 

@@ -63,6 +63,17 @@ export struct SpeakerItem {
     // The reference output's name for the sync hint; empty without one.
     reference-name: string,
     sync-open: bool,
+    // A local output other than the reference: its sync controls offer
+    // Calibrate with Microphone.
+    calibratable: bool,
+    // Its calibration runs: the button cancels it.
+    calibrating: bool,
+    // The button may start a calibration: streaming, this speaker on, a
+    // reference listed, and no other calibration running.
+    calibration-enabled: bool,
+    // Under the button: what a running calibration does, how the last one
+    // ended, or why none can start; empty otherwise.
+    calibration-status: string,
     auto-connect: bool,
     availability: Availability,
     // An Apple TV AudioSync keeps pairing credentials for: its menu offers

@@ -2280,10 +2280,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
         self.calibration_solo = id.map(str::to_owned);
         self.log.log(|| match id {
-            Some(id) => format!(
-                "calibration: only {} is heard",
-                label(&self.names, id)
-            ),
+            Some(id) => format!("calibration: only {} is heard", label(&self.names, id)),
             None => "calibration: every output is heard again".to_owned(),
         });
         for id in self.playing_ids() {
@@ -3303,6 +3300,42 @@ mod tests {
                 gain: 1.0,
             })
         );
+    }
+
+    #[test]
+    fn a_calibration_lets_one_output_be_heard_and_then_all_again() {
+        let mut backend = backend();
+        backend.set_output_volume(SPEAKERS, 50.0);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let gain = |backend: &MockBackend, id| backend.playing_params(id).unwrap().gain;
+        backend.set_calibration_solo(Some(SPEAKERS));
+        assert_eq!(gain(&backend, SPEAKERS), 0.125);
+        assert_eq!(gain(&backend, HEADPHONES), 0.0);
+        backend.set_output_volume(HEADPHONES, 80.0);
+        assert_eq!(
+            gain(&backend, HEADPHONES),
+            0.0,
+            "a volume change keeps it silent"
+        );
+        backend.set_calibration_solo(None);
+        assert_eq!(gain(&backend, SPEAKERS), 0.125);
+        assert!(gain(&backend, HEADPHONES) > 0.0);
+    }
+
+    #[test]
+    fn a_calibration_sees_a_restarted_session_as_another() {
+        let mut backend = backend();
+        assert_eq!(backend.calibration_engine().session, None);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let first = backend.calibration_engine();
+        assert!(first.session.is_some());
+        assert_eq!(first.playing.len(), 2);
+        assert_eq!(first.hold_backs_ms.len(), 2);
+        backend.stop();
+        poll_quietly(&mut backend, 3);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        poll_quietly(&mut backend, 3);
+        assert_ne!(backend.calibration_engine().session, first.session);
     }
 
     #[test]
