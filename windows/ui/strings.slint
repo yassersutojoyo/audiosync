@@ -404,6 +404,12 @@ export global Strings {
         return @tr("{} is in use by another app. Close that app, or stop apps from taking exclusive control of it in Sound settings. AudioSync plays to it as soon as it's free.", speaker);
     }
 
+    // A member of the stereo pair or home theater group `target` stays off
+    // by itself while the target is listed, on or off.
+    public pure function notice-airplay-plays-in-group(speaker: string, target: string) -> string {
+        return @tr("{0} plays as part of {1}, so it stays off by itself.", speaker, target);
+    }
+
     // A member of a stereo pair or home theater group asks for a password,
     // so the target is off.
     public pure function notice-airplay-member-password(member: string, target: string) -> string {
@@ -456,7 +462,7 @@ export global Strings {
             return @tr("AudioSync already plays to {}'s Apple TV, so the group is off. Turn the Apple TV off to play to the group.", speaker);
         }
         if problem == AirPlayProblem.plays-in-group {
-            return @tr("{} plays as part of its stereo pair or home theater group, so it stays off by itself. Turn the group off to play to it alone.", speaker);
+            return @tr("{} plays as part of its stereo pair or home theater group, so it stays off by itself.", speaker);
         }
         return @tr("AudioSync can't play to {}, so it's off.", speaker);
     }

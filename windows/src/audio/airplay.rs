@@ -1131,6 +1131,19 @@ impl AirPlaySpeakers {
             || (self.target_of(id).is_some() && !self.settings(id).enabled)
     }
 
+    /// The name of the stereo pair or home theater group that holds the
+    /// speaker `id`, which then stays off by itself
+    /// ([`AirPlayProblem::PlaysInGroup`]).
+    pub fn holding_target(&self, id: &str) -> Option<String> {
+        if !self.held_by_target(id) {
+            return None;
+        }
+        let target = self
+            .added_target_of(id)
+            .or_else(|| self.target_of(id).map(|target| target.id.to_string()))?;
+        self.targets.get(&target).map(|target| target.name.clone())
+    }
+
     /// The listed stereo pair or home theater group that the listed speaker
     /// `id` is a member of (P176).
     fn target_of(&self, id: &str) -> Option<&Target> {
@@ -5216,6 +5229,31 @@ pub mod tests {
         assert_eq!(
             airplay.set_enabled(&id_of(&right), true),
             Err(AirPlayProblem::PlaysInGroup)
+        );
+    }
+
+    #[test]
+    fn a_member_stays_held_while_its_pair_is_listed_even_with_the_pair_off() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        airplay.set_streaming(true);
+        assert!(airplay.enabled_ids().is_empty(), "the pair is off");
+        assert_eq!(
+            airplay.set_enabled(&id_of(&left), true),
+            Err(AirPlayProblem::PlaysInGroup)
+        );
+        assert_eq!(
+            airplay.holding_target(&id_of(&left)).as_deref(),
+            Some("Living Room")
+        );
+
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        airplay.set_enabled(PAIR, false).expect("off");
+        assert_eq!(
+            airplay.set_enabled(&id_of(&right), true),
+            Err(AirPlayProblem::PlaysInGroup),
+            "turning the pair off doesn't free it"
         );
     }
 

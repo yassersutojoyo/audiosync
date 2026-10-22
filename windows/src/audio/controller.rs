@@ -2164,6 +2164,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .and_then(AirPlaySpeakers::password_prompt)
     }
 
+    fn airplay_holding_target(&self, id: &str) -> Option<String> {
+        self.airplay.as_ref()?.holding_target(id)
+    }
+
     fn set_airplay_volume(&mut self, id: &str, position: f64) {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_volume(id, position);

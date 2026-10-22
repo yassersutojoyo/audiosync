@@ -3396,6 +3396,8 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         | NoticeMessage::AirPlayCantPlay { speaker, problem } => {
             strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
         }
+        NoticeMessage::AirPlayPlaysInGroup { speaker, target } => strings
+            .invoke_notice_airplay_plays_in_group(speaker.as_str().into(), target.as_str().into()),
         NoticeMessage::AirPlayMemberNeedsPassword { target, member } => strings
             .invoke_notice_airplay_member_password(member.as_str().into(), target.as_str().into()),
         NoticeMessage::CastCantPlay { speaker, problem } => {
@@ -3472,6 +3474,9 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         }
         NoticeMessage::AirPlayMemberNeedsPassword { target, .. } => {
             (NoticeKind::AirplayCantPlay, target.as_str())
+        }
+        NoticeMessage::AirPlayPlaysInGroup { speaker, .. } => {
+            (NoticeKind::AirplayCantPlay, speaker.as_str())
         }
         NoticeMessage::CastCantPlay { speaker, .. } => (NoticeKind::CastCantPlay, speaker.as_str()),
         NoticeMessage::AirPlayAheadOfCast { speaker, .. } => {
@@ -4995,6 +5000,21 @@ mod tests {
         let single = state.speaker("local:desk").unwrap();
         assert!(!speaker_item(&state, single, true, false, None).cast_group);
         assert_eq!(cast_group_note(&strings, single).as_str(), "");
+    }
+
+    #[test]
+    fn a_member_held_by_its_target_names_the_target() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let notice = NoticeMessage::AirPlayPlaysInGroup {
+            speaker: "Right".to_owned(),
+            target: "Living Room".to_owned(),
+        };
+        assert_eq!(
+            notice_text(&strings, &notice).as_str(),
+            "Right plays as part of Living Room, so it stays off by itself."
+        );
+        assert_eq!(notice_title(&strings, &notice).as_str(), "Right can't play");
     }
 
     #[test]

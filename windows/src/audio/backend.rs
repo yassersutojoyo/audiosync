@@ -739,6 +739,12 @@ pub trait AudioBackend {
     /// The password prompt to show, if one waits and no PIN prompt is open.
     fn airplay_password_prompt(&self) -> Option<AirPlayPasswordPrompt>;
 
+    /// The name of the stereo pair or home theater group that holds the
+    /// AirPlay speaker `id` (see [`AirPlayProblem::PlaysInGroup`]).
+    fn airplay_holding_target(&self, _id: &str) -> Option<String> {
+        None
+    }
+
     /// Sets an AirPlay speaker's volume slider position (0 to 100), live. A
     /// value that isn't finite is ignored.
     fn set_airplay_volume(&mut self, id: &str, position: f64);

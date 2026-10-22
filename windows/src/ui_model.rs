@@ -409,6 +409,9 @@ pub enum NoticeMessage {
         speaker: String,
         problem: AirPlayProblem,
     },
+    /// A member of the stereo pair or home theater group `target` stays off
+    /// by itself while the target is listed.
+    AirPlayPlaysInGroup { speaker: String, target: String },
     /// A member of a stereo pair or home theater group asks for a password,
     /// so the target is off.
     AirPlayMemberNeedsPassword { target: String, member: String },

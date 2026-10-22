@@ -1869,6 +1869,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             return;
         }
+        if problem == AirPlayProblem::PlaysInGroup
+            && let Some(target) = self.audio.airplay_holding_target(id)
+        {
+            let message = NoticeMessage::AirPlayPlaysInGroup {
+                speaker: self.airplay_name(id),
+                target,
+            };
+            self.airplay_off(id, problem, message);
+            return;
+        }
         self.airplay_cant_play(id, problem);
     }
 
