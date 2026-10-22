@@ -134,7 +134,8 @@ fn a_get_is_a_chunked_200_with_the_headers_and_range_is_ignored() {
     let stop = Arc::new(AtomicBool::new(false));
     let feeder = feed(writer, 7, Arc::clone(&stop));
     let mut stream = get(&server, "GET", "Range: bytes=1000-\r\n");
-    let (head, body) = http::read_response(&mut stream, Duration::from_millis(300));
+    // 300 ms was too short for three chunks on a busy macOS runner (CI 39722270459).
+    let (head, body) = http::read_response(&mut stream, Duration::from_millis(1000));
     assert_eq!(http::status(&head), 200, "not 206: Range is ignored");
     assert!(head.starts_with("HTTP/1.1 200"));
     assert_eq!(http::header(&head, "Content-Type"), Some("audio/wav"));
