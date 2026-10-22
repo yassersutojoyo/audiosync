@@ -572,14 +572,17 @@ fn pair_verify_checks_m2_and_ends_with_the_x25519_secret() {
         "{end:?}"
     );
 
-    // Error 7 is Busy, any other error item or a non-200 answer means
-    // rejected credentials, 409 is Busy, 401 a challenge (P58).
+    // Error 7 is Busy, any other error item, a 470 or another 4xx means
+    // rejected credentials, 409 is Busy, 401 a challenge (P58), and a 5xx
+    // is a passing fault that keeps them (P154).
     for (answer, expected) in [
         (Answer::Error(7), Some(ErrorKind::Busy)),
         (Answer::Error(2), Some(ErrorKind::PairingRequired)),
         (Answer::Error(1), Some(ErrorKind::PairingRequired)),
         (Answer::Status(470), Some(ErrorKind::PairingRequired)),
-        (Answer::Status(500), Some(ErrorKind::PairingRequired)),
+        (Answer::Status(403), Some(ErrorKind::PairingRequired)),
+        (Answer::Status(500), Some(ErrorKind::Refused)),
+        (Answer::Status(503), Some(ErrorKind::Refused)),
         (Answer::Status(409), Some(ErrorKind::Busy)),
         (Answer::Status(401), None),
     ] {

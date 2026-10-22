@@ -338,6 +338,66 @@ fn an_airplay2_session_waiting_for_its_retry_keeps_its_place_until_removed() {
     sender.shutdown();
 }
 
+// covers: P169
+#[test]
+fn a_retry_that_starts_on_airplay1_hands_the_airplay2_place_on() {
+    let _serial = serial();
+    let mut busy = FakeAp2::new();
+    busy.status.insert("SETUP session".to_owned(), 453);
+    let first = Ap2Server::start(busy);
+    let second = Ap2Server::start(FakeAp2::new());
+    let airplay1 = NetReceiver::start(Behavior::default());
+    let (sender, _host) = start();
+    let mut events = Events::default();
+
+    let a = airplay2_only(&first, 52);
+    let a_key = a.key.clone();
+    sender.add_speaker(a, options());
+    assert!(
+        events
+            .wait_state(&sender, &a_key, 1, LONG, |s| matches!(
+                s,
+                SpeakerState::Retrying { .. }
+            ))
+            .is_some(),
+        "{:?}",
+        events.of(&a_key)
+    );
+    let b = airplay2_only(&second, 53);
+    let b_key = b.key.clone();
+    sender.add_speaker(b, options());
+    assert!(
+        events
+            .wait_state(&sender, &b_key, 1, LONG, |s| *s == SpeakerState::Failed)
+            .is_some(),
+        "{:?}",
+        events.of(&b_key)
+    );
+
+    // The retrying speaker now advertises AirPlay 1 too, so its next start
+    // runs there and no longer holds the AirPlay 2 place.
+    let raop = airplay1.record(52, PCM_TXT);
+    let airplay = airplay_record(first.address.port(), 52);
+    let both = Device::from_records(a_key.clone(), Some(&raop), Some(&airplay)).expect("device");
+    sender.add_speaker(both, options());
+    assert!(
+        events
+            .wait_state(&sender, &a_key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?}",
+        events.of(&a_key)
+    );
+    assert!(
+        events
+            .wait_state(&sender, &b_key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?}",
+        events.of(&b_key)
+    );
+    assert_eq!(second.fake().connections, 1);
+    sender.shutdown();
+}
+
 // covers: P5, P152
 #[test]
 fn homekit_credentials_and_the_device_id_persist_through_the_host() {
