@@ -91,6 +91,11 @@ extension AppDelegate {
         a.setCastMuted = { [weak self] id, muted in self?.setCastMuted(id, muted) }
         a.resyncCast = { [weak self] id in self?.resyncCast(id) }
         a.setCastOffset = { [weak self] id, ms in self?.setCastOffset(id, ms) }
+        a.addCastAddress = { [weak self] typed, done in
+            guard let self else { return done(false) }
+            self.addCastAddress(typed, completion: done)
+        }
+        a.removeCastAddress = { [weak self] id in self?.removeCastAddress(id) }
         a.openMainWindow = { [weak self] in self?.showMainWindow() }
         a.openGuide = { [weak self] in self?.openGuideWindow() }
         a.openEqualizer = { [weak self] in self?.openEqualizerWindow() }
@@ -228,6 +233,7 @@ extension AppDelegate {
         publish(\.local, localSnapshot())
         publish(\.cast, castSnapshot())
         publish(\.castList, castModel.listState(now: Date()))
+        publish(\.castCanAdd, castSender != nil && castModel.discovery != .off)
         appModel.speakersListed(Set(appModel.airplay.map(\.id) + appModel.local.map(\.id) + appModel.cast.map(\.id)))
         publish(\.hasLocalReference, localReference != nil)
         publish(\.airPlayDelayMs, airPlayLatencyMs.rounded())

@@ -168,6 +168,10 @@ struct MainView: View {
                                     set: { if !$0 { model.actions.closeCalibrateAll() } })) {
             CalibrateAllSheetView(model: model).tint(accent)
         }
+        // On the content, not the window's root: one view holds one sheet.
+        .background {
+            Color.clear.sheet(isPresented: $model.castAddShown) { CastAddressSheet(model: model).tint(accent) }
+        }
     }
 
     /// The scroll list's soft top and bottom edge, shorter than the gap
@@ -401,6 +405,15 @@ struct MainView: View {
                         // Say where AirPlay or the Google Cast search stands, under the rows.
                         Divider()
                         emptyNote(note, hint: hasAirPlay ? nil : hint, under: speakers)
+                    }
+                    if connected && model.castCanAdd {
+                        Divider()
+                        Button(model.text.castAddByAddress) { model.castAddShown = true }
+                            .controlSize(.small)
+                            .help(model.text.castAddBody)
+                            .accessibilityHint(model.text.castAddBody)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
                     }
                 }
             }
@@ -714,6 +727,7 @@ struct SpeakerRow: View {
                 Button(cast.muted ? t.castUnmute : t.castMute) { model.actions.setCastMuted(speaker.id, !cast.muted) }
                 Button(t.castResync) { model.actions.resyncCast(speaker.id) }
             }
+            if cast.manual { Button(t.castRemove) { model.actions.removeCastAddress(speaker.id) } }
         } else {
             autoConnectToggle(t)
             if speaker.paired {
