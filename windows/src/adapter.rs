@@ -6850,11 +6850,16 @@ mod tests {
         adapter.poll();
         adapter.set_speaker_enabled(&ap(&kitchen), true);
         adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
-        adapter.set_speaker_delay(&cc(CAST_LIVING), 3000.0);
+        adapter.set_speaker_delay(&ap(&kitchen), 3250.0);
+        adapter.set_speaker_delay(&cc(CAST_LIVING), 15_000.0);
         adapter.poll();
-        assert!(messages(&adapter).is_empty(), "1.25 s more is within reach");
-        // L is 1.75 s: 6.25 s asks 4.5 s of the AirPlay speakers, 3 s at most.
-        adapter.set_speaker_delay(&cc(CAST_LIVING), 6250.0);
+        assert!(
+            messages(&adapter).is_empty(),
+            "13.25 s more is within reach"
+        );
+        // L is 1.75 s: 20 s asks 18.25 s on top of Kitchen's own 3.25 s,
+        // 1.5 s past the sender's 20 s.
+        adapter.set_speaker_delay(&cc(CAST_LIVING), 20_000.0);
         adapter.poll();
         assert_eq!(
             messages(&adapter),

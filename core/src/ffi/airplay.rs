@@ -3341,7 +3341,12 @@ mod tests {
         let c_id = c_string(id);
         // SAFETY: a live handle, used by this thread only; a C string.
         unsafe {
-            assert_eq!(asc_airplay_set_hold_back(handle, 5000.0), 3000.0);
+            assert_eq!(
+                f64::from(AIRPLAY_MAX_DELAY_MS),
+                crate::policy::delay::MAX_DELAY_MS
+            );
+            assert_eq!(asc_airplay_set_hold_back(handle, 13_000.0), 13_000.0);
+            assert_eq!(asc_airplay_set_hold_back(handle, 25_000.0), 20_000.0);
             assert_eq!(asc_airplay_set_hold_back(handle, f64::NAN), 0.0);
             assert_eq!(asc_airplay_set_hold_back(handle, -20.0), 0.0);
             assert_eq!(asc_airplay_set_hold_back(handle, 1000.0), 1000.0);

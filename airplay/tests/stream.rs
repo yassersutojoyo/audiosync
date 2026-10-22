@@ -9,13 +9,15 @@ mod common;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::time::Duration;
 
-use audiosync_airplay::audio::{FRAMES_PER_PACKET, Frame};
+use audiosync_airplay::alac;
+use audiosync_airplay::audio::{FRAMES_PER_PACKET, Frame, PCM_PAYLOAD_BYTES};
 use audiosync_airplay::rtp::{RESEND_PREFIX_BYTES, ResendRequest, SyncPacket};
 use audiosync_airplay::sdp::Codec;
 use audiosync_airplay::session::{MediaDestinations, ReceiverPorts};
-use audiosync_airplay::store::{DELAY_PACKETS, HISTORY_PACKETS, STORE_PACKETS};
+use audiosync_airplay::store::{DELAY_PACKETS, HISTORY_PACKETS, PayloadStore, STORE_PACKETS};
 use audiosync_airplay::stream::{
-    DEFAULT_LATENCY_FRAMES, LocalSocket, PacketKind, SpeakerId, StreamConfig, StreamEvent,
+    DEFAULT_LATENCY_FRAMES, LocalSocket, MAX_DELAY, PacketKind, SpeakerId, StreamConfig,
+    StreamEvent,
 };
 use audiosync_airplay::volume::Volume;
 use common::rig::{Host, Rig, decode, destinations, host_frame, speaker};
@@ -306,10 +308,21 @@ fn buffers_are_sized_by_the_spec_and_allocated_at_the_start() {
     let mut rig = Rig::with_host();
     assert_eq!(rig.stream.input_frames(), 2 * 44_100);
     // One payload store per codec covers the resend history plus the
-    // largest delay (and M): 1024 + 376 packets and a little more.
-    assert_eq!(DELAY_PACKETS, 376);
+    // largest delay (and M): 1024 + 2506 packets and a little more.
+    assert_eq!(MAX_DELAY, Duration::from_secs(20));
+    assert_eq!(DELAY_PACKETS, 2506);
     assert!(rig.stream.store_packets() >= HISTORY_PACKETS + DELAY_PACKETS);
     assert_eq!(rig.stream.store_packets(), STORE_PACKETS);
+    // What the 20 s costs: about 5 MB a store, at most 30 s of audio.
+    for bytes in [PCM_PAYLOAD_BYTES, alac::FRAME_BYTES] {
+        let store = PayloadStore::new(STORE_PACKETS, bytes);
+        assert!(
+            store.memory_bytes() <= 5_100_000,
+            "{}",
+            store.memory_bytes()
+        );
+    }
+    assert!(rig.stream.store_packets() * FRAMES_PER_PACKET <= 30 * 44_100);
     // A speaker with its own encoding gets a store of the same size.
     let mut config = speaker(1, Codec::Alac);
     config.software_volume = Some(Volume::Db(-10.0));
@@ -317,11 +330,11 @@ fn buffers_are_sized_by_the_spec_and_allocated_at_the_start() {
     let plain = rig.add(speaker(2, Codec::Alac));
     assert_eq!(rig.stream.own_store_packets(own), Some(STORE_PACKETS));
     assert_eq!(rig.stream.own_store_packets(plain), None);
-    // A delayed speaker finds its packets 3 s later.
+    // A speaker at the largest delay finds its packets 20 s later.
     let mut config = speaker(3, Codec::Alac);
-    config.delay = Duration::from_millis(3000);
+    config.delay = MAX_DELAY;
     let delayed = rig.add(config);
-    rig.run_for(Duration::from_secs(6));
+    rig.run_for(Duration::from_secs(23));
     let audio = rig.audio(delayed);
     assert!(audio.len() > 300);
     for packet in &audio {
@@ -510,20 +523,20 @@ fn sync_latency_and_times() {
     }
 }
 
-// covers: P4, P96, P99, P102
+// covers: P4, P84, P96, P99, P102
 #[test]
 fn per_speaker_delay() {
     let mut rig = Rig::with_host();
     let near = rig.add(speaker(1, Codec::Alac));
     let mut config = speaker(2, Codec::Alac);
-    config.delay = Duration::from_millis(750);
+    config.delay = Duration::from_millis(13_000);
     let far = rig.add(config);
-    rig.run_for(Duration::from_secs(6));
+    rig.run_for(Duration::from_secs(18));
 
     // Each speaker states P_s(n) = c(n) + L + d_s for the frame it names
     // (P96, P99), with the same latency field (P99).
     let mut stated_by = Vec::new();
-    for (id, delay) in [(near, 0.0), (far, 0.75)] {
+    for (id, delay) in [(near, 0.0), (far, 13.0)] {
         let syncs = rig.syncs(id);
         assert!(syncs.len() >= 4);
         let mut points = Vec::new();
@@ -538,7 +551,8 @@ fn per_speaker_delay() {
     }
     // One timeline for both (P4): for every frame the far speaker names,
     // the near one's statements, carried along the shared c(n), put it
-    // exactly 750 ms earlier, within one frame (P102).
+    // exactly 13 s earlier, within one frame (P102).
+    assert!(stated_by[1].len() >= 4);
     for &(n, far_time) in &stated_by[1] {
         let &(m, near_time) = stated_by[0]
             .iter()
@@ -546,10 +560,24 @@ fn per_speaker_delay() {
             .expect("a near statement");
         let near_for_n = near_time + (rig.c(n) - rig.c(m));
         assert!(
-            (far_time - near_for_n - 0.75).abs() < 1.0 / 44_100.0,
+            (far_time - near_for_n - 13.0).abs() < 1.0 / 44_100.0,
             "frame {n}"
         );
     }
+    // The far speaker's packets leave 13 s after the near one's (P84).
+    let near_audio = rig.audio(near);
+    let mut matched = 0;
+    for packet in rig.audio(far) {
+        let j = packet_of(&rig, far, packet.header.timestamp);
+        if let Some(same) = near_audio
+            .iter()
+            .find(|a| packet_of(&rig, near, a.header.timestamp) == j)
+        {
+            assert!((packet.at - same.at - 13.0).abs() <= 0.005, "packet {j}");
+            matched += 1;
+        }
+    }
+    assert!(matched > 400, "{matched}");
 }
 
 // covers: P100
