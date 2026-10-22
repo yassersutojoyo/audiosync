@@ -536,7 +536,8 @@ impl TrackInfo {
 /// after the track changed, which is the previous track's.
 #[derive(Default)]
 struct TimelineGuard {
-    /// The fields shown last, and the timeline read with them.
+    /// The fields shown last, and the last timeline read while they showed,
+    /// paused or playing.
     timed: Option<(TrackFields, Option<RawTimeline>)>,
     /// The previous track's timeline, while the reading still has it.
     stale: Option<RawTimeline>,
@@ -551,26 +552,35 @@ impl TimelineGuard {
         fields: &TrackFields,
         now: Instant,
     ) -> Option<Progress> {
-        let timeline = track
-            .filter(|track| track.session.playing)
-            .and_then(|track| track.timeline);
-        let raw = timeline.map(|timeline| timeline.raw);
-        if self
-            .timed
-            .as_ref()
-            .is_some_and(|(timed, _)| timed != fields)
+        if self.timed.as_ref().is_none_or(|(timed, _)| timed != fields) {
+            if let Some(previous) = self.timed.take().and_then(|(_, last)| last) {
+                self.stale = Some(previous);
+            }
+            self.timed = Some((fields.clone(), None));
+        }
+        if let Some(raw) = track
+            .and_then(|track| track.timeline)
+            .map(|timeline| timeline.raw)
         {
-            self.stale = self.timed.take().and_then(|(_, raw)| raw);
-        }
-        if raw.is_some() && raw == self.stale {
-            return None;
-        }
-        if raw.is_some() {
+            if self.stale.is_some_and(|stale| same_place(stale, raw)) {
+                return None;
+            }
             self.stale = None;
+            if let Some((_, last)) = &mut self.timed {
+                *last = Some(raw);
+            }
         }
-        self.timed = Some((fields.clone(), raw));
-        timeline?.progress_at(now)
+        track
+            .filter(|track| track.session.playing)
+            .and_then(|track| track.timeline)?
+            .progress_at(now)
     }
+}
+
+/// Whether two timelines put a track at the same place. The update time is
+/// left out: an app may refresh it on a timeline it no longer advances.
+fn same_place(one: RawTimeline, other: RawTimeline) -> bool {
+    (one.start, one.end, one.position) == (other.start, other.end, other.position)
 }
 
 /// Whether `sent` at `sent_at` still says what `next` says at `now`: both
@@ -1339,6 +1349,59 @@ mod tests {
             .sync(Some(&whole_system()), next)
             .expect("its own timeline is sent");
         assert_eq!(sent.progress, progress(2, 240));
+    }
+
+    #[test]
+    fn a_track_change_after_a_pause_still_drops_the_previous_tracks_timeline() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        let source = app("Spotify.exe", "Spotify");
+        info.sync(Some(&source), start);
+        let first = timed("First", true, 170, 180, start);
+        let left = first.timeline;
+        reader.read(Some(first));
+        info.sync(Some(&source), start);
+        reader.read(Some(track("Spotify.exe", "First", false, Some(COVER))));
+        info.sync(Some(&source), start + POLL_INTERVAL);
+
+        let later = start + POLL_INTERVAL * 2;
+        reader.read(Some(Track {
+            timeline: left,
+            ..track("Spotify.exe", "Second", true, Some(COVER))
+        }));
+        let sent = info
+            .sync(Some(&source), later)
+            .expect("the new track is sent");
+        assert_eq!(
+            sent.progress, None,
+            "the old timeline isn't the new track's"
+        );
+    }
+
+    #[test]
+    fn an_old_timeline_with_a_fresh_update_time_is_still_the_old_one() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        let wall = 13_000_000_000;
+        reader.read(Some(Track {
+            timeline: Timeline::read(raw(0, 180, 170, wall), wall * SECOND, start),
+            ..track("Spotify.exe", "First", true, Some(COVER))
+        }));
+        info.sync(Some(&whole_system()), start);
+
+        let later = start + POLL_INTERVAL;
+        let refreshed = wall + 2;
+        reader.read(Some(Track {
+            timeline: Timeline::read(raw(0, 180, 170, refreshed), refreshed * SECOND, later),
+            ..track("Spotify.exe", "Second", true, Some(COVER))
+        }));
+        let sent = info
+            .sync(Some(&whole_system()), later)
+            .expect("the new track is sent");
+        assert_eq!(sent.progress, None);
     }
 
     #[test]
