@@ -1,0 +1,12 @@
+# Clauses of docs/CAST_SPEC.md that a later stage of the sender implements,
+# so no test covers them yet. One per line: the clause ID, a space, the reason.
+# tests/spec_coverage.rs fails if a clause listed here gains a `// covers:`
+# test, so this list only shrinks. "Partly done" names what already exists.
+
+# Connection.
+C20 TLS 1.2 with ECDHE-RSA AES-GCM and CBC suites: the platform TLS stacks offer them, but native-tls can't pin a server suite in a test; G4 records what devices accept (partly done: TLS 1.2 minimum, a TLS 1.2-only server connects, handshake errors carry the TLS stack's reason).
+
+# Timing: hardware.
+C74 Latency of seconds: hardware, G7.
+C75 Growing latency: hardware, G7 (partly done: drops and rebuffers are counted, C79).
+C77 Measured-offset output: hardware, G7 (partly done: OUTPUT_SYNC says measured offset, DeviceMemory stores the offset per device id and changes it only on the host's request, and the Mac and Windows apps set it from the speaker's delay control, say it is set by ear, keep it between runs and hold their local and AirPlay speakers, or the Cast feed, back so both play at the longer of L and the offset; the offset per model and format and its drift wait for the measurements of G7).

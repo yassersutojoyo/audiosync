@@ -24,6 +24,8 @@ exceptions = [
     # own crates, so no third-party crate may bring a GPL license in.
     { crate = "audiosync-core", allow = ["GPL-3.0-or-later"] },
     { crate = "audiosync-airplay", allow = ["GPL-3.0-or-later"] },
+    { crate = "audiosync-cast", allow = ["GPL-3.0-or-later"] },
+    { crate = "audiosync-remote", allow = ["GPL-3.0-or-later"] },
 ]
 # Test, benchmark and build tools are held to the same list as the library.
 include-dev = true

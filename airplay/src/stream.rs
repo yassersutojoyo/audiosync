@@ -27,12 +27,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::alac;
+use crate::ap2::audio::{PacketSealer, SEALED_OVERHEAD, StreamKey};
 use crate::audio::{self, FRAMES_PER_PACKET, PACKET_FRAMES, PCM_PAYLOAD_BYTES, PacketFrames};
 use crate::clock::SenderClock;
 use crate::input::{self, InputReader, InputWriter};
 use crate::rate::{MAX_MARGIN, Margin, NOMINAL_RATE, RateModel};
 
-use crate::rtp::{self, HEADER_BYTES, RESEND_PREFIX_BYTES, ResendRequest, RtpHeader, SyncPacket};
+use crate::rtp::{
+    self, HEADER_BYTES, RESEND_PREFIX_BYTES, ResendRequest, RtpHeader, SyncPacket, TimeAnnounce,
+};
 use crate::sdp::Codec;
 use crate::session::MediaDestinations;
 use crate::store::{DELAY_PACKETS, HISTORY_PACKETS, MARGIN_PACKETS, PayloadStore, STORE_PACKETS};
@@ -44,8 +47,9 @@ pub const DEFAULT_LATENCY_FRAMES: u32 = 77_175;
 pub const MIN_LATENCY_FRAMES: u32 = 11_025;
 /// The largest Lf the host may set: 2.0 s (P98).
 pub const MAX_LATENCY_FRAMES: u32 = 88_200;
-/// The largest per-speaker delay (P99).
-pub const MAX_DELAY: Duration = Duration::from_millis(3000);
+/// The largest per-speaker delay (P99): the host's own 20 s delay range, so
+/// a Calibrate All result or a Cast hold-back up to it is played in full.
+pub const MAX_DELAY: Duration = Duration::from_millis(20_000);
 /// Delay changes closer together than this become one flush (P100).
 pub const DELAY_MERGE: Duration = Duration::from_millis(250);
 /// A retransmission request asks for at most this many packets (P88).
@@ -83,7 +87,7 @@ impl Default for StreamConfig {
 pub struct SpeakerId(u64);
 
 /// What the stream needs to know about a speaker whose RECORD succeeded.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpeakerConfig {
     /// The session's codec (P74).
     pub codec: Codec,
@@ -94,7 +98,7 @@ pub struct SpeakerConfig {
     /// The sequence number and timestamp its RECORD announced (P32, P79).
     pub first_seq: u16,
     pub first_rtptime: u32,
-    /// d_s, clamped to 0 to 3000 ms (P99).
+    /// d_s, clamped to 0 to 20 000 ms (P99).
     pub delay: Duration,
     /// `Some` for a receiver with `sv=true`: the samples are scaled by this
     /// volume before encoding, in an encoding of its own (P121).
@@ -106,6 +110,18 @@ pub struct SpeakerConfig {
     /// The receiver's `Audio-Latency` in frames, reported and never used
     /// (P110).
     pub audio_latency: Option<u32>,
+    /// `Some` for an AirPlay 2 session: its packets are sealed (P155).
+    pub airplay2: Option<Ap2Audio>,
+}
+
+/// How an AirPlay 2 speaker's packets differ (P155, P166).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ap2Audio {
+    /// The `shk` of the stream SETUP (P156).
+    pub key: StreamKey,
+    /// Under PTP timing, the clock identity: time-announce packets take the
+    /// place of sync packets (P166).
+    pub clock_identity: Option<[u8; 8]>,
 }
 
 impl SpeakerConfig {
@@ -127,6 +143,7 @@ impl SpeakerConfig {
             software_volume: None,
             software_mute: false,
             audio_latency: None,
+            airplay2: None,
         }
     }
 }
@@ -329,7 +346,7 @@ impl StreamCounters {
 }
 
 /// The local delay a host gives an output that used the engine's stored
-/// delay setting, migrated once (P114): clamp(configured − L, 0, 3000 ms).
+/// delay setting, migrated once (P114): clamp(configured − L, 0, 20 000 ms).
 pub fn migrate_local_delay(configured: Duration, latency: Duration) -> Duration {
     configured.saturating_sub(latency).min(MAX_DELAY)
 }
@@ -437,6 +454,59 @@ struct Speaker {
     receiver_latency: Option<u32>,
     first_sound: f64,
     counters: Arc<SpeakerCounters>,
+    /// An AirPlay 2 session's sealed packets (P155).
+    sealed: Option<SealedStore>,
+    /// Under PTP timing: time-announce packets in place of sync (P166).
+    clock_identity: Option<[u8; 8]>,
+}
+
+/// An AirPlay 2 speaker's sealer and its last 1024 sealed packets, kept as
+/// sent so a resend is byte-identical (P87, P155). Allocated whole when the
+/// speaker joins (P111).
+struct SealedStore {
+    sealer: PacketSealer,
+    /// One slot per history entry, `slot_bytes` each.
+    slots: Box<[u8]>,
+    lengths: Box<[usize]>,
+    slot_bytes: usize,
+}
+
+impl std::fmt::Debug for SealedStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SealedStore")
+            .field("sealer", &self.sealer)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SealedStore {
+    fn new(key: &StreamKey, codec: Codec) -> SealedStore {
+        let slot_bytes = payload_bytes(codec) + SEALED_OVERHEAD;
+        SealedStore {
+            sealer: PacketSealer::new(key),
+            slots: vec![0u8; slot_bytes * HISTORY_PACKETS].into_boxed_slice(),
+            lengths: vec![0usize; HISTORY_PACKETS].into_boxed_slice(),
+            slot_bytes,
+        }
+    }
+
+    /// Seals a packet into history slot `slot` and gives its bytes.
+    fn seal(&mut self, slot: usize, header: &[u8; HEADER_BYTES], payload: &[u8]) -> &[u8] {
+        let length = (payload.len() + SEALED_OVERHEAD).min(self.slot_bytes);
+        let start = slot * self.slot_bytes;
+        let out = &mut self.slots[start..start + length];
+        self.sealer
+            .seal_into(header, &payload[..length - SEALED_OVERHEAD], out);
+        self.lengths[slot] = length;
+        &self.slots[start..start + length]
+    }
+
+    /// The packet sealed into history slot `slot`, as sent.
+    fn get(&self, slot: usize) -> Option<&[u8]> {
+        let length = *self.lengths.get(slot)?;
+        let start = slot * self.slot_bytes;
+        (length > 0).then(|| &self.slots[start..start + length])
+    }
 }
 
 impl Speaker {
@@ -489,12 +559,27 @@ fn send(
     if marker || starts_sync_mark(packet) {
         let latency = context.latency_frames;
         let heard = (packet * PACKET_FRAMES) as i64 - i64::from(latency);
-        let sync = SyncPacket {
-            first: marker,
-            seq: speaker.sync_seq,
-            rtp_heard: rtptime.wrapping_sub(latency),
-            time: context.clock.ntp_at(context.heard(heard, speaker.delay)),
-            next_rtp: rtptime,
+        let at = context.heard(heard, speaker.delay);
+        let bytes = match speaker.clock_identity {
+            Some(clock_identity) => TimeAnnounce {
+                first: marker,
+                seq: speaker.sync_seq,
+                rtp_heard: rtptime.wrapping_sub(latency),
+                nanos: context.clock.ptp_at(at).total_nanos(),
+                next_rtp: rtptime,
+                clock_identity,
+            }
+            .encode()
+            .to_vec(),
+            None => SyncPacket {
+                first: marker,
+                seq: speaker.sync_seq,
+                rtp_heard: rtptime.wrapping_sub(latency),
+                time: context.clock.ntp_at(at),
+                next_rtp: rtptime,
+            }
+            .encode()
+            .to_vec(),
         };
         speaker.sync_seq = speaker.sync_seq.wrapping_add(1);
         transmits.push_back(Transmit {
@@ -502,7 +587,7 @@ fn send(
             kind: PacketKind::Sync,
             from: LocalSocket::Control,
             to: speaker.destinations.control,
-            bytes: sync.encode().to_vec(),
+            bytes,
         });
     }
     let number = context.packet_base + packet;
@@ -519,11 +604,20 @@ fn send(
             Codec::Pcm => silence.0,
         };
         let (payload, silent) = context
-            .payload(speaker, number)
+            .payload(speaker.own.as_ref(), speaker.codec, number)
             .unwrap_or((fallback, FRAMES_PER_PACKET as u16));
-        let mut bytes = Vec::with_capacity(HEADER_BYTES + payload.len());
-        bytes.extend_from_slice(&header.encode());
-        bytes.extend_from_slice(payload);
+        let header = header.encode();
+        let bytes = match &mut speaker.sealed {
+            Some(sealed) => sealed
+                .seal(usize::from(seq) % HISTORY_PACKETS, &header, payload)
+                .to_vec(),
+            None => {
+                let mut bytes = Vec::with_capacity(HEADER_BYTES + payload.len());
+                bytes.extend_from_slice(&header);
+                bytes.extend_from_slice(payload);
+                bytes
+            }
+        };
         (bytes, silent)
     };
     transmits.push_back(Transmit {
@@ -636,8 +730,13 @@ impl Context<'_> {
 
     /// A speaker's payload for absolute packet `number`, and its silent
     /// frames.
-    fn payload<'b>(&'b self, speaker: &'b Speaker, number: u64) -> Option<(&'b [u8], u16)> {
-        match (&speaker.own, speaker.codec) {
+    fn payload<'b>(
+        &'b self,
+        own: Option<&'b OwnEncoding>,
+        codec: Codec,
+        number: u64,
+    ) -> Option<(&'b [u8], u16)> {
+        match (own, codec) {
             (Some(own), _) => own.store.get(number),
             (None, Codec::Alac) => self.alac.get(number),
             (None, Codec::Pcm) => self.pcm.get(number),
@@ -944,6 +1043,11 @@ impl Stream {
             receiver_latency: config.audio_latency,
             first_sound: t,
             counters,
+            sealed: config
+                .airplay2
+                .as_ref()
+                .map(|ap2| SealedStore::new(&ap2.key, codec)),
+            clock_identity: config.airplay2.as_ref().and_then(|ap2| ap2.clock_identity),
         };
         let context = context!(self);
         let first = context.first_due(speaker.delay, t);
@@ -977,7 +1081,7 @@ impl Stream {
         self.speakers.len() != before
     }
 
-    /// Sets a speaker's delay d_s, clamped to 0 to 3000 ms (P99). A speaker
+    /// Sets a speaker's delay d_s, clamped to 0 to 20 000 ms (P99). A speaker
     /// that has sent nothing yet just starts later or sooner; a playing one
     /// changes through a flush (P100) 250 ms after the last of a burst of
     /// changes, and plays on under its old delay until then.
@@ -1118,23 +1222,38 @@ impl Stream {
             let age = speaker.next_seq.wrapping_sub(seq);
             let in_history =
                 entry.valid && entry.seq == seq && (1..=HISTORY_PACKETS as u16).contains(&age);
-            let payload = in_history
-                .then(|| context.payload(speaker, entry.number))
-                .flatten();
-            let Some((payload, _)) = payload.filter(|_| entry.resends < MAX_RESENDS) else {
+            let held = in_history && entry.resends < MAX_RESENDS;
+            let bytes = match &speaker.sealed {
+                // The sealed packet exactly as first sent, never sealed
+                // again (P155).
+                Some(sealed) => held.then(|| sealed.get(slot)).flatten().map(|packet| {
+                    let mut bytes = Vec::with_capacity(RESEND_PREFIX_BYTES + packet.len());
+                    bytes.extend_from_slice(&rtp::resend_prefix(seq));
+                    bytes.extend_from_slice(packet);
+                    bytes
+                }),
+                None => held
+                    .then(|| context.payload(speaker.own.as_ref(), speaker.codec, entry.number))
+                    .flatten()
+                    .map(|(payload, _)| {
+                        let header = RtpHeader {
+                            marker: entry.marker,
+                            seq,
+                            timestamp: entry.timestamp,
+                            ssrc: speaker.ssrc,
+                        };
+                        let mut bytes =
+                            Vec::with_capacity(RESEND_PREFIX_BYTES + HEADER_BYTES + payload.len());
+                        bytes.extend_from_slice(&rtp::resend_prefix(seq));
+                        bytes.extend_from_slice(&header.encode());
+                        bytes.extend_from_slice(payload);
+                        bytes
+                    }),
+            };
+            let Some(bytes) = bytes else {
                 counters.not_held.fetch_add(1, Ordering::Relaxed);
                 continue;
             };
-            let header = RtpHeader {
-                marker: entry.marker,
-                seq,
-                timestamp: entry.timestamp,
-                ssrc: speaker.ssrc,
-            };
-            let mut bytes = Vec::with_capacity(RESEND_PREFIX_BYTES + HEADER_BYTES + payload.len());
-            bytes.extend_from_slice(&rtp::resend_prefix(seq));
-            bytes.extend_from_slice(&header.encode());
-            bytes.extend_from_slice(payload);
             self.transmits.push_back(Transmit {
                 speaker: speaker.id,
                 kind: PacketKind::Resend,

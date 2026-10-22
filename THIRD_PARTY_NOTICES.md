@@ -3,9 +3,11 @@
 AudioSync's own code is licensed under GPL-3.0-or-later (see
 [`LICENSE`](LICENSE)). The app binary contains AudioSync's audio core (`core/`,
 written in Rust and under GPL-3.0-or-later like the rest of AudioSync) with
-AudioSync's own AirPlay sender (`airplay/`, GPL-3.0-or-later), and, compiled in with them, parts of the Rust standard
-library and the third-party crates the sender uses, see
-[App frameworks and libraries](#app-frameworks-and-libraries). Every build also
+AudioSync's own AirPlay sender (`airplay/`), Google Cast sender (`cast/`) and
+web remote (`remote/`), all GPL-3.0-or-later, and, compiled in with them, parts
+of the Rust standard library and the third-party crates they use, see
+[App frameworks and libraries](#app-frameworks-and-libraries) and
+[AudioSync's own Google Cast sender](#audiosyncs-own-google-cast-sender). Every build also
 ships the Poppins font (`Contents/Resources/Fonts/`), see [Fonts](#fonts).
 AudioSync bundles no separate AirPlay engine.
 
@@ -43,6 +45,8 @@ password digests; `getrandom` with `cfg-if` for random identifiers; for Apple
 TV pairing, RustCrypto's `sha1`, `sha2`, `aes`, `aes-gcm`, `ctr` and
 `crypto-bigint` with `aead`, `cipher`, `ghash`, `polyval`, `universal-hash`,
 `inout`, `cpufeatures`, `cpubits`, `cmov`, `ctutils` and `rand_core`;
+for HomeKit pairing, RustCrypto's `chacha20poly1305` and `hkdf` with
+`chacha20`, `poly1305` and `hmac`;
 `ed25519-dalek`, `x25519-dalek` and `curve25519-dalek` (BSD-3-Clause) with
 `ed25519`, `signature` and `subtle` (BSD-3-Clause); `zeroize`; and `plist`
 (MIT) for the pairing's property lists, with `quick-xml` (MIT), `time`,
@@ -63,10 +67,11 @@ speakers.
 
 The wordmark SVGs in `brand/` are outlined from Poppins Medium.
 
-## Windows app (in development, not released)
+## Windows app (preview)
 
-`windows/` is the start of a Windows 11 version of AudioSync. None of it is in
-the macOS app, and no Windows build has been released.
+`windows/` is the Windows 11 version of AudioSync. None of it is in the macOS
+app. Windows builds go out only as an unsigned preview attached to a macOS
+release.
 
 | Component | License |
 |---|---|
@@ -97,9 +102,10 @@ digests, and `getrandom` with `cfg-if` for random session identifiers.
 For Apple TV pairing the sender also brings in RustCrypto's `sha1`, `sha2`,
 `aes`, `aes-gcm`, `ctr` and `crypto-bigint` with the crates they build on
 (`aead`, `cipher`, `ghash`, `polyval`, `universal-hash`, `inout`,
-`cpufeatures`, `cpubits`, `cmov`, `ctutils`, `rand_core`), all MIT OR
-Apache-2.0; `ed25519-dalek`, `x25519-dalek` and `curve25519-dalek`
-(BSD-3-Clause) with `ed25519` and `signature` (Apache-2.0 OR MIT) and
+`cpufeatures`, `cpubits`, `cmov`, `ctutils`, `rand_core`), and for HomeKit
+pairing RustCrypto's `chacha20poly1305` and `hkdf` with `chacha20`,
+`poly1305` and `hmac`, all MIT OR Apache-2.0; `ed25519-dalek`,
+`x25519-dalek` and `curve25519-dalek` (BSD-3-Clause) with `ed25519` and `signature` (Apache-2.0 OR MIT) and
 `subtle` (BSD-3-Clause); `zeroize` (Apache-2.0 OR MIT); and `plist` (MIT) for
 the pairing's property lists, with `quick-xml` (MIT) and `time`,
 `time-core`, `deranged`, `powerfmt` and `num-conv` (MIT OR Apache-2.0), next
@@ -107,6 +113,23 @@ to `base64`, `indexmap` and `memchr`, which the app already contained.
 `airplay/NOTES.md` lists each with its license; the versions a Windows build
 compiles are the ones in `windows/Cargo.lock`, which that build's
 `THIRD-PARTY-NOTICES.txt` names.
+
+The Windows app also contains AudioSync's own Google Cast sender (`cast/`,
+GPL-3.0-or-later), described in its own section below. Of the crates listed
+there, these reach the Windows executable on top of the ones above:
+`native-tls` (MIT OR Apache-2.0) with `schannel` (MIT) for the TLS connection,
+`prost` (Apache-2.0) for the protocol buffer messages, and `flacenc`
+(Apache-2.0) for the FLAC stream, with `crc`, `crc-catalog`, `heapless`,
+`hash32`, `md-5` 0.10, `digest` 0.10, `block-buffer` 0.10 and
+`crypto-common` 0.1 (MIT OR Apache-2.0), `generic-array` (MIT) and
+`byteorder` (Unlicense OR MIT). The macOS and Linux TLS crates and the
+build-time ones aren't compiled into it.
+
+The Windows app also contains AudioSync's own web remote (`remote/`,
+GPL-3.0-or-later), whose `getrandom`, `serde_json` and `sha2` the app already
+contained, and draws the remote's address as a QR code with `qrcode` (MIT OR
+Apache-2.0), built without its optional features, so it brings in no other
+crate.
 
 The Windows app reads and writes its settings file with `serde` and
 `serde_json` (MIT OR Apache-2.0), which bring in `serde_core`, `serde_derive`
@@ -128,6 +151,40 @@ code based on the work of the Independent JPEG Group. The script fails when a
 crate's license isn't allowed by `windows/deny.toml`, or when a crate's source
 points to a license file the package doesn't ship and the script doesn't
 supply.
+
+## AudioSync's own Google Cast sender
+
+`cast/` is AudioSync's own Google Cast sender (GPL-3.0-or-later). Both apps
+contain it: the Windows app links it directly, and the
+macOS app through its audio core's C interface, which brings the crates below
+into the app binary. It builds on `native-tls` (MIT OR Apache-2.0) for the TLS
+connection to the device, with `fastrand` (Apache-2.0 OR MIT) on every
+platform and, on macOS, `tempfile`, `errno`, `bitflags` and
+`once_cell` (MIT OR Apache-2.0) and `rustix` (Apache-2.0 WITH LLVM-exception
+OR Apache-2.0 OR MIT); native-tls uses the platform's TLS stack: `schannel`
+(MIT) on Windows, `security-framework`, `security-framework-sys`,
+`core-foundation` and `core-foundation-sys` on macOS, and on Linux the system
+OpenSSL through `openssl` (Apache-2.0), `openssl-sys` (MIT), `openssl-macros`,
+`openssl-probe`, `foreign-types` and `foreign-types-shared`; `prost` and `prost-derive`
+(Apache-2.0) for the protocol buffer messages, with `bytes` (MIT), `anyhow`,
+`itertools` and `either`; `flacenc` (Apache-2.0) to encode the FLAC stream
+some devices need instead of WAV, with `crc`, `crc-catalog`, `heapless`,
+`hash32`, `stable_deref_trait`, `md-5`, `digest`, `block-buffer`,
+`crypto-common`, `generic-array` (MIT), `byteorder` (Unlicense OR MIT),
+`num-traits`, `rustversion`, `seq-macro`, `version_check` and, at build time,
+`built` (MIT) and `autocfg` (Apache-2.0 OR MIT, through `num-traits`); `serde_json` (MIT OR Apache-2.0) for the
+messages' JSON, with `serde_core`, `itoa` (MIT OR Apache-2.0), `zmij` (MIT)
+and `memchr`, in the macOS app as well as the Windows one; and on `mdns-sd`,
+`getrandom` and `sha2` with the crates they build on, listed above. The others are under MIT OR Apache-2.0. Its
+tests also use `claxon` (Apache-2.0) to decode that FLAC stream, and `rcgen`,
+`rustls` (Apache-2.0 OR ISC OR
+MIT), `ring` (Apache-2.0 AND ISC), `rustls-webpki` and `untrusted` (ISC) for a
+fake device's TLS server, with `rustls-pki-types`, `yasna`, `x509-parser`,
+`asn1-rs`, `der-parser`, `oid-registry`, `nom` (MIT), `data-encoding` (MIT),
+`time`, `time-core`, `deranged`, `powerfmt`, `num-conv`, `subtle`
+(BSD-3-Clause) and `zeroize`; those are never part of a build that ships. CI
+checks every crate of `cast/`, development dependencies included, with `cargo
+deny check licenses` against `cast/deny.toml`.
 
 ## Trademarks
 

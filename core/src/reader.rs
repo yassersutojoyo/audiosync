@@ -28,10 +28,10 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use crate::ring::Ring;
 
 /// The drift dead band in milliseconds (S50).
-pub const DRIFT_TOLERANCE_MS: u32 = 35;
+pub const DRIFT_TOLERANCE_MS: u32 = 50;
 
-/// The drift tolerance T at capture rate `rate`: `round(0.035 × rate)` frames
-/// (S50); 1680 at 48 kHz. Computed in integers, so ties round up exactly.
+/// The drift tolerance T at capture rate `rate`: `round(0.050 × rate)` frames
+/// (S50); 2400 at 48 kHz. Computed in integers, so ties round up exactly.
 pub fn tolerance_frames(rate: u32) -> i64 {
     (i64::from(DRIFT_TOLERANCE_MS) * i64::from(rate) + 500) / 1000
 }
@@ -339,7 +339,7 @@ impl fmt::Debug for Reader {
 
 impl Reader {
     /// Creates a reader of `ring` for a session captured at `capture_rate`.
-    /// The tolerance starts at `round(0.035 × capture_rate)` (S50), the target
+    /// The tolerance starts at `round(0.050 × capture_rate)` (S50), the target
     /// delay at 0 (floored to one block, S42). Not anchored until its first
     /// read that finds more than De frames written (S43, S45).
     pub fn new(ring: Arc<Ring>, capture_rate: u32) -> Reader {
@@ -397,6 +397,11 @@ impl Reader {
     /// the renderer that owns the reader, on its thread.
     pub fn set_floor_shift_frames(&mut self, frames: i64) {
         self.floor_shift = frames;
+    }
+
+    /// Jf, as last set.
+    pub fn floor_shift_frames(&self) -> i64 {
+        self.floor_shift
     }
 
     /// The frames the next read can go on with (S206): `W - P`, with W
@@ -740,7 +745,7 @@ mod tests {
 
     const RATE: u32 = 48_000;
     const N: usize = 512;
-    const T: i64 = 1680;
+    const T: i64 = 2400;
 
     fn frame(i: u64) -> [f32; 2] {
         let tag = (i + 1) as u32;
@@ -1144,9 +1149,9 @@ mod tests {
         assert_eq!(out.reader.readable_frames(N, false), Some(1200 - n));
         // More than T behind: an unheld read skips forward, a held one goes
         // on (S188).
-        cap.write(5 * N);
+        cap.write(6 * N);
         assert_eq!(out.reader.readable_frames(N, false), None);
-        assert_eq!(out.reader.readable_frames(N, true), Some(1200 - n + 5 * n));
+        assert_eq!(out.reader.readable_frames(N, true), Some(1200 - n + 6 * n));
         assert_eq!(
             out.read_target(N).report.correction,
             Correction::SkipForward
@@ -1731,8 +1736,17 @@ mod tests {
     #[test]
     fn a_change_applied_during_a_stall_lands_short_by_the_stalled_reads() {
         // After the change, j more reads with the writer stopped leave it
-        // j blocks short; the step back at the fourth starts the count again.
-        for (j, short) in [(0, 0), (1, 512), (2, 1024), (3, 1536), (4, 0), (5, 512)] {
+        // j blocks short; the step back at the fifth, the first more than T
+        // ahead, starts the count again.
+        for (j, short) in [
+            (0, 0),
+            (1, 512),
+            (2, 1024),
+            (3, 1536),
+            (4, 2048),
+            (5, 0),
+            (6, 512),
+        ] {
             let ring = ring(1 << 18);
             let mut cap = Capture::new(&ring);
             cap.write(20_000);
@@ -1785,16 +1799,17 @@ mod tests {
 
     // covers: S50
     #[test]
-    fn tolerance_is_35_ms_rounded() {
-        assert_eq!(tolerance_frames(48_000), 1680);
-        assert_eq!(tolerance_frames(44_100), 1544, "1543.5 rounds up");
-        assert_eq!(tolerance_frames(8_000), 280);
-        assert_eq!(tolerance_frames(32_000), 1120);
-        assert_eq!(tolerance_frames(96_000), 3360);
-        assert_eq!(tolerance_frames(384_000), 13_440);
+    fn tolerance_is_50_ms_rounded() {
+        assert_eq!(tolerance_frames(48_000), 2400);
+        assert_eq!(tolerance_frames(44_100), 2205);
+        assert_eq!(tolerance_frames(22_050), 1103, "1102.5 rounds up");
+        assert_eq!(tolerance_frames(8_000), 400);
+        assert_eq!(tolerance_frames(32_000), 1600);
+        assert_eq!(tolerance_frames(96_000), 4800);
+        assert_eq!(tolerance_frames(384_000), 19_200);
         let ring = ring(1 << 16);
         let reader = Reader::new(ring, 44_100);
-        assert_eq!(reader.control().tolerance_frames(), 1544);
+        assert_eq!(reader.control().tolerance_frames(), 2205);
     }
 
     // covers: S50, S51
@@ -1861,7 +1876,7 @@ mod tests {
         let before = settle(&mut cap, &mut out, 8192);
         // The output takes extra blocks the writer has not matched. Inside
         // the dead band it keeps playing what is buffered ...
-        for k in 1..=3 {
+        for k in 1..=4 {
             let block = out.read(N, 8192);
             assert_eq!(block.report.correction, Correction::None);
             assert_eq!(block.report.error, -k * N as i64);
@@ -1872,7 +1887,7 @@ mod tests {
         let w = cap.w();
         let block = out.read(N, 8192);
         assert_eq!(block.report.correction, Correction::StepBack);
-        assert_eq!(block.report.error, -4 * N as i64);
+        assert_eq!(block.report.error, -5 * N as i64);
         assert_eq!(block.report.start, w - 8192);
         // The frames between the new position and the last emitted are masked.
         let mut silent = block.silent();
@@ -1883,16 +1898,16 @@ mod tests {
             silent += b.silent();
             next = b.first();
         }
-        assert_eq!(silent, 4 * N, "|e| frames of silence, never a repeat");
+        assert_eq!(silent, 5 * N, "|e| frames of silence, never a repeat");
         assert_eq!(
             next,
-            Some(before + 3 * N as i64 + 1),
+            Some(before + 4 * N as i64 + 1),
             "the first frame never played"
         );
         let counters = out.reader.control().counters();
         assert_eq!(
             (counters.drift_silences, counters.drift_silence_frames),
-            (1, 4 * N as u64)
+            (1, 5 * N as u64)
         );
         assert_eq!(
             counters.starved_renders, 0,
@@ -1916,7 +1931,7 @@ mod tests {
             played.extend(block.frames.iter().flatten());
             assert!(block.report.start < w, "never reaches W");
             assert_eq!(block.report.starved, 0);
-            if read <= 3 {
+            if read <= 4 {
                 assert_eq!(
                     block.silent(),
                     0,
@@ -1925,15 +1940,15 @@ mod tests {
             } else {
                 assert_eq!(block.silent(), N, "silence held instead of draining");
             }
-            let steps_back = read % 4 == 0;
+            let steps_back = read % 5 == 0;
             assert_eq!(block.report.correction == Correction::StepBack, steps_back);
         }
         assert_eq!(
             played,
-            (before + 1..before + 1 + 3 * N as i64).collect::<Vec<_>>()
+            (before + 1..before + 1 + 4 * N as i64).collect::<Vec<_>>()
         );
         let counters = out.reader.control().counters();
-        assert_eq!(counters.drift_silences, 25);
+        assert_eq!(counters.drift_silences, 20);
         assert_eq!(counters.drift_silence_frames, 51_200);
         assert_eq!(counters.starved_renders, 0);
     }
@@ -1978,7 +1993,7 @@ mod tests {
         cap.write(20_000);
         let mut out = Output::new(&ring);
         settle(&mut cap, &mut out, 4096);
-        for _ in 0..10 {
+        for _ in 0..12 {
             out.read(N, 4096);
         }
         let last_played = out.last.unwrap();

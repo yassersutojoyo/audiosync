@@ -452,14 +452,20 @@ fn keyboard_shortcuts_are_declared() {
 /// AirPlay on Windows is new and not yet checked against a real receiver,
 /// so no text promises it: the translatable strings naming AirPlay are the
 /// speaker kind, what a listed speaker can't do yet, the AirPlay delay field
-/// (spec S181), which shows only while the AirPlay sender runs, and the notice
+/// (spec S181), which shows only while the AirPlay sender runs, the notice
+/// that AirPlay speakers playing can't wait long enough for a Google Cast
+/// speaker, with its short name, and the notice
 /// that the sender stopped or couldn't start, with its Retry button and its
-/// short name for the dismiss button, and the
-/// note that discovery has found no speaker yet, which shows only while it
-/// runs; an empty Connected Speakers list otherwise says just that it's
-/// empty, or that its virtual outputs are hidden. Seven strings of the
-/// AudioSync Guide name AirPlay too, with the receivers the sender plays,
-/// the ones it can't yet, and the track info it sends.
+/// short name for the dismiss button, and the note that discovery has found
+/// no speaker yet (alone, or with Google Cast's in one sentence), which
+/// shows only while it runs. The note and row state for a speaker waiting
+/// for the one AirPlay 2 slot show only behind the hidden AirPlay 2 switch.
+/// The calibration results' AirPlay lines show only when an AirPlay
+/// speaker took part, so the sender ran.
+/// An empty Connected Speakers list otherwise says just that it's empty, or
+/// that its virtual outputs are hidden. Seven strings of the AudioSync Guide
+/// name AirPlay too, with the receivers the sender plays, the ones it can't
+/// yet, and the track info it sends.
 #[test]
 fn no_text_promises_airplay() {
     let strings = include_str!("../ui/strings.slint");
@@ -467,6 +473,9 @@ fn no_text_promises_airplay() {
         assert!(
             !line.contains("AirPlay")
                 || line.contains("@tr(\"AirPlay\")")
+                || line.contains("@tr(\"AirPlay 2\")")
+                || line.contains("couldn't save your AirPlay pairings,")
+                || line.contains("couldn't read your AirPlay pairings when it started,")
                 || line.contains("not supported yet")
                 || line.contains("doesn't support yet")
                 || line.contains("property <string> airplay-delay-")
@@ -474,11 +483,26 @@ fn no_text_promises_airplay() {
                     .contains("notice-airplay-stopped: @tr(\"AirPlay stopped or couldn't start.")
                 || line.contains("notice-retry-label: @tr(\"Retry starting AirPlay\")")
                 || line.contains("return @tr(\"AirPlay stopped\");")
+                || line.contains(
+                    "return @tr(\"AirPlay speakers can wait at most 20 s for a Google Cast speaker,"
+                )
+                || line.contains("return @tr(\"AirPlay ahead of {}\", name);")
+                || line.contains("return @tr(\"AirPlay delay: was {}. New: {} ms")
+                || line.contains("return @tr(\"The AirPlay speakers differ by {} ms.")
+                || line.contains("return @tr(\"No AirPlay speaker was measured clearly,")
+                || line.contains("calibrate-all-airplay-waits: @tr(\"AirPlay isn't playing,")
                 || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
+                || line.contains("plays one AirPlay 2 speaker at a time, so {} waits.")
+                || line.contains("@tr(\"Waiting for the other AirPlay 2 speaker\")")
+                || line.contains(
+                    "network-none-found: @tr(\"No AirPlay or Google Cast speakers found yet.",
+                )
                 || [
                     "help-intro",
                     "help-start",
                     "help-sync",
+                    "help-sync-cast",
+                    "help-art-classes",
                     "help-volume",
                     "help-more",
                     "help-airplay-title",
@@ -701,6 +725,19 @@ fn the_audiosync_guide_is_wired_and_worded_in_strings() {
             "help.slint shows help-{name}"
         );
     }
+    // The Mac Guide's three illustrations, each in both themes with its
+    // description for Narrator.
+    for art in ["source", "delay", "classes"] {
+        assert!(
+            help.contains(&format!(
+                "light: @image-url(\"../../brand/guide/{art}.svg\");"
+            )) && help.contains(&format!(
+                "dark: @image-url(\"../../brand/guide/{art}-dark.svg\");"
+            )) && help.contains(&format!("description: Strings.help-art-{art};")),
+            "the Guide shows the {art} illustration"
+        );
+    }
+    assert!(help.contains("source: Tokens.dark ? root.dark : root.light;"));
 }
 
 /// The body of `function` in strings.slint, up to its closing brace.

@@ -15,6 +15,7 @@
 //! ancestry can be captured. Where they can't be read, or AudioSync is
 //! missing from the snapshot, AudioSync refuses rather than capture itself.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use audiosync_core::channels::input_to_stereo;
@@ -26,12 +27,14 @@ use audiosync_core::ring::{RingWriter, is_supported_rate};
 use super::SESSION_RATE;
 use super::airplay::FeedLease;
 use super::backend::{BackendError, SourceId, SourceInfo};
+use super::calibration::{CalibrationTap, Route};
+use super::cast::CastLease;
 use super::outputs::{EndpointReading, is_hands_free};
 use super::process::{IDLE_PID, ProcessTable, SYSTEM_PID};
 
 /// The name of the whole-system source in English, as the macOS app shows
-/// it: for logs, the mock, and the artist AirPlay receivers show while no
-/// track counts. The UI shows its own, translated label.
+/// it: for logs and the mock. The UI, and AirPlay receivers while no track
+/// counts, show its own, translated label.
 pub const WHOLE_SYSTEM_NAME: &str = "All System Audio";
 
 /// Which render streams a process loopback capture includes.
@@ -365,22 +368,85 @@ pub const CAPTURE_ATTEMPTS: [CaptureAttempt; 4] = [
 /// Frames converted per step; bounds the converter's buffers.
 const CONVERT_CHUNK: usize = 1024;
 
+/// The network senders' feeds a capture is lent: each gets the same
+/// equalized audio as the ring. The calibration's tap rides along: it fades
+/// the music out of all of them and adds its test signal to the one path
+/// its route names.
+#[derive(Default)]
+pub struct Feeds {
+    pub airplay: Option<FeedLease>,
+    pub cast: Option<CastLease>,
+    pub calibration: Option<Arc<CalibrationTap>>,
+}
+
+impl Feeds {
+    /// Hands `block` to the senders, after the calibration's fade, with the
+    /// calibration's signal from `signal` added for the ring or one feed.
+    fn push(&mut self, block: &mut [f32], frames: usize, arrived: Instant, signal: &mut i64) {
+        let Feeds {
+            airplay,
+            cast,
+            calibration,
+        } = self;
+        let mut push_airplay = |block: &[f32]| {
+            if let Some(airplay) = airplay.as_mut() {
+                airplay.push(block, frames, arrived);
+            }
+        };
+        let mut push_cast = |block: &[f32]| {
+            if let Some(cast) = cast.as_mut() {
+                cast.push(block, frames);
+            }
+        };
+        let Some(tap) = calibration.as_deref().filter(|tap| tap.is_active()) else {
+            push_airplay(block);
+            push_cast(block);
+            return;
+        };
+        tap.fade_music(block);
+        let sending = *signal >= 0;
+        let route = tap.route();
+        match route {
+            Route::Ring => {
+                push_airplay(block);
+                push_cast(block);
+                tap.add_signal(block, signal);
+            }
+            Route::AirPlay => {
+                push_cast(block);
+                tap.add_signal(block, signal);
+                push_airplay(block);
+            }
+            Route::Cast => {
+                push_airplay(block);
+                tap.add_signal(block, signal);
+                push_cast(block);
+            }
+        }
+        // A network route's signal only starts in a block of silence
+        // (`block_cursor`), so clearing it keeps the signal out of the ring.
+        if sending && route != Route::Ring {
+            block.fill(0.0);
+        }
+    }
+}
+
 /// Turns captured packets into interleaved stereo float at
 /// [`SESSION_RATE`], equalizes them and writes them to the ring, and to the
-/// AirPlay sender when it has its feed.
+/// AirPlay and Cast senders when they have their feeds.
 ///
 /// The equalizer runs at the session rate, after any resampling, so it is
 /// designed for [`SESSION_RATE`] whatever rate Windows captures at, and every
-/// output and AirPlay speaker hears the same equalized audio. All buffers are
-/// allocated by [`CaptureConverter::new`]; [`CaptureConverter::push`] never
-/// allocates, locks or blocks, and neither do the equalizer and the AirPlay
-/// feed.
+/// output and network speaker hears the same equalized audio. All buffers
+/// are allocated by [`CaptureConverter::new`]; [`CaptureConverter::push`]
+/// never allocates, locks or blocks, and neither do the equalizer and the
+/// feeds.
 pub struct CaptureConverter {
     format: StreamFormat,
     writer: RingWriter,
     equalizer: EqProcessor,
-    /// The AirPlay sender's feed, lent for this capture.
-    airplay: Option<FeedLease>,
+    /// The senders' feeds, lent for this capture.
+    feeds: Feeds,
     /// From the capture rate to the session rate, when they differ.
     resampler: Option<Resampler>,
     /// One chunk of decoded samples, `channels` per frame.
@@ -394,12 +460,12 @@ pub struct CaptureConverter {
 impl CaptureConverter {
     /// A converter for packets in `format`, writing through `writer` after
     /// `equalizer`, whose control half publishes settings designed for
-    /// [`SESSION_RATE`], and handing the same audio to `airplay`.
+    /// [`SESSION_RATE`], and handing the same audio to `feeds`.
     pub fn new(
         format: StreamFormat,
         writer: RingWriter,
         equalizer: EqProcessor,
-        airplay: Option<FeedLease>,
+        feeds: Feeds,
     ) -> Result<CaptureConverter, BackendError> {
         if format.channels == 0 || !is_supported_rate(format.rate) {
             return Err(BackendError::UnsupportedFormat);
@@ -419,7 +485,7 @@ impl CaptureConverter {
             format,
             writer,
             equalizer,
-            airplay,
+            feeds,
             resampler,
             decoded: vec![0.0; CONVERT_CHUNK * usize::from(format.channels)].into_boxed_slice(),
             stereo: vec![0.0; CONVERT_CHUNK * 2].into_boxed_slice(),
@@ -446,6 +512,9 @@ impl CaptureConverter {
             frames.min(data.len() / block)
         };
         let channels = usize::from(self.format.channels);
+        let mut signal = self.signal_cursor();
+        let starts_signal = signal == 0;
+        let mut written = 0;
         let mut done = 0;
         while done < frames {
             let n = (frames - done).min(CONVERT_CHUNK);
@@ -460,20 +529,38 @@ impl CaptureConverter {
                     &mut self.stereo[..n * 2],
                 );
             }
-            self.write_stereo(n, arrived);
+            written += self.write_stereo(n, arrived, &mut signal);
             done += n;
         }
-        self.writer.end_block_at(clock::now_ns());
+        let closed = clock::now_ns();
+        self.writer.end_block_at(closed);
+        if starts_signal
+            && written > 0
+            && let Some(tap) = self.feeds.calibration.as_ref()
+        {
+            tap.signal_started(closed, written);
+        }
+    }
+
+    /// Where this block's calibration signal starts, or -1 for none.
+    fn signal_cursor(&self) -> i64 {
+        self.feeds
+            .calibration
+            .as_ref()
+            .filter(|tap| tap.is_active())
+            .map_or(-1, |tap| tap.block_cursor())
     }
 
     /// Writes the first `frames` frames of `stereo`, resampled if needed and
     /// equalized, as part of the packet's block, and hands them to the
-    /// AirPlay sender as audio that arrived at `arrived`.
-    fn write_stereo(&mut self, frames: usize, arrived: Instant) {
+    /// AirPlay sender as audio that arrived at `arrived`. While a calibration
+    /// runs, the music fades out of both and the signal from `signal` goes
+    /// into the ring. Returns the frames written to the ring.
+    fn write_stereo(&mut self, frames: usize, arrived: Instant, signal: &mut i64) -> usize {
         let CaptureConverter {
             writer,
             equalizer,
-            airplay,
+            feeds,
             resampler,
             stereo,
             resampled,
@@ -483,27 +570,27 @@ impl CaptureConverter {
             None => {
                 let block = &mut stereo[..frames * 2];
                 equalizer.process(block);
+                feeds.push(block, frames, arrived, signal);
                 writer.write_part(block, frames);
-                if let Some(airplay) = airplay {
-                    airplay.push(block, frames, arrived);
-                }
+                frames
             }
             Some(resampler) => {
                 let input = &stereo[..frames * 2];
                 let mut consumed = 0;
+                let mut written = 0;
                 while consumed < frames {
                     let (used, produced) = resampler.process(&input[consumed * 2..], resampled);
                     let block = &mut resampled[..produced * 2];
                     equalizer.process(block);
+                    feeds.push(block, produced, arrived, signal);
                     writer.write_part(block, produced);
-                    if let Some(airplay) = airplay.as_mut() {
-                        airplay.push(block, produced, arrived);
-                    }
+                    written += produced;
                     consumed += used;
                     if used == 0 && produced == 0 {
                         break;
                     }
                 }
+                written
             }
         }
     }
@@ -517,7 +604,7 @@ const HNS_PER_SECOND: u64 = 10_000_000;
 const GAP_JUMP_HNS: u64 = 50_000;
 
 /// With no packet for this long after the last frame's end, 25 ms (more than
-/// a late packet but inside the readers' 35 ms dead band, S50), the capture
+/// a late packet but inside the readers' 50 ms dead band, S50), the capture
 /// is in a gap.
 const IDLE_AFTER_HNS: u64 = 250_000;
 
@@ -1133,7 +1220,7 @@ mod tests {
         writer: RingWriter,
     ) -> Result<CaptureConverter, BackendError> {
         let (_control, processor) = equalizer();
-        CaptureConverter::new(format, writer, processor, None)
+        CaptureConverter::new(format, writer, processor, Feeds::default())
     }
 
     /// Settings that only raise the level, by `preamp_db`: flat bands pass
@@ -1168,6 +1255,71 @@ mod tests {
             ring.frames_written()
         );
         out
+    }
+
+    #[test]
+    fn a_calibration_silences_the_music_and_adds_its_signal_from_a_block_start() {
+        let (ring, writer) = session_ring_after_lead_in();
+        let (_control, processor) = equalizer();
+        let tap = Arc::new(CalibrationTap::new());
+        let feeds = Feeds {
+            calibration: Some(Arc::clone(&tap)),
+            ..Feeds::default()
+        };
+        let mut converter =
+            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor, feeds).unwrap();
+        let music = f32_bytes(&[0.5; 960]);
+        tap.engage();
+        // 30 ms of music fade out over the first 20.
+        for _ in 0..3 {
+            converter.push(&music, 480, false);
+        }
+        assert!(newest(&ring, 480).iter().all(|s| *s == 0.0));
+        assert_eq!(tap.played_at_ns(), None);
+        tap.play();
+        let before = clock::now_ns();
+        converter.push(&music, 480, false);
+        let signal = audiosync_core::calibrate::signal(SESSION_RATE).unwrap();
+        let heard = newest(&ring, 480);
+        assert!((0..480).all(|i| heard[2 * i] == signal[i] && heard[2 * i + 1] == signal[i]));
+        let played = tap
+            .played_at_ns()
+            .expect("the block carried the signal's start");
+        assert!(
+            played + 10_000_000 >= before,
+            "stamped when its block closed"
+        );
+    }
+
+    #[test]
+    fn a_signal_for_a_network_speaker_stays_out_of_the_ring_and_waits_for_silence() {
+        let (ring, writer) = session_ring_after_lead_in();
+        let (_control, processor) = equalizer();
+        let tap = Arc::new(CalibrationTap::new());
+        let feeds = Feeds {
+            calibration: Some(Arc::clone(&tap)),
+            ..Feeds::default()
+        };
+        let mut converter =
+            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor, feeds).unwrap();
+        let music = f32_bytes(&[0.5; 960]);
+        tap.set_route(Route::Cast);
+        tap.engage();
+        tap.play();
+        converter.push(&music, 480, false);
+        assert_eq!(
+            tap.played_at_ns(),
+            None,
+            "the music still fades: the signal waits"
+        );
+        for _ in 0..4 {
+            converter.push(&music, 480, false);
+        }
+        assert!(
+            tap.played_at_ns().is_some(),
+            "it started once the music was out"
+        );
+        assert!(newest(&ring, 480 * 3).iter().all(|s| *s == 0.0));
     }
 
     #[test]
@@ -1349,8 +1501,13 @@ mod tests {
     fn the_equalizer_applies_from_the_next_packet() {
         let (ring, writer) = session_ring_after_lead_in();
         let (mut control, processor) = equalizer();
-        let mut converter =
-            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor, None).unwrap();
+        let mut converter = CaptureConverter::new(
+            CAPTURE_ATTEMPTS[0].format,
+            writer,
+            processor,
+            Feeds::default(),
+        )
+        .unwrap();
         converter.push(&f32_bytes(&[0.25; 8]), 4, false);
         assert_eq!(newest(&ring, 4), [0.25; 8], "off, audio passes unchanged");
 
@@ -1368,7 +1525,8 @@ mod tests {
         let (mut control, processor) = equalizer();
         control.set_settings(preamp_only(-6.0));
         let format = CAPTURE_ATTEMPTS[3].format;
-        let mut converter = CaptureConverter::new(format, writer, processor, None).unwrap();
+        let mut converter =
+            CaptureConverter::new(format, writer, processor, Feeds::default()).unwrap();
         // A tenth of a second of a 1 kHz tone at half scale.
         let bytes: Vec<u8> = (0..4410)
             .flat_map(|i| {
@@ -1391,8 +1549,13 @@ mod tests {
     fn a_loopback_gap_keeps_the_ring_in_real_time_so_nothing_from_before_it_plays_after_it() {
         let (ring, writer) = session_ring();
         let (_control, processor) = equalizer();
-        let mut converter =
-            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor, None).unwrap();
+        let mut converter = CaptureConverter::new(
+            CAPTURE_ATTEMPTS[0].format,
+            writer,
+            processor,
+            Feeds::default(),
+        )
+        .unwrap();
         let mut gaps = GapFill::new(SESSION_RATE);
         // An output lined up with an AirPlay speaker: L = 1750 ms.
         let mut reader = Reader::new(Arc::clone(&ring), SESSION_RATE);
@@ -1528,9 +1691,13 @@ mod tests {
         let (ring, writer) = session_ring();
         let (_control, processor) = equalizer();
         let lease = slot.lease().expect("the feed is free");
+        let feeds = Feeds {
+            airplay: Some(lease),
+            cast: None,
+            calibration: None,
+        };
         let mut converter =
-            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor, Some(lease))
-                .unwrap();
+            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor, feeds).unwrap();
         // One second at the session rate, in 10 ms packets.
         let packet = f32_bytes(&[0.25; 480 * 2]);
         for _ in 0..100 {

@@ -29,6 +29,11 @@ extension AppDelegate {
 
         appModel.text = text
         appModel.actions = makeActions()
+        let saved = AppSettings.load(SettingsStore.standard.read)
+        let remote = WebRemote(model: appModel, store: .standard, enabled: saved.webRemote, port: saved.webRemotePort)
+        remote.onNowPlayingNeedChange = { [weak self] in self?.syncTrackInfo() }
+        webRemote = remote
+        webRemoteWindow = WebRemoteWindowController(remote: remote, text: text)
         menuBar = MenuBarController(model: appModel)
         pushSources()
         pushModel()
@@ -68,13 +73,28 @@ extension AppDelegate {
         a.setMaster = { [weak self] position in self?.setMasterVolume(position) }
         a.setAirPlayEnabled = { [weak self] id, on in self?.setNativeAirPlayEnabled(id, on) }
         a.setAirPlayVolume = { [weak self] id, volume in self?.setNativeAirPlayVolume(id, volume) }
+        a.forgetAirPlayPairing = { [weak self] id in self?.forgetNativePairing(id) }
         a.setLocalEnabled = { [weak self] uid, on in self?.setLocalEnabled(uid, on) }
         a.setLocalVolume = { [weak self] uid, position in self?.setLocalVolume(uid, position) }
         a.setLocalOffset = { [weak self] uid, ms in self?.setLocalOffset(uid, ms) }
+        a.calibrate = { [weak self] uid in self?.startCalibration(uid) }
+        a.cancelCalibration = { [weak self] in self?.cancelCalibration() }
+        a.calibrateAll = { [weak self] in self?.startCalibrateAll() }
+        a.cancelCalibrateAll = { [weak self] in self?.cancelCalibrateAll() }
+        a.measureAgain = { [weak self] row in self?.measureAgain(row) }
+        a.applyCalibrateAll = { [weak self] in self?.applyCalibrateAll() }
+        a.undoCalibrateAll = { [weak self] in self?.undoCalibrateAll() }
+        a.closeCalibrateAll = { [weak self] in self?.closeCalibrateAll() }
         a.setAirPlayDelay = { [weak self] ms in self?.setAirPlayDelay(ms) }
+        a.setCastEnabled = { [weak self] id, on in self?.setCastEnabled(id, on) }
+        a.setCastVolume = { [weak self] id, position in self?.setCastVolume(id, position) }
+        a.setCastMuted = { [weak self] id, muted in self?.setCastMuted(id, muted) }
+        a.resyncCast = { [weak self] id in self?.resyncCast(id) }
+        a.setCastOffset = { [weak self] id, ms in self?.setCastOffset(id, ms) }
         a.openMainWindow = { [weak self] in self?.showMainWindow() }
         a.openGuide = { [weak self] in self?.openGuideWindow() }
         a.openEqualizer = { [weak self] in self?.openEqualizerWindow() }
+        a.openWebRemote = { [weak self] in self?.openWebRemoteWindow() }
         a.refreshDevices = { [weak self] in self?.rescanDevices() }
         a.refreshExternalState = { [weak self] in self?.rereadExternalState() }
         a.mainWindowVisible = { [weak self] visible in
@@ -97,6 +117,10 @@ extension AppDelegate {
         a.setShowVirtualDevices = { [weak self] on in self?.setShowVirtualDevices(on) }
         a.setSwitchWhenSourceQuits = { [weak self] on in
             self?.whenSourceQuits = on ? .system : .stop
+            self?.pushModel()
+        }
+        a.setAirPlay2 = { [weak self] on in
+            self?.airPlay2 = on
             self?.pushModel()
         }
         a.setAppearance = { [weak self] choice in self?.setAppearance(choice) }
@@ -202,7 +226,9 @@ extension AppDelegate {
         publish(\.master, masterVolume)
         publish(\.airplay, airplaySnapshot())
         publish(\.local, localSnapshot())
-        appModel.speakersListed(Set(appModel.airplay.map(\.id) + appModel.local.map(\.id)))
+        publish(\.cast, castSnapshot())
+        publish(\.castList, castModel.listState(now: Date()))
+        appModel.speakersListed(Set(appModel.airplay.map(\.id) + appModel.local.map(\.id) + appModel.cast.map(\.id)))
         publish(\.hasLocalReference, localReference != nil)
         publish(\.airPlayDelayMs, airPlayLatencyMs.rounded())
         // When the sender stopped after an internal error, the AirPlay
@@ -217,8 +243,11 @@ extension AppDelegate {
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)
         publish(\.switchWhenSourceQuits, whenSourceQuits == .system)
+        publish(\.airPlay2, airPlay2)
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
+        followCalibrationContext()
+        followCalibrateAll()
         menuBar?.setRunning(engine.isRunning)
         syncTrackInfo()
         scheduleDueReconcile()
@@ -260,16 +289,22 @@ extension AppDelegate {
     }
 
     private func airplaySnapshot() -> [AppModel.Speaker] {
-        airplayOrder.map { id in
-            AppModel.Speaker(id: id,
-                             name: shownName(airPlay: id),
-                             tag: .airplay,
-                             enabled: enabledAirPlay.contains(id),
-                             volume: airplayVolume[id] ?? defaultVolume,
-                             offsetMs: nil,
-                             autoConnect: autoConnect.contains(SpeakerKey.make(id: id, airplay: true)),
-                             availability: airplayAccess[id].map(SpeakerAvailability.init) ?? .open,
-                             systemName: systemName(airPlay: id))
+        let native = nativeAirPlay?.model
+        return airplayOrder.map { id in
+            let receiver = NativeAirPlayID.receiver(id)
+            return AppModel.Speaker(id: id,
+                                    name: shownName(airPlay: id),
+                                    tag: .airplay,
+                                    enabled: enabledAirPlay.contains(id),
+                                    volume: airplayVolume[id] ?? defaultVolume,
+                                    offsetMs: nil,
+                                    autoConnect: autoConnect.contains(SpeakerKey.make(id: id, airplay: true)),
+                                    availability: airplayAccess[id].map(SpeakerAvailability.init) ?? .open,
+                                    systemName: systemName(airPlay: id),
+                                    airPlay2: receiver.map { native?.reachedOverAirPlay2($0) == true } ?? false,
+                                    waitingForAirPlay2: receiver.map { native?.isWaiting($0) == true } ?? false,
+                                    paired: receiver.map { native?.isPaired($0) == true } ?? false,
+                                    airPlayTarget: receiver.flatMap { native?.targetRow($0) })
         }
     }
 
@@ -318,6 +353,11 @@ extension AppDelegate {
         equalizerWindow?.show()
     }
 
+    private func openWebRemoteWindow() {
+        menuBar?.close()
+        webRemoteWindow?.show()
+    }
+
     /// The Guide: the help text in a window of its own, made once and kept
     /// while AudioSync runs, so it opens where the user left it.
     private func openGuideWindow() {
@@ -334,29 +374,27 @@ extension AppDelegate {
         let window = GuideWindow(contentRect: frame, styleMask: style, backing: .buffered, defer: false)
         window.title = text.guideTitle
         window.isReleasedWhenClosed = false
-        window.contentMinSize = NSSize(width: 420, height: 300)
+        // 440 keeps the 360 pt illustrations whole with an always-on scroller.
+        window.contentMinSize = NSSize(width: 440, height: 300)
 
         let guideScroll = NSScrollView(frame: frame)
         guideScroll.hasVerticalScroller = true
         guideScroll.autohidesScrollers = true
         guideScroll.borderType = .noBorder
         guideScroll.autoresizingMask = [.width, .height]
-        let textView = NSTextView(frame: frame)
+        let textView = GuideTextView(frame: frame)
         textView.isEditable = false
         textView.isSelectable = true   // so a step can be copied
-        textView.isRichText = false
+        textView.isRichText = true     // for the illustrations; the text stays read-only
         textView.drawsBackground = true
         textView.backgroundColor = .textBackgroundColor   // both follow light and dark
-        textView.textColor = .labelColor
-        // The Guide's text is wrapped by hand with indented continuation
-        // lines, which line up only in a fixed-width face.
-        textView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         textView.textContainerInset = NSSize(width: 18, height: 16)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
-        textView.string = text.helpText
+        textView.textStorage?.setAttributedString(guideText())
+        textView.showArtForAppearance()
         textView.setAccessibilityLabel(text.guideTitle)
         guideScroll.documentView = textView
         window.contentView = guideScroll
@@ -371,6 +409,34 @@ extension AppDelegate {
         return window
     }
 
+    /// The Guide's text with its illustrations, in the light variant until the
+    /// text view picks the one for its appearance.
+    private func guideText() -> NSAttributedString {
+        // The text is wrapped by hand with indented continuation lines, which
+        // line up only in a fixed-width face.
+        let body: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+            .foregroundColor: NSColor.labelColor,
+        ]
+        let artParagraph = NSMutableParagraphStyle()
+        artParagraph.paragraphSpacingBefore = 6
+        artParagraph.paragraphSpacing = 14
+        var artAttributes = body
+        artAttributes[.paragraphStyle] = artParagraph
+
+        let guide = NSMutableAttributedString()
+        for piece in GuideLayout.pieces(of: text.helpText, anchor: text.guideArtAnchor) {
+            guide.append(NSAttributedString(string: piece.text, attributes: body))
+            guard let art = piece.art else { continue }
+            let attachment = GuideArtAttachment(art: art, label: text.guideArtDescription(art), dark: false)
+            let image = NSMutableAttributedString(attachment: attachment)
+            image.append(NSAttributedString(string: "\n"))
+            image.addAttributes(artAttributes, range: NSRange(location: 0, length: image.length))
+            guide.append(image)
+        }
+        return guide
+    }
+
     // MARK: - App menu commands
 
     // Menu items without a target (MainMenu.swift) reach these through the
@@ -381,6 +447,8 @@ extension AppDelegate {
     @objc func showEqualizer(_ sender: Any?) { openEqualizerWindow() }
 
     @objc func showGuide(_ sender: Any?) { openGuideWindow() }
+
+    @objc func showWebRemote(_ sender: Any?) { openWebRemoteWindow() }
 
     @objc func toggleStreaming(_ sender: Any?) { setStreaming(!engine.isRunning) }
 
@@ -400,6 +468,12 @@ extension AppDelegate {
     /// Takes effect at the next quit of the source app, never undoing a switch made (S227 d).
     @objc func toggleSwitchWhenSourceQuits(_ sender: Any?) {
         whenSourceQuits = whenSourceQuits == .system ? .stop : .system
+        pushModel()
+    }
+
+    /// Saved now; the sender reads it at the next launch (`airPlay2AtLaunch`).
+    @objc func toggleAirPlay2(_ sender: Any?) {
+        airPlay2.toggle()
         pushModel()
     }
 
@@ -425,11 +499,59 @@ extension AppDelegate {
             menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         case #selector(toggleSwitchWhenSourceQuits(_:)):
             menuItem.state = whenSourceQuits == .system ? .on : .off
+        case #selector(toggleAirPlay2(_:)):
+            menuItem.state = airPlay2 ? .on : .off
         default:
             break
         }
         return true
     }
+}
+
+/// The Guide's text: swaps each illustration for its light or dark variant
+/// when the appearance changes.
+private final class GuideTextView: NSTextView {
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        showArtForAppearance()
+    }
+
+    func showArtForAppearance() {
+        guard let storage = textStorage else { return }
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        var stale: [(NSRange, GuideArtAttachment)] = []
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            if let attachment = value as? GuideArtAttachment, attachment.dark != dark {
+                stale.append((range, attachment))
+            }
+        }
+        guard !stale.isEmpty else { return }
+        storage.beginEditing()
+        for (range, old) in stale {
+            storage.addAttribute(.attachment, value: GuideArtAttachment(art: old.art, label: old.label, dark: dark),
+                                 range: range)
+        }
+        storage.endEditing()
+    }
+}
+
+/// One Guide illustration, drawn from its SVG, with a description for VoiceOver.
+private final class GuideArtAttachment: NSTextAttachment {
+    let art: GuideArt
+    let label: String
+    let dark: Bool
+
+    init(art: GuideArt, label: String, dark: Bool) {
+        self.art = art
+        self.label = label
+        self.dark = dark
+        super.init(data: nil, ofType: nil)
+        let picture = NSImage(data: Data((dark ? art.darkSVG : art.lightSVG).utf8))
+        picture?.accessibilityDescription = label
+        image = picture
+    }
+
+    required init?(coder: NSCoder) { return nil }
 }
 
 /// The Guide's window: Escape closes it, like a sheet of help.

@@ -37,6 +37,10 @@ final class NativeAirPlay {
     private var timer: DispatchSourceTimer?
     /// What the receivers that show it get as playing (queue only).
     private var nowPlaying = NativeNowPlaying()
+    /// The hold-back last asked for (main queue), and the one the sender
+    /// gets, also when it is created later (queue only).
+    private(set) var holdBackMs = 0.0
+    private var queuedHoldBackMs = 0.0
 
     /// `onChange` gets each discovery change, `onEvent` each speaker or
     /// timeline event with what the model made of it, on the main queue.
@@ -46,14 +50,16 @@ final class NativeAirPlay {
         self.onEvent = onEvent
     }
 
-    /// Creates the sender at `master` (0 to 100), installs its input and
-    /// starts discovery, on the queue. `completion` gets, on the main queue,
-    /// whether all of it worked; when the sender can't start or multicast DNS
-    /// can't browse, nothing is left running and nothing else happens.
-    func start(master: Double, completion: @escaping (Bool) -> Void) {
+    /// Creates the sender at `master` (0 to 100), with AirPlay 2 when
+    /// `airPlay2` is on or the environment variable turns it on, installs its
+    /// input and starts discovery, on the queue. `completion` gets, on the
+    /// main queue, whether all of it worked; when the sender can't start or
+    /// multicast DNS can't browse, nothing is left running and nothing else
+    /// happens.
+    func start(master: Double, airPlay2: Bool, completion: @escaping (Bool) -> Void) {
         queue.async { [weak self] in
             guard let self else { return }
-            let latency = self.startOnQueue(master: master)
+            let latency = self.startOnQueue(master: master, airPlay2: airPlay2)
             DispatchQueue.main.async {
                 if let latency, self.model.latencyMs == 0 { self.model.latencyMs = latency }
                 completion(latency != nil)
@@ -92,6 +98,20 @@ final class NativeAirPlay {
             guard let handle = self?.handle else { return }
             _ = asc_airplay_set_volume(handle, id, volume)
         }
+    }
+
+    /// Holds every speaker back by `ms` on top of L, live; the sender caps
+    /// it at `NetworkHoldBack.airPlayLimitMs`. Main queue. False when it was set already.
+    @discardableResult
+    func setHoldBack(_ ms: Double) -> Bool {
+        guard ms != holdBackMs else { return false }
+        holdBackMs = ms
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.queuedHoldBackMs = ms
+            if let handle = self.handle { _ = asc_airplay_set_hold_back(handle, ms) }
+        }
+        return true
     }
 
     /// The master position (0 to 100), live, for every speaker.
@@ -165,7 +185,8 @@ final class NativeAirPlay {
         }
     }
 
-    /// Forgets the stored pairing of `id`; it needs a PIN again.
+    /// Forgets the stored pairing of `id`, AirPlay 2 credentials included;
+    /// it needs a PIN again.
     func forgetPairing(_ id: String) {
         queue.async { [weak self] in
             guard let handle = self?.handle else { return }
@@ -237,9 +258,9 @@ final class NativeAirPlay {
     // MARK: - On the queue
 
     /// The sender's L in ms once it runs, or nil when it couldn't start.
-    private func startOnQueue(master: Double) -> Double? {
+    private func startOnQueue(master: Double, airPlay2: Bool) -> Double? {
         if let handle { return asc_airplay_latency_ms(handle) }
-        guard let created = asc_airplay_create() else { return nil }
+        guard let created = asc_airplay_create_with_airplay2(airPlay2) else { return nil }
         handle = created
         // Before discovery, so a paired Apple TV is listed as able to play
         // from its first report.
@@ -250,16 +271,25 @@ final class NativeAirPlay {
         let moved = support.map { NativeAirPlayPairings.moveOlderFile(in: $0) } ?? .nothing
         let loaded = support.map { asc_airplay_open_pairings(created, NativeAirPlayPairings.file(in: $0).path) }
             ?? ASC_AIRPLAY_PAIRINGS_FAILED
+        // Reads and writes nothing while AirPlay 2 is off.
+        let airPlay2 = support.map {
+            asc_airplay_open_airplay2_identity(created, NativeAirPlayPairings.airPlay2File(in: $0).path)
+        }
         DispatchQueue.main.async {
             if let line = NativeAirPlayPairings.moveLogLine(moved) {
                 DebugTrace.log("[AudioSync] native AirPlay: " + line)
             }
             DebugTrace.log("[AudioSync] native AirPlay: " + Self.pairingsLogLine(loaded))
+            if let airPlay2, airPlay2 != 0 {
+                DebugTrace.log("[AudioSync] native AirPlay: AirPlay 2 identity file: "
+                    + (airPlay2 > 0 ? "\(airPlay2) paired receiver(s)" : "ignored or left as it is (code \(airPlay2))"))
+            }
             if !excluded {
                 DebugTrace.log("[AudioSync] native AirPlay: the pairings folder couldn't be kept out of backups")
             }
         }
         asc_airplay_set_master(created, master)
+        _ = asc_airplay_set_hold_back(created, queuedHoldBackMs)
         if let taken = asc_airplay_take_input(created) {
             input = taken
             NativeAirPlayTap.install(taken)
@@ -351,7 +381,12 @@ final class NativeAirPlay {
         if raw.event == ASC_AIRPLAY_GONE { return .gone(id: id, name: nil) }
         let receiver = NativeReceiver(id: id, name: text(raw.name), model: text(raw.model),
                                       availability: availability(raw.availability),
-                                      reason: reason(raw.unsupported), hints: hints(raw.flags))
+                                      reason: reason(raw.unsupported), hints: hints(raw.flags),
+                                      overAirPlay2: raw.flags & UInt32(ASC_AIRPLAY_FLAG_OVER_AIRPLAY2) != 0,
+                                      paired: raw.flags & UInt32(ASC_AIRPLAY_FLAG_PAIRED) != 0,
+                                      target: text(raw.target),
+                                      isTarget: raw.flags & UInt32(ASC_AIRPLAY_FLAG_TARGET) != 0,
+                                      incomplete: raw.flags & UInt32(ASC_AIRPLAY_FLAG_INCOMPLETE) != 0)
         return raw.event == ASC_AIRPLAY_APPEARED ? .appeared(receiver) : .changed(receiver)
     }
 
@@ -364,7 +399,8 @@ final class NativeAirPlay {
             guard let speakerState = Self.state(raw.state) else { return nil }
             return .state(id: id, speakerState, retryMs: speakerState == .retrying ? retry : nil)
         case ASC_AIRPLAY_EVENT_ERROR:
-            return .error(id: id, Self.problem(raw.error), retryMs: retry, detail: text(raw.detail))
+            return .error(id: id, Self.problem(raw.error, reason: raw.unsupported), retryMs: retry,
+                          detail: text(raw.detail))
         case ASC_AIRPLAY_EVENT_LATENCY:
             return .latency(id: id, ms: raw.latency_ms,
                             receiverFrames: raw.receiver_latency_frames >= 0 ? raw.receiver_latency_frames : nil)
@@ -394,6 +430,17 @@ final class NativeAirPlay {
         case ASC_AIRPLAY_STATE_FAILED: return .failed
         case ASC_AIRPLAY_STATE_STOPPED: return .stopped
         default: return nil
+        }
+    }
+
+    /// An unsupported session's reason, where the app words it apart.
+    static func problem(_ code: Int32, reason: Int32) -> NativeSpeakerEvent.Problem {
+        guard code == ASC_AIRPLAY_ERROR_UNSUPPORTED else { return Self.problem(code) }
+        switch reason {
+        case ASC_AIRPLAY_REASON_TIMING: return .timingUnavailable
+        case ASC_AIRPLAY_REASON_ONE_AIRPLAY2: return .oneAirPlay2
+        case ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS: return .playsThroughSpeakers
+        default: return .unsupported
         }
     }
 
@@ -430,6 +477,9 @@ final class NativeAirPlay {
         case ASC_AIRPLAY_REASON_METHODS: return "methods"
         case ASC_AIRPLAY_REASON_FORMAT: return "format"
         case ASC_AIRPLAY_REASON_AIRPLAY2_ONLY: return "AirPlay 2 only"
+        case ASC_AIRPLAY_REASON_TIMING: return "timing"
+        case ASC_AIRPLAY_REASON_ONE_AIRPLAY2: return "one AirPlay 2 speaker at a time"
+        case ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS: return "plays through its speakers"
         default: return nil
         }
     }
@@ -445,6 +495,10 @@ final class NativeAirPlay {
             (ASC_AIRPLAY_FLAG_LEGACY_PAIRING, "pin-pairing"),
             (ASC_AIRPLAY_FLAG_BUSY, "busy"),
             (ASC_AIRPLAY_FLAG_AIRPLAY2, "airplay2"),
+            (ASC_AIRPLAY_FLAG_OVER_AIRPLAY2, "over-airplay2"),
+            (ASC_AIRPLAY_FLAG_PAIRED, "paired"),
+            (ASC_AIRPLAY_FLAG_TARGET, "target"),
+            (ASC_AIRPLAY_FLAG_INCOMPLETE, "incomplete"),
         ]
         return names.filter { flags & UInt32($0.0) != 0 }.map(\.1)
     }

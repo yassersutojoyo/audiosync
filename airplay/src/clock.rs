@@ -89,4 +89,42 @@ impl SenderClock {
         let origin = i128::from(NTP_ORIGIN_SECONDS) << 32;
         (i128::from(time.0) - origin) as f64 / 4_294_967_296.0
     }
+
+    /// The sender's PTP time at `at` (P163): the time since the clock's
+    /// origin, which is the NTP-format seconds minus 0x83AA7E80; 0 before
+    /// the origin.
+    pub fn ptp(&self, at: Instant) -> PtpTime {
+        PtpTime::from(at.saturating_duration_since(self.origin))
+    }
+
+    /// The PTP time `seconds` after the origin, as the stream's model gives
+    /// it; 0 before the origin.
+    pub fn ptp_at(&self, seconds: f64) -> PtpTime {
+        PtpTime::from(Duration::from_secs_f64(seconds.clamp(0.0, 1e12)))
+    }
+}
+
+/// A PTP timestamp: seconds and nanoseconds (IEEE 1588-2008, P163).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PtpTime {
+    pub seconds: u64,
+    pub nanos: u32,
+}
+
+impl PtpTime {
+    /// The whole time in nanoseconds (P166).
+    pub fn total_nanos(self) -> u64 {
+        self.seconds
+            .wrapping_mul(1_000_000_000)
+            .wrapping_add(u64::from(self.nanos))
+    }
+}
+
+impl From<Duration> for PtpTime {
+    fn from(since_origin: Duration) -> PtpTime {
+        PtpTime {
+            seconds: since_origin.as_secs(),
+            nanos: since_origin.subsec_nanos(),
+        }
+    }
 }

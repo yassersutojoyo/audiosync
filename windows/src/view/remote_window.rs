@@ -1,0 +1,753 @@
+//! File > Web Remote (`ui/remote.slint`) and the server behind it.
+//!
+//! The setting is kept with the windows' own settings and starts the server
+//! at launch when it was on. Every refresh publishes the page's snapshot
+//! (`crate::remote::snapshot`); the server hands each command from the page
+//! to a channel and wakes the event loop, where it is applied like the
+//! window's own controls (`crate::remote::actions`) and the result shown and
+//! published again. The poll timer also takes commands, in case a wake-up
+//! was missed, and writes what the server reports to the debug log, which
+//! never sees a pairing code or a device token.
+
+use std::cell::RefCell;
+use std::net::{IpAddr, Ipv4Addr};
+use std::path::PathBuf;
+use std::rc::{Rc, Weak};
+use std::sync::mpsc;
+
+use audiosync_remote::auth::{DeviceFile, TokenStore};
+use audiosync_remote::{Command, Config, RemoteError, RemoteServer};
+use slint::{ComponentHandle, SharedString};
+
+use super::{App, availability, cast_group_note, cast_state, row_state, speaker_kind, with_app};
+use crate::Strings;
+use crate::remote::{self, Action, RemoteSettings, RowText};
+use crate::ui_model::{AppState, Speaker};
+
+thread_local! {
+    /// The app a command wakes on the event loop's thread.
+    static REMOTE_APP: RefCell<Weak<App>> = const { RefCell::new(Weak::new()) };
+}
+
+/// Pixels a QR module is drawn with before the window scales it.
+const QR_SCALE: usize = 4;
+
+/// Why the remote is on but not listening.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Problem {
+    /// The port can't be listened on: another app has it (`in_use`), or
+    /// Windows refuses it, as it does for the ports Hyper-V and WSL reserve.
+    Port { in_use: bool },
+    /// No randomness for a code, or a malformed page: not the user's to fix.
+    Failed,
+}
+
+fn problem_for(error: &RemoteError) -> Problem {
+    match error {
+        RemoteError::Bind(_) => Problem::Port {
+            in_use: error.port_in_use(),
+        },
+        RemoteError::Random | RemoteError::Page(_) => Problem::Failed,
+    }
+}
+
+/// The running server and what the window shows about it.
+pub(super) struct RemoteHost {
+    server: Option<RemoteServer>,
+    commands: Option<mpsc::Receiver<Command>>,
+    problem: Option<Problem>,
+    /// The port typed in the window wasn't one the setting takes.
+    port_invalid: bool,
+    /// Windows' DNS host name, as the page's footer shows it.
+    computer_name: String,
+    /// The same name as a `.local` host, when it is one.
+    host: Option<String>,
+    lan_address: Option<Ipv4Addr>,
+    /// The addresses the server listens on; the tests keep to loopback.
+    pub(super) listen: Vec<IpAddr>,
+    /// The paired-device file; `None` keeps the devices in memory.
+    pub(super) devices_path: Option<PathBuf>,
+    /// The QR code drawn, with the address it holds.
+    qr: Option<(String, slint::Image)>,
+    /// The devices in the file while the server is off, read when needed.
+    devices_offline: Option<usize>,
+    /// Forget All Remote Devices couldn't save the empty list.
+    forget_failed: bool,
+}
+
+impl Default for RemoteHost {
+    fn default() -> RemoteHost {
+        let computer_name = remote::computer_name().unwrap_or_default();
+        RemoteHost {
+            server: None,
+            commands: None,
+            problem: None,
+            port_invalid: false,
+            host: remote::local_host(&computer_name),
+            computer_name,
+            lan_address: None,
+            listen: Config::default().listen,
+            devices_path: devices_path(),
+            qr: None,
+            devices_offline: None,
+            forget_failed: false,
+        }
+    }
+}
+
+#[cfg(all(windows, not(test)))]
+fn devices_path() -> Option<PathBuf> {
+    crate::data_folder::folder().map(|folder| folder.join("remote-devices.json"))
+}
+
+#[cfg(any(not(windows), test))]
+fn devices_path() -> Option<PathBuf> {
+    None
+}
+
+/// The row texts the window shows, from its strings.
+struct StringsText<'a>(Strings<'a>);
+
+impl RowText for StringsText<'_> {
+    fn kind(&self, speaker: &Speaker) -> String {
+        self.0
+            .invoke_speaker_kind(speaker_kind(speaker.kind))
+            .into()
+    }
+
+    fn note(&self, state: &AppState, speaker: &Speaker) -> String {
+        if let Some(cast) = &speaker.cast {
+            let group_note = cast_group_note(&self.0, speaker);
+            let note = self
+                .0
+                .invoke_cast_note(cast_state(cast.state), cast.muted, group_note);
+            if !note.is_empty() {
+                return note.into();
+            }
+        }
+        let note = self
+            .0
+            .invoke_availability(availability(speaker.availability));
+        if !note.is_empty() {
+            return note.into();
+        }
+        self.0
+            .invoke_row_note(row_state(state.speaker_state(speaker)))
+            .into()
+    }
+}
+
+fn wake_on_event_loop() {
+    // Fails only once the event loop is gone (or in the headless tests); the poll takes the command then.
+    let _ = slint::invoke_from_event_loop(|| {
+        let app = REMOTE_APP.with(|app| app.borrow().upgrade());
+        if let Some(app) = app {
+            app.take_remote_commands();
+        }
+    });
+}
+
+impl App {
+    pub(super) fn connect_remote(self: &Rc<Self>) {
+        REMOTE_APP.with(|app| *app.borrow_mut() = Rc::downgrade(self));
+        self.follow_frame(|app| app.remote_window.window(), "Web Remote");
+        let weak = Rc::downgrade(self);
+        let w = weak.clone();
+        self.main
+            .on_remote_requested(move || with_app(&w, App::show_remote));
+        let w = weak.clone();
+        self.remote_window
+            .on_remote_toggled(move |on| with_app(&w, |app| app.set_remote_on(on)));
+        let w = weak.clone();
+        self.remote_window
+            .on_new_code_requested(move || with_app(&w, App::new_remote_code));
+        let w = weak.clone();
+        self.remote_window
+            .on_forget_all_requested(move || with_app(&w, App::forget_remote_devices));
+        let w = weak.clone();
+        self.remote_window.on_port_submitted(move |text| {
+            with_app(&w, |app| app.use_remote_port(&text));
+        });
+        let w = weak.clone();
+        self.remote_window.on_close_requested(move || {
+            with_app(&w, |app| {
+                // A window that fails to hide stays open; the user can still close it.
+                let _ = app.remote_window.hide();
+            })
+        });
+        self.remote_window.on_exit_requested(|| {
+            let _ = slint::quit_event_loop();
+        });
+        let w = weak;
+        self.remote_window.window().on_close_requested(move || {
+            with_app(&w, |app| {
+                let _ = app.remote_window.hide();
+            });
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
+
+    /// Starts the remote at launch when it was left on.
+    pub(super) fn restore_remote(&self) {
+        if self.ui.borrow().remote.on {
+            self.start_remote();
+        }
+        self.show_remote_state();
+    }
+
+    /// Opens the window, or brings it to the front; opening it makes a new
+    /// pairing code and ends a lockout.
+    pub fn show_remote(&self) {
+        let opening = !self.remote_window.window().is_visible();
+        if opening {
+            self.rotate_remote_code();
+            self.remote.borrow_mut().devices_offline = None;
+            self.log.log(|| "web remote: window opened".to_owned());
+        }
+        self.show_remote_state();
+        if let Err(error) = self.remote_window.show() {
+            self.show_window_error(&error);
+            return;
+        }
+        self.remote_window.invoke_take_focus();
+        crate::platform::bring_to_front(self.remote_window.window());
+    }
+
+    fn set_remote_on(&self, on: bool) {
+        if self.ui.borrow().remote.on == on {
+            return;
+        }
+        self.ui.borrow_mut().remote.on = on;
+        self.remember_view();
+        if on {
+            self.start_remote();
+        } else {
+            self.stop_remote();
+            self.remote.borrow_mut().problem = None;
+        }
+        self.show_remote_state();
+        self.refresh();
+    }
+
+    pub(super) fn remote_listening(&self) -> bool {
+        self.remote.borrow().server.is_some()
+    }
+
+    fn start_remote(&self) {
+        self.stop_remote();
+        let port = self.ui.borrow().remote.port;
+        let config = {
+            let host = self.remote.borrow();
+            Config {
+                port,
+                listen: host.listen.clone(),
+                local_name: host.host.clone(),
+                devices_path: host.devices_path.clone(),
+                ..Config::default()
+            }
+        };
+        let (sender, receiver) = mpsc::channel();
+        let started = RemoteServer::start(config, move |command: &Command| {
+            if sender.send(command.clone()).is_ok() {
+                wake_on_event_loop();
+            }
+        });
+        let mut host = self.remote.borrow_mut();
+        host.port_invalid = false;
+        host.forget_failed = false;
+        match started {
+            Ok(server) => {
+                self.log
+                    .log(|| format!("web remote: listening on port {}", server.port()));
+                host.server = Some(server);
+                host.commands = Some(receiver);
+                host.problem = None;
+            }
+            Err(error) => {
+                self.log
+                    .log(|| format!("web remote: didn't start on port {port} ({error})"));
+                host.problem = Some(problem_for(&error));
+            }
+        }
+        drop(host);
+        self.publish_remote(&self.snapshot());
+    }
+
+    fn stop_remote(&self) {
+        let server = {
+            let mut host = self.remote.borrow_mut();
+            host.commands = None;
+            host.server.take()
+        };
+        if let Some(server) = server {
+            self.log_remote_events(&server);
+            server.stop();
+            self.log.log(|| "web remote: stopped".to_owned());
+        }
+        self.remote.borrow_mut().devices_offline = None;
+    }
+
+    fn log_remote_events(&self, server: &RemoteServer) {
+        while let Some(event) = server.poll_event() {
+            self.log.log(|| event.to_string());
+        }
+    }
+
+    fn rotate_remote_code(&self) {
+        let host = self.remote.borrow();
+        if let Some(server) = host.server.as_ref()
+            && let Err(error) = server.rotate_code()
+        {
+            self.log
+                .log(|| format!("web remote: no new pairing code ({error})"));
+        }
+    }
+
+    fn new_remote_code(&self) {
+        self.rotate_remote_code();
+        self.log.log(|| "web remote: new pairing code".to_owned());
+        self.show_remote_state();
+    }
+
+    /// Forgets every paired device, through the server while it runs, else
+    /// in the file it reads at its next start.
+    fn forget_remote_devices(&self) {
+        let saved = {
+            let host = self.remote.borrow();
+            match host.server.as_ref() {
+                Some(server) => server.forget_all(),
+                None => {
+                    let (mut store, _) = TokenStore::open(host.devices_path.clone());
+                    DeviceFile::default().save(store.clear())
+                }
+            }
+        };
+        match &saved {
+            Ok(()) => self
+                .log
+                .log(|| "web remote: every device forgotten".to_owned()),
+            Err(error) => self
+                .log
+                .log(|| format!("web remote: the forgotten devices weren't saved ({error})")),
+        }
+        {
+            let mut host = self.remote.borrow_mut();
+            host.forget_failed = saved.is_err();
+            host.devices_offline = None;
+        }
+        self.show_remote_state();
+    }
+
+    fn use_remote_port(&self, text: &str) {
+        let Some(port) = remote::parse_port(text) else {
+            self.remote.borrow_mut().port_invalid = true;
+            self.show_remote_state();
+            return;
+        };
+        self.ui.borrow_mut().remote = RemoteSettings { on: true, port };
+        self.remember_view();
+        self.start_remote();
+        self.show_remote_state();
+    }
+
+    /// Applies the commands the page sent since the last call, then shows
+    /// and publishes the result.
+    pub(super) fn take_remote_commands(&self) {
+        let commands: Vec<Command> = match self.remote.borrow().commands.as_ref() {
+            Some(receiver) => receiver.try_iter().collect(),
+            None => return,
+        };
+        if commands.is_empty() {
+            return;
+        }
+        for command in &commands {
+            let state = self.snapshot();
+            let actions = {
+                let ui = self.ui.borrow();
+                remote::actions(command, &state, |speaker| {
+                    ui.listed_virtual.lists(speaker, ui.show_virtual)
+                })
+            };
+            match actions {
+                Ok(actions) => {
+                    let mut backend = self.backend.borrow_mut();
+                    for action in actions {
+                        match action {
+                            Action::Enable { id, on } => backend.set_speaker_enabled(&id, on),
+                            Action::Volume { id, volume } => {
+                                backend.set_speaker_volume(&id, volume);
+                            }
+                            Action::Delay { id, ms } => backend.set_speaker_delay(&id, ms),
+                            Action::Master { volume } => backend.set_master_volume(volume),
+                        }
+                    }
+                }
+                Err(refusal) => self
+                    .log
+                    .log(|| format!("web remote: a change was refused ({refusal:?})")),
+            }
+        }
+        self.refresh();
+    }
+
+    /// Hands the page the snapshot of `state`, while the remote listens.
+    pub(super) fn publish_remote(&self, state: &AppState) {
+        let host = self.remote.borrow();
+        let Some(server) = host.server.as_ref() else {
+            return;
+        };
+        let snapshot = {
+            let ui = self.ui.borrow();
+            let card = self.now_playing.borrow();
+            remote::snapshot(
+                state,
+                |speaker| ui.listed_virtual.lists(speaker, ui.show_virtual),
+                card.track(),
+                &host.computer_name,
+                &StringsText(self.strings()),
+            )
+        };
+        server.publish(snapshot);
+    }
+
+    /// What the poll timer does for the remote: takes commands, logs what
+    /// the server reports, and keeps the open window current (a code expires,
+    /// a phone pairs).
+    pub(super) fn poll_remote(&self) {
+        self.take_remote_commands();
+        if let Some(server) = self.remote.borrow().server.as_ref() {
+            self.log_remote_events(server);
+        }
+        if self.remote_window.window().is_visible() {
+            self.show_remote_state();
+        }
+    }
+
+    /// Fills the window from the setting and the server.
+    pub(super) fn show_remote_state(&self) {
+        let settings = self.ui.borrow().remote;
+        let window = &self.remote_window;
+        let mut host = self.remote.borrow_mut();
+        window.set_remote_on(settings.on);
+        window.set_port(i32::from(settings.port));
+        window.set_port_problem(matches!(host.problem, Some(Problem::Port { .. })));
+        window.set_port_in_use(host.problem == Some(Problem::Port { in_use: true }));
+        window.set_port_invalid(host.port_invalid);
+        window.set_problem(match host.problem {
+            Some(Problem::Failed) => self.strings().get_remote_failed(),
+            _ => SharedString::default(),
+        });
+        window.set_forget_failed(host.forget_failed);
+        let devices = match host.server.as_ref() {
+            Some(server) => server.device_count(),
+            None => {
+                let path = host.devices_path.clone();
+                *host
+                    .devices_offline
+                    .get_or_insert_with(|| TokenStore::open(path).0.len())
+            }
+        };
+        window.set_devices(i32::try_from(devices).unwrap_or(i32::MAX));
+        let Some(server) = host.server.as_ref() else {
+            window.set_listening(false);
+            return;
+        };
+        let port = server.port();
+        let code = server.pairing_code().unwrap_or_default();
+        window.set_code(code.as_str().into());
+        window.set_code_spoken(remote::spaced_digits(&code).into());
+        window.set_locked(server.pairing_locked());
+        let local = host
+            .host
+            .as_deref()
+            .map(|name| remote::local_url(name, port));
+        window.set_local_address(local.clone().unwrap_or_default().into());
+        // The PC may have moved to another network since the remote started.
+        host.lan_address = remote::lan_address();
+        window.set_ip_address(
+            host.lan_address
+                .map(|address| remote::ip_url(address, port))
+                .unwrap_or_default()
+                .into(),
+        );
+        let drawn = host.qr.as_ref().map(|(text, _)| text.clone());
+        if local != drawn {
+            host.qr = local.and_then(|address| {
+                let (side, pixels) = remote::qr_pixels(&address, QR_SCALE)?;
+                let side = u32::try_from(side).ok()?;
+                let mut buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(side, side);
+                for (pixel, [r, g, b]) in buffer.make_mut_slice().iter_mut().zip(pixels) {
+                    *pixel = slint::Rgb8Pixel { r, g, b };
+                }
+                Some((address, slint::Image::from_rgb8(buffer)))
+            });
+        }
+        window.set_has_qr(host.qr.is_some());
+        window.set_qr(
+            host.qr
+                .as_ref()
+                .map(|(_, image)| image.clone())
+                .unwrap_or_default(),
+        );
+        window.set_listening(true);
+    }
+
+    /// Stops the server as the app quits, so no command arrives after the backend.
+    pub fn stop_remote_at_exit(&self) {
+        self.stop_remote();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::{Ipv4Addr, TcpListener, TcpStream};
+
+    use slint::ComponentHandle;
+
+    use slint::platform::Key;
+
+    use super::super::tests::{app_over, draw_frames, press};
+    use crate::remote::RemoteSettings;
+    use crate::ui_model::MockBackend;
+
+    fn free_port() -> u16 {
+        // The port is free once this listener is dropped (and stays so in a test, likely enough).
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a port");
+        listener.local_addr().expect("its address").port()
+    }
+
+    fn over_loopback(backend: MockBackend) -> std::rc::Rc<super::App> {
+        let app = app_over(backend);
+        app.remote.borrow_mut().listen = vec![Ipv4Addr::LOCALHOST.into()];
+        app
+    }
+
+    fn get_state(port: u16) -> String {
+        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).expect("connected");
+        write!(
+            stream,
+            "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        )
+        .expect("sent");
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).expect("read");
+        answer
+    }
+
+    #[test]
+    fn escape_closes_the_window_from_the_switch() {
+        let app = over_loopback(MockBackend::new());
+        let window = app.remote_window.window();
+        app.main.invoke_remote_requested();
+        draw_frames();
+        assert!(window.is_visible());
+        press(window, Key::Escape);
+        assert!(!window.is_visible(), "Escape closes it");
+        app.main.invoke_remote_requested();
+        assert!(window.is_visible(), "it opens again");
+    }
+
+    #[test]
+    fn file_web_remote_opens_the_window_and_the_switch_is_kept() {
+        let app = over_loopback(MockBackend::new());
+        app.main.invoke_remote_requested();
+        assert!(app.remote_window.window().is_visible());
+        assert!(!app.remote_window.get_remote_on(), "off by default");
+        assert!(!app.remote_listening());
+
+        let port = free_port();
+        app.ui.borrow_mut().remote.port = port;
+        app.remote_window.invoke_remote_toggled(true);
+        assert!(app.remote_listening(), "on, it listens");
+        assert!(app.remote_window.get_listening());
+        assert_eq!(app.remote_window.get_code().len(), 6);
+        assert_eq!(app.remote_window.get_devices(), 0);
+        assert_eq!(
+            app.backend.borrow().view_settings().remote,
+            RemoteSettings { on: true, port },
+            "kept with the windows' settings"
+        );
+        // Not paired, so the API turns the request down: the server answers.
+        assert!(get_state(port).starts_with("HTTP/1.1 401"));
+
+        app.remote_window.invoke_remote_toggled(false);
+        assert!(!app.remote_listening());
+        assert!(!app.remote_window.get_listening());
+        assert!(!app.backend.borrow().view_settings().remote.on);
+        assert!(
+            TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err(),
+            "closed"
+        );
+    }
+
+    #[test]
+    fn opening_the_window_again_makes_a_new_code() {
+        let app = over_loopback(MockBackend::new());
+        app.ui.borrow_mut().remote.port = free_port();
+        app.main.invoke_remote_requested();
+        app.remote_window.invoke_remote_toggled(true);
+        let first = app.remote_window.get_code();
+        app.remote_window.invoke_close_requested();
+        assert!(!app.remote_window.window().is_visible());
+        assert!(
+            app.remote_listening(),
+            "closing the window keeps the remote on"
+        );
+        app.main.invoke_remote_requested();
+        let second = app.remote_window.get_code();
+        assert_eq!(second.len(), 6);
+        assert_ne!(first, second, "a new code (one in a million to fail)");
+        app.remote_window.invoke_new_code_requested();
+        assert_ne!(app.remote_window.get_code(), second);
+    }
+
+    #[test]
+    fn a_port_in_use_is_said_and_another_port_can_be_picked() {
+        let taken = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a port");
+        let busy = taken.local_addr().expect("its address").port();
+        let app = over_loopback(MockBackend::new());
+        app.ui.borrow_mut().remote.port = busy;
+        app.main.invoke_remote_requested();
+        app.remote_window.invoke_remote_toggled(true);
+        assert!(app.remote_window.get_remote_on(), "the setting stays on");
+        assert!(app.remote_window.get_port_problem());
+        assert!(app.remote_window.get_port_in_use());
+        assert_eq!(app.remote_window.get_port(), i32::from(busy));
+        assert!(!app.remote_window.get_listening());
+
+        app.remote_window.invoke_port_submitted("80".into());
+        assert!(app.remote_window.get_port_invalid());
+        assert!(app.remote_window.get_port_in_use(), "nothing changed");
+
+        let free = free_port();
+        app.remote_window
+            .invoke_port_submitted(free.to_string().into());
+        assert!(!app.remote_window.get_port_in_use());
+        assert!(!app.remote_window.get_port_invalid());
+        assert!(app.remote_window.get_listening());
+        assert_eq!(app.backend.borrow().view_settings().remote.port, free);
+    }
+
+    #[test]
+    fn any_bind_error_offers_another_port_and_only_a_taken_one_says_another_app() {
+        use std::io::{Error, ErrorKind};
+
+        use audiosync_remote::RemoteError;
+
+        use super::{Problem, problem_for};
+        let bind = |kind| RemoteError::Bind(Error::from(kind));
+        // A port Hyper-V or WSL reserves fails with WSAEACCES.
+        assert_eq!(
+            problem_for(&bind(ErrorKind::PermissionDenied)),
+            Problem::Port { in_use: false }
+        );
+        assert_eq!(
+            problem_for(&bind(ErrorKind::AddrInUse)),
+            Problem::Port { in_use: true }
+        );
+        assert_eq!(problem_for(&RemoteError::Random), Problem::Failed);
+    }
+
+    #[test]
+    fn a_port_windows_refuses_shows_the_port_field_without_the_raw_error() {
+        let app = over_loopback(MockBackend::new());
+        // Not this machine's address: binding fails, and not because the port is taken.
+        app.remote.borrow_mut().listen = vec![Ipv4Addr::new(192, 0, 2, 1).into()];
+        app.main.invoke_remote_requested();
+        app.remote_window.invoke_remote_toggled(true);
+        assert!(app.remote_window.get_port_problem());
+        assert!(!app.remote_window.get_port_in_use());
+        assert_eq!(app.remote_window.get_problem(), "", "no raw OS error");
+        assert!(!app.remote_window.get_listening());
+
+        app.remote.borrow_mut().listen = vec![Ipv4Addr::LOCALHOST.into()];
+        let free = free_port();
+        app.remote_window
+            .invoke_port_submitted(free.to_string().into());
+        assert!(!app.remote_window.get_port_problem());
+        assert!(app.remote_window.get_listening());
+    }
+
+    #[test]
+    fn forget_all_works_while_the_remote_is_off_and_says_when_it_wasnt_saved() {
+        let dir = crate::debug_log::test_dir("remote-forget");
+        let path = dir.join("remote-devices.json");
+        std::fs::write(
+            &path,
+            format!(r#"{{"version": 1, "devices": ["{}"]}}"#, "ab".repeat(32)),
+        )
+        .expect("written");
+        let app = over_loopback(MockBackend::new());
+        app.remote.borrow_mut().devices_path = Some(path.clone());
+        app.main.invoke_remote_requested();
+        assert!(!app.remote_window.get_remote_on());
+        assert_eq!(app.remote_window.get_devices(), 1, "read from the file");
+        app.remote_window.invoke_forget_all_requested();
+        assert_eq!(app.remote_window.get_devices(), 0);
+        assert!(!app.remote_window.get_forget_failed());
+        let kept = std::fs::read_to_string(&path).expect("read");
+        assert!(!kept.contains(&"ab".repeat(32)), "the file forgets it too");
+
+        // A file where a folder should be: the list can't be saved.
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, "").expect("written");
+        app.remote.borrow_mut().devices_path = Some(blocker.join("remote-devices.json"));
+        app.remote_window.invoke_forget_all_requested();
+        assert!(app.remote_window.get_forget_failed());
+    }
+
+    #[test]
+    fn a_command_from_the_page_works_like_the_windows_controls() {
+        let app = over_loopback(MockBackend::new());
+        app.ui.borrow_mut().remote.port = free_port();
+        app.remote_window.invoke_remote_toggled(true);
+        let state = app.snapshot();
+        let speaker = state
+            .speakers
+            .iter()
+            .find(|speaker| {
+                !speaker.enabled
+                    && speaker.availability == crate::ui_model::Availability::Open
+                    && speaker.kind != crate::ui_model::SpeakerKind::Virtual
+            })
+            .expect("a speaker that is off")
+            .id
+            .clone();
+        let sender = {
+            // The channel the server's callback feeds.
+            let (sender, receiver) = std::sync::mpsc::channel();
+            app.remote.borrow_mut().commands = Some(receiver);
+            sender
+        };
+        sender
+            .send(audiosync_remote::Command::Speaker {
+                id: speaker.clone(),
+                change: audiosync_remote::SpeakerChange {
+                    on: Some(true),
+                    volume: Some(20.0),
+                    ..Default::default()
+                },
+            })
+            .expect("sent");
+        sender
+            .send(audiosync_remote::Command::Master { volume: 40.0 })
+            .expect("sent");
+        sender
+            .send(audiosync_remote::Command::Speaker {
+                id: "gone".to_owned(),
+                change: audiosync_remote::SpeakerChange {
+                    on: Some(true),
+                    ..Default::default()
+                },
+            })
+            .expect("sent");
+        app.poll_remote();
+        let state = app.snapshot();
+        let turned = state.speaker(&speaker).expect("still there");
+        assert!(turned.enabled);
+        assert_eq!(turned.volume, 20.0);
+        assert!(state.running, "turning a speaker on starts streaming");
+        assert_eq!(state.master_volume, 40.0);
+    }
+}

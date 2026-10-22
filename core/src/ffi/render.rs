@@ -864,8 +864,8 @@ pub unsafe extern "C" fn asc_renderer_least_slack_ns(
 }
 
 /// Any thread: the observer's largest drop of the lateness floor below the
-/// floor at the reader's latest anchor, in ns (S229); 0 without output
-/// times or for a null handle.
+/// anchor floor set at the reader's latest anchor, in ns (S229); 0 without
+/// output times or for a null handle.
 ///
 /// # Safety
 ///
@@ -1379,8 +1379,10 @@ mod tests {
                     first = out.clone();
                 }
             }
-            // The first audio fades in from (almost) nothing.
-            assert!(first[0] > 0.0 && first[0] < 1e-4 && first[2 * 511] < 0.5);
+            // The converter's latency plays first, as silence; then the
+            // first audio fades in from (almost) nothing.
+            assert!(first[..2 * 21].iter().all(|&x| x == 0.0));
+            assert!(first[2 * 21] > 0.0 && first[2 * 21] < 1e-4 && first[2 * 511] < 0.5);
             assert_eq!(
                 states,
                 [

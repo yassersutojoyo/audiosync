@@ -16,6 +16,8 @@ export component GuideWindow inherits Window {
     in property <bool> settings-failed;
     callback page-requested(GuidePage);
     callback close-requested();
+    // Ctrl+Q, File > Exit from this window.
+    callback exit-requested();
 
     title: Strings.guide-title;
     icon: @image-url("../res/audiosync-256.png");
@@ -35,8 +37,12 @@ export component GuideWindow inherits Window {
 
     keys := FocusScope {
         key-pressed(event) => {
-            if event.text == Key.Escape {
+            if event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == "w") {
                 root.close-requested();
+                return accept;
+            }
+            if event.modifiers.control && event.text.to-lowercase() == "q" {
+                root.exit-requested();
                 return accept;
             }
             return reject;

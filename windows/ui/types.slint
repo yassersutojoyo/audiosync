@@ -2,9 +2,9 @@
 
 // How a speaker or group row shows: playing only while streaming is on. A
 // speaker that is on while streaming is on but can't play right now waits
-// for its device (another app holds it) or is reconnecting (AirPlay); a
-// group waits when every present member does.
-export enum RowState { off, will-play, playing, waiting-for-device, reconnecting }
+// for its device (another app holds it), is reconnecting (AirPlay) or waits
+// for the one AirPlay 2 slot; a group waits when every present member does.
+export enum RowState { off, will-play, playing, waiting-for-device, reconnecting, waiting-for-airplay2 }
 
 // The part of a speaker or group row that has, or is to take, the keyboard
 // focus: its toggle, delay button, volume, sync controls, options or name
@@ -13,13 +13,29 @@ export enum RowPart { none, toggle, delay, volume, sync, options, name }
 
 // The kind of output: the icon in a speaker's toggle, and the line under a
 // connected speaker's name.
-export enum SpeakerKind { airplay, built-in, headphones, bluetooth, usb, usb-headphones, usb-speakers, hdmi, display-port, virtual, other }
+export enum SpeakerKind { airplay, airplay2, cast, built-in, headphones, bluetooth, usb, usb-headphones, usb-speakers, hdmi, display-port, virtual, other }
+
+// An AirPlay row that plays a stereo pair or a home theater group (an Apple
+// TV's speakers) as one speaker; none for any other row.
+export enum SpeakerGroup { none, stereo-pair, home-theater }
+
+// Where a Google Cast speaker that is on is: idle while streaming is off.
+export enum CastState { idle, connecting, playing, reconnecting }
+
+// What went wrong with a Google Cast speaker, for its notice.
+export enum CastProblem { busy, not-responding, refused, taken-over, connection-lost }
+
+// The speaker list's note about Google Cast while none is listed.
+export enum CastList { quiet, searching, none-found, failed }
 
 // Whether an AirPlay speaker can simply play.
 export enum Availability { open, needs-code, pairing, waiting-to-pair, pairing-not-yet, airplay2-not-yet, unsupported }
 
 // What went wrong with an AirPlay speaker, for its notice.
-export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, unsupported }
+export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, timing-unavailable, one-airplay2-speaker, plays-through-speakers, apple-tv-plays, plays-in-group, unsupported }
+
+// View > Appearance: as Windows is set, or always light or dark.
+export enum Appearance { system, light, dark }
 
 // Where the PIN dialog of an Apple TV pairing is.
 export enum PinPhase { starting, ready, checking }
@@ -27,6 +43,15 @@ export enum PinPhase { starting, ready, checking }
 // What a switched-on local output's own volume in Windows calls for: none,
 // or the hint under its volume slider (low, muted, or both).
 export enum DeviceVolumeHint { none, low, muted, muted-low }
+
+// A row of the Calibrate All Speakers results.
+export struct CalibrationRowItem {
+    name: string,
+    // Its old and new delay, or why it has none.
+    detail: string,
+    // Measure Again can run for it.
+    can-measure-again: bool,
+}
 
 export struct SpeakerItem {
     id: string,
@@ -59,6 +84,20 @@ export struct SpeakerItem {
     // The reference output's name for the sync hint; empty without one.
     reference-name: string,
     sync-open: bool,
+    // A local output other than the reference: its sync controls offer
+    // Calibrate with Microphone.
+    calibratable: bool,
+    // Its calibration runs: the button cancels it.
+    calibrating: bool,
+    // The button may start a calibration: streaming, this speaker on, a
+    // reference listed, and no other calibration running.
+    calibration-enabled: bool,
+    // Under the button: what a running calibration does, how the last one
+    // ended, or why none can start; empty otherwise.
+    calibration-status: string,
+    // The last calibration found the microphone blocked: Open Privacy
+    // Settings goes next to the button.
+    calibration-privacy: bool,
     auto-connect: bool,
     availability: Availability,
     // An Apple TV AudioSync keeps pairing credentials for: its menu offers
@@ -68,6 +107,21 @@ export struct SpeakerItem {
     // whole percent.
     device-volume: DeviceVolumeHint,
     device-volume-percent: int,
+    // A Google Cast speaker: its delay is the offset the user measured, and
+    // while it connects or plays it offers Mute and Resync.
+    cast: bool,
+    cast-state: CastState,
+    // The Cast speaker reports itself muted.
+    muted: bool,
+    // The Cast speaker's volume can't be changed from here.
+    volume-fixed: bool,
+    // A Google Cast group, and the note under its name
+    // (Strings.cast-group-note); empty for any other row.
+    cast-group: bool,
+    cast-group-note: string,
+    // A stereo pair or home theater group: what it is and its members, or
+    // which member is missing (Strings.group-note); empty for any other row.
+    group-note: string,
 }
 
 export struct GroupItem {
@@ -79,7 +133,7 @@ export struct GroupItem {
 }
 
 // What a notice is about, for its short name (Strings.notice-title).
-export enum NoticeKind { no-speaker, source-quit, source-switched, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-cant-play, airplay-stopped, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings }
+export enum NoticeKind { no-speaker, source-quit, source-switched, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast }
 
 export struct NoticeItem {
     id: int,

@@ -8,11 +8,13 @@
 //! `audiosync_core::policy::session`).
 
 use std::fmt;
+use std::sync::Arc;
 
 use audiosync_core::eq::EqSettings;
 use audiosync_core::policy::device_volume::DeviceVolume;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 
+use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::routing::DirectPath;
 
 /// What AudioSync captures.
@@ -141,14 +143,40 @@ pub struct AirPlayInfo {
     pub enabled: bool,
     /// The volume slider position, 0 to 100.
     pub volume: f64,
-    /// Its own delay d_s in milliseconds, 0 to 3000.
+    /// Its own delay d_s in milliseconds, 0 to 20 000.
     pub delay_ms: f64,
     /// Whether it plays right now.
     pub playing: bool,
-    /// Whether AudioSync keeps credentials from pairing with it.
+    /// Whether AudioSync keeps credentials from pairing with it, on
+    /// AirPlay 1 or AirPlay 2.
     pub paired: bool,
     /// Whether a pairing with it is running.
     pub pairing: bool,
+    /// AudioSync reaches it over AirPlay 2, which happens only while the
+    /// AirPlay 2 switch is on.
+    pub airplay2: bool,
+    /// Set for a stereo pair or home theater group, listed as one speaker
+    /// while the AirPlay 2 switch is on (spec P176).
+    pub group: Option<AirPlayGroup>,
+}
+
+/// What a stereo pair or home theater group row says about its members.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AirPlayGroup {
+    pub kind: AirPlayGroupKind,
+    /// Every member's name, in view or not.
+    pub members: Vec<String>,
+    /// The members out of view or playing nothing now (P181).
+    pub missing: Vec<String>,
+    /// A member is missing, or reports its partner unreachable, even when
+    /// no name is known for it.
+    pub incomplete: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AirPlayGroupKind {
+    StereoPair,
+    HomeTheater,
 }
 
 /// The PIN prompt of a running pairing: the Apple TV shows a PIN for the
@@ -213,6 +241,20 @@ pub enum AirPlayProblem {
     PairingNotYet,
     /// Only AirPlay 2 can play it.
     AirPlay2NotYet,
+    /// It turned NTP timing down, and PTP timing isn't available.
+    TimingUnavailable,
+    /// Another AirPlay 2 speaker plays: it stays on and starts once that
+    /// one stops.
+    OneAirPlay2Speaker,
+    /// An Apple TV whose home theater group plays: its sound goes to those
+    /// speakers, so it is off.
+    PlaysThroughSpeakers,
+    /// A home theater group whose Apple TV plays by itself, so the group is
+    /// off.
+    AppleTvPlays,
+    /// A member of a stereo pair or home theater group that plays as part
+    /// of it, so it stays off by itself.
+    PlaysInGroup,
     /// AudioSync can't play to it at all.
     Unsupported,
 }
@@ -243,6 +285,85 @@ impl AirPlayAvailability {
             AirPlayAvailability::Unsupported => Some(AirPlayProblem::Unsupported),
         }
     }
+}
+
+/// What a Google Cast speaker that is on is doing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CastStatus {
+    /// Off, or on while streaming is off.
+    Idle,
+    /// Connecting, starting the player on the device, or loading the
+    /// stream.
+    Connecting,
+    /// The device plays the stream.
+    Playing,
+    /// The connection dropped and AudioSync reconnects.
+    Reconnecting,
+}
+
+/// What went wrong with a Google Cast speaker, for a notice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CastProblem {
+    /// Another Cast speaker is on: one plays at a time (spec C2).
+    Busy,
+    /// It didn't answer.
+    NotResponding,
+    /// It wouldn't start the player, or turned the stream down.
+    Refused,
+    /// Another app or device started playing on it.
+    TakenOver,
+    /// The connection was lost and couldn't be brought back.
+    ConnectionLost,
+}
+
+/// Whether Google Cast discovery runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CastDiscovery {
+    /// No Cast sender runs.
+    Off,
+    Browsing,
+    /// Discovery couldn't start or stopped, so no Cast speaker is listed.
+    Failed,
+}
+
+/// A Google Cast speaker on the network, and its settings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CastInfo {
+    /// Its ID: the device `id` it announces, in hex.
+    pub id: String,
+    /// The name it announces.
+    pub name: String,
+    /// Set for a Cast group, which plays as one speaker (spec C3).
+    pub group: Option<CastGroup>,
+    /// Whether the user turned it on.
+    pub enabled: bool,
+    /// The device's volume as it last reported it, 0 to 100.
+    pub volume: f64,
+    pub muted: bool,
+    /// The device's volume is locked (`controlType` `fixed`, spec C68).
+    pub volume_fixed: bool,
+    /// The user's measured offset in milliseconds, 0 to 20 000: how long
+    /// the other outputs wait for this speaker while it is on (spec C77).
+    pub offset_ms: f64,
+    pub status: CastStatus,
+}
+
+/// A Cast group as its row shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CastGroup {
+    pub members: CastMembers,
+}
+
+/// What a Cast group's row knows of its members (spec C94).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum CastMembers {
+    /// It is off, or its session hasn't played yet.
+    #[default]
+    NotReported,
+    /// Its session plays and named none of them.
+    Unknown,
+    /// The ones its session named, by name.
+    Known(Vec<String>),
 }
 
 /// Something the UI should know about, from [`AudioBackend::poll`].
@@ -319,6 +440,15 @@ pub enum BackendEvent {
         /// Why.
         problem: AirPlayProblem,
     },
+    /// A member of a stereo pair or home theater group asks for a password
+    /// no prompt can take now, so the target was turned off.
+    AirPlayMemberNeedsPassword {
+        /// The target's ID.
+        id: String,
+        /// The member's name, which the notice gives: a member that is part
+        /// of its target has no row of its own.
+        member: String,
+    },
     /// An Apple TV the user switched on was paired, and is on now.
     AirPlayPaired {
         /// The speaker's ID.
@@ -335,6 +465,25 @@ pub enum BackendEvent {
     /// did, so none is listed; [`AudioBackend::retry_airplay`] starts a new
     /// sender.
     AirPlayStopped,
+    /// Google Cast speakers appeared, changed or went away, or one's state
+    /// changed: list them again.
+    CastChanged,
+    /// A Google Cast speaker plays.
+    CastPlaying {
+        /// The speaker's ID.
+        id: String,
+    },
+    /// A Google Cast speaker couldn't play, or stopped, so it was turned
+    /// off.
+    CastFailed {
+        /// The speaker's ID.
+        id: String,
+        /// Why.
+        problem: CastProblem,
+    },
+    /// What AudioSync keeps per Cast device (offsets, formats) changed:
+    /// save it.
+    CastMemoryChanged,
     /// Whether the pairings' file could be written, reported when that
     /// changes: `false` once a write failed (the pairings added or forgotten
     /// since last only until AudioSync quits), `true` once one worked again.
@@ -590,12 +739,18 @@ pub trait AudioBackend {
     /// The password prompt to show, if one waits and no PIN prompt is open.
     fn airplay_password_prompt(&self) -> Option<AirPlayPasswordPrompt>;
 
+    /// The name of the stereo pair or home theater group that holds the
+    /// AirPlay speaker `id` (see [`AirPlayProblem::PlaysInGroup`]).
+    fn airplay_holding_target(&self, _id: &str) -> Option<String> {
+        None
+    }
+
     /// Sets an AirPlay speaker's volume slider position (0 to 100), live. A
     /// value that isn't finite is ignored.
     fn set_airplay_volume(&mut self, id: &str, position: f64);
 
     /// Sets an AirPlay speaker's own delay d_s in milliseconds, live. A value
-    /// that isn't finite is ignored; others are clamped to 0 to 3000.
+    /// that isn't finite is ignored; others are clamped to 0 to 20 000.
     fn set_airplay_delay(&mut self, id: &str, delay_ms: f64);
 
     /// The AirPlay sender's base latency L_s in milliseconds, or `None`
@@ -618,8 +773,70 @@ pub trait AudioBackend {
     /// `AirPlayStopped` again.
     fn retry_airplay(&mut self);
 
+    /// The Google Cast speakers on the network, by name, with their
+    /// settings; empty while there is no Cast sender.
+    fn cast_speakers(&self) -> Vec<CastInfo> {
+        Vec::new()
+    }
+
+    fn cast_discovery(&self) -> CastDiscovery {
+        CastDiscovery::Off
+    }
+
+    /// Turns a Cast speaker on or off. One plays at a time: turning one on
+    /// while another is on is refused with [`CastProblem::Busy`] (spec C2).
+    /// While streaming, one turned on connects at once.
+    fn set_cast_enabled(&mut self, _id: &str, _enabled: bool) -> Result<(), CastProblem> {
+        Err(CastProblem::NotResponding)
+    }
+
+    /// Sets a Cast speaker's device volume, 0 to 100.
+    fn set_cast_volume(&mut self, _id: &str, _position: f64) {}
+
+    fn set_cast_muted(&mut self, _id: &str, _muted: bool) {}
+
+    /// Sets a Cast speaker's measured offset in milliseconds, clamped to 0
+    /// to 20 000: while it is on, the other outputs wait that long for it
+    /// (spec C77). A value that isn't finite is ignored.
+    fn set_cast_offset(&mut self, _id: &str, _offset_ms: f64) {}
+
+    /// How far ahead of the Cast speaker that is on the AirPlay speakers
+    /// play, in ms, because their delay can't grow past the sender's limit
+    /// (spec C77, P99); 0 while they keep up.
+    fn airplay_ahead_ms(&self) -> f64 {
+        0.0
+    }
+
+    /// The user's Resync: the playing Cast speaker loads the stream again,
+    /// back at its starting latency, after a short gap (spec C79).
+    fn resync_cast(&mut self, _id: &str) {}
+
+    /// What AudioSync keeps per Cast device, as JSON to save; `None` while
+    /// there is no Cast sender.
+    fn cast_memory_json(&self) -> Option<String> {
+        None
+    }
+
     /// What a session does when the app it captures quits (spec S227).
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits);
+
+    /// What a microphone calibration depends on: the session, the outputs
+    /// that play, the reference and their hold-backs.
+    fn calibration_engine(&self) -> Engine;
+
+    /// The capture's calibration tap.
+    fn calibration_tap(&self) -> Option<Arc<CalibrationTap>>;
+
+    /// Only local output `id` is heard, the others at gain 0; `None`: every
+    /// output at its own gain again.
+    fn set_calibration_solo(&mut self, id: Option<&str>);
+
+    /// Only AirPlay speaker `id` is heard, the others muted; `None`: every
+    /// AirPlay speaker at its own volume again.
+    fn set_calibration_airplay_solo(&mut self, _id: Option<&str>) {}
+
+    /// Starts recording the default input device, with room for `seconds`.
+    fn open_microphone(&mut self, seconds: f64) -> Result<Box<dyn Microphone>, MicrophoneError>;
 
     /// Handles device changes, lost outputs, the end of capture and what the
     /// AirPlay sender reports, and returns what the UI should know. Call it

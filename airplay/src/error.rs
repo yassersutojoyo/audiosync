@@ -25,6 +25,14 @@ pub enum UnsupportedReason {
     Format,
     /// Only the AirPlay 2 path could serve the device, and it is off (P2).
     AirPlay2Only,
+    /// The receiver refused the session SETUP's timing and PTP can't take
+    /// its place (P157).
+    Timing,
+    /// Another AirPlay 2 session is running (P169).
+    OneAirPlay2Session,
+    /// The Apple TV of a home theater group the host plays, or the group of
+    /// an Apple TV the host plays by itself (P177).
+    PlaysThroughSpeakers,
 }
 
 impl fmt::Display for UnsupportedReason {
@@ -36,6 +44,9 @@ impl fmt::Display for UnsupportedReason {
             UnsupportedReason::Methods => "methods",
             UnsupportedReason::Format => "format",
             UnsupportedReason::AirPlay2Only => "AirPlay 2 only",
+            UnsupportedReason::Timing => "timing",
+            UnsupportedReason::OneAirPlay2Session => "one AirPlay 2 speaker at a time",
+            UnsupportedReason::PlaysThroughSpeakers => "plays through its speakers",
         })
     }
 }
@@ -195,4 +206,9 @@ pub enum Warning {
     /// check out against the Ed25519 key it gave at pairing; the
     /// verification goes on (P56).
     ReceiverSignatureInvalid,
+    /// PTP port 319 or 320 couldn't be bound, so a receiver that needs PTP
+    /// timing is Unsupported; told once per sender (P158). Also told once
+    /// to a target member with no address in the family the target's PTP
+    /// service runs in, whose session then goes without PTP (P179).
+    PtpUnavailable,
 }

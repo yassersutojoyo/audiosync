@@ -5,26 +5,39 @@
 //! in stamped blocks, so a played sample tells which capture frame it is and
 //! the device's clock tells when it sounds.
 //!
-//! Main fails most cases, so the matrix runs as a ratchet: per invariant,
-//! the failing cases on the pinned seed may not exceed [`RATCHET`]. Two
-//! sensitivity checks prove it sees the open findings on the Mac. The
-//! 512-case property run is ignored until the matrix passes.
+//! Every case of the pinned seed holds every invariant. Until it did, the
+//! matrix ran as a ratchet on the failing cases per invariant, I1 to I8:
+//! main failed 14, 34, 3, 31, 44, 32, 0 and 2 of them, the trim at any
+//! hold-back left 14, 21, 3, 24, 29, 20, 0, 2, the ratio-1 converter
+//! 1, 2, 2, 13, 0, 0, 0, 0, and the anchor floor that falls toward
+//! earlier callbacks, formed over 300 ms before any callback counts as
+//! late, none. The 512-case property run takes minutes, so it is
+//! ignored.
 //!
 //! Invariants, from 2 s on unless said otherwise:
 //! - I1: no read runs dry.
 //! - I2: no drift skip or silence at any time, the start included.
-//! - I3: S206's slow-down makes up no shortage.
+//! - I3: S206's slow-down makes up no shortage. A late-first output's I1
+//!   and I3 count from 1 s after its callbacks came on time.
 //! - I4: over the last quarter, any two outputs' mean delays, less their
 //!   latencies and hold-backs, lie within a capture block plus 2 ms.
 //! - I5: over the last quarter, each output's delay stays within 2 ms.
 //! - I6: an output without wander whose clock is at least 20 ppm off is
 //!   trimmed with its clock by 9/10 of what it gained, against it by at most
-//!   16 frames.
+//!   16 frames; a late-first output from 20 s after its callbacks came on
+//!   time, once it has moved by their lateness.
 //! - I7: with AirPlay chosen, the session lead stays 0 and no output
 //!   re-times.
 //! - I8 (stall cases only): a device that consumes nothing for 50 to 200 ms
 //!   and then plays on later gets at most one correction for it, runs dry
 //!   none, and every output it doesn't stall gets none.
+//!
+//! The late-first stratum is its own nine cases after the stall cases, each
+//! a twin of one even Mac case that is not finding 2's (2, 4, 6, 18, 20,
+//! 22, 34, 36 and 38), on its draw and named after it with an f: the first
+//! output's callbacks come 15.4 or 45 ms late for its first 0.6 to 1.8 s,
+//! so its prime and its floor take them as on time, and then on time,
+//! without wander. The Mac cases they twin keep their wander.
 //!
 //! A Bluetooth output adds a capture block to its start lead (S230); the
 //! random mixes have none yet, see [`device`].
@@ -54,17 +67,24 @@ const SETTLED: f64 = 2.0;
 const PREFILL: f64 = 3.0;
 /// Host time 0 in ns, so the prefill is stamped too.
 const HOST_OFFSET: f64 = 10.0;
-/// Held back, for the strata: beyond the trim's reach (S207).
+/// Held back, for the strata: beyond a lead and the dead band.
 const HELD_MS: f64 = 100.0;
 /// With AirPlay chosen, every local output is held back this much or more.
 const AIRPLAY_MS: f64 = 1700.0;
-
-/// Main's failing cases per invariant on the pinned seed, I1 to I8. A count
-/// above its maximum fails, and so does one below it until the maximum is
-/// lowered to it, so the ratchet never goes slack and every CI system proves
-/// the same counts. Each step of the design sets them to its own measured
-/// counts and says why one rose.
-const RATCHET: [usize; 8] = [14, 34, 3, 31, 44, 32, 0, 2];
+/// Late-first stratum: the most common late callback of the Bluetooth
+/// headset in render_wander.rs.
+const FIRST_LATE_BT_MS: f64 = 15.4;
+/// Late-first stratum: as late as a callback gets and still stays under
+/// LATE_CAP_MS and the dead band with a burst's margin.
+const FIRST_LATE_LARGE_MS: f64 = 45.0;
+/// Late-first: s after the callbacks came on time by which the reader's
+/// start is over, a dry read and S206's slow-downs as they come on time
+/// included.
+const CAUGHT_UP: f64 = 1.0;
+/// Late-first: s after the callbacks came on time by which the anchor floor
+/// has fallen (ten ANCHOR_FALL_MS) and the trim, at up to about 3.9 ms a
+/// second, has carried the output the 45 ms.
+const FALLEN_AFTER: f64 = 20.0;
 
 /// I4: how far apart outputs may play beyond a capture block, in ms.
 const ALIGN_SLACK_MS: f64 = 2.0;
@@ -122,6 +142,9 @@ struct Device {
     /// Two callbacks in a row from this host time on are stamped this many
     /// ms early.
     strays: Option<(f64, f64)>,
+    /// Its callbacks until this many s of device time come this many ms
+    /// late, then on time: (ms, s).
+    first_late: Option<(f64, f64)>,
     /// Its start lead counts a capture block more (S230).
     bluetooth: bool,
     seed: u64,
@@ -324,6 +347,7 @@ fn device(o: &RawOutput, platform: Platform, shared: Option<(u64, u64)>) -> Devi
         // in each of which an output already fails on a fast clock without
         // conversion or a late second callback, and the others move a block.
         bluetooth: false,
+        first_late: None,
         seed: o.seed,
     }
 }
@@ -331,8 +355,26 @@ fn device(o: &RawOutput, platform: Platform, shared: Option<(u64, u64)>) -> Devi
 /// Case `k` of the matrix, from `raw` and the strata of `k`.
 fn build(raw: &RawCase, k: usize, stall: bool) -> Case {
     if stall {
-        return build_stall(raw, k);
+        build_stall(raw, k)
+    } else {
+        build_mix(raw, k, false)
     }
+}
+
+/// Whether case `k`'s strata have a late-first case: a Mac case, since
+/// without output times the core never sees a late wake, at an even `k`
+/// that is not finding 2's.
+fn late_first_strata(k: usize) -> bool {
+    k % 2 == 0 && k % 8 != 0 && (k / 8) % 2 == 0
+}
+
+/// The late-first case on the strata of case `k`, from `raw`.
+fn build_late_first(raw: &RawCase, k: usize) -> Case {
+    assert!(late_first_strata(k), "case {k} has no late-first strata");
+    build_mix(raw, k, true)
+}
+
+fn build_mix(raw: &RawCase, k: usize, late_first: bool) -> Case {
     let stratum = k % 8;
     let first_held = stratum & 1 != 0;
     let first_converts = stratum & 2 != 0;
@@ -389,6 +431,16 @@ fn build(raw: &RawCase, k: usize, stall: bool) -> Case {
                     }
                 }
                 _ => {}
+            }
+            if late_first && i == 0 {
+                let ms = if (stratum / 2 + k / 16) % 2 == 0 {
+                    FIRST_LATE_BT_MS
+                } else {
+                    FIRST_LATE_LARGE_MS
+                };
+                // Wander is lateness too; without it the floor's fall is the stratum's.
+                d.wander_ms = 0.0;
+                d.first_late = Some((ms, 0.6 + (o.seed % 1201) as f64 / 1000.0));
             }
             if airplay {
                 d.hold_back_ms += AIRPLAY_MS;
@@ -531,7 +583,21 @@ struct Output {
     written: u64,
     played_shift: f64,
     tail: Tail,
+    /// I1 and I3 count from this time on, and its counters then.
+    settled_at: f64,
     settled: Option<(ReaderCounters, u64)>,
+    /// Late-first: the lowest Jf in ms, and Jf 2 s after the callbacks
+    /// came on time.
+    least_shift_ms: f64,
+    shift_after_ms: Option<f64>,
+    /// Late-first case: when the late callbacks come on time, and the
+    /// output's delay at its last callback before then.
+    observed_until: Option<f64>,
+    delay_before_ms: f64,
+    /// I6 counts the trim from this time on, and the frames slowed and sped
+    /// up by then.
+    trim_judged_from: f64,
+    trim_from: Option<(u64, u64)>,
 }
 
 impl Output {
@@ -588,6 +654,11 @@ impl Output {
         if self.pulls == 1 {
             late_ms += self.d.second_late_ms;
         }
+        if let Some((ms, until)) = self.d.first_late
+            && nominal < until
+        {
+            late_ms += ms;
+        }
         self.next_at = (nominal + late_ms / 1000.0).max(self.last_at);
     }
 }
@@ -602,6 +673,19 @@ struct Outcome {
     slack_ms: Vec<Option<f64>>,
     dry_from_start: Vec<u64>,
     norms: Vec<f64>,
+    /// Per output of a late-first case, in ms: the observer's floor drop,
+    /// the lowest Jf, Jf 2 s after the late callbacks came on time, its
+    /// delay before then and its mean delay over the last quarter.
+    falls: Vec<Option<Fall>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Fall {
+    drop_ms: f64,
+    least_ms: f64,
+    after_ms: Option<f64>,
+    before_ms: f64,
+    end_ms: f64,
 }
 
 fn write_block(writer: &mut RingWriter, samples: &mut [f32], first: u64, at: f64) {
@@ -665,7 +749,24 @@ fn simulate(case: &Case) -> Outcome {
                 mac,
                 played_shift: 0.0,
                 tail: Tail::default(),
+                // A late start ends once its callbacks have come on time.
+                settled_at: d
+                    .first_late
+                    .map_or(SETTLED, |(_, until)| SETTLED.max(until + CAUGHT_UP)),
                 settled: None,
+                least_shift_ms: 0.0,
+                shift_after_ms: None,
+                observed_until: case
+                    .devices
+                    .iter()
+                    .find_map(|d| d.first_late.map(|(_, until)| until)),
+                delay_before_ms: f64::NAN,
+                // Once the anchor floor has fallen and the trim has carried the
+                // output there, the trim follows the clock alone again.
+                trim_judged_from: d
+                    .first_late
+                    .map_or(SETTLED, |(_, until)| until + FALLEN_AFTER),
+                trim_from: None,
             };
             output.schedule();
             output
@@ -697,10 +798,11 @@ fn simulate(case: &Case) -> Outcome {
         if now > case.seconds {
             break;
         }
-        if now >= SETTLED {
-            for o in outputs.iter_mut().filter(|o| o.settled.is_none()) {
-                o.settled = Some((o.control.counters(), o.control.shortage_frames()));
-            }
+        for o in outputs
+            .iter_mut()
+            .filter(|o| o.settled.is_none() && now >= o.settled_at)
+        {
+            o.settled = Some((o.control.counters(), o.control.shortage_frames()));
         }
         if stall_at <= now {
             stall_marks.push(
@@ -740,6 +842,14 @@ fn simulate(case: &Case) -> Outcome {
             let stamped = output_at + early_ms / 1000.0;
             o.renderer
                 .render_timed_at(&mut out[..frames * 2], ns(stamped), ns(pull_at));
+            if let Some((_, until)) = o.d.first_late {
+                let shift_ms =
+                    o.renderer.floor_shift_frames() as f64 * 1000.0 / f64::from(CAPTURE_RATE);
+                o.least_shift_ms = o.least_shift_ms.min(shift_ms);
+                if o.shift_after_ms.is_none() && o.nominal(o.pulls) >= until + 2.0 {
+                    o.shift_after_ms = Some(shift_ms);
+                }
+            }
             (frames, output_at + (frames - 1) as f64 / rate)
         } else {
             // The device has played since it started at its first wake,
@@ -771,6 +881,20 @@ fn simulate(case: &Case) -> Outcome {
                 o.tail.add((played_at - captured_at) * 1000.0);
             }
         }
+        if let Some(until) = o.observed_until
+            && frames > 0
+            && pull_at.max(o.nominal(o.pulls)) < until
+            && o.renderer.fade_state() == FadeState::Open
+        {
+            let value = f64::from(out[(frames - 1) * 2]);
+            if value != 0.0 {
+                let captured_at = value * 1e6 / f64::from(CAPTURE_RATE) - capture_origin;
+                o.delay_before_ms = (played_at - captured_at) * 1000.0;
+            }
+        }
+        if o.trim_from.is_none() && pull_at >= o.trim_judged_from {
+            o.trim_from = Some((o.control.slowed_frames(), o.control.sped_frames()));
+        }
         o.pulls += 1;
         o.last_at = pull_at;
         o.schedule();
@@ -790,6 +914,18 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
     let mut norms = Vec::new();
     let mut slack_ms = Vec::new();
     let mut dry_from_start = Vec::new();
+    let falls = outputs
+        .iter()
+        .map(|o| {
+            o.observed_until.map(|_| Fall {
+                drop_ms: o.control.floor_drop_ns() as f64 / 1e6,
+                least_ms: o.least_shift_ms,
+                after_ms: o.shift_after_ms,
+                before_ms: o.delay_before_ms,
+                end_ms: o.tail.mean(),
+            })
+        })
+        .collect();
     for (i, o) in outputs.iter().enumerate() {
         let end = o.control.counters();
         let (early, shortage_early) = o.settled.unwrap_or_default();
@@ -797,6 +933,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         let corrections = end.drift_skips + end.drift_silences;
         let shortage = o.control.shortage_frames() - shortage_early;
         let (slowed, sped) = (o.control.slowed_frames(), o.control.sped_frames());
+        let (slowed_early, sped_early) = o.trim_from.unwrap_or((slowed, sped));
         let d = &o.d;
         let norm = o.tail.mean() - d.latency_ms - d.hold_back_frames() as f64 / 48.0;
         let spread = o.tail.high - o.tail.low;
@@ -810,7 +947,9 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
             own[2] = shortage > 0;
             own[4] = o.tail.count == 0 || spread > STEADY_MS;
             if d.wander_ms == 0.0 && d.ppm.abs() >= TRIM_JUDGED_PPM {
-                let gained = d.ppm.abs() * 1e-6 * case.seconds * f64::from(CAPTURE_RATE);
+                let judged_s = case.seconds - o.trim_judged_from;
+                let gained = d.ppm.abs() * 1e-6 * judged_s * f64::from(CAPTURE_RATE);
+                let (slowed, sped) = (slowed - slowed_early, sped - sped_early);
                 let (with, against) = if d.ppm > 0.0 {
                     (slowed, sped)
                 } else {
@@ -837,7 +976,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
             .filter_map(|(name, f)| f.then_some(*name))
             .collect();
         lines.push(format!(
-            "  o{i}{} {} Hz hb {:.1} ms {:+.0} ppm cb {} lat {:.0} wander {:.1}/{:.0}s 2nd {:.1} early {:.0} strays {:?} | dry {dry} skips {} silences {} resyncs {} shortage {shortage} slowed {slowed} sped {sped} slack {:.2} | tail {:.2} ms norm {:.2} {failed:?}",
+            "  o{i}{} {} Hz hb {:.1} ms {:+.0} ppm cb {} lat {:.0} wander {:.1}/{:.0}s 2nd {:.1} early {:.0} strays {:?} first late {:?} | dry {dry} skips {} silences {} resyncs {} shortage {shortage} slowed {slowed} sped {sped} slack {:.2} | tail {:.2} ms norm {:.2} {failed:?}",
             if d.bluetooth { " bt" } else { "" },
             d.rate,
             d.hold_back_ms,
@@ -849,6 +988,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
             d.second_late_ms,
             d.first_early_ms,
             d.strays.map(|(at, ms)| (at.round(), ms.round())),
+            d.first_late,
             end.drift_skips,
             end.drift_silences,
             end.resyncs,
@@ -872,7 +1012,11 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         0,
         format!(
             "case {}{} {:?} {} block {} align {:.2} ms {failed:?}",
-            if case.is_stall() { "s" } else { "" },
+            match (case.is_stall(), case.devices[0].first_late.is_some()) {
+                (true, _) => "s",
+                (false, true) => "f",
+                (false, false) => "",
+            },
             case.k,
             case.platform,
             if case.airplay { "airplay" } else { "local" },
@@ -886,6 +1030,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         slack_ms,
         dry_from_start,
         norms,
+        falls,
     }
 }
 
@@ -898,12 +1043,15 @@ fn run_all(cases: &[Case]) -> (Vec<Outcome>, f64) {
     std::thread::scope(|scope| {
         for _ in 0..workers.min(cases.len()) {
             scope.spawn(|| {
-                while let Some(case) = cases.get(next.fetch_add(1, Ordering::Relaxed)) {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(case) = cases.get(i) else {
+                        break;
+                    };
                     let started = Instant::now();
                     let outcome = simulate(case);
                     let took = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
                     busy_us.fetch_add(took, Ordering::Relaxed);
-                    let i = case.k + if case.is_stall() { CASES } else { 0 };
                     *results[i].lock().unwrap() = Some(outcome);
                 }
             });
@@ -961,14 +1109,24 @@ fn seed_bytes(seed: u64) -> [u8; 32] {
 }
 
 /// The pinned cases, drawn once by proptest from [`SEED`], then the stall
-/// cases.
+/// cases, then the late-first ones, each on its strata case's draw.
 fn pinned_cases() -> Vec<Case> {
     let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed_bytes(SEED));
     let mut runner = TestRunner::new_with_rng(Config::default(), rng);
     let strategy = raw_case();
     let mut draw = || strategy.new_tree(&mut runner).unwrap().current();
-    let mut cases: Vec<Case> = (0..CASES).map(|k| build(&draw(), k, false)).collect();
+    let raws: Vec<RawCase> = (0..CASES).map(|_| draw()).collect();
+    let mut cases: Vec<Case> = raws
+        .iter()
+        .enumerate()
+        .map(|(k, raw)| build(raw, k, false))
+        .collect();
     cases.extend((0..STALL_CASES).map(|k| build(&draw(), k, true)));
+    cases.extend(
+        (0..CASES)
+            .filter(|&k| late_first_strata(k))
+            .map(|k| build_late_first(&raws[k], k)),
+    );
     cases
 }
 
@@ -987,65 +1145,238 @@ fn matrix() -> &'static Matrix {
     })
 }
 
-// Known-failure probe on main for S50, S206, S207, S208, S209: it pins where main breaks them, so it is not coverage.
+// covers: S50, S206, S207, S208, S209
 #[test]
-fn the_matrix_fails_exactly_the_ratchets_cases_per_invariant() {
+fn every_case_of_the_matrix_holds_every_invariant() {
     let matrix = matrix();
     let counts = matrix.counts();
     let table: Vec<String> = NAMES
         .iter()
-        .zip(counts.iter().zip(RATCHET))
-        .map(|(name, (count, most))| format!("{name} {count}/{most}"))
+        .zip(counts)
+        .map(|(name, count)| format!("{name} {count}"))
         .collect();
     println!(
-        "{} cases in {:.1} s ({:.1} s on one core); failing per invariant (now/max): {}\n{}",
+        "{} cases in {:.1} s ({:.1} s on one core); failing per invariant: {}",
         matrix.cases.len(),
         matrix.seconds,
         matrix.one_core_seconds,
-        table.join(", "),
-        matrix.report()
+        table.join(", ")
     );
     assert!(
-        counts
-            .iter()
-            .zip(RATCHET)
-            .all(|(&count, most)| count == most),
-        "failing cases differ from the ratchet (above: a regression; below: lower RATCHET): {}\n{}",
+        counts.iter().all(|&count| count == 0),
+        "failing cases per invariant: {}\n{}",
         table.join(", "),
         matrix.report()
     );
 }
 
-// Known-failure probe on main for S206: it pins where main breaks them, so it is not coverage.
+/// Simulates `cases` on a thread each.
+fn simulate_all(cases: &[Case]) -> Vec<Outcome> {
+    std::thread::scope(|scope| {
+        let runs: Vec<_> = cases
+            .iter()
+            .map(|case| scope.spawn(move || simulate(case)))
+            .collect();
+        runs.into_iter().map(|run| run.join().unwrap()).collect()
+    })
+}
+
+// covers: S85, S206, S209
 #[test]
-fn every_mac_case_of_the_capture_rate_output_that_sets_the_lead_runs_dry() {
-    // Finding 2: without conversion there is no trim and the lead is one
-    // callback, so a fast clock runs it dry. C2 flips this to "never".
+fn the_capture_rate_output_that_sets_the_lead_never_runs_dry_through_its_wander() {
+    // Finding 2 on main: without conversion there was no trim and the lead
+    // was one callback, so every Mac case of this stratum ran dry on its
+    // fast clock. The ratio-1 converter fixed the clock; an output that
+    // anchored in a late stretch of its lateness wander still ran dry until
+    // the anchor floor fell toward the wander's earlier callbacks.
     let cases =
         matrix().cases_where(|c| !c.is_stall() && c.k % 8 == 0 && c.platform == Platform::Mac);
-    assert!(!cases.is_empty());
+    assert!(
+        cases
+            .iter()
+            .any(|(case, _)| case.devices[0].wander_ms > 0.0)
+    );
     for (case, outcome) in cases {
         assert!(
-            outcome.fails[0],
-            "case {} no longer fails I1:\n{}",
+            !outcome.fails[0],
+            "case {} runs dry:\n{}",
             case.k,
             outcome.lines.join("\n")
         );
     }
 }
 
-// Known-failure probe on main for S208, S209: it pins where main breaks them, so it is not coverage.
+// covers: S208, S209
 #[test]
-fn every_mac_case_with_a_late_second_callback_corrects_drift() {
-    // The start re-anchor lands on the late second callback before the
-    // floor has formed. C3b flips this to "never".
-    let cases =
+fn a_late_second_callback_neither_corrects_drift_nor_plays_early_in_a_mac_case() {
+    // The start re-anchor used to land on the late second callback before
+    // the floor had formed, too close to W by its lateness: past T it was
+    // corrected (I2), inside T it played that much early all run (on main
+    // every such case; with the ratio-1 converter cases 17 and 21). With the
+    // re-anchor held until the floor has formed, each case plays as its twin
+    // with that callback on time.
+    let late: Vec<(&Case, &Outcome)> =
         matrix().cases_where(|c| !c.is_stall() && c.k % 4 == 1 && c.platform == Platform::Mac);
-    assert!(!cases.is_empty());
+    assert!(!late.is_empty());
+    let on_time: Vec<Case> = late
+        .iter()
+        .map(|(case, _)| {
+            let mut twin = (*case).clone();
+            twin.devices[0].second_late_ms = 0.0;
+            twin
+        })
+        .collect();
+    let mut lines = Vec::new();
+    let mut shown = 0;
+    for ((case, late), on_time) in late.iter().zip(simulate_all(&on_time)) {
+        let early_ms = on_time.norms[0] - late.norms[0];
+        let corrected = late.fails[1] && !on_time.fails[1];
+        shown += usize::from(corrected || early_ms > ALIGN_SLACK_MS);
+        lines.push(format!(
+            "case {}: {:.2} ms early, drift corrected {corrected}",
+            case.k, early_ms
+        ));
+    }
+    println!("{}", lines.join("\n"));
+    assert_eq!(shown, 0, "\n{}", lines.join("\n"));
+}
+
+// covers: S209
+#[test]
+fn two_stray_early_stamps_move_no_output_by_more_than_2_ms() {
+    // The anchor floor falls toward a callback earlier than it by a share of
+    // that callback's span over 2 s, so two stray stamps of 20 to 80 ms
+    // hardly move it, where following the floor at once moved such outputs
+    // by up to 57 ms until the next anchor.
+    let strayed: Vec<(&Case, &Outcome)> = matrix().cases_where(|c| {
+        !c.is_stall() && c.platform == Platform::Mac && c.devices.iter().any(|d| d.strays.is_some())
+    });
+    assert!(!strayed.is_empty());
+    let calm: Vec<Case> = strayed
+        .iter()
+        .map(|(case, _)| {
+            let mut twin = (*case).clone();
+            for d in &mut twin.devices {
+                d.strays = None;
+            }
+            twin
+        })
+        .collect();
+    let mut lines = Vec::new();
+    let mut moved = 0;
+    for ((case, seen), calm) in strayed.iter().zip(simulate_all(&calm)) {
+        for (i, d) in case.devices.iter().enumerate() {
+            if d.strays.is_some() {
+                let later_ms = seen.norms[i] - calm.norms[i];
+                moved += usize::from(later_ms.abs() > ALIGN_SLACK_MS);
+                lines.push(format!("case {} o{i}: {later_ms:.2} ms later", case.k));
+            }
+        }
+    }
+    println!("{}", lines.join("\n"));
+    assert_eq!(moved, 0, "\n{}", lines.join("\n"));
+}
+
+// covers: S208, S209
+#[test]
+fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_output() {
+    // Its prime and its floor take the late callbacks as on time, so it
+    // plays that much early. Once they come on time the floor drops by
+    // their lateness and the anchor floor falls after it over
+    // ANCHOR_FALL_MS, so from then on the output moves later by the
+    // lateness and every other output by nothing, each to within 2 ms of
+    // its move in the twin whose callbacks were on time. Their delays
+    // aren't compared directly: an anchor lands on a capture block, and the
+    // twin's land at other times. At hold-back 0 a lateness past the lead
+    // runs the reader dry once as they come on time; that silence used to
+    // count toward the move twice, and the reference measured after it
+    // took in half of what the anchor floor still fell.
+    let late: Vec<(&Case, &Outcome)> =
+        matrix().cases_where(|c| c.devices.iter().any(|d| d.first_late.is_some()));
+    for ms in [FIRST_LATE_BT_MS, FIRST_LATE_LARGE_MS] {
+        assert!(
+            late.iter()
+                .any(|(case, _)| case.devices[0].first_late.is_some_and(|(m, _)| m == ms))
+        );
+    }
+    // The late-first cases are twins of their strata cases, which keep
+    // their wander.
+    assert!(
+        matrix()
+            .cases_where(|c| !c.is_stall() && late_first_strata(c.k))
+            .iter()
+            .any(
+                |(case, _)| case.devices[0].first_late.is_none() && case.devices[0].wander_ms > 0.0
+            )
+    );
+    let on_time: Vec<Case> = late
+        .iter()
+        .map(|(case, _)| {
+            let mut twin = (*case).clone();
+            twin.devices[0].first_late = twin.devices[0].first_late.map(|(_, until)| (0.0, until));
+            twin
+        })
+        .collect();
+    let mut lines = Vec::new();
+    let mut failed = 0;
+    for ((case, seen), on_time) in late.iter().zip(simulate_all(&on_time)) {
+        let (ms, until) = case.devices[0].first_late.unwrap();
+        let fall = seen.falls[0].unwrap();
+        let after = fall.after_ms.unwrap_or(f64::NEG_INFINITY);
+        let moves: Vec<f64> = seen
+            .falls
+            .iter()
+            .zip(&on_time.falls)
+            .enumerate()
+            .map(|(i, (seen, on_time))| {
+                let (seen, on_time) = (seen.unwrap(), on_time.unwrap());
+                let owed = if i == 0 { ms } else { 0.0 };
+                (seen.end_ms - seen.before_ms - owed) - (on_time.end_ms - on_time.before_ms)
+            })
+            .collect();
+        let own = moves[0];
+        let others = moves[1..]
+            .iter()
+            .fold(0.0f64, |most, by| most.max(by.abs()));
+        // One time constant leaves 1/e of the fall, so 2 s leave 0.4 of it at most.
+        let ok = fall.drop_ms >= 0.8 * ms
+            && after >= -0.4 * ms
+            && own.abs() <= ALIGN_SLACK_MS
+            && others <= ALIGN_SLACK_MS
+            && !seen.fails.iter().any(|&f| f);
+        failed += usize::from(!ok);
+        lines.push(format!(
+            "case f{}: {ms} ms late for {until:.2} s, floor down {:.2} ms, Jf down to {:.2} ms, {after:.2} ms 2 s later; moved {own:+.2} ms past its lateness, others up to {others:.2} ms{}",
+            case.k,
+            fall.drop_ms,
+            fall.least_ms,
+            if ok { "" } else { " FAILS" }
+        ));
+        if !ok {
+            lines.extend(seen.lines.iter().cloned());
+            lines.extend(on_time.lines.iter().cloned());
+        }
+    }
+    println!("{}", lines.join("\n"));
+    assert_eq!(failed, 0, "\n{}", lines.join("\n"));
+}
+
+// covers: S85, S206, S207, S208
+#[test]
+fn every_windows_case_holds_every_invariant() {
+    // Windows has no output times, so the anchor floor's steps (C3) don't
+    // apply there: with every 48 kHz output converting at ratio 1 the
+    // whole Windows platform passes, stall cases included.
+    let cases = matrix().cases_where(|c| c.platform == Platform::Windows);
+    assert!(
+        cases
+            .iter()
+            .any(|(case, _)| { case.devices.iter().any(|d| d.rate == CAPTURE_RATE) })
+    );
     for (case, outcome) in cases {
         assert!(
-            outcome.fails[1],
-            "case {} no longer fails I2:\n{}",
+            !outcome.fails.iter().any(|&f| f),
+            "case {}:\n{}",
             case.k,
             outcome.lines.join("\n")
         );
@@ -1062,9 +1393,13 @@ proptest! {
 
     // covers: S50, S206, S207, S208, S209
     #[test]
-    #[ignore = "open until the design's step 5: main fails most cases (see the ratchet)"]
+    #[ignore = "512 cases of up to 180 s take minutes"]
     fn every_output_of_every_mix_holds_every_invariant(raw in raw_case()) {
-        let case = build(&raw, raw.k, raw.stall);
+        let case = if !raw.stall && late_first_strata(raw.k) && raw.seed % 2 == 1 {
+            build_late_first(&raw, raw.k)
+        } else {
+            build(&raw, raw.k, raw.stall)
+        };
         let outcome = simulate(&case);
         prop_assert!(!outcome.fails.iter().any(|&f| f), "{}", outcome.lines.join("\n"));
     }
@@ -1091,6 +1426,7 @@ fn calm(platform: Platform, airplay: bool) -> Case {
         second_late_ms: 0.0,
         first_early_ms: 0.0,
         strays: None,
+        first_late: None,
         bluetooth: false,
         seed: 7,
     };
@@ -1128,14 +1464,15 @@ fn a_calm_mix_holds_every_invariant() {
 
 // covers: S208, S229, S230
 #[test]
-fn a_bluetooth_output_that_sets_the_lead_no_longer_runs_dry_at_its_start() {
-    // The 48 kHz output at hold-back 0 sets the session lead with one
-    // callback and nothing to spare. The capture's first block after the
-    // start comes on time and every later one up to 1 ms after the callback
-    // that reads it, so the reader loses a block's phase at once: it ran
-    // dry, which put it behind the others. As Bluetooth its start lead
-    // counts a capture block more, which absorbs that; every other output
-    // plays a block later with it, and the offsets stay as set.
+fn a_bluetooth_output_that_sets_the_lead_gains_a_block_of_slack_and_the_others_follow() {
+    // The 48 kHz output at hold-back 0 sets the session lead. The capture's
+    // first block after the start comes on time and every later one up to
+    // 1 ms after the callback that reads it, so the reader loses a block's
+    // phase at once. With one callback of lead and nothing to spare it ran
+    // dry; the converting lead's block now absorbs that. As Bluetooth its
+    // start lead counts a capture block more, which it keeps as slack;
+    // every other output plays a block later with it, and the offsets stay
+    // as set.
     let block_ms = 512.0 * 1000.0 / f64::from(CAPTURE_RATE);
     for platform in [Platform::Mac, Platform::Windows] {
         let wired = calm(platform, false);
@@ -1146,20 +1483,17 @@ fn a_bluetooth_output_that_sets_the_lead_no_longer_runs_dry_at_its_start() {
         println!("{report}");
         for outcome in [&before, &after] {
             assert!(!outcome.fails.iter().any(|&f| f), "{report}");
+            assert!(
+                outcome.dry_from_start.iter().all(|&dry| dry == 0),
+                "{report}"
+            );
         }
-        assert!(before.dry_from_start[0] > 0, "{report}");
-        assert_eq!(before.slack_ms[0], Some(0.0), "{report}");
-        assert!(after.dry_from_start.iter().all(|&dry| dry == 0), "{report}");
-        let slack = after.slack_ms[0].unwrap();
-        // On the Mac the whole block goes to the phase lost after the start.
-        // Windows refills 480-frame periods from 512-frame blocks, so part
-        // of it stays as slack there.
-        let least = if platform == Platform::Windows {
-            9.0
-        } else {
-            0.0
-        };
-        assert!(slack >= least, "{platform:?}: {slack} ms of slack");
+        let (was, is) = (before.slack_ms[0].unwrap(), after.slack_ms[0].unwrap());
+        assert!(was > 0.0, "{platform:?}: {was} ms of slack");
+        assert!(
+            (is - was - block_ms).abs() < 0.05,
+            "{platform:?}: slack {was} then {is} ms"
+        );
         let low = after.norms.iter().copied().fold(f64::INFINITY, f64::min);
         let high = after
             .norms
@@ -1167,12 +1501,41 @@ fn a_bluetooth_output_that_sets_the_lead_no_longer_runs_dry_at_its_start() {
             .copied()
             .fold(f64::NEG_INFINITY, f64::max);
         assert!(high - low < 0.1, "{platform:?}: {} ms apart", high - low);
-        for (was, is) in before.norms[1..].iter().zip(&after.norms[1..]) {
+        for (was, is) in before.norms.iter().zip(&after.norms) {
             assert!(
                 (is - was - block_ms).abs() < 0.05,
                 "{platform:?}: moved {} ms",
                 is - was
             );
         }
+    }
+}
+
+// covers: S85, S206, S207
+#[test]
+fn a_48_khz_output_that_does_not_convert_on_a_fast_clock_never_runs_dry() {
+    // At the capture rate, callbacks on time, 50 ppm fast: a block of 512
+    // frames gained every 213 s, four in 900 s. Without a converter it ran
+    // dry once per block gained (4 times alone, twice next to a 44.1 kHz
+    // output); at ratio 1 it is trimmed with its clock instead.
+    let on_time = |rate: u32| Device {
+        ppm: 50.0,
+        ..calm(Platform::Mac, false).devices[usize::from(rate != CAPTURE_RATE)].clone()
+    };
+    let alone = Case {
+        devices: vec![on_time(CAPTURE_RATE)],
+        seconds: 900.0,
+        ..calm(Platform::Mac, false)
+    };
+    let mut with_44 = alone.clone();
+    let mut held = on_time(44_100);
+    held.hold_back_ms = 0.0;
+    with_44.devices.push(held);
+    let outcomes = simulate_all(&[alone, with_44]);
+    let report: Vec<String> = outcomes.iter().flat_map(|o| o.lines.clone()).collect();
+    println!("{}", report.join("\n"));
+    for outcome in &outcomes {
+        assert!(!outcome.fails.iter().any(|&f| f), "{}", report.join("\n"));
+        assert_eq!(outcome.dry_from_start[0], 0, "{}", report.join("\n"));
     }
 }

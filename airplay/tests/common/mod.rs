@@ -476,7 +476,11 @@ impl Link {
 /// The keys of a normal AirPlay 1 start (P26).
 pub const START: [&str; 5] = ["OPTIONS", "ANNOUNCE", "SETUP", "RECORD", "SET_PARAMETER"];
 
+pub mod ap2;
+
 pub mod atv;
+
+pub mod hap;
 
 pub mod rig;
 

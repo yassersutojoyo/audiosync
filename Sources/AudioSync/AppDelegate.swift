@@ -54,6 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var equalizerWindow: EqualizerWindowController?
     /// The Guide, made the first time it opens and kept.
     var helpWindow: NSWindow?
+    var webRemote: WebRemote?
+    var webRemoteWindow: WebRemoteWindowController?
 
     // MARK: - AudioSync's own AirPlay sender (`+NativeAirPlay`)
 
@@ -63,6 +65,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var nativeAirPlay: NativeAirPlay?
     /// When AudioSync's own sender may start again after a start failed.
     var nativeStarts = NativeSenderStarts()
+
+    // MARK: - Google Cast speakers (`+Cast`)
+
+    /// The core's Cast sender, made by the first speaker reconcile; nil
+    /// before that and after it stopped working.
+    var castSender: CastSender?
+    /// The Cast devices listed, the one that is on, and its session.
+    var castModel = CastModel()
+    /// Whether the notice that AirPlay plays ahead of it is up (`syncNetworkHoldBacks`).
+    var airPlayAheadNotice = AirPlayAheadNotice()
 
     // MARK: - Settings kept between launches (AppSettings.swift)
 
@@ -119,6 +131,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var showVirtualDevices: Bool {
         didSet { if showVirtualDevices != oldValue { store.save(showVirtualDevices: showVirtualDevices) } }
     }
+    /// The AirPlay 2 switch as the user left it; the sender reads
+    /// `airPlay2AtLaunch`, since it can't change mode while speakers play.
+    var airPlay2: Bool {
+        didSet { if airPlay2 != oldValue { store.save(airPlay2: airPlay2) } }
+    }
+    let airPlay2AtLaunch: Bool
     var appearance: AppAppearance {
         didSet {
             guard appearance != oldValue else { return }
@@ -135,7 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: - AirPlay speakers (`+AirPlay`)
 
-    /// The sender's speakers in its order (`NativeAirPlayModel.rows`).
+    /// The sender's speakers in its order (`NativeAirPlayModel.rows(enabled:)`).
     var airplayOrder: [String] = [] {
         didSet { retimeLocalOutputs() }   // a chosen speaker may have come or gone (S79, S177)
     }
@@ -153,7 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var promptWithdrawal = PromptWithdrawal()
     /// Watches a waiting withdrawn prompt for the moment it is key again.
     var codePromptKeyObserver: NSObjectProtocol?
-    var sentTrackInfo: SentTrackInfo?
+    var trackInfoFeed = TrackInfoFeed()
 
     // MARK: - Local speakers (`+Outputs`)
 
@@ -170,6 +188,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// The device ID each local output was last started on, by UID, so a
     /// sync notices a device that came back under a new ID (EC1).
     var localBoundDevices: [String: AudioObjectID] = [:]
+    /// The microphone calibration under way, if any (S232).
+    var calibrationRun: CalibrationRun?
+    /// Calibrate All Speakers under way, its sheet and the Undo of its Apply (S235 to S240).
+    var calibrateAllRun: CalibrateAllRun?
+    var calibrateAllSheet: CalibrateAllSheetHandle?
+    var calibrateAllUndo: CalibrateAllUndo?
 
     // MARK: - Session
 
@@ -215,6 +239,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showVirtualDevices = saved.showVirtualDevices
         appearance = saved.appearance
         whenSourceQuits = saved.whenSourceQuits
+        airPlay2 = saved.airPlay2
+        airPlay2AtLaunch = saved.airPlay2
         super.init()
     }
 
@@ -268,6 +294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // AudioSync's own sender and its discovery start, after the window,
         // so a Local Network prompt they raise comes up in front of it.
         reconcileAirPlaySpeakers()
+        webRemote?.startIfEnabled()   // after the window too: listening on the network can raise that prompt
         pushModel()
     }
 
@@ -458,7 +485,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// Quit (S110, S186): stop the session, letting the outputs and the
     /// AirPlay inputs fade out (at most 0.5 s), then tear AudioSync's own
-    /// AirPlay sender down, which ends every speaker's session. An exit
+    /// AirPlay sender down, which ends every speaker's session, while the
+    /// Cast sender's teardown runs beside them. An exit
     /// signal runs the same steps before it exits (S111, `SignalQuit` in
     /// main.swift). Runs once, whichever asks first.
     func runQuitSteps() {
@@ -466,6 +494,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         quitStepsRan = true
         Self.exiting.store(true, ordering: .relaxed)
         DebugTrace.log("[AudioSync] quitting")
+        // Its destroy waits up to about 3.5 s for a session's teardown, so it
+        // runs beside the fades and the AirPlay sender's teardown.
+        let castTeardown = castSender?.beginShutdown()
+        let castDeadline = DispatchTime.now() + CastSender.shutdownWait
+        castSender = nil
+        webRemote?.shutdown()   // no phone changes anything while the session winds down
         appModel.dropDelayDrafts()
         safetyNetTimer?.invalidate()
         dueTimer?.invalidate()
@@ -477,5 +511,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         nowPlaying.stopWatching()
         localNetworkProbe.stopBrowsing()
         deviceVolumes.stopFollowing()   // removes the listeners, writes nothing (S192, S195)
+        if castTeardown?.wait(timeout: castDeadline) == .timedOut {
+            DebugTrace.log("[AudioSync] Cast: the sender's teardown didn't finish in time")
+        }
     }
 }

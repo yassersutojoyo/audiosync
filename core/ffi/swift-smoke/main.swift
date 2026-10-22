@@ -238,6 +238,9 @@ func airPlaySender() {
     check(asc_airplay_open_pairings(nil, pairings) == ASC_AIRPLAY_PAIRINGS_FAILED
               && asc_airplay_open_pairings(handle, nil) == ASC_AIRPLAY_PAIRINGS_FAILED,
           "a NULL sender or path opens no store")
+    check(asc_airplay_open_airplay2_identity(nil, pairings) == ASC_AIRPLAY_PAIRINGS_FAILED
+              && asc_airplay_open_airplay2_identity(handle, nil) == ASC_AIRPLAY_PAIRINGS_FAILED,
+          "a NULL sender or path opens no AirPlay 2 identity")
     check(!asc_airplay_start_pairing(handle, "02005E005301") && !asc_airplay_submit_pin(handle, "02005E005301", "1234"),
           "only a listed receiver pairs")
     asc_airplay_cancel_pairing(handle, "02005E005301")
@@ -262,9 +265,31 @@ func airPlaySender() {
     check(handle == nil, "destroy sets the host's pointer to NULL")
     asc_airplay_destroy(&handle)
     asc_airplay_destroy(nil)
-    check(Int(ASC_AIRPLAY_FLAG_AIRPLAY2) == 128 && ASC_AIRPLAY_GONE == 3 && ASC_AIRPLAY_EVENT_FAILED == 5
+    check(Int(ASC_AIRPLAY_FLAG_AIRPLAY2) == 128 && Int(ASC_AIRPLAY_FLAG_OVER_AIRPLAY2) == 256 && Int(ASC_AIRPLAY_FLAG_PAIRED) == 512
+              && ASC_AIRPLAY_GONE == 3 && ASC_AIRPLAY_EVENT_FAILED == 5
               && ASC_AIRPLAY_EVENT_PAIRED == 9 && ASC_AIRPLAY_ERROR_WRONG_PIN == 10 && ASC_AIRPLAY_PAIRINGS_NEWER == -3,
           "the AirPlay constants cross the header")
+}
+
+func castSender() {
+    var handle: OpaquePointer? = asc_cast_create(nil)
+    check(handle != nil, "the Cast sender starts")
+    var refused: Int32 = -1
+    check(asc_cast_start(handle, "0123456789abcdef0123456789abcdef", &refused) == 0
+              && refused == ASC_CAST_REFUSED_UNKNOWN,
+          "a start on an unknown device is refused at once")
+    check(asc_cast_memory_json(handle).map { String(cString: $0) }?.hasPrefix("{") == true,
+          "the memory JSON crosses the header")
+    var input: OpaquePointer? = asc_cast_take_input(handle)
+    check(input != nil && asc_cast_take_input(handle) == nil, "the input is taken once")
+    var silence = [Float](repeating: 0, count: 256)
+    check(asc_cast_input_write(input, &silence, 128) == 0, "no session takes no audio")
+    asc_cast_input_destroy(&input)
+    asc_cast_destroy(&handle)
+    check(input == nil && handle == nil, "destroy sets the host's pointers to NULL")
+    asc_cast_destroy(nil)
+    check(ASC_CAST_RATE == 48000 && ASC_CAST_EVENT_FAILED == 16 && ASC_CAST_ERROR_GROUP == 10,
+          "the Cast constants cross the header")
 }
 
 versionVolumeAndEqualizer()
@@ -272,4 +297,5 @@ ringAndReader()
 delayHelpers()
 localDelayModel()
 airPlaySender()
+castSender()
 exit(failures == 0 ? 0 : 1)

@@ -69,11 +69,13 @@ use std::time::{Duration, Instant};
 
 use crate::clock::SenderClock;
 use crate::discovery::mdns::{DiscoveryError, MdnsBrowser};
-use crate::discovery::{Browser, Device, DeviceKey};
-use crate::error::{ErrorKind, SessionError, UserReason, Warning};
+use crate::discovery::{Browser, Device, DeviceKey, ProtocolPath};
+use crate::error::{ErrorKind, SessionError, UnsupportedReason, UserReason, Warning};
+use crate::homekit::HomeKitCredentials;
 use crate::input::InputWriter;
 use crate::metadata::{Metadata, MetadataError, TrackInfo};
 use crate::pairing::{self, Credentials, PairingEvent, PinError};
+pub use crate::ptp::PtpPorts;
 use crate::rate::NOMINAL_RATE;
 use crate::rtsp::JackStatus;
 use crate::secret::Secret;
@@ -81,6 +83,7 @@ use crate::stream::{
     DEFAULT_INPUT_FRAMES, DEFAULT_LATENCY_FRAMES, MAX_DELAY, SpeakerCounters, SpeakerLatency,
     Stream, StreamConfig, StreamCounters,
 };
+use crate::targets::{Target, TargetChange, TargetId};
 use crate::volume::Volume;
 
 use driver::{Command, Driver, Input};
@@ -95,6 +98,37 @@ pub struct SenderConfig {
     /// The sender clock (P89): the host passes the clock its local outputs
     /// run on, or leaves it `None` for one that starts now.
     pub clock: Option<SenderClock>,
+    /// The hidden AirPlay 2 switch (P2), off by default until the real
+    /// receiver checks pass. A host sets it from [`AIRPLAY2_SWITCH_ENV`]
+    /// with [`airplay2_switch`]; while it is off nothing of the AirPlay 2
+    /// path runs (P170).
+    pub airplay2: bool,
+    /// The AirPlay 2 device ID (P5, P43): a random value the host made once
+    /// and stored ([`random_airplay2_device_id`]). `None` gives a random one
+    /// for this sender's lifetime, until [`Sender::set_airplay2_device_id`].
+    pub airplay2_device_id: Option<[u8; 6]>,
+    /// The ports the PTP service binds, 319 and 320 (P158); a test picks
+    /// others so it doesn't need the real ones.
+    pub ptp_ports: PtpPorts,
+    /// The receiver's PTP ports it sends to, 319 and 320 (P158).
+    pub ptp_receiver_ports: PtpPorts,
+}
+
+/// The environment variable a host reads for [`SenderConfig::airplay2`].
+pub const AIRPLAY2_SWITCH_ENV: &str = "AUDIOSYNC_AIRPLAY2";
+
+/// The switch's value from the environment variable's: on only for `1`.
+pub fn airplay2_switch(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
+/// A new random AirPlay 2 device ID for a host to store once (P5), or
+/// `None` when the random source is unavailable.
+pub fn random_airplay2_device_id() -> Option<[u8; 6]> {
+    use crate::ids::{Entropy, OsEntropy};
+    let mut id = [0u8; 6];
+    OsEntropy.fill(&mut id).ok()?;
+    Some(id)
 }
 
 impl Default for SenderConfig {
@@ -103,6 +137,10 @@ impl Default for SenderConfig {
             latency_frames: DEFAULT_LATENCY_FRAMES,
             input_frames: DEFAULT_INPUT_FRAMES,
             clock: None,
+            airplay2: false,
+            airplay2_device_id: None,
+            ptp_ports: PtpPorts::default(),
+            ptp_receiver_ports: PtpPorts::default(),
         }
     }
 }
@@ -110,7 +148,7 @@ impl Default for SenderConfig {
 /// How the host wants a speaker played.
 #[derive(Clone, PartialEq)]
 pub struct SpeakerOptions {
-    /// d_s, 0 to 3000 ms (P99).
+    /// d_s, 0 to 20 000 ms (P99).
     pub delay: Duration,
     /// The speaker volume (P118).
     pub volume: Volume,
@@ -122,6 +160,9 @@ pub struct SpeakerOptions {
     /// The credentials of an earlier pairing with this Apple TV (P54): each
     /// session verifies with them before ANNOUNCE (P55). Never logged.
     pub credentials: Option<Credentials>,
+    /// HomeKit credentials of an earlier pairing on the AirPlay 2 path
+    /// (P152): its sessions pair-verify with them (P61). Never logged.
+    pub homekit_credentials: Option<HomeKitCredentials>,
 }
 
 impl SpeakerOptions {
@@ -133,6 +174,7 @@ impl SpeakerOptions {
             password: None,
             pcm: false,
             credentials: None,
+            homekit_credentials: None,
         }
     }
 }
@@ -147,6 +189,10 @@ impl fmt::Debug for SpeakerOptions {
             .field(
                 "credentials",
                 &self.credentials.as_ref().map(Credentials::client_id),
+            )
+            .field(
+                "homekit_credentials",
+                &self.homekit_credentials.as_ref().map(|_| "<hidden>"),
             )
             .finish()
     }
@@ -186,32 +232,48 @@ pub struct ReceiverInfo {
     /// audio; it plays once the host pairs it ([`Sender::start_pairing`])
     /// and adds it with the credentials.
     pub plan: Result<(), ErrorKind>,
+    /// The stereo pair or home theater group it is a member of (P176). Its
+    /// shared group key, when it has one and no target, is only
+    /// information ([`Device::group_keys`], P175).
+    pub target: Option<TargetId>,
 }
 
 impl ReceiverInfo {
     pub fn new(device: Device) -> ReceiverInfo {
         let plan = plan(&device);
-        ReceiverInfo { device, plan }
+        ReceiverInfo {
+            device,
+            plan,
+            target: None,
+        }
     }
 }
 
-/// The AirPlay 1 path with the AirPlay 2 path off (P2), then the start
-/// conditions known before connecting (P139). The legacy pairing of an
-/// Apple TV without credentials is no such condition: only a connection
-/// reports PairingRequired (P46), so the plan stays `Ok` for it.
+/// The protocol path (P2), then the start conditions known before
+/// connecting (P139). The legacy pairing of an Apple TV without
+/// credentials is no such condition: only a connection reports
+/// PairingRequired (P46), so the plan stays `Ok` for it.
 pub(crate) fn plan(device: &Device) -> Result<(), ErrorKind> {
-    match plan_with(device, false) {
+    match plan_with(device, false, false) {
         Err(ErrorKind::PairingRequired) => Ok(()),
         plan => plan,
     }
 }
 
-/// The same, for a speaker the host has (or hasn't) credentials for.
-pub(crate) fn plan_with(device: &Device, has_credentials: bool) -> Result<(), ErrorKind> {
-    device
-        .choose_path(false, None)
-        .map_err(ErrorKind::Unsupported)?;
-    device.airplay1_plan(has_credentials)
+/// The same, for a speaker the host has (or hasn't) credentials for, with
+/// the AirPlay 2 switch as the host set it.
+pub(crate) fn plan_with(
+    device: &Device,
+    has_credentials: bool,
+    airplay2: bool,
+) -> Result<(), ErrorKind> {
+    match device.choose_path(airplay2, None) {
+        Ok(ProtocolPath::AirPlay1) => device.airplay1_plan(has_credentials),
+        // The driver starts an AirPlay 2 session before it asks for this
+        // plan, so only a host's view of the device lands here.
+        Ok(ProtocolPath::AirPlay2) => Err(ErrorKind::Unsupported(UnsupportedReason::AirPlay2Only)),
+        Err(reason) => Err(ErrorKind::Unsupported(reason)),
+    }
 }
 
 /// A change discovery saw (P7, P18, P19).
@@ -223,6 +285,9 @@ pub enum ReceiverEvent {
     /// It is gone from the network (or discovery stopped); a running
     /// session goes on until its own connection says otherwise (P18).
     Gone(DeviceKey),
+    /// A stereo pair or home theater group appeared or changed, or went
+    /// away (P176). Its members are reported as devices too, before it.
+    Target(TargetChange),
 }
 
 /// Where a speaker is.
@@ -273,6 +338,15 @@ pub enum SpeakerEvent {
     AudioJack(JackStatus),
     /// The level a volume read reported (P122).
     VolumeReported(f64),
+    /// A PIN or password pairing on the AirPlay 2 path gave these HomeKit
+    /// credentials (P152): the host stores them where secrets go and hands
+    /// them back in [`SpeakerOptions::homekit_credentials`]. The sender
+    /// keeps them too, until it stops. `Debug` shows the identifiers only.
+    HomeKitPaired(HomeKitCredentials),
+    /// The receiver no longer takes the speaker's HomeKit credentials
+    /// (P154): the sender dropped its copy, and the host deletes the stored
+    /// one, so the next start pairs again. A PairingRequired error follows.
+    HomeKitRejected,
 }
 
 /// What the sender reports.
@@ -304,6 +378,13 @@ pub enum SenderEvent {
     /// playing; a host that wants discovery back starts it again, or
     /// replaces the sender.
     DiscoveryFailed,
+    /// The members of a target the host added that play nothing now: out
+    /// of view at the start, or lost and waiting for a retry (P181). Sent
+    /// whenever the list changes, empty once every member plays again.
+    TargetMissing {
+        id: TargetId,
+        missing: Vec<DeviceKey>,
+    },
 }
 
 /// The sender: one stream, any number of speakers, optional discovery.
@@ -349,7 +430,9 @@ impl Sender {
             inputs.clone(),
             events_out,
             latency_frames.clone(),
-        );
+        )
+        .with_airplay2(config.airplay2, config.airplay2_device_id)
+        .with_ptp_ports(config.ptp_ports, config.ptp_receiver_ports);
         let handle = thread::Builder::new()
             .name("airplay-driver".to_owned())
             .spawn(move || driver.run())?;
@@ -366,7 +449,7 @@ impl Sender {
     }
 
     fn command(&self, command: Command) {
-        let _ = self.inputs.send(Input::Command(command));
+        let _ = self.inputs.send(Input::Command(Box::new(command)));
     }
 
     /// The sender clock: the host schedules its local outputs on it (P89).
@@ -381,7 +464,7 @@ impl Sender {
     }
 
     /// The delay a host gives a local output with trim `local` (0 to
-    /// 3000 ms) so it plays in step with the speakers: L + d_local, counted
+    /// 20 000 ms) so it plays in step with the speakers: L + d_local, counted
     /// on the sender clock from c(n) (P114).
     pub fn local_output_delay(&self, local: Duration) -> Duration {
         self.latency() + local.min(MAX_DELAY)
@@ -443,6 +526,79 @@ impl Sender {
         counters
     }
 
+    /// Plays a stereo pair or home theater group: every member in view gets
+    /// a session of its own, on one path, with one delay and one volume,
+    /// those of `options`; the control device of a home theater group gets
+    /// none (P177 to P180). `member` fills in each member's own password
+    /// and credentials. A member out of view joins when discovery sees it
+    /// again (P181); members that join the target later wait for the next
+    /// add (P176). Adding a target already added updates its delay and
+    /// volume.
+    ///
+    /// Speaker events come for each member under its own key; the returned
+    /// counters are the members'.
+    pub fn add_target(
+        &self,
+        target: Target,
+        options: SpeakerOptions,
+        mut member: impl FnMut(&DeviceKey, &mut SpeakerOptions),
+    ) -> Vec<(DeviceKey, Arc<SpeakerCounters>)> {
+        let mut members = Vec::with_capacity(target.members.len());
+        for key in target.members.iter().map(|member| &member.key) {
+            let mut own = options.clone();
+            member(key, &mut own);
+            own.delay = options.delay;
+            own.volume = options.volume;
+            own.pcm = options.pcm;
+            let counters = self
+                .speaker_counters
+                .borrow_mut()
+                .entry(key.clone())
+                .or_insert_with(|| {
+                    Arc::new(SpeakerCounters::for_stream(self.stream_counters.clone()))
+                })
+                .clone();
+            members.push((key.clone(), own, counters));
+        }
+        let counters = members
+            .iter()
+            .map(|(key, _, counters)| (key.clone(), counters.clone()))
+            .collect();
+        self.command(Command::AddTarget {
+            target: Box::new(target),
+            members,
+        });
+        counters
+    }
+
+    /// Stops every member of a target, as [`Sender::remove_speaker`] does.
+    pub fn remove_target(&self, id: &TargetId) {
+        self.command(Command::RemoveTarget(id.clone()));
+    }
+
+    /// Sets a target's one delay d_s for all its members (P179).
+    pub fn set_target_delay(&self, id: &TargetId, delay: Duration) {
+        self.command(Command::SetTargetDelay(id.clone(), delay));
+    }
+
+    /// Sets a target's one volume, sent to every member (P180).
+    pub fn set_target_volume(&self, id: &TargetId, volume: Volume) {
+        self.command(Command::SetTargetVolume(id.clone(), volume));
+    }
+
+    /// Asks a target's leader for its volume, or the first member that
+    /// plays when the leader doesn't (P180); the answer comes as
+    /// [`SpeakerEvent::VolumeReported`] under that member's key.
+    pub fn read_target_volume(&self, id: &TargetId) {
+        self.command(Command::ReadTargetVolume(id.clone()));
+    }
+
+    /// The stored AirPlay 2 device ID (P5, P43), for the AirPlay 2 sessions
+    /// that start from now on; a running one keeps the ID it sent.
+    pub fn set_airplay2_device_id(&self, id: [u8; 6]) {
+        self.command(Command::SetAirPlay2DeviceId(id));
+    }
+
     /// Stops a speaker: its packets stop, TEARDOWN goes out, and its
     /// connection closes after the answer or 2 s (P129). Retries end.
     pub fn remove_speaker(&self, key: &DeviceKey) {
@@ -495,7 +651,14 @@ impl Sender {
         self.command(Command::CancelPairing(key.clone()));
     }
 
-    /// Sets a speaker's delay d_s, 0 to 3000 ms (P99, P100).
+    /// Forgets the AirPlay 2 credentials the sender keeps for a device,
+    /// after the user forgot its pairing: its next session pairs again. The
+    /// host hears nothing back; a session already playing goes on.
+    pub fn forget_homekit(&self, key: &DeviceKey) {
+        self.command(Command::ForgetHomeKit(key.clone()));
+    }
+
+    /// Sets a speaker's delay d_s, 0 to 20 000 ms (P99, P100).
     pub fn set_delay(&self, key: &DeviceKey, delay: Duration) {
         self.command(Command::SetDelay(key.clone(), delay));
     }

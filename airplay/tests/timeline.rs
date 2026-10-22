@@ -180,7 +180,7 @@ fn rtsp_flush_numbering() {
 #[test]
 fn host_contract_local_alignment() {
     // The stored delay setting migrates once to d_local = clamp(configured
-    // − L, 0, 3000 ms).
+    // − L, 0, 20 000 ms).
     let latency = Duration::from_millis(1_750);
     assert_eq!(
         migrate_local_delay(Duration::from_millis(2_000), latency),
@@ -192,7 +192,11 @@ fn host_contract_local_alignment() {
     );
     assert_eq!(
         migrate_local_delay(Duration::from_millis(20_000), latency),
-        Duration::from_millis(3_000)
+        Duration::from_millis(18_250)
+    );
+    assert_eq!(
+        migrate_local_delay(Duration::from_millis(30_000), latency),
+        Duration::from_millis(20_000)
     );
 
     let d_local = Duration::from_millis(300);

@@ -30,6 +30,9 @@ jobs:
       - name: The app links the audio core
         run: nm -gU .build/release/AudioSync | grep -x '[0-9a-f]* T _asc_version'
 
+      - name: The screenshot renderers still compile against the app sources
+        run: scripts/screenshots/render.sh --typecheck
+
       - name: Install the pinned shellcheck (Tests/run-tests.sh requires it)
         run: |
           scripts/shellcheck.sh --install "$RUNNER_TEMP/shellcheck"
@@ -58,7 +61,7 @@ jobs:
           fi
           for arch in arm64 x86_64; do
             cc -arch "$arch" -std=c11 -Wall -Wextra -Werror -I core/include Tests/panic-probe.c "$probe_lib" \
-              -o "$RUNNER_TEMP/panic-probe-$arch"
+              -framework Security -framework CoreFoundation -o "$RUNNER_TEMP/panic-probe-$arch"
           done
           # Status 0 only: a panic that got past the guard aborts.
           "$RUNNER_TEMP/panic-probe-arm64"
@@ -125,15 +128,16 @@ jobs:
           rm -f AudioSync.dmg
 
       - name: Python syntax
-        run: python3 -I -m py_compile scripts/brand/compose.py scripts/brand/tidy-svg.py scripts/brand/tokens.py scripts/brand/ico.py scripts/windows_notices.py scripts/core_notices.py scripts/privacy_check.py scripts/text_check.py
+        run: python3 -I -m py_compile scripts/brand/compose.py scripts/brand/tidy-svg.py scripts/brand/tokens.py scripts/brand/ico.py scripts/brand/guide_art.py scripts/windows_notices.py scripts/core_notices.py scripts/privacy_check.py scripts/text_check.py
 
-      - name: Generated brand files are up to date (SVGs, the SwiftUI mark and the design tokens)
+      - name: Generated brand files are up to date (SVGs, the SwiftUI mark, the Guide art and the design tokens)
         run: |
           python3 -I scripts/brand/compose.py
           swift scripts/brand/wordmark.swift
           cp brand/audiosync-wordmark.svg site/wordmark.svg
           cp brand/audiosync-wordmark-dark.svg site/wordmark-dark.svg
           python3 -I scripts/brand/tokens.py
+          python3 -I scripts/brand/guide_art.py --check
           git diff --exit-code -- brand Sources/AudioSync/BrandMark.swift site/wordmark.svg site/wordmark-dark.svg \
             Sources/AudioSync/BrandTokens.swift windows/ui/tokens.slint windows/src/tokens.rs site/index.html
 

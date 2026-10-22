@@ -48,6 +48,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::digest::{self, Challenge};
 use crate::error::UnsupportedReason;
 use crate::error::{ErrorKind, SessionError, Warning};
+use crate::homekit::HomeKitCredentials;
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
 use crate::rtsp::{self, Message, Method, ParseError, Parser, Request, Response};
 use crate::secret::Secret;
@@ -315,6 +316,11 @@ pub enum PairingEvent {
     PinRequested,
     /// Pairing succeeded: store these credentials for the receiver (P54).
     Paired(Credentials),
+    /// A PIN pairing on the AirPlay 2 path succeeded, and its credentials
+    /// passed a pair-verify (P65, P153): store them where secrets go and
+    /// hand them back in `SpeakerOptions::homekit_credentials` (P152).
+    /// `Debug` shows the identifiers only.
+    HomeKitPaired(HomeKitCredentials),
     /// Pairing ended with an error (P58, P136): PairingFailed for a 470 or
     /// another failure status at a pairing step, Busy for a 409 (P137),
     /// Unsupported when the OPTIONS answer shows a receiver that can't take
@@ -323,8 +329,9 @@ pub enum PairingEvent {
     /// turns the password down (P39, P46, P135), PairingCancelled when the
     /// Apple TV closed the connection while the PIN was awaited, or the
     /// connection errors of P134 and P140. `wrong_pin` says the Apple TV
-    /// turned the PIN down (470 to the proof, P52); a new pairing starts
-    /// again from `/pair-pin-start` and shows a new PIN.
+    /// turned the PIN down (470 to the proof, P52; error 2 on the AirPlay 2
+    /// path, P150); a new pairing starts again from `/pair-pin-start` and
+    /// shows a new PIN.
     Failed {
         error: SessionError,
         wrong_pin: bool,
@@ -699,7 +706,8 @@ impl Pairing {
             &self.secrets.b_pub,
             &key[..],
         );
-        self.secrets.m2 = srp::server_proof(&values.public, &m1, &key[..]);
+        let m2 = srp::server_proof(&group, &values.public, &m1, &key[..]);
+        self.secrets.m2.copy_from_slice(&m2);
         self.secrets.a = a;
         self.secrets.key = key;
         let mut body = Dictionary::new();

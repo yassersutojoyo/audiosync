@@ -9,6 +9,8 @@ struct Notice: Identifiable, Equatable {
     let subject: String
     let text: String
     let date: Date
+    /// A few words above the text, for a notice about a state that lasts.
+    var title: String? = nil
     /// The System Settings pane that fixes the problem, offered as a button.
     var settings: PrivacyPane? = nil
     var id: String { subject }
@@ -19,6 +21,16 @@ struct Notice: Identifiable, Equatable {
     static let capture = "capture"      // streaming started but no audio arrives
     static let login = "login"          // Launch at Login
     static let airplaySender = "airplay-sender"   // AudioSync's own AirPlay sender couldn't start
+    /// A Google Cast speaker, by its device ID.
+    static func cast(_ device: String) -> String { CastID.app(device) }
+    static let castSender = "cast-sender"   // the Google Cast sender stopped working
+    /// The AirPlay speakers play ahead of this Google Cast speaker; apart
+    /// from `cast(_:)`, so it never replaces or clears a problem with it.
+    static func airPlayAhead(_ device: String) -> String { "airplay-ahead:" + device }
+    /// The subjects in `list` about a Google Cast speaker.
+    static func castSubjects(in list: NoticeList) -> [String] {
+        list.items.map(\.subject).filter { $0.hasPrefix(CastID.prefix) }
+    }
     /// Now Playing may not control this player.
     static func automation(_ bundleID: String) -> String { "automation:" + bundleID }
 }
@@ -27,6 +39,7 @@ struct Notice: Identifiable, Equatable {
 enum PrivacyPane: String, Equatable {
     case localNetwork = "Privacy_LocalNetwork"
     case automation = "Privacy_Automation"
+    case microphone = "Privacy_Microphone"
 
     var url: URL {
         URL(string: "x-apple.systempreferences:com.apple.preference.security?\(rawValue)")!
@@ -45,10 +58,10 @@ struct NoticeList: Equatable {
 
     /// Adds `text` about `subject`, replacing an older notice about it. The
     /// oldest notice drops off past `capacity`. `settings`: the pane that fixes it.
-    mutating func post(_ text: String, subject: String, at date: Date = Date(),
+    mutating func post(_ text: String, subject: String, at date: Date = Date(), title: String? = nil,
                        settings: PrivacyPane? = nil) {
         items.removeAll { $0.subject == subject }
-        items.insert(Notice(subject: subject, text: text, date: date, settings: settings), at: 0)
+        items.insert(Notice(subject: subject, text: text, date: date, title: title, settings: settings), at: 0)
         if items.count > Self.capacity { items.removeLast(items.count - Self.capacity) }
     }
 

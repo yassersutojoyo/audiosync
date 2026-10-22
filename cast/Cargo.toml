@@ -1,0 +1,38 @@
+[package]
+name = "audiosync-cast"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+description = "AudioSync's own Google Cast sender: discovery of _googlecast._tcp, the CASTV2 channel over TLS with its framing, heartbeat and receiver status, the launch and teardown of the Default Media Receiver, LOAD and MEDIA_STATUS, device volume, recovery, and the live WAV stream server the device fetches from, as sans-I/O state machines driven on std threads and sockets."
+repository = "https://github.com/yassersutojoyo/audiosync"
+publish = false
+
+[dependencies]
+# The FLAC encoder of the fallback format (C63, C84). Without default
+# features: no worker threads, no logging and no serde.
+flacenc = { version = "0.5.1", default-features = false }
+# Random request id starts (C29).
+getrandom = "0.4.3"
+# Live mDNS browsing of _googlecast._tcp (C10). Without default features: no
+# async runtime glue and no logging.
+mdns-sd = { version = "0.21.5", default-features = false }
+# The TLS client of the channel (C19 to C21): the platform's own TLS stack
+# (SChannel, Secure Transport, OpenSSL), which still offers the CBC suites
+# older devices negotiate. Without default features: no vendored OpenSSL.
+native-tls = { version = "0.2.14", default-features = false }
+# The CastMessage protocol buffer (C24), declared with the derive macro, so
+# no protoc and no build script.
+prost = { version = "0.14.1", default-features = false, features = ["derive", "std"] }
+# The JSON payloads of the four namespaces (C28), read and built as values.
+serde_json = { version = "1.0.140", default-features = false, features = ["std"] }
+# The device certificate's SHA-256 fingerprint (C21).
+sha2 = { version = "0.11.0", default-features = false }
+
+[dev-dependencies]
+# Decodes the FLAC stream in the tests to check it against the input.
+claxon = "0.4.3"
+# The fake receiver's TLS server and its self-signed certificate, made in
+# each test. Test-only: the sender itself speaks TLS through native-tls.
+rcgen = { version = "0.14.5", default-features = false, features = ["crypto", "ring"] }
+rustls = { version = "0.23.31", default-features = false, features = ["ring", "std", "tls12"] }

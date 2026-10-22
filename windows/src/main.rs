@@ -26,10 +26,12 @@ mod data_folder;
 mod debug_log;
 mod guide;
 mod launch_at_login;
+mod now_playing_card;
 mod os_version;
 #[cfg(any(windows, test))]
 mod placement;
 mod platform;
+mod remote;
 #[cfg(any(windows, test))]
 mod settings;
 #[cfg(any(windows, test))]
@@ -66,7 +68,8 @@ const PREVIEW_GUIDE_VAR: &str = "AUDIOSYNC_PREVIEW_GUIDE";
 const PREVIEW_HELP_VAR: &str = "AUDIOSYNC_PREVIEW_HELP";
 
 /// With the debug log on, `light` or `dark` here shows every window in that
-/// appearance, whatever Windows uses (`view::App::preview_theme`).
+/// appearance, whatever Windows uses, without saving it
+/// (`view::App::apply_appearance`).
 const PREVIEW_THEME_VAR: &str = "AUDIOSYNC_PREVIEW_THEME";
 
 /// With the debug log on, `code` or `wrong` here opens the PIN dialog of an
@@ -211,24 +214,79 @@ impl From<slint::PlatformError> for StartError {
 /// AirPlay sender, through the adapter that keeps the UI's own state. Both
 /// log to `log`.
 #[cfg(windows)]
-fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
+fn backend(
+    log: &DebugLog,
+    labels: &audio::now_playing::SharedLabels,
+    track_reader: audio::wasapi::MediaSessionReader,
+) -> Result<Box<dyn ui_model::Backend>, StartError> {
     let mut audio = audio::wasapi::open().map_err(StartError::Audio)?;
     log.log(|| "audio: the WASAPI backend is open".to_owned());
     audio.set_debug_log(log.clone());
     start_airplay(&mut audio, log);
-    audio.set_track_reader(Box::new(audio::wasapi::MediaSessionReader::start(
-        log.clone(),
-    )));
+    let cast_file = start_cast(&mut audio, log);
+    audio.set_track_reader(Box::new(track_reader));
+    audio.set_receiver_labels(labels.clone());
     let settings_file = settings::SettingsFile::default_path().map_or_else(
         settings::SettingsFile::in_memory,
         settings::SettingsFile::at,
     );
-    Ok(Box::new(adapter::AudioAdapter::with_settings(
+    let mut adapter = adapter::AudioAdapter::with_settings(
         audio,
         platform::notice_time,
         log.clone(),
         settings_file,
-    )))
+    );
+    adapter.set_cast_file(cast_file);
+    Ok(Box::new(adapter))
+}
+
+/// The file that keeps each Google Cast speaker's offset and audio format.
+#[cfg(windows)]
+const CAST_FILE_NAME: &str = "cast-speakers.json";
+
+/// Starts the Google Cast host with the speakers' offsets and formats from
+/// their file, and returns that file for the changes; `None` when Windows
+/// names no data folder, so they last until AudioSync quits. Without a host
+/// no Cast speaker is listed.
+#[cfg(windows)]
+fn start_cast(
+    audio: &mut audio::wasapi::WasapiBackend,
+    log: &DebugLog,
+) -> Option<std::path::PathBuf> {
+    use audiosync_cast::host::DeviceMemory;
+    let path = data_folder::folder().map(|folder| folder.join(CAST_FILE_NAME));
+    let memory = match path.as_deref().map(data_folder::read_at_launch) {
+        None => DeviceMemory::default(),
+        Some(Ok(bytes)) => DeviceMemory::from_json(&String::from_utf8_lossy(&bytes)),
+        Some(Err(error)) => {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                log.log(|| format!("Cast: the speakers' file couldn't be read: {error}"));
+            }
+            DeviceMemory::default()
+        }
+    };
+    match audio::cast::HostLink::start(memory) {
+        Ok((link, browse_error)) => {
+            match browse_error {
+                Some(error) => log.log(|| format!("Cast: discovery couldn't start: {error}")),
+                None => log.log(|| "Cast: browsing for speakers".to_owned()),
+            }
+            audio.set_cast(Box::new(link));
+        }
+        Err(error) => log.log(|| format!("Cast: the host couldn't start: {error}")),
+    }
+    path
+}
+
+/// What AirPlay receivers show while no track counts, from the strings.
+#[cfg(windows)]
+fn receiver_labels(strings: &Strings<'_>) -> audio::now_playing::ReceiverLabels {
+    audio::now_playing::ReceiverLabels {
+        title: strings.get_receiver_untitled().into(),
+        album: strings.get_receiver_album().into(),
+        whole_system: strings.get_source_system().into(),
+        unnamed_source: strings.get_receiver_unnamed_source().into(),
+    }
 }
 
 /// Starts the AirPlay sender and its discovery through the audio backend,
@@ -323,7 +381,19 @@ fn run(
     log: &DebugLog,
     #[cfg(windows)] instance: Option<&single_instance::Instance>,
 ) -> Result<(), StartError> {
-    let app = view::App::new(backend(log)?, log.clone())?;
+    #[cfg(windows)]
+    let labels = audio::now_playing::SharedLabels::default();
+    #[cfg(windows)]
+    let (track_reader, card_reader) = audio::wasapi::read_media_sessions(log.clone());
+    #[cfg(windows)]
+    let backend = backend(log, &labels, track_reader)?;
+    #[cfg(not(windows))]
+    let backend = backend(log)?;
+    let app = view::App::new(backend, log.clone())?;
+    #[cfg(windows)]
+    labels.set(receiver_labels(&app.strings()));
+    #[cfg(windows)]
+    app.set_media_controls(Box::new(card_reader));
 
     #[cfg(windows)]
     if let Some(instance) = instance {
@@ -366,7 +436,11 @@ fn run(
                 if dark { "dark" } else { "light" }
             )
         });
-        app.preview_theme(dark);
+        app.apply_appearance(if dark {
+            ui_model::Appearance::Dark
+        } else {
+            ui_model::Appearance::Light
+        });
     }
     #[cfg(windows)]
     let tray_available = _tray.is_some();
@@ -418,27 +492,29 @@ fn run(
     log.log(|| "the event loop ended".to_owned());
     // Changes since the last poll, and where the main window is.
     app.save_settings();
+    app.stop_remote_at_exit();
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     /// A quit first waits for the outputs' fade-outs, at most the cap of
-    /// S186, and then for the AirPlay sender's teardown and the debug log's
-    /// flush. Together they stay within the 5 s budget.
+    /// S186, and then for the AirPlay sender's teardown, while the Google
+    /// Cast host shuts down on a thread of its own; then the debug log
+    /// flushes. Together they stay within the 5 s budget.
     #[test]
     fn the_fade_cap_and_the_quit_waits_fit_in_5_s() {
         use audiosync_airplay::session::TEARDOWN_TIMEOUT;
+        use audiosync_cast::host::SHUTDOWN_MARGIN;
         use audiosync_core::policy::session::QUIT_BUDGET;
         use audiosync_core::render::STOP_FADE_CAP;
 
         let fade = STOP_FADE_CAP.as_secs_f64();
         assert_eq!(fade, 0.5);
         assert_eq!(QUIT_BUDGET, 5.0);
-        assert!(
-            fade + TEARDOWN_TIMEOUT.as_secs_f64() + super::LOG_FLUSH_AT_EXIT.as_secs_f64()
-                <= QUIT_BUDGET
-        );
+        let cast = (audiosync_cast::client::QUIT_BUDGET + SHUTDOWN_MARGIN).as_secs_f64();
+        let airplay = fade + TEARDOWN_TIMEOUT.as_secs_f64();
+        assert!(airplay.max(cast) + super::LOG_FLUSH_AT_EXIT.as_secs_f64() <= QUIT_BUDGET);
     }
 
     /// The About dialog, opened from the top-level menu, names AudioSync's
@@ -460,6 +536,184 @@ mod tests {
         assert!(
             main.contains("MenuBar {") && main.contains("root.about-requested();"),
             "the top-level menu opens the About dialog"
+        );
+    }
+
+    /// The Mac's menu shortcuts and what each is on Windows: the `Strings`
+    /// title of the menu item, its `@keys`, and how the docs write it. The
+    /// Mac's Hide (Command-H), Hide Others (Option-Command-H), Minimize
+    /// (Command-M) and AudioSync window (Command-0) have none: Windows has no
+    /// hiding an app, minimizing is the title bar's (Windows+Down), and the
+    /// menu bar is in the main window itself. Its Edit menu is the text
+    /// fields' own Ctrl keys.
+    const MENU_SHORTCUTS: &[(&str, &str, &str, &str)] = &[
+        (
+            "Apply Typed Delay, Command-S",
+            "menu-apply-delay",
+            "Control + S",
+            "Ctrl+S",
+        ),
+        (
+            "Close Window, Command-W",
+            "menu-close-window",
+            "Control + W",
+            "Ctrl+W",
+        ),
+        (
+            "Quit AudioSync, Command-Q",
+            "menu-exit",
+            "Control + Q",
+            "Ctrl+Q",
+        ),
+        ("New Group, Command-N", "new-group", "Control + N", "Ctrl+N"),
+        ("Refresh Devices, Command-R", "refresh-devices", "F5", "F5"),
+        (
+            "Equalizer, Option-Command-E",
+            "equalizer",
+            "Control + E",
+            "Ctrl+E",
+        ),
+        ("AudioSync Guide, Command-?", "help-title", "F1", "F1"),
+    ];
+
+    /// Keys Windows itself takes, so no menu item may use them.
+    const RESERVED_BY_WINDOWS: &[&str] = &[
+        "Alt + F4",
+        "Alt + Tab",
+        "Alt + Space",
+        "Control + Escape",
+        "Control + Alt + Delete",
+        "F10",
+        "F12",
+    ];
+
+    #[test]
+    fn each_mac_menu_shortcut_has_its_windows_key_in_the_menu_and_the_docs() {
+        let main = include_str!("../ui/main.slint");
+        let docs = include_str!("../../docs/WINDOWS_UI.md");
+        let menu = &main[main.find("MenuBar {").expect("the menu bar is there")..];
+        let mut seen = std::collections::BTreeSet::new();
+        for (mac, title, keys, written) in MENU_SHORTCUTS {
+            let item = menu
+                .find(&format!("title: Strings.{title};"))
+                .unwrap_or_else(|| panic!("{mac}: the menu has its item"));
+            let rest = &menu[item..];
+            let end = rest.find('}').expect("the item ends");
+            assert!(
+                rest[..end].contains(&format!("shortcut: @keys({keys});")),
+                "{mac}: the item shows {keys}"
+            );
+            assert!(seen.insert(*keys), "{keys} is used once");
+            assert!(
+                !RESERVED_BY_WINDOWS.contains(keys),
+                "{keys} is Windows' own"
+            );
+            assert!(
+                docs.contains(&format!("| {written} |")),
+                "{mac}: docs/WINDOWS_UI.md lists {written} under Keyboard"
+            );
+        }
+        let shown = menu.matches("shortcut: @keys(").count();
+        assert_eq!(
+            shown,
+            MENU_SHORTCUTS.len(),
+            "every menu shortcut is in the table"
+        );
+    }
+
+    const CTRL_W: &str = "event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == \"w\")";
+    const CTRL_Q: &str = "if event.modifiers.control && event.text.to-lowercase() == \"q\" {\n                root.exit-requested();";
+
+    /// A checkout on Windows can have CRLF line endings; the snippets above
+    /// are written with LF.
+    fn lf(source: &str) -> String {
+        source.replace("\r\n", "\n")
+    }
+
+    /// The windows without a menu bar: the equalizer, both Guides and About.
+    fn windows_without_a_menu_bar() -> [(&'static str, &'static str, &'static str); 4] {
+        [
+            (
+                "equalizer",
+                include_str!("../ui/equalizer.slint"),
+                "root.close-requested();",
+            ),
+            (
+                "AudioSync Guide",
+                include_str!("../ui/help.slint"),
+                "root.close-requested();",
+            ),
+            (
+                "double-audio guide",
+                include_str!("../ui/guide.slint"),
+                "root.close-requested();",
+            ),
+            (
+                "About dialog",
+                include_str!("../ui/about.slint"),
+                "root.closed();",
+            ),
+        ]
+    }
+
+    /// Command-W closes whichever window is in front on the Mac; on Windows
+    /// the windows without a menu bar take Ctrl+W themselves, as Escape, and
+    /// a dialog cancels on it.
+    #[test]
+    fn ctrl_w_closes_the_windows_without_a_menu_bar() {
+        for (name, source, close) in windows_without_a_menu_bar() {
+            let source = lf(source);
+            let keys = &source[source.find("keys := FocusScope {").expect("its keys")..];
+            let first = &keys[..keys.find(close).expect("it closes")];
+            assert!(
+                first.contains(CTRL_W),
+                "the {name} closes on Escape and Ctrl+W"
+            );
+        }
+        let dialogs = lf(include_str!("../ui/dialogs.slint"));
+        assert_eq!(
+            dialogs.matches("if event.text == Key.Escape").count(),
+            dialogs
+                .matches(&format!(
+                    "if {CTRL_W} {{\n                root.cancelled();"
+                ))
+                .count(),
+            "every dialog that cancels on Escape cancels on Ctrl+W"
+        );
+    }
+
+    /// Command-Q quits from any window on the Mac, so Ctrl+Q does from the
+    /// windows without a menu bar too.
+    #[test]
+    fn ctrl_q_exits_from_the_windows_without_a_menu_bar() {
+        let view = include_str!("view.rs");
+        for (name, source, _) in windows_without_a_menu_bar() {
+            let source = lf(source);
+            let keys = &source[source.find("keys := FocusScope {").expect("its keys")..];
+            assert!(keys.contains(CTRL_Q), "the {name} exits on Ctrl+Q");
+        }
+        for window in ["equalizer", "help", "guide", "about"] {
+            assert!(
+                view.contains(&format!("self.{window}.on_exit_requested(quit);")),
+                "the {window} window's Ctrl+Q quits"
+            );
+        }
+    }
+
+    /// `platform::repaint_frame` sends muda's private `MENU_UPDATE_THEME`
+    /// (201), which only muda 0.19.3 is known to take; Slint asks for ^0.19.
+    #[test]
+    fn slint_draws_the_menu_bar_with_muda_0_19_3() {
+        let lock = include_str!("../Cargo.lock");
+        let winit = &lock[lock
+            .find("name = \"i-slint-backend-winit\"")
+            .expect("Slint's winit backend is locked")..];
+        let winit = &winit[..winit.find("[[package]]").unwrap_or(winit.len())];
+        assert!(
+            winit.contains("\"muda 0.19.3\""),
+            "Slint's muda moved off 0.19.3: check that its MENU_UPDATE_THEME is still \
+             message 201 with dark 0 and light 1 before changing MUDA_MENU_BAR_THEME \
+             in platform.rs"
         );
     }
 

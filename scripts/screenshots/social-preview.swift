@@ -79,7 +79,8 @@ func draw(_ image: NSImage, in rect: CGRect) {
 }
 
 // Right: the main window, with its own shadow from the screenshot.
-let shotWidth: CGFloat = 690
+// Narrower when the window was grown to fit its speakers, so it stays inside the card.
+let shotWidth = min(690, CGFloat(height - 16) * screenshot.size.width / screenshot.size.height)
 let shotHeight = shotWidth * screenshot.size.height / screenshot.size.width
 draw(screenshot, in: CGRect(x: CGFloat(width) - shotWidth - 22, y: (CGFloat(height) - shotHeight) / 2,
                             width: shotWidth, height: shotHeight))
@@ -115,7 +116,7 @@ tagline.draw(with: CGRect(x: left, y: 214, width: column, height: 240),
              options: [.usesLineFragmentOrigin])
 
 let detail = NSAttributedString(
-    string: "HomePod · AirPlay 2 · local speakers",
+    string: "AirPlay · Google Cast · local speakers",
     attributes: [.font: poppins.withSize(22), .foregroundColor: color(0x525C5A),
                  .paragraphStyle: paragraph(30)])
 detail.draw(with: CGRect(x: left, y: 498, width: column, height: 60), options: [.usesLineFragmentOrigin])

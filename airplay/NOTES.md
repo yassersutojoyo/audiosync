@@ -90,7 +90,7 @@ Where the frame layout comes from: P77 leaves the bitstream to Apple's codec, an
 ### Spec readings
 
 - **P73**: "rounding to nearest" rounds halves away from zero; the product is formed in f64.
-- **P75, P80, P111**: "one payload store" is one per codec: a PCM store, which is also the source of every own encoding, and an ALAC store, both allocated when the stream starts. Each holds 1024 + 376 + 14 packets: the resend history, the 3 s largest delay, and M's 100 ms plus one.
+- **P75, P80, P111**: "one payload store" is one per codec: a PCM store, which is also the source of every own encoding, and an ALAC store, both allocated when the stream starts. Each holds 1024 + 2506 + 14 packets: the resend history, the 20 s largest delay, and M's 100 ms plus one.
 - **P77**: uncompressed frames only. The layout is the author's own reading of the ALAC frame syntax, confirmed against an independent decoder, not taken from Apple's codec source (see Design).
 - **P81, P103**: a speaker's first packet is the first whose send time hasn't passed when it is added; k_s gives that packet the announced rtptime.
 - **P84**: the residual is a block's arrival time minus c(n) of its last frame, so it is measured against the model that sets the send times; the host block is the largest write in the window. A late write (some frames dropped) still gives M its residual and block, so after one capture hiccup M covers the next ones, but it stays out of the rate fit; a late residual above M's 100 ms cap is a pause, not jitter, and is ignored.
@@ -105,7 +105,7 @@ Where the frame layout comes from: P77 leaves the bitstream to Apple's codec, an
 - **P100**: during the 250 ms window the speaker plays on under its old delay. A speaker that hasn't sent anything yet just starts at its new schedule, without FLUSH, and a change back to the current delay cancels a pending flush.
 - **P109**: a fact about receivers; the tests check the sender's side of it: a receiver that plays as the sync packets ask gets every packet about L − M before it plays it.
 - **P110, P113**: `Audio-Latency` reaches the stream through `SpeakerConfig::audio_latency` and comes back in `speaker_latency`, never in Lf or a stated time.
-- **P111**: the per-speaker parts (an own store, the 1024 resend headers) are allocated when the speaker is added; everything else when the stream starts. An own store is filled at once with the packets a delay can still reach (the last 376 + 14), so a delay raised soon after joining finds them.
+- **P111**: the per-speaker parts (an own store, the 1024 resend headers) are allocated when the speaker is added; everything else when the stream starts. An own store is filled at once with the packets a delay can still reach (the last 2506 + 14), so a delay raised soon after joining finds them.
 - **P114**: the crate gives `local_output_delay(d_local)` = L + d_local, `migrate_local_delay` for the one-time migration, c(n) through `arrival_time`, and the frame index of host frames as the writer position minus the timeline's origin (signed: frame n is at position n + origin). Besides Lf changes and restarts, a resumed capture changes the origin, and the `Timeline` event reports it too.
 - **P121**: the software volume applies when a packet is cut, so a delayed speaker hears a change d_s later. With `sm=true` alone the own encoding has gain 1 or 0 and starts unmuted; the session sends levels but never mute.
 - **P143**: frames still in the input ring are dropped and counted; M keeps its value and forgets its history. A driver that wakes more than L after the next packet's time restarts the timeline the same way rather than send packets that would be heard after their play time.
@@ -182,6 +182,66 @@ Where the test vector comes from: the spec now lists it as data in P145, with th
 - **P55, P56**: `LegacyVerifier` is made per session with a fresh X25519 secret from the OS random source, and a spare one for P58's reconnect. A 200 to the first step whose body isn't exactly 96 bytes is a failed verification (PairingRequired, checked by the session); an atv_pub that gives an all-zero shared secret (RFC 7748 §6.1) is a malformed answer (ProtocolError). With the receiver's key in the credentials, atv_data is decrypted and checked as its signature over atv_pub | v_pub; a failed check is `Warning::ReceiverSignatureInvalid` and the verification goes on. The `pk` TXT key isn't used for the check: the clause allows it, but on an Apple TV it may be another key, and the warning would then be noise. AES-128-CTR runs a 128-bit big-endian counter over the whole IV; the vector's 8 blocks can't tell it from narrower counters, and it is the usual form. The verifier is used whenever the host gives credentials, Apple TV or not.
 - **P58, P136**: any non-200 answer to `/pair-pin-start` or `/pair-setup-pin` ends the pairing as PairingFailed with method and status, except a 409, which is Busy (P137). After a 470 to the proof no proof is sent again; the pairing is closed and a new one starts from OPTIONS and `/pair-pin-start` (P52). A close while the PIN is awaited is PairingCancelled; a close at another step is Lost, a close while connecting Unreachable. A host cancel or a shutdown ends the pairing with `Stopped`. A verification answered with anything but 200 is PairingRequired (session.rs), which isn't retried. A 401 to the pairing's OPTIONS is a password challenge (P36, P46): with the speaker's password every later request, pairing requests included, carries `Authorization`; without one the pairing ends with PasswordRequired before `/pair-pin-start`. A 401 to `/pair-pin-start`, to any `/pair-setup-pin` step or to either pair-verify step is a password challenge too, also with no earlier challenge on the connection (P36, P58): with the password the same request goes again, body included, with `Authorization`; without one it is PasswordRequired; a second 401 to the answered request is WrongPassword, and a `stale=true` one gets exactly one more resend. None of these is PairingFailed or PairingRequired, so a host keeps its stored credentials, and resending the proof after a 401 is not the resend after a 470 that P52 rules out.
 
+## AirPlay 2 switch and HomeKit pairing
+
+### Layout
+
+- `sender.rs`: `SenderConfig::airplay2` (off by default) and `AIRPLAY2_SWITCH_ENV` with `airplay2_switch`, which a host uses to read `AUDIOSYNC_AIRPLAY2=1`. The driver passes the switch to `choose_path`; with it on, an AirPlay 2 path starts the AirPlay 2 session (next section).
+- `homekit.rs`: the pairing choice (`status_flags`, `choose_mode`, `check_mode`), `PairSetup` (transient, PIN, password, with the P151 retry), `PairVerify`, `Identity` and `HomeKitCredentials`; `homekit/tlv8.rs` the TLV8 codec, `homekit/keys.rs` HKDF-SHA-512, ChaCha20-Poly1305 with the message nonces and the Ed25519 signatures.
+- `pairing/srp.rs` now serves both pairings: each group names its hash (SHA-1 for the legacy groups, SHA-512 for the RFC 5054 3072-bit group with generator 5), and every value sits in a 4096-bit integer.
+
+### Design
+
+Both machines are sans-I/O at message level: `start` gives the first request, `handle_response` reads each answer and gives the next step (`Send`, `PinRequested`, `Challenge` for a 401, `Retry` for P151, a shared secret, credentials, or `Failed` with a `SessionError` and the back-off of item 8). They build only the request line, `Content-Type` and `X-Apple-HKP`; the AirPlay 2 session's connection adds `CSeq` and the P22 headers, answers a 401 by resending `last_request()` with `Authorization`, and starts framing after the last pairing answer (P153). None of this runs while the switch is off: only that session creates them.
+
+Tests: `tests/airplay2_switch.rs` (P2, P170) over loopback; `tests/homekit.rs` against a fake receiver (`tests/common/hap.rs`) with its own TLV8 codec and its own SRP, HKDF, ChaCha20-Poly1305 and signature steps on the primitive crates, never through `homekit` or `pairing`.
+
+### Spec readings
+
+- **P149**: `/pair-pin-start` carries `Content-Type` too, since the clause lists it for every pairing request; it has no body.
+- **P150**: item 8 (back-off) is read as a little-endian count of seconds, at most 8 bytes; the spec names no byte order.
+- **P151**: "B starts with a zero byte" is read as B shorter than 384 significant bytes or sent with a leading zero, so either form of a short B allows the one retry.
+- **P152**: the identifier is a version 4 UUID in lowercase text form (RFC 9562's output form).
+
+## AirPlay 2 session
+
+### Layout
+
+- `ap2/framing.rs`: the framed connection (P67 to P69) and the event connection's swapped keys (P70): 2-byte little-endian length, ChaCha20-Poly1305 with the length as additional data, 64-bit counters from 0 per direction.
+- `ap2/bodies.rs`: the binary-plist bodies (P41, P43, P44, P106, P164) and the readers of `/info`, the session SETUP answer and the stream SETUP answer.
+- `ap2/session.rs`: `Ap2Session`, one session from `GET /info` to TEARDOWN, sans-I/O like `session.rs`, with a second connection (the event connection) in its outputs.
+- `ap2/audio.rs`: the stream key `shk` (`StreamKey`, never shown in `Debug`) and the packet sealer of P155: ChaCha20-Poly1305 over the payload, header bytes 4 to 11 as additional data, the tag, then the 64-bit counter in little-endian.
+- `ptp.rs`: the PTP service (P158 to P163, P167), sans-I/O: Announce, two-step Sync with Follow_Up, Delay_Resp, on the sender clock read as PTP time (`SenderClock::ptp`, P163).
+- `rtp.rs` (`TimeAnnounce`) and `stream.rs` (`Ap2Audio` in `SpeakerConfig`): an AirPlay 2 speaker's packets are sealed into a store of its own, its resends are those sealed bytes, and under PTP its sync packets are 0xD7 time announces (P166).
+- `transport.rs` (`PtpIo`): the two PTP sockets and the thread that reads Delay_Req from the event socket, stamped on arrival.
+- `sender/driver/ap2.rs`: the driver's side: one AirPlay 2 session at a time (P169), its I/O under two session keys, the P2 path switch after an AirPlay 1 Unsupported or Refused, HomeKit credentials from a password pairing kept for the sender's lifetime, the speaker's place in the stream once it is Ready, and the PTP service.
+
+### Design
+
+The order is P42's: `/info`, pairing (P153), session SETUP (framed from here on), the event connection, `/info`, RECORD, SETPEERS only under PTP, the volume, the stream SETUP once the event connection is open, FLUSH. The session reports `Ready` after the FLUSH answer; the driver then adds the speaker to the shared stream as an ALAC speaker with the session's SSRC, the FLUSH's sequence number and timestamp, its delay and the `shk`, and its packets go from the session's control socket to `dataPort`, sync or time announces and resends to the receiver's `controlPort`. Retransmission requests on the control socket are served from the speaker's sealed store. A delay change or a timeline restart flushes the speaker through the stream as on AirPlay 1, and `Ap2Session::flush` names the next packet in the FLUSH's `RTP-Info`; the key and counter run on.
+
+The PTP sockets are bound when an AirPlay 2 session starts for a receiver whose features set bit 41, or that took PTP before, so a receiver without bit 41 never makes the sender bind 319 or 320, and with the switch off nothing is bound at all. They are let go when that session ends. The session gets the clock identity and UUID as its PTP peer, so a refused NTP session SETUP gets the P157 retry with PTP; once that SETUP is answered 200 the service starts sending to the address the session connected to, and it stops when the session closes. When a port can't be bound the speaker gets `Warning::PtpUnavailable`, once per sender, and the session asks for NTP only.
+
+Tests: `tests/ap2_session.rs` against the sans-I/O fake receiver of `tests/common/ap2.rs`, which wraps the HomeKit fake and frames with its own HKDF and ChaCha20-Poly1305 steps, never through `ap2`; `tests/ap2_driver.rs` runs the same fake on loopback sockets through `Sender` for P169 and the P2 switch. `tests/ap2_audio.rs` checks the sealing and the time announces on the stream rig, the PTP service on a fixed clock with its own header reader, and the whole path through `Sender`: the fake reads `shk` from the stream SETUP it decrypted itself and opens every audio packet with ChaCha20-Poly1305 directly, and its PTP sockets read the Announce, Sync, Follow_Up and Delay_Resp bytes. `SenderConfig::ptp_ports` and `ptp_receiver_ports` let those tests use free ports instead of 319 and 320.
+
+### Spec readings
+
+- **P5, P43**: the device ID comes from `SenderConfig::airplay2_device_id`, which a host fills with a value it made once and stored; without one the driver draws a random ID for its lifetime. Either way the first byte is marked locally administered and unicast. The hosts don't store one yet.
+- **P41**: a failed first `/info` is a warning, and the pairing falls back to the TXT flags. Only the binary plist format is read, at most 8 KiB, with a read budget, so a hostile body can't nest the reader into a stack overflow.
+- **P42**: RECORD carries no `RTP-Info` or `Range`; FLUSH names the first packet. The stream ID comes from the stream SETUP answer, else the session ID.
+- **P43**: `isMultiSelectAirPlay` is false (one receiver, P2) and `sourceVersion` is the crate version. An answer without `eventPort`, or a stream SETUP answer without `controlPort`, is a protocol error.
+- **P61, P149**: a PIN pairing on the AirPlay 2 path gives PairingRequired in this stage; the host-driven PIN flow comes later.
+- **P70**: after the first connect and five retries, all refused, the speaker is unreachable; a closed event connection means the session is lost. A response, or an unparsable message, on the event connection is a protocol error.
+- **P132**: `/feedback` starts 2 s after the session SETUP answer and has no body. A request still unanswered at the next 2 s tick counts as one miss per tick, so a silent receiver is lost 6 s after the first unanswered one.
+- **P164, P165**: the sender's addresses in `timingPeerInfo` and SETPEERS are the connection's local address only.
+- **P155**: sync packets, time announces and resend prefixes stay unencrypted; the spec seals only the audio packet. The sealed store holds 1024 packets at the largest ALAC payload, about 1.4 MiB, allocated when the speaker joins (P111).
+- **P156**: one session sends one stream SETUP, so its `shk`, drawn from the OS random source when the session is made, is new for each stream SETUP; a new session after a loss or a removal draws another.
+- **P158**: the sockets bind to the unspecified address of the family of the speaker's first address. A session that ends up on an address of the other family keeps the bound family, and its PTP messages then fail to send; binding both families at once is left until a receiver needs it.
+- **P161**: the Follow_Up time is read right after the Sync's send call returns, on the driver thread. A late driver turn sends one Sync, not a burst, and the schedule goes on from that turn; Announce the same.
+- **P162**: the event socket's thread hands on only datagrams that parse as a version 2 Delay_Req; the address check is the one of P86. Nothing reads the general socket.
+- **P166**: the sequence field is the speaker's sync counter, which starts at 0 when the speaker joins the stream, once per session.
+- **P169**: the refused second speaker gets no retry, as any Unsupported speaker; it can be added again once the first is removed.
+
 ## Dependencies and licenses
 
 | Crate | Version | License | Why |
@@ -209,10 +269,12 @@ Where the test vector comes from: the spec now lists it as data in P145, with th
 | zeroize | 1.9.1 | Apache-2.0 OR MIT | wiping the pairing secrets |
 | plist | 1.8.0 | MIT | the binary property list bodies of the pairing (P47), without default features (no serde) |
 | base64, indexmap, equivalent, hashbrown, quick-xml, memchr, time, time-core, deranged, powerfmt, num-conv | 0.22.1, 2.14.2, 1.0.3, 0.17.1, 0.38.4, 2.8.3, 0.3.55, 0.1.9, 0.5.9, 0.2.1, 0.2.2 | MIT OR Apache-2.0, except quick-xml (MIT) and memchr (Unlicense OR MIT, taken under MIT) | plist's dependencies |
+| chacha20poly1305, hkdf | 0.11.0, 0.13.0 | Apache-2.0 OR MIT, MIT OR Apache-2.0 | ChaCha20-Poly1305 (RFC 8439) and HKDF-SHA-512 (RFC 5869) for the HomeKit pairing (P65, P66) (RustCrypto), without default features (no allocation helpers, no OS random source); chacha20poly1305 with `zeroize` |
+| chacha20, poly1305, hmac | 0.10.2, 0.9.1, 0.13.0 | MIT OR Apache-2.0 | their dependencies |
 
 `deny.toml` mirrors core's allow-list (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, Zlib, ISC, Unicode-3.0) with dev and build dependencies included; CI runs cargo-deny 0.20.2. Crates the lock file lists that no build of this crate compiles (optional features off) aren't in the table. The Windows app bundles the crate, pairing crates included, so the Windows section of `THIRD_PARTY_NOTICES.md` names its dependencies and the `THIRD-PARTY-NOTICES.txt` of each Windows build carries their license texts; the macOS app doesn't bundle it.
 
 ## Spec coverage
 
-`tests/spec_coverage.rs` reads the spec and fails unless every clause is named by a `// covers:` line or listed in `tests/spec_pending.txt`, never both. A clause counts as covered only when everything it asks of the sender is done; a test for part of a pending clause says "Part of P6" in a plain comment. After the audio, RTP and timing stage: 144 clauses, 101 covered, 43 pending (stream and transport 8, pairing crypto 14, AirPlay 2 21). After the transport stage: 109 covered, 35 pending (pairing crypto 14, AirPlay 2 21). After the pairing stage: 123 covered, 21 pending (all AirPlay 2). After the refined spec (P145 added): 145 clauses, 124 covered, 21 pending (all AirPlay 2; P43's new requirement waits for the AirPlay 2 session SETUP). After the input limits went into the spec (P146 to P148: RTSP size limits, header line reading, pairing answer cap): 148 clauses, 127 covered, 21 pending.
+`tests/spec_coverage.rs` reads the spec and fails unless every clause is named by a `// covers:` line or listed in `tests/spec_pending.txt`, never both. A clause counts as covered only when everything it asks of the sender is done; a test for part of a pending clause says "Part of P6" in a plain comment. After the audio, RTP and timing stage: 144 clauses, 101 covered, 43 pending (stream and transport 8, pairing crypto 14, AirPlay 2 21). After the transport stage: 109 covered, 35 pending (pairing crypto 14, AirPlay 2 21). After the pairing stage: 123 covered, 21 pending (all AirPlay 2). After the refined spec (P145 added): 145 clauses, 124 covered, 21 pending (all AirPlay 2; P43's new requirement waits for the AirPlay 2 session SETUP). After the input limits went into the spec (P146 to P148: RTSP size limits, header line reading, pairing answer cap): 148 clauses, 127 covered, 21 pending. After the AirPlay 2 switch and HomeKit pairing stage: 170 clauses, 142 covered, 28 pending (all AirPlay 2; P149 partly done). After the AirPlay 2 session stage: 158 covered, 12 pending (P149 and P153 partly done, waiting for the host-driven PIN pairing; the audio packets P155 and P156; the PTP service P158 to P163, P166 and P167). After the AirPlay 2 audio stage: 168 covered, 2 pending (P149 and P153, partly done, waiting for the host-driven PIN pairing). After the host-driven PIN pairing and the stereo pair and group stages: 181 clauses, all covered, none pending.
  The test also checks that the IDs run P1 to Pn without gaps and that every clause names a source.

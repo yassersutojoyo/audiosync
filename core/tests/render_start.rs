@@ -566,62 +566,96 @@ fn every_jittered_run(jitter_ns: u64, other_way: u64) {
 
 // covers: S207
 #[test]
-fn stamps_a_fifth_of_a_millisecond_off_barely_trim_the_other_way() {
+fn stamps_a_fifth_of_a_millisecond_off_never_trim_the_other_way() {
     // A host's wake-ups, and so its stamps, fall a little off the times of
     // the blocks and callbacks. A fifth of a millisecond either way moves
     // the fill by up to ten frames at a time; averaged over half a second,
-    // or 16 callbacks when those are large, that trims the converter the
-    // other way by a few frames a minute at most.
-    every_jittered_run(200_000, 8);
+    // or 16 callbacks when those are large, that stays inside the dead zone
+    // (with the 4-frame one before, up to 8 frames a minute went back).
+    every_jittered_run(200_000, 0);
 }
 
 // covers: S207
 #[test]
 fn stamps_a_millisecond_off_never_run_an_output_dry() {
     // A millisecond either way moves the fill by up to 48 frames at a time,
-    // past the dead zone both ways, so the converter is trimmed back and
-    // forth, a few hundred frames a minute in all at worst, a frame at a
-    // time and interpolated; still no read runs dry and no correction is
-    // made.
-    every_jittered_run(1_000_000, 500);
+    // and its average now and then past the dead zone, so the converter is
+    // trimmed the other way by some 30 frames a minute at worst (a few
+    // hundred with the 4-frame dead zone before), a frame at a time and
+    // interpolated; still no read runs dry and no correction is made.
+    every_jittered_run(1_000_000, 32);
 }
 
 // covers: S207
 #[test]
 fn an_output_that_needs_no_trim_plays_the_same_with_stamps() {
     // Stamps change nothing for an output on a clock in step, whatever its
-    // hold-back, nor for one held back beyond the dead band and a lead,
-    // which a step back keeps off W as before (S52): over 60 seconds, those
-    // play the very same frames stamped or not, and are never trimmed.
+    // hold-back: over 60 seconds, it plays the very same frames stamped or
+    // not, and is never trimmed.
     for (device_rate, callback, block) in
         [(44_100, 441, 480), (44_100, 512, 512), (96_000, 512, 512)]
     {
-        for (delay, drifts) in [(0, &[0][..]), (1_200, &[0]), (4_800, &[-100, 0, 100])] {
-            for &drift_ppm in drifts {
-                for phase in [0.0, 0.5, 0.95] {
-                    let clocks = Clocks {
-                        device_rate,
-                        callback,
-                        block,
-                        delay,
-                        running: true,
-                        phase,
-                        drift_ppm,
-                        tail: 0,
-                    };
-                    let stamped = simulate(clocks, FEW_PHASES_SECONDS, true);
-                    let plain = simulate(clocks, FEW_PHASES_SECONDS, false);
-                    assert_eq!(
-                        (stamped.slowed, stamped.sped),
-                        (0, 0),
-                        "trimmed: {clocks:?}"
-                    );
-                    assert!(
-                        stamped.played == plain.played,
-                        "played otherwise: {clocks:?}"
-                    );
-                    assert_eq!(stamped.counters, plain.counters, "{clocks:?}");
-                }
+        for delay in [0, 1_200, 4_800] {
+            for phase in [0.0, 0.5, 0.95] {
+                let clocks = Clocks {
+                    device_rate,
+                    callback,
+                    block,
+                    delay,
+                    running: true,
+                    phase,
+                    drift_ppm: 0,
+                    tail: 0,
+                };
+                let stamped = simulate(clocks, FEW_PHASES_SECONDS, true);
+                let plain = simulate(clocks, FEW_PHASES_SECONDS, false);
+                assert_eq!(
+                    (stamped.slowed, stamped.sped),
+                    (0, 0),
+                    "trimmed: {clocks:?}"
+                );
+                assert!(
+                    stamped.played == plain.played,
+                    "played otherwise: {clocks:?}"
+                );
+                assert_eq!(stamped.counters, plain.counters, "{clocks:?}");
+            }
+        }
+    }
+}
+
+// covers: S53, S207
+#[test]
+fn an_output_held_back_beyond_the_dead_band_follows_the_capture_with_stamps() {
+    // Held back by 100 ms, beyond a lead and the dead band, an output on a
+    // clock 100 or 300 ppm off is tracked like one at hold-back 0 (S207):
+    // over 60 seconds no read runs dry, no drift correction is made, and
+    // its converter is trimmed one way only, by 9/10 of what the clock
+    // gained or more. Before, it drifted until a step back at T.
+    for (device_rate, callback, block) in
+        [(44_100, 441, 480), (44_100, 512, 512), (96_000, 512, 512)]
+    {
+        for phase in [0.0, 0.5, 0.95] {
+            for drift_ppm in FEW_PHASES_DRIFTS_PPM {
+                let clocks = Clocks {
+                    device_rate,
+                    callback,
+                    block,
+                    delay: 4_800,
+                    running: true,
+                    phase,
+                    drift_ppm,
+                    tail: 0,
+                };
+                assert_follows_the_capture(clocks, FEW_PHASES_SECONDS, 0, 0);
+                let outcome = simulate(clocks, FEW_PHASES_SECONDS, true);
+                let trimmed = outcome.slowed.max(outcome.sped);
+                let gained =
+                    u64::from(RATE) * FEW_PHASES_SECONDS * drift_ppm.unsigned_abs() / 1_000_000;
+                assert!(
+                    trimmed >= gained * 9 / 10,
+                    "{trimmed} of {gained} frames trimmed: {clocks:?}"
+                );
             }
         }
     }
@@ -636,11 +670,13 @@ fn a_callback_of_several_reads_at_the_capture_rate_judges_drift_once() {
     every_start(48_000, 4096, 512, 0);
 }
 
-// covers: S42, S206
+// covers: S206, S208
 #[test]
-fn an_output_at_the_capture_rate_with_one_read_per_callback_keeps_its_floor_of_one_block() {
-    // In step with the capture, as on the Mac's built-in speakers: the
-    // reader primes one block behind W, as S42 has it.
+fn an_output_at_the_capture_rate_primes_with_the_lead_cap_to_spare() {
+    // In step with the capture, as on the Mac's built-in speakers. It
+    // converts at ratio 1, so its reader gets its start lead less the
+    // converter's latency (S208), and the read that primes leaves the 25 ms
+    // cap on the capture's block.
     let outcome = run(Clocks {
         device_rate: 48_000,
         callback: 512,
@@ -651,7 +687,7 @@ fn an_output_at_the_capture_rate_with_one_read_per_callback_keeps_its_floor_of_o
         drift_ppm: 0,
         tail: 0,
     });
-    assert_eq!(outcome.lag_after_prime, Some(0));
+    assert_eq!(outcome.lag_after_prime, Some(lead_cap()));
     assert_eq!(outcome.counters.starved_renders, 0);
 }
 
@@ -691,9 +727,27 @@ fn a_converted_output_whose_hold_back_covers_the_lead_keeps_its_timing() {
 /// callbacks (S208): one callback's reads, the cap on the capture's block
 /// and the converter's latency.
 fn start_lead_44_1(callback: usize) -> i64 {
-    let cap = i64::from(RATE) * i64::from(LEAD_BLOCK_CAP_MS) / 1000;
-    let latency = Resampler::new(RATE, 44_100).unwrap().latency_frames() as i64;
-    reader_frames_bound(callback, RATE, 44_100) as i64 + cap + latency
+    start_lead(callback, 44_100)
+}
+
+/// S208's start lead of an output at `device_rate` with `callback` frames:
+/// the bound on its reads, the 25 ms cap on the block and the converter's
+/// latency, at the capture rate too (S85).
+fn start_lead(callback: usize, device_rate: u32) -> i64 {
+    reader_frames_bound(callback, RATE, device_rate) as i64 + lead_cap() + latency(device_rate)
+}
+
+/// S206's 25 ms cap on the capture's block, in capture frames.
+fn lead_cap() -> i64 {
+    i64::from(RATE) * i64::from(LEAD_BLOCK_CAP_MS) / 1000
+}
+
+/// The converter's latency for an output at `device_rate`, in capture
+/// frames: 21 at the capture rate (S85).
+fn latency(device_rate: u32) -> i64 {
+    Resampler::new_at_ratio_one(RATE, device_rate)
+        .unwrap()
+        .latency_frames() as i64
 }
 
 // covers: S206
@@ -780,16 +834,17 @@ fn late_wake(device_rate: u32, late: u64, resync: u64, period_given: bool) -> La
     }
 }
 
-// covers: S42, S187, S206
+// covers: S187, S206
 #[test]
-fn one_late_wake_never_raises_a_48_khz_outputs_floor_for_good() {
+fn one_late_wake_never_raises_a_48_khz_outputs_lead_for_good() {
     // The two-period callback is covered while it lasts; a second later,
-    // a delay change re-anchors the output at its floor of one period
-    // again, which a callback of one period reads to W.
+    // a delay change re-anchors the output at its start lead less the
+    // converter's latency again, which a callback of one period reads to
+    // the 25 ms cap on the block.
     let seen = late_wake(48_000, 50, 150, false);
     assert_eq!(seen.counters.starved_renders, 0);
     assert_eq!(seen.counters.resyncs, 1);
-    assert_eq!(seen.lag_after_resync, Some(0));
+    assert_eq!(seen.lag_after_resync, Some(lead_cap()));
 }
 
 // covers: S187, S206
@@ -815,22 +870,27 @@ fn one_late_wake_never_raises_a_converted_outputs_lead_for_good() {
 // covers: S187, S206
 #[test]
 fn with_its_period_given_a_late_wake_raises_the_lead_for_its_own_callback() {
-    // A Windows endpoint's period: the two-period callback (the 51st one
-    // rendered, the 50th was skipped) gets a lead of two periods, the next
-    // one is back at one, so a delay change right after the late wake
-    // re-anchors at the floor of one period.
+    // A Windows endpoint's period at the capture rate: the bound on one
+    // period's reads plus one block, two periods' in the two-period
+    // callback (the 51st one rendered, the 50th was skipped); the next one
+    // is back at one, so a delay change right after the late wake
+    // re-anchors at the start lead again.
     let seen = late_wake(48_000, 50, 53, true);
     assert_eq!(seen.counters.starved_renders, 0);
     assert_eq!(seen.counters.resyncs, 1);
-    assert_eq!(seen.lag_after_resync, Some(0));
-    assert_eq!(&seen.leads[48..52], &[480, 480, 960, 480]);
-    assert!(seen.leads.iter().all(|&lead| lead == 480 || lead == 960));
+    assert_eq!(seen.lag_after_resync, Some(lead_cap()));
+    let lead = reader_frames_bound(480, RATE, RATE) as i64 + 480;
+    let late = reader_frames_bound(960, RATE, RATE) as i64 + 480;
+    assert_eq!(&seen.leads[48..52], &[lead, lead, late, lead]);
+    assert!(seen.leads.iter().all(|&l| l == lead || l == late));
     // Without it, the larger callback counts for the next few callbacks
     // (CALLBACK_WINDOW, this one included) and is forgotten after them.
     let seen = late_wake(48_000, 50, 150, false);
     assert_eq!(
         &seen.leads[48..60],
-        &[480, 480, 960, 960, 960, 960, 960, 960, 960, 960, 480, 480]
+        &[
+            lead, lead, late, late, late, late, late, late, late, late, lead, lead
+        ]
     );
     // A converted output with its period given: the bound on one period's
     // reads plus one block, two periods' in the late callback.
@@ -1005,12 +1065,18 @@ fn the_session_lead_moves_the_other_outputs_only_when_it_changes() {
         let renderer = Renderer::new(reader, &control, Arc::clone(&gain), RATE, rate, 2).unwrap();
         (renderer, control)
     };
-    let latency = Resampler::new(RATE, 44_100).unwrap().latency_frames() as i64;
+    let built_in_lead = start_lead(480, 48_000);
+    let built_in_latency = latency(48_000);
     let near_lead = start_lead_44_1(441);
+    // The 44.1 kHz output's reads and latency take a few frames more.
+    assert!(near_lead > built_in_lead);
     write_blocks(&mut writer, 480, 100);
     let (mut built_in, built_in_control) = make(48_000, 0);
     play(&mut writer, &mut [&mut built_in], 50);
-    assert_eq!(built_in_control.reader().delay_frames(), 480);
+    assert_eq!(
+        built_in_control.reader().delay_frames(),
+        built_in_lead - built_in_latency
+    );
     // Made as the Mac makes it, its hold-back set a moment later: until
     // its first callback it doesn't count, so nothing moves meanwhile.
     let reader = Reader::new(Arc::clone(&ring), RATE);
@@ -1018,7 +1084,7 @@ fn the_session_lead_moves_the_other_outputs_only_when_it_changes() {
     let mut late =
         Renderer::new(reader, &late_control, Arc::clone(&gain), RATE, 44_100, 2).unwrap();
     play(&mut writer, &mut [&mut built_in], 5);
-    assert_eq!(ring.session_leads().session_lead(), 480);
+    assert_eq!(ring.session_leads().session_lead(), built_in_lead);
     late_control.set_delay_frames(96_000);
     play(&mut writer, &mut [&mut built_in, &mut late], 50);
     assert_eq!(built_in_control.counters().resyncs, 0);
@@ -1029,7 +1095,10 @@ fn the_session_lead_moves_the_other_outputs_only_when_it_changes() {
     let (mut far, far_control) = make(48_000, 4_800);
     play(&mut writer, &mut [&mut built_in, &mut far], 50);
     assert_eq!(built_in_control.counters().resyncs, 0);
-    assert_eq!(far_control.reader().delay_frames(), 4_800 + 480);
+    assert_eq!(
+        far_control.reader().delay_frames(),
+        4_800 + built_in_lead - built_in_latency
+    );
     // A converting output at hold-back 0 raises the session lead to its
     // start lead at its first callback: both others re-anchor once, their
     // hold-backs unchanged.
@@ -1037,16 +1106,31 @@ fn the_session_lead_moves_the_other_outputs_only_when_it_changes() {
     play(&mut writer, &mut [&mut built_in, &mut far, &mut near], 50);
     assert_eq!(built_in_control.counters().resyncs, 1);
     assert_eq!(far_control.counters().resyncs, 1);
-    assert_eq!(built_in_control.reader().delay_frames(), near_lead);
-    assert_eq!(far_control.reader().delay_frames(), 4_800 + near_lead);
-    assert_eq!(near_control.reader().delay_frames(), near_lead - latency);
+    assert_eq!(
+        built_in_control.reader().delay_frames(),
+        near_lead - built_in_latency
+    );
+    assert_eq!(
+        far_control.reader().delay_frames(),
+        4_800 + near_lead - built_in_latency
+    );
+    assert_eq!(
+        near_control.reader().delay_frames(),
+        near_lead - latency(44_100)
+    );
     // Its stop takes it out at once, and the others skip forward again.
     near_control.request_fade_out();
     play(&mut writer, &mut [&mut built_in, &mut far, &mut near], 50);
     assert_eq!(built_in_control.counters().resyncs, 2);
     assert_eq!(far_control.counters().resyncs, 2);
-    assert_eq!(built_in_control.reader().delay_frames(), 480);
-    assert_eq!(far_control.reader().delay_frames(), 4_800 + 480);
+    assert_eq!(
+        built_in_control.reader().delay_frames(),
+        built_in_lead - built_in_latency
+    );
+    assert_eq!(
+        far_control.reader().delay_frames(),
+        4_800 + built_in_lead - built_in_latency
+    );
     for control in [&built_in_control, &far_control, &near_control] {
         let c = control.counters();
         assert_eq!(
@@ -1072,21 +1156,30 @@ fn a_bluetooth_output_adds_a_capture_block_to_its_own_start_lead_only() {
     };
     let block = BLUETOOTH_LEAD_FRAMES as i64;
     let block_ns = block * 1_000_000_000 / i64::from(RATE);
+    let cap_ns = lead_cap() * 1_000_000_000 / i64::from(RATE);
+    let built_in_lead = start_lead(480, 48_000);
+    let built_in_latency = latency(48_000);
     write_blocks(&mut writer, 480, 100);
     let (mut built_in, built_in_control) = make(48_000, 0, false);
     assert_eq!(built_in_control.extra_lead_frames(), 0);
     play(&mut writer, &mut [&mut built_in], 100);
-    assert_eq!(built_in_control.reader().delay_frames(), 480);
-    // One callback's lead and nothing more: every callback finds exactly
-    // what it needs.
-    assert_eq!(built_in_control.least_slack_ns(), Some(0));
+    assert_eq!(
+        built_in_control.reader().delay_frames(),
+        built_in_lead - built_in_latency
+    );
+    // The start lead's cap on the block and nothing more: every callback
+    // finds what it needs and 25 ms to spare.
+    assert_eq!(built_in_control.least_slack_ns(), Some(cap_ns));
     // Held back beyond its start lead and the block: nothing moves.
     let (mut far, far_control) = make(48_000, 4_800, true);
     assert_eq!(far_control.extra_lead_frames(), block);
     play(&mut writer, &mut [&mut built_in, &mut far], 50);
-    assert_eq!(ring.session_leads().session_lead(), 480);
+    assert_eq!(ring.session_leads().session_lead(), built_in_lead);
     assert_eq!(built_in_control.counters().resyncs, 0);
-    assert_eq!(far_control.reader().delay_frames(), 4_800 + 480);
+    assert_eq!(
+        far_control.reader().delay_frames(),
+        4_800 + built_in_lead - built_in_latency
+    );
     far_control.request_fade_out();
     play(&mut writer, &mut [&mut built_in, &mut far], 5);
     drop((far, far_control));
@@ -1095,22 +1188,34 @@ fn a_bluetooth_output_adds_a_capture_block_to_its_own_start_lead_only() {
     // keep the block as slack.
     let (mut buds, buds_control) = make(48_000, 0, true);
     play(&mut writer, &mut [&mut built_in, &mut buds], 100);
-    assert_eq!(ring.session_leads().session_lead(), 480 + block);
+    let buds_lead = built_in_lead + block;
+    assert_eq!(ring.session_leads().session_lead(), buds_lead);
     assert_eq!(built_in_control.counters().resyncs, 1);
-    assert_eq!(built_in_control.reader().delay_frames(), 480 + block);
-    assert_eq!(buds_control.reader().delay_frames(), 480 + block);
-    assert_eq!(buds_control.least_slack_ns(), Some(block_ns));
+    assert_eq!(
+        built_in_control.reader().delay_frames(),
+        buds_lead - built_in_latency
+    );
+    assert_eq!(
+        buds_control.reader().delay_frames(),
+        buds_lead - built_in_latency
+    );
+    assert_eq!(buds_control.least_slack_ns(), Some(cap_ns + block_ns));
     // A converting one adds the block to its own start lead in the same way.
     buds_control.request_fade_out();
     play(&mut writer, &mut [&mut built_in, &mut buds], 5);
     drop((buds, buds_control));
-    let latency = Resampler::new(RATE, 44_100).unwrap().latency_frames() as i64;
     let (mut speaker, speaker_control) = make(44_100, 0, true);
     play(&mut writer, &mut [&mut built_in, &mut speaker], 100);
     let lead = start_lead_44_1(441) + block;
     assert_eq!(ring.session_leads().session_lead(), lead);
-    assert_eq!(built_in_control.reader().delay_frames(), lead);
-    assert_eq!(speaker_control.reader().delay_frames(), lead - latency);
+    assert_eq!(
+        built_in_control.reader().delay_frames(),
+        lead - built_in_latency
+    );
+    assert_eq!(
+        speaker_control.reader().delay_frames(),
+        lead - latency(44_100)
+    );
     for control in [&built_in_control, &speaker_control] {
         let c = control.counters();
         assert_eq!(

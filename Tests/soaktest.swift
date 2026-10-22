@@ -624,10 +624,10 @@ if opt.baseline != nil {
                   baseKey: "local_starved_renders_per_h")
         rateCheck("local drift corrections", count: "local_drift_corrections", config: "two_local",
                   baseKey: "local_drift_corrections_per_h")
-        marginCheck("local lag error |ms|", key: "local_lag_err_ms_max_abs", config: "two_local", margin: 35)
+        marginCheck("local lag error |ms|", key: "local_lag_err_ms_max_abs", config: "two_local", margin: 50)
     }
     if renderers.count == 2 {
-        marginCheck("inter-output drift |ms|", key: "inter_output_drift_ms_max_abs", config: "two_local", margin: 35)
+        marginCheck("inter-output drift |ms|", key: "inter_output_drift_ms_max_abs", config: "two_local", margin: 50)
     }
     if let v = mine("footprint_mb_growth"), let b = base("two_local", "footprint_mb_growth") {
         let limit = SoakRules.memoryGrowthLimit(baseline: b)

@@ -14,9 +14,10 @@ final class AppModel: ObservableObject {
         let tag: SpeakerTag
         var enabled: Bool
         var volume: Double          // slider position 0…100
-        /// A local speaker's offset relative to the reference (S175); nil
-        /// where the row has no delay field: AirPlay speakers, which wait for
-        /// nothing, and the reference itself (S181).
+        /// A local speaker's offset relative to the reference (S175), or a
+        /// Google Cast speaker's offset set by ear; nil where the row has no
+        /// delay field: AirPlay speakers, which wait for nothing, a Cast
+        /// group, and the reference itself (S181).
         var offsetMs: Double?
         var autoConnect = false
         /// From the AirPlay sender's discovery; always `.open` for local speakers.
@@ -24,9 +25,22 @@ final class AppModel: ObservableObject {
         /// The name macOS or AirPlay discovery reports; `name` is the user's
         /// when they renamed the speaker (`SpeakerNames`).
         var systemName = ""
+        /// A Google Cast speaker's session and its device's own volume state;
+        /// nil for every other speaker.
+        var cast: CastRow? = nil
+        /// An AirPlay speaker the sender reaches over AirPlay 2 (only with
+        /// the AirPlay 2 switch on).
+        var airPlay2 = false
+        /// An AirPlay 2 speaker waiting for the slot another one holds (P169).
+        var waitingForAirPlay2 = false
+        /// An AirPlay speaker AudioSync keeps a PIN pairing for.
+        var paired = false
+        /// A stereo pair or home theater group: its kind and members (P176).
+        var airPlayTarget: AirPlayTargetRow? = nil
 
         /// A speaker AudioSync streams to through AirPlay, not a local output.
         var isAirPlay: Bool { tag == .airplay }
+        var isCast: Bool { tag == .cast }
         /// Stable key across both kinds, used by groups and auto-connect.
         var key: String { SpeakerKey.make(id: id, airplay: isAirPlay) }
         var isRenamed: Bool { !systemName.isEmpty && name != systemName }
@@ -54,10 +68,18 @@ final class AppModel: ObservableObject {
         var setMaster: (Double) -> Void = { _ in }
         var setAirPlayEnabled: (String, Bool) -> Void = { _, _ in }
         var setAirPlayVolume: (String, Double) -> Void = { _, _ in }
+        var forgetAirPlayPairing: (String) -> Void = { _ in }
         var setLocalEnabled: (String, Bool) -> Void = { _, _ in }
         var setLocalVolume: (String, Double) -> Void = { _, _ in }
         var setLocalOffset: (String, Double) -> Void = { _, _ in }
         var setAirPlayDelay: (Double) -> Void = { _ in }
+        var setCastEnabled: (String, Bool) -> Void = { _, _ in }
+        /// The device's own volume, slider position 0 to 100.
+        var setCastVolume: (String, Double) -> Void = { _, _ in }
+        var setCastMuted: (String, Bool) -> Void = { _, _ in }
+        var resyncCast: (String) -> Void = { _ in }
+        /// The offset the user set by ear, 0 to 20 000 ms.
+        var setCastOffset: (String, Double) -> Void = { _, _ in }
         var openMainWindow: () -> Void = {}
         var openGuide: () -> Void = {}
         var refreshDevices: () -> Void = {}
@@ -67,6 +89,7 @@ final class AppModel: ObservableObject {
         /// The main window came on screen or left it (closed, minimized, covered).
         var mainWindowVisible: (Bool) -> Void = { _ in }
         var openEqualizer: () -> Void = {}
+        var openWebRemote: () -> Void = {}
         /// Dismiss the notice with this subject.
         var dismissNotice: (String) -> Void = { _ in }
         var dismissAllNotices: () -> Void = {}
@@ -80,12 +103,24 @@ final class AppModel: ObservableObject {
         var setLaunchAtLogin: (Bool) -> Void = { _ in }
         var setShowVirtualDevices: (Bool) -> Void = { _ in }
         var setSwitchWhenSourceQuits: (Bool) -> Void = { _ in }
+        var setAirPlay2: (Bool) -> Void = { _ in }
         var setAppearance: (AppAppearance) -> Void = { _ in }
         var transport: (NowPlayingMonitor.Command) -> Void = { _ in }
         var quit: () -> Void = {}
         var retryAirPlay: () -> Void = {}
         /// The device volume fix the user clicked under a local output (S197).
         var fixDeviceVolume: (String) -> Void = { _ in }
+        /// Calibrate this local speaker with the microphone (S232), and cancel it.
+        var calibrate: (String) -> Void = { _ in }
+        var cancelCalibration: () -> Void = {}
+        /// Calibrate All Speakers (S235 to S240): start, cancel, Measure
+        /// Again on a row, Apply, Undo, and close its sheet.
+        var calibrateAll: () -> Void = {}
+        var cancelCalibrateAll: () -> Void = {}
+        var measureAgain: (Int) -> Void = { _ in }
+        var applyCalibrateAll: () -> Void = {}
+        var undoCalibrateAll: () -> Void = {}
+        var closeCalibrateAll: () -> Void = {}
     }
 
     @Published var running = false
@@ -94,6 +129,10 @@ final class AppModel: ObservableObject {
     @Published var master: Double = 100
     @Published var airplay: [Speaker] = []
     @Published var local: [Speaker] = []
+    /// Google Cast speakers, by name.
+    @Published var cast: [Speaker] = []
+    /// What the list says about Google Cast while it lists none.
+    @Published var castList = CastListState.quiet
     /// The Mac's built-in speakers are listed, so local offsets are relative
     /// to them (S173, S181).
     @Published var hasLocalReference = true
@@ -114,10 +153,15 @@ final class AppModel: ObservableObject {
     /// The device volume hints of the switched-on local outputs, by device
     /// UID: only outputs whose macOS volume is low or muted (S196).
     @Published var deviceVolumes: [String: DeviceVolumeHint] = [:]
+    /// The microphone calibration under way or the last one's result (S232).
+    @Published var calibration = CalibrationStatus()
+    /// Calibrate All Speakers: its run, sheet and status (S235 to S240).
+    @Published var calibrateAll = CalibrateAllStatus()
     @Published var groups: [Group] = []
     @Published var launchAtLogin = false
     @Published var showVirtualDevices = false
     @Published var switchWhenSourceQuits = false
+    @Published var airPlay2 = false
     @Published var appearance = AppAppearance.system
     /// Rows whose sync controls are expanded. Lives here rather than in view
     /// @State: the Command Line Tools toolchain ships without SwiftUI's macro plugins.
@@ -188,9 +232,13 @@ final class AppModel: ObservableObject {
         DelayBadge.savedMs(of: id, airPlayID: AirPlayDelayRow.id, airPlayMs: airPlayDelayMs, rows: delayRows)
     }
     func savedDelayText(of id: String) -> String? {
-        DelayBadge.text(of: id, airPlayID: AirPlayDelayRow.id, airPlayMs: airPlayDelayMs, rows: delayRows, text: text)
+        // A Cast offset is a wait, never below 0, so it has no sign.
+        if let castMs = cast.first(where: { $0.id == id })?.offsetMs { return text.delayValue(ms: castMs) }
+        return DelayBadge.text(of: id, airPlayID: AirPlayDelayRow.id, airPlayMs: airPlayDelayMs, rows: delayRows, text: text)
     }
-    private var delayRows: [(id: String, offsetMs: Double?)] { local.map { (id: $0.id, offsetMs: $0.offsetMs) } }
+    private var delayRows: [(id: String, offsetMs: Double?)] {
+        (local + cast).map { (id: $0.id, offsetMs: $0.offsetMs) }
+    }
     /// Bumped every time the menu bar panel opens, so its rows start fresh
     /// (a row the pointer was over when the panel closed never got a hover exit).
     @Published var panelSession = 0
@@ -209,7 +257,25 @@ final class AppModel: ObservableObject {
     /// The device volume hint `speaker`'s row shows: none on an AirPlay row
     /// or a row switched off (S198).
     func deviceVolume(of speaker: Speaker) -> DeviceVolumeHint? {
-        DeviceVolumes.hint(for: speaker.id, airPlay: speaker.isAirPlay, enabled: speaker.enabled, in: deviceVolumes)
+        DeviceVolumes.hint(for: speaker.id, airPlay: speaker.isAirPlay || speaker.isCast, enabled: speaker.enabled,
+                           in: deviceVolumes)
+    }
+
+    /// A click on a speaker's switch, whatever kind it is.
+    func setEnabled(_ speaker: Speaker, _ on: Bool) {
+        switch speaker.tag {
+        case .airplay: actions.setAirPlayEnabled(speaker.id, on)
+        case .cast: actions.setCastEnabled(speaker.id, on)
+        default: actions.setLocalEnabled(speaker.id, on)
+        }
+    }
+
+    func setVolume(_ speaker: Speaker, _ position: Double) {
+        switch speaker.tag {
+        case .airplay: actions.setAirPlayVolume(speaker.id, position)
+        case .cast: actions.setCastVolume(speaker.id, position)
+        default: actions.setLocalVolume(speaker.id, position)
+        }
     }
 
     /// A group is on when all its present members are.
@@ -218,7 +284,7 @@ final class AppModel: ObservableObject {
     }
 
     /// Speakers switched on right now, AirPlay and local.
-    var activeSpeakers: Int { airplay.filter(\.enabled).count + local.filter(\.enabled).count }
+    var activeSpeakers: Int { (airplay + local + cast).filter(\.enabled).count }
 
     var statusText: String { running ? text.statusStreaming(speakers: activeSpeakers) : text.statusOff }
 
@@ -229,10 +295,17 @@ final class AppModel: ObservableObject {
     /// The speaker lists both views show: the Mac's own outputs, then every
     /// other speaker (AirPlay and local) by name.
     var layout: (thisMac: [Speaker], connected: [Speaker]) {
-        SpeakerLayout.split(local: local, airplay: shownAirPlay, tag: \.tag, name: \.name)
+        SpeakerLayout.split(local: local, airplay: shownAirPlay + cast, tag: \.tag, name: \.name)
     }
 
-    var airPlayEmptyText: String { text.airPlayNoneFound }
+    /// What Connected Speakers says about the network speakers it doesn't
+    /// list: no AirPlay speaker found, and how the Google Cast search goes;
+    /// nil when there is nothing to say.
+    var networkNote: String? {
+        text.networkSpeakersNote(airPlayNone: shownAirPlay.isEmpty && airPlayProblem == nil, cast: castList)
+    }
+    /// Connected Speakers with no speaker at all.
+    var networkEmptyText: String { networkNote ?? text.airPlayNoneFound }
 
     /// Why AirPlay can't work right now, shown in place of its speakers; nil
     /// while the sender runs or is starting.
@@ -246,6 +319,7 @@ extension SpeakerTag {
     var symbol: String {
         switch self {
         case .airplay: return "homepod.fill"
+        case .cast: return "hifispeaker.fill"
         case .builtIn: return "laptopcomputer"
         case .bluetooth: return "headphones"
         case .hdmi, .displayPort: return "display"
@@ -627,7 +701,7 @@ struct MenuBarView: View {
         if count == 0 && model.airPlayProblem != nil {
             EmptyView()   // the problem below says why
         } else if count == 0 {
-            Text(model.layout.thisMac.isEmpty ? t.noSpeakers : t.airPlayNoneFound)
+            Text(model.layout.thisMac.isEmpty ? t.noSpeakers : model.networkEmptyText)
                 .font(.caption)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -693,15 +767,13 @@ struct MenuBarView: View {
             }
             ForEach(layout.connected) { speaker in
                 CompactRow(name: speaker.name, symbol: speaker.tag.symbol, state: model.state(of: speaker),
-                           text: t, height: rowHeight, renamedFrom: speaker.renamedFrom, kind: speaker.tag,
+                           text: t, height: rowHeight,
+                           hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
+                                           target: speaker.airPlayTarget),
+                           renamedFrom: speaker.renamedFrom, kind: speaker.tag, airPlay2: speaker.airPlay2,
                            availability: speaker.availability,
                            deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
-                    let on = model.state(of: speaker).clickTurnsOn
-                    if speaker.isAirPlay {
-                        model.actions.setAirPlayEnabled(speaker.id, on)
-                    } else {
-                        model.actions.setLocalEnabled(speaker.id, on)
-                    }
+                    model.setEnabled(speaker, model.state(of: speaker).clickTurnsOn)
                 }
             }
         }
@@ -714,12 +786,14 @@ private struct CompactRow: View {
     let state: SpeakerState
     let text: UIStrings
     let height: CGFloat
-    /// Read after the name by VoiceOver: a group's member count.
+    /// Read after the name by VoiceOver: a group's member count, or what a
+    /// Google Cast speaker is doing.
     var hint: String? = nil
     /// A renamed speaker's system name, read by VoiceOver after its name.
     var renamedFrom: String? = nil
     /// The kind of output, shown as a small icon after the name.
     var kind: SpeakerTag? = nil
+    var airPlay2 = false
     var availability: SpeakerAvailability = .open
     /// A switched-on local output's device volume hint: a glyph, with the
     /// hint as its tooltip and in the VoiceOver hint (S198).
@@ -736,7 +810,7 @@ private struct CompactRow: View {
                     .font(.callout.weight(state == .playing ? .semibold : .regular))
                     .lineLimit(1)
                 if let kind {
-                    SpeakerTypeIcon(kind: kind, state: state, text: text, font: .caption)
+                    SpeakerTypeIcon(kind: kind, state: state, text: text, font: .caption, airPlay2: airPlay2)
                 }
                 Spacer(minLength: 4)
                 AvailabilityNote(availability: availability, text: text)
@@ -751,7 +825,8 @@ private struct CompactRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hover.isHovered = $0 }
-        .accessibilityLabel(text.speakerLabel(name: name, tag: kind.map(text.speakerTag), renamedFrom: renamedFrom))
+        .accessibilityLabel(text.speakerLabel(name: name, tag: kind.map { text.speakerTag($0, airPlay2: airPlay2) },
+                                              renamedFrom: renamedFrom))
         .accessibilityValue(text.value(state))
         .accessibilityHint(text.rowHint(state, note: hint ?? deviceVolume?.accessibilityNote
                                             ?? text.availability(availability)))
@@ -875,13 +950,14 @@ struct SpeakerTypeIcon: View {
     let state: SpeakerState
     let text: UIStrings
     var font: Font = .caption
+    var airPlay2 = false
 
     var body: some View {
         glyph
             .foregroundStyle(color)
             .fixedSize()
             .layoutPriority(1)   // a long name truncates first; the icon stays whole
-            .help(text.speakerTag(kind))
+            .help(text.speakerTag(kind, airPlay2: airPlay2))
             .accessibilityHidden(true)   // read in the row's label
     }
 
@@ -1061,6 +1137,11 @@ struct NoticeBanner<Footer: View>: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 VStack(alignment: .leading, spacing: 2) {
+                    if let title = notice.title {
+                        Text(title)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                    }
                     Text(notice.text)
                         .font(.caption)
                         .lineLimit(lineLimit)

@@ -34,21 +34,40 @@ struct EngineParts {
     }
 
     /// Control thread, while capture is stopped (each tap build): the
-    /// capture rate the equalizer and AudioSync's own AirPlay sender (when
-    /// it runs) convert from.
+    /// capture rate the equalizer and AudioSync's own AirPlay and Cast
+    /// senders (when they run) convert from.
     func prepare(captureRate: Double) {
         equalizer.setSampleRate(captureRate)
         NativeAirPlayTap.prepare(captureRate: captureRate)
+        CastTap.prepare(captureRate: captureRate)
     }
 
     /// Capture thread: one captured block, equalized once in place, then into
-    /// the ring and AudioSync's own AirPlay sender when it runs
-    /// (`NativeAirPlayTap`), the same samples for both (S7). Real-time safe.
+    /// the ring and AudioSync's own AirPlay and Cast senders when they
+    /// run (`NativeAirPlayTap`, `CastTap`), the same samples for all (S7). During a
+    /// microphone calibration (`CalibrationTap`) the music fades to silence
+    /// on every path and the test signal goes into the one path it targets.
+    /// Real-time safe.
     @inline(__always)
     func deliver(_ block: UnsafeMutablePointer<Float>, frames: Int) {
         equalizer.process(block, frames: frames)
+        if CalibrationTap.isActive {
+            CalibrationTap.fadeMusic(block, frames: frames)
+            let target = CalibrationTap.target
+            if target != .local { ring.write(interleaved: block, frames: frames) }
+            if target != .airPlay { NativeAirPlayTap.write(block, frames: frames) }
+            if target != .cast { CastTap.write(block, frames: frames) }
+            CalibrationTap.addSignal(block, frames: frames)
+            switch target {
+            case .local: ring.write(interleaved: block, frames: frames)
+            case .airPlay: NativeAirPlayTap.write(block, frames: frames)
+            case .cast: CastTap.write(block, frames: frames)
+            }
+            return
+        }
         ring.write(interleaved: block, frames: frames)
         NativeAirPlayTap.write(block, frames: frames)
+        CastTap.write(block, frames: frames)
     }
 
     /// A local output reading this session's ring, captured at `captureRate`

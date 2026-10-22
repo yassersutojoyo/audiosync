@@ -1,14 +1,15 @@
 // The main window: the same sections as the macOS app's main window, in the
 // same order. Header (mark, wordmark, status, streaming switch), notices,
-// then a left column (audio source, master volume, equalizer) and the
-// speaker list (This PC, Groups, Connected Speakers). The menu bar carries
-// the Windows shortcuts. Tab order follows the reading order.
+// then a left column (audio source, Now Playing, master volume, equalizer,
+// calibration) and the speaker list (This PC, Groups, Connected Speakers).
+// The menu bar carries the Windows shortcuts. Tab order follows the reading
+// order.
 
-import { ComboBox, ScrollView } from "std-widgets.slint";
+import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { GroupItem, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, NoticeStack, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { Appearance, CalibrationRowItem, CastList, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -16,13 +17,14 @@ export { TrayFlyout } from "flyout.slint";
 export { GroupNameDialog, PasswordDialog, PinDialog } from "dialogs.slint";
 export { GuideWindow } from "guide.slint";
 export { HelpWindow } from "help.slint";
+export { RemoteWindow } from "remote.slint";
 export { Strings } from "strings.slint";
 export { NameField } from "widgets.slint";
 // The style's palette, for the theme preview (src/view.rs).
 export { Palette } from "std-widgets.slint";
 // The brand teal, for the standard controls' accent (src/view.rs).
 export { Tokens } from "tokens.slint";
-export { AirPlayProblem, Availability, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
+export { AirPlayProblem, Appearance, Availability, CastList, CastProblem, CastState, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind } from "types.slint";
 
 // A titled card of speaker rows, with a note when it has none.
 component SpeakerSection inherits VerticalLayout {
@@ -44,6 +46,11 @@ component SpeakerSection inherits VerticalLayout {
     callback rename-edited(string, string);
     callback rename-committed(string);
     callback rename-cancelled(string);
+    callback cast-muted(string, bool);
+    callback cast-resync(string);
+    callback calibrate(string);
+    callback cancel-calibration();
+    callback calibration-privacy();
     // The part of a row with the keyboard focus changed; none: it lost it.
     callback focus-changed(string, RowPart);
     // A row built while this is its speaker's ID, or already built when it
@@ -132,6 +139,21 @@ component SpeakerSection inherits VerticalLayout {
                 }
                 rename-cancelled => {
                     root.rename-cancelled(speaker.id);
+                }
+                cast-muted(muted) => {
+                    root.cast-muted(speaker.id, muted);
+                }
+                cast-resync => {
+                    root.cast-resync(speaker.id);
+                }
+                calibrate => {
+                    root.calibrate(speaker.id);
+                }
+                cancel-calibration => {
+                    root.cancel-calibration();
+                }
+                calibration-privacy => {
+                    root.calibration-privacy();
                 }
             }
         }
@@ -252,6 +274,306 @@ component EqualizerCard inherits Rectangle {
     }
 }
 
+// Calibrate All Speakers (spec S235 to S240): the button, which cancels a
+// run under way, what the run does, and the results with Measure Again on
+// each row, Apply, Undo and Close.
+component CalibrationCard inherits Card {
+    in property <bool> running;
+    in property <bool> can-start;
+    // What the run does, how it ended, or why it can't start.
+    in property <string> status;
+    // The microphone was blocked: Open Privacy Settings.
+    in property <bool> privacy;
+    in property <bool> results-shown;
+    in property <[CalibrationRowItem]> rows;
+    // The AirPlay delay's line, empty without AirPlay speakers.
+    in property <string> airplay;
+    // How the run or the last action on its results ended.
+    in property <string> outcome;
+    in property <bool> can-apply;
+    in property <bool> can-undo;
+    callback start();
+    callback cancel();
+    callback privacy-requested();
+    callback measure-again(int);
+    callback apply();
+    callback undo();
+    callback close();
+
+    accessible-role: groupbox;
+    accessible-label: Strings.calibrate-all-title;
+
+    VerticalLayout {
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 10px;
+
+            Glyph {
+                glyph: Glyphs.microphone;
+                color: Tokens.teal-text;
+                width: 20px;
+            }
+
+            SectionTitle {
+                text: Strings.calibrate-all-title;
+            }
+        }
+
+        // One button for both, so the keyboard focus stays on it when a run
+        // starts or ends.
+        HorizontalLayout {
+            alignment: LayoutAlignment.start;
+
+            Button {
+                text: root.running ? Strings.calibration-cancel : Strings.calibrate-all;
+                enabled: root.running || root.can-start;
+                accessible-label: root.running ? Strings.calibrate-all-cancel-label : Strings.calibrate-all;
+                accessible-description: root.status;
+                clicked => {
+                    if root.running {
+                        root.cancel();
+                    } else {
+                        root.start();
+                    }
+                }
+            }
+        }
+
+        if root.privacy: HorizontalLayout {
+            alignment: LayoutAlignment.start;
+
+            Button {
+                text: Strings.notice-open-privacy;
+                accessible-label: Strings.notice-open-privacy-label;
+                clicked => {
+                    root.privacy-requested();
+                }
+            }
+        }
+
+        // The button's description says it already.
+        QuietText {
+            text: root.status;
+        }
+
+        if root.results-shown: VerticalLayout {
+            spacing: 8px;
+            accessible-role: groupbox;
+            accessible-label: Strings.calibrate-all-results;
+
+            Divider { }
+
+            SectionTitle {
+                text: Strings.calibrate-all-results;
+            }
+
+            for row[index] in root.rows: VerticalLayout {
+                spacing: 4px;
+
+                Text {
+                    text: row.name;
+                    font-size: Tokens.font-size-body;
+                    font-weight: 600;
+                    color: Tokens.text;
+                    wrap: word-wrap;
+                }
+
+                SecondaryText {
+                    text: row.detail;
+                }
+
+                if row.can-measure-again: HorizontalLayout {
+                    alignment: LayoutAlignment.start;
+
+                    Button {
+                        text: Strings.calibrate-all-again;
+                        enabled: !root.running;
+                        accessible-label: Strings.calibrate-all-again-label(row.name);
+                        accessible-description: row.detail;
+                        clicked => {
+                            root.measure-again(index);
+                        }
+                    }
+                }
+            }
+
+            if root.airplay != "": SecondaryText {
+                text: root.airplay;
+            }
+
+            if root.outcome != "": SecondaryText {
+                text: root.outcome;
+            }
+
+            HorizontalLayout {
+                alignment: LayoutAlignment.start;
+                spacing: 8px;
+
+                Button {
+                    text: Strings.calibrate-all-apply;
+                    accessible-label: Strings.calibrate-all-apply;
+                    primary: true;
+                    enabled: root.can-apply && !root.running;
+                    accessible-description: Strings.calibrate-all-apply-help;
+                    // Apply goes dead once applied: the focus moves on to
+                    // Undo rather than falling off the card.
+                    clicked => {
+                        root.apply();
+                        if root.can-undo {
+                            undo-button.focus();
+                        }
+                    }
+                }
+
+                undo-button := Button {
+                    text: Strings.calibrate-all-undo;
+                    enabled: root.can-undo && !root.running;
+                    accessible-label: Strings.calibrate-all-undo;
+                    accessible-description: Strings.calibrate-all-undo-help;
+                    clicked => {
+                        root.undo();
+                        if !root.can-undo {
+                            close-button.focus();
+                        }
+                    }
+                }
+
+                close-button := Button {
+                    text: Strings.calibrate-all-close;
+                    enabled: !root.running;
+                    accessible-label: Strings.calibrate-all-close-label;
+                    clicked => {
+                        root.close();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The Now Playing card: the track of the media session that counts for the
+// chosen source, with Previous, Play or Pause, and Next, as on the Mac.
+component NowPlayingCard inherits Card {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> playing;
+    in property <bool> has-artwork;
+    in property <image> artwork;
+    // Which button has the keyboard focus (0 to 2), -1 for none: the app
+    // hands the focus on before the card hides.
+    in-out property <int> focused-button: -1;
+    // 0 Previous, 1 Play or Pause, 2 Next.
+    callback transport(int);
+
+    accessible-role: groupbox;
+    accessible-label: Strings.now-playing;
+
+    VerticalLayout {
+        spacing: 10px;
+
+        HorizontalLayout {
+            spacing: 12px;
+
+            Rectangle {
+                width: 56px;
+                height: 56px;
+                border-radius: Fluent.radius-card;
+                clip: true;
+                background: Tokens.text.with-alpha(0.06);
+
+                if root.has-artwork: Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.artwork;
+                    image-fit: cover;
+                    accessible-role: none;
+                }
+
+                if !root.has-artwork: Glyph {
+                    width: parent.width;
+                    height: parent.height;
+                    glyph: Glyphs.music-note;
+                    color: Tokens.secondary-text;
+                    font-size: 20px;
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 3px;
+                horizontal-stretch: 1;
+
+                Text {
+                    text: root.title;
+                    font-weight: 600;
+                    color: Tokens.text;
+                    wrap: word-wrap;
+                    overflow: elide;
+                    // Two lines at most, as on the Mac.
+                    height: min(self.preferred-height, 2 * 19px);
+                }
+
+                if root.subtitle != "": Text {
+                    text: root.subtitle;
+                    font-size: Tokens.font-size-callout;
+                    color: Tokens.secondary-text;
+                    overflow: elide;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 20px;
+
+            IconButton {
+                glyph: Glyphs.previous;
+                label: Strings.previous-track;
+                clicked => {
+                    root.transport(0);
+                }
+                focus-changed(has) => {
+                    root.note-focus(0, has);
+                }
+            }
+
+            IconButton {
+                width: 40px;
+                height: 40px;
+                glyph: root.playing ? Glyphs.pause : Glyphs.play;
+                glyph-size: 20px;
+                label: root.playing ? Strings.pause : Strings.play;
+                clicked => {
+                    root.transport(1);
+                }
+                focus-changed(has) => {
+                    root.note-focus(1, has);
+                }
+            }
+
+            IconButton {
+                glyph: Glyphs.next;
+                label: Strings.next-track;
+                clicked => {
+                    root.transport(2);
+                }
+                focus-changed(has) => {
+                    root.note-focus(2, has);
+                }
+            }
+        }
+    }
+
+    function note-focus(button: int, has: bool) {
+        if has {
+            root.focused-button = button;
+        } else if root.focused-button == button {
+            root.focused-button = -1;
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     in property <bool> running;
     in property <string> status;
@@ -259,6 +581,14 @@ export component MainWindow inherits Window {
     in property <int> source-index;
     in property <float> master-volume;
     in property <bool> equalizer-on;
+    // The Now Playing card, while a media session counts for the source.
+    in property <bool> now-playing-shown;
+    in property <string> now-playing-title;
+    in property <string> now-playing-subtitle;
+    in property <bool> now-playing-playing;
+    in property <bool> now-playing-has-artwork;
+    in property <image> now-playing-artwork;
+    in-out property <int> now-playing-focused-button: -1;
     in property <[SpeakerItem]> this-pc;
     in property <[SpeakerItem]> connected;
     in property <[GroupItem]> groups;
@@ -268,6 +598,7 @@ export component MainWindow inherits Window {
     in property <string> notice-announcement;
     // View > Show Virtual Devices: virtual outputs are listed even while off.
     in property <bool> show-virtual-devices;
+    in property <Appearance> appearance;
     in property <bool> switch-source-on-quit;
     // File > Launch at Sign-In: what the Run key says, read again by Rust.
     in property <bool> launch-at-login;
@@ -279,6 +610,8 @@ export component MainWindow inherits Window {
     in property <bool> connected-virtual-hidden;
     // AirPlay discovery runs but has found no speaker for 20 seconds.
     in property <bool> airplay-none-found;
+    // What the Google Cast search says while it lists no speaker.
+    in property <CastList> cast-list;
     in property <string> airplay-delay-text;
     // The AirPlay delay field holds typing not yet applied.
     in property <bool> airplay-delay-pending;
@@ -288,11 +621,24 @@ export component MainWindow inherits Window {
     // A delay field, a speaker's or the AirPlay one, holds typing not yet
     // applied: File > Apply Typed Delay is enabled only then.
     in property <bool> delay-typing;
+    // Calibrate All Speakers (see CalibrationCard).
+    in property <bool> calibrate-all-running;
+    in property <bool> calibrate-all-can-start;
+    in property <string> calibrate-all-status;
+    in property <bool> calibrate-all-privacy;
+    in property <bool> calibrate-all-results-shown;
+    in property <[CalibrationRowItem]> calibrate-all-rows;
+    in property <string> calibrate-all-airplay;
+    in property <string> calibrate-all-outcome;
+    in property <bool> calibrate-all-can-apply;
+    in property <bool> calibrate-all-can-undo;
 
     callback power-toggled(bool);
     callback source-selected(int);
     callback master-volume-changed(float);
     callback equalizer-requested();
+    // A Now Playing button: 0 Previous, 1 Play or Pause, 2 Next.
+    callback now-playing-transport(int);
     callback speaker-toggled(string);
     callback speaker-volume-changed(string, float);
     callback sync-toggled(string);
@@ -323,6 +669,19 @@ export component MainWindow inherits Window {
     callback forget-pairing-requested(string);
     // The fix under a speaker's device-volume hint.
     callback device-volume-fix-requested(string);
+    // A Google Cast speaker's Mute or Unmute, and its Resync.
+    callback cast-muted-requested(string, bool);
+    callback cast-resync-requested(string);
+    // Calibrate with Microphone on a speaker's row, and its Cancel.
+    callback calibrate-requested(string);
+    callback cancel-calibration-requested();
+    callback calibration-privacy-requested();
+    callback calibrate-all-requested();
+    callback cancel-calibrate-all-requested();
+    callback calibrate-all-again-requested(int);
+    callback calibrate-all-apply-requested();
+    callback calibrate-all-undo-requested();
+    callback calibrate-all-close-requested();
     callback group-toggled(string);
 
     callback group-rename-requested(string);
@@ -330,8 +689,11 @@ export component MainWindow inherits Window {
     callback new-group-requested();
     callback refresh-devices();
     callback show-virtual-devices-toggled(bool);
+    callback appearance-chosen(Appearance);
     callback switch-source-on-quit-toggled(bool);
     callback launch-at-login-toggled(bool);
+    // File > Web Remote…
+    callback remote-requested();
     callback notice-dismissed(int);
     callback notices-dismissed-all();
     // Show How on a notice: open its guide.
@@ -368,6 +730,11 @@ export component MainWindow inherits Window {
 
     public function focus-streaming-switch() {
         power.focus();
+    }
+
+    // The Now Playing card is about to hide with the focus on a button.
+    public function focus-source() {
+        source.focus();
     }
 
     title: Strings.main-window-title;
@@ -433,10 +800,18 @@ export component MainWindow inherits Window {
                 }
             }
 
+            MenuItem {
+                title: Strings.menu-remote;
+                activated => {
+                    root.remote-requested();
+                }
+            }
+
             MenuSeparator { }
 
             MenuItem {
                 title: Strings.menu-exit;
+                shortcut: @keys(Control + Q);
                 activated => {
                     root.exit-requested();
                 }
@@ -491,6 +866,39 @@ export component MainWindow inherits Window {
                 checked: root.show-virtual-devices;
                 activated => {
                     root.show-virtual-devices-toggled(!root.show-virtual-devices);
+                }
+            }
+
+            MenuSeparator { }
+
+            Menu {
+                title: Strings.appearance;
+
+                MenuItem {
+                    title: Strings.appearance-system;
+                    checkable: true;
+                    checked: root.appearance == Appearance.system;
+                    activated => {
+                        root.appearance-chosen(Appearance.system);
+                    }
+                }
+
+                MenuItem {
+                    title: Strings.appearance-light;
+                    checkable: true;
+                    checked: root.appearance == Appearance.light;
+                    activated => {
+                        root.appearance-chosen(Appearance.light);
+                    }
+                }
+
+                MenuItem {
+                    title: Strings.appearance-dark;
+                    checkable: true;
+                    checked: root.appearance == Appearance.dark;
+                    activated => {
+                        root.appearance-chosen(Appearance.dark);
+                    }
                 }
             }
         }
@@ -651,6 +1059,18 @@ export component MainWindow inherits Window {
                         }
                     }
 
+                    if root.now-playing-shown: NowPlayingCard {
+                        title: root.now-playing-title;
+                        subtitle: root.now-playing-subtitle;
+                        playing: root.now-playing-playing;
+                        has-artwork: root.now-playing-has-artwork;
+                        artwork: root.now-playing-artwork;
+                        focused-button <=> root.now-playing-focused-button;
+                        transport(button) => {
+                            root.now-playing-transport(button);
+                        }
+                    }
+
                     Card {
                         VerticalLayout {
                             spacing: 6px;
@@ -683,6 +1103,40 @@ export component MainWindow inherits Window {
                         on: root.equalizer-on;
                         clicked => {
                             root.equalizer-requested();
+                        }
+                    }
+
+                    CalibrationCard {
+                        running: root.calibrate-all-running;
+                        can-start: root.calibrate-all-can-start;
+                        status: root.calibrate-all-status;
+                        privacy: root.calibrate-all-privacy;
+                        results-shown: root.calibrate-all-results-shown;
+                        rows: root.calibrate-all-rows;
+                        airplay: root.calibrate-all-airplay;
+                        outcome: root.calibrate-all-outcome;
+                        can-apply: root.calibrate-all-can-apply;
+                        can-undo: root.calibrate-all-can-undo;
+                        start => {
+                            root.calibrate-all-requested();
+                        }
+                        cancel => {
+                            root.cancel-calibrate-all-requested();
+                        }
+                        privacy-requested => {
+                            root.calibration-privacy-requested();
+                        }
+                        measure-again(row) => {
+                            root.calibrate-all-again-requested(row);
+                        }
+                        apply => {
+                            root.calibrate-all-apply-requested();
+                        }
+                        undo => {
+                            root.calibrate-all-undo-requested();
+                        }
+                        close => {
+                            root.calibrate-all-close-requested();
                         }
                     }
                 }
@@ -739,6 +1193,15 @@ export component MainWindow inherits Window {
                         }
                         delay-cancelled(id) => {
                             root.delay-cancelled(id);
+                        }
+                        calibrate(id) => {
+                            root.calibrate-requested(id);
+                        }
+                        cancel-calibration => {
+                            root.cancel-calibration-requested();
+                        }
+                        calibration-privacy => {
+                            root.calibration-privacy-requested();
                         }
                         auto-connect-toggled(id, on) => {
                             root.auto-connect-toggled(id, on);
@@ -825,9 +1288,21 @@ export component MainWindow inherits Window {
                         focus-changed(id, part) => {
                             root.speaker-focus-changed(id, part);
                         }
+                        cast-muted(id, muted) => {
+                            root.cast-muted-requested(id, muted);
+                        }
+                        cast-resync(id) => {
+                            root.cast-resync-requested(id);
+                        }
                         // While AirPlay finds nothing, the note says what to
-                        // check, after the hidden virtual outputs' note.
-                        note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + Strings.airplay-none-found : Strings.airplay-none-found) : root.connected.length > 0 ? "" : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
+                        // check, after the hidden virtual outputs' note; the
+                        // Google Cast search's note comes last, or one sentence
+                        // when neither finds a speaker.
+                        property <bool> both-none: root.airplay-none-found && root.cast-list == CastList.none-found;
+                        property <string> none-found: self.both-none ? Strings.network-none-found : Strings.airplay-none-found;
+                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + self.none-found : self.none-found) : root.connected.length > 0 ? "" : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
+                        property <string> cast-note: self.both-none ? "" : Strings.cast-list(root.cast-list);
+                        note: self.cast-note == "" ? self.list-note : self.list-note == "" || self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                         toggled(id) => {
                             root.speaker-toggled(id);
                         }
@@ -851,6 +1326,15 @@ export component MainWindow inherits Window {
                         }
                         delay-cancelled(id) => {
                             root.delay-cancelled(id);
+                        }
+                        calibrate(id) => {
+                            root.calibrate-requested(id);
+                        }
+                        cancel-calibration => {
+                            root.cancel-calibration-requested();
+                        }
+                        calibration-privacy => {
+                            root.calibration-privacy-requested();
                         }
                         auto-connect-toggled(id, on) => {
                             root.auto-connect-toggled(id, on);

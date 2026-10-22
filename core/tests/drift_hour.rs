@@ -11,10 +11,11 @@
 //!
 //! Findings these runs pin:
 //!
-//! - An output at the capture rate has no clock tracking (the S207 trim only
-//!   runs on a converting renderer near its lead), so its lag follows its
-//!   clock: 3 ppm fast loses about 10.8 ms of lag in an hour, inside the
-//!   35 ms dead band, with no correction. Clock stamps change nothing.
+//! - Without clock stamps an output's lag follows its clock: 3 ppm fast
+//!   loses about 10.8 ms of lag in an hour, inside the 50 ms dead band, with
+//!   no correction. With stamps (S207, S226) its converter, at ratio 1, is
+//!   trimmed with its clock, and the lag stays within the trim's dead zone
+//!   all hour.
 //! - A producer that stalls past the dead band and then catches up costs
 //!   every output the same two corrections: a step back (owed silence)
 //!   during the stall and a skip forward once the burst lands. The reader on
@@ -28,7 +29,7 @@
 use std::sync::Arc;
 
 use audiosync_core::reader::{Reader, ReaderControl, ReaderCounters, tolerance_frames};
-use audiosync_core::render::{Renderer, RendererControl};
+use audiosync_core::render::{Renderer, RendererControl, TRIM_DEAD_ZONE_FRAMES};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 
@@ -65,6 +66,9 @@ struct Setup {
     fast_ppb: [u64; 2],
     /// A producer stall: from this time, this long, in time units.
     stall: Option<(u64, u64)>,
+    /// Stamps each block with the time its last frame was due rather than
+    /// the producer's wake that wrote it, up to 2 ms later.
+    exact_stamps: bool,
 }
 
 enum Sink {
@@ -86,6 +90,14 @@ impl Sink {
             Sink::Read(_, control) => control.lag_frames(),
         }
     }
+
+    /// Capture frames the clock trim slowed and sped the converter by.
+    fn trims(&self) -> (u64, u64) {
+        match self {
+            Sink::Rendered(_, control) => (control.slowed_frames(), control.sped_frames()),
+            Sink::Read(..) => (0, 0),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -99,6 +111,17 @@ struct Hour {
     drift_first_ms: f64,
     drift_last_ms: f64,
     drift_worst_ms: f64,
+    /// The most any 10 s window's mean timing error strayed from the first
+    /// window's, per output, in frames. The timing error of a callback is
+    /// the capture's position at the callback's time less the reader's
+    /// position after it: unlike the lag, it does not move with the phase
+    /// of the callbacks against the blocks.
+    strayed: [f64; 2],
+    /// The spread of the timing error over every measured callback, per
+    /// output, in frames.
+    spread: [f64; 2],
+    /// Capture frames each output's converter was slowed and sped by.
+    trims: [(u64, u64); 2],
 }
 
 fn ms(frames: f64) -> f64 {
@@ -127,16 +150,26 @@ fn host_ns(at: u64) -> u64 {
     (u128::from(at) * 1_000_000_000 / u128::from(PER_SECOND)) as u64 + 1_000_000_000
 }
 
-fn produce(writer: &mut RingWriter, written: &mut u64, at: u64, stamped: bool, block: &[f32]) {
+fn produce(writer: &mut RingWriter, written: &mut u64, at: u64, stamps: Stamps, block: &[f32]) {
     let due = at / PER_FRAME;
     while *written + BLOCK as u64 <= due {
-        if stamped {
-            writer.write_at(block, BLOCK, host_ns(at));
-        } else {
-            writer.write(block, BLOCK);
+        match stamps {
+            Stamps::AtWake => writer.write_at(block, BLOCK, host_ns(at)),
+            Stamps::AtBlockEnd => {
+                let end = (*written + BLOCK as u64) * PER_FRAME;
+                writer.write_at(block, BLOCK, host_ns(end));
+            }
+            Stamps::None => writer.write(block, BLOCK),
         }
         *written += BLOCK as u64;
     }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Stamps {
+    None,
+    AtWake,
+    AtBlockEnd,
 }
 
 /// Runs the bench's hour as `setup` says and returns what the bench reports.
@@ -144,6 +177,11 @@ fn run_hour(setup: Setup) -> Hour {
     let ring = Ring::for_rate(RATE).unwrap();
     let mut writer = ring.writer().unwrap();
     let stamped = setup.host == Host::Renderer { stamped: true };
+    let stamps = match (stamped, setup.exact_stamps) {
+        (false, _) => Stamps::None,
+        (true, false) => Stamps::AtWake,
+        (true, true) => Stamps::AtBlockEnd,
+    };
     let mut sinks = [sink(&ring, setup.host), sink(&ring, setup.host)];
     let periods = setup
         .fast_ppb
@@ -156,6 +194,9 @@ fn run_hour(setup: Setup) -> Hour {
 
     let (mut sums, mut drift_sum, mut count) = ([0.0f64; 2], 0.0f64, 0u32);
     let mut windows: Vec<([f64; 2], f64)> = Vec::new();
+    let (mut timing_sums, mut timing_counts) = ([0.0f64; 2], [0u32; 2]);
+    let mut timing_windows: Vec<[f64; 2]> = Vec::new();
+    let (mut lowest, mut highest) = ([f64::MAX; 2], [f64::MIN; 2]);
     while sample < end {
         let next_pull = pulls[0].min(pulls[1]);
         if wake <= next_pull && wake <= sample {
@@ -163,7 +204,7 @@ fn run_hour(setup: Setup) -> Hour {
                 .stall
                 .is_some_and(|(from, len)| wake >= from && wake < from + len);
             if !stalled {
-                produce(&mut writer, &mut written, wake, stamped, &block);
+                produce(&mut writer, &mut written, wake, stamps, &block);
             }
             wake += PRODUCER_WAKE;
         } else if next_pull <= sample {
@@ -177,6 +218,14 @@ fn run_hour(setup: Setup) -> Hour {
                     reader.read_target(&mut out, CALLBACK);
                 }
             }
+            if pulls[i] >= MEASURE_FROM {
+                let position = written as i64 - sinks[i].lag();
+                let error = pulls[i] as f64 / PER_FRAME as f64 - position as f64;
+                timing_sums[i] += error;
+                timing_counts[i] += 1;
+                lowest[i] = lowest[i].min(error);
+                highest[i] = highest[i].max(error);
+            }
             pulls[i] += periods[i];
         } else {
             let lags = [sinks[0].lag(), sinks[1].lag()];
@@ -189,6 +238,8 @@ fn run_hour(setup: Setup) -> Hour {
                 let n = f64::from(count);
                 windows.push((sums.map(|s| ms(s / n)), ms(drift_sum / n)));
                 (sums, drift_sum, count) = ([0.0; 2], 0.0, 0);
+                timing_windows.push([0, 1].map(|i| timing_sums[i] / f64::from(timing_counts[i])));
+                (timing_sums, timing_counts) = ([0.0; 2], [0; 2]);
             }
             sample += SAMPLE_EVERY;
         }
@@ -203,6 +254,13 @@ fn run_hour(setup: Setup) -> Hour {
         drift_first_ms: first.1,
         drift_last_ms: last.1,
         drift_worst_ms: windows.iter().map(|w| w.1.abs()).fold(0.0, f64::max),
+        strayed: [0, 1].map(|i| {
+            let first = timing_windows[0][i];
+            let strayed = timing_windows.iter().map(|w| (w[i] - first).abs());
+            strayed.fold(0.0, f64::max)
+        }),
+        spread: [0, 1].map(|i| highest[i] - lowest[i]),
+        trims: [sinks[0].trims(), sinks[1].trims()],
     }
 }
 
@@ -213,6 +271,7 @@ fn bench_outputs(host: Host, stall: Option<(u64, u64)>) -> Setup {
         host,
         fast_ppb: [0, 3000],
         stall,
+        exact_stamps: false,
     }
 }
 
@@ -234,16 +293,73 @@ fn a_speaker_clock_3_ppm_fast_loses_11_ms_of_lag_in_an_hour_without_a_correction
         "the speakers drift: {moved:?}"
     );
     assert!((hour.drift_last_ms - hour.drift_first_ms - 10.8).abs() < 0.5);
-    // Corrected only once the drift leaves the dead band, after about 3 h.
+    // Corrected only once the drift leaves the dead band, after about 4.6 h.
     assert!(hour.drift_worst_ms < ms(tolerance_frames(RATE) as f64));
 
-    // Clock stamps (S207) leave an output at the capture rate as it was.
+    // With clock stamps (S207) the speakers' converter, at ratio 1, is
+    // trimmed with their clock instead: the lag holds, within the trim's
+    // dead zone, and the virtual output plays as it did.
     let stamped = run_hour(bench_outputs(Host::Renderer { stamped: true }, None));
-    assert_eq!(stamped.counters, hour.counters);
+    eprintln!("3 ppm, renderer with stamps: {stamped:?}");
+    assert_eq!(stamped.corrections, [0, 0], "{stamped:?}");
+    assert_eq!(stamped.counters[0], hour.counters[0]);
     assert_eq!(
-        (stamped.first_ms, stamped.last_ms),
-        (hour.first_ms, hour.last_ms)
+        (stamped.first_ms[0], stamped.last_ms[0]),
+        (hour.first_ms[0], hour.last_ms[0])
     );
+    let held = stamped.last_ms[1] - stamped.first_ms[1];
+    assert!(held.abs() < ms(16.0), "the speakers hold: {held} ms");
+}
+
+// covers: S226, S207, S50
+#[test]
+fn with_stamps_a_fast_speaker_clock_is_trimmed_within_a_millisecond_all_hour() {
+    // The clock trim at a 2 s hold-back, over the bench's hour: 3 ppm, the
+    // bench's speakers, and 100 ppm, five times what a trim capped at
+    // ±20 ppm would follow. With blocks stamped at the exact times, every
+    // callback's timing error stays within the trim's 15-frame dead zone
+    // plus a frame; with stamps up to 2 ms late, within a millisecond
+    // (48 frames). Either way the converter is trimmed
+    // one way only, by what the clock gained, the dead band never acts, and
+    // the output on the host's clock is never trimmed and never moves.
+    for (ppb, exact_stamps) in [
+        (3_000u64, true),
+        (3_000, false),
+        (100_000, true),
+        (100_000, false),
+    ] {
+        let setup = Setup {
+            host: Host::Renderer { stamped: true },
+            fast_ppb: [0, ppb],
+            stall: None,
+            exact_stamps,
+        };
+        let hour = run_hour(setup);
+        let context = format!("{ppb} ppb, exact stamps {exact_stamps}");
+        eprintln!("{context}: {hour:?}");
+        assert_eq!(hour.corrections, [0, 0], "{context}");
+        assert_eq!(hour.counters[1].starved_renders, 0, "{context}");
+        assert_eq!(hour.trims[0], (0, 0), "{context}");
+        assert!(hour.spread[0] < 1.0, "{context}: {:?}", hour.spread);
+        let bound = if exact_stamps {
+            TRIM_DEAD_ZONE_FRAMES + 1.0
+        } else {
+            f64::from(RATE) / 1000.0
+        };
+        assert!(
+            hour.spread[1] < bound && hour.strayed[1] < bound,
+            "{context}: spread {:?}, strayed {:?}",
+            hour.spread,
+            hour.strayed
+        );
+        let gained = ppb * 3600 * u64::from(RATE) / 1_000_000_000;
+        let (slowed, sped) = hour.trims[1];
+        assert_eq!(sped, 0, "{context}: never trimmed against the clock");
+        assert!(
+            slowed.abs_diff(gained) < 48,
+            "{context}: slowed {slowed}, gained {gained}"
+        );
+    }
 }
 
 fn steps_and_skips(host: Host, stall: u64) -> [(u64, u64); 2] {
@@ -271,6 +387,7 @@ fn a_producer_stall_past_the_dead_band_costs_every_output_a_step_back_and_a_skip
         steps_and_skips(Host::Renderer { stamped: false }, 50),
         [(0, 0); 2]
     );
-    // A longer stall steps back again each time the reader runs T ahead.
-    assert_eq!(steps_and_skips(Host::Reader, 150), [(3, 1); 2]);
+    // A longer stall steps back again each time the reader runs T ahead:
+    // twice in 150 ms, short of a third time.
+    assert_eq!(steps_and_skips(Host::Reader, 150), [(2, 1); 2]);
 }

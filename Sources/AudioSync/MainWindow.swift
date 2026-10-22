@@ -119,6 +119,7 @@ struct MainView: View {
                     if let track = model.nowPlaying { nowPlayingCard(track, t) }
                     volumeCard(t)
                     equalizerCard(t)
+                    Card { CalibrateAllButton(model: model) }
                     Spacer(minLength: 0)
                 }
                 .frame(width: 280)
@@ -131,7 +132,7 @@ struct MainView: View {
                         speakerSection(t.thisMacSection, speakers: layout.thisMac, empty: t.thisMacNone)
                         if !model.groups.isEmpty { groupsSection(t) }
                         speakerSection(t.connectedSection, speakers: layout.connected,
-                                       empty: model.airPlayEmptyText, connected: true,
+                                       empty: model.networkEmptyText, connected: true,
                                        problem: model.airPlayProblem,
                                        localNetworkHint: model.localNetworkHint)
                     }
@@ -163,6 +164,10 @@ struct MainView: View {
                 .onTapGesture { model.closeDelayPanels() }
         }
         .tint(accent)
+        .sheet(isPresented: Binding(get: { model.calibrateAll.shown },
+                                    set: { if !$0 { model.actions.closeCalibrateAll() } })) {
+            CalibrateAllSheetView(model: model).tint(accent)
+        }
     }
 
     /// The scroll list's soft top and bottom edge, shorter than the gap
@@ -212,6 +217,12 @@ struct MainView: View {
             Toggle(t.switchToSystemWhenSourceQuits,
                    isOn: Binding(get: { model.switchWhenSourceQuits },
                                  set: { model.actions.setSwitchWhenSourceQuits($0) }))
+            Button(t.webRemoteMenu) { model.actions.openWebRemote() }
+            Toggle(isOn: Binding(get: { model.airPlay2 },
+                                 set: { model.actions.setAirPlay2($0) })) {
+                Text(t.airPlay2Toggle)
+                Text(t.airPlay2Note)
+            }
             Divider()
             Button(t.guideTitle) { model.actions.openGuide() }
         } label: {
@@ -386,10 +397,10 @@ struct MainView: View {
                         Divider().padding(.leading, 52)
                         AirPlayDelayRow(model: model)
                     }
-                    if connected && problem == nil && !speakers.isEmpty && !hasAirPlay {
-                        // Local speakers only: say where AirPlay stands, under them.
+                    if connected && problem == nil && !speakers.isEmpty, let note = model.networkNote {
+                        // Say where AirPlay or the Google Cast search stands, under the rows.
                         Divider()
-                        emptyNote(empty, hint: hint, under: speakers)
+                        emptyNote(note, hint: hasAirPlay ? nil : hint, under: speakers)
                     }
                 }
             }
@@ -528,11 +539,9 @@ struct SpeakerRow: View {
     /// speaker's name; VoiceOver reads it in the row's label.
     var showTag = false
 
-    private var tag: String? { showTag ? model.text.speakerTag(speaker.tag) : nil }
+    private var tag: String? { showTag ? model.text.speakerTag(speaker.tag, airPlay2: speaker.airPlay2) : nil }
 
     private var showSync: Bool { model.delayPanels.isOpen(speaker.id) }
-
-    private var isAirPlay: Bool { speaker.isAirPlay }
 
     private var state: SpeakerState { model.state(of: speaker) }
 
@@ -556,7 +565,7 @@ struct SpeakerRow: View {
                 .accessibilityLabel(t.speakerLabel(name: speaker.name, tag: tag,
                                                    renamedFrom: speaker.renamedFrom))
                 .accessibilityValue(t.value(state))
-                .accessibilityHint(t.rowHint(state, note: t.availability(speaker.availability)))
+                .accessibilityHint(t.rowHint(state, note: note ?? t.availability(speaker.availability)))
                 .accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker) }
                 .help(t.help(state))
 
@@ -575,9 +584,19 @@ struct SpeakerRow: View {
                                     .exclusively(before: TapGesture().onEnded { rowTapped() }))
                         }
                         if showTag {
-                            SpeakerTypeIcon(kind: speaker.tag, state: state, text: t)
+                            SpeakerTypeIcon(kind: speaker.tag, state: state, text: t, airPlay2: speaker.airPlay2)
                         }
                         AvailabilityNote(availability: speaker.availability, text: t)
+                        if let note {
+                            // Read in the speaker's hint.
+                            Text(note)
+                                .font(.caption)
+                                .foregroundStyle(Brand.secondaryText)
+                                .lineLimit(1)
+                                // A group's member list can outrun the row.
+                                .help(note)
+                                .accessibilityHidden(true)
+                        }
                         if speaker.autoConnect {
                             Image(systemName: "bolt.fill")
                                 .font(.caption2)
@@ -596,11 +615,13 @@ struct SpeakerRow: View {
                         optionsMenu(t)
                     }
                     HStack(spacing: 8) {
-                        Slider(value: Binding(get: { speaker.volume }, set: setVolume), in: 0...100)
+                        Slider(value: Binding(get: { speaker.volume }, set: { model.setVolume(speaker, $0) }),
+                               in: 0...100)
                             .controlSize(.small)
-                            .disabled(!speaker.enabled)
+                            .disabled(!volumeAdjustable)
                             .accessibilityLabel(t.volume(of: speaker.name))
                             .accessibilityValue(t.volumeValue(speaker.volume))
+                            .hintAndHelp(speaker.cast?.volumeFixed == true ? t.castVolumeFixed : nil)
                             .focused($volumeFocused)
                         Text(t.volumeValue(speaker.volume))
                             .font(.caption.monospacedDigit())
@@ -618,21 +639,29 @@ struct SpeakerRow: View {
                             model.actions.fixDeviceVolume(speaker.id)
                         }
                     }
+                    if let cast = speaker.cast, cast.live { castButtons(cast, t) }
                 }
             }
             if showSync, let ms = model.savedDelay(of: speaker.id) {
                 SyncControls(model: model, id: speaker.id,
-                             kind: .offset(hasReference: model.hasLocalReference), ms: ms,
+                             kind: speaker.isCast ? .cast : .offset(hasReference: model.hasLocalReference), ms: ms,
                              label: t.delay(of: speaker.name), text: t, draft: model.draft(for: speaker.id),
                              escape: {
                     // Dropped first: the field losing the focus would apply it.
                     model.dropDelayTyping()
                     delayFocused = true
-                }) {
-                    model.actions.setLocalOffset(speaker.id, $0)
+                }) { ms in
+                    if speaker.isCast { model.actions.setCastOffset(speaker.id, ms) }
+                    else { model.actions.setLocalOffset(speaker.id, ms) }
                 }
                 .padding(.leading, 44)
                 .transition(.opacity)
+                // A Cast speaker's timing isn't known to the microphone sweep's model.
+                if !speaker.isCast {
+                    CalibrationControl(model: model, id: speaker.id, name: speaker.name, speakerOn: speaker.enabled)
+                        .padding(.leading, 44)
+                        .transition(.opacity)
+                }
             }
         }
         .onChange(of: showSync) { _, open in
@@ -679,7 +708,58 @@ struct SpeakerRow: View {
     @ViewBuilder
     private func menuItems(_ t: UIStrings) -> some View {
         Button(t.renameSpeaker) { model.startRename(speaker) }
-        autoConnectToggle(t)
+        if let cast = speaker.cast {
+            // A Cast speaker never turns itself on: the menu has its session's actions.
+            if cast.live {
+                Button(cast.muted ? t.castUnmute : t.castMute) { model.actions.setCastMuted(speaker.id, !cast.muted) }
+                Button(t.castResync) { model.actions.resyncCast(speaker.id) }
+            }
+        } else {
+            autoConnectToggle(t)
+            if speaker.paired {
+                Button(t.forgetPairing) { model.actions.forgetAirPlayPairing(speaker.id) }
+                    .help(t.forgetPairingHelp)
+            }
+        }
+    }
+
+    /// What a Cast speaker does, that an AirPlay 2 speaker waits for the
+    /// slot, or what a stereo pair or home theater group is made of.
+    private var note: String? {
+        model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
+                           target: speaker.airPlayTarget)
+    }
+
+    /// The device's own volume moves only while a session reaches it.
+    private var volumeAdjustable: Bool {
+        guard let cast = speaker.cast else { return speaker.enabled }
+        return speaker.enabled && cast.live && !cast.volumeFixed
+    }
+
+    /// Mute and Resync under a Cast speaker's volume while it connects or plays.
+    private func castButtons(_ cast: CastRow, _ t: UIStrings) -> some View {
+        HStack(spacing: 14) {
+            castButton(cast.muted ? t.castUnmute : t.castMute, help: cast.muted ? t.castUnmuteHelp : t.castMuteHelp, t) {
+                model.actions.setCastMuted(speaker.id, !cast.muted)
+            }
+            castButton(t.castResync, help: t.castResyncHelp, t) { model.actions.resyncCast(speaker.id) }
+        }
+    }
+
+    private func castButton(_ title: String, help: String, _ t: UIStrings,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                // Primary text, like the device volume fix: the brand teal can
+                // fall below 4.5:1 on a playing row.
+                .foregroundStyle(.primary)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityLabel(t.castButtonLabel(title, name: speaker.name))
+        .accessibilityHint(help)
+        .help(help)
     }
 
     private func optionsMenu(_ t: UIStrings) -> some View {
@@ -699,14 +779,14 @@ struct SpeakerRow: View {
                                             set: { model.actions.setAutoConnect(speaker.key, $0) }))
     }
 
-    private func toggle(_ on: Bool) {
-        if isAirPlay { model.actions.setAirPlayEnabled(speaker.id, on) }
-        else { model.actions.setLocalEnabled(speaker.id, on) }
-    }
+    private func toggle(_ on: Bool) { model.setEnabled(speaker, on) }
+}
 
-    private func setVolume(_ v: Double) {
-        if isAirPlay { model.actions.setAirPlayVolume(speaker.id, v) }
-        else { model.actions.setLocalVolume(speaker.id, v) }
+private extension View {
+    /// `text` as the VoiceOver hint and the tooltip; neither when nil.
+    @ViewBuilder
+    func hintAndHelp(_ text: String?) -> some View {
+        if let text { accessibilityHint(text).help(text) } else { self }
     }
 }
 
@@ -825,6 +905,24 @@ private struct DelayValueButton: View {
     }
 }
 
+/// The one ring `DelayFieldRings` asks for, as a single shape: a change of
+/// state moves and recolors it, and never fades a second ring in beside it.
+/// The focus ring sits 3 pt outside the bezel like AppKit's; the red outline
+/// sits on the bezel, or where the focus ring goes while the field has the focus.
+private struct DelayFieldRing: View {
+    let rings: DelayFieldRings
+
+    var body: some View {
+        let outset: CGFloat = rings.focusRing || rings.redOutsideBezel ? 3 : 0
+        let width: CGFloat = rings.focusRing || rings.redOutsideBezel ? 3 : 1.5
+        RoundedRectangle(cornerRadius: 6 + outset)
+            .strokeBorder(rings.focusRing ? Color(nsColor: .keyboardFocusIndicatorColor) : Brand.errorText,
+                          lineWidth: width)
+            .padding(-outset)
+            .opacity(rings.focusRing || rings.redOutlines > 0 ? 1 : 0)
+    }
+}
+
 /// The dashed line under a delay field that holds typing not yet applied.
 private struct DraftUnderline: Shape {
     func path(in rect: CGRect) -> Path {
@@ -837,8 +935,8 @@ private struct DraftUnderline: Shape {
 
 /// A delay field as an AppKit text field. SwiftUI's own field shows a
 /// keystroke before its binding can turn it down, so a blocked character
-/// flashed in and out; a formatter here blocks it before it shows. It also
-/// hides the focus ring while the panel's error outline stands in for it.
+/// flashed in and out; a formatter here blocks it before it shows. AppKit's
+/// focus ring is off: `DelayFieldRing` draws the one ring the field shows.
 private struct DelayTextField: NSViewRepresentable {
     /// The row's key in `delayPanels`, for the main window's click monitor.
     let rowID: String
@@ -846,7 +944,6 @@ private struct DelayTextField: NSViewRepresentable {
     let placeholder: String
     let label: String
     let hint: String
-    let showsError: Bool
     let typed: (String) -> Void
     /// A keystroke, or part of a paste, the field turned down.
     let blocked: () -> Void
@@ -860,6 +957,8 @@ private struct DelayTextField: NSViewRepresentable {
         let field = Field()
         field.isBezeled = true
         field.bezelStyle = .roundedBezel
+        // Set at creation only: turned off mid-edit, AppKit's ring stayed drawn.
+        field.focusRingType = DelayFieldRings.appKitRing ? .default : .none
         field.alignment = .center
         field.font = .monospacedDigitSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize,
                                                 weight: .regular)
@@ -884,12 +983,6 @@ private struct DelayTextField: NSViewRepresentable {
         field.placeholderString = placeholder
         field.setAccessibilityLabel(label)
         field.setAccessibilityHelp(hint)
-        let ring: NSFocusRingType = showsError ? .none : .default
-        if field.focusRingType != ring {
-            field.focusRingType = ring
-            field.noteFocusRingMaskChanged()
-            field.currentEditor()?.noteFocusRingMaskChanged()
-        }
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
@@ -1030,6 +1123,8 @@ struct SyncControls: View {
         case offset(hasReference: Bool)
         /// The AirPlay delay, 0 to 20 000 ms (S178).
         case airPlay
+        /// A Google Cast speaker's offset, set by ear, 0 to 20 000 ms (CAST_SPEC C74-C77).
+        case cast
     }
 
     /// Not observed: read for the saved delay as it is now, and by the debug
@@ -1048,6 +1143,11 @@ struct SyncControls: View {
     let escape: () -> Void
     let apply: (Double) -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// AppKit hides the focus ring while the window isn't active; the drawn
+    /// one follows.
+    @Environment(\.appearsActive) private var appearsActive
+
     var body: some View {
         // Typing not yet applied: a dashed underline under the field and a
         // hint under the steps, so the cue isn't color alone. Out of range,
@@ -1058,12 +1158,12 @@ struct SyncControls: View {
         let invalid = outOfRange || draft.blocked
         let problem = outOfRange ? rangeMessage : text.delayFieldTakes
         let cue = invalid ? problem : pending ? text.delayDraftHint : ""
+        let rings = DelayFieldRings(invalid: invalid, focused: draft.fieldFocused && appearsActive)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 4) {
                 step(-100)
                 step(-10)
                 DelayTextField(rowID: id, text: draft.field.text, placeholder: text.delayFieldLabel, label: label, hint: cue,
-                               showsError: invalid,
                                typed: { typed in
                                    draft.clearBlock()
                                    draft.field.type(typed)
@@ -1077,23 +1177,12 @@ struct SyncControls: View {
                                escape: escape,
                                focusChanged: focusChanged)
                 .frame(width: 72)
-                // The outline animates in and out; while the field has the
-                // focus a second ring stands in for the focus ring, which
-                // would clash with it (`DelayTextField` hides that one).
+                .focusEffectDisabled()
                 .overlay {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(Brand.errorText, lineWidth: 1.5)
-                        RoundedRectangle(cornerRadius: 8)
-                            .strokeBorder(Brand.errorText, lineWidth: 2)
-                            .padding(-3)
-                            .opacity(draft.fieldFocused ? 1 : 0)
-                    }
-                    .opacity(invalid ? 1 : 0)
-                    .animation(.easeOut(duration: 0.15), value: invalid)
-                    .animation(.easeOut(duration: 0.15), value: draft.fieldFocused)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+                    DelayFieldRing(rings: rings)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: rings)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
                 // Below the focus ring, so the two don't overlap.
                 .overlay(alignment: .bottom) {
@@ -1176,6 +1265,7 @@ struct SyncControls: View {
         switch kind {
         case .offset(let hasReference): return text.offsetHint(hasReference: hasReference)
         case .airPlay: return text.airPlayDelayHint
+        case .cast: return text.castSyncHint
         }
     }
 
@@ -1184,6 +1274,7 @@ struct SyncControls: View {
         switch kind {
         case .offset: return LocalDelay.sanitizedOffset(typed)
         case .airPlay: return LocalDelay.sanitizedAirPlayDelay(typed)
+        case .cast: return CastModel.clampedOffset(typed)
         }
     }
 
@@ -1191,7 +1282,7 @@ struct SyncControls: View {
     private func shown(_ value: Double) -> String {
         switch kind {
         case .offset: return text.offsetNumber(value)
-        case .airPlay: return String(Int(value.rounded()))
+        case .airPlay, .cast: return String(Int(value.rounded()))
         }
     }
 

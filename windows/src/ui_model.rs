@@ -15,6 +15,12 @@ use audiosync_core::volume;
 
 #[cfg(any(not(windows), test))]
 use crate::speaker_names;
+use audiosync_core::calibrate_all::{AirPlayShared, Class, EndReason, RowState};
+
+pub use crate::audio::backend::CastMembers;
+use crate::audio::calibration::{Failure, Phase};
+
+pub use crate::settings::Appearance;
 
 /// The largest offset the sync controls accept, in milliseconds (the macOS
 /// app's limit too).
@@ -53,6 +59,10 @@ pub struct Source {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpeakerKind {
     AirPlay,
+    /// An AirPlay speaker AudioSync reaches over AirPlay 2.
+    AirPlay2,
+    /// A Google Cast speaker.
+    Cast,
     BuiltIn,
     Headphones,
     Bluetooth,
@@ -142,6 +152,16 @@ pub enum AirPlayProblem {
     PairingNotYet,
     /// Only AirPlay 2 can play it.
     AirPlay2NotYet,
+    /// It turned NTP timing down, and PTP timing isn't available.
+    TimingUnavailable,
+    /// Another AirPlay 2 speaker plays; it starts once that one stops.
+    OneAirPlay2Speaker,
+    /// An Apple TV whose home theater group plays, so it is off.
+    PlaysThroughSpeakers,
+    /// A home theater group whose Apple TV plays by itself, so it is off.
+    AppleTvPlays,
+    /// A member of a pair or group that plays as part of it, so it is off.
+    PlaysInGroup,
     /// AudioSync can't play to it.
     Unsupported,
 }
@@ -174,6 +194,80 @@ pub struct Speaker {
     /// Why a speaker that is on can't play right now, while streaming is
     /// on; it plays again by itself. `None` while it plays or is off.
     pub waiting: Option<Waiting>,
+    /// What only a Google Cast speaker's row shows.
+    pub cast: Option<CastRow>,
+    /// A stereo pair or home theater group: what kind, and its members.
+    pub group: Option<crate::audio::backend::AirPlayGroup>,
+}
+
+/// A Google Cast speaker's own state. Its delay is the measured offset the
+/// user sets, since Cast can't be kept in sync automatically.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CastRow {
+    pub state: CastState,
+    /// The speaker reports itself muted.
+    pub muted: bool,
+    /// The speaker's volume can't be changed from here.
+    pub volume_fixed: bool,
+    /// Set for a Cast group, which plays as one speaker.
+    pub group: Option<CastGroup>,
+}
+
+/// A Google Cast group and what its row knows of its members.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CastGroup {
+    pub members: CastMembers,
+}
+
+/// Where a Google Cast speaker that is on is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(dead_code, reason = "only the Windows backend plays to Cast")
+)]
+pub enum CastState {
+    /// Off, or on while streaming is off.
+    Idle,
+    Connecting,
+    Playing,
+    /// It played, and AudioSync is reaching it again.
+    Reconnecting,
+}
+
+/// What the speaker list says about Google Cast while no Cast speaker is
+/// listed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(dead_code, reason = "only the Windows backend looks for Cast")
+)]
+pub enum CastList {
+    /// Nothing: a Cast speaker is listed, or Cast isn't running.
+    #[default]
+    Quiet,
+    /// Discovery runs and has found nothing yet.
+    Searching,
+    /// Discovery has found nothing for a while.
+    NoneFound,
+    /// Discovery couldn't start or stopped.
+    Failed,
+}
+
+/// Why a Google Cast speaker can't play, as a notice words it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(dead_code, reason = "only the Windows backend posts notices")
+)]
+pub enum CastProblem {
+    /// Another Cast speaker is on; one plays at a time.
+    Busy,
+    NotResponding,
+    /// It turned the stream down.
+    Refused,
+    /// Another app started casting to it.
+    TakenOver,
+    ConnectionLost,
 }
 
 /// Why a speaker that is on can't play right now. Its row says so instead
@@ -193,6 +287,9 @@ pub enum Waiting {
     /// An AirPlay speaker that stopped playing, which AudioSync keeps trying
     /// to reach.
     Reconnecting,
+    /// An AirPlay speaker that waits for the one AirPlay 2 slot; it starts
+    /// once the other AirPlay 2 speaker stops.
+    ForAirPlay2Slot,
 }
 
 /// Where a pairing's PIN prompt is.
@@ -317,6 +414,12 @@ pub enum NoticeMessage {
         speaker: String,
         problem: AirPlayProblem,
     },
+    /// A member of the stereo pair or home theater group `target` stays off
+    /// by itself while the target is listed.
+    AirPlayPlaysInGroup { speaker: String, target: String },
+    /// A member of a stereo pair or home theater group asks for a password,
+    /// so the target is off.
+    AirPlayMemberNeedsPassword { target: String, member: String },
     /// AudioSync's AirPlay sender stopped after an internal error or
     /// couldn't start, so AirPlay speakers aren't listed or playing. The
     /// notice offers Retry ([`Backend::retry_airplay`]).
@@ -363,6 +466,15 @@ pub enum NoticeMessage {
     /// The Run value is written, but Task Manager or Settings has AudioSync
     /// turned off as a startup app; it is turned on again there.
     LaunchAtLoginOffInSettings,
+    /// A Google Cast speaker can't play, so it is off.
+    CastCantPlay {
+        speaker: String,
+        problem: CastProblem,
+    },
+    /// The AirPlay speakers can't wait long enough for the Google Cast
+    /// speaker that is on, so they play about `tenths` tenths of a second
+    /// ahead of it. Clears itself once they keep up again.
+    AirPlayAheadOfCast { speaker: String, tenths: u32 },
 }
 
 /// How a speaker or group row shows: playing only while streaming is on.
@@ -429,6 +541,94 @@ pub struct AppState {
     pub airplay_none_found: bool,
     /// What a session does when the app it captures quits (spec S227).
     pub when_source_quits: WhenSourceQuits,
+    /// The speaker list's note about Google Cast discovery.
+    pub cast_list: CastList,
+    /// The microphone calibration a row shows.
+    pub calibration: CalibrationState,
+    /// Calibrate All Speakers, in its own card.
+    pub calibrate_all: CalibrateAllState,
+}
+
+/// Calibrate All Speakers (spec S235 to S240): where a run stands and the
+/// results of the last one.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CalibrateAllState {
+    pub phase: AllPhase,
+    /// Why a run can't start now; `None` when the button may try.
+    pub blocked: Option<Failure>,
+    /// The results, while they still describe the stored delays.
+    pub sheet: Option<SheetState>,
+    /// Counts each ending, Apply and Undo, so Narrator hears each once.
+    pub endings: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum AllPhase {
+    #[default]
+    Idle,
+    Running(AllProgress),
+    /// It couldn't start, or the microphone or the capture stopped it.
+    Failed(Failure),
+    /// A delay changed after the run, so its results went.
+    Stale,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum AllProgress {
+    /// The music fades out and plays out.
+    Preparing,
+    /// The sweep plays on speaker `name` alone: the reference's one sweep,
+    /// or sweep `take` (1 or 2) of another speaker.
+    Measuring {
+        name: String,
+        reference: bool,
+        take: usize,
+        searching: bool,
+    },
+    Estimating,
+}
+
+/// The results of a run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SheetState {
+    pub rows: Vec<SheetRow>,
+    pub airplay: Option<AirPlayShared>,
+    /// Why the run ended before it could be applied.
+    pub ended: Option<EndReason>,
+    /// The microphone or the capture stopped the run.
+    pub failure: Option<Failure>,
+    /// The last Measure Again ended early, so its row stayed.
+    pub again_ended: Option<EndReason>,
+    pub can_apply: bool,
+    /// Apply or Undo would set the AirPlay delay while AirPlay doesn't
+    /// play, so it can't be worked out: both wait.
+    pub airplay_waits: bool,
+    pub applied: bool,
+    /// Undo restores what Apply replaced, in one step.
+    pub can_undo: bool,
+    pub undone: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SheetRow {
+    pub name: String,
+    pub class: Class,
+    /// The stored delay before the run.
+    pub old_ms: Option<f64>,
+    pub state: RowState,
+    pub can_measure_again: bool,
+}
+
+/// The microphone calibration of one local speaker (spec S232): where it
+/// stands, on the row of the speaker it concerns.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CalibrationState {
+    /// The speaker it concerns; `None` when none ran.
+    pub speaker_id: Option<String>,
+    pub phase: Phase,
+    /// A run holds the outputs (it runs, or a cut-off sweep plays out),
+    /// this one or Calibrate All: no other may start.
+    pub busy: bool,
 }
 
 impl AppState {
@@ -515,6 +715,11 @@ pub trait Backend {
     fn set_speaker_enabled(&mut self, id: &str, on: bool);
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
     fn set_speaker_delay(&mut self, id: &str, ms: f64);
+    /// Mutes or unmutes a Google Cast speaker on the speaker itself.
+    fn set_speaker_muted(&mut self, _id: &str, _muted: bool) {}
+    /// The Resync button of a Google Cast speaker: it restarts its stream so
+    /// it plays at its set offset again.
+    fn resync_speaker(&mut self, _id: &str) {}
     /// The user entered `ms` in the AirPlay delay field.
     fn set_airplay_delay(&mut self, ms: f64);
     fn set_auto_connect(&mut self, id: &str, on: bool);
@@ -558,6 +763,37 @@ pub trait Backend {
     /// Retry on the notice that AirPlay stopped: starts a new AirPlay
     /// sender, and the speakers that were on come back once it lists them.
     fn retry_airplay(&mut self) {}
+
+    /// Calibrate with Microphone on local speaker `id`'s row.
+    fn start_calibration(&mut self, _id: &str) {}
+
+    /// Cancel on the running calibration: its speaker's delay stays.
+    fn cancel_calibration(&mut self) {}
+
+    /// Calibrate All Speakers: measures every speaker that is on.
+    fn start_calibrate_all(&mut self) {}
+
+    /// Cancel on the running Calibrate All or Measure Again: nothing
+    /// changes.
+    fn cancel_calibrate_all(&mut self) {}
+
+    /// Measure Again on the results' row `row`.
+    fn measure_again(&mut self, _row: usize) {}
+
+    /// Apply on the results: the certain rows' delays, as one change.
+    fn apply_calibrate_all(&mut self) {}
+
+    /// Undo after Apply: every replaced delay back, in one step.
+    fn undo_calibrate_all(&mut self) {}
+
+    /// Close on the results.
+    fn close_calibrate_all(&mut self) {}
+
+    /// Moves a calibration on; the UI calls it every few tens of ms while
+    /// [`CalibrationState::busy`]. Returns whether the snapshot changed.
+    fn tick_calibration(&mut self) -> bool {
+        false
+    }
 
     /// Takes in what happened since the last call (devices that came or went,
     /// a source that quit, an output that failed) and says whether the
@@ -628,8 +864,12 @@ pub fn frame_to_keep(shows: MainWindowShows, saved: Option<WindowFrame>) -> Opti
 pub struct ViewSettings {
     /// View > Show Virtual Devices.
     pub show_virtual_devices: bool,
+    /// View > Appearance.
+    pub appearance: Appearance,
     /// The main window's place and size, once it has been shown.
     pub window: Option<WindowFrame>,
+    /// File > Web Remote.
+    pub remote: crate::remote::RemoteSettings,
 }
 
 /// Clamps a typed or stepped offset to what the sync controls accept, in
@@ -679,6 +919,7 @@ pub fn delay_field_text(typed: &str) -> String {
 pub struct MockBackend {
     state: AppState,
     next_id: u64,
+    view: ViewSettings,
 }
 
 #[cfg(any(not(windows), test))]
@@ -709,6 +950,8 @@ impl MockBackend {
             paired: false,
             device_volume: None,
             waiting: None,
+            cast: None,
+            group: None,
         };
         let mut speakers = vec![
             // The reference: no delay of its own.
@@ -790,8 +1033,15 @@ impl MockBackend {
             airplay_delay_ms: Some(1750.0),
             airplay_none_found: false,
             when_source_quits: WhenSourceQuits::Stop,
+            cast_list: CastList::Quiet,
+            calibration: CalibrationState::default(),
+            calibrate_all: CalibrateAllState::default(),
         };
-        MockBackend { state, next_id: 1 }
+        MockBackend {
+            state,
+            next_id: 1,
+            view: ViewSettings::default(),
+        }
     }
 
     /// Posts a notice about `subject`, replacing an older one about it.
@@ -854,6 +1104,14 @@ impl MockBackend {
 impl Backend for MockBackend {
     fn snapshot(&self) -> AppState {
         self.state.clone()
+    }
+
+    fn view_settings(&self) -> ViewSettings {
+        self.view
+    }
+
+    fn set_view_settings(&mut self, settings: ViewSettings) {
+        self.view = settings;
     }
 
     fn set_running(&mut self, on: bool) {
@@ -1126,6 +1384,8 @@ mod tests {
             paired: false,
             device_volume: None,
             waiting: None,
+            cast: None,
+            group: None,
         };
         assert!(!speaker(SpeakerKind::Virtual, false).is_listed(false));
         assert!(speaker(SpeakerKind::Virtual, false).is_listed(true));

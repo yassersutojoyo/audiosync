@@ -9,9 +9,17 @@ extension AppDelegate {
 
     // MARK: - Speaker / source state (shared by the window and the menu bar panel)
 
-    /// A local speaker's linear gain, through the core's volume curve.
+    /// A local speaker's linear gain, through the core's volume curve; 0
+    /// while a calibration plays its signal through another output (S232, S235).
     private func effectiveGain(_ uid: String) -> Double {
-        engine.gainCurve.outputGain(localPosition: localVolume[uid] ?? defaultVolume, masterPosition: masterVolume)
+        if let solo = calibrationRun?.soloUID ?? calibrateAllRun?.localSolo, solo != uid { return 0 }
+        return engine.gainCurve.outputGain(localPosition: localVolume[uid] ?? defaultVolume,
+                                           masterPosition: masterVolume)
+    }
+
+    /// Every running local output gets its gain again.
+    func reapplyLocalGains() {
+        LocalOutputSync.reapplyGains(on: engine, gain: { effectiveGain($0) })
     }
 
     func setLocalEnabled(_ uid: String, _ on: Bool) {
@@ -28,7 +36,7 @@ extension AppDelegate {
 
     /// With every speaker switched off there is nothing to stream to.
     func stopIfIdle() {
-        if StreamingPolicy.isIdle(streaming: engine.isRunning, enabledAirPlay: playableAirPlay,
+        if StreamingPolicy.isIdle(streaming: engine.isRunning, enabledAirPlay: playableAirPlay.union(castSwitchedOn),
                                   enabledLocal: enabledLocal) {
             stopEngine()
         }
@@ -59,6 +67,7 @@ extension AppDelegate {
     func setLocalOffset(_ uid: String, _ rawMs: Double) {
         guard let ms = LocalDelay.sanitizedOffset(rawMs) else { return }   // not finite: ignored
         localOffsetMs[uid] = ms
+        calibrationOffsetChanged(uid)
         retimeLocalOutputs()
         pushModel()
     }
@@ -95,11 +104,39 @@ extension AppDelegate {
     }
 
     /// The hold-back of every local speaker taking part: switched on and
-    /// listed now (S172, S176).
+    /// listed now (S172, S176). They wait for L while an AirPlay speaker is
+    /// chosen, for the Cast speaker's offset while one is, and for the
+    /// longer of the two when both are.
     func localHoldBackTargets() -> [String: Double] {
-        LocalDelay.holdBacks(takingPart: localListed.filter(enabledLocal.contains), reference: localReference,
-                             offsets: localOffsetMs, airPlayChosen: airPlayChosenAndListed,
-                             latencyMs: airPlayLatencyMs)
+        let wait = CastModel.networkWaitMs(airPlay: airPlayChosenAndListed ? airPlayLatencyMs : nil,
+                                           cast: castModel.anchorMs)
+        return LocalDelay.holdBacks(takingPart: localListed.filter(enabledLocal.contains), reference: localReference,
+                                    offsets: localOffsetMs, airPlayChosen: wait != nil,
+                                    latencyMs: wait ?? airPlayLatencyMs)
+    }
+
+    /// Holds the AirPlay speakers or the Cast feed back, live, so both play
+    /// at the longer of L and the Cast offset (C77), and says so in a notice
+    /// when the AirPlay sender's delay limit leaves its speakers ahead.
+    func syncNetworkHoldBacks() {
+        let airPlay = airPlayChosenAndListed ? airPlayLatencyMs : nil
+        let cast = castModel.anchorMs
+        let wanted = NetworkHoldBack.airPlayMs(airPlay: airPlay, cast: cast)
+        if let native = nativeAirPlay, native.setHoldBack(wanted) {
+            DebugTrace.log("[AudioSync] AirPlay speakers held back \(Int(NetworkHoldBack.airPlayAppliedMs(wanted).rounded())) ms "
+                + "for the Google Cast speaker (asked \(Int(wanted.rounded())) ms)")
+        }
+        let castWait = NetworkHoldBack.castMs(airPlay: airPlay, cast: cast)
+        if let sender = castSender, sender.setHoldBack(castWait) {
+            DebugTrace.log("[AudioSync] Cast: the feed is held back \(Int(castWait.rounded())) ms to meet L")
+        }
+        let device = cast == nil ? nil : castModel.enabled
+        guard let step = airPlayAheadNotice.update(device: device, aheadMs: NetworkHoldBack.airPlayAheadMs(wanted)) else { return }
+        if let cleared = step.clear { clearNotices([Notice.airPlayAhead(cleared)]) }
+        if let shown = step.post {
+            postNotice(text.airPlayAheadOfCast(tenths: shown.tenths, speaker: castName(shown.device)),
+                       subject: Notice.airPlayAhead(shown.device))
+        }
     }
 
     /// Gives every running local speaker whose hold-back changed its new one
@@ -107,6 +144,7 @@ extension AppDelegate {
     /// reference, whether an AirPlay speaker is chosen, or L may have changed.
     /// One whose hold-back is the same gets no call, so it doesn't resync.
     func retimeLocalOutputs() {
+        syncNetworkHoldBacks()   // the same changes move how long AirPlay and Cast wait for each other
         guard engine.isRunning else {
             localHoldBacks = [:]
             return

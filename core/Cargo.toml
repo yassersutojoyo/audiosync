@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "GPL-3.0-or-later"
-description = "Platform-independent audio core of AudioSync: delay ring buffer, drift correction, resampling, equalizer, volume and sync policy, plus the C interface of AudioSync's own AirPlay sender."
+description = "Platform-independent audio core of AudioSync: delay ring buffer, drift correction, resampling, equalizer, volume and sync policy, plus the C interface of AudioSync's own AirPlay and Google Cast senders."
 repository = "https://github.com/yassersutojoyo/audiosync"
 publish = false
 
@@ -25,6 +25,10 @@ ffi-panic-probe = []
 # Rust static library, so the sender comes in through the core's. Its
 # third-party crates are listed in THIRD_PARTY_NOTICES.md.
 audiosync-airplay = { path = "../airplay" }
+# AudioSync's own Google Cast sender (cast/), reached the same way (src/ffi/cast.rs).
+audiosync-cast = { path = "../cast" }
+# AudioSync's web remote (remote/), reached the same way (src/ffi/remote.rs).
+audiosync-remote = { path = "../remote" }
 # Wipes the pairing store's plaintext from memory (src/airplay_pairings.rs);
 # already in the tree through the AirPlay sender.
 zeroize = "1.8.1"

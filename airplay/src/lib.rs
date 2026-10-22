@@ -33,19 +33,28 @@
 //!   control and timing), browses the network with
 //!   [`discovery::mdns::MdnsBrowser`], reconnects lost speakers
 //!   ([`reconnect`]) and reports events and counters.
+//! - [`homekit`]: the HomeKit pairing of the AirPlay 2 path (TLV8, SRP-3072
+//!   with SHA-512, the HKDF and ChaCha20-Poly1305 steps), which only the
+//!   AirPlay 2 session uses.
 //!
-//! AirPlay 2 comes later, behind its flag (P2).
+//! - [`ap2`]: the AirPlay 2 session from `GET /info` to TEARDOWN, with the
+//!   encrypted framing, the event connection and the `/feedback`
+//!   keep-alive, behind the hidden switch (P2), which is off by default
+//!   ([`sender::SenderConfig::airplay2`]). Its audio packets come later.
 
 pub mod alac;
+pub mod ap2;
 pub mod audio;
 pub mod clock;
 pub mod digest;
 pub mod discovery;
 pub mod error;
+pub mod homekit;
 pub mod ids;
 pub mod input;
 pub mod metadata;
 pub mod pairing;
+pub mod ptp;
 pub mod rate;
 pub mod reconnect;
 pub mod rtp;
@@ -56,6 +65,7 @@ pub mod sender;
 pub mod session;
 pub mod store;
 pub mod stream;
+pub mod targets;
 mod transport;
 pub mod volume;
 
