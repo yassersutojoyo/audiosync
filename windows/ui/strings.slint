@@ -194,6 +194,8 @@ export global Strings {
     out property <string> rename-group: @tr("Rename Group…");
     out property <string> rename-group-title: @tr("Rename Group");
     out property <string> rename: @tr("Rename");
+    // In a speaker's … menu and right-click menu: edits its name in the row.
+    out property <string> rename-speaker: @tr("Rename…");
     out property <string> refresh-devices: @tr("Refresh Devices");
     out property <string> show-virtual-devices: @tr("Show Virtual Devices");
     out property <string> appearance: @tr("Appearance");
@@ -614,7 +616,7 @@ export global Strings {
     out property <string> help-double-title: @tr("Hearing Sound Twice");
     out property <string> help-double: @tr("Windows keeps playing the source on its own outputs while AudioSync plays its synced copies, so you may hear it twice. For one app, open the Volume mixer and send the app to an output you don't listen to. For All System Audio, make such an output the Windows default in Sound settings. Don't mute the app itself in the Volume mixer: AudioSync would capture silence.\n\nWhen AudioSync detects this, it shows a notice. Its Show How button opens the steps for your setup.");
     out property <string> help-more-title: @tr("More Controls");
-    out property <string> help-more: @tr("To make a group, turn on the speakers you want, then choose Speakers > New Group from Active Speakers (Ctrl+N). Select the group to turn them all on or off at once. To rename or delete it, right-click it or use its … button.\n\nTo have a speaker turn on whenever it appears, right-click it or use its … button, and choose Auto-connect when available. At launch, AudioSync starts streaming only when such a speaker is there.\n\nThe equalizer shapes the sound on every speaker at once, with ten bands, a preamp and presets. Open it from its card or with View > Equalizer (Ctrl+E).\n\nAirPlay speakers with a screen, such as a TV, show the track's title, artist, album and artwork, taken from the media controls Windows shows for apps that support them. With All System Audio, that's the track that is playing; with one app, that app's track, even while paused. Otherwise they show AudioSync, the source's name, the album From your PC and AudioSync's icon.\n\nVirtual outputs, such as loopback drivers, are hidden unless one is on. View > Show Virtual Devices lists them all. Speakers > Refresh Devices (F5) reads the sources and outputs again.\n\nTo start AudioSync when you sign in to Windows, choose File > Launch at Sign-In, or Launch at Sign-In in the menu of the AudioSync icon in the notification area. AudioSync then starts there without opening its window. If AudioSync is turned off in Settings > Apps > Startup, that page opens with a notice: turn AudioSync on there.\n\nView > Appearance: Match System follows Windows; Light or Dark keeps AudioSync's windows that way. The AudioSync icon in the notification area always follows the Windows theme.\n\nAudioSync saves the source, each speaker's switch, delay and volume, your groups and the equalizer, and restores them the next time it starts.");
+    out property <string> help-more: @tr("To make a group, turn on the speakers you want, then choose Speakers > New Group from Active Speakers (Ctrl+N). Select the group to turn them all on or off at once. To rename or delete it, right-click it or use its … button.\n\nTo rename a speaker, double-click its name, or right-click it or use its … button and choose Rename. Type a name and press Enter. Leave it empty to use the device's own name; while a speaker is renamed, its tooltip shows that name.\n\nTo have a speaker turn on whenever it appears, right-click it or use its … button, and choose Auto-connect when available. At launch, AudioSync starts streaming only when such a speaker is there.\n\nThe equalizer shapes the sound on every speaker at once, with ten bands, a preamp and presets. Open it from its card or with View > Equalizer (Ctrl+E).\n\nAirPlay speakers with a screen, such as a TV, show the track's title, artist, album and artwork, taken from the media controls Windows shows for apps that support them. With All System Audio, that's the track that is playing; with one app, that app's track, even while paused. Otherwise they show AudioSync, the source's name, the album From your PC and AudioSync's icon.\n\nVirtual outputs, such as loopback drivers, are hidden unless one is on. View > Show Virtual Devices lists them all. Speakers > Refresh Devices (F5) reads the sources and outputs again.\n\nTo start AudioSync when you sign in to Windows, choose File > Launch at Sign-In, or Launch at Sign-In in the menu of the AudioSync icon in the notification area. AudioSync then starts there without opening its window. If AudioSync is turned off in Settings > Apps > Startup, that page opens with a notice: turn AudioSync on there.\n\nView > Appearance: Match System follows Windows; Light or Dark keeps AudioSync's windows that way. The AudioSync icon in the notification area always follows the Windows theme.\n\nAudioSync saves the source, each speaker's switch, delay, volume and name, your groups and the equalizer, and restores them the next time it starts.");
     out property <string> help-airplay-title: @tr("AirPlay");
     out property <string> help-airplay: @tr("AudioSync finds AirPlay speakers on your network by itself. If none show up, check that this PC is on the same network as your speakers and that the network is set to Private. If it has to stay Public, allow AudioSync on Public networks in Windows Firewall.\n\nAudioSync for Windows plays to AirPlay 1 receivers. A speaker that plays only AirPlay 2, or needs something else AudioSync for Windows can't do yet, is listed with a note saying so, and stays off unless AirPlay 2 (Experimental) is on.\n\nAn Apple TV that asks for a PIN shows \"Asks for a code\". When you turn it on, the TV shows a PIN: type it in the dialog that opens. AudioSync keeps the pairing, so the PIN isn't asked again. Forget Pairing in the speaker's … menu removes it. Auto-connect never starts a pairing: it shows a notice instead.\n\nA speaker protected by a password shows \"Asks for a code\" too. When you turn it on, type the password set for it in the Home app or in the speaker's settings. AudioSync keeps it in memory until it quits, so it asks once each time AudioSync starts. A wrong password brings the dialog back; Cancel leaves the speaker off. If a speaker turns the password down after it has started playing, it goes off with a notice. A speaker that auto-connect turned on goes off with a notice instead: turn it on yourself to type the password.\n\nIf AudioSync's AirPlay sender stops or can't start, a notice says so, with a Retry button.\n\n'AirPlay 2 (Experimental)', in the File menu, lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups. It's off at first; turn it on, then quit and reopen AudioSync.");
     out property <string> help-remote-title: @tr("Web Remote");
@@ -871,12 +873,36 @@ export global Strings {
         return @tr("Other");
     }
 
-    // A speaker row's accessible label: "Kitchen, AirPlay".
-    public pure function speaker-label(name: string, kind: SpeakerKind, show-kind: bool) -> string {
-        if !show-kind {
+    // A speaker row's accessible label: "Kitchen, AirPlay", followed for a
+    // renamed speaker by the name its device reports (`system`, else empty).
+    public pure function speaker-label(name: string, kind: SpeakerKind, show-kind: bool, system: string) -> string {
+        if system == "" && !show-kind {
             return name;
         }
-        return @tr("{}, {}", name, root.speaker-kind(kind));
+        if system == "" {
+            return @tr("{}, {}", name, root.speaker-kind(kind));
+        }
+        if !show-kind {
+            return @tr("{}, device name {}", name, system);
+        }
+        return @tr("{}, {}, device name {}", name, root.speaker-kind(kind), system);
+    }
+
+    // The name field's accessible label; its placeholder is the device's
+    // own name, which an empty field brings back.
+    public pure function speaker-name-field(system: string) -> string {
+        return @tr("Name for {}", system);
+    }
+
+    // What the name field says about its keys.
+    out property <string> speaker-name-field-hint: @tr("Press Enter to apply or Escape to cancel. Leave it empty for the device's own name.");
+
+    // The tooltip on a speaker's name; `system` is empty unless renamed.
+    public pure function speaker-name-tooltip(system: string) -> string {
+        if system != "" {
+            return @tr("Device name: {}. Double-click to rename.", system);
+        }
+        return @tr("Double-click to rename.");
     }
 
     // What a stereo pair or home theater group row says after its kind:
