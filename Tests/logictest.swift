@@ -4063,5 +4063,123 @@ do {
           "guide: the illustrations carry no text and differ between light and dark")
 }
 
+// MARK: Web remote: the snapshot the page gets, and what a phone's change does
+do {
+    let t = UIStrings()
+    typealias Facts = RemoteRow.Facts
+    let reference = RemoteRow(Facts(id: "builtin", name: "MacBook Speakers", kind: "Built-in", on: true, volume: 120),
+                              text: t)
+    let usb = RemoteRow(Facts(id: "usb", name: "Desk", kind: "USB", on: false, volume: 40, offsetMs: 150), text: t)
+    let homePod = RemoteRow(Facts(id: "hp", name: "Kitchen", kind: "AirPlay 2", on: true, volume: 30, isAirPlay: true,
+                                  airPlayDelayMs: 1750), text: t)
+    let castIdle = RemoteRow(Facts(id: "cast", name: "Nest", kind: "Google Cast", on: false, volume: 50,
+                                   cast: (live: false, group: false, volumeFixed: false), offsetMs: 300), text: t)
+    let castGroup = RemoteRow(Facts(id: "group", name: "Home group", kind: "Google Cast", on: false, volume: 50,
+                                    cast: (live: false, group: true, volumeFixed: false),
+                                    note: t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: true))),
+                              text: t)
+    let locked = RemoteRow(Facts(id: "tv", name: "TV", kind: "AirPlay", on: false, volume: 50, isAirPlay: true,
+                                 needsCode: true), text: t)
+    let pairedTV = RemoteRow(Facts(id: "tv2", name: "TV 2", kind: "AirPlay", on: false, volume: 50, isAirPlay: true,
+                                   needsCode: true, paired: true), text: t)
+    let rows = [reference, usb, homePod, castIdle, castGroup, locked, pairedTV]
+
+    let snapshot = RemoteSnapshot(computerName: "Studio Mac", master: 80, nowPlaying: nil, rows: rows)
+    let object = (try? JSONSerialization.jsonObject(with: Data(snapshot.json.utf8))) as? [String: Any]
+    let speakers = object?["speakers"] as? [[String: Any]] ?? []
+    let byID = Dictionary(speakers.map { ($0["id"] as? String ?? "", $0) }, uniquingKeysWith: { a, _ in a })
+    func field(_ id: String, _ key: String) -> Any? { byID[id]?[key] }
+    func range(_ id: String) -> [Int] {
+        [field(id, "delay_min_ms"), field(id, "delay_ms"), field(id, "delay_max_ms")].compactMap { $0 as? Int }
+    }
+    let master = (object?["master"] as? [String: Any])?["volume"] as? Double
+    let ids: [String] = speakers.compactMap { $0["id"] as? String }
+    let named = object?["computer_name"] as? String == "Studio Mac"
+    let noTrack = object?["now_playing"] is NSNull
+    check(named && noTrack && master == 80 && ids == rows.map(\.id),
+          "web remote: the snapshot has the name, the master volume, no track and the rows in order")
+    let clamped = field("builtin", "volume") as? Double == 100
+    check(clamped && range("builtin") == [0, 0, 0],
+          "web remote: the reference has no delay to change and its volume stays in 0 to 100", "\(range("builtin"))")
+    let usbRange = range("usb") == [-2000, 150, 20000]
+    let airPlayRange = range("hp") == [0, 1750, 20000]
+    let castRange = range("cast") == [0, 300, 20000]
+    check(usbRange && airPlayRange && castRange, "web remote: each delay carries the range its field in the window takes",
+          "\(range("usb")) \(range("hp")) \(range("cast"))")
+    let groupOff = field("group", "available") as? Bool == false
+    let groupNote = field("group", "notice") as? String == "Speaker groups not supported"
+    let codeOff = field("tv", "available") as? Bool == false
+    let codeNote = field("tv", "notice") as? String == t.remoteTurnOnInApp
+    let pairedOpen = field("tv2", "available") as? Bool == true
+    let pairedQuiet = field("tv2", "notice") is NSNull
+    check(groupOff && groupNote && codeOff && codeNote && pairedOpen && pairedQuiet,
+          "web remote: a Cast group and a speaker that would ask for a code on the Mac can't be driven from the phone")
+    check(snapshot.json == RemoteSnapshot(computerName: "Studio Mac", master: 80, nowPlaying: nil, rows: rows).json,
+          "web remote: the same state gives the same text, so the core sends nothing new")
+    let playing = RemoteSnapshot(computerName: "", master: 50,
+                                 nowPlaying: .init(title: "Song", artist: "Band", source: "Music"), rows: []).json
+    check(playing.contains("\"now_playing\":{\"artist\":\"Band\",\"source\":\"Music\",\"title\":\"Song\"}"),
+          "web remote: Now Playing goes out with title, artist and source app", playing)
+
+    // The core's own parser takes the snapshot.
+    let noCommand: AscRemoteCommand = { _, _ in }
+    var error: Int32 = 0
+    var remote = asc_remote_start("{\"port\": 0, \"listen\": [\"127.0.0.1\"]}", noCommand, nil, &error)
+    check(remote != nil && asc_remote_publish(remote, snapshot.json) && asc_remote_publish(remote, playing),
+          "web remote: the core accepts the snapshots", "start error \(error)")
+    asc_remote_stop(&remote)
+
+    let fullCommand = RemoteCommand(json: "{\"type\":\"speaker\",\"id\":\"usb\",\"on\":true,\"volume\":55.5,\"delay_ms\":-40}")
+    let numberAsSwitch = RemoteCommand(json: "{\"type\":\"speaker\",\"id\":\"usb\",\"on\":1}")
+    let masterCommand = RemoteCommand(json: "{\"type\":\"master\",\"volume\":20}")
+    let dropped: [RemoteCommand?] = ["{\"type\":\"master\"}", "{\"type\":\"eq\"}", "not json"].map { RemoteCommand(json: $0) }
+    let readFull = fullCommand == .speaker(id: "usb", on: true, volume: 55.5, delayMs: -40)
+    let readNumber = numberAsSwitch == .speaker(id: "usb", on: nil, volume: nil, delayMs: nil)
+    let readMaster = masterCommand == .master(volume: 20)
+    check(readFull && readNumber && readMaster && dropped.allSatisfy { $0 == nil },
+          "web remote: commands read as the core sends them; anything else is dropped")
+
+    func plan(_ json: String) -> [RemoteAction] { RemoteCommand(json: json).map { RemoteAction.plan($0, rows: rows) } ?? [] }
+    check(plan("{\"type\":\"speaker\",\"id\":\"usb\",\"on\":true,\"volume\":70}")
+            == [.setEnabled(id: "usb", on: true), .setVolume(id: "usb", position: 70)],
+          "web remote: turning a speaker on with a volume flips the switch, then moves the slider")
+    check(plan("{\"type\":\"speaker\",\"id\":\"usb\",\"volume\":70}").isEmpty,
+          "web remote: the volume of a speaker that is off changes nothing, as its slider is disabled in the window")
+    check(plan("{\"type\":\"speaker\",\"id\":\"cast\",\"on\":true,\"volume\":70}") == [.setEnabled(id: "cast", on: true)],
+          "web remote: a Cast speaker's volume waits for its session")
+    let toLocal = plan("{\"type\":\"speaker\",\"id\":\"usb\",\"delay_ms\":-5000}") == [.setLocalOffset(id: "usb", ms: -2000)]
+    let toCast = plan("{\"type\":\"speaker\",\"id\":\"cast\",\"delay_ms\":450}") == [.setCastOffset(id: "cast", ms: 450)]
+    let toAirPlay = plan("{\"type\":\"speaker\",\"id\":\"hp\",\"delay_ms\":1800}") == [.setAirPlayDelay(ms: 1800)]
+    let noDelay = plan("{\"type\":\"speaker\",\"id\":\"builtin\",\"delay_ms\":100}").isEmpty
+    let unchanged = plan("{\"type\":\"speaker\",\"id\":\"usb\",\"delay_ms\":150}").isEmpty
+    check(toLocal && toCast && toAirPlay && noDelay && unchanged,
+          "web remote: each delay goes to its own control, clamped like the window's field; the reference has none")
+    let leftAlone = ["group", "tv", "gone"].allSatisfy { plan("{\"type\":\"speaker\",\"id\":\"\($0)\",\"on\":true}").isEmpty }
+    let pairedOn = plan("{\"type\":\"speaker\",\"id\":\"tv2\",\"on\":true}") == [.setEnabled(id: "tv2", on: true)]
+    check(leftAlone && pairedOn,
+          "web remote: a speaker that can't be driven or isn't listed is left alone; a paired one turns on")
+    let offFirst = plan("{\"type\":\"speaker\",\"id\":\"hp\",\"on\":false,\"volume\":10}") == [.setEnabled(id: "hp", on: false)]
+    let masterClamped = plan("{\"type\":\"master\",\"volume\":150}") == [.setMaster(position: 100)]
+    check(offFirst && masterClamped, "web remote: a speaker turned off takes no volume; the master volume is clamped")
+
+    check(RemotePort.parse(" 8080 ") == 8080 && RemotePort.parse("80") == nil && RemotePort.parse("70000") == nil
+            && RemotePort.parse("abc") == nil && RemotePort.stored(1e30) == nil && RemotePort.stored(7655.5) == nil,
+          "web remote: a port from 1024 to 65535 is taken")
+    let fresh = AppSettings.load { _ in nil }
+    let stored: [String: Any] = ["webRemoteEnabled": true, "webRemotePort": 8080]
+    let kept = AppSettings.load { stored[$0] }
+    let damaged: [String: Any] = ["webRemotePort": 1e30]
+    let dropsDamaged = AppSettings.load { damaged[$0] }.webRemotePort == RemotePort.default
+    check(!fresh.webRemote && fresh.webRemotePort == RemotePort.default && kept.webRemote && kept.webRemotePort == 8080
+            && dropsDamaged,
+          "web remote: off on port 7655 by default; the stored setting and port are read back, a damaged port is dropped")
+    check(RemoteAddresses(localHostName: "kitchen", ipv4: "192.0.2.20").urls(port: 7655)
+            == ["http://kitchen.local:7655", "http://192.0.2.20:7655"]
+            && RemoteAddresses(localHostName: nil, ipv4: "198.51.100.2").urls(port: 8000) == ["http://198.51.100.2:8000"],
+          "web remote: the .local address comes first, the IP address second")
+    check(t.webRemoteCodeLabel("042917") == "Pairing code 0 4 2 9 1 7",
+          "web remote: VoiceOver reads the code digit by digit")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

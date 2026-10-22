@@ -21,6 +21,7 @@ enum MainMenu {
         app.addItem(withTitle: t.appearance, action: nil, keyEquivalent: "").submenu = appearance
         app.addItem(item(t.launchAtLogin, #selector(AppDelegate.toggleLaunchAtLogin(_:))))
         app.addItem(item(t.switchToSystemWhenSourceQuits, #selector(AppDelegate.toggleSwitchWhenSourceQuits(_:))))
+        app.addItem(item(t.webRemoteMenu, #selector(AppDelegate.showWebRemote(_:))))
         app.addItem(.separator())
         let services = NSMenu(title: t.menuServices)
         app.addItem(withTitle: t.menuServices, action: nil, keyEquivalent: "").submenu = services

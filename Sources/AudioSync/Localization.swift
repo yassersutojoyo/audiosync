@@ -791,6 +791,45 @@ struct UIStrings {
     /// A gain as VoiceOver reads it: "+2.5 dB".
     func equalizerGainValue(_ db: Double) -> String { "\(equalizerGain(db)) dB" }
 
+    // MARK: Web remote
+
+    let webRemoteMenu = "Web Remote…"
+    let webRemoteTitle = "Web Remote"
+    let webRemoteSummary = "Control the speakers from a phone or tablet on the same network."
+    let webRemoteAddressTitle = "Address"
+    let webRemoteSteps = "On the phone, open the address or scan the QR code, add the page to the Home Screen, "
+        + "then open it from there and enter the pairing code."
+    func webRemoteQRLabel(_ address: String) -> String { "QR code for \(address)" }
+    let webRemoteNoAddress = "This Mac has no network address right now."
+    let webRemoteCodeTitle = "Pairing Code"
+    /// Spaced out so VoiceOver reads the digits one by one.
+    func webRemoteCodeLabel(_ code: String) -> String {
+        "Pairing code " + code.map(String.init).joined(separator: " ")
+    }
+    let webRemoteCodeNote = "A code works once, for 10 minutes."
+    let webRemoteCodeExpired = "This code expired. Make a new one to pair a phone."
+    let webRemoteLocked = "Pairing is locked after too many wrong codes. Make a new code to pair again."
+    let webRemoteNewCode = "New Code"
+    func webRemoteDevices(_ count: Int) -> String {
+        switch count {
+        case 0: return "No paired devices"
+        case 1: return "1 paired device"
+        default: return "\(count) paired devices"
+        }
+    }
+    let webRemoteForgetAll = "Forget All Remote Devices"
+    let webRemoteForgetFailed = "The devices are forgotten, but that couldn't be saved: "
+        + "they are paired again after AudioSync restarts."
+    let webRemotePort = "Port"
+    let webRemoteUsePort = "Use Port"
+    let webRemotePortRange = "Enter a port from 1024 to 65535."
+    func webRemotePortInUse(_ port: Int) -> String { "Another app is using port \(port). Pick another port." }
+    func webRemoteListenFailed(_ port: Int) -> String { "AudioSync couldn't open port \(port) on this Mac." }
+    let webRemoteStartFailed = "The web remote couldn't start. Turn it off and on again to retry."
+    let webRemotePlainHTTP = "The remote uses plain HTTP, so use it on your home network only."
+    /// On the phone, under a speaker that asks for a code AudioSync doesn't keep.
+    let remoteTurnOnInApp = "Asks for a code: turn it on in AudioSync on the Mac"
+
     // MARK: Guide
 
     var helpText: String { """
@@ -884,6 +923,16 @@ struct UIStrings {
         Several can wait at once. Click × to dismiss one, or 'Dismiss All'
         when there is more than one. A notice also clears itself once its
         cause is gone.
+
+        Web Remote
+        Choose 'Web Remote…' in the gear menu or the AudioSync menu and turn it
+        on to control the speakers from a phone on the same network: each
+        speaker's switch, volume and delay, Master Volume, and what's playing.
+        On the phone, open the address it shows or scan its QR code, and add
+        the page to the Home Screen first. Then open it from there and enter
+        the pairing code: a page paired in the browser loses its pairing once
+        it's added to the Home Screen. The remote uses plain HTTP, so keep it
+        to your home network. 'Forget All Remote Devices' unpairs every phone.
 
         Tips
         - Tune with just two speakers at first: one AirPlay and one local.

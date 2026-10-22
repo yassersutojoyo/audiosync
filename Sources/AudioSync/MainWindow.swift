@@ -212,6 +212,7 @@ struct MainView: View {
             Toggle(t.switchToSystemWhenSourceQuits,
                    isOn: Binding(get: { model.switchWhenSourceQuits },
                                  set: { model.actions.setSwitchWhenSourceQuits($0) }))
+            Button(t.webRemoteMenu) { model.actions.openWebRemote() }
             Divider()
             Button(t.guideTitle) { model.actions.openGuide() }
         } label: {
