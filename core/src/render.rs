@@ -2020,4 +2020,63 @@ mod tests {
             "{counters:?}"
         );
     }
+
+    /// [`timed_step`] with a ramp for the block, each frame's value its
+    /// index in the capture: returns how many capture frames behind the
+    /// newest written one the callback's first frame is.
+    fn ramp_step(s: &mut Stepped, written: &mut u64, late_ns: u64) -> f64 {
+        s.now += 10_000_000;
+        let block: Vec<f32> = (*written..*written + 480)
+            .flat_map(|i| [i as f32 / 4_000_000.0; 2])
+            .collect();
+        *written += 480;
+        s.writer.write_at(&block, 480, s.now);
+        let due = s.now + 1_000_000;
+        s.renderer
+            .render_timed_at(&mut s.out, due + 20_000_000, due + late_ns);
+        *written as f64 - f64::from(s.out[0]) * 4_000_000.0
+    }
+
+    /// An output whose callbacks all come 60 ms late, but for `strays`
+    /// early by `early_ns`, whose delay is set to 100 ms after them: how far
+    /// behind the capture it plays a minute later, and its late callbacks.
+    fn resync_after_strays(strays: usize, early_ns: u64) -> (f64, u64) {
+        let late = 60_000_000;
+        let mut s = Stepped::new();
+        let mut written = 0;
+        for _ in 0..200 {
+            ramp_step(&mut s, &mut written, late);
+        }
+        for _ in 0..strays {
+            ramp_step(&mut s, &mut written, late - early_ns);
+        }
+        for _ in 0..5 {
+            ramp_step(&mut s, &mut written, late);
+        }
+        s.control.set_delay_frames(4800);
+        let mut behind = 0.0;
+        for _ in 0..6000 {
+            behind = ramp_step(&mut s, &mut written, late);
+        }
+        let counters = s.control.counters();
+        assert_eq!(counters.resyncs, 1, "{counters:?}");
+        (behind, s.renderer.late_callbacks())
+    }
+
+    // covers: S209
+    #[test]
+    fn a_resync_after_two_stray_early_stamps_lands_where_it_would_without_them() {
+        // Both strays sit in the floor for up to 50 s; anchoring against it
+        // used to put the output their size later for good.
+        let (calm, _) = resync_after_strays(0, 0);
+        for early_ns in [20_000_000, 60_000_000] {
+            let (behind, late_callbacks) = resync_after_strays(2, early_ns);
+            let moved_ms = (behind - calm) / 48.0;
+            assert!(
+                moved_ms.abs() < 2.0,
+                "{early_ns} ns strays: {moved_ms:.2} ms"
+            );
+            assert_eq!(late_callbacks, 0, "{early_ns} ns strays");
+        }
+    }
 }
