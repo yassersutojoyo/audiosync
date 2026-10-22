@@ -37,7 +37,9 @@ AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay s
 
 - Google Cast speakers, on the Mac and on Windows, one at a time. You set each one's offset by ear, and Resync restarts it if it drifts.
 - Cast and AirPlay speakers together: the side that's ahead waits for the other, AirPlay up to 20 s.
-- On the Mac, Calibrate with Microphone sets a local speaker's delay for you.
+- On the Mac, Calibrate with Microphone sets a local speaker's delay for you. On `main` (coming in 0.7) it's in the Windows app too.
+- On `main` (coming in 0.7), Calibrate All Speakers measures every speaker that's on with the microphone, one after the other, and changes nothing until you choose Apply. Both apps have it.
+- On `main` (coming in 0.7), Web Remote lets a phone on the same network switch speakers on and off and set their volume and delay. It's off until you turn it on, and it uses plain HTTP, so keep it to your home network.
 - On the Mac, rename a speaker with a double-click on its name.
 - If the app you capture quits, AudioSync can switch to all system audio instead of stopping.
 - Local speakers with a clock that runs a bit fast or slow stay in time with smaller corrections.
