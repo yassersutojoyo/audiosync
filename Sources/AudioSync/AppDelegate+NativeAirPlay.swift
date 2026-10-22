@@ -372,7 +372,9 @@ extension AppDelegate {
     /// A native speaker's slider position (0 to 100), live.
     func setNativeAirPlayVolume(_ id: String, _ volume: Double) {
         airplayVolume[id] = max(0, min(100, volume))
-        if let receiver = NativeAirPlayID.receiver(id), let position = airplayVolume[id] {
+        // A speaker Calibrate All Speakers keeps silent gets its volume back when the run ends.
+        if let receiver = NativeAirPlayID.receiver(id), let position = airplayVolume[id],
+           calibrateAllRun?.silences(airPlay: id) != true {
             nativeAirPlay?.setVolume(receiver, volume: position)
         }
         pushModel()

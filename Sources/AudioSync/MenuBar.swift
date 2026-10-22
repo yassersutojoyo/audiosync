@@ -110,6 +110,14 @@ final class AppModel: ObservableObject {
         /// Calibrate this local speaker with the microphone (S232), and cancel it.
         var calibrate: (String) -> Void = { _ in }
         var cancelCalibration: () -> Void = {}
+        /// Calibrate All Speakers (S235 to S240): start, cancel, Measure
+        /// Again on a row, Apply, Undo, and close its sheet.
+        var calibrateAll: () -> Void = {}
+        var cancelCalibrateAll: () -> Void = {}
+        var measureAgain: (Int) -> Void = { _ in }
+        var applyCalibrateAll: () -> Void = {}
+        var undoCalibrateAll: () -> Void = {}
+        var closeCalibrateAll: () -> Void = {}
     }
 
     @Published var running = false
@@ -144,6 +152,8 @@ final class AppModel: ObservableObject {
     @Published var deviceVolumes: [String: DeviceVolumeHint] = [:]
     /// The microphone calibration under way or the last one's result (S232).
     @Published var calibration = CalibrationStatus()
+    /// Calibrate All Speakers: its run, sheet and status (S235 to S240).
+    @Published var calibrateAll = CalibrateAllStatus()
     @Published var groups: [Group] = []
     @Published var launchAtLogin = false
     @Published var showVirtualDevices = false

@@ -169,6 +169,16 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// Undo of a calibration for a device that had no offset: the app
+    /// forgets it, and the sender, which can't forget one, plays at 0 ms.
+    func clearCastOffset(_ appID: String) {
+        guard let id = CastID.device(appID), castModel.clearOffset(id) else { return }
+        DebugTrace.log("[AudioSync] Cast: offset of \(castLabel(id)) cleared")
+        castSender?.setOffset(id, ms: 0)
+        retimeLocalOutputs()
+        pushModel()
+    }
+
     // MARK: - Rows and names
 
     func castSnapshot() -> [AppModel.Speaker] {
