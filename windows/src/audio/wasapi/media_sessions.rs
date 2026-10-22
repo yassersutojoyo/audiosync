@@ -9,7 +9,8 @@
 //! Every wait on an app is bounded by [`APP_WAIT`], and a thumbnail that
 //! missed it isn't asked for again for [`MISS_RETRY`]. The receivers'
 //! reading goes out before any work only the card needs. Artwork is made
-//! from the thumbnail's bytes once per track ([`media`]). A card button goes to the session that
+//! from the thumbnail's bytes once per track ([`media`]), and the receivers'
+//! track carries its session's timeline. A card button goes to the session that
 //! counts when the thread takes it, and the sessions are read again
 //! [`AFTER_COMMAND`] later, so the card shows the new state without waiting
 //! for the next poll. Nothing else waits on the thread: the readers meet it
@@ -22,7 +23,7 @@ use std::pin::pin;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSession as Session,
@@ -39,7 +40,8 @@ use windows_future::{IAsyncInfo, IAsyncOperation};
 use super::com::Apartment;
 use super::media;
 use crate::audio::now_playing::{
-    Follow, MediaSession, POLL_INTERVAL, Reading, Track, TrackReader, pick,
+    Follow, MediaSession, POLL_INTERVAL, RawTimeline, Reading, Timeline, Track, TrackReader, pick,
+    wall_ticks,
 };
 use crate::debug_log::DebugLog;
 use crate::now_playing_card::{ArtworkCache, CardSource, CardTrack, MediaControls, Transport};
@@ -286,6 +288,9 @@ trait SessionList {
         session: &Self::Session,
     ) -> windows::core::Result<Option<IAsyncOperation<IRandomAccessStreamWithContentType>>>;
 
+    /// The session's timeline as it reports it now.
+    fn timeline(&self, session: &Self::Session) -> windows::core::Result<RawTimeline>;
+
     /// Sends `command` to the session; the operation says whether the app
     /// took it.
     fn send(
@@ -337,6 +342,16 @@ impl SessionList for WindowsSessions {
             return Ok(None);
         };
         thumbnail.OpenReadAsync().map(Some)
+    }
+
+    fn timeline(&self, (session, _): &Self::Session) -> windows::core::Result<RawTimeline> {
+        let timeline = session.GetTimelineProperties()?;
+        Ok(RawTimeline {
+            start: timeline.StartTime()?.Duration,
+            end: timeline.EndTime()?.Duration,
+            position: timeline.Position()?.Duration,
+            updated: timeline.LastUpdatedTime()?.UniversalTime,
+        })
     }
 
     fn send(
@@ -425,6 +440,14 @@ impl<L: SessionList> Reader<L> {
         self.log_track(index.map(|index| &listing.listed[index].0), log);
         let index = index?;
         let session = listing.listed[index].0.clone();
+        // Read at each poll rather than on TimelinePropertiesChanged, which
+        // needs a handler on every session as they come and go: track info
+        // passes on only a jump, so a poll that finds none sends nothing.
+        let timeline = self
+            .sessions
+            .timeline(&listing.listed[index].1)
+            .ok()
+            .and_then(|raw| Timeline::read(raw, wall_ticks(SystemTime::now()), Instant::now()));
         let key = track_key(&session);
         let artwork = match self.jpegs.get(&key) {
             Some(made) => made.clone(),
@@ -432,7 +455,11 @@ impl<L: SessionList> Reader<L> {
                 .thumbnail(listing, index, &key, log)
                 .and_then(|image| self.jpeg(key, &session, &image, log)),
         };
-        Some(Track { session, artwork })
+        Some(Track {
+            session,
+            artwork,
+            timeline,
+        })
     }
 
     /// The card's track for `follow`, or `None` when no session counts.
@@ -841,6 +868,10 @@ mod tests {
             }
         }
 
+        fn timeline(&self, _: &()) -> windows::core::Result<RawTimeline> {
+            Ok(TIMELINE)
+        }
+
         fn send(&self, _: &(), _: Transport) -> windows::core::Result<IAsyncOperation<bool>> {
             let gate = self.gate.clone();
             Ok(IAsyncOperation::spawn(move || {
@@ -851,6 +882,14 @@ mod tests {
 
         fn reset(&mut self) {}
     }
+
+    /// 50 s into a 200 s track that starts at 10 s, with no update time.
+    const TIMELINE: RawTimeline = RawTimeline {
+        start: 100_000_000,
+        end: 2_100_000_000,
+        position: 600_000_000,
+        updated: 0,
+    };
 
     fn playing() -> MediaSession {
         MediaSession {
@@ -893,6 +932,11 @@ mod tests {
         let track = track.expect("the receivers get the track");
         assert_eq!(track.session, playing());
         assert!(track.artwork.is_some());
+        let timeline = track.timeline.expect("the track carries its timeline");
+        assert_eq!(
+            (timeline.elapsed, timeline.length, timeline.raw),
+            (Duration::from_secs(50), Duration::from_secs(200), TIMELINE)
+        );
         let card = card.expect("the card gets the track");
         assert_eq!((card.title.as_str(), card.playing), ("Song", true));
         assert!(card.artwork.is_some());
@@ -1035,6 +1079,10 @@ mod tests {
             Some(track) => {
                 let artwork = track.artwork.map(|jpeg| jpeg.len());
                 println!("{:?}, artwork: {artwork:?} bytes", track.session);
+                let progress = track
+                    .timeline
+                    .and_then(|timeline| timeline.progress_at(Instant::now()));
+                println!("timeline: {:?}, progress now: {progress:?}", track.timeline);
             }
             None => println!("no media session counts"),
         }

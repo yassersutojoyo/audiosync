@@ -42,7 +42,7 @@ use crate::transport::{self, IoEvent, RtspIo, SessionIo, SessionKey};
 use crate::volume::Volume;
 
 use super::{
-    NowPlaying, ReceiverEvent, ReceiverInfo, SenderEvent, SpeakerError, SpeakerEvent,
+    NowPlaying, Progress, ReceiverEvent, ReceiverInfo, SenderEvent, SpeakerError, SpeakerEvent,
     SpeakerOptions, SpeakerState,
 };
 
@@ -276,7 +276,8 @@ pub(crate) struct Driver {
     directory: Directory,
     browser: Option<Box<dyn Browser + Send>>,
     reported: BTreeSet<DeviceKey>,
-    now_playing: Option<NowPlaying>,
+    /// What is playing, and when the host set it.
+    now_playing: Option<(NowPlaying, Instant)>,
     retired: Vec<JoinHandle<()>>,
     /// The threads of a closed PTP service, which keep its ports bound
     /// until they end (P158).
@@ -1263,7 +1264,7 @@ impl Driver {
                 }
             }
             Command::SetNowPlaying(now_playing) => {
-                self.now_playing = Some(now_playing);
+                self.now_playing = Some((now_playing, now));
                 let keys: Vec<DeviceKey> = self.stream_ids.values().cloned().collect();
                 for key in keys {
                     self.send_now_playing(&key, now);
@@ -1549,7 +1550,7 @@ impl Driver {
     /// Sends what is playing to one playing speaker, as far as it lists the
     /// types (P123 to P127). Each item applies from the audio arriving now.
     fn send_now_playing(&mut self, key: &DeviceKey, now: Instant) {
-        let Some(now_playing) = self.now_playing.clone() else {
+        let Some((now_playing, set_at)) = self.now_playing.clone() else {
             return;
         };
         let Some(speaker) = self.speakers.get_mut(key) else {
@@ -1571,7 +1572,10 @@ impl Driver {
         if let Some(jpeg) = now_playing.artwork {
             let _ = session.send_metadata(Metadata::Artwork { jpeg, rtptime }, now);
         }
-        if let Some(progress) = now_playing.progress {
+        if let Some(progress) = now_playing
+            .progress
+            .and_then(|progress| progress_at(progress, set_at, now))
+        {
             let start = rtptime.wrapping_sub(frames(progress.elapsed));
             let end = start.wrapping_add(frames(progress.length));
             let metadata = Metadata::Progress {
@@ -1746,11 +1750,41 @@ fn random_device_id() -> [u8; 6] {
     bytes
 }
 
+/// `progress` as the host set it at `set_at`, carried on to `now`, so a
+/// speaker that starts later shows where the track is by then (the host
+/// sets progress only while the track plays); `None` once past its end.
+fn progress_at(progress: Progress, set_at: Instant, now: Instant) -> Option<Progress> {
+    let elapsed = progress.elapsed + now.saturating_duration_since(set_at);
+    (elapsed <= progress.length).then_some(Progress {
+        elapsed,
+        length: progress.length,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::clock::SenderClock;
     use crate::stream::StreamConfig;
+
+    #[test]
+    fn progress_set_earlier_is_carried_to_a_speaker_that_starts_later() {
+        let set_at = Instant::now();
+        let progress = Progress {
+            elapsed: Duration::from_secs(30),
+            length: Duration::from_secs(40),
+        };
+        assert_eq!(progress_at(progress, set_at, set_at), Some(progress));
+        let later = progress_at(progress, set_at, set_at + Duration::from_secs(4));
+        assert_eq!(
+            later.map(|later| later.elapsed),
+            Some(Duration::from_secs(34))
+        );
+        assert_eq!(
+            progress_at(progress, set_at, set_at + Duration::from_secs(11)),
+            None
+        );
+    }
 
     // A thread that outlives its session's close, such as an RTSP writer
     // blocked in a send that a socket shutdown doesn't wake (Windows) and
