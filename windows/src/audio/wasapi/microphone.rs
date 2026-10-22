@@ -2,8 +2,9 @@
 //! 32-bit float at the device's own rate and channels (Windows converts when
 //! its mix format isn't float), mixed down to mono into a buffer allocated
 //! before the stream starts. The thread stamps the first frame with the
-//! core's clock, from the packet's position on the performance counter, so a
-//! run can find the frame where its signal entered the ring.
+//! core's clock, from a packet's position on the performance counter, so a
+//! run can find the frame where its signal entered the ring, and marks where
+//! the device lost audio, which would move every later frame.
 
 use std::slice;
 use std::sync::Arc;
@@ -13,9 +14,11 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use audiosync_core::clock;
 use windows::Win32::Foundation::{E_ACCESSDENIED, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
-    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
-    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-    IAudioCaptureClient, IAudioClient, WAVEFORMATEX, eCapture, eConsole,
+    AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT,
+    AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, IAudioCaptureClient, IAudioClient, WAVEFORMATEX,
+    eCapture, eConsole,
 };
 use windows::Win32::System::Com::CLSCTX_ALL;
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
@@ -25,9 +28,9 @@ use windows::core::HRESULT;
 use super::com::{
     Apartment, ComMemory, Event, Ready, Worker, float_format, read_mix_format, spawn_worker,
 };
-use super::devices::{device_id, enumerator};
-use crate::audio::calibration::{Microphone, MicrophoneError, MicrophoneId};
-use crate::audio::outputs::{HNS_PER_MS, RenderFormat, default_channel_mask};
+use super::devices::{device_id, enumerator, properties};
+use crate::audio::calibration::{Microphone, MicrophoneError, MicrophoneId, RecordingClock};
+use crate::audio::outputs::{HNS_PER_MS, RenderFormat, default_channel_mask, is_hands_free};
 
 /// The stream buffer asked for, 100 ms.
 const BUFFER_HNS: i64 = 100 * HNS_PER_MS;
@@ -38,12 +41,16 @@ const WAIT_MS: u32 = 20;
 /// No first frame yet.
 const UNSET: u64 = u64::MAX;
 
+/// No audio lost yet.
+const NO_GAP: usize = usize::MAX;
+
 /// A running recording of the default input device.
 pub struct WasapiMicrophone {
     id: MicrophoneId,
     stop: Arc<Event>,
     frames: Arc<AtomicUsize>,
     first_ns: Arc<AtomicU64>,
+    gap_at: Arc<AtomicUsize>,
     recording: Receiver<Vec<f32>>,
     thread: Worker,
 }
@@ -53,13 +60,15 @@ pub(super) fn open(seconds: f64) -> Result<WasapiMicrophone, MicrophoneError> {
     let stop = Arc::new(Event::manual_reset().map_err(|_| MicrophoneError::Missing)?);
     let frames = Arc::new(AtomicUsize::new(0));
     let first_ns = Arc::new(AtomicU64::new(UNSET));
+    let gap_at = Arc::new(AtomicUsize::new(NO_GAP));
     let (send, recording) = mpsc::channel();
     let (thread, id) = {
         let stop = Arc::clone(&stop);
         let frames = Arc::clone(&frames);
         let first_ns = Arc::clone(&first_ns);
+        let gap_at = Arc::clone(&gap_at);
         spawn_worker("audiosync-microphone", move |ready| {
-            run(seconds, &stop, &frames, &first_ns, &send, ready);
+            run(seconds, &stop, &frames, &first_ns, &gap_at, &send, ready);
         })
         .map_err(|_| MicrophoneError::Missing)?
     };
@@ -69,6 +78,7 @@ pub(super) fn open(seconds: f64) -> Result<WasapiMicrophone, MicrophoneError> {
             stop,
             frames,
             first_ns,
+            gap_at,
             recording,
             thread,
         }),
@@ -88,6 +98,11 @@ impl Microphone for WasapiMicrophone {
 
     fn frames_recorded(&self) -> usize {
         self.frames.load(Ordering::Acquire)
+    }
+
+    fn gap_at(&self) -> Option<usize> {
+        let gap = self.gap_at.load(Ordering::Acquire);
+        (gap != NO_GAP).then_some(gap)
     }
 
     fn take(&mut self, start: usize, count: usize) -> Vec<f32> {
@@ -138,6 +153,10 @@ fn open_stream() -> Result<Stream, MicrophoneError> {
         let device = enumerator
             .GetDefaultAudioEndpoint(eCapture, eConsole)
             .map_err(|_| MicrophoneError::Missing)?;
+        let enumerator_name = properties(&device).ok().and_then(|found| found.enumerator);
+        if is_hands_free(enumerator_name.as_deref().unwrap_or_default()) {
+            return Err(MicrophoneError::HandsFree);
+        }
         let device_name = device_id(&device).unwrap_or_default();
         let client: IAudioClient = device
             .Activate(CLSCTX_ALL, None)
@@ -202,6 +221,7 @@ fn run(
     stop: &Event,
     frames: &AtomicUsize,
     first_ns: &AtomicU64,
+    gap_at: &AtomicUsize,
     send: &Sender<Vec<f32>>,
     ready: Ready<Result<MicrophoneId, MicrophoneError>>,
 ) {
@@ -227,7 +247,7 @@ fn run(
         return;
     }
     if ready.ok(Ok(stream.id.clone())) {
-        let written = record(&stream, &mut samples, stop, frames, first_ns);
+        let written = record(&stream, &mut samples, stop, frames, first_ns, gap_at);
         samples.truncate(written);
     }
     // SAFETY: stops the stream started above.
@@ -253,13 +273,14 @@ fn record(
     stop: &Event,
     frames: &AtomicUsize,
     first_ns: &AtomicU64,
+    gap_at: &AtomicUsize,
 ) -> usize {
     let handles = [stop.raw(), stream.event.raw()];
     let packet_ready = WAIT_EVENT(WAIT_OBJECT_0.0 + 1);
     let mut frequency = 0_i64;
     // SAFETY: writes one integer.
     let _ = unsafe { QueryPerformanceFrequency(&mut frequency) };
-    let rate = u64::from(stream.id.rate);
+    let mut timing = RecordingClock::default();
     let mut written = 0;
     loop {
         // SAFETY: both handles live as long as this loop.
@@ -294,13 +315,25 @@ fn record(
                 return written;
             }
             let count = count as usize;
-            if written == 0 && count > 0 {
+            if count > 0 {
                 let now_ns = clock::now_ns();
-                let age_ns = match now_hns(frequency) {
-                    Some(now) if position != 0 => now.saturating_sub(position) * 100,
-                    _ => count as u64 * 1_000_000_000 / rate,
-                };
-                first_ns.store(now_ns.saturating_sub(age_ns), Ordering::Release);
+                let age_ns = now_hns(frequency)
+                    .filter(|_| position != 0)
+                    .map(|now| now.saturating_sub(position) * 100);
+                timing.packet(
+                    written,
+                    stream.id.rate,
+                    now_ns,
+                    age_ns,
+                    flags & (AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR.0 as u32) != 0,
+                    flags & (AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32) != 0,
+                );
+                if let Some(first) = timing.first_frame_ns {
+                    first_ns.store(first, Ordering::Release);
+                }
+                if let Some(gap) = timing.gap_at {
+                    gap_at.store(gap, Ordering::Release);
+                }
             }
             let room = samples.len() - written;
             let take = count.min(room);

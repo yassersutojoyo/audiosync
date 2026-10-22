@@ -763,8 +763,10 @@ export component SyncControls inherits VerticalLayout {
     in property <bool> calibrating;
     in property <bool> calibration-enabled;
     in property <string> calibration-status;
+    in property <bool> calibration-privacy;
     callback calibrate();
     callback cancel-calibration();
+    callback calibration-privacy-requested();
     callback stepped(int);
     callback edited(string);
     // Enter in the field: apply what was typed.
@@ -774,7 +776,14 @@ export component SyncControls inherits VerticalLayout {
     // Whether one of its steps or its field has the keyboard focus: a count,
     // as the handlers of two controls trading the focus run in any order.
     property <int> focused-controls;
-    out property <bool> focus-within: self.focused-controls > 0;
+    // Open Privacy Settings goes without reporting that it lost the focus.
+    property <bool> privacy-focused;
+    changed calibration-privacy => {
+        if !self.calibration-privacy {
+            self.privacy-focused = false;
+        }
+    }
+    out property <bool> focus-within: self.focused-controls > 0 || self.privacy-focused;
 
     // Focuses the field with the cursor at the end of its text, to go on
     // typing. The offset is in bytes; one past the end lands on the end.
@@ -889,6 +898,7 @@ export component SyncControls inherits VerticalLayout {
 
         HorizontalLayout {
             alignment: start;
+            spacing: 8px;
 
             // One button for both, so the keyboard focus stays on it when
             // a calibration starts or ends.
@@ -908,9 +918,21 @@ export component SyncControls inherits VerticalLayout {
                     root.focused-controls += self.has-focus ? 1 : -1;
                 }
             }
+
+            if root.calibration-privacy: Button {
+                text: Strings.notice-open-privacy;
+                accessible-label: Strings.notice-open-privacy-label;
+                clicked => {
+                    root.calibration-privacy-requested();
+                }
+                changed has-focus => {
+                    root.privacy-focused = self.has-focus;
+                }
+            }
         }
 
-        SecondaryText {
+        // The button's description says it already.
+        QuietText {
             text: root.calibration-status != "" ? root.calibration-status : Strings.calibration-hint(root.reference-name);
         }
     }
@@ -1063,6 +1085,7 @@ export component SpeakerRow inherits Rectangle {
     // Calibrate with Microphone, and Cancel while it runs.
     callback calibrate();
     callback cancel-calibration();
+    callback calibration-privacy();
     // The part of the row with the keyboard focus changed; none: the row
     // lost it.
     callback focus-changed(RowPart);
@@ -1478,11 +1501,15 @@ export component SpeakerRow inherits Rectangle {
                             calibrating: root.item.calibrating;
                             calibration-enabled: root.item.calibration-enabled;
                             calibration-status: root.item.calibration-status;
+                            calibration-privacy: root.item.calibration-privacy;
                             calibrate => {
                                 root.calibrate();
                             }
                             cancel-calibration => {
                                 root.cancel-calibration();
+                            }
+                            calibration-privacy-requested => {
+                                root.calibration-privacy();
                             }
                             init => {
                                 // The field keeps what was typed (the app's draft).

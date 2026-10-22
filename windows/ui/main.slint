@@ -44,6 +44,7 @@ component SpeakerSection inherits VerticalLayout {
     callback cast-resync(string);
     callback calibrate(string);
     callback cancel-calibration();
+    callback calibration-privacy();
     // The part of a row with the keyboard focus changed; none: it lost it.
     callback focus-changed(string, RowPart);
     // A row built while this is its speaker's ID, or already built when it
@@ -132,6 +133,9 @@ component SpeakerSection inherits VerticalLayout {
                 }
                 cancel-calibration => {
                     root.cancel-calibration();
+                }
+                calibration-privacy => {
+                    root.calibration-privacy();
                 }
             }
         }
@@ -457,6 +461,7 @@ export component MainWindow inherits Window {
     // Calibrate with Microphone on a speaker's row, and its Cancel.
     callback calibrate-requested(string);
     callback cancel-calibration-requested();
+    callback calibration-privacy-requested();
     callback group-toggled(string);
 
     callback group-rename-requested(string);
@@ -941,6 +946,9 @@ export component MainWindow inherits Window {
                         cancel-calibration => {
                             root.cancel-calibration-requested();
                         }
+                        calibration-privacy => {
+                            root.calibration-privacy-requested();
+                        }
                         auto-connect-toggled(id, on) => {
                             root.auto-connect-toggled(id, on);
                         }
@@ -1058,6 +1066,9 @@ export component MainWindow inherits Window {
                         }
                         cancel-calibration => {
                             root.cancel-calibration-requested();
+                        }
+                        calibration-privacy => {
+                            root.calibration-privacy-requested();
                         }
                         auto-connect-toggled(id, on) => {
                             root.auto-connect-toggled(id, on);

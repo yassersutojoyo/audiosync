@@ -74,6 +74,9 @@ export struct SpeakerItem {
     // Under the button: what a running calibration does, how the last one
     // ended, or why none can start; empty otherwise.
     calibration-status: string,
+    // The last calibration found the microphone blocked: Open Privacy
+    // Settings goes next to the button.
+    calibration-privacy: bool,
     auto-connect: bool,
     availability: Availability,
     // An Apple TV AudioSync keeps pairing credentials for: its menu offers

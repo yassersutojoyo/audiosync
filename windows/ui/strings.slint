@@ -954,11 +954,15 @@ export global Strings {
     out property <string> calibration-turn-on: @tr("Turn on streaming and this speaker to calibrate it.");
     out property <string> calibration-microphone-denied: @tr("Windows is blocking microphone access for desktop apps. Turn on \"Let desktop apps access your microphone\" in Settings > Privacy & security > Microphone, and try again.");
     out property <string> calibration-no-microphone: @tr("AudioSync couldn't record from the microphone. Check the input in Settings > System > Sound.");
-    out property <string> calibration-unsupported-rate: @tr("The microphone runs at a sample rate calibration can't use. Set its format to 48000 Hz in Settings > System > Sound, and try again.");
+    out property <string> calibration-unsupported-rate: @tr("The microphone runs at a sample rate calibration can't use. Set its format to 48 kHz in Settings > System > Sound, and try again.");
     out property <string> calibration-source-silent: @tr("The audio source isn't sending audio, so the test sound couldn't play. Play something, or choose All System Audio as the source, and try again.");
     out property <string> calibration-interrupted: @tr("Streaming, the speakers or their delays changed during the measurement.");
+    out property <string> calibration-microphone-changed: @tr("The microphone changed between the two measurements. Keep one microphone as the default input, and try again.");
+    out property <string> calibration-microphone-skipped: @tr("The microphone dropped audio during the measurement, so its timing can't be trusted. Try again.");
+    out property <string> calibration-hands-free: @tr("The default microphone is a Bluetooth headset's hands-free input, and recording from it would switch the headset to call mode. Choose another input in Settings > System > Sound, and try again.");
+    out property <string> calibration-unfinished: @tr("AudioSync couldn't finish working out the delay. Try again.");
     out property <string> calibration-too-short: @tr("The recording was too short. Try again.");
-    out property <string> calibration-too-long: @tr("The delays are too long to measure in one recording at the microphone's sample rate. Lower the largest delay, or set the microphone's format to 48000 Hz in Settings > System > Sound, and try again.");
+    out property <string> calibration-too-long: @tr("The delays are too long to measure in one recording at the microphone's sample rate. Lower the largest delay, or set the microphone's format to 48 kHz in Settings > System > Sound, and try again.");
     out property <string> calibration-implausible: @tr("The two speakers were too far apart to measure.");
 
     public pure function calibrate-label(name: string) -> string {

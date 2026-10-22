@@ -543,6 +543,8 @@ pub struct App {
     on_refresh: RefCell<Option<RefreshHook>>,
     /// Which new notice Narrator is told about.
     notice_announcer: RefCell<NoticeAnnouncer>,
+    /// The calibration ending Narrator was last told about.
+    calibration_announced: RefCell<Option<(String, Phase)>>,
     /// The delay fields holding a number out of range, so Narrator hears
     /// the range once as a field goes out of it (`newly_out_of_range`).
     out_of_range: RefCell<HashSet<String>>,
@@ -723,6 +725,7 @@ impl App {
             frames: RefCell::default(),
             on_refresh: RefCell::new(None),
             notice_announcer: RefCell::default(),
+            calibration_announced: RefCell::default(),
             out_of_range: RefCell::default(),
             announcement_timer: Timer::default(),
             poll_timer: Timer::default(),
@@ -1319,6 +1322,22 @@ impl App {
             Announcement::Clear => self.clear_announcement(),
             Announcement::Keep => {}
         }
+        let ended = calibration_ended(
+            &mut self.calibration_announced.borrow_mut(),
+            &state.calibration,
+        );
+        let calibration_said = ended
+            .and_then(|id| all.iter().find(|row| row.id == id.as_str()))
+            .map(|row| row.calibration_status.clone())
+            .filter(|said| !said.is_empty());
+        if let Some(said) = calibration_said {
+            let said = match notice_said.take() {
+                Some(notice) => strings.invoke_announcements(notice, said),
+                None => said,
+            };
+            self.announce(said.clone());
+            notice_said = Some(said);
+        }
         let sources: Vec<SharedString> = state
             .sources
             .iter()
@@ -1632,6 +1651,8 @@ impl App {
         main.on_cancel_calibration_requested(move || {
             with_app(&w, |app| app.update(|b| b.cancel_calibration()))
         });
+        let w = weak.clone();
+        main.on_calibration_privacy_requested(move || with_app(&w, App::open_microphone_privacy));
         let w = weak.clone();
         main.on_group_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_group(&id))));
         let w = weak.clone();
@@ -1988,10 +2009,8 @@ impl App {
         let _ = self.guide.hide();
     }
 
-    /// Opens the Settings page a guide button asks for; only the pages the
-    /// guide names, nothing else. When the shell doesn't take it, the guide
-    /// says where to find the page.
-    /// Opens the microphone privacy settings for the notice that asks.
+    /// Opens the microphone privacy settings for the notice or the
+    /// calibration that asks.
     fn open_microphone_privacy(&self) {
         let uri = SettingsPage::MicrophonePrivacy.uri();
         if !crate::platform::open_settings(uri) {
@@ -2000,6 +2019,9 @@ impl App {
         }
     }
 
+    /// Opens the Settings page a guide button asks for; only the pages the
+    /// guide names, nothing else. When the shell doesn't take it, the guide
+    /// says where to find the page.
     fn open_guide_page(&self, page: GuidePage) {
         let Some(page) = settings_page(page) else {
             return;
@@ -2782,6 +2804,8 @@ pub fn speaker_item(
             .is_none(),
         // Needs the strings: set by the caller (`App::refresh`).
         calibration_status: SharedString::default(),
+        calibration_privacy: state.calibration.speaker_id.as_deref() == Some(speaker.id.as_str())
+            && state.calibration.phase == Phase::Failed(Failure::MicrophoneDenied),
         auto_connect: speaker.auto_connect,
         availability: availability(speaker.availability),
         paired: speaker.paired,
@@ -2858,6 +2882,28 @@ fn calibration_status(
     }
 }
 
+/// The speaker whose calibration just ended, once per ending, so Narrator
+/// hears how it ended without the focus moving to its line.
+fn calibration_ended(
+    announced: &mut Option<(String, Phase)>,
+    calibration: &ui_model::CalibrationState,
+) -> Option<String> {
+    let ended = matches!(
+        calibration.phase,
+        Phase::Done { .. } | Phase::Failed(_) | Phase::Cancelled
+    );
+    let now = calibration
+        .speaker_id
+        .clone()
+        .filter(|_| ended)
+        .map(|id| (id, calibration.phase));
+    if now == *announced {
+        return None;
+    }
+    announced.clone_from(&now);
+    now.map(|(id, _)| id)
+}
+
 fn calibration_failure(strings: &Strings<'_>, reference: &str, failure: Failure) -> SharedString {
     let subject = |which: Option<Which>| -> SharedString {
         match which {
@@ -2874,6 +2920,10 @@ fn calibration_failure(strings: &Strings<'_>, reference: &str, failure: Failure)
         Failure::UnsupportedRate => strings.get_calibration_unsupported_rate(),
         Failure::SourceSilent => strings.get_calibration_source_silent(),
         Failure::Interrupted => strings.get_calibration_interrupted(),
+        Failure::MicrophoneChanged => strings.get_calibration_microphone_changed(),
+        Failure::MicrophoneSkipped => strings.get_calibration_microphone_skipped(),
+        Failure::HandsFreeMicrophone => strings.get_calibration_hands_free(),
+        Failure::Unfinished => strings.get_calibration_unfinished(),
         Failure::TooShort(_) => strings.get_calibration_too_short(),
         Failure::TooLong(_) => strings.get_calibration_too_long(),
         Failure::Clipped(which) => strings.invoke_calibration_clipped(subject(which)),
@@ -3604,6 +3654,52 @@ mod tests {
         };
         let line = calibration_status(&app.strings(), &state, &speaker);
         assert!(line.contains("412"), "{line}");
+    }
+
+    #[test]
+    fn a_calibrations_ending_is_announced_once() {
+        let mut announced = None;
+        let mut calibration = ui_model::CalibrationState {
+            speaker_id: Some("local:desk".into()),
+            phase: Phase::Running(Step::Preparing),
+            busy: true,
+        };
+        assert_eq!(calibration_ended(&mut announced, &calibration), None);
+        calibration.phase = Phase::Failed(Failure::MicrophoneSkipped);
+        assert_eq!(
+            calibration_ended(&mut announced, &calibration).as_deref(),
+            Some("local:desk")
+        );
+        calibration.busy = false;
+        assert_eq!(
+            calibration_ended(&mut announced, &calibration),
+            None,
+            "said"
+        );
+        calibration.phase = Phase::Idle;
+        assert_eq!(calibration_ended(&mut announced, &calibration), None);
+        calibration.phase = Phase::Failed(Failure::MicrophoneSkipped);
+        assert_eq!(
+            calibration_ended(&mut announced, &calibration).as_deref(),
+            Some("local:desk"),
+            "a second run that ends the same way"
+        );
+    }
+
+    #[test]
+    fn a_blocked_microphone_offers_its_privacy_settings_on_the_row() {
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        backend.set_speaker_enabled("local:desk", true);
+        let app = app_over(backend);
+        let mut state = app.snapshot();
+        let speaker = state.speaker("local:desk").unwrap().clone();
+        assert!(!speaker_item(&state, &speaker, false, true, None).calibration_privacy);
+        state.calibration.speaker_id = Some("local:desk".into());
+        state.calibration.phase = Phase::Failed(Failure::MicrophoneDenied);
+        assert!(speaker_item(&state, &speaker, false, true, None).calibration_privacy);
+        let bt = state.speaker("local:bt").unwrap().clone();
+        assert!(!speaker_item(&state, &bt, false, true, None).calibration_privacy);
     }
 
     /// Opens the desk's and the headset's sync controls, types 400 into the

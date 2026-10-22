@@ -231,6 +231,16 @@ pub enum Failure {
     /// Streaming stopped, the source changed, or the speakers or their
     /// delays changed during the measurement.
     Interrupted,
+    /// The default input device or its rate changed between the two runs.
+    MicrophoneChanged,
+    /// The microphone lost audio during a recording, so its timing can't
+    /// be trusted.
+    MicrophoneSkipped,
+    /// The default input device is a Bluetooth headset's hands-free one,
+    /// which opening would switch to call mode.
+    HandsFreeMicrophone,
+    /// The estimate couldn't run.
+    Unfinished,
     TooShort(Option<Which>),
     TooLong(Option<Which>),
     Clipped(Option<Which>),
@@ -349,6 +359,54 @@ pub struct MicrophoneId {
 pub enum MicrophoneError {
     Denied,
     Missing,
+    HandsFree,
+}
+
+impl From<MicrophoneError> for Failure {
+    fn from(error: MicrophoneError) -> Failure {
+        match error {
+            MicrophoneError::Denied => Failure::MicrophoneDenied,
+            MicrophoneError::Missing => Failure::NoMicrophone,
+            MicrophoneError::HandsFree => Failure::HandsFreeMicrophone,
+        }
+    }
+}
+
+/// When a recording's first frame was made, and where it first lost audio,
+/// from what each packet says. Allocates nothing: the recording thread
+/// keeps one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RecordingClock {
+    pub first_frame_ns: Option<u64>,
+    pub gap_at: Option<usize>,
+}
+
+impl RecordingClock {
+    /// A packet that follows `frames_before` frames at `rate`, recorded
+    /// `age_ns` before `now_ns` (`None`: no position came with it). The
+    /// first frame's time comes from the first packet whose timestamp the
+    /// device vouches for. A discontinuity on the very first packet only
+    /// marks the stream's start.
+    pub fn packet(
+        &mut self,
+        frames_before: usize,
+        rate: u32,
+        now_ns: u64,
+        age_ns: Option<u64>,
+        timestamp_error: bool,
+        discontinuity: bool,
+    ) {
+        if discontinuity && frames_before > 0 && self.gap_at.is_none() {
+            self.gap_at = Some(frames_before);
+        }
+        if self.first_frame_ns.is_some() || timestamp_error || rate == 0 {
+            return;
+        }
+        if let Some(age_ns) = age_ns {
+            let before_ns = (frames_before as u128 * 1_000_000_000 / u128::from(rate)) as u64;
+            self.first_frame_ns = Some(now_ns.saturating_sub(age_ns).saturating_sub(before_ns));
+        }
+    }
 }
 
 /// A running recording of the default input device, mono.
@@ -357,6 +415,8 @@ pub trait Microphone {
     /// When its first frame was recorded, on the core's clock.
     fn first_frame_ns(&self) -> Option<u64>;
     fn frames_recorded(&self) -> usize;
+    /// The frame where the recording first lost audio, if it did.
+    fn gap_at(&self) -> Option<usize>;
     /// Stops recording and gives `count` frames from `start`, fewer when it
     /// recorded less.
     fn take(&mut self, start: usize, count: usize) -> Vec<f32>;
@@ -501,7 +561,7 @@ pub fn microphone_check(
     largest_hold_back_ms: f64,
 ) -> Option<Failure> {
     if first.is_some_and(|first| first != now) {
-        return Some(Failure::Interrupted);
+        return Some(Failure::MicrophoneChanged);
     }
     if !(MIN_RATE..=MAX_RATE).contains(&now.rate) {
         return Some(Failure::UnsupportedRate);
@@ -635,8 +695,7 @@ impl CalibrationRun {
         // before the music fades keeps a denial from pausing it.
         match rig.open_microphone(0.1) {
             Ok(mut probe) => drop(probe.take(0, 0)),
-            Err(MicrophoneError::Denied) => return refuse(Failure::MicrophoneDenied),
-            Err(MicrophoneError::Missing) => return refuse(Failure::NoMicrophone),
+            Err(error) => return refuse(error.into()),
         }
         let largest_hold_back_ms = engine
             .hold_backs_ms
@@ -798,7 +857,9 @@ impl CalibrationRun {
             } => {
                 // Past the deadline the microphone stalled: the estimate
                 // judges what came in.
-                if mic.frames_recorded() < start + frames && now_ns < deadline_ns {
+                let waiting = mic.frames_recorded() < start + frames && now_ns < deadline_ns;
+                let skipped = mic.gap_at().is_some_and(|gap| gap < start + frames);
+                if waiting || skipped {
                     self.stage = Stage::Recording {
                         which,
                         mic,
@@ -806,6 +867,9 @@ impl CalibrationRun {
                         frames,
                         deadline_ns,
                     };
+                    if skipped {
+                        self.fail(rig, Failure::MicrophoneSkipped, now_ns);
+                    }
                     return;
                 }
                 let rate = mic.id().rate;
@@ -858,10 +922,7 @@ impl CalibrationRun {
             + STALL_S;
         let mic = match rig.open_microphone(room) {
             Ok(mic) => mic,
-            Err(MicrophoneError::Denied) => {
-                return self.fail(rig, Failure::MicrophoneDenied, now_ns);
-            }
-            Err(MicrophoneError::Missing) => return self.fail(rig, Failure::NoMicrophone, now_ns),
+            Err(error) => return self.fail(rig, error.into(), now_ns),
         };
         let heard = mic.id();
         if let Some(failure) = microphone_check(
@@ -892,10 +953,13 @@ impl CalibrationRun {
     fn estimate(&mut self, rig: &mut dyn Rig, chosen: Vec<f32>, rate: u32, now_ns: u64) {
         rig.set_solo(None);
         let Some((reference, reference_rate)) = self.reference_take.take() else {
-            return self.fail(rig, Failure::Interrupted, now_ns);
+            return self.fail(rig, Failure::Unfinished, now_ns);
         };
-        let Some(signal) = calibrate::signal(rate).filter(|_| reference_rate == rate) else {
-            return self.fail(rig, Failure::Interrupted, now_ns);
+        if reference_rate != rate {
+            return self.fail(rig, Failure::MicrophoneChanged, now_ns);
+        }
+        let Some(signal) = calibrate::signal(rate) else {
+            return self.fail(rig, Failure::UnsupportedRate, now_ns);
         };
         let old = self.old_offset_ms;
         let (send, receive) = mpsc::channel();
@@ -905,7 +969,7 @@ impl CalibrationRun {
                 let _ = send.send(calibrate::estimate(&signal, &reference, &chosen, rate, old));
             });
         if spawned.is_err() {
-            return self.fail(rig, Failure::Interrupted, now_ns);
+            return self.fail(rig, Failure::Unfinished, now_ns);
         }
         self.stage = Stage::Estimating(receive);
         self.phase = Phase::Running(Step::Estimating);
@@ -919,7 +983,7 @@ impl CalibrationRun {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return,
             Err(TryRecvError::Disconnected) => {
-                return self.fail(rig, Failure::Interrupted, now_ns);
+                return self.fail(rig, Failure::Unfinished, now_ns);
             }
         };
         // The offset moved while the estimate ran: the result is for the
@@ -1046,6 +1110,7 @@ mod tests {
         tap: Arc<CalibrationTap>,
         heard_after_ms: Option<f64>,
         deaf: bool,
+        gap_at: Option<usize>,
     }
 
     impl Microphone for FakeMic {
@@ -1060,6 +1125,10 @@ mod tests {
         fn frames_recorded(&self) -> usize {
             let since = self.now.get().saturating_sub(self.first_ns);
             (since as f64 * f64::from(self.id.rate) / 1e9) as usize
+        }
+
+        fn gap_at(&self) -> Option<usize> {
+            self.gap_at.filter(|gap| *gap < self.frames_recorded())
         }
 
         fn take(&mut self, start: usize, count: usize) -> Vec<f32> {
@@ -1103,6 +1172,8 @@ mod tests {
         solo: Option<String>,
         room: Room,
         mic: Result<MicrophoneId, MicrophoneError>,
+        /// Where each recording loses audio.
+        mic_gap_at: Option<usize>,
         set_offsets: RefCell<Vec<(String, f64)>>,
     }
 
@@ -1136,6 +1207,7 @@ mod tests {
                     device: "mic".to_owned(),
                     rate: MIC_RATE,
                 }),
+                mic_gap_at: None,
                 set_offsets: RefCell::new(Vec::new()),
             }
         }
@@ -1187,6 +1259,7 @@ mod tests {
                 tap: Arc::clone(&self.tap),
                 heard_after_ms,
                 deaf: self.room.deaf,
+                gap_at: self.mic_gap_at,
             }))
         }
 
@@ -1375,6 +1448,56 @@ mod tests {
         rig.mic = Err(MicrophoneError::Missing);
         let refused = CalibrationRun::start(&mut rig, "usb", now, DebugLog::default());
         assert_eq!(refused.err(), Some(Failure::NoMicrophone));
+        rig.mic = Err(MicrophoneError::HandsFree);
+        let refused = CalibrationRun::start(&mut rig, "usb", now, DebugLog::default());
+        assert_eq!(refused.err(), Some(Failure::HandsFreeMicrophone));
+        assert!(!rig.tap.engaged.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_microphone_that_loses_audio_while_recording_changes_nothing() {
+        let mut rig = FakeRig::new();
+        rig.mic_gap_at = Some(MIC_RATE as usize / 2);
+        let mut run = start(&mut rig);
+        run_to_end(&mut rig, &mut run, |_, _| {});
+        assert_eq!(run.phase(), Phase::Failed(Failure::MicrophoneSkipped));
+        assert!(rig.set_offsets.borrow().is_empty());
+        assert_eq!(rig.solo, None);
+    }
+
+    #[test]
+    fn another_microphone_for_the_second_run_changes_nothing() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        run_to_end(&mut rig, &mut run, |rig, run| {
+            if run.phase() == Phase::Running(Step::Measuring(Which::Reference)) {
+                rig.mic = Ok(MicrophoneId {
+                    device: "webcam".to_owned(),
+                    rate: MIC_RATE,
+                });
+            }
+        });
+        assert_eq!(run.phase(), Phase::Failed(Failure::MicrophoneChanged));
+        assert!(rig.set_offsets.borrow().is_empty());
+    }
+
+    #[test]
+    fn the_first_frame_is_timed_from_the_first_packet_the_device_vouches_for() {
+        let rate = 48_000;
+        let mut clock = RecordingClock::default();
+        // The stream's first packet: its discontinuity marks the start.
+        clock.packet(0, rate, 1_000_000_000, Some(5_000_000), true, true);
+        assert_eq!(clock, RecordingClock::default(), "a timestamp error");
+        clock.packet(480, rate, 1_010_000_000, None, false, false);
+        assert_eq!(clock.first_frame_ns, None, "no position");
+        // 960 frames before it, recorded 4 ms ago: 20 ms more before that.
+        clock.packet(960, rate, 1_020_000_000, Some(4_000_000), false, false);
+        assert_eq!(clock.first_frame_ns, Some(996_000_000));
+        clock.packet(1440, rate, 1_030_000_000, Some(1_000_000), false, true);
+        assert_eq!(clock.first_frame_ns, Some(996_000_000), "kept");
+        assert_eq!(clock.gap_at, Some(1440));
+        clock.packet(1920, rate, 1_040_000_000, Some(1_000_000), false, true);
+        assert_eq!(clock.gap_at, Some(1440), "the first gap");
     }
 
     #[test]
@@ -1407,7 +1530,7 @@ mod tests {
         };
         assert_eq!(
             microphone_check(Some(&mic), &other, 2000.0),
-            Some(Failure::Interrupted)
+            Some(Failure::MicrophoneChanged)
         );
         let fast = MicrophoneId {
             device: "mic".to_owned(),
