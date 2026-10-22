@@ -26,6 +26,7 @@ mod data_folder;
 mod debug_log;
 mod guide;
 mod launch_at_login;
+mod network_profile;
 mod now_playing_card;
 mod os_version;
 #[cfg(any(windows, test))]

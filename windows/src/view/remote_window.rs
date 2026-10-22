@@ -8,21 +8,29 @@
 //! published again. The poll timer also takes commands, in case a wake-up
 //! was missed, and writes what the server reports to the debug log, which
 //! never sees a pairing code or a device token.
+//!
+//! While the server listens, a thread reads the networks' profiles, and the
+//! window and a notice say so when one is Public.
 
 use std::cell::RefCell;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
 
 use audiosync_remote::auth::{DeviceFile, TokenStore};
 use audiosync_remote::{Command, Config, RemoteError, RemoteServer};
 use slint::{ComponentHandle, SharedString};
 
-use super::{App, availability, cast_group_note, cast_state, row_state, speaker_kind, with_app};
+use super::{
+    App, REMOTE_PUBLIC_NOTICE_ID, availability, cast_group_note, cast_state, row_state,
+    speaker_kind, with_app,
+};
 use crate::Strings;
+use crate::network_profile::{ProfileSource, PublicNetworkWarning, Watch};
 use crate::remote::{self, Action, RemoteSettings, RowText};
-use crate::ui_model::{AppState, Speaker};
+use crate::ui_model::{AppState, Notice, NoticeMessage, Speaker};
 
 thread_local! {
     /// The app a command wakes on the event loop's thread.
@@ -31,6 +39,10 @@ thread_local! {
 
 /// Pixels a QR module is drawn with before the window scales it.
 const QR_SCALE: usize = 4;
+
+/// How often the networks' profiles are read while the remote listens: a
+/// move to a cafe's Wi-Fi shows within this. The tests read more often.
+const PROFILE_CHECK: Duration = Duration::from_millis(if cfg!(test) { 10 } else { 5000 });
 
 /// Why the remote is on but not listening.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +85,12 @@ pub(super) struct RemoteHost {
     devices_offline: Option<usize>,
     /// Forget All Remote Devices couldn't save the empty list.
     forget_failed: bool,
+    /// The networks' profiles; `None` reads none (the tests that don't fake one).
+    pub(super) profiles: Option<Arc<dyn ProfileSource>>,
+    watch: Option<Watch>,
+    public: PublicNetworkWarning,
+    /// When the Public network notice last appeared.
+    public_since: String,
 }
 
 impl Default for RemoteHost {
@@ -91,8 +109,22 @@ impl Default for RemoteHost {
             qr: None,
             devices_offline: None,
             forget_failed: false,
+            profiles: profile_source(),
+            watch: None,
+            public: PublicNetworkWarning::default(),
+            public_since: String::new(),
         }
     }
+}
+
+#[cfg(all(windows, not(test)))]
+fn profile_source() -> Option<Arc<dyn ProfileSource>> {
+    Some(Arc::new(crate::network_profile::NetworkList))
+}
+
+#[cfg(any(not(windows), test))]
+fn profile_source() -> Option<Arc<dyn ProfileSource>> {
+    None
 }
 
 #[cfg(all(windows, not(test)))]
@@ -262,6 +294,10 @@ impl App {
                 host.server = Some(server);
                 host.commands = Some(receiver);
                 host.problem = None;
+                host.watch = host
+                    .profiles
+                    .clone()
+                    .map(|source| Watch::start(source, PROFILE_CHECK));
             }
             Err(error) => {
                 self.log
@@ -277,6 +313,8 @@ impl App {
         let server = {
             let mut host = self.remote.borrow_mut();
             host.commands = None;
+            host.watch = None;
+            host.public = PublicNetworkWarning::default();
             host.server.take()
         };
         if let Some(server) = server {
@@ -418,9 +456,54 @@ impl App {
         if let Some(server) = self.remote.borrow().server.as_ref() {
             self.log_remote_events(server);
         }
+        self.read_network_profiles();
         if self.remote_window.window().is_visible() {
             self.show_remote_state();
         }
+    }
+
+    /// Takes the newest profile reading, and shows what it changed.
+    fn read_network_profiles(&self) {
+        let public = {
+            let mut host = self.remote.borrow_mut();
+            let Some(reading) = host.watch.as_ref().and_then(Watch::latest) else {
+                return;
+            };
+            let was = host.public;
+            if !host.public.read(reading.as_deref()) {
+                return;
+            }
+            if host.public.notice() && !was.notice() {
+                host.public_since = crate::platform::notice_time();
+            }
+            (host.public.public() != was.public()).then_some(host.public.public())
+        };
+        if let Some(public) = public {
+            self.log.log(|| {
+                format!(
+                    "web remote: {} connected network is Public",
+                    if public { "a" } else { "no" }
+                )
+            });
+        }
+        self.refresh();
+    }
+
+    /// The notice while the remote listens on a Public network.
+    pub(super) fn remote_public_notice(&self) -> Option<Notice> {
+        let host = self.remote.borrow();
+        (host.server.is_some() && host.public.notice()).then(|| Notice {
+            id: REMOTE_PUBLIC_NOTICE_ID,
+            subject: "web remote on a public network".to_owned(),
+            message: NoticeMessage::RemoteOnPublicNetwork,
+            time: host.public_since.clone(),
+        })
+    }
+
+    /// Dismisses the Public network notice if `id` is its id; returns
+    /// whether it was showing.
+    pub(super) fn dismiss_remote_notice(&self, id: u64) -> bool {
+        id == REMOTE_PUBLIC_NOTICE_ID && self.remote.borrow_mut().public.dismiss()
     }
 
     /// Fills the window from the setting and the server.
@@ -448,6 +531,7 @@ impl App {
             }
         };
         window.set_devices(i32::try_from(devices).unwrap_or(i32::MAX));
+        window.set_public_network(host.server.is_some() && host.public.public());
         let Some(server) = host.server.as_ref() else {
             window.set_listening(false);
             return;
@@ -507,9 +591,12 @@ mod tests {
 
     use slint::platform::Key;
 
+    use std::sync::Arc;
+
     use super::super::tests::{app_over, draw_frames, press};
+    use crate::network_profile::{Category, ProfileSource};
     use crate::remote::RemoteSettings;
-    use crate::ui_model::MockBackend;
+    use crate::ui_model::{MockBackend, NoticeMessage};
 
     fn free_port() -> u16 {
         // The port is free once this listener is dropped (and stays so in a test, likely enough).
@@ -749,5 +836,67 @@ mod tests {
         assert_eq!(turned.volume, 20.0);
         assert!(state.running, "turning a speaker on starts streaming");
         assert_eq!(state.master_volume, 40.0);
+    }
+
+    struct FakeProfiles(std::sync::Mutex<Vec<Category>>);
+
+    impl ProfileSource for FakeProfiles {
+        fn connected(&self) -> Option<Vec<Category>> {
+            Some(self.0.lock().unwrap().clone())
+        }
+    }
+
+    fn public_notices(app: &super::App) -> usize {
+        app.snapshot()
+            .notices
+            .iter()
+            .filter(|notice| notice.message == NoticeMessage::RemoteOnPublicNetwork)
+            .count()
+    }
+
+    /// Polls until the window's Public line reads `public`.
+    fn poll_until_public(app: &super::App, public: bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            app.poll_remote();
+            if app.remote_window.get_public_network() == public {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "no reading");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn a_public_network_shows_in_the_window_and_as_a_notice_until_dismissed() {
+        let app = over_loopback(MockBackend::new());
+        let fake = Arc::new(FakeProfiles(std::sync::Mutex::new(vec![
+            Category::Private,
+            Category::Public,
+        ])));
+        app.remote.borrow_mut().profiles = Some(fake.clone());
+        app.ui.borrow_mut().remote.port = free_port();
+        app.main.invoke_remote_requested();
+        app.remote_window.invoke_remote_toggled(true);
+        poll_until_public(&app, true);
+        assert_eq!(public_notices(&app), 1);
+
+        app.main
+            .invoke_notice_dismissed(super::REMOTE_PUBLIC_NOTICE_ID as i32);
+        assert_eq!(public_notices(&app), 0, "dismissed");
+        assert!(
+            app.remote_window.get_public_network(),
+            "the window still says so"
+        );
+
+        *fake.0.lock().unwrap() = vec![Category::Private];
+        poll_until_public(&app, false);
+        *fake.0.lock().unwrap() = vec![Category::Public];
+        poll_until_public(&app, true);
+        assert_eq!(public_notices(&app), 1, "back on a Public network");
+
+        app.remote_window.invoke_remote_toggled(false);
+        assert_eq!(public_notices(&app), 0, "the remote is off");
+        assert!(!app.remote_window.get_public_network());
     }
 }
