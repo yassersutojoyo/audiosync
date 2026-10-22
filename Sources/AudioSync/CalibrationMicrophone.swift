@@ -57,6 +57,17 @@ final class CalibrationMicrophone {
 
     deinit { stop() }
 
+    /// The default input's nominal rate in whole Hz; nil without a default
+    /// input or for a rate the test signal isn't made at (S233).
+    static func defaultInputRate() -> UInt32? {
+        guard let device = MicrophoneHAL.defaultInput() else { return nil }
+        let nominal = MicrophoneHAL.nominalRate(of: device)
+        guard nominal.isFinite, nominal.rounded() == nominal, nominal >= 1, nominal <= Double(UInt32.max),
+              asc_calibration_signal_frames(UInt32(nominal)) > 0
+        else { return nil }
+        return UInt32(nominal)
+    }
+
     /// Host ticks of the first recorded frame; nil before the first buffer.
     var firstFrameTicks: UInt64? {
         let ticks = sink.firstTicks.load(ordering: .acquiring)

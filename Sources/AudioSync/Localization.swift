@@ -253,6 +253,146 @@ struct UIStrings {
         }
     }
 
+    // MARK: Calibrate All Speakers (S235 to S240)
+
+    let calibrateAll = "Calibrate All Speakers"
+    let calibrateAllHint = "Put the microphone where you listen. AudioSync pauses the music, plays a short sweep "
+        + "on each speaker that is on, one at a time, and shows the new delays before anything changes."
+    let calibrateAllIntro = "Put the microphone where you listen and keep the room quiet. "
+        + "Nothing changes until you click Apply."
+
+    /// Why the button is off, under it and as its tooltip.
+    func calibrateAllUnavailable(_ blocker: CalibrateAllBlocker) -> String {
+        switch blocker {
+        case .noReference: "Calibration measures against the Mac's built-in speakers, and they aren't listed."
+        case .notPlaying: "Turn on streaming and the built-in speakers first."
+        case .noOtherSpeaker: "Turn on another speaker to measure it against the built-in speakers."
+        case .busy: "Another calibration is still running."
+        }
+    }
+
+    func calibrateAllProgress(_ progress: CalibrateAllProgress) -> String {
+        switch progress {
+        case .preparing: "Pausing the music…"
+        case .listening(let name, 0): "Listening to \(name)…"
+        case .listening(let name, let sweep): "Listening to \(name), sweep \(sweep) of 2…"
+        case .searching(let name): "Listening to \(name), sweep 1 of 2. AudioSync doesn't know this "
+            + "speaker's delay yet, so this can take up to a minute."
+        }
+    }
+
+    let calibrateAllSpeakerColumn = "Speaker"
+    let calibrateAllCurrentColumn = "Current"
+    let calibrateAllNewColumn = "New"
+    let calibrateAllNone = "None"
+    let calibrateAllApply = "Apply"
+    let calibrateAllUndo = "Undo"
+    let calibrateAllUndoLabel = "Undo the new delays"
+    let calibrateAllClose = "Close"
+    let calibrateAllDone = "Done"
+    let measureAgain = "Measure Again"
+    func measureAgainLabel(of name: String) -> String { "Measure \(name) again" }
+
+    /// The kind line under a row's name.
+    func calibrateAllKind(_ kind: CalibrateAllKind, reference: Bool) -> String {
+        if reference { return "Reference" }
+        switch kind {
+        case .local: return "Local speaker"
+        case .cast: return "Google Cast"
+        case .airPlay: return "AirPlay"
+        }
+    }
+
+    /// A stored delay in a row: signed for a local offset, plain for a
+    /// Cast offset and the AirPlay delay.
+    func calibrateAllValue(_ ms: Double, kind: CalibrateAllKind) -> String {
+        kind == .local ? offsetValue(ms: ms) : delayValue(ms: ms)
+    }
+
+    /// A measured delay with its uncertainty: "+50 ms ± 3 ms".
+    func calibrateAllMeasured(_ ms: Double, uncertaintyMs: Double, kind: CalibrateAllKind) -> String {
+        "\(calibrateAllValue(ms, kind: kind)) ± \(Int(uncertaintyMs.rounded())) \(millisecondsUnit)"
+    }
+
+    /// What the New column says about a row.
+    func calibrateAllResult(_ row: CalibrateAllSheet.Row) -> String {
+        let kind = row.speaker.kind
+        switch row.result {
+        case .reference:
+            return "The other speakers are measured against it."
+        case .notMeasured:
+            return "Not measured."
+        case .certain(let ms, let u, let clamped):
+            let value = calibrateAllMeasured(ms, uncertaintyMs: u, kind: kind)
+            return clamped ? value + ". The end of the range, so this speaker stays a little out of sync." : value
+        case .uncertain(let ms, let u):
+            return calibrateAllMeasured(ms, uncertaintyMs: u, kind: kind)
+                + ". The two sweeps differ too much, so the delay stays. Measure again."
+        case .refused(let failure):
+            return calibrateAllRefusal(failure) + " The delay stays."
+        }
+    }
+
+    /// Why a row's sweeps were refused, in a few words for the sheet.
+    func calibrateAllRefusal(_ failure: CalibrationFailure) -> String {
+        switch failure {
+        case .tooQuiet(.reference): "The microphone barely heard the built-in speakers."
+        case .tooQuiet: "The microphone barely heard this speaker. Turn it up or move the microphone closer."
+        case .clipped: "The microphone was overloaded. Turn the volume down or move the microphone away."
+        case .ambiguousEcho: "An echo or another sound was almost as loud as the sweep."
+        case .tooShort: "The recording was too short."
+        case .tooLong: "The recording would be too long at the microphone's sample rate."
+        case .implausible: "Too far apart from the built-in speakers to measure."
+        default: calibrationFailure(failure)
+        }
+    }
+
+    /// The shared AirPlay delay under the rows (S237).
+    func calibrateAllAirPlay(_ airPlay: CalibrateAllSheet.AirPlay) -> String {
+        let current = airPlay.oldMs.map { delayValue(ms: $0) } ?? calibrateAllNone.lowercased()
+        switch airPlay.state {
+        case .noneCertain:
+            return "No AirPlay speaker was measured clearly, so the AirPlay delay stays at \(current)."
+        case .certain, .spread:
+            let source = airPlay.certainRows > 1
+                ? ", the middle value of the \(airPlay.certainRows) AirPlay speakers measured" : ""
+            let line = "AirPlay delay: \(delayValue(ms: airPlay.newMs)) instead of \(current)\(source)."
+            guard airPlay.state == .spread else { return line }
+            return line + " The AirPlay speakers differ by \(delayValue(ms: airPlay.spreadMs)) among themselves. "
+                + "AudioSync sets one delay for all AirPlay speakers, so that difference stays."
+        }
+    }
+
+    /// Why a run stopped, as a sentence of its own.
+    func calibrateAllEndReason(_ end: CalibrateAllEnd) -> String {
+        switch end {
+        case .cancelled: "Calibration cancelled."
+        case .speakersChanged: "The speakers changed during the measurement."
+        case .speakerOff: "A speaker was turned off during the measurement."
+        case .sourceChanged: "The source was switched during the measurement."
+        case .delaysChanged: "A delay changed during the measurement."
+        case .failed(let failure): calibrationFailure(failure)
+        }
+    }
+
+    /// The sheet's status line.
+    func calibrateAllLine(_ line: CalibrateAllLine) -> String {
+        switch line {
+        case .ended(let end):
+            return calibrateAllEndReason(end) + " Nothing was changed."
+        case .againEnded(let name, let end):
+            return calibrateAllEndReason(end) + " The row for \(name) wasn't changed."
+        case .changedSinceMeasured:
+            return "A delay changed after the measurement, so nothing was applied. Calibrate again."
+        case .applied:
+            return "New delays applied."
+        case .undone:
+            return "Undone. The delays are back as they were."
+        }
+    }
+
+    let calibrateAllNothingCertain = "No speaker was measured clearly, so there is nothing to apply."
+
     // MARK: Main menu
 
     let menuAbout = "About AudioSync"
@@ -867,7 +1007,9 @@ struct UIStrings {
           Every other local speaker has a delay relative to them, which always
           applies: click the time next to it to adjust it. Once that control is
           open, '\(calibrateWithMicrophone)' under it can measure the delay
-          instead. A positive value holds the speaker back; a negative one is
+          instead. '\(calibrateAll)' in the left column measures every
+          speaker that is on, AirPlay and Google Cast too, and shows the new
+          delays before you apply them. A positive value holds the speaker back; a negative one is
           for a speaker that sounds late, such as Bluetooth. While an AirPlay
           speaker is on, every local speaker also waits the 'AirPlay delay'
           under Connected Speakers for it.

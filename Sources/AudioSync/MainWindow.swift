@@ -119,6 +119,7 @@ struct MainView: View {
                     if let track = model.nowPlaying { nowPlayingCard(track, t) }
                     volumeCard(t)
                     equalizerCard(t)
+                    Card { CalibrateAllButton(model: model) }
                     Spacer(minLength: 0)
                 }
                 .frame(width: 280)
@@ -163,6 +164,10 @@ struct MainView: View {
                 .onTapGesture { model.closeDelayPanels() }
         }
         .tint(accent)
+        .sheet(isPresented: Binding(get: { model.calibrateAll.shown },
+                                    set: { if !$0 { model.actions.closeCalibrateAll() } })) {
+            CalibrateAllSheetView(model: model).tint(accent)
+        }
     }
 
     /// The scroll list's soft top and bottom edge, shorter than the gap
