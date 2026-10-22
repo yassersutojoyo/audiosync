@@ -358,7 +358,109 @@ fn a_target_takes_one_airplay2_place_for_all_its_members() {
             UnsupportedReason::OneAirPlay2Session
         )]
     );
-    // One member ending hands nothing on; the last one does.
+    // The target ending hands the place on.
+    sender.remove_target(&id);
+    assert!(
+        playing(&mut events, &sender, &dc.key, 1),
+        "{:?}",
+        events.of(&dc.key)
+    );
+    sender.shutdown();
+}
+
+fn states_of(events: &Events, key: &DeviceKey) -> Vec<SpeakerState> {
+    events
+        .of(key)
+        .into_iter()
+        .filter_map(|event| match event {
+            SpeakerEvent::State(state) => Some(state),
+            _ => None,
+        })
+        .collect()
+}
+
+// covers: P169, P177, P181
+#[test]
+fn one_member_ending_or_lost_hands_nothing_on_and_the_others_play_on() {
+    let _serial = serial();
+    let first = Ap2Server::start(FakeAp2::new());
+    let mut ending = FakeAp2::new();
+    ending
+        .pause
+        .insert("SETUP session".to_owned(), Duration::from_millis(3000));
+    ending.status.insert("SETUP session".to_owned(), 501);
+    let second = Ap2Server::start(ending);
+    let other = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start(true);
+    let mut events = Events::default();
+    let (da, db) = (
+        airplay2_only(&first, 1, "0x0,0x10040"),
+        airplay2_only(&second, 2, "0x0,0x10040"),
+    );
+    let target = pair(vec![member(Some(&da), 1), member(Some(&db), 2)], None);
+    let id = target.id.clone();
+    sender.add_target(target, options(), |_, _| {});
+    assert!(
+        playing(&mut events, &sender, &da.key, 1),
+        "{:?}",
+        events.of(&da.key)
+    );
+    let dc = airplay2_only(&other, 3, "0x0,0x10040");
+    sender.add_speaker(dc.clone(), options());
+    let failed = |s: &SpeakerState| *s == SpeakerState::Failed;
+    assert!(
+        events
+            .wait_state(&sender, &dc.key, 1, LONG, failed)
+            .is_some()
+    );
+
+    let refused = states_of(&events, &dc.key).len();
+
+    // The second member ends for good while the first plays.
+    assert!(
+        events
+            .wait_state(&sender, &db.key, 1, LONG, failed)
+            .is_some(),
+        "{:?}",
+        events.of(&db.key)
+    );
+    assert_eq!(
+        errors(&events, &db.key),
+        vec![ErrorKind::Unsupported(UnsupportedReason::Timing)]
+    );
+    let quiet = Duration::from_millis(1000);
+    assert!(
+        events
+            .wait_state(&sender, &dc.key, refused + 1, quiet, |_| true)
+            .is_none(),
+        "{:?}",
+        events.of(&dc.key)
+    );
+    assert_eq!(
+        states_of(&events, &da.key),
+        [SpeakerState::Connecting, SpeakerState::Playing]
+    );
+
+    // The first member is lost mid-play: its retry keeps the place.
+    drop(first);
+    assert!(
+        events
+            .wait_state(&sender, &da.key, 1, LONG, |s| matches!(
+                s,
+                SpeakerState::Retrying { .. }
+            ))
+            .is_some(),
+        "{:?}",
+        events.of(&da.key)
+    );
+    assert!(
+        events
+            .wait_state(&sender, &dc.key, refused + 1, quiet, |_| true)
+            .is_none(),
+        "{:?}",
+        events.of(&dc.key)
+    );
+    assert!(other.fake().keys().is_empty(), "{:?}", other.fake().keys());
     sender.remove_target(&id);
     assert!(
         playing(&mut events, &sender, &dc.key, 1),
