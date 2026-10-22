@@ -5,7 +5,7 @@
 //! while the switch is off: only `start_session` calls
 //! [`Driver::start_ap2`], and only with it on.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use super::*;
 
@@ -75,18 +75,36 @@ impl Driver {
         };
         // The PTP ports are bound only for a receiver that may take PTP:
         // one that took it before or sets features bit 41 (P157, P158).
-        let ptp_family = self.speakers.get(key).and_then(|speaker| {
-            let wants = self.ptp_timing.contains(key) || speaker.device.features().has(FEATURE_PTP);
-            let first = speaker.device.airplay_socket_addrs().first().copied();
-            first.filter(|_| wants).map(|address| address.ip())
+        let wants = self.speakers.get(key).is_some_and(|speaker| {
+            self.ptp_timing.contains(key) || speaker.device.features().has(FEATURE_PTP)
         });
-        let ptp = ptp_family.and_then(|family| self.ptp_peer(key, family));
+        let mut addresses = self
+            .speakers
+            .get(key)
+            .map(|speaker| speaker.device.airplay_socket_addrs())
+            .unwrap_or_default();
+        let mut ptp = None;
+        if wants && let Some(v6) = self.ptp_v6(key) {
+            let in_family = |address: &SocketAddr| address.ip().to_canonical().is_ipv6() == v6;
+            match addresses.iter().copied().find(in_family) {
+                Some(address) => {
+                    // The session goes over the service's family first (P158).
+                    addresses.sort_by_key(|address| !in_family(address));
+                    ptp = self.ptp_peer(key, address.ip());
+                }
+                None => {
+                    if self.ptp_family_told.insert(key.clone()) {
+                        self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpUnavailable));
+                    }
+                }
+            }
+        }
         let members = self.other_member_addresses(key);
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
         let device = &speaker.device;
-        let mut config = Ap2Config::new(device.airplay_socket_addrs(), speaker.options.volume);
+        let mut config = Ap2Config::new(addresses, speaker.options.volume);
         config.txt_flags = device
             .airplay_txt
             .as_ref()
@@ -249,15 +267,50 @@ impl Driver {
         }
     }
 
+    /// Whether another speaker's AirPlay 2 session may use the PTP
+    /// service: only members of one target share the path (P169, P179).
+    fn ptp_shared(&self, key: &DeviceKey) -> bool {
+        self.speakers
+            .iter()
+            .any(|(other, speaker)| other != key && matches!(speaker.phase, Phase::Ap2(_)))
+    }
+
+    /// The address family, IPv6 when true, of the PTP service for a
+    /// session to `key`: the running service's while another member uses
+    /// it, IPv4 for a target with a member reachable over IPv4, and
+    /// otherwise the family of the receiver's first address (P158, P179).
+    fn ptp_v6(&self, key: &DeviceKey) -> Option<bool> {
+        if let Some(run) = &self.ptp
+            && self.ptp_shared(key)
+        {
+            return Some(run.v6);
+        }
+        let has_v4 = |device: &&Device| {
+            device
+                .airplay_socket_addrs()
+                .iter()
+                .any(|address| !address.ip().to_canonical().is_ipv6())
+        };
+        if self.members_in_view(key).iter().any(has_v4) {
+            return Some(false);
+        }
+        let speaker = self.speakers.get(key)?;
+        let first = speaker.device.airplay_socket_addrs().first()?.ip();
+        Some(first.to_canonical().is_ipv6())
+    }
+
     /// The PTP service for a session to a receiver in `family`'s address
     /// family, bound now if it isn't (P158). When a port can't be bound the
     /// host is told once and the session goes without PTP.
     fn ptp_peer(&mut self, key: &DeviceKey, family: IpAddr) -> Option<PtpPeer> {
         let v6 = family.to_canonical().is_ipv6();
-        if let Some(run) = &self.ptp
-            && run.v6 == v6
-        {
-            return Some(run.peer.clone());
+        if let Some(run) = &self.ptp {
+            if run.v6 == v6 {
+                return Some(run.peer.clone());
+            }
+            if self.ptp_shared(key) {
+                return None;
+            }
         }
         self.close_ptp();
         let mut random = [0u8; 22];
@@ -396,13 +449,24 @@ impl Driver {
                     let remote = self
                         .ap2_active(key)
                         .and_then(|active| active.session.remote());
-                    if let (Some(run), Some(remote)) = (&mut self.ptp, remote) {
-                        run.service.start(remote.ip(), now);
+                    match (&mut self.ptp, remote) {
+                        (Some(run), Some(remote))
+                            if remote.ip().to_canonical().is_ipv6() == run.v6 =>
+                        {
+                            run.service.start(remote.ip(), now);
+                        }
+                        // It connected over another family than the
+                        // service's, which serves only its own (P158).
+                        (Some(_), Some(_)) if self.ptp_family_told.insert(key.clone()) => {
+                            self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpUnavailable));
+                        }
+                        _ => {}
                     }
-                } else if self
-                    .ptp
-                    .as_ref()
-                    .is_some_and(|run| run.service.peers().is_empty())
+                } else if !self.ptp_shared(key)
+                    && self
+                        .ptp
+                        .as_ref()
+                        .is_some_and(|run| run.service.peers().is_empty())
                 {
                     // P158: the service runs only while a session uses PTP.
                     self.close_ptp();

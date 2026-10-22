@@ -301,6 +301,9 @@ pub(crate) struct Driver {
     driven: BTreeMap<TargetId, targets::TargetRun>,
     /// When the sender last tore down a member of a target (P181).
     teardowns: HashMap<DeviceKey, Instant>,
+    /// Speakers told their session goes without PTP because the service
+    /// runs in another address family (P158, P179).
+    ptp_family_told: BTreeSet<DeviceKey>,
 }
 
 impl Driver {
@@ -340,6 +343,7 @@ impl Driver {
             targets: Targets::new(),
             driven: BTreeMap::new(),
             teardowns: HashMap::new(),
+            ptp_family_told: BTreeSet::new(),
         }
     }
 
@@ -1328,8 +1332,9 @@ impl Driver {
         };
         speaker.removing = true;
         if speaker.target.is_some() {
-            self.teardowns.insert(key.clone(), now);
+            self.note_teardown(key.clone(), now);
         }
+        self.ptp_family_told.remove(key);
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };

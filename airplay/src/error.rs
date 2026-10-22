@@ -207,6 +207,8 @@ pub enum Warning {
     /// verification goes on (P56).
     ReceiverSignatureInvalid,
     /// PTP port 319 or 320 couldn't be bound, so a receiver that needs PTP
-    /// timing is Unsupported; told once per sender (P158).
+    /// timing is Unsupported; told once per sender (P158). Also told once
+    /// to a target member with no address in the family the target's PTP
+    /// service runs in, whose session then goes without PTP (P179).
     PtpUnavailable,
 }

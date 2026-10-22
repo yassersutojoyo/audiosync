@@ -7,15 +7,16 @@
 mod common;
 
 use std::collections::{BTreeMap, VecDeque};
-use std::net::{IpAddr, Ipv4Addr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use audiosync_airplay::ap2::bodies;
 use audiosync_airplay::clock::SenderClock;
 use audiosync_airplay::discovery::{
     BrowseEvent, Browser, Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
-use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
+use audiosync_airplay::error::{ErrorKind, UnsupportedReason, Warning};
 use audiosync_airplay::ptp::{PtpPorts, PtpService};
 use audiosync_airplay::sender::{
     Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
@@ -482,6 +483,153 @@ fn under_ptp_every_member_is_served_and_named_to_the_others_in_setpeers() {
         groups[0], groups[1],
         "each session has a groupUUID of its own"
     );
+    sender.shutdown();
+}
+
+// covers: P179
+#[test]
+fn setpeers_names_the_member_then_the_other_members_then_the_sender() {
+    let address = |last: u8| IpAddr::V4(Ipv4Addr::new(192, 0, 2, last));
+    let body = bodies::peers_with_members(address(1), &[address(2), address(3)], &[address(9)]);
+    let list = read_value(&body)
+        .and_then(|value| value.into_array())
+        .expect("an array");
+    let texts: Vec<_> = list.iter().filter_map(|entry| entry.as_string()).collect();
+    assert_eq!(texts, ["192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.9"]);
+}
+
+/// A receiver's PTP ports on loopback, read by the test.
+struct PtpListener {
+    event: UdpSocket,
+    _general: UdpSocket,
+}
+
+impl PtpListener {
+    fn bind() -> PtpListener {
+        let event = UdpSocket::bind("127.0.0.1:0").expect("a socket");
+        event
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .expect("a timeout");
+        let general = UdpSocket::bind("127.0.0.1:0").expect("a socket");
+        PtpListener {
+            event,
+            _general: general,
+        }
+    }
+
+    fn ports(&self) -> PtpPorts {
+        PtpPorts {
+            event: self.event.local_addr().expect("address").port(),
+            general: self._general.local_addr().expect("address").port(),
+        }
+    }
+
+    /// The clock identity of every Sync that arrives within `span`.
+    fn syncs(&self, span: Duration) -> Vec<[u8; 8]> {
+        let deadline = Instant::now() + span;
+        let mut found = Vec::new();
+        let mut buffer = [0u8; 256];
+        while Instant::now() < deadline {
+            let Ok(length) = self.event.recv(&mut buffer) else {
+                continue;
+            };
+            if length >= 28 && buffer[0] & 0x0f == 0 {
+                let mut identity = [0u8; 8];
+                identity.copy_from_slice(&buffer[20..28]);
+                found.push(identity);
+            }
+        }
+        found
+    }
+}
+
+fn ptp_sender(listener: &PtpListener) -> (Sender, HostAudio) {
+    let config = SenderConfig {
+        airplay2: true,
+        ptp_ports: free_ports(),
+        ptp_receiver_ports: listener.ports(),
+        ..SenderConfig::default()
+    };
+    let (sender, writer) = Sender::start(config).expect("the sender starts");
+    (sender, HostAudio::start(writer))
+}
+
+fn assert_one_clock_keeps_syncing(listener: &PtpListener) {
+    let syncs = listener.syncs(Duration::from_millis(1500));
+    assert!(syncs.len() >= 6, "{} Syncs", syncs.len());
+    assert!(
+        syncs.iter().all(|identity| *identity == syncs[0]),
+        "the clock identity changed: {syncs:?}"
+    );
+}
+
+// covers: P179
+#[test]
+fn a_member_in_another_address_family_leaves_the_playing_members_ptp_alone() {
+    let _serial = serial();
+    for ipv6_first in [false, true] {
+        let first = Ap2Server::start(ptp_fake());
+        let listener = PtpListener::bind();
+        let (sender, _host) = ptp_sender(&listener);
+        let mut events = Events::default();
+        let da = airplay2_only(&first, 1, "0x0,0x10240");
+        let closed = TcpListener::bind("127.0.0.1:0")
+            .and_then(|socket| socket.local_addr())
+            .expect("a port")
+            .port();
+        let mut record = airplay_record(closed, 2, "0x0,0x10240");
+        record.addresses = vec![ScopedAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST))];
+        let db =
+            Device::from_records(DeviceKey::Id(device_id(2)), None, Some(&record)).expect("device");
+        let mut members = vec![member(Some(&da), 1), member(Some(&db), 2)];
+        if ipv6_first {
+            members.reverse();
+        }
+        sender.add_target(pair(members, None), options(), |_, _| {});
+        assert!(
+            playing(&mut events, &sender, &da.key, 1),
+            "{:?}",
+            events.of(&da.key)
+        );
+        assert_one_clock_keeps_syncing(&listener);
+        events.drain(&sender);
+        assert!(
+            events
+                .of(&db.key)
+                .contains(&SpeakerEvent::Warning(Warning::PtpUnavailable)),
+            "{:?}",
+            events.of(&db.key)
+        );
+        sender.shutdown();
+    }
+}
+
+// covers: P179
+#[test]
+fn a_member_on_ntp_leaves_the_ptp_service_to_a_member_still_setting_up() {
+    let _serial = serial();
+    let mut slow = ptp_fake();
+    slow.pause
+        .insert("SETUP session".to_owned(), Duration::from_millis(800));
+    let first = Ap2Server::start(slow);
+    let second = Ap2Server::start(FakeAp2::new());
+    let listener = PtpListener::bind();
+    let (sender, _host) = ptp_sender(&listener);
+    let mut events = Events::default();
+    let (da, dc) = (
+        airplay2_only(&first, 1, "0x0,0x10240"),
+        airplay2_only(&second, 3, "0x0,0x10040"),
+    );
+    let target = pair(vec![member(Some(&da), 1), member(Some(&dc), 3)], None);
+    sender.add_target(target, options(), |_, _| {});
+    for key in [&dc.key, &da.key] {
+        assert!(
+            playing(&mut events, &sender, key, 1),
+            "{:?}",
+            events.of(key)
+        );
+    }
+    assert_one_clock_keeps_syncing(&listener);
     sender.shutdown();
 }
 

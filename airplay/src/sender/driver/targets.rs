@@ -282,7 +282,7 @@ impl Driver {
             match &mut speaker.phase {
                 Phase::Active(active) => {
                     active.session.teardown(now);
-                    self.teardowns.insert(key, now);
+                    self.note_teardown(key, now);
                 }
                 Phase::Waiting(_) => speaker.phase = Phase::Waiting(now),
                 _ => {}
@@ -366,32 +366,45 @@ impl Driver {
         self.insert_member(&id, device, options, counters, now);
     }
 
-    /// Addresses of the other members in view, for a member's SETPEERS
-    /// (P179).
-    pub(super) fn other_member_addresses(&self, key: &DeviceKey) -> Vec<std::net::IpAddr> {
+    /// The members in view of the target `key` is a member of: as
+    /// discovery lists them now, or as the host gave them for a target
+    /// discovery doesn't list.
+    pub(super) fn members_in_view(&self, key: &DeviceKey) -> Vec<&Device> {
         let Some(id) = self.speakers.get(key).and_then(|s| s.target.as_ref()) else {
             return Vec::new();
         };
         let Some(run) = self.driven.get(id) else {
             return Vec::new();
         };
-        run.target
+        let target = self.targets.get(id).unwrap_or(&run.target);
+        target
             .members
             .iter()
-            .filter(|member| member.key != *key)
-            .filter_map(|member| {
-                let device = self
-                    .speakers
-                    .get(&member.key)
-                    .map(|speaker| &speaker.device)
-                    .or_else(|| self.directory.device(&member.key))
-                    .or(member.device.as_deref())?;
+            .filter_map(|member| member.device.as_deref())
+            .collect()
+    }
+
+    /// Addresses of the other members in view, for a member's SETPEERS
+    /// (P179).
+    pub(super) fn other_member_addresses(&self, key: &DeviceKey) -> Vec<std::net::IpAddr> {
+        self.members_in_view(key)
+            .into_iter()
+            .filter(|device| device.key != *key)
+            .filter_map(|device| {
                 device
                     .airplay_socket_addrs()
                     .first()
                     .map(|address| address.ip())
             })
             .collect()
+    }
+
+    /// Notes the sender's own TEARDOWN to a member; older notes are past
+    /// their window and go (P181).
+    pub(super) fn note_teardown(&mut self, key: DeviceKey, now: Instant) {
+        self.teardowns
+            .retain(|_, at| now.saturating_duration_since(*at) < SETTLE_AFTER_TEARDOWN);
+        self.teardowns.insert(key, now);
     }
 
     /// Reports the members of each target that play nothing now, when that
