@@ -78,6 +78,7 @@ use super::capture::{
     input_sources, running_app, source_list,
 };
 use super::cast::{CastLink, CastSpeakers};
+use super::cast_address::CastAddress;
 use super::now_playing::{Follow, SharedLabels, TrackInfo, TrackReader, TrackSource};
 #[cfg(test)]
 use super::outputs::OutputParams;
@@ -2254,6 +2255,19 @@ impl<D: Driver> AudioBackend for Controller<D> {
     fn resync_cast(&mut self, id: &str) {
         if let Some(cast) = self.cast.as_mut() {
             cast.resync(id);
+        }
+    }
+
+    fn add_cast_address(&mut self, address: CastAddress) {
+        if let Some(cast) = self.cast.as_mut() {
+            cast.add_address(address);
+        }
+    }
+
+    fn remove_cast_address(&mut self, address: &CastAddress) {
+        if let Some(cast) = self.cast.as_mut() {
+            cast.remove_address(address);
+            self.sync_cast_rule();
         }
     }
 

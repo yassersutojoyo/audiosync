@@ -189,6 +189,20 @@ export global Strings {
     out property <string> rename-group-title: @tr("Rename Group");
     out property <string> rename: @tr("Rename");
     out property <string> refresh-devices: @tr("Refresh Devices");
+
+    // Add by Address…: a Google Cast speaker that discovery can't find.
+    out property <string> cast-add-address: @tr("Add by Address…");
+    out property <string> cast-add-address-title: @tr("Add a Cast Speaker by Address");
+    out property <string> cast-add-address-message: @tr("Use this when a Google Cast speaker doesn't show up. Enter its IP address or host name, and add :port only if it doesn't use 8009.");
+    out property <string> cast-address-label: @tr("Address");
+    // An example in the empty field; a name, never a private address.
+    out property <string> cast-address-placeholder: "speaker.local";
+    out property <string> cast-address-invalid: @tr("That isn't an IP address or host name. Check it and try again.");
+    out property <string> cast-address-not-found: @tr("AudioSync couldn't find a speaker at that address. Check that it's on and try again.");
+    out property <string> add: @tr("Add");
+    // On the menu and under the name of a speaker added that way.
+    out property <string> cast-remove: @tr("Remove");
+    out property <string> cast-added-by-address: @tr("Added by address");
     out property <string> show-virtual-devices: @tr("Show Virtual Devices");
     out property <string> appearance: @tr("Appearance");
     out property <string> appearance-system: @tr("Match System");
@@ -592,7 +606,7 @@ export global Strings {
     out property <string> help-sync-title: @tr("Sync");
     out property <string> help-sync: @tr("The PC's own speakers are the reference and have no delay. Every other local speaker shows its delay relative to them. Without a reference, the speaker with the lowest value plays first and the others wait by the difference.\n\nTo change a delay, select the speaker's row or its value. The −100, −10, +10 and +100 buttons apply at once. You can also type a number, with + or − in front if you like, and apply it with Enter or Ctrl+S (File > Apply Typed Delay); the controls stay open. Selecting the row again, or clicking outside every speaker row, applies what you typed and closes the controls. Escape drops what you typed. A number out of range gets a red outline and a line that gives the range.\n\nHeard a speaker before the others? Raise its delay. Heard it late? Lower it, below 0 if needed.\n\nThe AirPlay Delay card under Connected Speakers sets how long the speakers on this PC wait for the AirPlay speakers. If the AirPlay speakers sound late, raise it; if they sound early, lower it. AudioSync keeps the AirPlay speakers in step with each other, so they have no delay of their own.");
     // The Sync section's second part, after the delay illustration.
-    out property <string> help-sync-cast: @tr("Local and AirPlay speakers play in step: once their delays are set, AudioSync keeps them together. It can't sync Google Cast speakers automatically, so each one has an offset you set by ear in its row. If the Cast speaker sounds late, raise it, and the other speakers wait longer; if it sounds early, lower it. AudioSync keeps the offset for that speaker. One Google Cast speaker plays at a time. A speaker group made in the Google Home app plays as one speaker, with one volume and one offset, and its speakers stay listed on their own. While a Google Cast speaker plays, Resync under its volume restarts the stream, with a short gap, so it lines up at its offset again.");
+    out property <string> help-sync-cast: @tr("Local and AirPlay speakers play in step: once their delays are set, AudioSync keeps them together. It can't sync Google Cast speakers automatically, so each one has an offset you set by ear in its row. If the Cast speaker sounds late, raise it, and the other speakers wait longer; if it sounds early, lower it. AudioSync keeps the offset for that speaker. If a Google Cast speaker doesn't show up, choose Speakers > Add by Address… and enter its IP address or host name. One Google Cast speaker plays at a time. A speaker group made in the Google Home app plays as one speaker, with one volume and one offset, and its speakers stay listed on their own. While a Google Cast speaker plays, Resync under its volume restarts the stream, with a short gap, so it lines up at its offset again.");
     // The Sync section's last part, after the illustration of the two kinds of timing.
     out property <string> help-sync-tune: @tr("Tune with two speakers at first, then add the others one at a time. A track with sharp sounds, such as drums or speech, makes an offset easy to hear.");
     // What each Guide illustration shows, for Narrator, worded as in the Mac Guide.

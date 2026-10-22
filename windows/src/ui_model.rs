@@ -206,6 +206,9 @@ pub struct CastRow {
     pub volume_fixed: bool,
     /// Set for a Cast group, which plays as one speaker.
     pub group: Option<CastGroup>,
+    /// The user added it by address (spec C18): its row says so, and its
+    /// menu removes it.
+    pub added_by_address: bool,
 }
 
 /// A Google Cast group and what its row knows of its members.
@@ -538,6 +541,8 @@ pub struct AppState {
     pub when_source_quits: WhenSourceQuits,
     /// The speaker list's note about Google Cast discovery.
     pub cast_list: CastList,
+    /// A Google Cast sender runs, so Add by Address… can list a speaker.
+    pub cast_by_address: bool,
     /// The microphone calibration a row shows.
     pub calibration: CalibrationState,
     /// Calibrate All Speakers, in its own card.
@@ -687,6 +692,15 @@ impl AppState {
     }
 }
 
+/// Why Add by Address… turned an address down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CastAddressError {
+    /// It isn't a host name or IPv4 address with an optional port.
+    Invalid,
+    /// It doesn't resolve, or nothing answers on its port.
+    NotFound,
+}
+
 /// Why a new group wasn't made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroupError {
@@ -715,6 +729,15 @@ pub trait Backend {
     /// The Resync button of a Google Cast speaker: it restarts its stream so
     /// it plays at its set offset again.
     fn resync_speaker(&mut self, _id: &str) {}
+    /// Add by Address…: lists the Google Cast speaker at `text`, a host
+    /// name or IPv4 address with an optional port, and keeps it for the
+    /// next launch (spec C18). Nothing changes when `text` isn't one, or
+    /// when nothing answers there; finding that out waits up to 3 s.
+    fn add_cast_address(&mut self, _text: &str) -> Result<(), CastAddressError> {
+        Err(CastAddressError::NotFound)
+    }
+    /// Remove, on the row of a speaker added by address.
+    fn remove_cast_address(&mut self, _id: &str) {}
     /// The user entered `ms` in the AirPlay delay field.
     fn set_airplay_delay(&mut self, ms: f64);
     fn set_auto_connect(&mut self, id: &str, on: bool);
@@ -1025,6 +1048,7 @@ impl MockBackend {
             airplay_none_found: false,
             when_source_quits: WhenSourceQuits::Stop,
             cast_list: CastList::Quiet,
+            cast_by_address: true,
             calibration: CalibrationState::default(),
             calibrate_all: CalibrateAllState::default(),
         };
@@ -1206,6 +1230,51 @@ impl Backend for MockBackend {
 
     fn delete_group(&mut self, id: &str) {
         self.state.groups.retain(|g| g.id != id);
+    }
+
+    /// A host under `.invalid` (RFC 6761) stands for one nothing answers.
+    fn add_cast_address(&mut self, text: &str) -> Result<(), CastAddressError> {
+        let Some(address) = crate::audio::cast_address::CastAddress::parse(text) else {
+            return Err(CastAddressError::Invalid);
+        };
+        if address.host().ends_with(".invalid") {
+            return Err(CastAddressError::NotFound);
+        }
+        let id = format!("cc:{}", address.text());
+        if self.state.speaker(&id).is_none() {
+            self.state.speakers.push(Speaker {
+                id,
+                name: address.text(),
+                kind: SpeakerKind::Cast,
+                enabled: false,
+                volume: 100.0,
+                delay_ms: Some(0.0),
+                auto_connect: false,
+                availability: Availability::Open,
+                paired: false,
+                device_volume: None,
+                waiting: None,
+                cast: Some(CastRow {
+                    state: CastState::Idle,
+                    muted: false,
+                    volume_fixed: false,
+                    group: None,
+                    added_by_address: true,
+                }),
+                group: None,
+            });
+        }
+        Ok(())
+    }
+
+    fn remove_cast_address(&mut self, id: &str) {
+        self.state.speakers.retain(|speaker| {
+            speaker.id != id
+                || !speaker
+                    .cast
+                    .as_ref()
+                    .is_some_and(|cast| cast.added_by_address)
+        });
     }
 
     fn set_equalizer(&mut self, settings: EqSettings) {

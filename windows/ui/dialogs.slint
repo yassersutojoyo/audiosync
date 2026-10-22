@@ -379,3 +379,116 @@ export component PasswordDialog inherits Dialog {
         }
     }
 }
+
+// Add by Address…: one field for a Google Cast speaker's IP address or host
+// name, with an optional port. Enter adds, Escape cancels. An address that
+// is turned down keeps the dialog open with the reason above the field.
+export component CastAddressDialog inherits Dialog {
+    in-out property <string> address;
+    // Why the last address was turned down; "" while there is none.
+    in property <string> error;
+    callback confirmed(string);
+    callback cancelled();
+
+    title: Strings.cast-add-address-title;
+    icon: @image-url("../res/audiosync-256.png");
+    background: Tokens.background;
+    default-font-family: Fluent.font;
+    default-font-size: Tokens.font-size-body;
+    preferred-width: 420px;
+
+    // Bumped each time the dialog opens or turns an address down, so the
+    // field takes the cursor.
+    property <int> focus-request;
+
+    public function prepare() {
+        root.focus-request += 1;
+    }
+
+    FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == "w") {
+                root.cancelled();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            padding: 18px;
+            spacing: 12px;
+
+            Text {
+                text: Strings.cast-add-address-message;
+                color: Tokens.text;
+                wrap: word-wrap;
+            }
+
+            // A turned-down address sits on the notice color, as a wrong
+            // PIN does.
+            if root.error != "": Rectangle {
+                background: Tokens.notice;
+                border-radius: Fluent.radius-control;
+
+                HorizontalLayout {
+                    padding: 8px;
+                    spacing: 8px;
+
+                    Glyph {
+                        glyph: Glyphs.warning;
+                        font-size: 14px;
+                        vertical-alignment: top;
+                    }
+
+                    Text {
+                        text: root.error;
+                        color: Tokens.text;
+                        wrap: word-wrap;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+
+            TextField {
+                property <int> focus-request: root.focus-request;
+                text <=> root.address;
+                placeholder-text: Strings.cast-address-placeholder;
+                accessible-label: Strings.cast-address-label;
+                accessible-description: root.error != "" ? root.error : Strings.cast-add-address-message;
+                init => {
+                    self.focus();
+                }
+                changed focus-request => {
+                    self.focus();
+                    self.select-all();
+                }
+                accepted => {
+                    root.confirmed(root.address);
+                }
+            }
+        }
+    }
+
+    DialogButton {
+        text: Strings.add;
+        primary: true;
+        dialog-button-role: accept;
+        clicked => {
+            root.confirmed(root.address);
+        }
+        escape-pressed => {
+            root.cancelled();
+        }
+    }
+
+    DialogButton {
+        text: Strings.cancel;
+        dialog-button-role: reject;
+        clicked => {
+            root.cancelled();
+        }
+        escape-pressed => {
+            root.cancelled();
+        }
+    }
+}

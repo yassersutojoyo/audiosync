@@ -111,6 +111,9 @@ export struct SpeakerItem {
     // (Strings.cast-group-note); empty for any other row.
     cast-group: bool,
     cast-group-note: string,
+    // A Google Cast speaker the user added by address: its note says so,
+    // and its menu has Remove.
+    cast-added-by-address: bool,
     // A stereo pair or home theater group: what it is and its members, or
     // which member is missing (Strings.group-note); empty for any other row.
     group-note: string,

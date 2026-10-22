@@ -1083,6 +1083,8 @@ export component SpeakerRow inherits Rectangle {
     // A Google Cast speaker's Mute (true) or Unmute (false), and its Resync.
     callback cast-muted(bool);
     callback cast-resync();
+    // Remove, for a Google Cast speaker the user added by address.
+    callback cast-remove();
     // Calibrate with Microphone, and Cancel while it runs.
     callback calibrate();
     callback cancel-calibration();
@@ -1142,7 +1144,11 @@ export component SpeakerRow inherits Rectangle {
     // of one that can't simply play, or that is on but can't play right now
     // ("Waiting for device", "Reconnecting…").
     property <string> cast-note: Strings.cast-note(root.item.cast-state, root.item.muted, root.item.cast-group-note);
-    property <string> note: root.item.cast && root.cast-note != "" ? root.cast-note : Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.row-note(root.item.state);
+    property <string> state-note: Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.row-note(root.item.state);
+    property <string> note: root.item.cast && root.cast-note != "" ? root.cast-note : root.state-note == "" && root.item.cast-added-by-address ? Strings.cast-added-by-address : root.state-note;
+    // A Cast speaker's menu has items while it connects or plays, or when
+    // it was added by address (Remove).
+    property <bool> has-menu: !root.item.cast || root.cast-live || root.item.cast-added-by-address;
     property <string> caption: Strings.speaker-caption(root.item.show-kind ? Strings.speaker-kind(root.item.kind) : "", root.note);
 
     border-radius: Fluent.radius-control;
@@ -1162,8 +1168,7 @@ export component SpeakerRow inherits Rectangle {
             }
         }
         menu := ContextMenuArea {
-            // An idle Cast speaker's menu would be empty.
-            enabled: !root.item.cast || root.cast-live;
+            enabled: root.has-menu;
             Menu {
                 // Auto-connect is for local and AirPlay speakers; a Cast
                 // speaker's menu holds the controls under its volume.
@@ -1196,6 +1201,13 @@ export component SpeakerRow inherits Rectangle {
                         root.forget-pairing();
                     }
                 }
+
+                if root.item.cast-added-by-address: MenuItem {
+                    title: Strings.cast-remove;
+                    activated => {
+                        root.cast-remove();
+                    }
+                }
             }
 
             VerticalLayout {
@@ -1218,7 +1230,7 @@ export component SpeakerRow inherits Rectangle {
                         badge := SpeakerBadge {
                             glyph: Glyphs.speaker(root.item.kind);
                             state: root.item.state;
-                            label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind);
+                            label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : root.item.cast-added-by-address ? Strings.cast-group-label(root.item.name, Strings.cast-added-by-address) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind);
                             description: Strings.with-group-note(root.item.group-note, Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.help(root.item.state));
                             toggled => {
                                 root.toggled();
@@ -1372,8 +1384,7 @@ export component SpeakerRow inherits Rectangle {
                                     glyph: Glyphs.more;
                                     label: Strings.speaker-options(root.item.name);
                                     glyph-color: Tokens.teal-text;
-                                    // A Cast speaker's menu has nothing while it is idle.
-                                    enabled: !root.item.cast || root.cast-live;
+                                    enabled: root.has-menu;
                                     clicked => {
                                         // show() takes a point in the menu area, not in this button's layout.
                                         menu.show({
