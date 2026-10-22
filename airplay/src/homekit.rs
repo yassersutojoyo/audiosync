@@ -839,11 +839,19 @@ impl PairVerify {
             STATUS_CONFLICT => {
                 return self.fail(PairingFailure::status(ErrorKind::Busy, 409, "busy"));
             }
-            code => {
+            code @ 400..=499 => {
                 return self.fail(PairingFailure::status(
                     ErrorKind::PairingRequired,
                     code,
                     "verification refused",
+                ));
+            }
+            // A server fault says nothing about the keys, so they stay (P154).
+            code => {
+                return self.fail(PairingFailure::status(
+                    ErrorKind::Refused,
+                    code,
+                    "verification failed",
                 ));
             }
         }

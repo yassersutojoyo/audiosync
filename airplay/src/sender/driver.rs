@@ -1306,10 +1306,18 @@ impl Driver {
     /// OPTIONS before PairingRequired is reported, so a receiver that can't
     /// take AirPlay 1 audio is Unsupported instead (P46).
     fn start_session(&mut self, key: &DeviceKey, now: Instant) {
-        if let Some(speaker) = self.speakers.get_mut(key) {
+        let held = self.speakers.get_mut(key).is_some_and(|speaker| {
             speaker.ap2_waiting = false;
-            speaker.ap2_retry = false;
+            std::mem::take(&mut speaker.ap2_retry)
+        });
+        self.open_session(key, now);
+        // A retry that ends anywhere but a running AirPlay 2 session hands the place on (P169).
+        if held {
+            self.wake_ap2_waiter(now);
         }
+    }
+
+    fn open_session(&mut self, key: &DeviceKey, now: Instant) {
         if self.airplay2 {
             if let Some(device) = self.directory.device(key).cloned()
                 && let Some(speaker) = self.speakers.get_mut(key)
