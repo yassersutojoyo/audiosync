@@ -426,9 +426,11 @@ component CalibrationCard inherits Card {
                     text: Strings.calibrate-all-close;
                     enabled: !root.running;
                     accessible-label: Strings.calibrate-all-close-label;
-                    // Close removes the results and this button with them.
+                    // Close removes itself; the window places the focus when Calibrate All is disabled.
                     clicked => {
-                        calibrate-button.focus();
+                        if root.can-start {
+                            calibrate-button.focus();
+                        }
                         root.close();
                     }
                 }
@@ -1089,7 +1091,7 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    EqualizerCard {
+                    equalizer-card := EqualizerCard {
                         on: root.equalizer-on;
                         clicked => {
                             root.equalizer-requested();
@@ -1125,7 +1127,11 @@ export component MainWindow inherits Window {
                         undo => {
                             root.calibrate-all-undo-requested();
                         }
+                        // Close went away and Calibrate All is disabled: the card above takes the focus.
                         close => {
+                            if !root.calibrate-all-can-start {
+                                equalizer-card.focus();
+                            }
                             root.calibrate-all-close-requested();
                         }
                     }
