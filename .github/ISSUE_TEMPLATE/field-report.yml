@@ -1,34 +1,36 @@
-name: Field report (Mac)
-description: You tried AudioSync 0.5.0 on your Mac. Tell me what you used and whether sync held, good or bad.
+name: Field report
+description: You tried AudioSync on your Mac or PC. Tell me what you used and whether sync held, good or bad.
 body:
   - type: markdown
     attributes:
       value: |
         This is for reports from real setups, including ones where everything worked. If something broke, the "Something's wrong" form fits better.
 
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Which app
+      options:
+        - Mac
+        - Windows
+    validations:
+      required: true
+
   - type: input
     id: app-version
     attributes:
       label: AudioSync version
       description: It's in the About panel.
-      placeholder: "0.5.0"
+      placeholder: "The version shown in About AudioSync"
     validations:
       required: true
 
   - type: input
-    id: macos
+    id: system
     attributes:
-      label: macOS version
-      placeholder: "macOS 15.6"
-    validations:
-      required: true
-
-  - type: input
-    id: mac-model
-    attributes:
-      label: Mac model
-      description: Apple menu > About This Mac.
-      placeholder: "MacBook Air M2, 2022"
+      label: OS version and computer
+      description: On a Mac, Apple menu > About This Mac. On Windows, Settings > System > About.
+      placeholder: "macOS 15.6 on a MacBook Air M2, or Windows 11 24H2 on a Surface Laptop 7"
     validations:
       required: true
 
@@ -51,19 +53,35 @@ body:
         - label: Built-in speakers or headphone jack
         - label: USB
         - label: Bluetooth
-        - label: AirPlay
         - label: HDMI or DisplayPort
+        - label: AirPlay
+        - label: AirPlay 2 (experimental, started with AUDIOSYNC_AIRPLAY2=1)
+        - label: Google Cast
 
   - type: textarea
     id: outputs
     attributes:
       label: Outputs and their delays
-      description: One line per local output that was on, with its make and model if you know it, and the delay you set (0 ms if you left it alone). AirPlay speakers share one AirPlay delay, so list them by name and give that delay once.
+      description: |
+        One line per output that was on, with its make and model if you know it, and the delay you set (0 ms if you left it alone). AirPlay speakers share one AirPlay delay, so list them by name and give that delay once. For a Google Cast speaker, give the offset you set in its row.
       placeholder: |
         Sony WH-1000XM4 (Bluetooth): -220 ms
         USB DAC: 0 ms
         AirPlay speakers: HomePod mini
         AirPlay delay: 0 ms
+        Nest Audio (Google Cast): offset 1200 ms
+    validations:
+      required: true
+
+  - type: dropdown
+    id: resync
+    attributes:
+      label: Did you use Resync on a Google Cast speaker?
+      options:
+        - No Google Cast speaker was on
+        - No, it stayed in sync
+        - Yes, once
+        - Yes, more than once
     validations:
       required: true
 
@@ -83,7 +101,7 @@ body:
     id: duration
     attributes:
       label: How long you listened
-      description: If it drifted, also roughly when.
+      description: If it drifted, also roughly when. If you used Resync, roughly when and whether it helped.
       placeholder: "About 2 hours, drifted after 40 minutes"
     validations:
       required: true
@@ -99,8 +117,10 @@ body:
     attributes:
       label: Debug log
       description: |
-        Quit AudioSync, then start it in Terminal with its debug log on:
-        `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`
-        Listen as usual, quit, and drag `/tmp/audiosync-debug.log` in here. The log starts over at every launch.
+        Quit AudioSync (on Windows, from the tray icon's menu), start it again with its debug log on, listen as usual, quit, and drag the log file in here. The log starts over at every launch.
 
-        The log lists your outputs and the AirPlay speakers on your network by name, and speakers are often named after people. It also lists each AirPlay speaker's ID, which is usually its hardware address. Look it over and replace anything you'd rather not post before attaching it.
+        Mac, in Terminal: `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, the log is `/tmp/audiosync-debug.log`.
+        Windows, in PowerShell in the folder with the exe: `$env:AUDIOSYNC_DEBUG=1; .\audiosync.exe`, the log is `%TEMP%\audiosync-debug.log`.
+        If you tried AirPlay 2, add `AUDIOSYNC_AIRPLAY2=1` the same way: `AUDIOSYNC_DEBUG=1 AUDIOSYNC_AIRPLAY2=1 ...` on a Mac, `$env:AUDIOSYNC_AIRPLAY2=1;` before `.\audiosync.exe` on Windows.
+
+        The log lists your outputs and the AirPlay and Google Cast speakers on your network by name, and speakers are often named after people. It also lists each AirPlay speaker's ID, which is usually its hardware address. Look it over and replace anything you'd rather not post before attaching it.
