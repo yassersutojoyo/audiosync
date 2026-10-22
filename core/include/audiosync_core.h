@@ -720,8 +720,8 @@ uint64_t asc_renderer_shortage_frames(const AscRenderer *renderer);
 bool asc_renderer_least_slack_ns(const AscRenderer *renderer, int64_t *slack_ns);
 
 /* Any thread: the observer's largest drop of the lateness floor below the
-   floor at the reader's latest anchor, in ns (S229); 0 without output times
-   or for a NULL handle. */
+   anchor floor set at the reader's latest anchor, in ns (S229); 0 without
+   output times or for a NULL handle. */
 uint64_t asc_renderer_floor_drop_ns(const AscRenderer *renderer);
 
 /* Any thread: the observer's steps in the device's output times, callbacks

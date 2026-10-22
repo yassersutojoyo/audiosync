@@ -720,11 +720,11 @@ pub struct Renderer {
     opening: usize,
     /// [`RESTART_INCREASE_MS`] in capture frames.
     restart_increase: i64,
-    /// The floor at the reader's latest anchor, fallen since toward the
-    /// callbacks that came earlier, in ns (S209); `None` until the floor has
-    /// formed.
+    /// What Jt counted from at the reader's latest anchor, fallen since
+    /// toward the callbacks that came earlier, in ns (S209); `None` until
+    /// the floor has formed.
     anchor_floor: Option<i64>,
-    /// The floor as it stood at that anchor, for the observer (S229).
+    /// The anchor floor as that anchor set it, for the observer (S229).
     anchored_floor: Option<i64>,
     /// Timed callbacks and their device frames until the floor has formed
     /// (S209); `floor_formed` once they reach [`FLOOR_FORM_CALLBACKS`] and
@@ -981,7 +981,7 @@ impl Renderer {
         let channels = self.channels;
         let frames = out.len() / channels;
         self.update_lead(frames);
-        let late_ns = match (time, now) {
+        let floor_late_ns = match (time, now) {
             (Some(time), Some(now)) => {
                 let late_ns = self.lateness(time, now, frames);
                 self.form_floor(frames);
@@ -992,6 +992,13 @@ impl Renderer {
                 0
             }
         };
+        let (floor_shift_ns, drop_ns) = self.floor_shift_ns(frames);
+        // Jt counts from the anchor floor while the floor lies below it, so
+        // early stamps the anchor floor didn't follow move no anchor and
+        // count no callback as late; the drift is judged as before.
+        let below_ns = u64::try_from(floor_shift_ns.saturating_neg()).unwrap_or(0);
+        let late_ns = floor_late_ns.saturating_sub(below_ns);
+        let shift_ns = floor_shift_ns.saturating_add((floor_late_ns - late_ns) as i64);
         if late_ns > 0 {
             let shared = &*self.shared;
             shared.late_max_ns.fetch_max(late_ns, Ordering::Relaxed);
@@ -1002,7 +1009,6 @@ impl Renderer {
         let late = late_ns as u128 * u128::from(self.capture_rate) / 1_000_000_000;
         self.reader
             .set_late_frames(i64::try_from(late).unwrap_or(i64::MAX));
-        let (shift_ns, drop_ns) = self.floor_shift_ns(frames);
         let shift = i128::from(shift_ns) * i128::from(self.capture_rate) / 1_000_000_000;
         self.reader
             .set_floor_shift_frames(shift.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64);
@@ -1289,8 +1295,8 @@ impl Renderer {
     }
 
     /// How far the lateness floor lies above the anchor floor, and how far
-    /// it lies below the floor at the reader's latest anchor, in ns (S209,
-    /// S229). The floor leaks up and drops with the callbacks,
+    /// it lies below the anchor floor set at the reader's latest anchor, in
+    /// ns (S209, S229). The floor leaks up and drops with the callbacks,
     /// so lateness that builds or fades slower than the leak moves the
     /// floor instead of Jt; judged against the anchor floor, it stays
     /// lateness. A callback of `frames` device frames earlier than the
@@ -1355,7 +1361,7 @@ impl Renderer {
 
     /// The observer at the start of a callback of `frames` device frames
     /// output at `time`, whose lateness floor lies `drop_ns` below the
-    /// floor at the reader's latest anchor (S229). Once the output has
+    /// anchor floor set at the reader's latest anchor (S229). Once the output has
     /// played [`OBSERVE_AFTER_MS`], it counts a step in the output times, keeps the largest drop and,
     /// while the output plays and no stop is under way, the reader's least
     /// slack over the callback's need. It publishes only a new extreme.
@@ -1513,7 +1519,11 @@ impl Renderer {
             self.tracking = RESTART;
         }
         if report.correction != Correction::None {
-            self.anchor_floor = self.late_floor();
+            // What this callback's Jt counted from, so Jf is 0 from here.
+            self.anchor_floor = match (self.late_floor(), self.anchor_floor) {
+                (Some(floor), Some(anchor)) => Some(floor.max(anchor.min(self.callback_late_ns))),
+                (floor, _) => floor,
+            };
             self.anchored_floor = self.anchor_floor;
         }
         if self.awaiting_resync
@@ -2019,5 +2029,101 @@ mod tests {
             (0, 0, 0),
             "{counters:?}"
         );
+    }
+
+    /// [`timed_step`] with a ramp for the block, each frame's value its
+    /// index in the capture: returns how many capture frames behind the
+    /// newest written one the callback's first frame is.
+    fn ramp_step(s: &mut Stepped, written: &mut u64, late_ns: u64) -> f64 {
+        s.now += 10_000_000;
+        let block: Vec<f32> = (*written..*written + 480)
+            .flat_map(|i| [i as f32 / 4_000_000.0; 2])
+            .collect();
+        *written += 480;
+        s.writer.write_at(&block, 480, s.now);
+        let due = s.now + 1_000_000;
+        s.renderer
+            .render_timed_at(&mut s.out, due + 20_000_000, due + late_ns);
+        *written as f64 - f64::from(s.out[0]) * 4_000_000.0
+    }
+
+    /// An output whose callbacks all come 60 ms late, but for `strays`
+    /// early by `early_ns`, whose delay is set to 100 ms after them: how far
+    /// behind the capture it plays a minute later, and its late callbacks.
+    fn resync_after_strays(strays: usize, early_ns: u64) -> (f64, u64) {
+        let late = 60_000_000;
+        let mut s = Stepped::new();
+        let mut written = 0;
+        for _ in 0..200 {
+            ramp_step(&mut s, &mut written, late);
+        }
+        for _ in 0..strays {
+            ramp_step(&mut s, &mut written, late - early_ns);
+        }
+        for _ in 0..5 {
+            ramp_step(&mut s, &mut written, late);
+        }
+        s.control.set_delay_frames(4800);
+        let mut behind = 0.0;
+        for _ in 0..6000 {
+            behind = ramp_step(&mut s, &mut written, late);
+        }
+        let counters = s.control.counters();
+        assert_eq!(counters.resyncs, 1, "{counters:?}");
+        (behind, s.renderer.late_callbacks())
+    }
+
+    // covers: S209
+    #[test]
+    fn a_resync_after_two_stray_early_stamps_lands_where_it_would_without_them() {
+        // Both strays sit in the floor for up to 50 s; anchoring against it
+        // used to put the output their size later for good.
+        let (calm, _) = resync_after_strays(0, 0);
+        for early_ns in [20_000_000, 60_000_000] {
+            let (behind, late_callbacks) = resync_after_strays(2, early_ns);
+            let moved_ms = (behind - calm) / 48.0;
+            assert!(
+                moved_ms.abs() < 2.0,
+                "{early_ns} ns strays: {moved_ms:.2} ms"
+            );
+            assert_eq!(late_callbacks, 0, "{early_ns} ns strays");
+        }
+    }
+
+    /// An output whose first 100 callbacks come `late_ns` late and the
+    /// rest on time, whose delay is set to 100 ms half a second after they
+    /// came on time: how far behind the capture it plays a minute later.
+    fn resync_after_late_start(late_ns: u64) -> f64 {
+        let mut s = Stepped::new();
+        let mut written = 0;
+        for _ in 0..100 {
+            ramp_step(&mut s, &mut written, late_ns);
+        }
+        for _ in 0..50 {
+            ramp_step(&mut s, &mut written, 0);
+        }
+        s.control.set_delay_frames(4800);
+        let mut behind = 0.0;
+        for _ in 0..6000 {
+            behind = ramp_step(&mut s, &mut written, 0);
+        }
+        let counters = s.control.counters();
+        assert_eq!(counters.resyncs, 1, "{counters:?}");
+        behind
+    }
+
+    // covers: S209
+    #[test]
+    fn a_resync_while_the_anchor_floor_falls_after_a_late_start_lands_on_its_delay() {
+        // The anchor lands on the on-time callback, so the anchor floor
+        // must not keep the rest of its fall past it.
+        let calm = resync_after_late_start(0);
+        for late_ns in [15_400_000, 45_000_000] {
+            let moved_ms = (resync_after_late_start(late_ns) - calm) / 48.0;
+            assert!(
+                moved_ms.abs() < 2.0,
+                "{late_ns} ns late start: {moved_ms:.2} ms"
+            );
+        }
     }
 }

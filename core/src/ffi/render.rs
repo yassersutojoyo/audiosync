@@ -864,8 +864,8 @@ pub unsafe extern "C" fn asc_renderer_least_slack_ns(
 }
 
 /// Any thread: the observer's largest drop of the lateness floor below the
-/// floor at the reader's latest anchor, in ns (S229); 0 without output
-/// times or for a null handle.
+/// anchor floor set at the reader's latest anchor, in ns (S229); 0 without
+/// output times or for a null handle.
 ///
 /// # Safety
 ///

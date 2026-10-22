@@ -24,6 +24,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A local speaker that plays later than your earliest one, because you set a delay on it or an AirPlay speaker is on, now keeps its timing when its clock runs a little fast or slow. AudioSync now nudges its speed in small, smoothed steps, where before it drifted until a short skip or moment of silence put it back. Speakers whose clocks keep time are also no longer adjusted back and forth when the system wakes AudioSync a little late now and then.
 - A local speaker at the same sample rate as the captured audio no longer runs short for a moment now and then when its clock runs a little fast. It gets the same small speed adjustments as a speaker at another rate, and plays the audio unchanged between them.
 - On the Mac, a speaker (often Bluetooth) that started while the system was waking AudioSync late, or whose second wake-up came late, no longer plays a little ahead of your other speakers for the whole session, or skips once right after it starts. Once its wake-ups come on time again, it eases to the timing you set, so the same delay lands on the same timing every session.
+- On the Mac, a speaker whose timestamps briefly said it was early no longer ends up that much later than its delay when you change the delay within the next minute, and the debug log no longer counts that minute's wake-ups as late.
 
 ## [0.5.0] - 2026-10-21
 
