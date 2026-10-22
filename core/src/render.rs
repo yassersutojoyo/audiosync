@@ -720,11 +720,11 @@ pub struct Renderer {
     opening: usize,
     /// [`RESTART_INCREASE_MS`] in capture frames.
     restart_increase: i64,
-    /// The floor at the reader's latest anchor, fallen since toward the
-    /// callbacks that came earlier, in ns (S209); `None` until the floor has
-    /// formed.
+    /// The higher of the floor and the anchor floor at the reader's latest
+    /// anchor, fallen since toward the callbacks that came earlier, in ns
+    /// (S209); `None` until the floor has formed.
     anchor_floor: Option<i64>,
-    /// The floor as it stood at that anchor, for the observer (S229).
+    /// The anchor floor as that anchor set it, for the observer (S229).
     anchored_floor: Option<i64>,
     /// Timed callbacks and their device frames until the floor has formed
     /// (S209); `floor_formed` once they reach [`FLOOR_FORM_CALLBACKS`] and
@@ -981,7 +981,7 @@ impl Renderer {
         let channels = self.channels;
         let frames = out.len() / channels;
         self.update_lead(frames);
-        let late_ns = match (time, now) {
+        let floor_late_ns = match (time, now) {
             (Some(time), Some(now)) => {
                 let late_ns = self.lateness(time, now, frames);
                 self.form_floor(frames);
@@ -992,6 +992,13 @@ impl Renderer {
                 0
             }
         };
+        let (floor_shift_ns, drop_ns) = self.floor_shift_ns(frames);
+        // Jt counts from the anchor floor while the floor lies below it, so
+        // early stamps the anchor floor didn't follow move no anchor and
+        // count no callback as late; the drift is judged as before.
+        let below_ns = u64::try_from(floor_shift_ns.saturating_neg()).unwrap_or(0);
+        let late_ns = floor_late_ns.saturating_sub(below_ns);
+        let shift_ns = floor_shift_ns.saturating_add((floor_late_ns - late_ns) as i64);
         if late_ns > 0 {
             let shared = &*self.shared;
             shared.late_max_ns.fetch_max(late_ns, Ordering::Relaxed);
@@ -1002,7 +1009,6 @@ impl Renderer {
         let late = late_ns as u128 * u128::from(self.capture_rate) / 1_000_000_000;
         self.reader
             .set_late_frames(i64::try_from(late).unwrap_or(i64::MAX));
-        let (shift_ns, drop_ns) = self.floor_shift_ns(frames);
         let shift = i128::from(shift_ns) * i128::from(self.capture_rate) / 1_000_000_000;
         self.reader
             .set_floor_shift_frames(shift.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64);
@@ -1289,8 +1295,8 @@ impl Renderer {
     }
 
     /// How far the lateness floor lies above the anchor floor, and how far
-    /// it lies below the floor at the reader's latest anchor, in ns (S209,
-    /// S229). The floor leaks up and drops with the callbacks,
+    /// it lies below the anchor floor set at the reader's latest anchor, in
+    /// ns (S209, S229). The floor leaks up and drops with the callbacks,
     /// so lateness that builds or fades slower than the leak moves the
     /// floor instead of Jt; judged against the anchor floor, it stays
     /// lateness. A callback of `frames` device frames earlier than the
@@ -1355,7 +1361,7 @@ impl Renderer {
 
     /// The observer at the start of a callback of `frames` device frames
     /// output at `time`, whose lateness floor lies `drop_ns` below the
-    /// floor at the reader's latest anchor (S229). Once the output has
+    /// anchor floor set at the reader's latest anchor (S229). Once the output has
     /// played [`OBSERVE_AFTER_MS`], it counts a step in the output times, keeps the largest drop and,
     /// while the output plays and no stop is under way, the reader's least
     /// slack over the callback's need. It publishes only a new extreme.
@@ -1513,7 +1519,11 @@ impl Renderer {
             self.tracking = RESTART;
         }
         if report.correction != Correction::None {
-            self.anchor_floor = self.late_floor();
+            // The anchor landed by Jt, which counts from the higher of the two.
+            self.anchor_floor = match (self.late_floor(), self.anchor_floor) {
+                (Some(floor), Some(anchor)) => Some(floor.max(anchor)),
+                (floor, _) => floor,
+            };
             self.anchored_floor = self.anchor_floor;
         }
         if self.awaiting_resync
