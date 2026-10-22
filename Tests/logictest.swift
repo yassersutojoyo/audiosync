@@ -4131,7 +4131,7 @@ do {
             let airPlay = shown?.airPlay
             let airPlayText = airPlay.map(t.calibrateAllAirPlay) ?? ""
             check(airPlay?.state == .spread && airPlay?.newMs == 1965 && airPlay?.certainRows == 2
-                    && airPlayText.contains("AirPlay delay: 1965 ms instead of 1750 ms")
+                    && airPlayText.contains("AirPlay delay: was 1750 ms. New: 1965 ms")
                     && airPlayText.contains("differ by 30 ms") && airPlayText.contains("one delay for all AirPlay speakers"),
                   "calibrate all: the AirPlay delay is the median, and a spread over 10 ms is said in plain words (S237)",
                   airPlayText)
@@ -4243,9 +4243,9 @@ do {
     let close = t.calibrateAllAirPlay(.init(state: .certain, oldMs: 1750, newMs: 1960, spreadMs: 6, certainRows: 3))
     let apart = t.calibrateAllAirPlay(.init(state: .spread, oldMs: 1750, newMs: 1965, spreadMs: 30, certainRows: 2))
     let single = t.calibrateAllAirPlay(.init(state: .certain, oldMs: 1750, newMs: 1940, spreadMs: 0, certainRows: 1))
-    check(close == "AirPlay delay: 1960 ms instead of 1750 ms, the middle value of the 3 AirPlay speakers measured, spread 6 ms."
-            && apart.contains("the 2 AirPlay speakers measured, spread 30 ms.") && apart.contains("differ by 30 ms")
-            && single == "AirPlay delay: 1940 ms instead of 1750 ms.",
+    check(close == "AirPlay delay: was 1750 ms. New: 1960 ms, the middle value of 3 AirPlay speakers, which are 6 ms apart."
+            && apart.contains("2 AirPlay speakers, which are 30 ms apart.") && apart.contains("differ by 30 ms")
+            && single == "AirPlay delay: was 1750 ms. New: 1940 ms.",
           "calibrate all: the AirPlay median shows its spread, and only a spread over 10 ms gets the plain sentence",
           close + " | " + apart + " | " + single)
 
@@ -4399,7 +4399,9 @@ do {
     let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost]
     check(problems.allSatisfy { let text = t.castProblem($0, name: "Den"); return text.contains("Den") && !text.contains("\u{2014}") },
           "cast: every notice names the speaker, with no em dash")
-    check(t.networkSpeakersNote(airPlayNone: true, cast: .noneFound) == "No AirPlay or Google Cast speakers found on this network"
+    let bothNone = t.networkSpeakersNote(airPlayNone: true, cast: .noneFound) ?? ""
+    check(bothNone.hasPrefix("No AirPlay or Google Cast speakers found yet.") && bothNone.contains("Local Network")
+            && t.airPlayNoneFound.contains("Local Network")
             && t.networkSpeakersNote(airPlayNone: true, cast: .quiet) == t.airPlayNoneFound
             && t.networkSpeakersNote(airPlayNone: false, cast: .searching) == t.castList(.searching)
             && t.networkSpeakersNote(airPlayNone: false, cast: .quiet) == nil

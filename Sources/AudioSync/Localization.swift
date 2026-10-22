@@ -33,7 +33,7 @@ struct UIStrings {
     let willPlayHelp = "Plays when streaming starts. Click to start streaming."
     let statusOff = "Off"
     let retry = "Retry"
-    let retryAirPlayHelp = "Start AudioSync's own AirPlay sender again"
+    let retryAirPlayHelp = "Start AirPlay again"
     /// AudioSync's own AirPlay sender stopped after an internal error; shown
     /// in place of the AirPlay speakers, with Retry.
     let nativeAirPlayFailed = "AudioSync's own AirPlay sender stopped after an internal error."
@@ -355,12 +355,12 @@ struct UIStrings {
             return "No AirPlay speaker was measured clearly, so the AirPlay delay stays at \(current)."
         case .certain, .spread:
             let source = airPlay.certainRows > 1
-                ? ", the middle value of the \(airPlay.certainRows) AirPlay speakers measured, "
-                    + "spread \(delayValue(ms: airPlay.spreadMs))" : ""
-            let line = "AirPlay delay: \(delayValue(ms: airPlay.newMs)) instead of \(current)\(source)."
+                ? ", the middle value of \(airPlay.certainRows) AirPlay speakers, "
+                    + "which are \(delayValue(ms: airPlay.spreadMs)) apart" : ""
+            let line = "AirPlay delay: was \(current). New: \(delayValue(ms: airPlay.newMs))\(source)."
             guard airPlay.state == .spread else { return line }
-            return line + " The AirPlay speakers differ by \(delayValue(ms: airPlay.spreadMs)) among themselves. "
-                + "AudioSync sets one delay for all AirPlay speakers, so that difference stays."
+            return line + " The AirPlay speakers differ by \(delayValue(ms: airPlay.spreadMs)). "
+                + "AudioSync sets one delay for all AirPlay speakers, so they can't all line up exactly."
         }
     }
 
@@ -452,18 +452,18 @@ struct UIStrings {
     func airPlayTurnedOff(name: String, reason: AirPlayPairing.Reason) -> String {
         switch reason {
         case .unreachable:
-            return "\(name) couldn't be reached, so it was turned off. "
+            return "\(name) couldn't be reached, so it's off. "
                 + "Check that the speaker is on and on the same network, then turn it on again."
         case .needsCode:
-            return "\(name) asks for a PIN or password, so it was turned off. "
+            return "\(name) asks for a PIN or password, so it's off. "
                 + "To pair it, turn it on again and enter the code when AudioSync asks. "
                 + "To use it without a code, set Allow Speaker & TV Access on the speaker (or in the Home app) "
                 + "to \"Anyone on the Same Network\" and turn off Require Password."
         case .cancelled:
-            return "Pairing with \(name) was cancelled, so it was turned off. "
+            return "Pairing with \(name) was cancelled, so it's off. "
                 + "To try again, turn it on and enter its PIN or password when AudioSync asks."
         case .stillNeedsCode:
-            return "\(name) still asks for a PIN or password after pairing, so it was turned off. "
+            return "\(name) still asks for a PIN or password after pairing, so it's off. "
                 + "On the speaker (or in the Home app), check that Allow Speaker & TV Access is set to "
                 + "\"Anyone on the Same Network\", then turn \(name) on again in AudioSync."
         }
@@ -472,7 +472,7 @@ struct UIStrings {
     /// A PIN pairing ended without pairing, for another reason than a wrong
     /// PIN (which asks again).
     func nativeAirPlayPairingFailed(name: String) -> String {
-        "Pairing with \(name) didn't finish, so it was turned off. "
+        "Pairing with \(name) didn't finish, so it's off. "
             + "To try again, turn it on and enter the PIN it shows."
     }
 
@@ -483,13 +483,12 @@ struct UIStrings {
 
     /// The notice when AudioSync's own AirPlay sender stopped after an
     /// internal error.
-    let nativeAirPlayStopped = "AudioSync's own AirPlay sender stopped after an internal error, "
-        + "so AirPlay speakers aren't playing. Click Retry under the speakers to start it again. "
-        + "If it keeps stopping, restart AudioSync."
+    let nativeAirPlayStopped = "AirPlay stopped after an internal error, so AirPlay speakers aren't playing. "
+        + "Select Retry to start it again. If it keeps stopping, restart AudioSync."
 
     /// AudioSync's own AirPlay sender can't play to this receiver.
     func nativeAirPlayCantPlay(name: String) -> String {
-        "\(name) can't play from AudioSync's own AirPlay sender yet, so it was turned off."
+        "AudioSync can't play to \(name) yet, so it's off."
     }
 
     /// The receiver turned NTP timing down, and PTP timing isn't available.
@@ -603,7 +602,7 @@ struct UIStrings {
 
     func outputCouldNotStart(names: String) -> String {
         let deviceName = names.isEmpty ? unknownDevice : names
-        return "Could not start output for this speaker, so it was turned off: \(deviceName)\n"
+        return "Could not start output for this speaker, so it's off: \(deviceName)\n"
             + "Another app may be using it exclusively, or the format may be incompatible."
     }
 
@@ -645,7 +644,9 @@ struct UIStrings {
 
     let thisMacSection = "This Mac"
     let connectedSection = "Connected Speakers"
-    let airPlayNoneFound = "No AirPlay speakers found on this network"
+    let airPlayNoneFound = "No AirPlay speakers found yet. " + UIStrings.networkAdvice
+    private static let networkAdvice = "Make sure this Mac is on the same network as your speakers, "
+        + "and that AudioSync is allowed in System Settings → Privacy & Security → Local Network."
     let thisMacNone = "No built-in output"
 
     /// A connected speaker's kind of output: the type icon's tooltip and part
@@ -875,9 +876,9 @@ struct UIStrings {
     /// search goes; nil when there is nothing to say.
     func networkSpeakersNote(airPlayNone: Bool, cast: CastListState) -> String? {
         switch (airPlayNone, cast) {
-        case (true, .noneFound): return "No AirPlay or Google Cast speakers found on this network"
+        case (true, .noneFound): return "No AirPlay or Google Cast speakers found yet. " + UIStrings.networkAdvice
         case (true, .quiet): return airPlayNoneFound
-        case (true, _): return airPlayNoneFound + ". " + (castList(cast) ?? "")
+        case (true, _): return airPlayNoneFound + " " + (castList(cast) ?? "")
         case (false, _): return castList(cast)
         }
     }
@@ -887,8 +888,7 @@ struct UIStrings {
         case .quiet: return nil
         case .searching: return "Looking for Google Cast speakers…"
         case .noneFound:
-            return "No Google Cast speakers found on this network. Make sure this Mac is on the same network as "
-                + "your speakers, and that AudioSync is allowed in System Settings → Privacy & Security → Local Network."
+            return "No Google Cast speakers found yet. " + UIStrings.networkAdvice
         case .failed: return "AudioSync can't look for Google Cast speakers right now. Restart AudioSync to try again."
         }
     }
@@ -1008,8 +1008,8 @@ struct UIStrings {
     let webRemotePortRange = "Enter a port from 1024 to 65535."
     func webRemotePortInUse(_ port: Int) -> String { "Another app is using port \(port). Pick another port." }
     func webRemoteListenFailed(_ port: Int) -> String { "AudioSync couldn't open port \(port) on this Mac. Pick another port." }
-    let webRemoteStartFailed = "The web remote couldn't start. Turn it off and on again to retry."
-    let webRemotePlainHTTP = "The remote uses plain HTTP, so use it on your home network only."
+    let webRemoteStartFailed = "The web remote couldn't start. Turn it off and on again."
+    let webRemotePlainHTTP = "The page uses plain HTTP, so use the web remote only on your home network."
     /// On the phone, under a speaker that asks for a code AudioSync doesn't keep.
     let remoteTurnOnInApp = "Asks for a code: turn it on in AudioSync on the Mac"
 
