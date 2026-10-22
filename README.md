@@ -33,15 +33,16 @@ AirPlay speakers play about two seconds late. Local speakers don't. Play the sam
 
 AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. Mac app, menu bar panel, free, early alpha.
 
-## What's new in 0.5
+## What's new in 0.6
 
-- New audio engine, written in Rust.
-- AudioSync's own AirPlay sender. No more bundled AirPlay engine, so the app is much smaller.
-- Delays work with local speakers only, no AirPlay needed. The Mac's built-in speakers are the reference.
-- Short fades on start and stop, so no clicks.
-- Track info and artwork on AirPlay speakers with a screen, like a TV.
-- A hint when a speaker you turned on is at 25% or less, or muted, in macOS. One click fixes it.
-- License is now GPL-3.0-or-later.
+- Google Cast speakers, on the Mac and on Windows, one at a time. You set each one's offset by ear, and Resync restarts it if it drifts.
+- Cast and AirPlay speakers together: the side that's ahead waits for the other, AirPlay up to 3 s.
+- On the Mac, Calibrate with Microphone sets a local speaker's delay for you.
+- On the Mac, rename a speaker with a double-click on its name.
+- If the app you capture quits, AudioSync can switch to all system audio instead of stopping.
+- Local speakers with a clock that runs a bit fast or slow stay in time with smaller corrections.
+- Diagrams in the Guide.
+- AirPlay 2 is in there, but experimental and off. See below.
 
 The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 
