@@ -449,6 +449,9 @@ pub enum BackendEvent {
     /// Another app holds PTP port 319 or 320, so AirPlay speakers that need
     /// PTP timing can't play (P158); reported once per sender.
     AirPlayPtpPortsTaken,
+    /// A speaker whose session bound the PTP ports after
+    /// [`BackendEvent::AirPlayPtpPortsTaken`] plays: the ports are free.
+    AirPlayPtpFree,
     /// Google Cast speakers appeared, changed or went away, or one's state
     /// changed: list them again.
     CastChanged,

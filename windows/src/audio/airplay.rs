@@ -80,7 +80,7 @@ use audiosync_airplay::sender::{
 };
 use audiosync_airplay::stream::{MAX_DELAY, SpeakerCounters, StreamCounters};
 use audiosync_airplay::targets::{Target, TargetChange, TargetId, TargetKind};
-use audiosync_airplay::volume::{MIN_DB, Volume};
+use audiosync_airplay::volume::{MIN_DB, MUTED_DB, Volume};
 use audiosync_core::fade::InputFade;
 use audiosync_core::resample::Resampler;
 use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, sanitize_position};
@@ -654,6 +654,9 @@ struct VolumeRead {
     set_at: Instant,
     /// It turned a read down: it isn't asked again.
     unreadable: bool,
+    /// The level a read reported, which the sender keeps, until the volume
+    /// is set again.
+    level: Option<Volume>,
 }
 
 impl VolumeRead {
@@ -662,6 +665,7 @@ impl VolumeRead {
             reading: false,
             set_at: now,
             unreadable: false,
+            level: None,
         }
     }
 
@@ -673,6 +677,7 @@ impl VolumeRead {
     fn set(&mut self, now: Instant) {
         self.reading = false;
         self.set_at = now;
+        self.level = None;
     }
 
     /// Asks when an answer could count; returns whether it asked.
@@ -933,6 +938,9 @@ pub struct AirPlaySpeakers {
     calibration_solo: Option<String>,
     /// When the playing speakers were last asked for their own volume.
     volume_read_at: Instant,
+    /// The speakers whose session bound the PTP ports after another app
+    /// held them; the first to play says the ports are free.
+    ptp_opened: BTreeSet<String>,
     /// The sender stopped after an internal error, or its discovery did;
     /// reported once, until a new sender replaces it.
     stopped: bool,
@@ -988,6 +996,7 @@ impl AirPlaySpeakers {
             hold_back_ms: 0.0,
             calibration_solo: None,
             volume_read_at: Instant::now(),
+            ptp_opened: BTreeSet::new(),
             stopped: false,
             store_unsaved: false,
             store_change: None,
@@ -1920,9 +1929,10 @@ impl AirPlaySpeakers {
 
     /// Asks every playing row that may answer for its own volume, every
     /// [`VOLUME_READ_INTERVAL`]: a level changed on the speaker moves its
-    /// slider (P122), a target's through its leader (P180). Not while a
-    /// calibration mutes the others, nor a speaker that scales the samples
-    /// itself (`sv`), whose level isn't the one the slider sets (P121).
+    /// slider (P122), a target's through its leader (P180). Not while
+    /// Calibrate All mutes all but one, nor a speaker that scales the
+    /// samples itself (`sv`), whose level isn't the one the slider sets
+    /// (P121).
     fn read_volumes(&mut self, now: Instant) {
         if now.saturating_duration_since(self.volume_read_at) < VOLUME_READ_INTERVAL {
             return;
@@ -1956,42 +1966,51 @@ impl AirPlaySpeakers {
         self.added_target_of(id)
     }
 
-    /// A read answered `db`: a level other than the one sent, read after
-    /// the volume was last set, becomes the row's slider position without
-    /// going back as a slider change. The sender keeps it too, so a session
-    /// that starts again or a member that joins late gets it. Returns
-    /// whether the speaker list changed.
+    /// A read answered `db`: a level other than the one the speaker has
+    /// from AudioSync, read after the volume was last set, is kept in the
+    /// sender as it is, so a session that starts again or a member that
+    /// joins late gets it, and moves the row's slider as near as it goes
+    /// without going back as a slider change. Returns whether the speaker
+    /// list changed.
     fn volume_reported(&mut self, id: &str, db: f64, now: Instant) -> bool {
         let Some(row) = self.row_of(id) else {
             return false;
         };
-        let sent = self.volume_of(&row).wire_db();
+        let from_slider = self.volume_of(&row);
         let solo = self.calibration_solo.is_some();
         let Some(added) = self.added.get_mut(&row) else {
             return false;
         };
-        if !added.read.answered(now) || solo || (db - sent).abs() < VOLUME_TOLERANCE_DB {
+        if !added.read.answered(now) || solo || !db.is_finite() {
             return false;
         }
-        let Some(position) = slider_position(db, self.master) else {
+        let has = added.read.level.unwrap_or(from_slider).wire_db();
+        if (db - has).abs() < VOLUME_TOLERANCE_DB {
             return false;
+        }
+        let level = if db <= MUTED_DB {
+            Volume::Muted
+        } else {
+            Volume::Db(db)
         };
-        if position == self.settings(&row).volume {
-            return false;
-        }
-        self.entry(&row).volume = position;
-        let volume = self.volume_of(&row);
+        added.read.level = Some(level);
+        added.set_volume(self.link.as_mut(), level);
+        let position = slider_position(db, self.master);
         self.log.log(|| {
+            let slider = position.map_or("unchanged".to_owned(), |position| position.to_string());
             format!(
-                "AirPlay speaker {} volume changed on the speaker: slider at {position} ({})",
+                "AirPlay speaker {} volume changed on the speaker to {}: slider at {slider}",
                 self.label(&row),
-                describe_volume(volume)
+                describe_volume(level)
             )
         });
-        if let Some(added) = self.added.get(&row) {
-            added.set_volume(self.link.as_mut(), volume);
+        match position {
+            Some(position) if position != self.settings(&row).volume => {
+                self.entry(&row).volume = position;
+                true
+            }
+            _ => false,
         }
-        true
     }
 
     /// Sets a speaker's own delay d_s, live.
@@ -2810,6 +2829,9 @@ impl AirPlaySpeakers {
         event: SpeakerEvent,
         events: &mut Vec<BackendEvent>,
     ) -> bool {
+        if event == SpeakerEvent::State(SpeakerState::Playing) && self.ptp_opened.remove(id) {
+            events.push(BackendEvent::AirPlayPtpFree);
+        }
         if let Some(target) = self.added_target_of(id)
             && let Some(changed) = self.member_event(&target, id, &event, events)
         {
@@ -2921,8 +2943,13 @@ impl AirPlaySpeakers {
                     added.read.unreadable = true;
                 }
                 if warning == Warning::PtpUnavailable {
+                    self.ptp_opened.clear();
                     events.push(BackendEvent::AirPlayPtpPortsTaken);
                 }
+                false
+            }
+            SpeakerEvent::PtpOpened => {
+                self.ptp_opened.insert(id.to_owned());
                 false
             }
             SpeakerEvent::VolumeReported(db) => self.volume_reported(id, db, Instant::now()),
@@ -5039,7 +5066,6 @@ pub mod tests {
         }
     }
 
-    /// A stereo pair of two AirPlay 2 speakers, Left and Right (P173).
     /// Lets the volume set when `id` joined settle, so a read counts.
     fn settle(airplay: &mut AirPlaySpeakers, id: &str) {
         let read = &mut airplay.added.get_mut(id).expect("added").read;
@@ -5155,12 +5181,83 @@ pub mod tests {
         // The sender keeps the level for a restart; nothing else goes out.
         assert_eq!(
             fake.take_calls(),
-            [Call::Volume(id.clone(), airplay_volume(80.0, 100.0))]
+            [Call::Volume(id.clone(), Volume::Db(-6.0))]
         );
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -6.0);
         assert!(airplay.poll().is_empty(), "the same level is no news");
         assert!(fake.take_calls().is_empty());
+    }
+
+    #[test]
+    fn the_sender_keeps_the_speakers_own_level_whatever_the_master() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_volume(&id, 80.0);
+        airplay.set_master(50.0);
+        settle(&mut airplay, &id);
+        fake.take_calls();
+        // −3 dB is past what the slider reaches at master 50 (−15 dB): the
+        // slider goes to its end, the speaker keeps −3 dB.
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -3.0);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(airplay.speakers()[0].volume, 100.0);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Volume(id.clone(), Volume::Db(-3.0))]
+        );
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -3.0);
+        assert!(airplay.poll().is_empty(), "the level the sender has");
+        assert!(fake.take_calls().is_empty());
+        // With the slider at its end already, the new level is still kept.
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -1.0);
+        assert!(airplay.poll().is_empty(), "the slider stays where it is");
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Volume(id.clone(), Volume::Db(-1.0))]
+        );
+    }
+
+    #[test]
+    fn a_level_near_the_bottom_moves_the_slider_to_0_without_muting() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -29.9);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(airplay.speakers()[0].volume, 0.0);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Volume(id.clone(), Volume::Db(-29.9))]
+        );
+    }
+
+    #[test]
+    fn only_a_speaker_that_bound_ptp_after_the_clash_clears_it() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
+        warn(&fake, &kitchen, Warning::PtpUnavailable);
+        airplay.poll();
+        fake.state(&kitchen, SpeakerState::Connecting);
+        fake.state(&kitchen, SpeakerState::Playing);
+        assert!(!airplay.poll().contains(&BackendEvent::AirPlayPtpFree));
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: SpeakerEvent::PtpOpened,
+        });
+        fake.state(&kitchen, SpeakerState::Connecting);
+        assert!(!airplay.poll().contains(&BackendEvent::AirPlayPtpFree));
+        fake.state(&kitchen, SpeakerState::Playing);
+        assert!(airplay.poll().contains(&BackendEvent::AirPlayPtpFree));
+        fake.state(&kitchen, SpeakerState::Connecting);
+        fake.state(&kitchen, SpeakerState::Playing);
+        assert!(
+            !airplay.poll().contains(&BackendEvent::AirPlayPtpFree),
+            "told once"
+        );
     }
 
     #[test]
@@ -5249,6 +5346,7 @@ pub mod tests {
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayPtpPortsTaken]);
     }
 
+    /// A stereo pair of two AirPlay 2 speakers, Left and Right (P173).
     fn stereo_pair() -> (Target, Device, Device) {
         let left = airplay2_device(21, "Left", false);
         let right = airplay2_device(22, "Right", false);

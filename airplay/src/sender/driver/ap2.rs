@@ -342,6 +342,9 @@ impl Driver {
                     peer: peer.clone(),
                     v6,
                 });
+                if std::mem::take(&mut self.ptp_unavailable_told) {
+                    self.emit_speaker(key, SpeakerEvent::PtpOpened);
+                }
                 Some(peer)
             }
             Err(_) => {

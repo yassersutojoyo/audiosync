@@ -2003,7 +2003,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::CastMemoryChanged => self.save_cast_memory(),
             BackendEvent::AirPlayPlaying { id } => {
                 self.reconnecting.remove(&id);
-                self.notices.clear(&[NoticeSubject::AirPlayPtp]);
                 self.clear_if(airplay_subject(&id), |message| {
                     matches!(message, NoticeMessage::AirPlayRetrying { .. })
                 });
@@ -2039,6 +2038,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::AirPlayStopped => {
                 self.reconnecting.clear();
                 self.post(NoticeSubject::AirPlay, NoticeMessage::AirPlayStopped);
+            }
+            BackendEvent::AirPlayPtpFree => {
+                self.notices.clear(&[NoticeSubject::AirPlayPtp]);
             }
             BackendEvent::AirPlayPtpPortsTaken => {
                 self.post(
@@ -5466,6 +5468,18 @@ mod tests {
             event: audiosync_airplay::sender::SpeakerEvent::Warning(
                 audiosync_airplay::error::Warning::PtpUnavailable,
             ),
+        });
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayPtpPortsTaken]);
+        // A speaker on AirPlay 1, or one that didn't bind PTP, says nothing
+        // about the ports.
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayPtpPortsTaken]);
+        fake.state(&kitchen, AirPlayState::Connecting);
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::PtpOpened,
         });
         adapter.poll();
         assert_eq!(messages(&adapter), [NoticeMessage::AirPlayPtpPortsTaken]);
