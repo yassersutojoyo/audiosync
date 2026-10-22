@@ -144,7 +144,7 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
     let casts: Vec<Member> = audio
         .cast_speakers()
         .into_iter()
-        .filter(|cast| cast.enabled && !cast.group && cast.status == CastStatus::Playing)
+        .filter(|cast| cast.enabled && cast.status == CastStatus::Playing)
         .map(|cast| Member {
             offset_ms: (cast.offset_ms > 0.0).then_some(cast.offset_ms),
             latency_ms: finite_ms(Some(cast.offset_ms)) + CAST_ALLOWANCE_S * 1000.0,

@@ -1,7 +1,8 @@
 //! Google Cast speakers, through AudioSync's own sender (`audiosync-cast`).
 //!
-//! Discovery lists every device the network announces; a Cast group is
-//! listed as one AudioSync can't play to (spec C3). One device is on at a
+//! Discovery lists every device the network announces. A Cast group plays
+//! as one device, with its own volume and offset (C3, C100, C101), while
+//! each member stays a device of its own (C99). One device is on at a
 //! time (C2): turning a second one on is refused while one is on, and the
 //! host's own refusal of a second session reads the same. A device that is
 //! on joins while streaming is on, through [`CastHost`], whose one worker
@@ -38,9 +39,8 @@ use std::time::Duration;
 
 use audiosync_cast::audio::{AudioReader, AudioWriter, audio_ring};
 use audiosync_cast::discovery::mdns::MdnsBrowser;
-use audiosync_cast::discovery::{
-    BrowseEvent, DeviceId, DeviceKey, DeviceKind, DeviceList, Entry, ListEvent,
-};
+use audiosync_cast::discovery::{BrowseEvent, DeviceId, DeviceKey, DeviceList, Entry, ListEvent};
+use audiosync_cast::group::{GroupMember, GroupRecords};
 use audiosync_cast::host::{
     AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, StartRefused,
 };
@@ -51,7 +51,7 @@ use audiosync_core::fade::Fade;
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
 
 use super::SESSION_RATE;
-use super::backend::{BackendEvent, CastDiscovery, CastInfo, CastProblem, CastStatus};
+use super::backend::{BackendEvent, CastDiscovery, CastGroup, CastInfo, CastProblem, CastStatus};
 use crate::debug_log::DebugLog;
 
 /// The ring between the capture and a Cast session: 2 s at the session
@@ -461,6 +461,11 @@ pub struct CastSpeakers {
     /// A level the user set that no status has answered yet, 0.0 to 1.0.
     requested: Option<(DeviceId, f64)>,
     attempt: Option<Attempt>,
+    /// The addresses of the group in a session, kept current from
+    /// discovery (C90, C103).
+    records: Option<GroupRecords>,
+    /// Each group's members as its latest session listed them (C94).
+    members: BTreeMap<DeviceId, Vec<GroupMember>>,
     streaming: bool,
     log: DebugLog,
     pending: Vec<BackendEvent>,
@@ -476,6 +481,8 @@ impl CastSpeakers {
             volumes: BTreeMap::new(),
             requested: None,
             attempt: None,
+            records: None,
+            members: BTreeMap::new(),
             streaming: false,
             log,
             pending: Vec::new(),
@@ -546,7 +553,12 @@ impl CastSpeakers {
                 .name
                 .clone()
                 .unwrap_or_else(|| device.instance.clone()),
-            group: device.kind == DeviceKind::Group,
+            group: entry.is_group().then(|| CastGroup {
+                members: self
+                    .members
+                    .get(&id)
+                    .map(|members| self.member_names(members)),
+            }),
             enabled: self.enabled == Some(id),
             volume: (level * 100.0).clamp(0.0, 100.0),
             muted: reported.is_some_and(|volume| volume.muted),
@@ -590,6 +602,43 @@ impl CastSpeakers {
         }
     }
 
+    /// A group's members by name: the name of the device a member is, when
+    /// one is listed, else the name the group gives it (C95).
+    fn member_names(&self, members: &[GroupMember]) -> Vec<String> {
+        members
+            .iter()
+            .filter_map(|member| {
+                self.list
+                    .member(member)
+                    .and_then(|entry| entry.device.as_ref())
+                    .and_then(|device| device.name.clone())
+                    .or_else(|| member.name.clone())
+            })
+            .collect()
+    }
+
+    /// Hands the group in a session its latest records and its members'
+    /// addresses (C90, C103).
+    fn follow_group(&self) {
+        let (Some(records), Some(attempt)) = (&self.records, self.attempt) else {
+            return;
+        };
+        if let Some(entry) = self.entry(attempt.device) {
+            records.set_group(entry.addresses.clone());
+        }
+        let members = self
+            .members
+            .get(&attempt.device)
+            .map_or(Vec::new(), |members| {
+                members
+                    .iter()
+                    .filter_map(|member| self.list.member(member))
+                    .flat_map(|entry| entry.addresses.iter().map(|address| address.ip()))
+                    .collect()
+            });
+        records.set_members(members);
+    }
+
     fn entry(&self, id: DeviceId) -> Option<&Entry> {
         self.list.get(DeviceKey::Id(id))
     }
@@ -601,8 +650,8 @@ impl CastSpeakers {
             .unwrap_or_else(|| id.to_string())
     }
 
-    /// Turns a device on or off. A second device is refused while one is
-    /// on (C2), and a group always (C3).
+    /// Turns a device or group on or off. A second one is refused while one
+    /// is on (C2), a member of the group that plays included (C99).
     pub fn set_enabled(&mut self, id: &str, on: bool) -> Result<(), CastProblem> {
         let Some(device) = DeviceId::parse(id) else {
             return Ok(());
@@ -625,13 +674,6 @@ impl CastSpeakers {
                 )
             });
             return Err(CastProblem::Busy);
-        }
-        if self
-            .entry(device)
-            .and_then(|entry| entry.device.as_ref())
-            .is_some_and(|found| found.kind == DeviceKind::Group)
-        {
-            return Err(CastProblem::Group);
         }
         self.enabled = Some(device);
         self.log
@@ -671,10 +713,13 @@ impl CastSpeakers {
         let Some(entry) = self.entry(id) else {
             return;
         };
+        let records = entry
+            .is_group()
+            .then(|| GroupRecords::new(entry.addresses.clone()));
         let target = CastTarget {
             id,
             addresses: entry.addresses.clone(),
-            group: None,
+            group: records.clone(),
         };
         let Some(link) = self.link.as_mut() else {
             return;
@@ -691,6 +736,10 @@ impl CastSpeakers {
                     device: id,
                     status: CastStatus::Connecting,
                 });
+                if records.is_some() {
+                    self.members.remove(&id);
+                }
+                self.records = records;
                 self.list.set_in_session(DeviceKey::Id(id), true);
                 self.log
                     .log(|| format!("Cast: {} connects (attempt {})", self.name(id), attempt.0));
@@ -713,6 +762,7 @@ impl CastSpeakers {
         let Some(attempt) = self.attempt.take() else {
             return;
         };
+        self.records = None;
         if let Some(link) = self.link.as_mut() {
             link.stop();
         }
@@ -810,16 +860,33 @@ impl CastSpeakers {
                 ListEvent::Skipped(_) => {}
                 change => {
                     self.log.log(|| format!("Cast discovery: {change:?}"));
+                    if let ListEvent::Added(DeviceKey::Id(id)) | ListEvent::Identified { id, .. } =
+                        change
+                    {
+                        self.log_group(id);
+                    }
                     self.pending.push(BackendEvent::CastChanged);
                 }
             }
         }
+        self.follow_group();
         while let Some(event) = self.link.as_mut().and_then(|link| link.poll_event()) {
             self.handle(event);
         }
         self.feed.flush();
         self.sync();
         dedup_changed(std::mem::take(&mut self.pending))
+    }
+
+    /// What a group announces, when it is first listed (C89).
+    fn log_group(&self, id: DeviceId) {
+        if let Some(line) = self
+            .entry(id)
+            .and_then(|entry| entry.device.as_ref())
+            .and_then(|device| device.group_log_line())
+        {
+            self.log.log(|| line);
+        }
     }
 
     fn is_current(&self, attempt: AttemptId) -> bool {
@@ -881,6 +948,7 @@ impl CastSpeakers {
                     return;
                 }
                 self.attempt = None;
+                self.records = None;
                 self.feed.hand(None);
                 self.list.set_in_session(DeviceKey::Id(device), false);
                 self.log
@@ -944,7 +1012,20 @@ impl CastSpeakers {
             SessionEvent::Rebuffering => self.log.log(|| "Cast: the device ran dry".to_owned()),
             SessionEvent::Stream(event) => self.log.log(|| format!("Cast stream: {event:?}")),
             SessionEvent::GroupMessage(kind) => self.log.log(|| format!("Cast group: {kind}")),
-            SessionEvent::Members(_) | SessionEvent::Ended(_) => {}
+            SessionEvent::Members(members) => {
+                self.log.log(|| {
+                    format!(
+                        "Cast group {}: {} members ({})",
+                        self.name(device),
+                        members.len(),
+                        self.member_names(&members).join(", ")
+                    )
+                });
+                self.members.insert(device, members);
+                self.follow_group();
+                self.pending.push(BackendEvent::CastChanged);
+            }
+            SessionEvent::Ended(_) => {}
         }
     }
 
@@ -954,6 +1035,7 @@ impl CastSpeakers {
     pub fn begin_shutdown(&mut self) -> Option<JoinHandle<bool>> {
         let mut link = self.link.take()?;
         self.attempt = None;
+        self.records = None;
         self.feed.hand(None);
         thread::Builder::new()
             .name("cast-shutdown".to_owned())
@@ -1008,12 +1090,13 @@ fn describe_end(end: &SessionEnd) -> String {
 #[cfg(test)]
 pub mod tests {
     use std::collections::VecDeque;
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     use audiosync_cast::discovery::{DEVICE_PORT, ServiceRecord};
     use audiosync_cast::error::ConnectError;
 
     use super::*;
+    use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
 
     pub const KITCHEN: &str = "0123456789abcdef0123456789abcdef";
     pub const LIVING: &str = "fedcba9876543210fedcba9876543210";
@@ -1031,6 +1114,8 @@ pub mod tests {
         pub memory: DeviceMemory,
         pub refuse: Option<StartRefused>,
         pub readers: Vec<AudioReader>,
+        /// The group records each start was handed.
+        pub groups: Vec<Option<GroupRecords>>,
         pub events: VecDeque<HostEvent>,
         pub browse: VecDeque<BrowseEvent>,
         next: u64,
@@ -1051,6 +1136,10 @@ pub mod tests {
 
         /// A device announces itself; a port other than 8009 is a group.
         pub fn announce(&self, id: &str, name: &str, port: u16) {
+            self.announce_at(id, name, port, Ipv4Addr::new(192, 0, 2, 10));
+        }
+
+        pub fn announce_at(&self, id: &str, name: &str, port: u16, address: Ipv4Addr) {
             self.state()
                 .browse
                 .push_back(BrowseEvent::Resolved(ServiceRecord {
@@ -1060,7 +1149,7 @@ pub mod tests {
                         format!("id={id}").into_bytes(),
                         format!("fn={name}").into_bytes(),
                     ],
-                    addresses: vec![IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10))],
+                    addresses: vec![IpAddr::V4(address)],
                 }));
         }
 
@@ -1082,6 +1171,7 @@ pub mod tests {
                 return Err(refused);
             }
             state.started.push(target.id);
+            state.groups.push(target.group);
             state.readers.push(reader);
             state.next += 1;
             Ok(AttemptId(state.next))
@@ -1167,8 +1257,8 @@ pub mod tests {
         let speakers = cast.speakers();
         let names: Vec<&str> = speakers.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["Attic", "Kitchen", "Living Room"]);
-        assert!(speakers[0].group);
-        assert!(!speakers[1].group);
+        assert_eq!(speakers[0].group, Some(CastGroup { members: None }));
+        assert_eq!(speakers[1].group, None);
         assert_eq!(speakers[1].id, KITCHEN);
         assert_eq!(cast.discovery(), CastDiscovery::Browsing);
     }
@@ -1256,13 +1346,15 @@ pub mod tests {
     }
 
     #[test]
-    fn a_second_speaker_or_a_group_is_refused() {
+    fn a_second_speaker_is_refused_and_a_group_starts_like_one() {
         let (fake, mut cast) = listed();
         cast.set_enabled(KITCHEN, true).unwrap();
         assert_eq!(cast.set_enabled(LIVING, true), Err(CastProblem::Busy));
         assert_eq!(cast.set_enabled(ATTIC, true), Err(CastProblem::Busy));
         cast.set_enabled(KITCHEN, false).unwrap();
-        assert_eq!(cast.set_enabled(ATTIC, true), Err(CastProblem::Group));
+        assert_eq!(cast.set_enabled(ATTIC, true), Ok(()));
+        assert!(cast.speakers()[0].enabled);
+        cast.set_enabled(ATTIC, false).unwrap();
         assert!(cast.speakers().iter().all(|speaker| !speaker.enabled));
 
         // The host's own refusal reads the same.
@@ -1277,6 +1369,139 @@ pub mod tests {
             problem: CastProblem::Busy,
         }));
         assert!(!cast.speakers()[2].enabled);
+    }
+
+    fn members(device: &str, members: Vec<GroupMember>) -> HostEvent {
+        HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(device),
+            event: SessionEvent::Members(members),
+        }
+    }
+
+    fn member(device_id: &str, name: &str) -> GroupMember {
+        GroupMember {
+            device_id: device_id.to_owned(),
+            id: DeviceId::parse(device_id),
+            name: Some(name.to_owned()),
+        }
+    }
+
+    fn group_members(cast: &CastSpeakers) -> Option<Vec<String>> {
+        cast.speakers()[0]
+            .group
+            .clone()
+            .expect("Attic is a group")
+            .members
+    }
+
+    #[test]
+    fn a_group_plays_as_one_speaker_and_lists_its_members_once_named() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        assert_eq!(fake.state().started, [id(ATTIC)]);
+        let records = fake.state().groups[0].clone().expect("a group's records");
+        let attic: SocketAddr = "192.0.2.10:32123".parse().unwrap();
+        assert_eq!(records.get().group, [attic]);
+        assert_eq!(group_members(&cast), None, "unknown until named");
+
+        // Kitchen by its UUID in another case and with dashes, then one no
+        // listed device matches.
+        fake.report(playing(ATTIC));
+        fake.report(members(
+            ATTIC,
+            vec![
+                member("01234567-89AB-CDEF-0123-456789ABCDEF", "Kitchen speaker"),
+                member("garage", "Garage"),
+            ],
+        ));
+        let events = cast.poll();
+        assert!(events.contains(&BackendEvent::CastChanged));
+        assert_eq!(
+            group_members(&cast),
+            Some(vec!["Kitchen".to_owned(), "Garage".to_owned()])
+        );
+        assert_eq!(records.get().members, [attic.ip()]);
+
+        // A leader handover moves the group's records; its session follows.
+        let leader = Ipv4Addr::new(192, 0, 2, 20);
+        fake.announce_at(ATTIC, "Attic", 32_123, leader);
+        cast.poll();
+        assert_eq!(
+            records.get().group,
+            [SocketAddr::new(IpAddr::V4(leader), 32_123)]
+        );
+
+        // Its members stay speakers of their own, off while the group plays.
+        let kitchen = &cast.speakers()[1];
+        assert_eq!(kitchen.name, "Kitchen");
+        assert!(!kitchen.enabled && kitchen.group.is_none());
+        assert_eq!(cast.set_enabled(KITCHEN, true), Err(CastProblem::Busy));
+
+        // One volume, sent to the group's session.
+        cast.set_volume(ATTIC, 30.0);
+        assert_eq!(fake.state().volumes, [0.3]);
+    }
+
+    #[test]
+    fn a_new_group_session_starts_with_its_members_unknown() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        fake.report(members(ATTIC, vec![member(KITCHEN, "Kitchen")]));
+        cast.poll();
+        cast.set_enabled(ATTIC, false).unwrap();
+        assert_eq!(
+            group_members(&cast),
+            Some(vec!["Kitchen".to_owned()]),
+            "the last list stays while it is off"
+        );
+        cast.set_enabled(ATTIC, true).unwrap();
+        assert_eq!(fake.state().started.len(), 2);
+        assert_eq!(group_members(&cast), None);
+    }
+
+    #[test]
+    fn a_group_keeps_its_own_offset_under_its_id() {
+        let (fake, mut cast) = listed();
+        assert!(cast.set_offset(KITCHEN, 80.0));
+        assert!(cast.set_offset(ATTIC, 240.0));
+        let memory = fake.state().memory.clone();
+        assert_eq!(memory.offset(&id(ATTIC)), Some(Duration::from_millis(240)));
+        assert_eq!(memory.offset(&id(KITCHEN)), Some(Duration::from_millis(80)));
+        assert_eq!(cast.speakers()[0].offset_ms, 240.0);
+        cast.set_enabled(ATTIC, true).unwrap();
+        assert_eq!(cast.anchor(), Some(Duration::from_millis(240)));
+    }
+
+    #[test]
+    fn group_lines_reach_the_debug_log() {
+        let dir = test_dir("cast-group-log");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let fake = FakeCast::default();
+        fake.announce(ATTIC, "Attic", 32_123);
+        let mut cast = CastSpeakers::new(fake.link(), log.clone());
+        cast.poll();
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        fake.report(members(ATTIC, vec![member("garage", "Garage")]));
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(ATTIC),
+            event: SessionEvent::GroupMessage("CASTING_GROUPS".to_owned()),
+        });
+        cast.poll();
+        assert!(log.flush(TEST_FLUSH));
+        assert_in_order(
+            &read_messages(&dir.join(FILE_NAME)),
+            &[
+                "Cast group 00112233445566778899aabbccddeeff on port 32123: ca=- md=-",
+                "Cast: Attic switched on",
+                "Cast group Attic: 1 members (Garage)",
+                "Cast group: CASTING_GROUPS",
+            ],
+        );
     }
 
     #[test]

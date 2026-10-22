@@ -95,9 +95,9 @@ use crate::settings::{
 };
 use crate::ui_model::{
     self, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
-    CalibrationState, CastList, CastRow, CastState, Group, GroupError, Notice, NoticeMessage,
-    PasswordPrompt, PinPhase, PinPrompt, SheetRow, SheetState, Source, SourceKind, Speaker,
-    SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
+    CalibrationState, CastGroup, CastList, CastRow, CastState, Group, GroupError, Notice,
+    NoticeMessage, PasswordPrompt, PinPhase, PinPrompt, SheetRow, SheetState, Source, SourceKind,
+    Speaker, SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -1241,11 +1241,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             volume: speaker.volume,
             delay_ms: Some(speaker.offset_ms),
             auto_connect: false,
-            availability: if speaker.group {
-                Availability::Unsupported
-            } else {
-                Availability::Open
-            },
+            availability: Availability::Open,
             paired: false,
             device_volume: None,
             waiting: (speaker.enabled && speaker.status == CastStatus::Reconnecting)
@@ -1259,6 +1255,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 },
                 muted: speaker.muted,
                 volume_fixed: speaker.volume_fixed,
+                group: speaker.group.map(|group| CastGroup {
+                    members: group.members,
+                }),
             }),
         }
     }
@@ -3069,7 +3068,6 @@ fn ui_cast_problem(problem: CastProblem) -> ui_model::CastProblem {
         CastProblem::Refused => P::Refused,
         CastProblem::TakenOver => P::TakenOver,
         CastProblem::ConnectionLost => P::ConnectionLost,
-        CastProblem::Group => P::Group,
     }
 }
 
@@ -3158,6 +3156,7 @@ mod tests {
     use audiosync_airplay::sender::{SenderEvent, SpeakerState as AirPlayState};
     use audiosync_cast::discovery::DEVICE_PORT;
     use audiosync_cast::error::ConnectError;
+    use audiosync_cast::group::GroupMember;
     use audiosync_cast::host::{AttemptId, DeviceMemory, HostEvent};
     use audiosync_cast::session::{SessionEnd, SessionError as CastSessionError, SessionEvent};
 
@@ -3168,7 +3167,8 @@ mod tests {
     };
     use crate::audio::capture::{CaptureTarget, LoopbackMode};
     use crate::audio::cast::tests::{
-        FakeCast, KITCHEN as CAST_KITCHEN, LIVING as CAST_LIVING, id as cast_device,
+        ATTIC as CAST_ATTIC, FakeCast, KITCHEN as CAST_KITCHEN, LIVING as CAST_LIVING,
+        id as cast_device,
     };
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
     use crate::audio::pairings::PairingStore;
@@ -6805,7 +6805,10 @@ mod tests {
         let row = state.speaker(&cc(CAST_KITCHEN)).expect("Kitchen is listed");
         assert_eq!(row.kind, SpeakerKind::Cast);
         assert_eq!(row.delay_ms, Some(0.0), "the offset the user sets");
-        assert_eq!(row.cast.map(|cast| cast.state), Some(CastState::Idle));
+        assert_eq!(
+            row.cast.as_ref().map(|cast| cast.state),
+            Some(CastState::Idle)
+        );
         assert!(!row.enabled);
         let (this_pc, connected) = state.layout();
         assert!(this_pc.is_empty());
@@ -6869,7 +6872,7 @@ mod tests {
         assert!(state.running, "one Cast speaker is enough");
         let row = state.speaker(&cc(CAST_KITCHEN)).unwrap();
         assert!(row.enabled);
-        assert_eq!(row.cast.unwrap().state, CastState::Connecting);
+        assert_eq!(row.cast.as_ref().unwrap().state, CastState::Connecting);
         assert_eq!(fake.state().started, [cast_device(CAST_KITCHEN)]);
         assert!(adapter.audio.driver().capture_feeds_cast());
 
@@ -6896,6 +6899,65 @@ mod tests {
         adapter.set_speaker_enabled(&cc(CAST_KITCHEN), false);
         assert!(!adapter.snapshot().running, "nothing is on anymore");
         assert_eq!(fake.state().stops, 1);
+    }
+
+    #[test]
+    fn a_cast_group_is_one_row_that_plays_with_its_own_offset() {
+        let (mut adapter, fake) = cast_adapter();
+        fake.announce(CAST_ATTIC, "Attic", 32_123);
+        adapter.poll();
+        let group = |adapter: &AudioAdapter<MockBackend>| {
+            let state = adapter.snapshot();
+            let row = state
+                .speaker(&cc(CAST_ATTIC))
+                .expect("Attic is listed")
+                .clone();
+            assert_eq!(row.kind, SpeakerKind::Cast);
+            assert_eq!(row.availability, Availability::Open);
+            row
+        };
+        let members = |row: &Speaker| {
+            row.cast
+                .as_ref()
+                .and_then(|cast| cast.group.as_ref())
+                .expect("a group")
+                .members
+                .clone()
+        };
+        assert_eq!(members(&group(&adapter)), None);
+        assert!(
+            adapter
+                .snapshot()
+                .speaker(&cc(CAST_KITCHEN))
+                .is_some_and(|row| row.cast.as_ref().is_some_and(|cast| cast.group.is_none())),
+            "a member stays a speaker of its own"
+        );
+
+        adapter.set_speaker_delay(&cc(CAST_ATTIC), 180.0);
+        assert_eq!(
+            fake.state().memory.offset(&cast_device(CAST_ATTIC)),
+            Some(std::time::Duration::from_millis(180))
+        );
+        assert_eq!(fake.state().memory.offset(&cast_device(CAST_KITCHEN)), None);
+
+        adapter.set_speaker_enabled(&cc(CAST_ATTIC), true);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert!(group(&adapter).enabled);
+        assert_eq!(fake.state().started, [cast_device(CAST_ATTIC)]);
+
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: cast_device(CAST_ATTIC),
+            event: SessionEvent::Members(vec![GroupMember {
+                device_id: CAST_KITCHEN.to_owned(),
+                id: Some(cast_device(CAST_KITCHEN)),
+                name: None,
+            }]),
+        });
+        adapter.poll();
+        assert_eq!(members(&group(&adapter)), Some(vec!["Kitchen".to_owned()]));
+        adapter.set_speaker_volume(&cc(CAST_ATTIC), 50.0);
+        assert_eq!(fake.state().volumes, [0.5]);
     }
 
     #[test]
@@ -6945,6 +7007,7 @@ mod tests {
                 .speaker(&cc(CAST_KITCHEN))
                 .unwrap()
                 .cast
+                .as_ref()
                 .unwrap()
                 .state,
             CastState::Playing

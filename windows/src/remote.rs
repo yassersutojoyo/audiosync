@@ -200,7 +200,7 @@ pub fn actions(
                 if !in_range(volume) {
                     return Err(Refusal::OutOfRange);
                 }
-                if speaker.cast.is_some_and(|cast| cast.volume_fixed) {
+                if speaker.cast.as_ref().is_some_and(|cast| cast.volume_fixed) {
                     return Err(Refusal::Unavailable);
                 }
                 actions.push(Action::Volume {
@@ -377,6 +377,7 @@ mod tests {
     fn state() -> AppState {
         let mut cast = speaker("kitchen", SpeakerKind::Cast, Some(300.0));
         cast.cast = Some(CastRow {
+            group: None,
             state: CastState::Idle,
             muted: false,
             volume_fixed: false,
