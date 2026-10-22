@@ -16,6 +16,12 @@ The native sender doesn't run a server or an API of its own, and it publishes no
 
 AudioSync sends no telemetry. Its network traffic is AirPlay discovery (mDNS browsing) and streaming to the speakers you turn on, and album artwork for Spotify's Now Playing, fetched from the https URL Spotify provides.
 
+Google Cast speakers get the audio over plain HTTP on your local network. For each stream AudioSync opens a server on a port the system picks, under a random path, and only answers the Cast speaker's own address.
+
+### Web remote
+
+The web remote is off until you turn it on. Then it serves plain HTTP on port 7655 (unless you pick another) and only lets in private, link-local and loopback addresses, plus IPv6 devices on the same network as your Mac. There's no TLS, so the pairing code and the session cookie cross the network unencrypted. Someone on the same network who can watch the traffic could take over that session and turn your speakers on or off or change their volume and delay. Keep the web remote to a home network you trust.
+
 ### Pairing
 
 An Apple TV that asks for a PIN pairs once, when you turn it on. The PIN goes only to the sender and is never logged. The resulting credentials are kept per receiver in `~/Library/Application Support/AudioSync/Pairings/airplay-pairings.dat`, readable and writable only by your user. That file isn't encrypted, so AudioSync keeps the `Pairings` folder (and only that folder) out of Time Machine backups. A speaker password is kept in memory for the current run only and never written to disk or logged. The sender wipes its own copies of a password or PIN from memory once it no longer needs them. The text field you type it into and the strings the app passes it to the sender in aren't wiped.
