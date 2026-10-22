@@ -20,10 +20,42 @@ final class NowPlayingMonitor {
         let album: String
         let isPlaying: Bool
         var artwork: NSImage?
+        /// Nil when the player gives no length, as for a radio stream.
+        var position: Position? = nil
 
+        /// Leaves `position` out: it moves on all the time, and only a jump
+        /// is news (`Position.jumped`).
         static func == (a: Track, b: Track) -> Bool {
             a.bundleID == b.bundleID && a.title == b.title && a.artist == b.artist
                 && a.album == b.album && a.isPlaying == b.isPlaying && (a.artwork == nil) == (b.artwork == nil)
+        }
+    }
+
+    /// How far into its track a player was when read, and the track's
+    /// length, in seconds, for receivers that show progress (P126).
+    struct Position: Equatable {
+        let elapsed: TimeInterval
+        let length: TimeInterval
+        /// `ProcessInfo.systemUptime`, so a clock step can't move the track.
+        let readAt: TimeInterval
+        let playing: Bool
+
+        /// A seek, or a player clock this far off the Mac's, counts as a jump;
+        /// less is the scripts' own timing.
+        static let jumpTolerance: TimeInterval = 2
+
+        /// Where the track is at `uptime` (`ProcessInfo.systemUptime`).
+        func elapsed(at uptime: TimeInterval) -> TimeInterval {
+            guard playing else { return elapsed }
+            return min(length, elapsed + max(0, uptime - readAt))
+        }
+
+        /// Whether `new` is somewhere `old` doesn't run on to: a seek, another
+        /// length, or a position coming or going.
+        static func jumped(from old: Position?, to new: Position?) -> Bool {
+            guard let old, let new else { return (old == nil) != (new == nil) }
+            return abs(new.length - old.length) > jumpTolerance
+                || abs(new.elapsed - old.elapsed(at: new.readAt)) > jumpTolerance
         }
     }
 
@@ -137,7 +169,7 @@ final class NowPlayingMonitor {
     private func publish(_ next: Track?, reading: Bool) {
         let first = reading && isRunning && !hasReading
         if first { hasReading = true }
-        guard next != track || first else { return }
+        guard next != track || first || Position.jumped(from: track?.position, to: next?.position) else { return }
         track = next
         onChange?(next)
     }
@@ -158,6 +190,9 @@ final class NowPlayingMonitor {
     private func query(_ bundleID: String) -> Track? {
         // Fields joined by a separator that never appears in metadata.
         let sep = "\u{1F}"
+        // Spotify's duration is in ms, Music's in seconds. Whole ms avoid the locale's decimal
+        // separator; rounding outside the tell block keeps scripting additions away from the player.
+        let durationToMs = bundleID == Self.spotify ? 1 : 1000
         let script = """
             with timeout of 2 seconds
                 if application id "\(bundleID)" is not running then return "stopped"
@@ -165,17 +200,35 @@ final class NowPlayingMonitor {
                     set s to player state as string
                     if s is "stopped" then return s
                     set t to current track
-                    return s & "\(sep)" & (name of t) & "\(sep)" & (artist of t) & "\(sep)" & (album of t)
+                    set trackText to s & "\(sep)" & (name of t) & "\(sep)" & (artist of t) & "\(sep)" & (album of t)
+                    set p to missing value
+                    set d to missing value
+                    try
+                        set p to player position
+                        set d to duration of t
+                    end try
                 end tell
+                set timing to ""
+                try
+                    set timing to "\(sep)" & ((round (p * 1000)) as string) & "\(sep)" & ((round (d * \(durationToMs))) as string)
+                end try
+                return trackText & timing
             end timeout
             """
         guard let result = run(target: bundleID, script)?.stringValue else { return nil }
+        let readAt = ProcessInfo.processInfo.systemUptime
         let parts = result.components(separatedBy: sep)
         guard parts.count >= 4, !parts[1].isEmpty else { return nil }
         let appName = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName
             ?? bundleID
+        let isPlaying = parts[0] == "playing"
+        var position: Position?
+        if parts.count >= 6, let elapsedMs = Int(parts[4]), let lengthMs = Int(parts[5]), lengthMs > 0 {
+            position = Position(elapsed: Double(min(max(0, elapsedMs), lengthMs)) / 1000,
+                                length: Double(lengthMs) / 1000, readAt: readAt, playing: isPlaying)
+        }
         return Track(bundleID: bundleID, appName: appName, title: parts[1], artist: parts[2],
-                     album: parts[3], isPlaying: parts[0] == "playing", artwork: nil)
+                     album: parts[3], isPlaying: isPlaying, artwork: nil, position: position)
     }
 
     private func artwork(for t: Track) -> NSImage? {
