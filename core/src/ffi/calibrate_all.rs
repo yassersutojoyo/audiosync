@@ -65,6 +65,8 @@ pub const CALIBRATION_APPLY_NOTHING_CERTAIN: u32 = 2;
 pub const CALIBRATION_APPLY_TOO_MANY: u32 = 3;
 /// A null argument.
 pub const CALIBRATION_APPLY_INVALID: u32 = 4;
+/// [`ApplyRefusal::AlreadyApplied`].
+pub const CALIBRATION_APPLY_ALREADY_APPLIED: u32 = 5;
 
 /// A Calibrate All Speakers run behind an opaque C pointer.
 pub struct AscCalibrationRun {
@@ -436,19 +438,29 @@ pub unsafe extern "C" fn asc_calibration_sheet_ended(sheet: *const AscCalibratio
     end_code(unsafe { &(*sheet).sheet }.ended())
 }
 
+fn apply_code(refusal: ApplyRefusal) -> u32 {
+    match refusal {
+        ApplyRefusal::Ended(_) => CALIBRATION_APPLY_ENDED,
+        ApplyRefusal::NothingCertain => CALIBRATION_APPLY_NOTHING_CERTAIN,
+        ApplyRefusal::AlreadyApplied => CALIBRATION_APPLY_ALREADY_APPLIED,
+    }
+}
+
 /// The changes Apply writes into `changes`, their number into `*count`,
-/// with an ASC_CALIBRATION_APPLY_ code. Only APPLY_OK writes changes;
+/// with an ASC_CALIBRATION_APPLY_ code. Only APPLY_OK writes changes, and
+/// spends the sheet: a second Apply and Measure Again are refused.
 /// APPLY_TOO_MANY sets `*count` to the number needed, which is never more
-/// than the rows.
+/// than the rows, and leaves the sheet as it was.
 ///
 /// # Safety
 ///
-/// `sheet` is null or a live handle; `changes` is null or holds `capacity`
-/// aligned, writable changes and `count` is null or points to an aligned,
-/// writable size, none of which anything else touches during the call.
+/// `sheet` is null or a live handle no other call uses now; `changes` is
+/// null or holds `capacity` aligned, writable changes and `count` is null or
+/// points to an aligned, writable size, none of which anything else touches
+/// during the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_calibration_sheet_apply(
-    sheet: *const AscCalibrationSheet,
+    sheet: *mut AscCalibrationSheet,
     changes: *mut AscCalibrationChange,
     capacity: usize,
     count: *mut usize,
@@ -456,18 +468,21 @@ pub unsafe extern "C" fn asc_calibration_sheet_apply(
     if sheet.is_null() || count.is_null() || (changes.is_null() && capacity > 0) {
         return CALIBRATION_APPLY_INVALID;
     }
-    // SAFETY: a live handle, by the caller's contract.
-    let sheet = unsafe { &(*sheet).sheet };
-    let applied = match sheet.apply() {
-        Ok(applied) => applied,
-        Err(ApplyRefusal::Ended(_)) => return CALIBRATION_APPLY_ENDED,
-        Err(ApplyRefusal::NothingCertain) => return CALIBRATION_APPLY_NOTHING_CERTAIN,
+    // SAFETY: a live handle only this call uses.
+    let sheet = unsafe { &mut (*sheet).sheet };
+    let needed = match sheet.changes() {
+        Ok(applied) => applied.changes.len(),
+        Err(refusal) => return apply_code(refusal),
     };
     // SAFETY: non-null, and by the caller's contract aligned and writable.
-    unsafe { count.write(applied.changes.len()) };
-    if applied.changes.len() > capacity {
+    unsafe { count.write(needed) };
+    if needed > capacity {
         return CALIBRATION_APPLY_TOO_MANY;
     }
+    let applied = match sheet.apply() {
+        Ok(applied) => applied,
+        Err(refusal) => return apply_code(refusal),
+    };
     for (slot, change) in applied.changes.iter().enumerate() {
         let (has_old, old_ms) = stored(change.old_ms);
         let (row, airplay) = match &change.target {
@@ -496,9 +511,10 @@ pub unsafe extern "C" fn asc_calibration_sheet_apply(
     CALIBRATION_APPLY_OK
 }
 
-/// A run of the reference and row `index` alone, for Measure Again; null
-/// for the reference's row, a row out of range, an ended or a null sheet.
-/// Its sheet goes back through [`asc_calibration_sheet_replace`].
+/// A run of the reference and row `index` alone, for Measure Again; its
+/// steps name the sheet's rows. Null for the reference's row, a row out of
+/// range, an ended, applied or null sheet. Its sheet goes back through
+/// [`asc_calibration_sheet_replace`].
 ///
 /// # Safety
 ///
@@ -519,9 +535,9 @@ pub unsafe extern "C" fn asc_calibration_sheet_measure_again(
 }
 
 /// Puts the row a Measure Again run's sheet holds in place of the old one,
-/// and frees `again`; an `again` that ended ends `sheet` with its reason.
-/// False for a null argument or an `again` that doesn't come from this
-/// sheet's Measure Again (still freed).
+/// and frees `again`. False, changing nothing in `sheet`, for an `again`
+/// that was cancelled or ended by a change, one that doesn't come from this
+/// sheet's Measure Again, or a null argument; `again` is freed either way.
 ///
 /// # Safety
 ///
@@ -575,13 +591,14 @@ mod tests {
         recording
     }
 
-    /// Plays every step, the reference heard at 50 ms and row `n` at
-    /// `at_ms[n]`.
-    unsafe fn drive(run: *mut AscCalibrationRun, at_ms: &[f64]) {
+    /// Plays every step: the reference's sweep heard at 50 ms, row `n`'s at
+    /// `at_ms[n]`; every reference step must name row `reference`.
+    unsafe fn drive(run: *mut AscCalibrationRun, reference: usize, at_ms: &[f64]) {
         let mut step = AscCalibrationStep::default();
         // SAFETY: a live run and a local step.
         while unsafe { asc_calibration_run_step(run, &mut step) } {
             let at = if step.sweep == 0 {
+                assert_eq!(step.row, reference);
                 50.0
             } else {
                 at_ms[step.row]
@@ -601,117 +618,126 @@ mod tests {
         row
     }
 
+    fn apply(
+        sheet: *mut AscCalibrationSheet,
+        changes: &mut [AscCalibrationChange],
+    ) -> (u32, usize) {
+        let mut count = 99;
+        // SAFETY: a live sheet, a live array and a local count.
+        let status = unsafe {
+            asc_calibration_sheet_apply(sheet, changes.as_mut_ptr(), changes.len(), &mut count)
+        };
+        (status, count)
+    }
+
+    // covers: S235, S236, S237, S238, S239
     #[test]
     fn a_run_its_sheet_apply_and_measure_again_cross_the_boundary() {
+        let local = |offset: Option<f64>, latency_ms: f64| AscCalibrationSpeaker {
+            kind: CALIBRATION_KIND_LOCAL,
+            has_offset: offset.is_some(),
+            offset_ms: offset.unwrap_or(0.0),
+            latency_ms,
+        };
         let speakers = [
-            AscCalibrationSpeaker {
-                kind: CALIBRATION_KIND_LOCAL,
-                latency_ms: 50.0,
-                ..AscCalibrationSpeaker::default()
-            },
-            AscCalibrationSpeaker {
-                kind: CALIBRATION_KIND_LOCAL,
-                has_offset: true,
-                offset_ms: 10.0,
-                latency_ms: 200.0,
-            },
+            local(Some(10.0), 200.0),
+            local(None, 50.0),
             AscCalibrationSpeaker {
                 kind: CALIBRATION_KIND_AIRPLAY,
                 has_offset: true,
                 offset_ms: 2000.0,
                 latency_ms: 2000.0,
             },
+            local(None, 50.0),
         ];
-        // SAFETY: a live array of three speakers.
-        let run = unsafe { asc_calibration_run_create(RATE, speakers.as_ptr(), 3, 0) };
+        // SAFETY: a live array of four speakers; the reference is row 1.
+        let run = unsafe { asc_calibration_run_create(RATE, speakers.as_ptr(), 4, 1) };
         assert!(!run.is_null());
         // SAFETY: a live run, then freed by finish.
         let sheet = unsafe {
-            drive(run, &[0.0, 250.0, 150.0]);
+            drive(run, 1, &[250.0, 0.0, 150.0, 80.0]);
             asc_calibration_run_finish(run)
         };
         // SAFETY: a live sheet.
-        assert_eq!(unsafe { asc_calibration_sheet_rows(sheet) }, 3);
+        assert_eq!(unsafe { asc_calibration_sheet_rows(sheet) }, 4);
         // SAFETY: a live sheet.
         let ended = unsafe { asc_calibration_sheet_ended(sheet) };
         assert_eq!(ended, CALIBRATION_END_NONE);
-        assert_eq!(row(sheet, 0).state, CALIBRATION_ROW_REFERENCE);
-        let local = row(sheet, 1);
-        assert_eq!(local.state, CALIBRATION_ROW_CERTAIN);
-        assert_eq!((local.has_old, local.old_ms), (true, 10.0));
-        assert_eq!(local.new_ms, -190.0);
+        assert_eq!(row(sheet, 1).state, CALIBRATION_ROW_REFERENCE);
+        let bt = row(sheet, 0);
+        assert_eq!(bt.state, CALIBRATION_ROW_CERTAIN);
+        assert_eq!((bt.has_old, bt.old_ms), (true, 10.0));
+        assert_eq!(bt.new_ms, -190.0);
+        assert_eq!(row(sheet, 3).new_ms, -30.0);
         let mut airplay = AscCalibrationAirPlay::default();
         // SAFETY: a live sheet and a local value.
         assert!(unsafe { asc_calibration_sheet_airplay(sheet, &mut airplay) });
         assert_eq!(airplay.state, CALIBRATION_AIRPLAY_CERTAIN);
         assert_eq!(airplay.new_ms, 2100.0);
 
-        let mut changes = [AscCalibrationChange::default(); 3];
-        let mut count = 0;
-        // SAFETY: a live sheet, one change of room and a local count.
-        let status =
-            unsafe { asc_calibration_sheet_apply(sheet, changes.as_mut_ptr(), 1, &mut count) };
-        assert_eq!((status, count), (CALIBRATION_APPLY_TOO_MANY, 2));
-        // SAFETY: a live sheet, three changes of room and a local count.
-        let status =
-            unsafe { asc_calibration_sheet_apply(sheet, changes.as_mut_ptr(), 3, &mut count) };
-        assert_eq!((status, count), (CALIBRATION_APPLY_OK, 2));
-        assert_eq!(
-            changes[..2],
-            [
-                AscCalibrationChange {
-                    row: 1,
-                    airplay: false,
-                    has_old: true,
-                    old_ms: 10.0,
-                    new_ms: -190.0,
-                },
-                AscCalibrationChange {
-                    row: 0,
-                    airplay: true,
-                    has_old: true,
-                    old_ms: 2000.0,
-                    new_ms: 2100.0,
-                },
-            ]
-        );
-
         // SAFETY: a live sheet.
-        assert!(unsafe { asc_calibration_sheet_measure_again(sheet, 0) }.is_null());
+        assert!(unsafe { asc_calibration_sheet_measure_again(sheet, 1) }.is_null());
         // SAFETY: a live sheet.
-        let again = unsafe { asc_calibration_sheet_measure_again(sheet, 1) };
+        let again = unsafe { asc_calibration_sheet_measure_again(sheet, 3) };
         assert!(!again.is_null());
         // SAFETY: a live run, then freed by finish; the sheets are live and
         // replace frees the second.
         let replaced = unsafe {
-            drive(again, &[0.0, 40.0]);
+            drive(again, 1, &[0.0, 0.0, 0.0, 40.0]);
             let again = asc_calibration_run_finish(again);
             asc_calibration_sheet_replace(sheet, again)
         };
         assert!(replaced);
-        assert_eq!(row(sheet, 1).new_ms, 20.0);
+        assert_eq!(row(sheet, 3).new_ms, 10.0);
 
+        let before = row(sheet, 0);
         // SAFETY: a live sheet.
-        let again = unsafe { asc_calibration_sheet_measure_again(sheet, 2) };
+        let again = unsafe { asc_calibration_sheet_measure_again(sheet, 0) };
         // SAFETY: live handles; finish and replace free `again`.
         unsafe {
             asc_calibration_run_cancel(again, CALIBRATION_END_SOURCE_CHANGED);
-            assert!(asc_calibration_sheet_replace(
+            assert!(!asc_calibration_sheet_replace(
                 sheet,
                 asc_calibration_run_finish(again)
             ));
         }
+        assert_eq!(row(sheet, 0), before);
         // SAFETY: a live sheet.
         let ended = unsafe { asc_calibration_sheet_ended(sheet) };
-        assert_eq!(ended, CALIBRATION_END_SOURCE_CHANGED);
-        // SAFETY: a live sheet, room for three changes and a local count.
-        let status =
-            unsafe { asc_calibration_sheet_apply(sheet, changes.as_mut_ptr(), 3, &mut count) };
-        assert_eq!(status, CALIBRATION_APPLY_ENDED);
+        assert_eq!(ended, CALIBRATION_END_NONE);
+
+        let mut changes = [AscCalibrationChange::default(); 4];
+        assert_eq!(
+            apply(sheet, &mut changes[..1]),
+            (CALIBRATION_APPLY_TOO_MANY, 3)
+        );
+        assert_eq!(apply(sheet, &mut changes), (CALIBRATION_APPLY_OK, 3));
+        let change = |row, airplay, has_old, old_ms, new_ms| AscCalibrationChange {
+            row,
+            airplay,
+            has_old,
+            old_ms,
+            new_ms,
+        };
+        assert_eq!(
+            changes[..3],
+            [
+                change(0, false, true, 10.0, -190.0),
+                change(3, false, false, 0.0, 10.0),
+                change(0, true, true, 2000.0, 2100.0),
+            ]
+        );
+        assert_eq!(
+            apply(sheet, &mut changes),
+            (CALIBRATION_APPLY_ALREADY_APPLIED, 99)
+        );
+        // SAFETY: a live sheet.
+        assert!(unsafe { asc_calibration_sheet_measure_again(sheet, 0) }.is_null());
         // SAFETY: a live sheet nothing uses afterwards.
         unsafe { asc_calibration_sheet_destroy(sheet) };
     }
 
+    // covers: S236
     #[test]
     fn a_refused_reference_and_bad_arguments() {
         let speakers = [

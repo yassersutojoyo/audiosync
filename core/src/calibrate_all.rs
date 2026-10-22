@@ -1,7 +1,7 @@
-//! Calibrate All Speakers: the reference and then every speaker that is on,
-//! one at a time, each measured twice against the reference with the
-//! microphone (S232 to S234), and the results sheet the user applies, undoes
-//! or measures a row of again.
+//! Calibrate All Speakers (S235 to S240): the reference and then every
+//! speaker that is on, one at a time, each measured twice against the
+//! reference with the microphone as S232 to S234 measure one output, and the
+//! results sheet the user applies, undoes or measures a row of again.
 //!
 //! The host plays and records; [`Run`] says what to play next and how long
 //! to record, and turns the recordings into a [`Sheet`]. Nothing here
@@ -27,8 +27,9 @@ pub const MAX_AIRPLAY_SPREAD_MS: f64 = 10.0;
 pub enum Class {
     /// A local output's offset (S175): heard later, it gets a lower offset.
     Local,
-    /// A Cast speaker's measured offset, 0 to 20 000 ms: heard later, the
-    /// others wait longer for it.
+    /// A Cast speaker's measured offset: heard later, the others wait longer
+    /// for it. The sheet keeps it to 0 to 20 000 ms, the largest hold-back
+    /// (S176), although the Cast sender stores up to 120 000 ms.
     Cast,
     /// The one AirPlay delay as shown, 0 to 20 000 ms (S178), shared by
     /// every AirPlay speaker: heard later, the others wait longer.
@@ -44,7 +45,8 @@ pub struct Speaker {
     /// Every AirPlay speaker carries the shared AirPlay delay.
     pub offset_ms: Option<f64>,
     /// When its sweep is expected in the recording, counted from the moment
-    /// the sweep enters its path: the host's current latency estimate.
+    /// the sweep enters its path before its hold-back (S232): its hold-back
+    /// plus its latency as the host estimates it, the reference's included.
     pub latency_ms: f64,
 }
 
@@ -198,6 +200,8 @@ pub struct Applied {
 pub enum ApplyRefusal {
     Ended(EndReason),
     NothingCertain,
+    /// The sheet was applied once: its rows measured the offsets it replaced.
+    AlreadyApplied,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -218,6 +222,9 @@ pub struct Run {
     rate: u32,
     signal: Vec<f32>,
     speakers: Vec<Speaker>,
+    /// The row a step names for each speaker: its own position, except in a
+    /// Measure Again run, where it is the speaker's row on the sheet.
+    rows: Vec<usize>,
     reference: usize,
     order: Vec<usize>,
     states: Vec<RowState>,
@@ -249,6 +256,7 @@ impl Run {
         Ok(Run {
             rate,
             signal,
+            rows: (0..speakers.len()).collect(),
             speakers,
             reference,
             order,
@@ -295,7 +303,7 @@ impl Run {
             Next::Done => return None,
         };
         Some(Step {
-            row,
+            row: self.rows[row],
             take,
             window_frames,
             searching,
@@ -368,6 +376,7 @@ impl Run {
             rows: Vec::new(),
             airplay: None,
             ended: self.ended,
+            applied: false,
         };
         sheet.rows = sheet
             .speakers
@@ -527,6 +536,7 @@ pub struct Sheet {
     rows: Vec<Row>,
     airplay: Option<AirPlayShared>,
     ended: Option<EndReason>,
+    applied: bool,
 }
 
 impl Sheet {
@@ -544,10 +554,27 @@ impl Sheet {
         self.ended
     }
 
+    /// Whether [`Sheet::apply`] succeeded once.
+    pub fn applied(&self) -> bool {
+        self.applied
+    }
+
     /// The changes for the certain rows, one for the AirPlay delay, and the
-    /// values they replace. Refused once the sheet ended, or while no row
-    /// is certain.
-    pub fn apply(&self) -> Result<Applied, ApplyRefusal> {
+    /// values they replace, for one Undo. Refused once the sheet ended,
+    /// while no row is certain, and after a first Apply: from then on the
+    /// rows describe offsets that are no longer stored, so a second Apply or
+    /// a Measure Again would undo the correction.
+    pub fn apply(&mut self) -> Result<Applied, ApplyRefusal> {
+        let applied = self.changes()?;
+        self.applied = true;
+        Ok(applied)
+    }
+
+    /// What [`Sheet::apply`] would return, leaving the sheet as it is.
+    pub fn changes(&self) -> Result<Applied, ApplyRefusal> {
+        if self.applied {
+            return Err(ApplyRefusal::AlreadyApplied);
+        }
         if let Some(reason) = self.ended {
             return Err(ApplyRefusal::Ended(reason));
         }
@@ -590,36 +617,44 @@ impl Sheet {
     }
 
     /// A run of the reference and the speaker on `row` alone, with the
-    /// values the sheet started from. `None` for the reference's row, a row
-    /// out of range or an ended sheet.
+    /// values the sheet started from; its steps name the sheet's rows.
+    /// `None` for the reference's row, a row out of range, an ended sheet
+    /// or one already applied.
     pub fn measure_again(&self, row: usize) -> Option<Run> {
-        if self.ended.is_some() || row == self.reference || row >= self.speakers.len() {
+        if self.ended.is_some()
+            || self.applied
+            || row == self.reference
+            || row >= self.speakers.len()
+        {
             return None;
         }
         let reference = &self.speakers[self.reference];
         let speakers = vec![reference.clone(), self.speakers[row].clone()];
-        Run::new(self.rate, &reference.id, speakers).ok()
+        let mut run = Run::new(self.rate, &reference.id, speakers).ok()?;
+        run.rows = vec![self.reference, row];
+        Some(run)
     }
 
     /// Puts the row a [`Sheet::measure_again`] run measured in place of the
-    /// old one. An again run that ended ends this sheet with its reason.
-    /// False for a sheet that doesn't come from this one's Measure Again.
+    /// old one; true when it did. An again run that was cancelled or ended
+    /// by a change, or that doesn't come from this sheet's Measure Again,
+    /// changes nothing: the sheet and its rows stay as they were.
     pub fn replace(&mut self, again: Sheet) -> bool {
+        if again.ended.is_some() || self.ended.is_some() || self.applied {
+            return false;
+        }
         let [_, measured] = again.rows.as_slice() else {
             return false;
         };
         let Some(at) = self.rows.iter().position(|row| row.id == measured.id) else {
             return false;
         };
+        let same = |a: &Speaker, b: &Speaker| a.id == b.id && a.class == b.class;
         if at == self.reference
-            || again.speakers[0] != self.speakers[self.reference]
-            || again.speakers[1] != self.speakers[at]
+            || !same(&again.speakers[0], &self.speakers[self.reference])
+            || !same(&again.speakers[1], &self.speakers[at])
         {
             return false;
-        }
-        if let Some(reason) = again.ended {
-            self.ended = Some(reason);
-            return true;
         }
         self.rows[at] = measured.clone();
         self.airplay = shared(&self.rows);

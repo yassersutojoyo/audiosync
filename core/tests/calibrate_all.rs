@@ -93,6 +93,7 @@ fn mixed() -> Vec<Speaker> {
     ]
 }
 
+// covers: S235
 #[test]
 fn the_reference_comes_first_then_each_speaker_twice_with_its_window() {
     let mut run = Run::new(RATE, "ref", mixed()).unwrap();
@@ -125,6 +126,7 @@ fn the_reference_comes_first_then_each_speaker_twice_with_its_window() {
     assert!(steps.iter().all(|s| !s.searching));
 }
 
+// covers: S236
 #[test]
 fn certain_rows_move_each_class_its_own_way() {
     let mut run = Run::new(RATE, "ref", mixed()).unwrap();
@@ -153,6 +155,7 @@ fn certain_rows_move_each_class_its_own_way() {
     assert!(sheet.airplay().is_none());
 }
 
+// covers: S236, S238
 #[test]
 fn sweeps_too_far_apart_leave_the_row_uncertain_and_apply_is_refused() {
     let speakers = vec![
@@ -164,7 +167,7 @@ fn sweeps_too_far_apart_leave_the_row_uncertain_and_apply_is_refused() {
         &mut run,
         arrivals(&[(1, [Heard::At(250.0), Heard::At(272.0)])]),
     );
-    let sheet = run.finish();
+    let mut sheet = run.finish();
     let (new, u) = measured(&sheet.rows()[1]);
     assert!(matches!(sheet.rows()[1].state, RowState::Uncertain(_)));
     assert_eq!(new, -211.0);
@@ -172,23 +175,51 @@ fn sweeps_too_far_apart_leave_the_row_uncertain_and_apply_is_refused() {
     assert_eq!(sheet.apply(), Err(ApplyRefusal::NothingCertain));
 }
 
+// covers: S236
 #[test]
-fn uncertainty_at_the_limit_is_still_certain() {
+fn uncertainty_at_the_limit_is_still_certain_and_just_over_it_is_not() {
     let speakers = vec![
         speaker("ref", Class::Local, None, 50.0),
         speaker("bt", Class::Local, None, 200.0),
+        speaker("den", Class::Local, None, 200.0),
     ];
     let mut run = Run::new(RATE, "ref", speakers).unwrap();
-    // 14 ms apart: U = 7 + 3 = 10.
+    // 14 ms apart: U = 7 + 3 = 10; 15 ms apart: U = 10.5.
     drive(
         &mut run,
-        arrivals(&[(1, [Heard::At(250.0), Heard::At(264.0)])]),
+        arrivals(&[
+            (1, [Heard::At(250.0), Heard::At(264.0)]),
+            (2, [Heard::At(250.0), Heard::At(265.0)]),
+        ]),
     );
     let sheet = run.finish();
     assert!(sheet.rows()[1].state.is_certain());
     close(measured(&sheet.rows()[1]).1, 10.0);
+    assert!(matches!(sheet.rows()[2].state, RowState::Uncertain(_)));
+    close(measured(&sheet.rows()[2]).1, 10.5);
 }
 
+// covers: S235, S236
+#[test]
+fn a_searching_window_can_find_an_arrival_no_offset_explains() {
+    let speakers = vec![
+        speaker("ref", Class::Local, None, 50.0),
+        speaker("tv", Class::Cast, None, 0.0),
+    ];
+    let mut run = Run::new(RATE, "ref", speakers).unwrap();
+    // 24 950 ms after the reference, past the 22 000 ms any two offsets span.
+    let steps = drive(&mut run, arrivals(&[(1, [Heard::At(25_000.0); 2])]));
+    assert_eq!(steps.len(), 2, "no second sweep");
+    assert_eq!(
+        run.finish().rows()[1].state,
+        RowState::Refused(Refused {
+            reason: Refusal::Implausible,
+            recording: None,
+        })
+    );
+}
+
+// covers: S236
 #[test]
 fn a_quiet_or_clipped_sweep_refuses_the_row_and_is_never_averaged() {
     let mut run = Run::new(RATE, "ref", mixed()).unwrap();
@@ -202,7 +233,7 @@ fn a_quiet_or_clipped_sweep_refuses_the_row_and_is_never_averaged() {
     );
     // A refused first sweep skips the second.
     assert_eq!(steps.iter().filter(|s| s.row == 1).count(), 1);
-    let sheet = run.finish();
+    let mut sheet = run.finish();
     let chosen = |reason| {
         RowState::Refused(Refused {
             reason,
@@ -217,12 +248,13 @@ fn a_quiet_or_clipped_sweep_refuses_the_row_and_is_never_averaged() {
     assert_eq!(applied.changes[0].target, Target::Speaker("den".to_owned()));
 }
 
+// covers: S236
 #[test]
 fn a_refused_reference_refuses_every_row_and_ends_the_steps() {
     let mut run = Run::new(RATE, "ref", mixed()).unwrap();
     let steps = drive(&mut run, |_| Heard::Silence);
     assert_eq!(steps.len(), 1);
-    let sheet = run.finish();
+    let mut sheet = run.finish();
     assert_eq!(sheet.ended(), None);
     for row in &sheet.rows()[1..] {
         assert_eq!(
@@ -248,10 +280,11 @@ fn airplay_sheet(heard: &[(usize, [Heard; 2])]) -> Sheet {
     run.finish()
 }
 
+// covers: S237
 #[test]
 fn the_airplay_delay_is_the_median_of_the_certain_airplay_rows() {
     // Heard 100, 103 and 105 ms after the reference.
-    let sheet = airplay_sheet(&[
+    let mut sheet = airplay_sheet(&[
         (1, [Heard::At(150.0), Heard::At(150.0)]),
         (2, [Heard::At(153.0), Heard::At(153.0)]),
         (3, [Heard::At(155.0), Heard::At(155.0)]),
@@ -268,10 +301,11 @@ fn the_airplay_delay_is_the_median_of_the_certain_airplay_rows() {
     assert_eq!(applied.changes[0].new_ms, 2103.0);
 }
 
+// covers: S237
 #[test]
 fn an_airplay_spread_over_the_limit_is_reported_with_the_median() {
-    // Heard 100, 104 and 120 ms late; the uncertain row doesn't count.
-    let sheet = airplay_sheet(&[
+    // Heard 100, 104 and 120 ms late.
+    let mut sheet = airplay_sheet(&[
         (1, [Heard::At(150.0), Heard::At(150.0)]),
         (2, [Heard::At(154.0), Heard::At(154.0)]),
         (3, [Heard::At(170.0), Heard::At(170.0)]),
@@ -282,6 +316,7 @@ fn an_airplay_spread_over_the_limit_is_reported_with_the_median() {
     assert_eq!(shared.new_ms, Some(2104.0));
     assert!(sheet.apply().is_ok(), "the median still applies");
 
+    // The uncertain row doesn't count.
     let sheet = airplay_sheet(&[
         (1, [Heard::At(150.0), Heard::At(150.0)]),
         (2, [Heard::At(153.0), Heard::At(153.0)]),
@@ -292,7 +327,7 @@ fn an_airplay_spread_over_the_limit_is_reported_with_the_median() {
     assert_eq!(shared.certain_rows, 2);
     assert_eq!(shared.new_ms, Some(2102.0), "101.5 rounds up");
 
-    let sheet = airplay_sheet(&[
+    let mut sheet = airplay_sheet(&[
         (1, [Heard::Silence, Heard::Silence]),
         (2, [Heard::At(150.0), Heard::At(180.0)]),
         (3, [Heard::Silence, Heard::Silence]),
@@ -303,6 +338,7 @@ fn an_airplay_spread_over_the_limit_is_reported_with_the_median() {
     assert_eq!(sheet.apply(), Err(ApplyRefusal::NothingCertain));
 }
 
+// covers: S235
 #[test]
 fn a_cast_speaker_without_an_offset_searches_the_longest_window_first() {
     let speakers = vec![
@@ -324,6 +360,7 @@ fn a_cast_speaker_without_an_offset_searches_the_longest_window_first() {
     assert_eq!(sheet.rows()[1].old_ms, None);
 }
 
+// covers: S238
 #[test]
 fn apply_and_undo_round_trip_to_the_stored_values() {
     let speakers = vec![
@@ -343,7 +380,7 @@ fn apply_and_undo_round_trip_to_the_stored_values() {
             (4, [Heard::At(150.0), Heard::At(150.0)]),
         ]),
     );
-    let sheet = run.finish();
+    let mut sheet = run.finish();
     let mut store: Vec<(Target, Option<f64>)> = speakers[1..4]
         .iter()
         .map(|s| (Target::Speaker(s.id.clone()), s.offset_ms))
@@ -380,56 +417,96 @@ fn apply_and_undo_round_trip_to_the_stored_values() {
     assert_eq!(store, before);
 }
 
+// covers: S239
 #[test]
 fn measure_again_replaces_one_row_from_a_new_reference() {
-    let mut run = Run::new(RATE, "ref", mixed()).unwrap();
+    // The reference isn't first, and one latency isn't even a number.
+    let speakers = vec![
+        speaker("bt", Class::Local, Some(10.0), 200.0),
+        speaker("ref", Class::Local, None, 50.0),
+        speaker("tv", Class::Cast, Some(400.0), 600.0),
+        speaker("den", Class::Local, None, f64::NAN),
+    ];
+    let mut run = Run::new(RATE, "ref", speakers).unwrap();
     drive(
         &mut run,
         arrivals(&[
-            (1, [Heard::At(250.0), Heard::At(280.0)]),
+            (0, [Heard::At(250.0), Heard::At(250.0)]),
             (2, [Heard::At(650.0), Heard::At(650.0)]),
-            (3, [Heard::At(50.0), Heard::At(50.0)]),
+            (3, [Heard::At(80.0), Heard::At(110.0)]),
         ]),
     );
     let mut sheet = run.finish();
-    assert!(matches!(sheet.rows()[1].state, RowState::Uncertain(_)));
-    let untouched: Vec<Row> = sheet.rows()[2..].to_vec();
+    assert!(matches!(sheet.rows()[3].state, RowState::Uncertain(_)));
+    let untouched: Vec<Row> = sheet.rows()[..3].to_vec();
 
-    assert!(sheet.measure_again(0).is_none(), "not the reference");
+    assert!(sheet.measure_again(1).is_none(), "not the reference");
     assert!(sheet.measure_again(4).is_none());
-    let mut again = sheet.measure_again(1).unwrap();
+    let mut again = sheet.measure_again(3).unwrap();
     let steps = drive(&mut again, |step| match step.take {
         Take::Reference => Heard::At(60.0),
-        Take::Sweep(_) => Heard::At(260.0),
+        Take::Sweep(_) => Heard::At(80.0),
     });
-    assert_eq!(steps.len(), 3);
-    assert_eq!((steps[0].row, steps[1].row), (0, 1));
+    let named: Vec<(usize, Take)> = steps.iter().map(|s| (s.row, s.take)).collect();
+    assert_eq!(
+        named,
+        [
+            (1, Take::Reference),
+            (3, Take::Sweep(1)),
+            (3, Take::Sweep(2))
+        ],
+        "the steps name the sheet's rows"
+    );
     assert!(sheet.replace(again.finish()));
-    assert!(sheet.rows()[1].state.is_certain());
-    assert_eq!(sheet.rows()[1].id, "bt");
-    assert_eq!(measured(&sheet.rows()[1]).0, 10.0 - 200.0);
-    assert_eq!(sheet.rows()[2..], untouched[..]);
+    assert!(sheet.rows()[3].state.is_certain());
+    assert_eq!(sheet.rows()[3].id, "den");
+    assert_eq!(measured(&sheet.rows()[3]).0, -20.0);
+    assert_eq!(sheet.rows()[..3], untouched[..]);
 
     let other = Run::new(RATE, "ref", mixed()).unwrap().finish();
     assert!(!sheet.replace(other), "only a Measure Again sheet");
 }
 
+// covers: S239, S240
 #[test]
-fn a_cancelled_measure_again_ends_the_sheet() {
-    let mut run = Run::new(RATE, "ref", mixed()).unwrap();
-    drive(&mut run, |_| Heard::At(50.0));
-    let mut sheet = run.finish();
-    assert!(sheet.apply().is_ok());
-    let mut again = sheet.measure_again(2).unwrap();
-    again.cancel(EndReason::SpeakerTurnedOff);
-    assert!(sheet.replace(again.finish()));
-    assert_eq!(sheet.ended(), Some(EndReason::SpeakerTurnedOff));
-    assert_eq!(
-        sheet.apply(),
-        Err(ApplyRefusal::Ended(EndReason::SpeakerTurnedOff))
-    );
+fn a_cancelled_or_changed_measure_again_leaves_the_sheet_as_it_was() {
+    for reason in [EndReason::Cancelled, EndReason::SpeakerTurnedOff] {
+        let mut run = Run::new(RATE, "ref", mixed()).unwrap();
+        drive(&mut run, |_| Heard::At(50.0));
+        let mut sheet = run.finish();
+        let rows = sheet.rows().to_vec();
+        let mut again = sheet.measure_again(2).unwrap();
+        let step = again.step().unwrap();
+        assert!(again.record(&recording(step.window_frames, Heard::At(50.0))));
+        again.cancel(reason);
+        assert!(!sheet.replace(again.finish()));
+        assert_eq!(sheet.ended(), None);
+        assert_eq!(sheet.rows(), &rows[..]);
+        assert!(sheet.apply().is_ok());
+    }
 }
 
+// covers: S238
+#[test]
+fn an_applied_sheet_is_spent() {
+    let mut run = Run::new(RATE, "ref", mixed()).unwrap();
+    drive(&mut run, |_| Heard::At(60.0));
+    let mut sheet = run.finish();
+    let mut again = sheet.measure_again(1).unwrap();
+    drive(&mut again, |_| Heard::At(60.0));
+    let again = again.finish();
+    let preview = sheet.changes().unwrap();
+    assert!(!sheet.applied());
+    let applied = sheet.apply().unwrap();
+    assert_eq!(applied, preview);
+    assert!(sheet.applied());
+    assert_eq!(sheet.apply(), Err(ApplyRefusal::AlreadyApplied));
+    assert!(sheet.measure_again(1).is_none());
+    assert!(!sheet.replace(again), "nothing replaced once applied");
+    assert_eq!(applied.undo.undo().len(), 3, "the undo still holds");
+}
+
+// covers: S240
 #[test]
 fn cancel_or_a_change_mid_run_applies_nothing() {
     for reason in [
@@ -446,7 +523,7 @@ fn cancel_or_a_change_mid_run_applies_nothing() {
         run.cancel(reason);
         assert_eq!(run.step(), None);
         assert!(!run.record(&recording(100_000, Heard::At(50.0))));
-        let sheet = run.finish();
+        let mut sheet = run.finish();
         assert_eq!(sheet.ended(), Some(reason));
         assert!(
             sheet.rows()[1].state.is_certain(),
@@ -466,6 +543,7 @@ fn cancel_or_a_change_mid_run_applies_nothing() {
     );
 }
 
+// covers: S235
 #[test]
 fn a_run_needs_a_local_reference_and_something_to_measure() {
     let cast_ref = vec![

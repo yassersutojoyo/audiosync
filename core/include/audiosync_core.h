@@ -236,7 +236,7 @@ extern "C" {
 
 /* How a speaker's delay is kept (AscCalibrationSpeaker.kind). */
 #define ASC_CALIBRATION_KIND_LOCAL 0   /* a local output's offset, -2000...+20 000 ms */
-#define ASC_CALIBRATION_KIND_CAST 1    /* a Cast speaker's measured offset, 0...20 000 ms */
+#define ASC_CALIBRATION_KIND_CAST 1    /* a Cast speaker's measured offset, kept to 0...20 000 ms (the sender stores up to 120 000) */
 #define ASC_CALIBRATION_KIND_AIRPLAY 2 /* the one AirPlay delay as shown, 0...20 000 ms */
 
 /* What the sheet says about a speaker (AscCalibrationRow.state). */
@@ -264,6 +264,7 @@ extern "C" {
 #define ASC_CALIBRATION_APPLY_NOTHING_CERTAIN 2 /* no row is certain */
 #define ASC_CALIBRATION_APPLY_TOO_MANY 3        /* more changes than capacity: *count says how many */
 #define ASC_CALIBRATION_APPLY_INVALID 4         /* a NULL argument */
+#define ASC_CALIBRATION_APPLY_ALREADY_APPLIED 5 /* the sheet was applied once */
 
 /* What asc_source_quit_decide answers. */
 #define ASC_SOURCE_QUIT_KEEP 0             /* nothing changes */
@@ -1028,7 +1029,7 @@ typedef struct AscCalibrationSpeaker {
     uint32_t kind;     /* an ASC_CALIBRATION_KIND_ code */
     bool has_offset;   /* false: no stored delay (a Cast speaker's first window is then the longest) */
     double offset_ms;  /* its stored delay; every AirPlay speaker carries the shared AirPlay delay */
-    double latency_ms; /* when its sweep is expected, from the moment the sweep enters its path */
+    double latency_ms; /* when its sweep is expected, from the moment it enters its path before the hold-back: hold-back plus latency, the reference's too */
 } AscCalibrationSpeaker;
 
 /* What to play and record next. */
@@ -1114,25 +1115,27 @@ uint32_t asc_calibration_sheet_ended(const AscCalibrationSheet *sheet);
  * The changes Apply writes, one per certain local or Cast row and one for
  * the AirPlay delay when an AirPlay row is certain, into `changes` and
  * their number into *count, with an ASC_CALIBRATION_APPLY_ code. Only
- * APPLY_OK writes changes; APPLY_TOO_MANY sets *count to the number
- * needed, never more than the rows. Keep the old values of one Apply for
- * its Undo.
+ * APPLY_OK writes changes, and spends the sheet: from then on its rows
+ * describe offsets no longer stored, so a second Apply answers
+ * APPLY_ALREADY_APPLIED and Measure Again is refused. APPLY_TOO_MANY sets
+ * *count to the number needed, never more than the rows, and leaves the
+ * sheet as it was. Keep the old values of one Apply for its Undo.
  */
-uint32_t asc_calibration_sheet_apply(const AscCalibrationSheet *sheet, AscCalibrationChange *changes, size_t capacity, size_t *count);
+uint32_t asc_calibration_sheet_apply(AscCalibrationSheet *sheet, AscCalibrationChange *changes, size_t capacity, size_t *count);
 
 /*
  * Measure Again: a run of a new reference sweep and row `index`'s two,
- * from the values the sheet started with. NULL for the reference's row, a
- * row out of range, an ended or a NULL sheet. Finish it and pass its sheet
- * to asc_calibration_sheet_replace.
+ * from the values the sheet started with; its steps name the sheet's rows.
+ * NULL for the reference's row, a row out of range, an ended, applied or
+ * NULL sheet. Finish it and pass its sheet to asc_calibration_sheet_replace.
  */
 AscCalibrationRun *asc_calibration_sheet_measure_again(const AscCalibrationSheet *sheet, size_t index);
 
 /*
  * Puts the row of a Measure Again sheet in place of the old one and frees
- * `again`; an `again` that ended ends `sheet` with its reason. False for a
- * NULL argument or an `again` not from this sheet's Measure Again (still
- * freed).
+ * `again`. False, leaving `sheet` and its rows as they were, for an `again`
+ * that was cancelled or ended by a change, one not from this sheet's
+ * Measure Again, or a NULL argument; `again` is freed either way.
  */
 bool asc_calibration_sheet_replace(AscCalibrationSheet *sheet, AscCalibrationSheet *again);
 

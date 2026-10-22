@@ -1185,6 +1185,10 @@ mod tests {
                 "ASC_CALIBRATION_APPLY_INVALID",
                 CALIBRATION_APPLY_INVALID.to_string(),
             ),
+            (
+                "ASC_CALIBRATION_APPLY_ALREADY_APPLIED",
+                CALIBRATION_APPLY_ALREADY_APPLIED.to_string(),
+            ),
             ("ASC_SOURCE_QUIT_KEEP", SOURCE_QUIT_KEEP.to_string()),
             ("ASC_SOURCE_QUIT_STOP", SOURCE_QUIT_STOP.to_string()),
             (
