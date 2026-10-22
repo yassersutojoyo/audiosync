@@ -409,6 +409,9 @@ pub enum NoticeMessage {
         speaker: String,
         problem: AirPlayProblem,
     },
+    /// A member of a stereo pair or home theater group asks for a password,
+    /// so the target is off.
+    AirPlayMemberNeedsPassword { target: String, member: String },
     /// AudioSync's AirPlay sender stopped after an internal error or
     /// couldn't start, so AirPlay speakers aren't listed or playing. The
     /// notice offers Retry ([`Backend::retry_airplay`]).

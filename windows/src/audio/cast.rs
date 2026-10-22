@@ -556,11 +556,7 @@ impl CastSpeakers {
                 .clone()
                 .unwrap_or_else(|| device.instance.clone()),
             group: entry.is_group().then(|| CastGroup {
-                members: match self.members.get(&id) {
-                    None => CastMembers::NotReported,
-                    Some(members) if members.is_empty() => CastMembers::Unknown,
-                    Some(members) => CastMembers::Known(self.member_names(members)),
-                },
+                members: self.group_members(id),
             }),
             enabled: self.enabled == Some(id),
             volume: (level * 100.0).clamp(0.0, 100.0),
@@ -602,6 +598,27 @@ impl CastSpeakers {
         if self.feed.set_hold_back(frames) {
             self.log
                 .log(|| format!("Cast: the feed is held back {ms:.0} ms to meet L"));
+        }
+    }
+
+    /// What the row of the group `id` says about its members. A list
+    /// arrives before the stream plays (C94), so one still missing once it
+    /// plays is unknown; members without a name are left out.
+    fn group_members(&self, id: DeviceId) -> CastMembers {
+        let Some(attempt) = self.attempt.filter(|attempt| attempt.device == id) else {
+            return CastMembers::NotReported;
+        };
+        let names: Vec<String> = self
+            .members
+            .get(&id)
+            .map(|members| self.member_names(members).into_iter().flatten().collect())
+            .unwrap_or_default();
+        if !names.is_empty() {
+            CastMembers::Known(names)
+        } else if attempt.status == CastStatus::Playing {
+            CastMembers::Unknown
+        } else {
+            CastMembers::NotReported
         }
     }
 
@@ -903,16 +920,10 @@ impl CastSpeakers {
             && attempt.status != status
         {
             attempt.status = status;
-            let device = attempt.device;
             self.pending.push(BackendEvent::CastChanged);
             if status == CastStatus::Playing {
-                // A group lists its members before its stream plays (C94),
-                // so one that plays without a list keeps them unknown.
-                if self.entry(device).is_some_and(Entry::is_group) {
-                    self.members.entry(device).or_default();
-                }
                 self.pending.push(BackendEvent::CastPlaying {
-                    id: device.to_string(),
+                    id: attempt.device.to_string(),
                 });
             }
         }
@@ -1450,7 +1461,7 @@ pub mod tests {
         assert!(events.contains(&BackendEvent::CastChanged));
         assert_eq!(
             group_members(&cast),
-            CastMembers::Known(vec![Some("Kitchen".to_owned()), Some("Garage".to_owned())])
+            CastMembers::Known(vec!["Kitchen".to_owned(), "Garage".to_owned()])
         );
         assert_eq!(records.get().members, [attic.ip()]);
 
@@ -1484,8 +1495,8 @@ pub mod tests {
         cast.set_enabled(ATTIC, false).unwrap();
         assert_eq!(
             group_members(&cast),
-            CastMembers::Known(vec![Some("Kitchen".to_owned())]),
-            "the last list stays while it is off"
+            CastMembers::NotReported,
+            "an off group shows no list"
         );
         cast.set_enabled(ATTIC, true).unwrap();
         assert_eq!(fake.state().started.len(), 2);
@@ -1503,15 +1514,11 @@ pub mod tests {
         cast.poll();
         assert_eq!(group_members(&cast), CastMembers::Unknown);
         cast.set_enabled(ATTIC, false).unwrap();
-        assert_eq!(
-            group_members(&cast),
-            CastMembers::Unknown,
-            "what its session showed stays while it is off"
-        );
+        assert_eq!(group_members(&cast), CastMembers::NotReported, "off");
     }
 
     #[test]
-    fn a_member_nobody_names_keeps_its_place_in_the_list() {
+    fn members_nobody_names_are_left_out_and_none_named_is_unknown() {
         let (fake, mut cast) = listed();
         cast.set_streaming(true);
         cast.set_enabled(ATTIC, true).unwrap();
@@ -1520,12 +1527,26 @@ pub mod tests {
             id: None,
             name: None,
         };
-        fake.report(members(ATTIC, vec![member(KITCHEN, "Kitchen"), nameless]));
+        fake.report(members(
+            ATTIC,
+            vec![member(KITCHEN, "Kitchen"), nameless.clone()],
+        ));
         cast.poll();
         assert_eq!(
             group_members(&cast),
-            CastMembers::Known(vec![Some("Kitchen".to_owned()), None])
+            CastMembers::Known(vec!["Kitchen".to_owned()])
         );
+
+        fake.report(members(ATTIC, vec![nameless]));
+        cast.poll();
+        assert_eq!(
+            group_members(&cast),
+            CastMembers::NotReported,
+            "not yet playing"
+        );
+        fake.report(playing(ATTIC));
+        cast.poll();
+        assert_eq!(group_members(&cast), CastMembers::Unknown);
     }
 
     #[test]

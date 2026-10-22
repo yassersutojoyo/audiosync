@@ -2915,17 +2915,10 @@ fn cast_group_note(strings: &Strings<'_>, speaker: &ui_model::Speaker) -> Shared
     let Some(group) = cast_group(speaker) else {
         return SharedString::default();
     };
-    let unnamed = strings.get_cast_unnamed_member().to_string();
     let (members, unknown) = match &group.members {
         ui_model::CastMembers::NotReported => (SharedString::default(), false),
         ui_model::CastMembers::Unknown => (SharedString::default(), true),
-        ui_model::CastMembers::Known(names) => {
-            let names: Vec<String> = names
-                .iter()
-                .map(|name| name.clone().unwrap_or_else(|| unnamed.clone()))
-                .collect();
-            (joined(strings, &names), names.is_empty())
-        }
+        ui_model::CastMembers::Known(names) => (joined(strings, names), names.is_empty()),
     };
     strings.invoke_cast_group_note(members, unknown)
 }
@@ -3403,6 +3396,8 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         | NoticeMessage::AirPlayCantPlay { speaker, problem } => {
             strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
         }
+        NoticeMessage::AirPlayMemberNeedsPassword { target, member } => strings
+            .invoke_notice_airplay_member_password(member.as_str().into(), target.as_str().into()),
         NoticeMessage::CastCantPlay { speaker, problem } => {
             strings.invoke_notice_cast(cast_problem(*problem), speaker.as_str().into())
         }
@@ -3474,6 +3469,9 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         }
         NoticeMessage::AirPlayCantPlay { speaker, .. } => {
             (NoticeKind::AirplayCantPlay, speaker.as_str())
+        }
+        NoticeMessage::AirPlayMemberNeedsPassword { target, .. } => {
+            (NoticeKind::AirplayCantPlay, target.as_str())
         }
         NoticeMessage::CastCantPlay { speaker, .. } => (NoticeKind::CastCantPlay, speaker.as_str()),
         NoticeMessage::AirPlayAheadOfCast { speaker, .. } => {
@@ -4968,17 +4966,16 @@ mod tests {
         );
 
         speaker.cast.as_mut().unwrap().group = group(ui_model::CastMembers::Known(vec![
-            Some("Kitchen".to_owned()),
-            None,
-            Some("Living Room".to_owned()),
+            "Kitchen".to_owned(),
+            "Living Room".to_owned(),
         ]));
         assert_eq!(
             note(&speaker).as_str(),
-            "Google Cast group: Kitchen, an unnamed speaker and Living Room"
+            "Google Cast group: Kitchen and Living Room"
         );
         assert_eq!(
             label(note(&speaker)).as_str(),
-            "Attic, Google Cast group: Kitchen, an unnamed speaker and Living Room"
+            "Attic, Google Cast group: Kitchen and Living Room"
         );
         let cast_note = |state, muted| strings.invoke_cast_note(state, muted, note(&speaker));
         assert_eq!(
@@ -4992,12 +4989,31 @@ mod tests {
         );
         assert_eq!(
             cast_note(CastState::Playing, false).as_str(),
-            "Google Cast group: Kitchen, an unnamed speaker and Living Room"
+            "Google Cast group: Kitchen and Living Room"
         );
 
         let single = state.speaker("local:desk").unwrap();
         assert!(!speaker_item(&state, single, true, false, None).cast_group);
         assert_eq!(cast_group_note(&strings, single).as_str(), "");
+    }
+
+    #[test]
+    fn a_target_whose_member_asks_for_a_password_names_both() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let notice = NoticeMessage::AirPlayMemberNeedsPassword {
+            target: "Living Room".to_owned(),
+            member: "Right".to_owned(),
+        };
+        assert_eq!(
+            notice_text(&strings, &notice).as_str(),
+            "Right in Living Room asks for a password, so Living Room is off. Turn Living Room \
+             on again to enter it."
+        );
+        assert_eq!(
+            notice_title(&strings, &notice).as_str(),
+            "Living Room can't play"
+        );
     }
 
     #[test]

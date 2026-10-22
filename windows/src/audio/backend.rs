@@ -357,14 +357,13 @@ pub struct CastGroup {
 /// What a Cast group's row knows of its members (spec C94).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum CastMembers {
-    /// No session of the group has played yet.
+    /// It is off, or its session hasn't played yet.
     #[default]
     NotReported,
-    /// Its latest session played without naming them.
+    /// Its session plays and named none of them.
     Unknown,
-    /// As its latest session listed them; `None` for a member that neither
-    /// a listed device nor the group names.
-    Known(Vec<Option<String>>),
+    /// The ones its session named, by name.
+    Known(Vec<String>),
 }
 
 /// Something the UI should know about, from [`AudioBackend::poll`].

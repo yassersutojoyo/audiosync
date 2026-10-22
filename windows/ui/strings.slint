@@ -404,6 +404,12 @@ export global Strings {
         return @tr("{} is in use by another app. Close that app, or stop apps from taking exclusive control of it in Sound settings. AudioSync plays to it as soon as it's free.", speaker);
     }
 
+    // A member of a stereo pair or home theater group asks for a password,
+    // so the target is off.
+    public pure function notice-airplay-member-password(member: string, target: string) -> string {
+        return @tr("{0} in {1} asks for a password, so {1} is off. Turn {1} on again to enter it.", member, target);
+    }
+
     // An AirPlay speaker stopped playing or can't play. For the first four
     // problems it stays on and AudioSync keeps trying, and one waiting for
     // the AirPlay 2 slot stays on too; for the others it is off, because
@@ -789,10 +795,6 @@ export global Strings {
         }
         return @tr("Google Cast group");
     }
-
-    // A Google Cast group's member that neither a listed device nor the
-    // group names, in its member list.
-    out property <string> cast-unnamed-member: @tr("an unnamed speaker");
 
     // What Narrator reads for a Google Cast group's switch: "Attic, Google
     // Cast group: Kitchen and Living Room", the group's note after its name.
