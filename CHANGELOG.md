@@ -6,7 +6,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Added
 
-- Google Cast speakers, on the Mac and on Windows. They're listed with your other speakers and start and stop with streaming, with their own volume and Mute. One plays at a time, and speaker groups made in the Google Home app can't play.
+- Google Cast speakers, on the Mac and on Windows. They're listed with your other speakers and start and stop with streaming, with their own volume and Mute. One plays at a time, and speaker groups made in the Google Home app can't play. If another app starts casting to a speaker AudioSync plays on, AudioSync turns it off and says so.
 - Cast has no shared clock, so AudioSync can't line a Cast speaker up by itself: you set its offset by ear under the speaker, and it's kept for that speaker. If one drifts, Resync under its volume restarts the stream with a short gap. AudioSync never does that on its own.
 - When a Cast speaker and AirPlay speakers are on together, the side that's ahead waits for the other. AirPlay can wait at most 3 seconds; past that a notice says how far ahead AirPlay plays and suggests lowering the Cast speaker's offset.
 - AirPlay 2, experimental and off unless you start AudioSync with `AUDIOSYNC_AIRPLAY2=1`. It plays one AirPlay 2 speaker at a time: a second one waits with a note under its name and starts once the first stops. A speaker that asks for a PIN gets the pairing prompt, and a pairing the speaker turns down is forgotten, so the next try pairs again. It hasn't been tried on a real AirPlay 2 receiver yet.
