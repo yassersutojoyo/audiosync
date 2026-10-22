@@ -305,19 +305,31 @@ impl Targets {
         &mut self,
         devices: impl IntoIterator<Item = &'a Device>,
     ) -> Vec<TargetChange> {
+        let devices: Vec<&Device> = devices.into_iter().collect();
+        let in_view: BTreeSet<&DeviceKey> = devices.iter().map(|device| &device.key).collect();
+        let found = find_targets(devices.iter().copied());
+        // A device in view outside a target has left it, so it is never named missing there.
+        for (id, seen) in &mut self.seen {
+            let target = found.iter().find(|target| target.id == *id);
+            seen.retain(|key, _| {
+                !in_view.contains(key) || target.is_some_and(|target| target.contains(key))
+            });
+        }
+        self.seen.retain(|_, seen| !seen.is_empty());
         let mut next = BTreeMap::new();
-        for mut target in find_targets(devices) {
+        for mut target in found {
             let seen = self.seen.entry(target.id.clone()).or_default();
             for member in &target.members {
                 seen.insert(member.key.clone(), member.name.clone());
             }
+            // Without a group size, only a member seen before can show the target is short.
             if target.partner_unreachable
                 || target
                     .expected_members
-                    .is_some_and(|expected| target.members.len() < expected)
+                    .is_none_or(|expected| target.members.len() < expected)
             {
                 for (key, name) in seen.iter() {
-                    if !target.contains(key) {
+                    if !in_view.contains(key) && !target.contains(key) {
                         target.members.push(Member {
                             key: key.clone(),
                             name: name.clone(),
